@@ -1,0 +1,10 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: javascript
+layer: application
+
+fileGroups:
+  sources:
+    - 'src/**/*.{ts,tsx}'
+  tests:
+    - 'src/**/*.test.{ts,tsx}'

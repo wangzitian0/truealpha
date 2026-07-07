@@ -1,0 +1,13 @@
+$schema: 'https://moonrepo.dev/schemas/workspace.json'
+
+vcs:
+  client: git
+  defaultBranch: main
+
+projects:
+  - 'apps/*'
+  - '.'
+
+pipeline:
+  cacheLifetime: '7 days'
+  inheritColorsForPipedTasks: true

@@ -1,0 +1,62 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+layer: tool
+
+fileGroups:
+  workspace:
+    - '.github/**/*'
+    - '.moon/**/*'
+    - 'apps/**/*'
+    - 'tools/**/*'
+    - '*.md'
+    - '*.toml'
+    - '*.yml'
+    - '*.yaml'
+    - 'Makefile'
+    - 'package*.json'
+
+tasks:
+  setup:
+    command: 'python3 tools/cli.py setup'
+    deps: []
+    inputs:
+      - '@group(workspace)'
+    options:
+      cache: false
+
+  dev:
+    command: 'python3 tools/cli.py dev'
+    preset: 'server'
+    inputs:
+      - '@group(workspace)'
+    options:
+      cache: false
+
+  test:
+    command: 'python3 tools/cli.py test'
+    inputs:
+      - '@group(workspace)'
+    options:
+      cache: false
+
+  lint:
+    command: 'python3 tools/cli.py lint'
+    inputs:
+      - '@group(workspace)'
+    options:
+      cache: false
+
+  build:
+    command: 'python3 tools/cli.py build'
+    inputs:
+      - '@group(workspace)'
+    options:
+      cache: false
+
+  clean:
+    command: 'python3 tools/cli.py clean'
+    preset: 'server'
+    inputs:
+      - '@group(workspace)'
+    options:
+      cache: false

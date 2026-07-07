@@ -1,0 +1,10 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: python
+layer: application
+
+fileGroups:
+  sources:
+    - 'src/**/*.py'
+  tests:
+    - 'tests/**/*.py'

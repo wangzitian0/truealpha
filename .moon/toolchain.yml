@@ -1,0 +1,9 @@
+$schema: 'https://moonrepo.dev/schemas/toolchain.json'
+
+node:
+  version: '20.19.0'
+  packageManager: npm
+  inferTasksFromScripts: false
+
+  npm:
+    version: '10.8.2'
