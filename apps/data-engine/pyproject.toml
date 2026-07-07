@@ -7,6 +7,7 @@ dependencies = [
     "httpx>=0.27.0",
     "pydantic-settings>=2.2.0",
     "truealpha-factors",
+    "yfinance>=1.5.1",
 ]
 
 [dependency-groups]
