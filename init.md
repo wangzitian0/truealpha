@@ -113,7 +113,7 @@ The four units exchange data only through Postgres.
 | Twelve Data | Official source for daily price/fundamentals | One of the primary sources for price data |
 | moomoo (million-dollar tier) | Scarce quota, 2,000 calls/month | Whether it has analyst ratings, ETF holding weights, or supply-chain fields — **all unverified, don't assume it does**, see Phase -1 |
 | Historical analyst ratings — alternate source | **To be confirmed, currently unresolved** | If the moomoo audit confirms it has none, Phase -1 needs to scout free/low-cost rating archives; the analyst-backtest module is marked blocked until a source is confirmed, not deleted from the roadmap |
-| ETF holdings weight data | **To be confirmed, currently unresolved** | None of the four existing sources is confirmed to provide this; the ETF-virtual-company module depends on it — must be confirmed in Phase -1 |
+| ETF holdings weight data | **Confirmed (2026-07-07): SEC EDGAR N-PORT-P** | Monthly per-series filings, per-holding `pctVal` + CUSIP (verified on QQQ and ARKK). Pitfalls: the raw XML is `primary_doc.xml` (the filing's `primaryDocument` field points at the XSL-rendered HTML); multi-series trusts (e.g. ARK) must be queried by series ID via browse-edgar, not by trust CIK; foreign holdings carry CUSIP `000000000`, so `same_as` resolution needs an ISIN/name fallback |
 
 ---
 
