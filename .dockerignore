@@ -1,0 +1,10 @@
+# Context for apps/llm-service/Dockerfile (repo root)
+.git
+.github
+.venv
+repo
+apps/app-web
+apps/data-engine/data
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache

@@ -29,6 +29,20 @@ make check          # lint + typecheck + test
 
 Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
+## Deployment
+
+Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC
+(pinned here as the `repo/` submodule, same as finance_report). This repo owns the
+images — `release-images.yml` pushes `ghcr.io/wangzitian0/truealpha-app-web` and
+`truealpha-llm-service` on main/tags; infra2's `truealpha/truealpha/` service tree
+owns the compose, Vault secrets, Traefik routes, and the persistent Postgres at
+`/data/truealpha/postgres`. Deploy (from `repo/`):
+
+```bash
+python -m tools.deploy_v2 --service truealpha/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service truealpha/app      --type staging --iac-ref vX.Y.Z --domain zitian.party
+```
+
 ## Status
 
 **Phase -1 — data reconnaissance.** Building the data availability matrix; factor
