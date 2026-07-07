@@ -167,3 +167,9 @@ out/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Phase -1 raw samples — data, not code
+apps/data-engine/data/
+
+# TS incremental build cache
+*.tsbuildinfo

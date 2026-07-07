@@ -1,0 +1,20 @@
+# Virtual workspace root — not a package itself.
+# Python members share one lockfile (uv.lock) and one .venv at the repo root.
+
+[tool.uv.workspace]
+members = [
+    "apps/data-engine",
+    "apps/llm-service",
+    "libs/factors",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["apps/data-engine/tests", "apps/llm-service/tests", "libs/factors/tests"]

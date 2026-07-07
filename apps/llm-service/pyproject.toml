@@ -1,0 +1,28 @@
+[project]
+name = "truealpha-llm-service"
+version = "0.1.0"
+description = "FastAPI: MCP endpoint (priority) + /chat SSE (Tier 3). Reads only the mart schema via the mart_readonly role."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic-settings>=2.2.0",
+    "truealpha-factors",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+    "ruff>=0.9.0",
+]
+
+[tool.uv.sources]
+truealpha-factors = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_service"]
