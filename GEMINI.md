@@ -1,4 +1,3 @@
-# TrueAlpha - Gemini Settings
+# Gemini Guide
 
-See AGENTS.md for main guidelines.
-This project uses moon build tool and standard python/node toolchains.
+Follow `AGENTS.md` (working rules) and `init.md` (authoritative architecture).

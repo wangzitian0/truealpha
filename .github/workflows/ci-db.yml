@@ -1,0 +1,42 @@
+name: ci-db
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "db/**"
+      - ".github/workflows/ci-db.yml"
+  pull_request:
+    paths:
+      - "db/**"
+      - ".github/workflows/ci-db.yml"
+
+jobs:
+  # Apply every migration + roles.sql against a throwaway Postgres — the DDL must
+  # always be runnable from scratch, matching what docker-compose does locally.
+  migrate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: truealpha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply migrations and roles
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in db/migrations/*.sql db/roles.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done

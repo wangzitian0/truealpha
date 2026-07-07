@@ -1,0 +1,33 @@
+name: ci-python
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/data-engine/**"
+      - "apps/llm-service/**"
+      - "libs/factors/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/ci-python.yml"
+  pull_request:
+    paths:
+      - "apps/data-engine/**"
+      - "apps/llm-service/**"
+      - "libs/factors/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/ci-python.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest

@@ -1,64 +1,59 @@
-.PHONY: help install dev test lint format check clean
+.PHONY: help install db-up db-down web llm sample lint format typecheck test check clean
 
 help:
-	@echo "TrueAlpha - Development Commands"
+	@echo "TrueAlpha — Development Commands"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make install      Install all dependencies + pre-commit hooks"
+	@echo "  make install      uv sync + bun install + pre-commit hooks"
+	@echo "  make db-up        Start dev Postgres (applies db/ DDL on first run)"
+	@echo "  make db-down      Stop dev Postgres"
 	@echo ""
-	@echo "Development:"
-	@echo "  make dev          Start backend + frontend dev servers"
-	@echo "  make backend      Start backend only"
-	@echo "  make frontend     Start frontend only"
+	@echo "Run:"
+	@echo "  make web          Next.js dev server (apps/app-web)"
+	@echo "  make llm          FastAPI dev server  (apps/llm-service, :8000)"
+	@echo "  make sample       Phase -1: pull SEC company-facts samples"
 	@echo ""
 	@echo "Quality:"
-	@echo "  make lint         Run linters (ruff + eslint)"
-	@echo "  make format       Auto-format code"
-	@echo "  make check        Run all checks"
-	@echo "  make test         Run backend tests"
-	@echo ""
-	@echo "Utilities:"
-	@echo "  make clean        Clean generated files"
+	@echo "  make check        lint + typecheck + test"
 
 install:
-	bash tools/bootstrap.sh
+	uv sync --all-packages
+	cd apps/app-web && bun install
+	uvx pre-commit install 2>/dev/null || true
 
-dev:
-	@echo "Starting dev servers (use Ctrl+C to stop)..."
-	@trap 'kill 0' INT; \
-	(cd apps/backend && uv run uvicorn src.main:app --reload --port 8000) & \
-	(cd apps/frontend && npm run dev) & \
-	wait
+db-up:
+	docker compose up -d postgres
 
-backend:
-	cd apps/backend && uv run uvicorn src.main:app --reload --port 8000
+db-down:
+	docker compose down
 
-frontend:
-	cd apps/frontend && npm run dev
+web:
+	cd apps/app-web && bun run dev
+
+llm:
+	uv run --package truealpha-llm-service uvicorn llm_service.main:app --reload --port 8000
+
+sample:
+	uv run --package truealpha-data-engine python apps/data-engine/scripts/pull_sec_samples.py
 
 lint:
-	cd apps/backend && uv run ruff check src/
-	cd apps/frontend && npm run lint
+	uv run ruff check .
+	uv run ruff format --check .
 
 format:
-	cd apps/backend && uv run ruff check src/ --fix
-	cd apps/backend && uv run ruff format src/
-	@cd apps/frontend && npm run lint -- --fix || { \
-		echo ""; \
-		echo "⚠️  Some ESLint issues could not be auto-fixed"; \
-	}
+	uv run ruff check . --fix
+	uv run ruff format .
 
-check: lint
-	@echo "✅ All checks passed"
+typecheck:
+	cd apps/app-web && bun run typecheck
 
 test:
-	moon run :test
+	uv run pytest
+
+check: lint typecheck test
+	@echo "✅ All checks passed"
 
 clean:
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name .ruff_cache -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	rm -rf apps/backend/.coverage apps/backend/coverage.* 2>/dev/null || true
-	rm -rf apps/frontend/.next 2>/dev/null || true
+	find . -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache \) -exec rm -rf {} + 2>/dev/null || true
+	rm -rf apps/app-web/.next
 	@echo "✅ Cleaned"

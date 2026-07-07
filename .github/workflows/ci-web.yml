@@ -1,0 +1,25 @@
+name: ci-web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/app-web/**"
+      - ".github/workflows/ci-web.yml"
+  pull_request:
+    paths:
+      - "apps/app-web/**"
+      - ".github/workflows/ci-web.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/app-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
