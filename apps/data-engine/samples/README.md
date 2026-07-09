@@ -19,11 +19,17 @@ Universe: DDOG, NICE, SHOP, DUOL (init.md Section 11's test names) + QQQ, ARKK
 - `sec/` — SEC EDGAR company-facts JSON (`GET /api/xbrl/companyfacts/CIK##########.json`)
 - `filings/` — latest 10-K (or 20-F for NICE, a foreign private issuer) primary document, raw HTML
 - `nport/` — latest NPORT-P primary_doc.xml (ETF holdings + weights)
+- `prices/` — 1y daily OHLCV bars (`data_engine.sources.yahoo`, Yahoo Finance chart endpoint)
 
-Not included: price bars (yfinance) — **the VPS's IP is rate-limited by Yahoo
-Finance (HTTP 429 on every endpoint tried)**, a real Phase -1 finding: yfinance
-may not be viable as a source called from the VPS long-term, only from
-non-datacenter IPs. Needs a decision before Phase 1 relies on it.
+**The `yfinance` PyPI package gets HTTP 429 from this VPS's IP on every
+endpoint** (a real Phase -1 finding — Yahoo appears to fingerprint at the
+session/TLS level, not just check the User-Agent string). Worked around by
+dropping the package and hitting Yahoo's chart endpoint directly with a plain
+`httpx` client and a non-default `User-Agent`
+(`data_engine/sources/yahoo.py`) — the same approach finance_report runs in
+production from this same VPS
+(`apps/backend/src/pricing/extension/market_data/_providers.py` in that repo).
+Verified working end-to-end for all 4 tickers.
 
 ## Profiling findings from this snapshot (see `git log` for the exact pull)
 
