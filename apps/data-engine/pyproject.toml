@@ -5,6 +5,7 @@ description = "Ingestion: source adapters into Postgres raw schema. Phase -1: lo
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27.0",
+    "moomoo-api>=10.8.6808",
     "pydantic-settings>=2.2.0",
     "truealpha-factors",
 ]
