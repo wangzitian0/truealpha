@@ -1,5 +1,6 @@
-"""Phase -1 sampling: daily price bars via yfinance (the FALLBACK price source —
-no SLA, init.md Section 9; Twelve Data is the primary once an API key exists).
+"""Phase -1 sampling: daily price bars via a direct Yahoo Finance chart-endpoint
+call (see data_engine.sources.yahoo — NOT the yfinance package, which gets
+HTTP 429 on the VPS).
 
 Usage:
     uv run --package truealpha-data-engine python apps/data-engine/scripts/pull_price_samples.py [TICKER ...]
@@ -7,10 +8,11 @@ Usage:
 CSV lands in apps/data-engine/data/samples/ (gitignored).
 """
 
+import csv
 import sys
 from pathlib import Path
 
-import yfinance as yf
+from data_engine.sources.yahoo import fetch_daily_bars
 
 DEFAULT_TICKERS = ["DDOG", "NICE", "SHOP", "DUOL"]
 OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "samples"
@@ -21,16 +23,20 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for ticker in tickers:
         try:
-            df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=False)
+            bars = fetch_daily_bars(ticker)
         except Exception as e:
             print(f"{ticker}: FAILED — {e}")
             continue
-        if df is None or df.empty:
+        if not bars:
             print(f"{ticker}: FAILED — empty response")
             continue
         path = OUT_DIR / f"{ticker.upper()}_prices_1y.csv"
-        df.to_csv(path)
-        print(f"{ticker}: {len(df)} daily bars, {df.index.min().date()} → {df.index.max().date()}, saved {path.name}")
+        with path.open("w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Date", "Open", "High", "Low", "Close", "Adj Close", "Volume"])
+            for bar in bars:
+                writer.writerow([bar.date, bar.open, bar.high, bar.low, bar.close, bar.adj_close, bar.volume])
+        print(f"{ticker}: {len(bars)} daily bars, {bars[0].date} → {bars[-1].date}, saved {path.name}")
 
 
 if __name__ == "__main__":
