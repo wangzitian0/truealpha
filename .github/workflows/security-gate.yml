@@ -1,0 +1,48 @@
+name: security-gate
+
+# This is a public repo touching financial-account data (moomoo). Runs on every
+# push/PR, repo-wide, deliberately with no path filter — a leaked credential or
+# a trading-API call could land in any file. See CLAUDE.md's hard constraints.
+
+on:
+  push: # no branches filter, deliberately — a push to any branch is already
+    # public on this repo, don't wait for a PR to scan it
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  no-trade-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid moomoo trading APIs (quote/read-only data only)
+        run: |
+          set -e
+          # CLAUDE.md hard constraint: this repo only ever reads moomoo market/
+          # fundamental data via OpenQuoteContext. Trading contexts and order
+          # calls are hard-forbidden, no exceptions — this is a public repo.
+          # \b is a GNU grep extension (works in -E mode, not PCRE-only) — the
+          # runner's grep is GNU grep, so this is a real word boundary here.
+          PATTERN='OpenSecTradeContext|OpenFutureTradeContext|OpenCryptoTradeContext|OpenHKTradeContext|OpenUSTradeContext|OpenCNTradeContext|\bplace_order\b|\bmodify_order\b|\bcancel_order\b|\bunlock_trade\b'
+          # Repo-wide, excluding the docs that legitimately name these APIs
+          # (as things to forbid) and this workflow file itself.
+          if git grep -InE "$PATTERN" -- . \
+              ':(exclude)CLAUDE.md' \
+              ':(exclude)init.md' \
+              ':(exclude).github/workflows/security-gate.yml'; then
+            echo "::error::Forbidden moomoo trading API reference found above — this repo is quote/read-only only (see CLAUDE.md hard constraints)."
+            exit 1
+          fi
+          echo "OK: no moomoo trading API references found."
