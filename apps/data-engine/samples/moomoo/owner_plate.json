@@ -1,0 +1,198 @@
+[
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST23585",
+    "plate_name": "DeepSeek Beneficiaries",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST2470",
+    "plate_name": "Software - Application",
+    "plate_type": "INDUSTRY"
+  },
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST2570",
+    "plate_name": "Cybersecurity",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST92009",
+    "plate_name": "MY券商美股定投",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST92061",
+    "plate_name": "Fractional Shares JP",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST2520",
+    "plate_name": "SaaS",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST23492",
+    "plate_name": "AI application software",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST2153",
+    "plate_name": "ARK Portfolio",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.DDOG",
+    "name": "Datadog",
+    "plate_code": "US.LIST24171",
+    "plate_name": "Trump Holdings Concept",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.NICE",
+    "name": "NICE Ltd",
+    "plate_code": "US.LIST92009",
+    "plate_name": "MY券商美股定投",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.NICE",
+    "name": "NICE Ltd",
+    "plate_code": "US.LIST2153",
+    "plate_name": "ARK Portfolio",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.NICE",
+    "name": "NICE Ltd",
+    "plate_code": "US.LIST2136",
+    "plate_name": "Artificial Intelligence",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.NICE",
+    "name": "NICE Ltd",
+    "plate_code": "US.LIST2470",
+    "plate_name": "Software - Application",
+    "plate_type": "INDUSTRY"
+  },
+  {
+    "code": "US.NICE",
+    "name": "NICE Ltd",
+    "plate_code": "US.LIST92061",
+    "plate_name": "Fractional Shares JP",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST2153",
+    "plate_name": "ARK Portfolio",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST23444",
+    "plate_name": "Santa Rally",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST92061",
+    "plate_name": "Fractional Shares JP",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST2157",
+    "plate_name": "Top Retailers",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST2520",
+    "plate_name": "SaaS",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST91337",
+    "plate_name": "HK券商美股定投",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST23492",
+    "plate_name": "AI application software",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST92009",
+    "plate_name": "MY券商美股定投",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.SHOP",
+    "name": "Shopify",
+    "plate_code": "US.LIST2470",
+    "plate_name": "Software - Application",
+    "plate_type": "INDUSTRY"
+  },
+  {
+    "code": "US.DUOL",
+    "name": "Duolingo",
+    "plate_code": "US.LIST23585",
+    "plate_name": "DeepSeek Beneficiaries",
+    "plate_type": "CONCEPT"
+  },
+  {
+    "code": "US.DUOL",
+    "name": "Duolingo",
+    "plate_code": "US.LIST92009",
+    "plate_name": "MY券商美股定投",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.DUOL",
+    "name": "Duolingo",
+    "plate_code": "US.LIST2470",
+    "plate_name": "Software - Application",
+    "plate_type": "INDUSTRY"
+  },
+  {
+    "code": "US.DUOL",
+    "name": "Duolingo",
+    "plate_code": "US.LIST92061",
+    "plate_name": "Fractional Shares JP",
+    "plate_type": "OTHER"
+  },
+  {
+    "code": "US.DUOL",
+    "name": "Duolingo",
+    "plate_code": "US.LIST23492",
+    "plate_name": "AI application software",
+    "plate_type": "CONCEPT"
+  }
+]

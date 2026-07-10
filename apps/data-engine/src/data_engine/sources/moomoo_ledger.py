@@ -2,7 +2,10 @@
 rule 6: every moomoo call must go through the gate, no module decides for
 itself). This is a Phase -1 tool — real ingestion should read/write
 `staging.api_call_ledger` in Postgres instead once that pipeline exists; this
-file only prevents a manual audit session from blowing the monthly quota.
+file only prevents a manual audit session from making an unbounded number of
+calls. The monthly cap it enforces is a self-imposed precaution, not a real
+moomoo-side quota — see init.md Section 5's 2026-07-10 correction: moomoo's
+own docs only rate-limit these endpoints (bursts per 30s), no monthly total.
 
 State lives in apps/data-engine/data/moomoo_ledger.json (gitignored).
 """
