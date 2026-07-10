@@ -7,7 +7,8 @@ cannot start or log into OpenD itself — that's an interactive 2FA/app flow.
 
 Spends at most 3 calls per ticker x len(tickers) — small on purpose, this is
 a capability check, not a data pull. Every call is gated by moomoo_ledger
-(2,000/month hard cap, init.md Section 1 rule 6).
+(a self-imposed precautionary cap, init.md Section 1 rule 6 — not a real
+moomoo-side monthly quota, see init.md Section 5's 2026-07-10 correction).
 
 Usage:
     uv run --package truealpha-data-engine python apps/data-engine/scripts/probe_moomoo_capabilities.py [TICKER ...]

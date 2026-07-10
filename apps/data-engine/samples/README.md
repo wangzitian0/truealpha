@@ -20,6 +20,14 @@ Universe: DDOG, NICE, SHOP, DUOL (init.md Section 11's test names) + QQQ, ARKK
 - `filings/` — latest 10-K (or 20-F for NICE, a foreign private issuer) primary document, raw HTML
 - `nport/` — latest NPORT-P primary_doc.xml (ETF holdings + weights)
 - `prices/` — 1y daily OHLCV bars (`data_engine.sources.yahoo`, Yahoo Finance chart endpoint)
+- `moomoo/` — one JSON per ticker (`data_engine/scripts/capture_fundamental_samples.py`), captured
+  2026-07-10 once OpenD login was fixed (see git log). 14 endpoints per ticker: company
+  profile, financials (income/balance-sheet/cash-flow/key-metrics), revenue breakdown,
+  valuation trend, analyst consensus + rating summary, Morningstar report, shareholders
+  overview, insider trades, dividends, short interest — plus one batched `owner_plate.json`
+  covering all 4 tickers. Endpoints were chosen by reading moomoo's proto defs and SDK
+  source first (57 calls total, no repeated trial-and-error against the live API — quota
+  is capped at 2,000/month).
 
 **The `yfinance` PyPI package gets HTTP 429 from this VPS's IP on every
 endpoint** (a real Phase -1 finding — Yahoo appears to fingerprint at the
@@ -62,6 +70,42 @@ Verified working end-to-end for all 4 tickers.
   (already noted in `init.md` Section 5, reconfirmed here).
 - **NICE is a 20-F filer, not 10-K** (foreign private issuer) — any filing-type
   assumption in the ingestion pipeline must handle both forms, not hardcode `10-K`.
+
+## moomoo findings (init.md Section 11 item 6 — analyst-rating source, now resolved)
+
+- **Path A confirmed: moomoo has real per-analyst historical ratings, not just
+  current-outstanding ones.** `rating_summary`'s `analyst_rating_summary_list` embeds each
+  analyst's own `rating_item_list` inline — DDOG alone has 20 analysts covering it with
+  159 combined historical dated rating rows (one analyst, Koji Ikeda, has 18 by himself),
+  each with date/rating/target-price/source-URL. NICE/SHOP/DUOL are similar (85–107 rows
+  across 15–20 analysts). moomoo also ships pre-computed per-analyst `success_rate` and
+  `excess_return` fields — the backtesting scoring module 4 wants may already be half
+  done by moomoo's own vendor, not something to build from scratch.
+  **This corrects an earlier same-day misread**: an ad-hoc probe script printed "2 rows"
+  for this same endpoint by calling `len()` on the raw response *dict* (2 top-level keys:
+  `next_key` + `analyst_rating_summary_list`) instead of the nested list — not a real
+  data-scarcity finding. Lesson: always inspect the actual parsed structure, not a
+  generic `len()`, before concluding an API is "thin."
+- **Financials history is deep**: `get_financials_statements` returned 32–50 periods
+  (quarterly + annual combined) per statement type per ticker, reaching back to
+  2016–2019 depending on the ticker — comfortably enough for point-in-time backtesting,
+  no pagination needed for a first pass.
+- **Financial field IDs are numeric and undocumented client-side**: `structure_list`
+  entries came back with populated `field_id` (e.g. 8001, 8002...) but an **empty
+  `display_name`** for every field, for all 4 tickers, in `en` language mode — moomoo's
+  own financials have the same "opaque tag" problem SEC XBRL does (see above), just
+  with integer IDs instead of XBRL tag strings. A field_id → meaning mapping needs to be
+  sourced separately before this is usable; don't assume the field names are self-evident.
+- **Morningstar coverage exists for all 4 tickers** (star ratings 2–5), but
+  `economic_moat_label` came back empty for all 4 despite the star rating being
+  populated — coverage is per-field, not all-or-nothing even within one endpoint response.
+- **`get_industrial_chain_*` is an industry taxonomy, not a company-to-company supply
+  graph** (checked via the proto definitions, not called): nodes are named industry
+  segments with an optional `plateId` (sector), not stock codes. It does not give
+  "DDOG's suppliers are AWS/GCP/Azure" directly — the LLM-extraction path
+  (`libs/factors/shared/extraction.py`) is still the way to build `supplies_to` KG edges,
+  not a shortcut moomoo replaces.
+- Quota spent this capture run: 57 calls (66/2,000 used this month total).
 
 ## A note on masked-looking fields
 

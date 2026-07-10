@@ -16,7 +16,7 @@ Neither needs to be read every session — read them on demand per "Reference Do
 - **Computation logic exists in exactly one place**: PEG / gross-profit-per-employee / supply-chain and other factor logic is implemented once, in `libs/factors`. Both `apps/data-engine` and `apps/llm-service` import from there — never reimplement. This includes screening/tagging logic like the three-tier valuation framework — it's a **composite factor** (reads other factors' mart outputs), not app-layer business logic.
 - **Factors consume `(entity_id, value, confidence, as_of)` — never the data's source.** Every staging/KG row has a mandatory `confidence` (0-1); a factor must never branch on "this came from SEC vs. moomoo vs. an LLM extraction." A composite factor's own confidence is `min()` of everything it reads.
 - **The LLM can only read the `mart` schema** — never raw/staging. This boundary is enforced by a database role (`mart_readonly`), not an application-layer convention.
-- **Every moomoo call must go through the `api_call_ledger` gate**: a hard quota of 2,000 calls/month. No module may call moomoo directly, bypassing the gate.
+- **Every moomoo call must go through the `api_call_ledger` gate**: no module may call moomoo directly, bypassing the gate. The gate is a defensive throttle/audit trail, not an enforcement of a real moomoo-side monthly quota — confirmed 2026-07-10 from moomoo's own docs that fundamental/quote endpoints are rate-limited (bursts per 30s), not capped at a monthly total; "2,000/month" was an earlier mix-up of the *subscription* quota tier ceiling with a call budget. See `init.md` Section 5.
 
 ## Repo Structure
 

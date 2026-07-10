@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     # data_engine/sources/moomoo.py). Not the moomoo account itself.
     moomoo_opend_host: str = "127.0.0.1"
     moomoo_opend_port: int = 11111
-    # Hard cap from init.md Section 1 rule 6 — the account tier's real limit.
+    # Self-imposed precautionary cap, NOT a real moomoo-side monthly quota —
+    # moomoo's own docs only rate-limit fundamental/quote endpoints (bursts
+    # per 30s); see init.md Section 5's 2026-07-10 correction. Kept as a
+    # defensive throttle/audit trail (init.md Section 1 rule 6).
     moomoo_monthly_call_budget: int = 2000
 
 
