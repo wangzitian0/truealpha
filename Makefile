@@ -1,13 +1,15 @@
-.PHONY: help install db-up db-migrate db-down web llm sample lint format typecheck test check clean
+.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample lint format typecheck test check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
 	@echo ""
 	@echo "Setup:"
 	@echo "  make install      uv sync + bun install + pre-commit hooks"
-	@echo "  make db-up        Start dev Postgres (applies db/ DDL on first run)"
+	@echo "  make runtime-up   Start Postgres/KG + MinIO and create the raw bucket"
+	@echo "  make stack-up     Build/start runtime + web + llm-service"
+	@echo "  make runtime-check Probe Postgres, KG tables, and object storage"
+	@echo "  make runtime-down Stop the local stack (keeps volumes)"
 	@echo "  make db-migrate   Re-apply db/ DDL to a running Postgres (idempotent)"
-	@echo "  make db-down      Stop dev Postgres"
 	@echo ""
 	@echo "Run:"
 	@echo "  make web          Next.js dev server (apps/app-web)"
@@ -22,8 +24,22 @@ install:
 	cd apps/app-web && bun install
 	uvx pre-commit install 2>/dev/null || true
 
-db-up:
-	docker compose up -d postgres
+runtime-up:
+	docker compose up -d --wait postgres minio
+	docker compose run --rm minio-init
+
+stack-up:
+	docker compose --profile app up -d --build --wait
+
+runtime-check:
+	uv run --package truealpha-runtime truealpha-runtime check --live
+
+runtime-down:
+	docker compose --profile app down
+
+db-up: runtime-up
+
+db-down: runtime-down
 
 # The initdb mount in docker-compose.yml only runs on a FRESH volume — an existing
 # dev DB never picks up new migration files by itself. All DDL is `if not exists`,
@@ -33,9 +49,6 @@ db-migrate:
 		echo "== $$f"; \
 		docker compose exec -T postgres psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-truealpha} -v ON_ERROR_STOP=1 < $$f || exit 1; \
 	done
-
-db-down:
-	docker compose down
 
 web:
 	cd apps/app-web && bun run dev
@@ -47,12 +60,12 @@ sample:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/pull_sec_samples.py
 
 lint:
-	uv run ruff check .
-	uv run ruff format --check .
+	uv run ruff check apps libs
+	uv run ruff format --check apps libs
 
 format:
-	uv run ruff check . --fix
-	uv run ruff format .
+	uv run ruff check apps libs --fix
+	uv run ruff format apps libs
 
 typecheck:
 	cd apps/app-web && bun run typecheck

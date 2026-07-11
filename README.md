@@ -10,10 +10,12 @@ the authoritative doc) → [`CLAUDE.md`](CLAUDE.md) (working rules).
 ## Layout
 
 ```
-apps/data-engine    Python  ingestion into Postgres raw schema (dlt + Dagster from Phase 0/1)
+apps/data-engine    Python  ingestion into immutable raw objects + Postgres lineage/staging
 apps/llm-service    Python  FastAPI: MCP endpoint (priority) + /chat (Tier 3)
 apps/app-web        TS/Bun  Next.js — reads the mart schema directly, no API hop
+libs/contracts      Python  point-in-time DTOs + repository/storage/backtest ports
 libs/factors        Python  the ONLY place computation logic lives (base / composite / shared)
+libs/runtime        Python  runtime env/dependencies + Postgres/KG/S3 adapters and probes
 db                  SQL     raw / staging / mart / dagster schemas + mart_readonly role
 ```
 
@@ -21,11 +23,15 @@ db                  SQL     raw / staging / mart / dagster schemas + mart_readon
 
 ```bash
 make install        # uv sync + bun install
-make db-up          # dev Postgres with schemas applied
+make runtime-up     # Postgres/KG + MinIO with schemas/bucket initialized
 cp .env.example .env  # then set SEC_USER_AGENT
 make sample         # Phase -1: pull SEC samples for DDOG / NICE / SHOP / DUOL
 make check          # lint + typecheck + test
 ```
+
+`make stack-up` additionally builds and starts Web + LLM locally. Application
+code consumes only `DATABASE_URL` and the S3-compatible `S3_*` contract; local
+Compose, GitHub CI, and infra2 may provide different backends behind it.
 
 Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
@@ -35,8 +41,8 @@ Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s Ia
 (pinned here as the `repo/` submodule, same as finance_report). This repo owns the
 images — `release-images.yml` pushes `ghcr.io/wangzitian0/truealpha-app-web` and
 `truealpha-llm-service` on main/tags; infra2's `truealpha/truealpha/` service tree
-owns the compose, Vault secrets, Traefik routes, and the persistent Postgres at
-`/data/truealpha/postgres`. Deploy (from `repo/`):
+owns deployed Compose, Vault secrets, Traefik routes, persistent Postgres, and
+the environment-specific S3-compatible storage binding. Deploy (from `repo/`):
 
 ```bash
 python -m tools.deploy_v2 --service truealpha/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
@@ -45,6 +51,6 @@ python -m tools.deploy_v2 --service truealpha/app      --type staging --iac-ref 
 
 ## Status
 
-**Phase -1 — data reconnaissance.** Building the data availability matrix; factor
-implementations are registered stubs that fix the function-signature convention.
-CI is path-filtered per app (`.github/workflows/`).
+**Phase 0 — walking skeleton.** Phase -1 reconnaissance and runtime/contracts
+foundations are complete. Factor implementations remain registered stubs while
+point-in-time ingestion is built. CI is path-filtered per app (`.github/workflows/`).

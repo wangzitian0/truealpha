@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:15-alpine
+        image: postgres:16-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -40,3 +40,7 @@ jobs:
             echo "== $f"
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
           done
+      - name: Assert runtime persistence contract
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/runtime_contract.sql

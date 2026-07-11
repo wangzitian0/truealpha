@@ -1,4 +1,4 @@
-"""Entity resolution over the knowledge graph (staging.kg_entities / staging.kg_edges).
+"""Entity resolution over the knowledge graph.
 
 All cross-source ID crosswalk (CIK <-> ticker <-> moomoo_code <-> CUSIP/ISIN) goes
 through `same_as` edges here — no module keeps its own mapping table (init.md

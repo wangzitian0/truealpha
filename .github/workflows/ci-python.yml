@@ -7,6 +7,8 @@ on:
       - "apps/data-engine/**"
       - "apps/llm-service/**"
       - "libs/factors/**"
+      - "libs/contracts/**"
+      - "libs/runtime/**"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/ci-python.yml"
@@ -15,6 +17,8 @@ on:
       - "apps/data-engine/**"
       - "apps/llm-service/**"
       - "libs/factors/**"
+      - "libs/contracts/**"
+      - "libs/runtime/**"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/ci-python.yml"
@@ -44,8 +48,8 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
+      - run: uv run ruff check apps libs
+      - run: uv run ruff format --check apps libs
       - name: Apply DB migrations
         env:
           PGPASSWORD: postgres

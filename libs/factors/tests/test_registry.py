@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 
 # Importing the stub modules registers them.
 import factors.base.gross_profit_per_employee  # noqa: F401
@@ -25,3 +26,9 @@ def test_confidence_is_mandatory_and_bounded():
 def test_data_availability_defaults_to_unverified():
     r = FactorResult(factor="peg", entity_id="e1", value=None, confidence=0.5, as_of=datetime.now(UTC))
     assert r.data_availability == "unverified"
+
+
+def test_factor_wire_values_use_decimal_not_float():
+    fact = Fact(entity_id="e1", metric="revenue", value="0.1", confidence="0.9", as_of=datetime.now(UTC))
+    assert fact.value == Decimal("0.1")
+    assert fact.confidence == Decimal("0.9")

@@ -36,8 +36,10 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 ### 2.1 Data Flow Layers
 
 ```
-L0 Source adapter layer   ── dlt: SEC / yfinance / Twelve Data / moomoo, unified output into Postgres raw schema
-L1 Storage layer          ── Postgres: raw (immutable) → staging (normalized, dual timestamps + mandatory confidence, see Section 6 DDL),
+L0 Source adapter layer   ── dlt: SEC / yfinance / Twelve Data / moomoo, producing versioned raw captures
+L1 Storage layer          ── S3-compatible object storage: immutable source-response bytes
+                           + Postgres raw.fetches: checksum, object pointer, fetch/publication timestamps, and lineage
+                           → Postgres staging (normalized, dual timestamps + mandatory confidence, see Section 6 DDL),
                               including the knowledge graph (entities + edges — this is where all entity resolution lives, see Section 6)
                               → mart (clean point-in-time result tables, flattened 2D projections of the KG where applicable)
 L2 Factor computation     ── libs/factors, wrapped as Dagster assets, code_version + data_version tracked (see Section 9 exception for LLM-assisted extraction factors)
@@ -50,12 +52,14 @@ L5 Consumption layer      ── App (reads mart directly) + LLM chat (mart read
 
 ### 2.2 Service Topology and Priority (the four services are not peers)
 
-- **Tier 0 (needed now)**: Postgres + the ingestion part of data-engine (dlt adapters)
+- **Tier 0 (needed now)**: Postgres + S3-compatible raw archive + the ingestion part of data-engine (dlt adapters)
 - **Tier 1 (used in Phase 1-2)**: `libs/factors` + the mart schema
-- **Tier 2 (after Phase 3)**: Dagster scheduling/UI, Dokploy deployment
+- **Tier 2 (starting in Phase 3)**: Dagster scheduling/UI, Dokploy Staging deployment; Production remains Phase 6-gated
 - **Tier 3 (explicitly deferred to Phase 7)**: `llm-service`'s self-built `/chat` interface, `app-web`'s chat UI. **Exception: the MCP endpoint** — it reuses the same `libs/factors` functions and needs no new UI; wiring it into Claude Desktop/claude.ai is nearly free, and can happen well before the self-built `/chat`.
 
-The four units exchange data only through Postgres.
+The four application units exchange structured data only through Postgres. The
+data-engine/runtime boundary additionally uses S3-compatible object storage as
+the immutable raw archive; object storage is not an App/LLM integration path.
 
 ---
 
@@ -68,7 +72,7 @@ The four units exchange data only through Postgres.
 | Python package management | uv |
 | Data ingestion | dlt |
 | Orchestration/scheduling | Dagster (asset-based, code_version + data_version tracked; **runtime metadata explicitly pointed at Postgres's `dagster` schema, not the default local store**) |
-| Storage | Postgres |
+| Storage | Postgres for raw metadata/staging/mart/KG + S3-compatible object storage for immutable raw bytes (MinIO in Local/CI) |
 | TS package management/runtime | Bun |
 | App frontend | Next.js + TypeScript |
 | App data display | Next.js backend queries the mart schema directly |
@@ -77,6 +81,29 @@ The four units exchange data only through Postgres.
 | LLM backend | FastAPI, `/chat` + MCP endpoints, MCP prioritized over `/chat` |
 | Contract sync | OpenAPI + openapi-typescript, limited to `/chat` and a few other genuinely cross-language endpoints |
 | Deployment | Dokploy |
+
+### 3.1 Environment Model and Promotion Gates
+
+The runtime keeps six logical tiers because local tests, GitHub CI, and a future
+PR preview have different dependency-substitution semantics. Only four actual
+environments are provisioned in the active rollout:
+
+| Actual environment | Logical tier(s) | Purpose | Data policy |
+|---|---|---|---|
+| Local | `local_dev`, `local_test` | Development and fixture replay | Fixtures by default; developer-owned Compose Postgres + MinIO |
+| GitHub CI | `github_ci` | Code, DDL, image, security, and runtime-contract validation | Ephemeral fixtures/mocks; no real source credentials |
+| Staging | `staging` | Real pipeline, point-in-time replay, and bounded backtest validation | Real sources; isolated canary universe and credentials |
+| Production | `production` | Authoritative raw/staging/mart data and versioned strategy outputs | Real production universe; isolated credentials and storage |
+
+`preview` remains a logical tier but no preview environment is provisioned until
+the Web application needs per-PR visual review.
+
+Promotion is artifact-based: PRs prove code in CI; the same image digest then
+runs against real sources in Staging; Production receives that exact digest only
+after the Staging pipeline/backtest gates and a human approval. Staging and
+Production never share writable Postgres databases, S3 buckets, Dagster metadata,
+API ledgers, or Vault secret paths. Strategy computation remains in
+`libs/factors`; environments only schedule and materialize versioned results.
 
 ---
 
@@ -88,6 +115,8 @@ The four units exchange data only through Postgres.
   /app-web             TypeScript: Next.js frontend + data-display backend + chat UI (Tier 3)
   /llm-service         Python: FastAPI, MCP endpoint (priority) + /chat SSE endpoint (Tier 3)
 /libs
+  /contracts           Python: sample-aware cross-module DTOs + storage/repository/backtest ports;
+                        no computation logic
   /factors             Python: the single implementation of the seven modules; function signatures
                         align with the eventual Dagster asset convention starting from Phase -1
     /base              Factors that consume staging (incl. KG) data directly
@@ -95,6 +124,9 @@ The four units exchange data only through Postgres.
                         confidence = min() of all consumed inputs
     /shared            Entity resolution (KG read/write) + LLM structured-extraction primitive,
                         used by both base and composite factors, not reimplemented per module
+  /runtime             Python: environment/dependency manifest, Postgres/KG/S3 probes, and the
+                        boto3 immutable raw-object adapter; local/CI use Compose Postgres + MinIO,
+                        deployed environments receive the same DATABASE_URL/S3_* contract from infra2
 /db
   /migrations          DDL for the four schemas: raw / staging / mart / dagster
   /roles.sql           mart_readonly (incl. statement_timeout config) and other role permissions
@@ -171,6 +203,21 @@ create table staging.kg_entities (
     display_name  text not null
 );
 
+-- Source identifier property rows locate source-specific entity nodes. Entity
+-- resolution then traverses a same_as edge to the unified entity as of the
+-- requested transaction-time cutoff.
+create table staging.kg_identifiers (
+    id                bigint generated always as identity primary key,
+    entity_id         text not null references staging.kg_entities(id),
+    source            text not null,
+    identifier_type   text not null,
+    identifier_value  text not null,
+    valid_time        daterange not null,
+    transaction_time  timestamptz not null,
+    confidence        numeric not null,
+    raw_ref           text not null
+);
+
 create table staging.kg_edges (
     id                bigint generated always as identity primary key,
     from_id           text not null references staging.kg_entities(id),
@@ -225,17 +272,23 @@ Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — they consu
 | Phase | Goal | Verification | Infrastructure scope |
 |---|---|---|---|
 | Phase -1 | Data reconnaissance + **data availability matrix** (below) | Matrix surfaces at least 3 unexpected findings; ETF-weight source and analyst-rating alternate source must reach a definitive yes/no | Local scripts, no Dagster/Dokploy |
-| Phase 0 | Walking skeleton, function signatures aligned to the future Dagster asset convention | Querying the value as of some historical point matches what was actually disclosed at that time | Local scripts + dev Postgres |
+| Phase 0 | Walking skeleton, function signatures aligned to the future Dagster asset convention | Querying the value as of some historical point matches what was actually disclosed at that time | Local Compose + GitHub CI; no deployed scheduler |
 | Phase 1 | PEG + ETF virtual company (if the weight source is confirmed) | Manually check PEG for 3 stocks; reverse-engineer a real ETF | Dagster introduced (optional) |
 | Phase 2 | Gross profit / headcount | Spot-check 10 companies, ≥90% accuracy | Dagster |
 | Phase 2.5 | Three-tier valuation tagging (module 7, composite factor over Phase 2's output) | Cross-check tier assignment against a handful of companies with an obvious, undisputed tier (e.g. a clear large-model-native name and a clear traditional name) — the boundary cases are exactly what Phase -1/2 sample data should surface, not something to pre-guess | Dagster |
-| Phase 3 | moomoo capability audit + analyst backtest (Path A or B) | Depends on audit outcome | Dagster + Dokploy deployment |
+| Phase 3 | Analyst backtest + activate the real Staging pipeline | Two consecutive Dagster-scheduled canary runs prove idempotency, new vintages, lineage, and frozen-schema stability | Dagster + Dokploy Staging deployment |
 | Phase 4 | Supply-chain relationship graph | Manually verify edge plausibility | |
 | Phase 5 | Pure-blood company screening | Spot-check top 10 for plausibility | |
-| Phase 6 | Backtest and portfolio validation | Direction matches a known strategy's actual performance | |
+| Phase 6 | Backtest and portfolio validation + Production readiness | Direction matches a known strategy's actual performance; backup/restore and exact-image promotion gates pass | Production is initialized only after this gate |
 | Phase 7 | App / MCP (priority) / `/chat` (Tier 3, last) | Walk the full pipeline end to end once | |
 
 **Data availability matrix**: not a document to file away once written. Every factor function's return value carries a `data_availability: "verified" | "unverified"` field matching the matrix, so both the App display and LLM answers can show whether the number behind them still hasn't been verified.
+
+Environment sequencing is therefore part of the phase contract: Local/CI are
+available in Phase 0; no real scheduled Staging run may use cron or GitHub
+Actions before Dagster becomes the single scheduling authority in Phase 3; and
+Production remains closed until the Phase 6 data, backtest, recovery, and
+promotion gates pass.
 
 ---
 
