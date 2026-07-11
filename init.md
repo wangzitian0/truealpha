@@ -6,7 +6,7 @@ This project answers a specific set of investment-research questions — it isn'
 
 - **Is this company actually leveraged by large models?** — using metrics like gross profit per employee, tied to the "doesn't need proportional headcount growth to handle a new category of decisions" framework, to sort companies into valuation tiers
 - **Is the current valuation reasonable relative to growth?** — PEG, but the growth-rate convention needs to be switchable, since different conventions (analyst consensus / historical CAGR / company guidance) can point to different conclusions
-- **What is this company exposed to, up and down its supply chain — risk or opportunity?** — relationship graph + causal reasoning
+- **What is this company exposed to, up and down its supply chain — risk or opportunity?** — relationship graph + versioned scenario exposure; causal language requires separate causal evidence
 - **Is a given analyst's track record worth trusting?** — TipRanks-style historical backtesting
 - **Does an ETF/portfolio "look like" a healthy company when treated as one?** — virtual consolidation
 - **Who's the "purest" name under a given theme?** — revenue-share ranking
@@ -18,15 +18,15 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 ## 1. Core Design Principles (hard constraints, not to be violated)
 
 1. **Point-in-time correctness is priority one.** Distinguish `valid_time` (the period the data describes) from `transaction_time` (when the data became knowable). A restatement always produces a new vintage — never overwrite an old record. Factor computation and backtesting always operate on "the data that was visible as of a specific point in time."
-2. **Computation logic is allowed to exist in exactly one place**, implemented in `libs/factors`; both `data-engine` and `llm-service` import from there. The App layer is only allowed to do **deterministic reformatting**: sorting, filtering, pagination, unit conversion, simple within-row arithmetic that doesn't span tables (e.g., "change vs. prior period"). Any logic that jointly computes a new metric across factors or time points must go back into `libs/factors` and be materialized into mart — it must not be computed on the fly in the Next.js backend. Use this concrete rule wherever the boundary feels blurry. **This includes screening/tagging logic** (e.g., the three-tier valuation framework, Section 7 module 7) — it reads other factors' mart outputs, but it is still a factor (a "composite factor," Section 6), not app-layer business logic.
-3. **Factors never know their data's provenance, only its confidence.** Every fact reaching a factor is a `(entity_id, value, confidence, as_of)` tuple — a factor must not branch on "this came from SEC vs. moomoo vs. an LLM extraction." Provenance lives in `staging`/`raw` (via `raw_ref`) for traceability, not in the factor's decision logic. See Section 6 for the `confidence` column and Section 7 for the base/composite split this enables.
-4. **The LLM reads only the `mart` schema**, enforced via a dedicated database role (`mart_readonly`) with a `statement_timeout` (5s recommended) and an application-layer cap on returned rows — this solves resource contention, not access control; the two are separate problems, and this doesn't need a heavier solution like connection-pool isolation.
+2. **Computation logic is allowed to exist in exactly one place**, implemented in `libs/factors` and invoked by data-engine/Dagster. `llm-service` and the App consume materialized outputs through typed mart read contracts; they never invoke factor computation. The App layer is only allowed to do **deterministic reformatting**: sorting, filtering, pagination, unit conversion, simple within-row arithmetic that doesn't span tables (e.g., "change vs. prior period"). Any logic that jointly computes a new metric across factors or time points must go back into `libs/factors` and be materialized into mart — it must not be computed on the fly in the Next.js backend. Use this concrete rule wherever the boundary feels blurry. **This includes screening/tagging logic** (e.g., the three-tier valuation framework, Section 7 module 7) — it reads other factors' mart outputs, but it is still a factor (a "composite factor," Section 6), not app-layer business logic.
+3. **Factors never know their data's provenance.** Factors consume provenance-neutral typed semantic records: an opaque `input_id`, typed subject identity, value/unit/currency where relevant, valid period, confidence, and the snapshot cutoff. They must not receive or branch on `source`, `raw_ref`, accession, or extractor metadata. The runner uses the opaque IDs to record exact consumed-input lineage outside factor computation.
+4. **LLM surfaces read only typed `mart` projections.** MCP and `/chat` call bounded `ResearchQueryService` methods over a `mart_readonly` repository; they never execute arbitrary model-generated SQL or recompute factors. The database role has a `statement_timeout` (5s recommended), and repositories enforce pagination and row caps. The App implements the same semantic read contract directly against mart.
 5. **The App reads the database directly** (querying the mart schema), not through FastAPI. FastAPI's scope is narrowed to LLM-call orchestration only.
 6. **Every moomoo call must go through the global call-budget gateway** — no module decides for itself whether to call. **Currently single-user only; how this quota gets allocated across multiple users is a deliberately deferred architectural debt, not something to design now** — see Section 10. **This is a public repo: moomoo trading contexts/order calls are hard-forbidden (quote/read-only data only) and no real credential ever gets committed — see `CLAUDE.md`'s hard constraints and `.github/workflows/security-gate.yml`.**
 7. **Schema changes must raise an active alert.** Core point-in-time tables use dlt's frozen/contract mode, not the default auto-evolve.
-8. **Scheduling has exactly one authority: Dagster.** Phase -1/0 don't yet introduce Dagster scheduling — see Section 8.
+8. **Scheduling has exactly one authority: Dagster.** Local reconnaissance may use one-shot scripts, but Dagster is introduced with the first executable Gate 1 snapshot/factor slice and is the only authority for real recurring runs — see Section 8.
 9. **Observability is centered on the Dagster UI** — on the condition that Dagster's own runtime metadata is persisted (see Section 6), not left on its default local storage.
-10. **Supply-chain causal reasoning has a kill condition, defined in terms of confidence, not a separate accuracy concept**: no causal-reasoning step until the `confidence` of materialized supply-chain edges clears a bar (the bar itself is set after Phase -1 sampling, not guessed now).
+10. **Supply-chain propagation is scenario analysis unless causality is independently established.** Every propagation run declares a versioned shock, direction, materiality/sensitivity rule, horizon, and minimum edge confidence. Low-confidence paths are killed, but high confidence in a disclosed relationship does not by itself prove a causal effect.
 11. **No moon.** GitHub Actions with path filtering is sufficient.
 12. **Multi-source truth is resolved by declared fusion rules, never by ingestion recency.** Staging keeps every source's assertion side by side; the mart winner comes from the metric registry's per-field `source_priority` (Section 6, "Source fusion"), and the ruleset version is part of mart lineage. Corollary: `transaction_time` (= knowable-at) is always written explicitly from a source property, never defaulted to the insert clock, and every staging row also carries `recorded_at` (ingestion clock, audit only) plus — for parsed facts — a `mapping_version`, so "the data changed" and "the cleaning logic changed" stay distinguishable forever.
 
@@ -45,18 +45,18 @@ L1 Storage layer          ── S3-compatible object storage: immutable source-
                               → mart (clean point-in-time result tables, flattened 2D projections of the KG where applicable)
 L2 Factor computation     ── libs/factors, wrapped as Dagster assets, code_version + data_version tracked (see Section 9 exception for LLM-assisted extraction factors)
                               - base factors    consume staging (incl. KG) data directly
-                              - composite factors consume other factors' mart outputs; confidence = min() of all inputs consumed
+                              - composite factors reload other factors' mart outputs; confidence cannot exceed the minimum consumed confidence, and a versioned stricter policy is allowed
 L3 Analytics modules      ── the 7 concrete tools (Section 7)
-L4 Backtest/portfolio validation ── historical replay at the staging layer
-L5 Consumption layer      ── App (reads mart directly) + LLM chat (mart read-only SQL / tool calls)
+L4 Backtest/portfolio validation ── PIT decision snapshots + a separate monotonic future market-event stream
+L5 Consumption layer      ── App direct mart adapter + typed MCP/ResearchQueryService tools used by `/chat`
 ```
 
 ### 2.2 Service Topology and Priority (the four services are not peers)
 
 - **Tier 0 (needed now)**: Postgres + S3-compatible raw archive + the ingestion part of data-engine (dlt adapters)
-- **Tier 1 (used in Phase 1-2)**: `libs/factors` + the mart schema
-- **Tier 2 (starting in Phase 3)**: Dagster scheduling/UI, Dokploy Staging deployment; Production remains Phase 6-gated
-- **Tier 3 (explicitly deferred to Phase 7)**: `llm-service`'s self-built `/chat` interface, `app-web`'s chat UI. **Exception: the MCP endpoint** — it reuses the same `libs/factors` functions and needs no new UI; wiring it into Claude Desktop/claude.ai is nearly free, and can happen well before the self-built `/chat`.
+- **Tier 1 (Gate 1 onward)**: `libs/factors`, the mart schema, and Dagster asset execution; the first real recurring run already uses Dagster
+- **Tier 2 (Gate 1 Staging through Gate 4 Production)**: persistent Dagster scheduling/UI plus Dokploy environments; Production stays isolated shadow output until the Gate 4 graduation decision
+- **Tier 3 (Gate 3 consumption, deployed proof in Gate 4)**: MCP first, then reports/cards and the App; `llm-service`'s self-built `/chat` and `app-web` chat UI remain the last consumption surface
 
 The four application units exchange structured data only through Postgres. The
 data-engine/runtime boundary additionally uses S3-compatible object storage as
@@ -86,15 +86,15 @@ the immutable raw archive; object storage is not an App/LLM integration path.
 ### 3.1 Environment Model and Promotion Gates
 
 The runtime keeps six logical tiers because local tests, GitHub CI, and a future
-PR preview have different dependency-substitution semantics. Only four actual
-environments are provisioned in the active rollout:
+PR preview have different dependency-substitution semantics. The table below is the
+target active rollout, not a claim that every environment has passed its gate:
 
 | Actual environment | Logical tier(s) | Purpose | Data policy |
 |---|---|---|---|
 | Local | `local_dev`, `local_test` | Development and fixture replay | Fixtures by default; developer-owned Compose Postgres + MinIO |
 | GitHub CI | `github_ci` | Code, DDL, image, security, and runtime-contract validation | Ephemeral fixtures/mocks; no real source credentials |
 | Staging | `staging` | Real pipeline, point-in-time replay, and bounded backtest validation | Real sources; isolated canary universe and credentials |
-| Production | `production` | Authoritative raw/staging/mart data and versioned strategy outputs | Real production universe; isolated credentials and storage |
+| Production | `production` | Isolated canary/shadow first; authoritative research only after Gate 4 graduation | Exact approved Research Catalog/universe; isolated credentials and storage |
 
 `preview` remains a logical tier but no preview environment is provisioned until
 the Web application needs per-PR visual review.
@@ -105,6 +105,14 @@ after the Staging pipeline/backtest gates and a human approval. Staging and
 Production never share writable Postgres databases, S3 buckets, Dagster metadata,
 API ledgers, or Vault secret paths. Strategy computation remains in
 `libs/factors`; environments only schedule and materialize versioned results.
+
+The promoted unit is a versioned release manifest, not one ambiguous application
+image. It binds the App, LLM service, data-engine/Dagster execution artifact,
+migrations, Research Catalog and SLO versions, configuration hashes, and accepted
+consumer artifacts. Manual host sweeps remain reconnaissance/bootstrap tools and can
+never satisfy a scheduled-run gate. The deployed Dagster resource contract must reach
+the host-only moomoo OpenD boundary without exposing OpenD publicly; #11 owns the
+executable connectivity and negative-network proof.
 
 ---
 
@@ -119,10 +127,11 @@ API ledgers, or Vault secret paths. Strategy computation remains in
   /contracts           Python: sample-aware cross-module DTOs + storage/repository/backtest ports;
                         no computation logic
   /factors             Python: the single implementation of the seven modules; function signatures
-                        align with the eventual Dagster asset convention starting from Phase -1
+                        align with the executable Dagster asset convention frozen by Gates 0-1
     /base              Factors that consume staging (incl. KG) data directly
     /composite         Factors that consume other factors' mart outputs (e.g., module 7's three-tier tagging);
-                        confidence = min() of all consumed inputs
+                        confidence cannot exceed the minimum consumed confidence;
+                        a versioned stricter policy is allowed
     /shared            Entity resolution (KG read/write) + LLM structured-extraction primitive,
                         used by both base and composite factors, not reimplemented per module
   /runtime             Python: environment/dependency manifest, Postgres/KG/S3 probes, and the
@@ -144,8 +153,8 @@ API ledgers, or Vault secret paths. Strategy computation remains in
 | SEC EDGAR | Official structured financial data | `data.sec.gov/api/xbrl/companyfacts/CIK##########.json`; User-Agent must include an email. Financial companies have no gross-profit field, needs an industry branch. Headcount is free text, needs extraction with a fallback. |
 | yfinance | Fallback source for daily price data | Unofficial, no SLA, fallback only |
 | Twelve Data | Official source for daily price/fundamentals | One of the primary sources for price data |
-| moomoo | Rate-limited (bursts/30s), not a monthly quota — see below | Whether it has analyst ratings, ETF holding weights, or supply-chain fields — **all unverified, don't assume it does**, see Phase -1 |
-| Historical analyst ratings — alternate source | **To be confirmed, currently unresolved** | If the moomoo audit confirms it has none, Phase -1 needs to scout free/low-cost rating archives; the analyst-backtest module is marked blocked until a source is confirmed, not deleted from the roadmap |
+| moomoo | Rate-limited (bursts/30s), not a monthly quota — see below | Historical per-analyst rating events are confirmed. Historical public availability for backtest eligibility still requires independent evidence; vendor backfill/update time is not a substitute. ETF weights and company-level supply-chain edges are not sourced from moomoo. |
+| Historical analyst ratings — fallback | Required only if moomoo history or usage rights fail the production source gate | Any fallback must preserve analyst identity, recommendation time, independently defensible public availability, vendor revision time, target/rating semantics, and usage/retention rights. |
 | ETF holdings weight data | **Confirmed (2026-07-07): SEC EDGAR N-PORT-P** | Monthly per-series filings, per-holding `pctVal` + CUSIP (verified on QQQ and ARKK; 2026-07-11 also on IVV, AGIX, MCHI). Pitfalls: the raw XML is `primary_doc.xml` (the filing's `primaryDocument` field points at the XSL-rendered HTML); multi-series trusts (e.g. ARK) must be queried by series ID via browse-edgar, not by trust CIK; foreign holdings carry CUSIP `000000000`, so `same_as` resolution needs an ISIN/name fallback. **SPY is a UIT and absent from SEC's fund-ticker mapping — proxy the S&P 500 with IVV/VOO.** The publicly available filing is the last month of each fiscal quarter (~1-3 months behind) — fine for defining a universe, not a live holdings feed. |
 
 **moomoo quota, corrected 2026-07-10**: moomoo's own "Authorities and Quota" docs only define two quota systems — a *subscription* quota (real-time push, tiered 100/300/1000/2000 by account assets/trade volume) and a *historical-candlestick* quota (per unique stock per rolling window, not per call). Fundamental/quote endpoints (`get_financials_statements`, `get_research_rating_summary`, `get_valuation_detail`, etc. — everything the Phase -1 moomoo audit actually uses) appear in neither table; they're only rate-limited (bursts per 30s), not capped at a monthly total. The "2,000 calls/month" figure that was previously written here conflated the subscription-quota tier ceiling with a call budget — there is no evidence for a real monthly cap on these endpoints. `moomoo_ledger.py`'s gate is kept anyway as a defensive throttle/audit trail (Section 1 rule 6's "no module decides for itself whether to call" principle still holds), not because 2,000/month is a real moomoo-side limit.
@@ -280,40 +289,42 @@ Other tables: `api_call_ledger` (moomoo quota ledger), `ingestion_health_log` (o
 
 ## 7. The Seven Analytics Modules
 
-Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — they consume staging/KG data directly. Module 7 is a **composite factor** (`libs/factors/composite`) — it consumes other modules' mart outputs, and its own confidence is the min() of everything it reads.
+Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`libs/factors/composite`) — it reloads other modules' materialized mart outputs, and its confidence cannot exceed the minimum confidence consumed; a declared versioned policy may be stricter.
 
 1. **PEG**: switchable growth-rate conventions
 2. **Gross profit per employee**: financial/non-financial branch, headcount gaps explicitly flagged rather than silently dropped
-3. **Supply-chain relationship graph + causal reasoning**: graph first (KG `supplies_to` edges), causal reasoning gated behind the confidence-based kill condition (Section 1, rule 10)
-4. **Analyst backtesting**: **two paths** — Path A (moomoo confirmed to have historical ratings) uses it directly; Path B (it doesn't) marks this blocked, Phase -1 scouts alternate sources, module stays on the roadmap
-5. **ETF virtual company**: depends on a holdings-weight data source, must be confirmed in Phase -1
+3. **Supply-chain relationship graph + confidence-gated scenario exposure**: graph first (KG `supplies_to` edges); path propagation must declare a versioned shock/exposure scenario, direction, materiality/sensitivity, and confidence kill condition. It may be described as causal only after independent causal evidence, not merely because an edge is high-confidence.
+4. **Analyst backtesting**: moomoo historical rating depth is confirmed, but only events with independently defensible public availability may enter PIT scoring; backfilled rows remain unavailable before that time
+5. **ETF virtual company**: SEC N-PORT-P is the confirmed holdings-weight source; calculations must respect report/filing lag, fund-series identity, instrument type, unresolved weight, currency, and period alignment
 6. **Pure-blood company screening**: LLM-assisted semantic classification of segment revenue
 7. **Three-tier valuation tagging** (composite): sorts a company into the traditional / tech / large-model-native P/S tier (Vision, "large-model-driven company" framework) by reading module 2's gross-profit-per-employee output (and other base factors as needed) — this is a screening/interpretation layer expressed as a factor, not app-layer logic (Section 1, rule 2)
 
 ---
 
-## 8. Implementation Phases and Verification Criteria
+## 8. Release Gates and Verification Criteria
 
-| Phase | Goal | Verification | Infrastructure scope |
+| Gate | Goal | Verification | Infrastructure scope |
 |---|---|---|---|
-| Phase -1 | Data reconnaissance + **data availability matrix** (below) | Matrix surfaces at least 3 unexpected findings; ETF-weight source and analyst-rating alternate source must reach a definitive yes/no | Local scripts, no Dagster/Dokploy |
-| Phase 0 | Walking skeleton, function signatures aligned to the future Dagster asset convention | Querying the value as of some historical point matches what was actually disclosed at that time | Local Compose + GitHub CI; no deployed scheduler |
-| Phase 1 | PEG + ETF virtual company (if the weight source is confirmed) | Manually check PEG for 3 stocks; reverse-engineer a real ETF | Dagster introduced (optional) |
-| Phase 2 | Gross profit / headcount | Spot-check 10 companies, ≥90% accuracy | Dagster |
-| Phase 2.5 | Three-tier valuation tagging (module 7, composite factor over Phase 2's output) | Cross-check tier assignment against a handful of companies with an obvious, undisputed tier (e.g. a clear large-model-native name and a clear traditional name) — the boundary cases are exactly what Phase -1/2 sample data should surface, not something to pre-guess | Dagster |
-| Phase 3 | Analyst backtest + activate the real Staging pipeline | Two consecutive Dagster-scheduled canary runs prove idempotency, new vintages, lineage, and frozen-schema stability | Dagster + Dokploy Staging deployment |
-| Phase 4 | Supply-chain relationship graph | Manually verify edge plausibility | |
-| Phase 5 | Pure-blood company screening | Spot-check top 10 for plausibility | |
-| Phase 6 | Backtest and portfolio validation + Production readiness | Direction matches a known strategy's actual performance; backup/restore and exact-image promotion gates pass | Production is initialized only after this gate |
-| Phase 7 | App / MCP (priority) / `/chat` (Tier 3, last) | Walk the full pipeline end to end once | |
+| Gate 0: Semantic & Data Closure | Freeze research semantics, issuer/security/listing and currency/time/return rules, executable snapshot/extraction/invocation/lineage contracts, longitudinal source rights, and module coverage/freshness SLOs | Contract examples and fixture/Postgres conformance pass; every required field has a viable longitudinal source and every module has an independent oracle and usable-coverage denominator | Local/CI only; no interface is called v1-frozen before this gate |
+| Gate 1: Core Strategy MVP | Gross profit per employee, financial branch, three-tier valuation, `large_model_value_v0`, deterministic replay, mart/report, and real Staging canary | Independent core oracle passes; local replay has required usable coverage and no look-ahead; Staging proves idempotent scheduled operation | Dagster enters with the first executable snapshot/factor slice; persistent Staging by gate end |
+| Gate 2: Seven Research Modules | Add all PEG conventions, analyst track records, ETF virtual company, supply-chain scenario exposure, and pure-blood screening through the shared PIT path | Every module passes a sealed independent holdout and one shared seven-module replay; required subjects cannot pass as `unavailable` | Dagster assets and module-specific longitudinal data planes in Local/CI/Staging |
+| Gate 3: Research Consumption | Stable mart reads, MCP, reports/cards, App, and deferred `/chat` | Canonical Vision questions agree across fixture consumers; report/card facts come only from materialized outputs | App reads mart directly; MCP/chat use typed read tools; no raw/staging consumer access |
+| Gate 4: Production Validation & Graduation | Multi-regime data/strategy checks, all-module Staging soak, recovery/exact-release promotion, deployed Production consumers, curated-universe expansion, and shadow graduation | Known-reference sanity, independent price/data reconciliation, SLO soak over natural source changes, backup/restore, real-client questions, and final Vision audit all pass | Isolated Production is initialized as canary/shadow and becomes authoritative research only after recorded graduation |
 
-**Data availability matrix**: not a document to file away once written. Every factor function's return value carries a `data_availability: "verified" | "unverified"` field matching the matrix, so both the App display and LLM answers can show whether the number behind them still hasn't been verified.
+**Availability and validation are separate**. Every factor output carries an
+`availability_status` such as `available`, `unavailable`, `stale`, `excluded`,
+`low_confidence`, or `error`, plus an `input_evidence_status` for the selected semantic
+records and a separate `factor_validation_status` for the factor version's independent
+golden/holdout gate. Only applicable, available, fresh outputs from an accepted factor
+version count toward the module's versioned usable-coverage SLO. Consumers display all
+three dimensions rather than conflating source evidence with formula validation.
 
-Environment sequencing is therefore part of the phase contract: Local/CI are
-available in Phase 0; no real scheduled Staging run may use cron or GitHub
-Actions before Dagster becomes the single scheduling authority in Phase 3; and
-Production remains closed until the Phase 6 data, backtest, recovery, and
-promotion gates pass.
+Environment sequencing is part of the gate contract. Local/CI exist throughout;
+Dagster is introduced early in Gate 1 and is the only authority for real scheduled
+runs; Production remains isolated shadow output until Gate 4 data, strategy,
+consumer, recovery, soak, and human-graduation evidence all pass. Implementation
+inside later gates may proceed in parallel when leaf dependencies allow it, but a
+release gate cannot be declared complete out of order.
 
 ---
 
@@ -323,8 +334,8 @@ promotion gates pass.
 - yfinance has no SLA — can't be the sole dependency on a critical path
 - LLM-generated ad hoc SQL touching raw/staging carries a semantic look-ahead-bias risk without raising an error — already blocked off via role permissions (Section 6)
 - dlt schema evolution must use frozen mode for core tables
-- **Dagster's code_version/data_version assumes computation is deterministic.** LLM-based extraction (e.g., headcount) is inherently non-deterministic — rerunning the same code_version can produce slightly different results, which the mechanism may misread as "data_version changed, recompute downstream" — or conversely, treat a genuine restatement signal as noise. This will surface in Phase 2 (headcount extraction) — for LLM-extraction-based factors, the data_version hash should be based on the extraction result itself, not the raw call each time; set a manual change-tolerance threshold where needed rather than relying on the default automatic hash.
-- **LLM self-reported confidence is a starting point, not a ground truth.** Phase -1/2 use a plain self-reported 0-1 score in the extraction prompt (cheapest to ship). It may turn out poorly calibrated once real samples come in — the fallback is multi-sample self-consistency (same fact extracted N times, agreement rate as confidence), which costs several times the LLM calls. Don't build the self-consistency path until sample data shows the self-reported score is actually unreliable.
+- **Dagster's `code_version`/`data_version` assumes deterministic inputs.** LLM extraction is therefore a separate, versioned, append-only step. Its invocation binds model, instructions, schema, and decoding settings; the stored semantic result and evidence spans determine downstream `data_version`. Replay reuses that stored result and never silently calls the model again. A new extraction is a new invocation/vintage, not sampling noise hidden behind the old ID.
+- **LLM self-reported confidence is not ground truth.** It may be retained as one signal, but Gate 0 freezes the confidence policy and Gate 2's sealed holdout measures calibration. `low_confidence` remains distinct from evidence verification and cannot count toward usable coverage. More expensive self-consistency or review paths are introduced only through a new versioned policy backed by that evidence.
 - Discriminated unions only reliably generate `oneOf` when declared at the top level with an explicit discriminator; nested cases are a known open issue — handle if/when encountered
 
 ---
@@ -337,14 +348,22 @@ promotion gates pass.
 
 ---
 
-## 11. Phase -1 Starter Checklist
+## 11. Current Baseline and Next Gate
 
-1. Initialize the monorepo directory structure (Section 4)
-2. `db/migrations`: stub out the four schemas (raw/staging/mart/dagster) + `staging.kg_entities`/`staging.kg_edges` + `roles.sql`
-3. `libs/factors`: a factor registry skeleton split into `base`/`composite`/`shared`, function signatures aligned to the future Dagster asset convention (even without wiring into Dagster yet) — every base-factor signature carries `confidence` in and out
-4. Local scripts (no Dagster/Dokploy): connect to the SEC company-facts API, pull samples for test names like DDOG, NICE, SHOP, DUOL
-5. **KG entity-resolution smoke test, one concrete sample per entity type** — not just companies: one ETF, one analyst, one supply-chain relationship (e.g. a real DDOG supplier), each run through the `same_as`/`supplies_to`/`covers` edge machinery end to end. This is what actually validates the KG design, not just a checklist item
-6. **Data availability matrix**: confirm the ETF-holdings-weight source and moomoo's historical-rating coverage definitively, rather than continuing to assume
-7. `.github/workflows`: a minimal path-filtered CI skeleton
+The initial reconnaissance established the monorepo, four schemas, factor registry
+skeleton, runtime contracts, path-filtered CI, SEC/price/filing/N-PORT samples, KG
+identity smoke cases, and the first typed corpus audit. It also confirmed SEC N-PORT-P
+as the delayed ETF-holdings source and moomoo historical analyst events as a candidate
+input whose PIT public-availability and usage rights still need proof.
 
-Everything else gets resolved inside Claude Code as the actual code takes shape.
+That baseline is enough to design and test boundaries; it is not a release gate. The
+next blocking work is the [Semantic & Data Closure epic #56](https://github.com/wangzitian0/truealpha/issues/56):
+
+1. freeze issuer/security/listing, currency, time, return, universe, and research semantics (#57 and #59);
+2. close executable snapshot, extraction, invocation, replay, and lineage contracts (#58);
+3. prove longitudinal source coverage and permitted Production usage (#60); and
+4. define module applicability, usable coverage, freshness, soak, and graduation SLOs (#61).
+
+No interface is called v1-frozen, and no sample-readiness boolean is promoted into a
+strategy or Production claim, until those issues produce their specified independent
+and executable evidence.

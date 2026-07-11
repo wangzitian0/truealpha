@@ -25,7 +25,7 @@ db                  SQL     raw / staging / mart / dagster schemas + mart_readon
 make install        # uv sync + bun install
 make runtime-up     # Postgres/KG + MinIO with schemas/bucket initialized
 cp .env.example .env  # then set SEC_USER_AGENT
-make sample         # Phase -1: pull SEC samples for DDOG / NICE / SHOP / DUOL
+make sample         # capture the checked-in SEC reconnaissance corpus
 make check          # lint + typecheck + test
 ```
 
@@ -51,6 +51,8 @@ python -m tools.deploy_v2 --service truealpha/app      --type staging --iac-ref 
 
 ## Status
 
-**Phase 0 — walking skeleton.** Phase -1 reconnaissance and runtime/contracts
-foundations are complete. Factor implementations remain registered stubs while
-point-in-time ingestion is built. CI is path-filtered per app (`.github/workflows/`).
+**Walking skeleton; Gate 0 is active.** Initial reconnaissance and runtime/contracts
+foundations exist, but the executable interfaces are not frozen until semantic, source,
+lineage, research-oracle, and coverage/SLO closure issues #56-#61 pass. Factor
+implementations remain registered stubs while the point-in-time path is built. CI is
+path-filtered per app (`.github/workflows/`).
