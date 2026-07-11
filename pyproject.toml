@@ -10,6 +10,22 @@ members = [
     "libs/runtime",
 ]
 
+[dependency-groups]
+dev = ["mypy>=1.14"]
+
+[tool.mypy]
+python_version = "3.12"
+files = [
+    "apps/data-engine/src",
+    "apps/llm-service/src",
+    "libs/contracts/src",
+    "libs/factors/src",
+    "libs/runtime/src",
+]
+# Third-party sources without stubs (moomoo SDK, boto3's dynamic client) —
+# missing-import noise, not a type-safety signal for our own code.
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

@@ -272,10 +272,10 @@ def _verified_evidence(coverage: dict, sample_root: Path) -> tuple[dict[str, tup
     errors: list[str] = []
     cases: dict[str, EvidenceCase] = {}
     for raw_case in coverage.get("evidence_cases", []):
-        case = EvidenceCase.model_validate(raw_case)
-        if case.evidence_id in cases:
-            errors.append(f"duplicate evidence ID: {case.evidence_id}")
-        cases[case.evidence_id] = case
+        parsed = EvidenceCase.model_validate(raw_case)
+        if parsed.evidence_id in cases:
+            errors.append(f"duplicate evidence ID: {parsed.evidence_id}")
+        cases[parsed.evidence_id] = parsed
 
     verified: dict[str, tuple[EvidenceCase, ...]] = {}
     for requirement_id, evidence_ids in coverage.get("requirement_evidence", {}).items():

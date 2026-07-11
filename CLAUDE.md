@@ -4,7 +4,7 @@ This file is the context Claude Code loads every session when working in this re
 
 ## What This Is
 
-A monorepo for a fundamental and supply-chain research tool: ingestion (dlt) + immutable raw bytes (S3-compatible storage) + warehouse/KG metadata (Postgres) + factor computation (`libs/factors`, orchestrated by Dagster) + consumption layer (App reads the database directly + LLM chat via MCP / constrained SQL).
+A monorepo for a fundamental and supply-chain research tool: ingestion (httpx sweep scripts today; dlt arrives Phase 0/1) + immutable raw bytes (S3-compatible storage) + warehouse/KG metadata (Postgres) + factor computation (`libs/factors`; Dagster orchestration arrives Phase 3) + consumption layer (App reads the database directly + LLM chat via MCP / constrained SQL).
 
 Why this exists and what investment questions it answers → read `vision.md`.
 Full technical architecture, schema design, implementation phases, known risks → read `init.md`.
@@ -13,6 +13,7 @@ Neither needs to be read every session — read them on demand per "Reference Do
 ## Hard Constraints (IMPORTANT — violating these produces bugs that are hard to notice)
 
 - **Point-in-time correctness**: time-series/financial data distinguishes `valid_time` from `transaction_time`. Writes to the staging layer are append-only — never UPDATE or overwrite an old vintage. Factor computation and backtesting always operate on "what was visible as of a given historical point in time."
+- **Two time axes on every staging row, and fusion never picks by recency**: `transaction_time` (= knowable-at) is written explicitly from a source property — never the insert clock (no column defaults; a backfill stamped with now() silently corrupts PIT). `recorded_at` is the ingestion clock, audit only. When several sources assert the same field, the mart winner comes from the metric registry's per-field `source_priority` (`libs/contracts` `metrics.py`, init.md Section 6 "Source fusion") — never from which row landed last. Parsed facts also carry `mapping_version` so a reparse is distinguishable from a restatement.
 - **Raw storage is split by responsibility**: S3-compatible storage holds immutable source-response bytes; Postgres `raw.fetches` holds checksums, object pointers, timestamps, and lineage. Apps and the LLM never use object storage as a service-to-service data path.
 - **Computation logic exists in exactly one place**: PEG / gross-profit-per-employee / supply-chain and other factor logic is implemented once, in `libs/factors`. Both `apps/data-engine` and `apps/llm-service` import from there — never reimplement. This includes screening/tagging logic like the three-tier valuation framework — it's a **composite factor** (reads other factors' mart outputs), not app-layer business logic.
 - **Factors consume `(entity_id, value, confidence, as_of)` — never the data's source.** Every staging/KG row has a mandatory `confidence` (0-1); a factor must never branch on "this came from SEC vs. moomoo vs. an LLM extraction." A composite factor's own confidence is `min()` of everything it reads.
@@ -25,7 +26,7 @@ Neither needs to be read every session — read them on demand per "Reference Do
 
 ```
 /apps
-  /data-engine    Python: dlt pipelines + dagster assets/schedules
+  /data-engine    Python: source adapters + sweep scripts (dlt/dagster in later phases)
   /app-web        TypeScript: Next.js, reads the mart schema via a read-only account
   /llm-service    Python: FastAPI, MCP endpoint + /chat SSE endpoint
 /libs
@@ -49,7 +50,8 @@ make install          # uv sync --all-packages + bun install + pre-commit
 make runtime-up       # local runtime: Postgres/KG + MinIO + raw bucket (docker compose)
 make runtime-check    # probe Postgres, KG tables, and object storage
 make db-migrate       # re-apply db/ DDL to a running Postgres (idempotent)
-make check            # ruff + typecheck + pytest (DB/S3 integration tests skip without a reachable runtime)
+make check            # ruff + mypy + TS typecheck + pytest (DB/S3 integration tests skip without a reachable
+                      # runtime locally; CI sets TRUEALPHA_REQUIRE_RUNTIME=1 so silent skips fail there)
 
 # Ingestion (Phase 0) — order matters; each script's docstring has the details
 uv run --package truealpha-data-engine python apps/data-engine/scripts/bootstrap_universe.py     # ETF N-PORTs + OpenFIGI -> KG universe

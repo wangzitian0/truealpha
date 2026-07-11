@@ -46,11 +46,20 @@ db-down: runtime-down
 # The initdb mount in docker-compose.yml only runs on a FRESH volume — an existing
 # dev DB never picks up new migration files by itself. All DDL is `if not exists`,
 # so re-applying everything is safe and cheap.
+# Prefers the compose container; falls back to host psql (DATABASE_URL or the
+# conventional local postgres) so a docker-less machine can still migrate.
 db-migrate:
-	@for f in db/migrations/*.sql db/roles.sql; do \
-		echo "== $$f"; \
-		docker compose exec -T postgres psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-truealpha} -v ON_ERROR_STOP=1 < $$f || exit 1; \
-	done
+	@if [ -n "$$(docker compose ps -q postgres 2>/dev/null)" ]; then \
+		for f in db/migrations/*.sql db/roles.sql; do \
+			echo "== $$f"; \
+			docker compose exec -T postgres psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-truealpha} -v ON_ERROR_STOP=1 < $$f || exit 1; \
+		done; \
+	else \
+		for f in db/migrations/*.sql db/roles.sql; do \
+			echo "== $$f"; \
+			psql "$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}" -v ON_ERROR_STOP=1 -f $$f || exit 1; \
+		done; \
+	fi
 
 web:
 	cd apps/app-web && bun run dev
@@ -76,6 +85,7 @@ format:
 	uv run ruff format apps libs
 
 typecheck:
+	uv run mypy
 	cd apps/app-web && bun run typecheck
 
 test:
