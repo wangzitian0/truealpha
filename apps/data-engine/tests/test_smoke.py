@@ -4,7 +4,11 @@ from data_engine.sources.sec import COMPANY_FACTS_URL
 from pydantic import ValidationError
 
 
-def test_settings_defaults():
+def test_settings_defaults(monkeypatch):
+    # _env_file=None only isolates the .env FILE; ambient variables (CI sets
+    # APP_ENV=ci) still win — strip them so this genuinely tests the defaults.
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     s = Settings(_env_file=None)
     assert s.app_env == "dev"
     assert s.sec_user_agent == ""
