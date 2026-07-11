@@ -5,6 +5,7 @@ provenance stays in raw/staging (via raw_ref), never in factor logic (init.md Se
 """
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
@@ -35,8 +36,8 @@ class Fact(BaseModel):
 
     entity_id: str  # staging.kg_entities.id (unified_id)
     metric: str
-    value: float | None
-    confidence: float = Field(ge=0.0, le=1.0)
+    value: Decimal | None
+    confidence: Decimal = Field(ge=0, le=1)
     as_of: datetime
     fiscal_period: str | None = None
 
@@ -46,8 +47,8 @@ class FactorResult(BaseModel):
 
     factor: str
     entity_id: str
-    value: float | None
-    confidence: float = Field(ge=0.0, le=1.0)
+    value: Decimal | None
+    confidence: Decimal = Field(ge=0, le=1)
     as_of: datetime
     data_availability: DataAvailability = "unverified"
     # Explicit gaps beat silent drops (e.g. module 2 flags missing headcount).

@@ -1,7 +1,7 @@
 -- Operational tables (init.md Section 6, "other tables").
 
 -- Every moomoo call goes through the global call-budget gateway; this is its ledger
--- (2,000 calls/month, init.md Section 1 rule 6).
+-- The local budget is a defensive throttle, not a moomoo-side monthly quota.
 create table if not exists staging.api_call_ledger (
     id           bigint generated always as identity primary key,
     source       text not null,               -- 'moomoo' for now
