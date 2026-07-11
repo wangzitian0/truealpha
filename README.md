@@ -25,7 +25,7 @@ db                  SQL     raw / staging / mart / dagster schemas + mart_readon
 make install        # uv sync + bun install
 make runtime-up     # Postgres/KG + MinIO with schemas/bucket initialized
 cp .env.example .env  # then set SEC_USER_AGENT
-make sample         # Phase -1: pull SEC samples for DDOG / NICE / SHOP / DUOL
+make sample         # capture the checked-in SEC reconnaissance corpus
 make check          # lint + typecheck + test
 ```
 
@@ -44,6 +44,11 @@ images — `release-images.yml` pushes `ghcr.io/wangzitian0/truealpha-app-web` a
 owns deployed Compose, Vault secrets, Traefik routes, persistent Postgres, and
 the environment-specific S3-compatible storage binding. Deploy (from `repo/`):
 
+Those two images are the current scaffold, not a complete Production release. Gate 4
+requires #11/#52 to add an immutable data-engine/Dagster artifact and bind every service,
+migration, catalog/SLO version, and configuration hash in one signed release manifest;
+manual host sweeps cannot satisfy scheduled or promotion evidence.
+
 ```bash
 python -m tools.deploy_v2 --service truealpha/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 python -m tools.deploy_v2 --service truealpha/app      --type staging --iac-ref vX.Y.Z --domain zitian.party
@@ -51,6 +56,8 @@ python -m tools.deploy_v2 --service truealpha/app      --type staging --iac-ref 
 
 ## Status
 
-**Phase 0 — walking skeleton.** Phase -1 reconnaissance and runtime/contracts
-foundations are complete. Factor implementations remain registered stubs while
-point-in-time ingestion is built. CI is path-filtered per app (`.github/workflows/`).
+**Walking skeleton; Gate 0 is active.** Initial reconnaissance and runtime/contracts
+foundations exist, but the executable interfaces are not frozen until semantic, source,
+lineage, research-oracle, and coverage/SLO closure issues #56-#61 pass. Factor
+implementations remain registered stubs while the point-in-time path is built. CI is
+path-filtered per app (`.github/workflows/`).
