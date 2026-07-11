@@ -32,10 +32,16 @@ MINIO="platform-minio${SUFFIX}"
 echo "== repo: $REPO_DIR  env: $ENV_NAME"
 
 echo "== uv"
-if ! command -v uv >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/uv" ]; then
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-fi
 export PATH="$HOME/.local/bin:$PATH"
+if ! command -v uv >/dev/null 2>&1; then
+  # Deliberately NOT curl|sh here: this script runs as root on the VPS, and
+  # piping a remote installer into a root shell is a supply-chain hole. Install
+  # once, explicitly, from a pinned release you can inspect:
+  echo "uv is not installed. Install a pinned release first, e.g.:" >&2
+  echo '  curl -LsSfO https://github.com/astral-sh/uv/releases/download/0.9.26/uv-installer.sh' >&2
+  echo "  less uv-installer.sh   # inspect, then: sh uv-installer.sh" >&2
+  exit 1
+fi
 uv --version
 
 echo "== python deps"
@@ -54,14 +60,17 @@ get() { echo "$RENDERED" | grep "^$1=" | head -1 | cut -d= -f2- | tr -d '"'; }
 PG_PASSWORD=$(get DATABASE_URL | sed -E 's|^postgresql://postgres:([^@]*)@.*|\1|')
 [ -n "$PG_PASSWORD" ] || { echo "could not derive DB password from rendered env" >&2; exit 1; }
 
-# MinIO: prefer the compose bridge IP (fast, LAN-local); fall back to the
-# Traefik route if the container has no host-routable bridge address.
-MINIO_IP=$(docker inspect "$MINIO" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' | tr ' ' '\n' | grep -E '^172\.' | head -1 || true)
-if [ -n "$MINIO_IP" ] && curl -sf -m 3 "http://$MINIO_IP:9000/minio/health/live" >/dev/null; then
-  S3_ENDPOINT="http://$MINIO_IP:9000"
-else
-  S3_ENDPOINT="https://s3${SUFFIX}.zitian.party"
-fi
+# MinIO: prefer a host-routable container address (fast, LAN-local). Docker
+# bridge subnets are configurable, so probe EVERY address the container holds
+# instead of pattern-matching ranges — the health check decides reachability
+# (overlay addresses simply fail it). Fall back to the Traefik route.
+S3_ENDPOINT="https://s3${SUFFIX}.zitian.party"
+for ip in $(docker inspect "$MINIO" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'); do
+  if curl -sf -m 3 "http://$ip:9000/minio/health/live" >/dev/null; then
+    S3_ENDPOINT="http://$ip:9000"
+    break
+  fi
+done
 echo "   S3_ENDPOINT=$S3_ENDPOINT"
 
 umask 077

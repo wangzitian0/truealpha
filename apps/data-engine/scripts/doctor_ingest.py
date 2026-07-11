@@ -3,7 +3,8 @@
 Probes exactly what the ingestion path depends on, using the same settings the
 sweeps will use:
 
-- Postgres reachable + the runtime-contract tables exist (0004/0005 applied)
+- Postgres reachable + every table the sweeps touch exists (i.e. ALL of
+  db/migrations applied — the ledger is 0003, the runtime contracts 0004/0005)
 - object storage reachable + a raw_store write/read-back round-trip
   (content-addressed, so repeated runs re-use the same object)
 - moomoo OpenD TCP reachability (NO moomoo API call — zero quota; login state
@@ -38,7 +39,7 @@ def check_database() -> list[str]:
 
     problems = []
     try:
-        with psycopg.connect(settings.database_url, connect_timeout=5) as conn:
+        with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:
             for table in REQUIRED_TABLES:
                 if conn.execute("select to_regclass(%s)", (table,)).fetchone()[0] is None:
                     problems.append(f"missing table {table} (run the migrations: make db-migrate or docker-exec psql)")
@@ -54,7 +55,7 @@ def check_object_storage() -> list[str]:
     from truealpha_contracts import DataSource
 
     try:
-        with psycopg.connect(settings.database_url, connect_timeout=5) as conn:
+        with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:
             fetch_id = raw_store.insert_fetch(
                 conn,
                 source=DataSource.SEC,
