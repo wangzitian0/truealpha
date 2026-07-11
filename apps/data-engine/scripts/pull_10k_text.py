@@ -16,7 +16,8 @@ import re
 import sys
 from pathlib import Path
 
-from data_engine.sources.sec import _client, ticker_to_cik
+from data_engine.sources.sec import client as sec_client
+from data_engine.sources.sec import ticker_to_cik
 
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{doc}"
@@ -54,7 +55,7 @@ def main() -> None:
     tickers = sys.argv[1:] or ["DDOG"]
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for ticker in tickers:
-        with _client() as client:
+        with sec_client() as client:
             cik = ticker_to_cik(ticker)
             form, accession, doc = latest_annual(client, cik)
             resp = client.get(ARCHIVE_URL.format(cik=cik, accession=accession, doc=doc))

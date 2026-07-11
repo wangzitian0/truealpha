@@ -13,6 +13,9 @@ members = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+# The infra2 submodule has its own tooling — linting/formatting it from here
+# would dirty a foreign working tree.
+extend-exclude = ["repo"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

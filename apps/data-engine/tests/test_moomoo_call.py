@@ -5,8 +5,15 @@ from data_engine.sources import moomoo_ledger as ledger
 
 @pytest.fixture(autouse=True)
 def _isolated_ledger(tmp_path, monkeypatch):
+    # Pin the json backend: without this, a developer .env with
+    # MOOMOO_LEDGER_BACKEND=postgres would make these tests write fake rows
+    # into the real append-only staging.api_call_ledger (autocommitted).
+    monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 10)
+    # _call now throttles; keep the shared window empty so unrelated tests
+    # can't accumulate into a real 30s sleep.
+    ledger._recent_calls.clear()
 
 
 def test_call_records_success():

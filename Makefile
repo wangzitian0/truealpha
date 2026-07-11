@@ -1,4 +1,4 @@
-.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-down web llm sample lint format typecheck test check clean
+.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample lint format typecheck test check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -9,6 +9,7 @@ help:
 	@echo "  make stack-up     Build/start runtime + web + llm-service"
 	@echo "  make runtime-check Probe Postgres, KG tables, and object storage"
 	@echo "  make runtime-down Stop the local stack (keeps volumes)"
+	@echo "  make db-migrate   Re-apply db/ DDL to a running Postgres (idempotent)"
 	@echo ""
 	@echo "Run:"
 	@echo "  make web          Next.js dev server (apps/app-web)"
@@ -39,6 +40,15 @@ runtime-down:
 db-up: runtime-up
 
 db-down: runtime-down
+
+# The initdb mount in docker-compose.yml only runs on a FRESH volume — an existing
+# dev DB never picks up new migration files by itself. All DDL is `if not exists`,
+# so re-applying everything is safe and cheap.
+db-migrate:
+	@for f in db/migrations/*.sql db/roles.sql; do \
+		echo "== $$f"; \
+		docker compose exec -T postgres psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-truealpha} -v ON_ERROR_STOP=1 < $$f || exit 1; \
+	done
 
 web:
 	cd apps/app-web && bun run dev

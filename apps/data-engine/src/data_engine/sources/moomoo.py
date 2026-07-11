@@ -21,7 +21,7 @@ from contextlib import contextmanager
 import moomoo
 
 from data_engine.config import settings
-from data_engine.sources.moomoo_ledger import gate, record
+from data_engine.sources.moomoo_ledger import gate, record, throttle
 
 
 class MoomooConnectionError(Exception):
@@ -59,7 +59,7 @@ def connect() -> Iterator["moomoo.OpenQuoteContext"]:
 
 
 def _call(ctx, endpoint: str, caller: str, fn):
-    """Gate, call, record — the one path every moomoo call must go through.
+    """Gate, throttle, call, record — the one path every moomoo call must go through.
 
     moomoo's SDK return shape isn't uniform: most calls return (ret, data),
     but get_rating_change returns (ret, data, next_page, all_count). ret is
@@ -74,14 +74,31 @@ def _call(ctx, endpoint: str, caller: str, fn):
     via __cause__) so every caller-facing failure mode is one exception type.
     """
     gate(endpoint, caller)
+    throttle()
     try:
         result = fn(ctx)
     except Exception as e:
-        record(endpoint, caller, ok=False)
+        try:
+            record(endpoint, caller, ok=False)
+        except Exception as ledger_err:
+            # The ledger write failing must neither mask the original SDK error
+            # nor escape as a raw psycopg error no sweep handler knows.
+            raise MoomooConnectionError(
+                f"{endpoint} raised: {e} — and recording it failed too ({ledger_err}); this spent call is unaudited"
+            ) from e
         raise MoomooConnectionError(f"{endpoint} raised: {e}") from e
     ret, rest = result[0], result[1:]
     ok = ret == moomoo.RET_OK
-    record(endpoint, caller, ok)
+    try:
+        record(endpoint, caller, ok)
+    except Exception as ledger_err:
+        # Deliberately drop the payload: an unaudited-but-kept result would let
+        # raw fill up while the gate undercounts. Surfacing this as the one
+        # caller-facing exception type means sweeps log it, skip, and re-fetch
+        # (and re-record) the same call on a later run.
+        raise MoomooConnectionError(
+            f"{endpoint} succeeded but the ledger write failed ({ledger_err}); payload dropped — rerun re-fetches it"
+        ) from ledger_err
     if not ok:
         raise MoomooConnectionError(f"{endpoint} failed: {rest[0] if rest else 'unknown error'}")
     return rest[0] if len(rest) == 1 else rest
@@ -227,3 +244,60 @@ def get_owner_plate(ctx, code_list: list[str], *, caller: str = "probe_moomoo_ca
     """Sector/industry-plate classification for one or more stocks in a single
     call — pass the whole universe at once rather than one call per ticker."""
     return _call(ctx, "get_owner_plate", caller, lambda c: c.get_owner_plate(code_list))
+
+
+# moomoo's Python SDK doesn't expose these as enum classes (unlike e.g.
+# moomoo.Market) — it takes the raw Qot_Common.proto enum ints directly.
+FS_INCOME, FS_BALANCE_SHEET, FS_CASH_FLOW, FS_MAIN_INDEX = 1, 2, 3, 4  # FinancialStatementsType
+VALUATION_PE = 1  # ValuationType
+INTERVAL_YEAR10 = 7  # ValuationIntervalType
+
+# The per-ticker fundamental endpoint set, one registry shared by the capture/
+# probe scripts and the full-universe sweep so "which endpoints do we pull" is
+# defined exactly once. get_owner_plate isn't here — it batches many codes per
+# call and is handled separately by callers.
+FUNDAMENTAL_ENDPOINTS = {
+    "company_profile": lambda ctx, code, caller: get_company_profile(ctx, code, caller=caller),
+    "financials_income": lambda ctx, code, caller: get_financials_statements(
+        ctx, code, statement_type=FS_INCOME, caller=caller
+    ),
+    "financials_balance_sheet": lambda ctx, code, caller: get_financials_statements(
+        ctx, code, statement_type=FS_BALANCE_SHEET, caller=caller
+    ),
+    "financials_cash_flow": lambda ctx, code, caller: get_financials_statements(
+        ctx, code, statement_type=FS_CASH_FLOW, caller=caller
+    ),
+    "financials_main_index": lambda ctx, code, caller: get_financials_statements(
+        ctx, code, statement_type=FS_MAIN_INDEX, caller=caller
+    ),
+    "financials_revenue_breakdown": lambda ctx, code, caller: get_financials_revenue_breakdown(
+        ctx, code, caller=caller
+    ),
+    "valuation_pe": lambda ctx, code, caller: get_valuation_detail(
+        ctx, code, valuation_type=VALUATION_PE, interval_type=INTERVAL_YEAR10, caller=caller
+    ),
+    "analyst_consensus": lambda ctx, code, caller: get_analyst_consensus(ctx, code, caller=caller),
+    "rating_summary": lambda ctx, code, caller: get_rating_summary(
+        ctx, code, analyst_dimension=True, num=20, caller=caller
+    ),
+    "morningstar_report": lambda ctx, code, caller: get_research_morningstar_report(ctx, code, caller=caller),
+    "shareholders_overview": lambda ctx, code, caller: get_shareholders_overview(ctx, code, caller=caller),
+    "insider_trades": lambda ctx, code, caller: get_insider_trade_list(ctx, code, num=20, caller=caller),
+    "dividends": lambda ctx, code, caller: get_corporate_actions_dividends(ctx, code, caller=caller),
+    "short_interest": lambda ctx, code, caller: get_short_interest(ctx, code, num=20, caller=caller),
+}
+
+# What the current factor modules actually read (init.md Section 7: PEG, gross
+# profit/employee, analyst backtesting, revenue-share screening) — the default
+# sweep set. The rest of FUNDAMENTAL_ENDPOINTS is opt-in (--all-endpoints).
+CORE_ENDPOINTS = (
+    "company_profile",
+    "financials_income",
+    "financials_balance_sheet",
+    "financials_cash_flow",
+    "financials_main_index",
+    "financials_revenue_breakdown",
+    "valuation_pe",
+    "analyst_consensus",
+    "rating_summary",
+)

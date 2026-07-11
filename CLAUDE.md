@@ -44,17 +44,19 @@ Neither needs to be read every session — read them on demand per "Reference Do
 
 ## Commands
 
-Current commands:
-
 ```bash
-# Python (apps/data-engine, apps/llm-service, libs/*)
-uv sync --all-packages
-uv run pytest
+make install          # uv sync --all-packages + bun install + pre-commit
+make runtime-up       # local runtime: Postgres/KG + MinIO + raw bucket (docker compose)
+make runtime-check    # probe Postgres, KG tables, and object storage
+make db-migrate       # re-apply db/ DDL to a running Postgres (idempotent)
+make check            # ruff + typecheck + pytest (DB/S3 integration tests skip without a reachable runtime)
 
-# Local runtime (Postgres/KG + MinIO) or the full application stack
-make runtime-up
-make runtime-check
-make stack-up
+# Ingestion (Phase 0) — order matters; each script's docstring has the details
+uv run --package truealpha-data-engine python apps/data-engine/scripts/bootstrap_universe.py     # ETF N-PORTs + OpenFIGI -> KG universe
+uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_sec_facts.py        # company-facts -> raw (runs anywhere, no quota)
+# The two below need the moomoo OpenD host and MOOMOO_LEDGER_BACKEND=postgres:
+uv run --package truealpha-data-engine python apps/data-engine/scripts/probe_moomoo_nonus.py     # HK/CN endpoint spot check BEFORE the full sweep
+uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_moomoo_fundamentals.py [--dry-run]
 
 # TypeScript (apps/app-web)
 cd apps/app-web && bun install

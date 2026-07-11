@@ -798,6 +798,8 @@ source = { editable = "apps/data-engine" }
 dependencies = [
     { name = "httpx" },
     { name = "moomoo-api" },
+    { name = "pandas" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "truealpha-contracts" },
     { name = "truealpha-factors" },
@@ -814,6 +816,8 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "moomoo-api", specifier = ">=10.8.6808" },
+    { name = "pandas", specifier = ">=2.0.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "truealpha-contracts", editable = "libs/contracts" },
     { name = "truealpha-factors", editable = "libs/factors" },
