@@ -26,11 +26,13 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Real Postgres so the KG / raw-store / ledger integration tests run in CI
-    # instead of skipping (they skip gracefully where no DB is reachable).
+    # Real Postgres + MinIO so the KG / raw-store / ledger integration tests run
+    # in CI instead of skipping (they skip gracefully where unreachable).
+    # bitnami/minio rather than minio/minio: GitHub service containers can't
+    # override the container command, and the official image needs `server /data`.
     services:
       postgres:
-        image: postgres:15-alpine
+        image: postgres:16-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -42,6 +44,13 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
+      minio:
+        image: bitnami/minio:2025.9.7
+        env:
+          MINIO_ROOT_USER: minio
+          MINIO_ROOT_PASSWORD: minio_local_secret
+        ports:
+          - 9000:9000
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -60,4 +69,9 @@ jobs:
           done
       - run: uv run pytest
         env:
+          APP_ENV: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+          S3_ENDPOINT: http://localhost:9000
+          S3_ACCESS_KEY: minio
+          S3_SECRET_KEY: minio_local_secret
+          S3_BUCKET: truealpha-raw

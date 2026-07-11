@@ -26,6 +26,10 @@ class DataSource(StrEnum):
     NPORT = "nport"
     YAHOO = "yahoo"
     TWELVE_DATA = "twelvedata"
+    # Identifier-resolution vendor (ISIN -> listings), not a fundamental-data
+    # source — its responses land in raw like any other so KG assertions can
+    # carry a raw_ref.
+    OPENFIGI = "openfigi"
 
 
 class EntityIdentifier(BaseModel):

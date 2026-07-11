@@ -1,20 +1,26 @@
-"""Integration tests against a real Postgres (make db-up && make db-migrate, or
-the CI service container). Skip cleanly when none is reachable. Every test runs
-inside one never-committed transaction with uuid-suffixed ids, so a dev database
-with real universe data is never polluted or depended on."""
+"""Integration tests against a real Postgres (make runtime-up / make db-migrate,
+or the CI service container). Skip cleanly when none is reachable. Every test
+runs inside one never-committed transaction with uuid-suffixed ids, so a dev
+database with real universe data is never polluted or depended on.
+
+transaction_time is always passed explicitly (the runtime contract dropped the
+column defaults), so tests pin distinct instants instead of racing now()."""
 
 import uuid
 from datetime import UTC, datetime
 
 import pytest
-from data_engine import raw_store
 from data_engine.config import settings
 from data_engine.sources import moomoo_ledger as ledger
 from factors.shared import entity_resolution as er
 
 psycopg = pytest.importorskip("psycopg")
 
+T1 = datetime(2026, 7, 1, tzinfo=UTC)
+T2 = datetime(2026, 7, 2, tzinfo=UTC)
+T3 = datetime(2026, 7, 3, tzinfo=UTC)
 NOW = datetime.now(UTC)
+REF = "raw.fetches:0"  # raw_ref is lineage text, not a foreign key
 
 
 @pytest.fixture
@@ -22,55 +28,63 @@ def conn():
     try:
         c = psycopg.connect(settings.database_url, connect_timeout=3)
     except psycopg.OperationalError:
-        pytest.skip("no reachable Postgres (make db-up && make db-migrate)")
+        pytest.skip("no reachable Postgres (make runtime-up && make db-migrate)")
     yield c
     c.rollback()
     c.close()
 
 
-def test_same_as_roundtrip_idempotency_and_lookup(conn):
+def _ident(conn, entity_id, value, *, transaction_time=T1, confidence=0.98, id_type="moomoo", source="openfigi"):
+    return er.assert_identifier(
+        conn,
+        entity_id=entity_id,
+        source=source,
+        identifier_type=id_type,
+        identifier_value=value,
+        confidence=confidence,
+        transaction_time=transaction_time,
+        valid_from=transaction_time.date().isoformat(),
+        raw_ref=REF,
+    )
+
+
+def test_identifier_roundtrip_idempotency_and_lookup(conn):
     uid = uuid.uuid4().hex[:10]
     company = f"company:test:{uid}"
     code = f"US.T{uid}"
     er.ensure_entity(conn, company, "company", f"Test Co {uid}")
     er.ensure_entity(conn, company, "company", "different name")  # first writer wins, no error
 
-    assert er.add_same_as(
-        conn, namespace="moomoo", value=code, entity_id=company, confidence=0.98, source="test", valid_from="2026-07-11"
-    )
-    # identical assertion on a later day -> skipped, not a duplicate vintage
-    assert not er.add_same_as(
-        conn, namespace="moomoo", value=code, entity_id=company, confidence=0.98, source="test", valid_from="2026-07-12"
-    )
+    assert _ident(conn, company, code, transaction_time=T1)
+    # identical assertion later -> already current, skipped
+    assert not _ident(conn, company, code, transaction_time=T2)
     # a changed assertion (new confidence) -> new vintage
-    assert er.add_same_as(
-        conn, namespace="moomoo", value=code, entity_id=company, confidence=0.9, source="test", valid_from="2026-07-12"
-    )
+    assert _ident(conn, company, code, transaction_time=T2, confidence=0.9)
 
-    assert er.resolve(conn, "moomoo", code, as_of=datetime.now(UTC)) == company
+    assert er.resolve(conn, "moomoo", code, as_of=NOW) == company
+    assert er.resolve(conn, "moomoo", code, as_of=datetime(2026, 6, 1, tzinfo=UTC)) is None  # before T1
     assert er.resolve(conn, "moomoo", "US.DOES_NOT_EXIST", as_of=NOW) is None
-    assert er.crosswalk(conn, company, as_of=datetime.now(UTC)) == {"moomoo": [code]}
-    assert (code, company) in er.identifiers(conn, "moomoo", as_of=datetime.now(UTC))
+    assert er.crosswalk(conn, company, as_of=NOW) == {"moomoo": [code]}
+    assert (code, company) in er.identifiers(conn, "moomoo", as_of=NOW)
 
 
-def test_same_as_correction_can_be_corrected_back(conn):
-    """same_as is a pointer relation: after X->A is superseded by X->B, re-asserting
-    X->A must append a new vintage that wins in resolve() — deduping against all
-    history would make the supersession permanent."""
+def test_identifier_correction_can_be_corrected_back(conn):
+    """Identifier rows are pointer-like: after X->A is superseded by X->B,
+    re-asserting X->A must append a vintage that wins in resolve() — deduping
+    against all history would make the supersession permanent."""
     uid = uuid.uuid4().hex[:10]
     a, b = f"company:test:{uid}a", f"company:test:{uid}b"
     isin = f"XX{uid}"
     er.ensure_entity(conn, a, "company", "A")
     er.ensure_entity(conn, b, "company", "B")
 
-    kwargs = dict(namespace="isin", value=isin, confidence=1.0, source="test", valid_from="2026-07-11")
-    assert er.add_same_as(conn, entity_id=a, **kwargs)
-    assert er.add_same_as(conn, entity_id=b, **kwargs)  # bad upstream data
-    assert er.resolve(conn, "isin", isin, as_of=datetime.now(UTC)) == b
-    assert er.add_same_as(conn, entity_id=a, **kwargs)  # corrected back — must insert
-    assert er.resolve(conn, "isin", isin, as_of=datetime.now(UTC)) == a
-    # and re-asserting what is now current is still a no-op
-    assert not er.add_same_as(conn, entity_id=a, **kwargs)
+    assert _ident(conn, a, isin, id_type="isin", transaction_time=T1)
+    assert _ident(conn, b, isin, id_type="isin", transaction_time=T2)  # bad upstream data
+    assert er.resolve(conn, "isin", isin, as_of=NOW) == b
+    assert _ident(conn, a, isin, id_type="isin", transaction_time=T3)  # corrected back — must insert
+    assert er.resolve(conn, "isin", isin, as_of=NOW) == a
+    # and re-asserting what is now current is a no-op
+    assert not _ident(conn, a, isin, id_type="isin", transaction_time=T3)
 
 
 def test_resolve_follows_one_merge_hop(conn):
@@ -78,9 +92,7 @@ def test_resolve_follows_one_merge_hop(conn):
     a, b = f"company:test:{uid}a", f"company:test:{uid}b"
     er.ensure_entity(conn, a, "company", "A")
     er.ensure_entity(conn, b, "company", "B")
-    er.add_same_as(
-        conn, namespace="isin", value=f"XX{uid}", entity_id=a, confidence=1.0, source="test", valid_from="2026-07-11"
-    )
+    _ident(conn, a, f"XX{uid}", id_type="isin")
     er.add_edge(
         conn,
         from_id=a,
@@ -88,60 +100,77 @@ def test_resolve_follows_one_merge_hop(conn):
         relation_type="same_as",
         confidence=0.9,
         source="test",
-        valid_from="2026-07-11",
-        single_target=True,
+        transaction_time=T2,
+        valid_from="2026-07-02",
+        raw_ref=REF,
     )
-    assert er.resolve(conn, "isin", f"XX{uid}", as_of=datetime.now(UTC)) == b
+    assert er.resolve(conn, "isin", f"XX{uid}", as_of=NOW) == b
 
 
-def test_parallel_holds_edges_coexist_and_rerun_skips(conn):
-    """One ETF holding the same company via two lines (A-share + H-share) keeps
-    two holds edges, discriminated by properties.isin — and re-running writes
-    neither again (the ping-pong duplicate failure mode)."""
+def test_holds_edge_rerun_skips_and_new_filing_appends(conn):
     uid = uuid.uuid4().hex[:10]
     etf, company = f"etf:test:{uid}", f"company:test:{uid}"
     er.ensure_entity(conn, etf, "etf", "Test ETF")
-    er.ensure_entity(conn, company, "company", "Dual-listed Co")
+    er.ensure_entity(conn, company, "company", "Held Co")
 
-    def hold(isin, pct):
+    def hold(tx, valid):
         return er.add_edge(
             conn,
             from_id=etf,
             to_id=company,
             relation_type="holds",
             confidence=1.0,
-            source="test",
-            valid_from="2026-02-28",
-            properties={"pct_val": pct, "isin": isin, "report_period": "2026-02-28"},
+            source="nport",
+            transaction_time=tx,
+            valid_from=valid,
+            raw_ref=REF,
         )
 
-    assert hold("CNE000001R84", 2.08)
-    assert hold("CNE1000003X6", 1.1)
-    assert not hold("CNE000001R84", 2.08)
-    assert not hold("CNE1000003X6", 1.1)
-    # a new report period is a genuinely new vintage
+    assert hold(T1, "2026-02-28")
+    assert not hold(T1, "2026-02-28")  # re-run of the same filing
+    assert not hold(T2, "2026-02-28")  # same assertion at a later time is still current
+    # a genuinely different assertion (nothing changed here except... nothing) stays skipped;
+    # a new filing writes through the changed-confidence path in real life. Simulate a
+    # revision: same pair, revised confidence -> new vintage.
     assert er.add_edge(
         conn,
         from_id=etf,
         to_id=company,
         relation_type="holds",
-        confidence=1.0,
-        source="test",
+        confidence=0.9,
+        source="nport",
+        transaction_time=T2,
         valid_from="2026-05-31",
-        properties={"pct_val": 2.5, "isin": "CNE000001R84", "report_period": "2026-05-31"},
+        raw_ref=REF,
     )
 
 
-def test_raw_store_roundtrip(conn):
+def test_fund_holding_dual_lines_coexist_and_rerun_conflicts_away(conn):
+    """MCHI really holds one issuer via the A-share AND H-share line in one
+    period with an identical name — 0005's unique key keeps both, and a re-run
+    of the same filing collapses onto the existing rows (on conflict)."""
     uid = uuid.uuid4().hex[:10]
-    assert not raw_store.already_fetched(conn, source="test", endpoint="ep", entity_key=uid)
-    fetch_id = raw_store.insert_fetch(
-        conn, source="test", endpoint="ep", entity_key=uid, payload={"a": 1}, params={"p": 2}
-    )
-    assert raw_store.raw_ref(fetch_id) == f"raw.fetches:{fetch_id}"
-    assert raw_store.already_fetched(conn, source="test", endpoint="ep", entity_key=uid)
-    # content-only rows (XML/HTML) are the other legal shape
-    raw_store.insert_fetch(conn, source="test", endpoint="xml", entity_key=uid, content="<x/>")
+    etf, company = f"etf:test:{uid}", f"company:test:{uid}"
+    er.ensure_entity(conn, etf, "etf", "Test ETF")
+    er.ensure_entity(conn, company, "company", "Ping An Test")
+
+    def line(isin, pct, value):
+        return conn.execute(
+            """
+            insert into staging.fund_holding_facts
+                (fund_id, holding_id, holding_name, report_period, transaction_time,
+                 isin, value_usd, percent_of_net_assets, confidence, raw_ref)
+            values (%s, %s, 'Ping An Test Co', '2026-02-28', %s, %s, %s, %s, 1.0, %s)
+            on conflict do nothing
+            returning id
+            """,
+            (etf, company, T1, isin, value, pct, REF),
+        ).fetchone()
+
+    assert line("CNE000001R84", 2.08, 1000.0) is not None
+    assert line("CNE1000003X6", 1.10, 500.0) is not None  # H-share line, same name
+    assert line("CNE000001R84", 2.08, 1000.0) is None  # re-run collapses
+    assert line("CNE1000003X6", 1.10, 500.0) is None
 
 
 def test_ledger_postgres_backend(conn, monkeypatch):

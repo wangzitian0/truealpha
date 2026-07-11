@@ -33,8 +33,8 @@ from data_engine.config import settings
 from data_engine.sources import moomoo as mm
 from data_engine.sources.moomoo_ledger import BudgetExceededError, calls_this_month
 from factors.shared import entity_resolution as er
+from truealpha_contracts import DataSource
 
-SOURCE = "moomoo"
 CALLER = "sweep_moomoo_fundamentals"
 OWNER_PLATE_CHUNK = 50
 
@@ -43,7 +43,9 @@ def plan_calls(conn, codes: list[str], endpoints: list[str], refetch: bool) -> l
     plan = []
     for code in codes:
         for endpoint in endpoints:
-            if refetch or not raw_store.already_fetched(conn, source=SOURCE, endpoint=endpoint, entity_key=code):
+            if refetch or not raw_store.already_fetched(
+                conn, source=DataSource.MOOMOO, source_record_id=f"{endpoint}:{code}"
+            ):
                 plan.append((code, endpoint))
     return plan
 
@@ -54,7 +56,9 @@ def sweep_owner_plate(conn, ctx, codes: list[str], stats: Counter) -> None:
     persisted — an empty raw row would satisfy already_fetched forever, turning
     one bad response into a permanent silent gap."""
     pending = [
-        c for c in codes if not raw_store.already_fetched(conn, source=SOURCE, endpoint="owner_plate", entity_key=c)
+        c
+        for c in codes
+        if not raw_store.already_fetched(conn, source=DataSource.MOOMOO, source_record_id=f"owner_plate:{c}")
     ]
     for start in range(0, len(pending), OWNER_PLATE_CHUNK):
         chunk = pending[start : start + OWNER_PLATE_CHUNK]
@@ -75,8 +79,13 @@ def sweep_owner_plate(conn, ctx, codes: list[str], stats: Counter) -> None:
                 stats[(market, "owner_plate", "fail")] += 1
                 print(f"  {code}.owner_plate: absent from batched response — will retry next run")
                 continue
-            raw_store.insert_fetch(
-                conn, source=SOURCE, endpoint="owner_plate", entity_key=code, payload=rows, params={"batched": True}
+            raw_store.insert_json_fetch(
+                conn,
+                source=DataSource.MOOMOO,
+                source_record_id=f"owner_plate:{code}",
+                payload=rows,
+                fetched_at=datetime.now(UTC),
+                metadata={"batched": True},
             )
             stats[(market, "owner_plate", "ok")] += 1
         conn.commit()
@@ -135,8 +144,12 @@ def main() -> None:
                 stats[(market, endpoint, "fail")] += 1
                 print(f"  {code}.{endpoint}: FAILED — {e}")
                 continue
-            raw_store.insert_fetch(
-                conn, source=SOURCE, endpoint=endpoint, entity_key=code, payload=jsonable.to_jsonable(data)
+            raw_store.insert_json_fetch(
+                conn,
+                source=DataSource.MOOMOO,
+                source_record_id=f"{endpoint}:{code}",
+                payload=jsonable.to_jsonable(data),
+                fetched_at=datetime.now(UTC),
             )
             conn.commit()
             stats[(market, endpoint, "ok")] += 1

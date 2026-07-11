@@ -26,7 +26,8 @@ def main() -> None:
     with sec_client() as client:
         cik, series_id = nport.fund_series(client, ticker)
         print(f"{ticker}: CIK {cik}, series {series_id}")
-        accession = nport.latest_nport_accession(client, series_id)
+        accession, filing_date = nport.latest_nport_accession(client, series_id)
+        print(f"latest NPORT-P filed {filing_date}")
         xml = nport.fetch_nport_xml(client, cik, accession)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)

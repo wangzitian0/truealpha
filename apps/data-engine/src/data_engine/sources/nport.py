@@ -35,6 +35,9 @@ class Holding:
     name: str | None
     cusip: str | None
     isin: str | None
+    lei: str | None
+    balance: float | None  # share/contract count as filed
+    value_usd: float | None
     pct_val: float | None  # percentage of net assets
     asset_cat: str | None  # 'EC' = equity common; cash/derivative lines differ
 
@@ -51,15 +54,19 @@ def fund_series(client, ticker: str) -> tuple[int, str]:
     raise KeyError(f"ticker not found in SEC mutual-fund/ETF mapping: {ticker}")
 
 
-def latest_nport_accession(client, series_id: str) -> str:
-    """Accession number (dashes stripped) of the series' most recent NPORT-P."""
+def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
+    """(accession number with dashes stripped, filing date 'YYYY-MM-DD') of the
+    series' most recent NPORT-P. The filing date is the transaction time of
+    everything derived from the filing — the moment its contents became publicly
+    knowable — which is NOT the ingestion time (runtime contract)."""
     resp = client.get(BROWSE_URL.format(series_id=series_id))
     resp.raise_for_status()
     atom = ET.fromstring(resp.content)
     acc = atom.findtext(".//a:entry/a:content/a:accession-number", None, _ATOM_NS)
-    if acc is None:
-        raise LookupError(f"no NPORT-P filing found for series {series_id}")
-    return acc.replace("-", "")
+    filing_date = atom.findtext(".//a:entry/a:content/a:filing-date", None, _ATOM_NS)
+    if acc is None or filing_date is None:
+        raise LookupError(f"no NPORT-P filing (with a filing date) found for series {series_id}")
+    return acc.replace("-", ""), filing_date
 
 
 def fetch_nport_xml(client, cik: int, accession: str) -> bytes:
@@ -72,6 +79,19 @@ def _clean(value: str | None) -> str | None:
     if value is None or value.strip() in _PLACEHOLDERS:
         return None
     return value.strip()
+
+
+def _number(value: str | None) -> float | None:
+    """Numeric fields get the same placeholder tolerance as name/cusip: a
+    literal 'N/A' (or otherwise non-numeric) downgrades that one field to None
+    instead of aborting the whole filing's parse."""
+    cleaned = _clean(value)
+    if cleaned is None:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
 
 
 def parse_nport(xml_bytes: bytes) -> tuple[dict, list[Holding]]:
@@ -87,20 +107,15 @@ def parse_nport(xml_bytes: bytes) -> tuple[dict, list[Holding]]:
     for sec in root.findall(".//n:invstOrSec", NS):
         ids = sec.find("n:identifiers", NS)
         isin_el = ids.find("n:isin", NS) if ids is not None else None
-        # pctVal gets the same placeholder tolerance as name/cusip: a literal
-        # 'N/A' (or otherwise non-numeric) weight downgrades that one line to
-        # pct None instead of aborting the whole filing's parse.
-        pct_text = _clean(sec.findtext("n:pctVal", None, NS))
-        try:
-            pct_val = float(pct_text) if pct_text is not None else None
-        except ValueError:
-            pct_val = None
         holdings.append(
             Holding(
                 name=_clean(sec.findtext("n:name", None, NS)),
                 cusip=_clean(sec.findtext("n:cusip", None, NS)),
                 isin=_clean(isin_el.attrib.get("value")) if isin_el is not None else None,
-                pct_val=pct_val,
+                lei=_clean(sec.findtext("n:lei", None, NS)),
+                balance=_number(sec.findtext("n:balance", None, NS)),
+                value_usd=_number(sec.findtext("n:valUSD", None, NS)),
+                pct_val=_number(sec.findtext("n:pctVal", None, NS)),
                 asset_cat=_clean(sec.findtext("n:assetCat", None, NS)),
             )
         )

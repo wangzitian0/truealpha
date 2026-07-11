@@ -21,8 +21,8 @@ import httpx
 from data_engine import db, raw_store
 from data_engine.sources import sec
 from factors.shared import entity_resolution as er
+from truealpha_contracts import DataSource
 
-SOURCE, ENDPOINT = "sec", "companyfacts"
 PACE_SECONDS = 0.25
 
 
@@ -42,8 +42,8 @@ def main() -> None:
             if args.limit is not None and fetched >= args.limit:
                 break
             cik = int(cik_str)
-            key = f"CIK{cik:010d}"
-            if not args.refetch and raw_store.already_fetched(conn, source=SOURCE, endpoint=ENDPOINT, entity_key=key):
+            record_id = f"companyfacts:CIK{cik:010d}"
+            if not args.refetch and raw_store.already_fetched(conn, source=DataSource.SEC, source_record_id=record_id):
                 skipped += 1
                 continue
             try:
@@ -55,13 +55,15 @@ def main() -> None:
                 # sweep; the resume check retries them on the next run.
                 failed += 1
                 status = getattr(getattr(e, "response", None), "status_code", None)
-                print(f"  {key} ({entity_id}): {f'HTTP {status}' if status else repr(e)}, skipping")
+                print(f"  {record_id} ({entity_id}): {f'HTTP {status}' if status else repr(e)}, skipping")
                 continue
-            raw_id = raw_store.insert_fetch(conn, source=SOURCE, endpoint=ENDPOINT, entity_key=key, payload=facts)
+            raw_id = raw_store.insert_json_fetch(
+                conn, source=DataSource.SEC, source_record_id=record_id, payload=facts, fetched_at=datetime.now(UTC)
+            )
             conn.commit()
             fetched += 1
             if fetched % 25 == 0:
-                print(f"  {fetched} fetched (latest {key} -> raw.fetches:{raw_id})")
+                print(f"  {fetched} fetched (latest {record_id} -> raw.fetches:{raw_id})")
             time.sleep(PACE_SECONDS)
 
     conn.close()

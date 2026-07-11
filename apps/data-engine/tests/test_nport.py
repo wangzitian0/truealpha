@@ -19,6 +19,8 @@ def test_qqq_parses_holdings_with_weights():
     weighted = [h for h in holdings if h.pct_val is not None]
     assert len(weighted) > 90  # ~100 names
     assert 95.0 < sum(h.pct_val for h in weighted) < 105.0
+    # the holding-facts writer requires valUSD; the filing carries it per line
+    assert sum(1 for h in weighted if h.value_usd is not None) == len(weighted)
 
 
 def test_arkk_placeholder_cusips_normalized_to_none():

@@ -1,16 +1,16 @@
-"""Entity resolution over the knowledge graph.
+"""Entity resolution over the knowledge graph (staging.kg_entities /
+staging.kg_identifiers / staging.kg_edges).
 
-All cross-source ID crosswalk (CIK <-> ticker <-> moomoo_code <-> CUSIP/ISIN) goes
-through `same_as` edges here — no module keeps its own mapping table (init.md
-Section 6).
-
-Model: every source-local identifier is itself a node (entity_type='identifier',
-id 'id:<namespace>:<value>') with a same_as edge pointing at the canonical entity
-it identifies. Canonical entities use the most durable id available at creation:
+All cross-source ID crosswalk (CIK <-> ticker <-> moomoo_code <-> CUSIP/ISIN)
+goes through `staging.kg_identifiers` (db/migrations/0004_runtime_contracts.sql)
+— typed identifier rows pointing at canonical entities — no module keeps its own
+mapping table. Canonical entities use the most durable id available at creation:
 'company:cik:<n>' for SEC filers, 'company:isin:<ISIN>' otherwise,
 'etf:series:<S000...>' for funds (fund series ids are durable; trust CIKs cover
-many series). same_as can also link canonical->canonical when two entities are
-later found to be the same real-world thing — resolve() follows one such merge hop.
+many series). `same_as` edges in kg_edges link canonical->canonical when two
+entities are later found to be the same real-world thing — resolve() follows one
+such merge hop; relationship edges ('holds', 'supplies_to', ...) also live in
+kg_edges, with holdings WEIGHTS in staging.fund_holding_facts, not on the edge.
 
 Functions take an open DB connection (psycopg-style: conn.execute(sql, params)
 returns a cursor) rather than owning connection config, so this library stays
@@ -18,18 +18,13 @@ free of any driver dependency; data-engine / llm-service pass their own
 connection in and control transaction boundaries (nothing here commits).
 
 Point-in-time: reads filter transaction_time <= as_of; writes are append-only
-vintages, never updates (CLAUDE.md hard constraints). Postgres's now() is
-transaction-scoped, so vintages written in one transaction share a
-transaction_time — "newest wins" therefore tiebreaks on the strictly-increasing
-identity id, i.e. insertion order.
+vintages with an EXPLICIT transaction_time (the runtime contract dropped the
+column defaults: when a fact became knowable is the source's property, never the
+insert clock). "Newest wins" tiebreaks on the strictly-increasing identity id,
+since vintages written in one transaction can share a timestamp.
 """
 
-import json
 from datetime import datetime
-
-
-def identifier_node_id(namespace: str, value: str) -> str:
-    return f"id:{namespace}:{value}"
 
 
 def ensure_entity(conn, entity_id: str, entity_type: str, display_name: str) -> None:
@@ -41,6 +36,49 @@ def ensure_entity(conn, entity_id: str, entity_type: str, display_name: str) -> 
     )
 
 
+def assert_identifier(
+    conn,
+    *,
+    entity_id: str,
+    source: str,
+    identifier_type: str,
+    identifier_value: str,
+    confidence: float,
+    transaction_time: datetime,
+    valid_from: str,
+    raw_ref: str,
+) -> bool:
+    """Assert 'this source-local identifier refers to this entity'; returns False
+    when the assertion is already current. Identifier rows are pointer-like: the
+    newest vintage per (identifier_type, identifier_value) wins in resolve(), so
+    a previously superseded mapping can always be re-asserted as a new vintage —
+    only re-asserting what the latest vintage already says is skipped (comparing
+    against all history would make any correction permanent)."""
+    latest = conn.execute(
+        """
+        select entity_id, confidence from staging.kg_identifiers
+        where identifier_type = %s and identifier_value = %s
+        order by transaction_time desc, id desc
+        limit 1
+        """,
+        (identifier_type, identifier_value),
+    ).fetchone()
+    if latest is not None and latest[0] == entity_id and float(latest[1]) == confidence:
+        return False
+    inserted = conn.execute(
+        """
+        insert into staging.kg_identifiers
+            (entity_id, source, identifier_type, identifier_value, valid_time,
+             transaction_time, confidence, raw_ref)
+        values (%s, %s, %s, %s, daterange(%s::date, null, '[)'), %s, %s, %s)
+        on conflict (source, identifier_type, identifier_value, transaction_time) do nothing
+        returning id
+        """,
+        (entity_id, source, identifier_type, identifier_value, valid_from, transaction_time, confidence, raw_ref),
+    ).fetchone()
+    return inserted is not None
+
+
 def add_edge(
     conn,
     *,
@@ -49,103 +87,41 @@ def add_edge(
     relation_type: str,
     confidence: float,
     source: str,
+    transaction_time: datetime,
     valid_from: str,
-    raw_ref: str | None = None,
-    properties: dict | None = None,
-    single_target: bool = False,
+    raw_ref: str,
 ) -> bool:
-    """Append a new edge vintage; returns False if the assertion is already
-    current. Assertion identity is (from, to, relation, source, confidence,
-    properties) — valid_from and raw_ref deliberately don't count, so re-running
-    a bootstrap on a later day skips unchanged facts instead of spraying
-    duplicate vintages, while a real change (a new N-PORT period in properties,
-    a revised confidence) appends.
-
-    single_target=False (set relations, e.g. 'holds'): edges from one node
-    coexist and readers consume them as a set, so "already current" means ANY
-    vintage with this identity exists — parallel edges that differ only in
-    properties (one holds edge per A-share/H-share line, discriminated by
-    properties.isin) survive re-runs without ping-ponging.
-
-    single_target=True (pointer relations, e.g. same_as): readers take only the
-    LATEST edge from this node, so "already current" must mean the latest edge
-    IS this assertion. Comparing against all history would make a correction
-    permanent: X->A (run 1), corrected to X->B (run 2), then re-asserting X->A
-    would find the run-1 row and skip — leaving resolve() stuck on B forever."""
-    props_json = json.dumps(properties, sort_keys=True) if properties is not None else None
-    if single_target:
-        latest = conn.execute(
-            """
-            select to_id, source, confidence, properties from staging.kg_edges
-            where from_id = %s and relation_type = %s
-            order by transaction_time desc, id desc
-            limit 1
-            """,
-            (from_id, relation_type),
-        ).fetchone()
-        already_current = latest is not None and (
-            latest[0] == to_id
-            and latest[1] == source
-            and float(latest[2]) == confidence
-            and (json.dumps(latest[3], sort_keys=True) if latest[3] is not None else None) == props_json
-        )
-    else:
-        already_current = (
-            conn.execute(
-                """
-                select 1 from staging.kg_edges
-                where from_id = %s and to_id = %s and relation_type = %s and source = %s
-                  and confidence = %s and properties is not distinct from %s::jsonb
-                limit 1
-                """,
-                (from_id, to_id, relation_type, source, confidence, props_json),
-            ).fetchone()
-            is not None
-        )
-    if already_current:
+    """Append a relationship-edge vintage; returns False when the latest vintage
+    for (from, to, relation) already asserts the same (source, confidence) — a
+    re-run of the same ingestion must not spray duplicate vintages, while a new
+    filing period (new transaction_time) or a revised assertion appends. The
+    uq_kg_edges_vintage index additionally rejects exact duplicates racing within
+    one transaction (on conflict do nothing)."""
+    latest = conn.execute(
+        """
+        select source, confidence from staging.kg_edges
+        where from_id = %s and to_id = %s and relation_type = %s
+        order by transaction_time desc, id desc
+        limit 1
+        """,
+        (from_id, to_id, relation_type),
+    ).fetchone()
+    if latest is not None and latest[0] == source and float(latest[1]) == confidence:
         return False
-    conn.execute(
+    inserted = conn.execute(
         """
         insert into staging.kg_edges
-            (from_id, to_id, relation_type, valid_time, confidence, source, raw_ref, properties)
-        values (%s, %s, %s, daterange(%s::date, null, '[)'), %s, %s, %s, %s::jsonb)
+            (from_id, to_id, relation_type, valid_time, transaction_time, confidence, source, raw_ref)
+        values (%s, %s, %s, daterange(%s::date, null, '[)'), %s, %s, %s, %s)
+        on conflict do nothing
+        returning id
         """,
-        (from_id, to_id, relation_type, valid_from, confidence, source, raw_ref, props_json),
-    )
-    return True
+        (from_id, to_id, relation_type, valid_from, transaction_time, confidence, source, raw_ref),
+    ).fetchone()
+    return inserted is not None
 
 
-def add_same_as(
-    conn,
-    *,
-    namespace: str,
-    value: str,
-    entity_id: str,
-    confidence: float,
-    source: str,
-    valid_from: str,
-    raw_ref: str | None = None,
-) -> bool:
-    """Assert 'this source-local identifier refers to this entity'. Creates the
-    identifier node on first sight. same_as is a pointer relation — the newest
-    vintage wins in resolve() — so re-asserting a previously superseded mapping
-    appends a new vintage rather than being deduped away (see add_edge)."""
-    node = identifier_node_id(namespace, value)
-    ensure_entity(conn, node, "identifier", f"{namespace}:{value}")
-    return add_edge(
-        conn,
-        from_id=node,
-        to_id=entity_id,
-        relation_type="same_as",
-        confidence=confidence,
-        source=source,
-        valid_from=valid_from,
-        raw_ref=raw_ref,
-        single_target=True,
-    )
-
-
-def _same_as_target(conn, from_id: str, as_of: datetime):
+def _merge_target(conn, entity_id: str, as_of: datetime):
     return conn.execute(
         """
         select to_id from staging.kg_edges
@@ -153,56 +129,63 @@ def _same_as_target(conn, from_id: str, as_of: datetime):
         order by transaction_time desc, id desc
         limit 1
         """,
-        (from_id, as_of),
+        (entity_id, as_of),
     ).fetchone()
 
 
-def resolve(conn, namespace: str, value: str, *, as_of: datetime) -> str | None:
+def resolve(conn, identifier_type: str, value: str, *, as_of: datetime) -> str | None:
     """Return the unified entity id for a source-local identifier as visible at
-    as_of, or None if unknown. Follows the identifier's same_as edge, then at most
-    one canonical->canonical merge hop.
+    as_of, or None if unknown. Reads the newest kg_identifiers vintage (any
+    asserting source; highest confidence breaks same-instant ties), then follows
+    at most one canonical->canonical same_as merge hop.
 
     as_of is deliberately required, not defaulted to now(): a backtest that
     forgets to pass its historical viewpoint would silently use today's mapping
     (lookahead bias) — the repo's point-in-time hard constraint says that must
     be impossible by construction, not a convention."""
-    row = _same_as_target(conn, identifier_node_id(namespace, value), as_of)
+    row = conn.execute(
+        """
+        select entity_id from staging.kg_identifiers
+        where identifier_type = %s and identifier_value = %s and transaction_time <= %s
+        order by transaction_time desc, confidence desc, id desc
+        limit 1
+        """,
+        (identifier_type, value, as_of),
+    ).fetchone()
     if row is None:
         return None
-    canonical = row[0]
-    merged = _same_as_target(conn, canonical, as_of)
-    return merged[0] if merged else canonical
+    merged = _merge_target(conn, row[0], as_of)
+    return merged[0] if merged else row[0]
 
 
 def crosswalk(conn, entity_id: str, *, as_of: datetime) -> dict[str, list[str]]:
-    """All source-local identifiers pointing at an entity, grouped by namespace:
-    {'ticker': ['GOOGL', 'GOOG'], 'cik': ['1652044'], ...}. One hop only — does not
-    chase canonical merges. as_of required for the same reason as resolve()."""
+    """All source-local identifiers pointing at an entity, grouped by type:
+    {'ticker': ['GOOGL', 'GOOG'], 'cik': ['1652044'], ...}. One hop only — does
+    not chase canonical merges. as_of required for the same reason as resolve()."""
     rows = conn.execute(
         """
-        select distinct from_id from staging.kg_edges
-        where to_id = %s and relation_type = 'same_as' and transaction_time <= %s
-          and from_id like 'id:%%'
+        select distinct identifier_type, identifier_value from staging.kg_identifiers
+        where entity_id = %s and transaction_time <= %s
         """,
         (entity_id, as_of),
     ).fetchall()
     out: dict[str, list[str]] = {}
-    for (from_id,) in rows:
-        _, namespace, value = from_id.split(":", 2)
-        out.setdefault(namespace, []).append(value)
-    return {ns: sorted(vals) for ns, vals in out.items()}
+    for identifier_type, value in rows:
+        out.setdefault(identifier_type, []).append(value)
+    return {t: sorted(vals) for t, vals in out.items()}
 
 
-def identifiers(conn, namespace: str, *, as_of: datetime) -> list[tuple[str, str]]:
-    """Every (value, entity_id) pair in one identifier namespace — e.g. all moomoo
-    codes in the KG, for a sweep to iterate. Latest vintage per identifier.
+def identifiers(conn, identifier_type: str, *, as_of: datetime) -> list[tuple[str, str]]:
+    """Every (value, entity_id) pair of one identifier type — e.g. all moomoo
+    codes in the KG, for a sweep to iterate. Newest vintage per value.
     as_of required for the same reason as resolve()."""
     rows = conn.execute(
         """
-        select distinct on (from_id) from_id, to_id from staging.kg_edges
-        where relation_type = 'same_as' and from_id like %s and transaction_time <= %s
-        order by from_id, transaction_time desc, id desc
+        select distinct on (identifier_value) identifier_value, entity_id
+        from staging.kg_identifiers
+        where identifier_type = %s and transaction_time <= %s
+        order by identifier_value, transaction_time desc, confidence desc, id desc
         """,
-        (f"id:{namespace}:%", as_of),
+        (identifier_type, as_of),
     ).fetchall()
-    return sorted((from_id.split(":", 2)[2], to_id) for from_id, to_id in rows)
+    return sorted(rows)
