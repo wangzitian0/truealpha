@@ -15,18 +15,13 @@ Consumers read materialized outputs and only reformat them.
 ## 2. Goals and Non-Goals
 Goals:
 - Reproduce every result at an explicit transaction-time cutoff.
-- Give all seven modules one stable invocation and output protocol.
 - Support metrics, categories, and graph relationships without reducing them to `Decimal`.
 - Separate pipeline stages while keeping all business computation in `libs/factors`.
 - Keep confidence mandatory and provenance-blind at the factor boundary.
 - Include actions, membership, and identifier history in replay contracts.
-- Make snapshots content-addressable and independently auditable.
-- Test fixture and Postgres repositories with one conformance kit.
 - Turn issue #14 evidence into executable golden cases rather than coverage claims.
 Non-goals:
-- Changing source priority, deployment topology, or phase ordering in `init.md`.
 - Exposing vendor schemas to factors or selecting formula thresholds here.
-- Implementing formulas, SQL migrations, repositories, or Dagster assets in this PR.
 - Treating fixtures as evidence of performance or closing issue #14 prematurely.
 ## 3. Pre-Implementation Gaps
 1. `PriceBar` lacks `confidence`; add it before a price repository is conformant.
@@ -61,6 +56,12 @@ class Fact(BaseModel):
 ```
 `Fact` has no provenance. Reconciliation occurs first; the manifest preserves lineage.
 ```python
+class FactorRelationshipInput(BaseModel): from_entity_id: str; to_entity_id: str; relation_type: str; valid_from: date; valid_to: date | None; confidence: Decimal; as_of: datetime
+class FactorRatingInput(BaseModel): analyst_id: str; entity_id: str; recommendation_at: datetime; rating: int; target_price: Decimal | None; currency: str | None; confidence: Decimal; as_of: datetime
+class FactorHoldingInput(BaseModel): fund_id: str; entity_id: str; report_period: date; weight: Decimal; value: Decimal | None; confidence: Decimal; as_of: datetime
+class FactorPriceInput(BaseModel): entity_id: str; trading_date: date; open: Decimal; high: Decimal; low: Decimal; close: Decimal; adjusted_close: Decimal; volume: int; confidence: Decimal; as_of: datetime
+class FactorActionInput(BaseModel): entity_id: str; action_type: str; effective_date: date; ratio: Decimal | None; cash_amount: Decimal | None; currency: str | None; confidence: Decimal; as_of: datetime
+class FactorMembershipInput(BaseModel): universe_id: str; entity_id: str; valid_from: date; valid_to: date | None; confidence: Decimal; as_of: datetime
 class FactorInputBundle(BaseModel):
     snapshot_id: str
     as_of: datetime
@@ -437,7 +438,6 @@ The v1 freeze covers field semantics, discriminators, time and confidence rules,
 behavior, and registry identity. It does not freeze storage schemas or internals.
 - Contracts use major/minor semantic `contract_version` values.
 - Factor, screen, strategy, and rule versions are independent and immutable.
-- Optional fields and new output variants are minor additive changes.
 - Removed/renamed fields, changed time meaning, confidence rules, or discriminators
   require a new major version.
 - Formula, taxonomy, default threshold, or rule behavior changes require a new
