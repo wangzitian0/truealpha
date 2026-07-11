@@ -1,5 +1,16 @@
 """Stable contracts shared by ingestion, factors, runtime, and backtests."""
 
+from truealpha_contracts.data_quality import (
+    STRATEGY_DATA_REQUIREMENTS,
+    DataDomain,
+    DataQualityReport,
+    QualityCheckResult,
+    QualityStatus,
+    ReadinessAssessment,
+    ReadinessLevel,
+    Strategy,
+    StrategyDataRequirement,
+)
 from truealpha_contracts.models import (
     AnalystRatingEvent,
     AsOfQuery,
@@ -22,6 +33,8 @@ __all__ = [
     "BacktestDataGateway",
     "BacktestDataset",
     "DataSource",
+    "DataDomain",
+    "DataQualityReport",
     "EntityIdentifier",
     "FinancialFact",
     "FundHolding",
@@ -32,4 +45,11 @@ __all__ = [
     "RawIngestionEnvelope",
     "RawObjectRef",
     "RawObjectStore",
+    "QualityCheckResult",
+    "QualityStatus",
+    "ReadinessAssessment",
+    "ReadinessLevel",
+    "Strategy",
+    "StrategyDataRequirement",
+    "STRATEGY_DATA_REQUIREMENTS",
 ]

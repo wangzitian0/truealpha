@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "company_traits": {
+    "DDOG": ["software", "loss_making"],
+    "DUOL": ["software"],
+    "NICE": ["software", "foreign_issuer"],
+    "SHOP": ["software", "foreign_issuer"]
+  },
+  "evidence": {
+    "ambiguous_disclosure_case": true,
+    "restatement_golden_pair": false,
+    "split_golden_case": false,
+    "dividend_golden_case": false,
+    "universe_membership_intervals": false,
+    "symbol_change_or_delisting_case": false,
+    "rating_knowability_corroborated": false,
+    "supply_chain_edge_candidates": true,
+    "supply_chain_pit_golden_edges": false,
+    "factor_output_replay_case": false,
+    "primary_price_source": false,
+    "independent_price_reconciliation": false
+  }
+}

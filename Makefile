@@ -1,4 +1,4 @@
-.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample lint format typecheck test check clean
+.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-audit lint format typecheck test check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -15,6 +15,7 @@ help:
 	@echo "  make web          Next.js dev server (apps/app-web)"
 	@echo "  make llm          FastAPI dev server  (apps/llm-service, :8000)"
 	@echo "  make sample       Phase -1: pull SEC company-facts samples"
+	@echo "  make sample-audit Check fixture readiness for tooling and backtests"
 	@echo ""
 	@echo "Quality:"
 	@echo "  make check        lint + typecheck + test"
@@ -58,6 +59,9 @@ llm:
 
 sample:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/pull_sec_samples.py
+
+sample-audit:
+	uv run --package truealpha-data-engine python apps/data-engine/scripts/audit_strategy_samples.py
 
 lint:
 	uv run ruff check apps libs
