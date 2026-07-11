@@ -14,6 +14,6 @@ REQUIRE_RUNTIME_ENV = "TRUEALPHA_REQUIRE_RUNTIME"
 def skip_or_fail(reason: str) -> None:
     import pytest
 
-    if os.environ.get(REQUIRE_RUNTIME_ENV):
+    if os.environ.get(REQUIRE_RUNTIME_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
         pytest.fail(f"{REQUIRE_RUNTIME_ENV} is set but: {reason}", pytrace=False)
     pytest.skip(reason)

@@ -95,7 +95,16 @@ _SPECS = (
     ),
 )
 
-METRICS: dict[str, MetricSpec] = {spec.name: spec for spec in _SPECS}
+def _build_registry(specs: tuple[MetricSpec, ...]) -> dict[str, MetricSpec]:
+    registry: dict[str, MetricSpec] = {}
+    for spec in specs:
+        if spec.name in registry:
+            raise ValueError(f"duplicate metric registration: {spec.name}")
+        registry[spec.name] = spec
+    return registry
+
+
+METRICS: dict[str, MetricSpec] = _build_registry(_SPECS)
 
 
 def source_priority(metric: str) -> tuple[DataSource, ...]:

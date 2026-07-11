@@ -107,4 +107,5 @@ def test_kg_edges_carries_both_time_axes():
     conn.close()
     by_name = dict(rows)
     assert "recorded_at" in by_name, "kg_edges lost its recorded_at axis"
-    assert by_name.get("transaction_time") is None, "kg_edges.transaction_time regained an insert-clock default"
+    assert "transaction_time" in by_name, "kg_edges lost its transaction_time axis"
+    assert by_name["transaction_time"] is None, "kg_edges.transaction_time regained an insert-clock default"

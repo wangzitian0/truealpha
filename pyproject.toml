@@ -11,7 +11,7 @@ members = [
 ]
 
 [dependency-groups]
-dev = ["mypy>=1.14"]
+dev = ["mypy>=1.14", "pandas-stubs>=2.2"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -22,8 +22,11 @@ files = [
     "libs/factors/src",
     "libs/runtime/src",
 ]
-# Third-party sources without stubs (moomoo SDK, boto3's dynamic client) —
-# missing-import noise, not a type-safety signal for our own code.
+
+# Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients).
+# Scoped per-module so a typo'd or missing dependency still fails the check.
+[[tool.mypy.overrides]]
+module = ["moomoo.*", "boto3.*", "botocore.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
