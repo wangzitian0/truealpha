@@ -37,11 +37,13 @@ jobs:
           # runner's grep is GNU grep, so this is a real word boundary here.
           PATTERN='OpenSecTradeContext|OpenFutureTradeContext|OpenCryptoTradeContext|OpenHKTradeContext|OpenUSTradeContext|OpenCNTradeContext|\bplace_order\b|\bmodify_order\b|\bcancel_order\b|\bunlock_trade\b'
           # Repo-wide, excluding the docs that legitimately name these APIs
-          # (as things to forbid) and this workflow file itself.
+          # (as things to forbid), this workflow file itself, and the
+          # pre-commit config whose local gate carries the same pattern.
           if git grep -InE "$PATTERN" -- . \
               ':(exclude)CLAUDE.md' \
               ':(exclude)init.md' \
-              ':(exclude).github/workflows/security-gate.yml'; then
+              ':(exclude).github/workflows/security-gate.yml' \
+              ':(exclude).pre-commit-config.yaml'; then
             echo "::error::Forbidden moomoo trading API reference found above — this repo is quote/read-only only (see CLAUDE.md hard constraints)."
             exit 1
           fi
