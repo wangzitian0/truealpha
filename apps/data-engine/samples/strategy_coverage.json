@@ -1,23 +1,218 @@
 {
   "schema_version": 1,
   "company_traits": {
+    "ADM": ["traditional"],
     "DDOG": ["software", "loss_making"],
     "DUOL": ["software"],
+    "JPM": ["financial"],
+    "META": ["software"],
     "NICE": ["software", "foreign_issuer"],
+    "NVDA": ["software"],
+    "PLUG": ["loss_making", "traditional"],
     "SHOP": ["software", "foreign_issuer"]
   },
-  "evidence": {
-    "ambiguous_disclosure_case": true,
-    "restatement_golden_pair": false,
-    "split_golden_case": false,
-    "dividend_golden_case": false,
-    "universe_membership_intervals": false,
-    "symbol_change_or_delisting_case": false,
-    "rating_knowability_corroborated": false,
-    "supply_chain_edge_candidates": true,
-    "supply_chain_pit_golden_edges": false,
-    "factor_output_replay_case": false,
-    "primary_price_source": false,
-    "independent_price_reconciliation": false
+  "evidence_cases": [
+    {
+      "evidence_id": "evidence.filing.ddog.headcount-ambiguity.2025",
+      "requirement_id": "filings.edge_cases",
+      "kind": "real",
+      "artifact_paths": ["filings/DDOG_10K_000162828026008819.html"],
+      "artifact_sha256": ["dcdd728cc76efaa0ca2fce5c2b6fd0e1704a77092d232ce0d931eddca8debfde"],
+      "subject_entity_ids": ["company:ddog"],
+      "corroborated_knowable_at": "2026-02-18T00:00:00Z",
+      "assertion_ids": ["filing.ddog.headcount-ambiguity"],
+      "notes": "The filing separately reports 3,600 sales/marketing, 3,900 R&D, and 8,100 total employees."
+    },
+    {
+      "evidence_id": "evidence.filing.ddog.supply-chain-candidates.2025",
+      "requirement_id": "graph.supply_chain_evidence",
+      "kind": "real",
+      "artifact_paths": ["filings/DDOG_10K_000162828026008819.html"],
+      "artifact_sha256": ["dcdd728cc76efaa0ca2fce5c2b6fd0e1704a77092d232ce0d931eddca8debfde"],
+      "subject_entity_ids": ["company:ddog"],
+      "corroborated_knowable_at": "2026-02-18T00:00:00Z",
+      "assertion_ids": ["filing.ddog.supply-chain-candidates"],
+      "notes": "The filing names AWS, Microsoft Azure, and Google Cloud Platform as cloud-provider relationships."
+    },
+    {
+      "evidence_id": "evidence.action.nvda.split.2024",
+      "requirement_id": "corporate_actions.total_return",
+      "kind": "real",
+      "artifact_paths": [
+        "filings/NVDA_8K_SPLIT_000104581024000144.html",
+        "events/NVDA_YAHOO_EVENTS_20240501_20240701.json",
+        "prices/NVDA_prices_3y_20260712.csv"
+      ],
+      "artifact_sha256": [
+        "047c49a59b50dd6851111d580d8c68b33fcb3bca22d5ea219793568b1bf7b0a6",
+        "72a6b196ea744458f5f8280212e69d613d919bb4e70584a7e68e35936de3b947",
+        "277301f5c45e16bcf9a581dd7b89fc72f576e16dce6ccbf1ccaa846c2d8be926"
+      ],
+      "subject_entity_ids": ["company:nvda"],
+      "corroborated_knowable_at": "2024-06-07T20:19:34Z",
+      "assertion_ids": ["corporate-action.split-replay"],
+      "notes": "SEC 8-K states the 10:1 split and adjusted-trading date; Yahoo events and adjusted prices provide replay inputs."
+    },
+    {
+      "evidence_id": "evidence.action.jpm.dividend.2025q2",
+      "requirement_id": "corporate_actions.total_return",
+      "kind": "real",
+      "artifact_paths": [
+        "events/JPM_DIVIDEND_20250519.json",
+        "events/JPM_YAHOO_EVENTS_20250501_20250810.json",
+        "prices/JPM_prices_3y_20260712.csv"
+      ],
+      "artifact_sha256": [
+        "e653beff80eb61b525fb9f12c251cf26ea100fdf3741557d58e6e64340a93d4e",
+        "ef184a85b26099b103a0a8968ee1719e4e60f55f9ab39322d07eccad2ee3a46c",
+        "0e1ede6888ca5808df8876acad488a40606f4c65c4b575200519b2dfd3434479"
+      ],
+      "subject_entity_ids": ["company:jpm"],
+      "corroborated_knowable_at": "2025-05-19T23:59:59Z",
+      "assertion_ids": ["corporate-action.dividend-replay"],
+      "notes": "JPMorganChase announcement states amount, record, and pay dates; Yahoo corroborates the ex-date event."
+    },
+    {
+      "evidence_id": "evidence.universe.qqq.membership.2025q4-2026q1",
+      "requirement_id": "universe.membership_history",
+      "kind": "real",
+      "artifact_paths": [
+        "nport/QQQ_NPORT_000106783926000016.xml",
+        "nport/QQQ_NPORT_000106783926000024.xml"
+      ],
+      "artifact_sha256": [
+        "9ea743d80b511852c238f9b4281a35f7db5f61d19f2fbd8a43cc0b921d0a3079",
+        "9ecd92e1b08e558378ecd01f05b82d36d6caf6031138a2a01c040dbc9f5fbbbd"
+      ],
+      "subject_entity_ids": ["etf:qqq"],
+      "corroborated_knowable_at": "2026-05-28T10:53:06Z",
+      "assertion_ids": ["universe.membership-replay"],
+      "notes": "Two consecutive public N-PORT vintages prove additions and removals can be replayed."
+    },
+    {
+      "evidence_id": "evidence.identifier.meta.fb-to-meta.2022",
+      "requirement_id": "universe.membership_history",
+      "kind": "real",
+      "artifact_paths": [
+        "filings/META_8K_SYMBOL_000132680122000070.html",
+        "prices/META_prices_5y_20260712.csv"
+      ],
+      "artifact_sha256": [
+        "d3ec72f5f72d852e7cbe8fe760cd27fb3f809bb9aeccac6be4e7234f4ae62cac",
+        "ee61c1358a8eefd0c430d1d55124d2043290dc24a73ca55dde110e3244b4bb70"
+      ],
+      "subject_entity_ids": ["company:meta"],
+      "corroborated_knowable_at": "2022-05-31T20:18:52Z",
+      "assertion_ids": ["universe.symbol-change-or-delisting-replay"],
+      "notes": "The SEC-filed press release states that META replaces FB before market open on June 9, 2022."
+    },
+    {
+      "evidence_id": "evidence.financial.plug.restatement.2020fy",
+      "requirement_id": "financial.restatement_vintages",
+      "kind": "real",
+      "artifact_paths": [
+        "filings/PLUG_10K_000155837021007147.html",
+        "filings/PLUG_10KA_000155837022003577.html",
+        "sec/PLUG_CIK0001093691.json"
+      ],
+      "artifact_sha256": [
+        "fbe9fe64c7583f3f0b391396e9015a8787e58c8f3decb55292707c5ac6d0c9ed",
+        "985468e206ba380f7b413c76227bb3cd759b48eef49f7ff943839776383b551f",
+        "f146df6c39754bb1c73e6edefa34724c14e342ab3176ffd5cf0c9e6e40e8e58a"
+      ],
+      "subject_entity_ids": ["company:plug"],
+      "corroborated_knowable_at": "2022-03-14T21:30:04Z",
+      "assertion_ids": ["financial.restatement-before-after"],
+      "notes": "The amended filing is explicitly restated and company-facts preserves different original and amended values."
+    },
+    {
+      "evidence_id": "evidence.analyst.ddog.benchmark.2026-07-02",
+      "requirement_id": "analyst.knowability",
+      "kind": "real",
+      "artifact_paths": [
+        "moomoo/DDOG.json",
+        "events/DDOG_RATING_CORROBORATION_20260712.html"
+      ],
+      "artifact_sha256": [
+        "925570ac2466f6f2f69aeb327f99ed62fc76795a321f2eaa1b8ae0e0c3900000",
+        "72923b6e007ab173b5671aee2ea9b7c57332d9fb11ccee0b6936494de307a77d"
+      ],
+      "subject_entity_ids": ["analyst:yi-fu-lee", "company:ddog"],
+      "corroborated_knowable_at": "2026-07-02T11:40:41Z",
+      "assertion_ids": ["analyst.knowability-corroborated"],
+      "notes": "An independent timestamped news aggregation corroborates the event before moomoo's July 9 vendor update."
+    },
+    {
+      "evidence_id": "evidence.graph.ddog.cloud-providers.2025",
+      "requirement_id": "graph.supply_chain_history",
+      "kind": "real",
+      "artifact_paths": [
+        "golden/DDOG_supply_chain_edges.json",
+        "filings/DDOG_10K_000162828026008819.html"
+      ],
+      "artifact_sha256": [
+        "164841fc737999564d536a16caa196ab7101be60657200a6b81b6d5f38b71406",
+        "dcdd728cc76efaa0ca2fce5c2b6fd0e1704a77092d232ce0d931eddca8debfde"
+      ],
+      "subject_entity_ids": ["company:ddog"],
+      "corroborated_knowable_at": "2026-02-18T00:00:00Z",
+      "assertion_ids": ["graph.supply-chain-pit-replay"],
+      "notes": "Human-reviewed PIT edge annotations retain confidence and exact filing tokens; causal reasoning remains disabled."
+    },
+    {
+      "evidence_id": "evidence.universe.jpm.financial.2025",
+      "requirement_id": "universe.strategy_diversity",
+      "kind": "real",
+      "artifact_paths": ["filings/JPM_10K_000162828026008131.html"],
+      "artifact_sha256": ["4d9febdbc2038dcdca8726053286df4cbbfd48885051cbd781efcc3becb66a23"],
+      "subject_entity_ids": ["company:jpm"],
+      "corroborated_knowable_at": "2026-02-13T23:59:59Z",
+      "assertion_ids": ["filing.jpm.financial-semantics"],
+      "notes": "The annual filing identifies JPMorganChase as a financial holding company and financial services firm."
+    },
+    {
+      "evidence_id": "evidence.universe.adm.traditional.2025",
+      "requirement_id": "universe.strategy_diversity",
+      "kind": "real",
+      "artifact_paths": ["filings/ADM_10K_000000708426000011.html"],
+      "artifact_sha256": ["969e53661a9df3d929ce3b1c6bb7e9b64ddad27927b3aa574864c50a14d0d8c7"],
+      "subject_entity_ids": ["company:adm"],
+      "corroborated_knowable_at": "2026-02-17T23:59:59Z",
+      "assertion_ids": ["filing.adm.traditional-semantics"],
+      "notes": "The annual filing describes ADM as an agricultural supply-chain manager and processor."
+    },
+    {
+      "evidence_id": "evidence.guidance.nvda.2025q2",
+      "requirement_id": "financial.company_guidance",
+      "kind": "real",
+      "artifact_paths": ["filings/NVDA_8K_GUIDANCE_000104581024000113.html"],
+      "artifact_sha256": ["bc8f3e97c6cf9ce9196d6a11dacadfc8be0bfdf21e4eafd761cb7c22f87e1170"],
+      "subject_entity_ids": ["company:nvda"],
+      "corroborated_knowable_at": "2024-05-22T20:21:29Z",
+      "assertion_ids": ["financial.company-guidance"],
+      "notes": "Filed CFO commentary contains dated revenue and gross-margin guidance for PEG convention inputs."
+    }
+  ],
+  "requirement_evidence": {
+    "filings.edge_cases": ["evidence.filing.ddog.headcount-ambiguity.2025"],
+    "corporate_actions.total_return": [
+      "evidence.action.nvda.split.2024",
+      "evidence.action.jpm.dividend.2025q2"
+    ],
+    "universe.membership_history": [
+      "evidence.universe.qqq.membership.2025q4-2026q1",
+      "evidence.identifier.meta.fb-to-meta.2022"
+    ],
+    "financial.restatement_vintages": ["evidence.financial.plug.restatement.2020fy"],
+    "financial.company_guidance": ["evidence.guidance.nvda.2025q2"],
+    "graph.supply_chain_evidence": ["evidence.filing.ddog.supply-chain-candidates.2025"],
+    "graph.supply_chain_history": ["evidence.graph.ddog.cloud-providers.2025"],
+    "analyst.knowability": ["evidence.analyst.ddog.benchmark.2026-07-02"],
+    "universe.strategy_diversity": [
+      "evidence.universe.jpm.financial.2025",
+      "evidence.universe.adm.traditional.2025"
+    ],
+    "factors.point_in_time_outputs": [],
+    "prices.source_reconciliation": []
   }
 }
