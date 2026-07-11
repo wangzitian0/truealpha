@@ -79,6 +79,7 @@ VPS host runtime (sweeps MUST run on the host — moomoo OpenD only listens on t
 
 ## Conventions
 
+- **Deliverables are a complete issue or a MERGEABLE PR — nothing in between.** Mergeable means: CI green; every review comment (Copilot included) addressed AND its thread resolved; re-request review after structural changes; the PR body describes the final state; cross-repo companions consistent at merge time (merge the infra2 side first, then bump the `repo` submodule pointer here in the same PR). A complete issue carries context, evidence/repro, and acceptance criteria so anyone can pick it up cold.
 - Python dependency management via uv, TypeScript via Bun. No moon for repo task orchestration — GitHub Actions with path filtering is enough for CI.
 - Code style follows whatever formatter/linter config already exists per language — not repeated here. If no config exists yet, ask rather than inventing one.
 - Before editing `db/migrations`, check whether the change violates a hard constraint above, especially point-in-time.
