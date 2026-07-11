@@ -1,0 +1,60 @@
+name: ci-runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker-compose.yml"
+      - ".env.example"
+      - "db/**"
+      - "libs/contracts/**"
+      - "libs/runtime/**"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/ci-runtime.yml"
+  pull_request:
+    paths:
+      - "docker-compose.yml"
+      - ".env.example"
+      - "db/**"
+      - "libs/contracts/**"
+      - "libs/runtime/**"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/ci-runtime.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: ci
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+      S3_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio_local_secret
+      S3_BUCKET: truealpha-raw
+      S3_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --frozen
+      - name: Start app-owned runtime
+        run: |
+          docker compose up -d --wait postgres minio
+          docker compose run --rm minio-init
+      - name: Assert declared dependencies
+        run: uv run --package truealpha-runtime truealpha-runtime check --live
+      - name: Assert point-in-time persistence contract
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/runtime_contract.sql
+      - name: Show runtime logs on failure
+        if: failure()
+        run: docker compose logs postgres minio
+      - name: Stop runtime
+        if: always()
+        run: docker compose down -v

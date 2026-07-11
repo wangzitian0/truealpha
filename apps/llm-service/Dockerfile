@@ -5,7 +5,9 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS build
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 COPY pyproject.toml uv.lock ./
+COPY libs/contracts ./libs/contracts
 COPY libs/factors ./libs/factors
+COPY libs/runtime ./libs/runtime
 COPY apps/llm-service ./apps/llm-service
 # data-engine is a workspace member referenced by uv.lock; a stub pyproject
 # satisfies the resolver without pulling its dependencies into this image.

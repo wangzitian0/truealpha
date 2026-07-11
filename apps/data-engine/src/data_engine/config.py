@@ -1,13 +1,9 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from truealpha_runtime import RuntimeSettings
 
 
-class Settings(BaseSettings):
-    """Read from environment / repo-root .env (see .env.example)."""
+class Settings(RuntimeSettings):
+    """Data-source settings layered on the shared runtime contract."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    app_env: str = "dev"  # dev | staging | prod
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/truealpha"
     # SEC requires a descriptive User-Agent including a contact email.
     sec_user_agent: str = ""
     # moomoo OpenD gateway (must already be running and logged in — see

@@ -7,7 +7,9 @@ dependencies = [
     "httpx>=0.27.0",
     "moomoo-api>=10.8.6808",
     "pydantic-settings>=2.2.0",
+    "truealpha-contracts",
     "truealpha-factors",
+    "truealpha-runtime",
 ]
 
 [dependency-groups]
@@ -17,7 +19,9 @@ dev = [
 ]
 
 [tool.uv.sources]
+truealpha-contracts = { workspace = true }
 truealpha-factors = { workspace = true }
+truealpha-runtime = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

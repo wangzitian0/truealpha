@@ -14,6 +14,8 @@ on:
       - "apps/app-web/**"
       - "apps/llm-service/**"
       - "libs/factors/**"
+      - "libs/contracts/**"
+      - "libs/runtime/**"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/release-images.yml"

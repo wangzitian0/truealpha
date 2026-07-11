@@ -28,12 +28,14 @@ Neither needs to be read every session — read them on demand per "Reference Do
   /app-web        TypeScript: Next.js, reads the mart schema via a read-only account
   /llm-service    Python: FastAPI, MCP endpoint + /chat SSE endpoint
 /libs
+  /contracts      Python: cross-module point-in-time DTOs and repository/storage/backtest ports
   /factors        Python: the single implementation of all seven factor modules
     /base         Factors consuming staging/KG data directly (modules 1-6)
     /composite    Factors consuming other factors' mart outputs (module 7 — three-tier tagging);
                   confidence = min() of all inputs consumed
     /shared       Entity resolution (KG read/write) + LLM structured-extraction primitive — used by
                   both base and composite factors, not reimplemented per module
+  /runtime        Python: runtime env/dependency contract, Postgres/KG/S3 probes, raw object storage
 /db
   /migrations     Single source of truth for schema (raw / staging / mart / dagster)
   /roles.sql      Database role/permission configuration
@@ -44,9 +46,14 @@ Neither needs to be read every session — read them on demand per "Reference Do
 The project is just getting started — once the scaffolding is in place, update this section with real commands. Planned:
 
 ```bash
-# Python (apps/data-engine, apps/llm-service, libs/factors)
-uv sync
+# Python (apps/data-engine, apps/llm-service, libs/*)
+uv sync --all-packages
 uv run pytest
+
+# Local runtime (Postgres/KG + MinIO) or the full application stack
+make runtime-up
+make runtime-check
+make stack-up
 
 # TypeScript (apps/app-web)
 bun install
@@ -65,7 +72,7 @@ bun test
 - SEC XBRL tags for the same concept can be inconsistent across industries — don't assume field names/units are uniform across companies.
 - yfinance has no official SLA — this is expressed as a lower `confidence` on its rows, not a separate ad hoc "fallback only" rule; still don't make it a critical-path dependency.
 - LLM-extraction-based factors (headcount, supply-chain relationships) are inherently non-deterministic — the cache key must be based on "extraction result + schema version," not a hash of the raw LLM output, or Dagster's data_version will mistake sampling noise for a real change. The extraction confidence itself starts as a plain LLM self-reported 0-1 score — don't build a multi-sample self-consistency check until real data shows the self-report is unreliable.
-- N-PORT (ETF holdings) identifies positions by CUSIP/ISIN, not ticker/CIK — resolve through OpenFIGI or similar before writing the `same_as` edge into `staging.kg_edges`. Entity resolution (all ID crosswalks — CIK/ticker/moomoo_code/CUSIP/ISIN) is now a knowledge graph (`staging.kg_entities` + `staging.kg_edges`), not a flat `symbol_mapping` table — don't recreate the old flat table.
+- N-PORT (ETF holdings) identifies positions by CUSIP/ISIN, not ticker/CIK — resolve through OpenFIGI or similar before writing the `same_as` edge into `staging.kg_edges`. Entity resolution (all ID crosswalks — CIK/ticker/moomoo_code/CUSIP/ISIN) is now a knowledge graph (`staging.kg_entities` + identifier properties in `staging.kg_identifiers` + point-in-time `staging.kg_edges`), not a flat `symbol_mapping` table — don't recreate the old flat table.
 - The extraction primitive in `libs/factors/shared` must exist before the gross-profit/headcount and pure-blood-screening modules are built — don't shortcut it by having each module implement its own extraction logic to save time.
 
 ## Reference Documents (read on demand)

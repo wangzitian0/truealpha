@@ -1,25 +1,129 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${DOCKER_LOG_MAX_FILE:-3}"
+
 services:
   postgres:
-    image: postgres:15.14-alpine
-    container_name: truealpha-db
-    restart: unless-stopped
+    image: postgres:16-alpine
+    container_name: truealpha-postgres${ENV_SUFFIX:-}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-truealpha}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Fresh dev DB gets the schemas automatically; initdb runs files in name order,
-      # so roles.sql is mounted with a zz_ prefix to run after the migrations.
-      - ./db/migrations:/docker-entrypoint-initdb.d:ro
-      - ./db/roles.sql:/docker-entrypoint-initdb.d/zz_roles.sql:ro
+      - ./db:/truealpha-db:ro
+      - ./db/docker-init.sh:/docker-entrypoint-initdb.d/00_truealpha.sh:ro
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORTS:-127.0.0.1:5432:5432}"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-truealpha}"]
       interval: 5s
       timeout: 5s
+      retries: 10
+    networks: [runtime]
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: truealpha-minio${ENV_SUFFIX:-}
+    restart: ${RESTART_POLICY:-unless-stopped}
+    logging: *default-logging
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minio_local_secret}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_API_PORTS:-127.0.0.1:9000:9000}"
+      - "${MINIO_CONSOLE_PORTS:-127.0.0.1:9001:9001}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [runtime]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: truealpha-minio-init${ENV_SUFFIX:-}
+    logging: *default-logging
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-minio} ${S3_SECRET_KEY:-minio_local_secret};
+      mc mb local/${S3_BUCKET:-truealpha-raw} --ignore-existing;
+      "
+    networks: [runtime]
+
+  llm-service:
+    build:
+      context: .
+      dockerfile: apps/llm-service/Dockerfile
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-llm-service:${IMAGE_TAG:-local}
+    container_name: truealpha-llm${ENV_SUFFIX:-}
+    profiles: [app]
+    restart: ${RESTART_POLICY:-unless-stopped}
+    logging: *default-logging
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-truealpha}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minio}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minio_local_secret}
+      S3_BUCKET: ${S3_BUCKET:-truealpha-raw}
+      S3_REGION: ${S3_REGION:-us-east-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "${LLM_PORTS:-127.0.0.1:8000:8000}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
       retries: 5
+    networks: [runtime]
+
+  app-web:
+    build:
+      context: apps/app-web
+      dockerfile: Dockerfile
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-app-web:${IMAGE_TAG:-local}
+    container_name: truealpha-web${ENV_SUFFIX:-}
+    profiles: [app]
+    restart: ${RESTART_POLICY:-unless-stopped}
+    logging: *default-logging
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      APP_ENV: ${APP_ENV:-dev}
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-truealpha}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORTS:-127.0.0.1:3000:3000}"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [runtime]
 
 volumes:
   postgres_data:
+  minio_data:
+
+networks:
+  runtime:

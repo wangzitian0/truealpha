@@ -1,7 +1,8 @@
-"""Entity resolution over the knowledge graph (staging.kg_entities / staging.kg_edges).
+"""Entity resolution over the knowledge graph.
 
 All cross-source ID crosswalk (CIK <-> ticker <-> moomoo_code <-> CUSIP/ISIN) goes
-through `same_as` edges here — no module keeps its own mapping table.
+through `kg_identifiers` + point-in-time `same_as` edges here — no module keeps
+its own mapping table.
 Wired to Postgres in Phase 0; the Phase -1 smoke test exercises one sample per
 entity type (company, ETF, analyst, supply-chain relationship).
 """

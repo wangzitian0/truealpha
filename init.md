@@ -88,6 +88,8 @@ The four units exchange data only through Postgres.
   /app-web             TypeScript: Next.js frontend + data-display backend + chat UI (Tier 3)
   /llm-service         Python: FastAPI, MCP endpoint (priority) + /chat SSE endpoint (Tier 3)
 /libs
+  /contracts           Python: sample-aware cross-module DTOs + storage/repository/backtest ports;
+                        no computation logic
   /factors             Python: the single implementation of the seven modules; function signatures
                         align with the eventual Dagster asset convention starting from Phase -1
     /base              Factors that consume staging (incl. KG) data directly
@@ -95,6 +97,9 @@ The four units exchange data only through Postgres.
                         confidence = min() of all consumed inputs
     /shared            Entity resolution (KG read/write) + LLM structured-extraction primitive,
                         used by both base and composite factors, not reimplemented per module
+  /runtime             Python: environment/dependency manifest, Postgres/KG/S3 probes, and the
+                        boto3 immutable raw-object adapter; local/CI use Compose Postgres + MinIO,
+                        deployed environments receive the same DATABASE_URL/S3_* contract from infra2
 /db
   /migrations          DDL for the four schemas: raw / staging / mart / dagster
   /roles.sql           mart_readonly (incl. statement_timeout config) and other role permissions
@@ -169,6 +174,21 @@ create table staging.kg_entities (
     id            text primary key,          -- our internal unified_id
     entity_type   text not null,             -- 'company' | 'etf' | 'analyst' | 'supply_chain_node'
     display_name  text not null
+);
+
+-- Source identifier property rows locate source-specific entity nodes. Entity
+-- resolution then traverses a same_as edge to the unified entity as of the
+-- requested transaction-time cutoff.
+create table staging.kg_identifiers (
+    id                bigint generated always as identity primary key,
+    entity_id         text not null references staging.kg_entities(id),
+    source            text not null,
+    identifier_type   text not null,
+    identifier_value  text not null,
+    valid_time        daterange not null,
+    transaction_time  timestamptz not null,
+    confidence        numeric not null,
+    raw_ref           text not null
 );
 
 create table staging.kg_edges (

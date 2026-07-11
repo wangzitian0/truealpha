@@ -5,7 +5,9 @@
 members = [
     "apps/data-engine",
     "apps/llm-service",
+    "libs/contracts",
     "libs/factors",
+    "libs/runtime",
 ]
 
 [tool.ruff]
@@ -17,4 +19,10 @@ select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-testpaths = ["apps/data-engine/tests", "apps/llm-service/tests", "libs/factors/tests"]
+testpaths = [
+    "apps/data-engine/tests",
+    "apps/llm-service/tests",
+    "libs/contracts/tests",
+    "libs/factors/tests",
+    "libs/runtime/tests",
+]
