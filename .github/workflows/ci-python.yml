@@ -50,6 +50,7 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run ruff check apps libs
       - run: uv run ruff format --check apps libs
+      - run: uv run mypy
       # A docker-run step rather than a service container: GitHub services can't
       # override the container command, and the official minio image (the same
       # pin docker-compose.yml uses) needs `server /data`.
@@ -81,3 +82,6 @@ jobs:
           S3_ACCESS_KEY: minio
           S3_SECRET_KEY: minio_local_secret
           S3_BUCKET: truealpha-raw
+          # The services above exist so integration tests RUN here; a suite
+          # that silently skips must fail, not pass green while covering nothing.
+          TRUEALPHA_REQUIRE_RUNTIME: "1"

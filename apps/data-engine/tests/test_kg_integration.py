@@ -13,6 +13,7 @@ import pytest
 from data_engine.config import settings
 from data_engine.sources import moomoo_ledger as ledger
 from factors.shared import entity_resolution as er
+from truealpha_runtime.testing import skip_or_fail
 
 psycopg = pytest.importorskip("psycopg")
 
@@ -28,7 +29,7 @@ def conn():
     try:
         c = psycopg.connect(settings.database_url, connect_timeout=3)
     except psycopg.OperationalError:
-        pytest.skip("no reachable Postgres (make runtime-up && make db-migrate)")
+        skip_or_fail("no reachable Postgres (make runtime-up && make db-migrate)")
     yield c
     c.rollback()
     c.close()

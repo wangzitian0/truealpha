@@ -1,5 +1,12 @@
 # Uses the workspace's own ruff so the pinned version matches CI (uv.lock).
+# gitleaks + the trade-API gate mirror .github/workflows/security-gate.yml:
+# this is a public repo, so a secret or a trading-API call should die at commit
+# time — the CI security gate is the backstop, not the first line.
 repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.3
+    hooks:
+      - id: gitleaks
   - repo: local
     hooks:
       - id: ruff-check
@@ -12,3 +19,10 @@ repos:
         entry: uv run ruff format
         language: system
         types: [python]
+      - id: no-trade-api
+        name: forbid moomoo trading APIs (quote/read-only repo)
+        language: pygrep
+        entry: 'OpenSecTradeContext|OpenFutureTradeContext|OpenCryptoTradeContext|OpenHKTradeContext|OpenUSTradeContext|OpenCNTradeContext|\bplace_order\b|\bmodify_order\b|\bcancel_order\b|\bunlock_trade\b'
+        # Same doc exclusions as security-gate.yml (files that legitimately
+        # name these APIs as things to forbid), plus this config itself.
+        exclude: '^(CLAUDE\.md|init\.md|\.github/workflows/security-gate\.yml|\.pre-commit-config\.yaml)$'

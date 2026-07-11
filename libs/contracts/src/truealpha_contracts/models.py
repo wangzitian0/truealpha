@@ -116,6 +116,9 @@ class FinancialFact(BaseModel):
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str
     source_metric: str
+    # "<parser-id>:<schema-version>" (see truealpha_contracts.metrics) — keeps a
+    # reparse under revised mapping logic distinguishable from a restatement.
+    mapping_version: str = Field(min_length=1)
     accession: str | None = None
     form: str | None = None
     is_restatement: bool = False

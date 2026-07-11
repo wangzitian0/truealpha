@@ -28,6 +28,7 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 9. **Observability is centered on the Dagster UI** — on the condition that Dagster's own runtime metadata is persisted (see Section 6), not left on its default local storage.
 10. **Supply-chain causal reasoning has a kill condition, defined in terms of confidence, not a separate accuracy concept**: no causal-reasoning step until the `confidence` of materialized supply-chain edges clears a bar (the bar itself is set after Phase -1 sampling, not guessed now).
 11. **No moon.** GitHub Actions with path filtering is sufficient.
+12. **Multi-source truth is resolved by declared fusion rules, never by ingestion recency.** Staging keeps every source's assertion side by side; the mart winner comes from the metric registry's per-field `source_priority` (Section 6, "Source fusion"), and the ruleset version is part of mart lineage. Corollary: `transaction_time` (= knowable-at) is always written explicitly from a source property, never defaulted to the insert clock, and every staging row also carries `recorded_at` (ingestion clock, audit only) plus — for parsed facts — a `mapping_version`, so "the data changed" and "the cleaning logic changed" stay distinguishable forever.
 
 ---
 
@@ -157,17 +158,26 @@ API ledgers, or Vault secret paths. Strategy computation remains in
 
 Four schemas: `raw`, `staging`, `mart`, `dagster` (Dagster's own run/event/schedule storage, explicitly configured, not left on default local storage).
 
+**Time axes (every staging table carries all three):**
+
+- `valid_time` — the real-world period the data describes.
+- `transaction_time` — when the fact became **publicly knowable** (the DTO layer calls this `knowable_at`). Always set explicitly by the writer from a source property (filing date, publish time) — **never defaulted to the insert clock**. The failure mode this kills: a new source added in year N backfills five years of history; stamped with `now()` those rows are invisible to every historical as-of query, stamped correctly they are usable while `recorded_at` still tells the truth about when we got them.
+- `recorded_at` — when TrueAlpha ingested the row. Audit and reproducibility only; as-of resolution never reads it.
+
 The concrete point-in-time structure (staging layer):
 
 ```sql
 create table staging.financial_facts (
     id                bigint generated always as identity primary key,
     unified_id        text not null,          -- KG entity id, see staging.kg_entities below
-    metric            text not null,          -- 'revenue' / 'gross_profit' / ...
+    metric            text not null,          -- canonical field name; registry: libs/contracts metrics.py
     fiscal_period     text not null,          -- '2025Q4'
     valid_time        daterange not null,     -- the period this data describes
-    transaction_time  timestamptz not null default now(),  -- when this became knowable
+    transaction_time  timestamptz not null,   -- knowable-at; NO default (see "Time axes")
+    recorded_at       timestamptz not null default now(),  -- ingestion clock, audit only
     value             numeric,
+    unit              text not null,          -- XBRL units are not uniform across companies;
+                                               -- a bare numeric is not a fact
     confidence        numeric not null,       -- 0-1, MANDATORY on every row, no nulls.
                                                -- Absorbs both "extraction uncertainty" (LLM-derived
                                                -- facts self-report a score) AND "source reliability"
@@ -175,7 +185,13 @@ create table staging.financial_facts (
                                                -- not as a separate ad hoc rule). Official filed data
                                                -- (SEC) defaults to 1.0.
     source            text not null,          -- 'sec' | 'yfinance' | 'twelvedata' | 'moomoo'
-    raw_ref           text,                   -- pointer back to the original record in the raw schema
+    source_metric     text not null,          -- the source's native tag ('Revenues', ...) — the
+                                               -- mapping layer's evidence
+    raw_ref           text not null,          -- pointer back to the original record in the raw schema
+    mapping_version   text not null,          -- '<parser-id>:<schema-version>'; a reparse under revised
+                                               -- mapping logic is distinguishable from a restatement
+    accession         text,                   -- SEC provenance, null for other sources
+    form              text,
     is_restatement    boolean not null default false
 );
 
@@ -183,16 +199,24 @@ create index idx_financial_facts_asof
     on staging.financial_facts (unified_id, metric, fiscal_period, transaction_time desc);
 ```
 
-The core shape of a point-in-time query:
+**Source fusion (staging → mart).** Staging is evidence, mart is verdict. Multiple sources may assert the same `(unified_id, metric, fiscal_period)` — they coexist as separate rows, and the winner is chosen by **declared rules, never by ingestion recency**. The rules live in the metric registry (`libs/contracts/src/truealpha_contracts/metrics.py`): each canonical metric declares an ordered `source_priority`. Resolution at a cutoff:
+
+1. Rows with `transaction_time <= :as_of` and a source registered for the metric compete; unregistered sources stay in staging as evidence and never reach mart.
+2. The highest-priority source present wins.
+3. Within the winning source, the latest `transaction_time` (restatement) wins; `id` breaks same-instant ties.
+4. `confidence` rides along as data for the factor — it never arbitrates between sources (static per-source confidence must not silently decide truth).
 
 ```sql
 select distinct on (unified_id, metric, fiscal_period) *
 from staging.financial_facts
 where transaction_time <= :as_of_timestamp
-order by unified_id, metric, fiscal_period, transaction_time desc;
+  and array_position(:source_priority, source) is not null   -- registry order for this metric
+order by unified_id, metric, fiscal_period,
+         array_position(:source_priority, source),           -- fusion rank first
+         transaction_time desc, id desc;
 ```
 
-Every row in the mart layer must already have this logic resolved — it can't be left for downstream consumers to choose.
+Every row in the mart layer must already have this logic resolved — it can't be left for downstream consumers to choose. Mart rows carry two lineage fields so a number stays explainable after the rules move on: `staging_ref` (the winning staging row, `staging.financial_facts:<id>`, which chains to `raw_ref` and the immutable bytes) and `fusion_version` (`FUSION_RULESET_VERSION` at materialization time). Swapping a field's source is a registry edit that bumps `FUSION_RULESET_VERSION` — re-materialization is then attributable, and the fetch side is untouched: the new source lands in raw/staging under its own keys like any other, and old evidence is never deleted.
 
 **Knowledge graph (replaces the old flat `symbol_mapping` table).** Entity resolution is not unique to companies — companies, ETFs, analysts, and supply-chain nodes all have the same "same real-world thing, different IDs per source" problem, so it's modeled once as a graph, implemented as plain Postgres tables (no separate graph engine — the query patterns needed here are shallow joins, not deep multi-hop traversal):
 
@@ -226,12 +250,13 @@ create table staging.kg_edges (
                                                -- moomoo_code<->CUSIP/ISIN) | 'supplies_to' | 'holds' (ETF->company)
                                                -- | 'covers' (analyst->company) | ...
     valid_time        daterange not null,
-    transaction_time  timestamptz not null default now(),
+    transaction_time  timestamptz not null,   -- knowable-at; NO default (see "Time axes")
+    recorded_at       timestamptz not null default now(),
     confidence        numeric not null,       -- same semantics as financial_facts.confidence.
                                                -- The supply-chain causal-reasoning kill condition
                                                -- (Section 1, rule 10) reads confidence on 'supplies_to' edges.
     source            text not null,
-    raw_ref           text
+    raw_ref           text not null
 );
 
 create index idx_kg_edges_asof

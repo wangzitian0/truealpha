@@ -13,6 +13,14 @@ from truealpha_contracts.data_quality import (
     Strategy,
     StrategyDataRequirement,
 )
+from truealpha_contracts.metrics import (
+    FUSION_RULESET_VERSION,
+    METRICS,
+    MetricSpec,
+    UnitFamily,
+    fusion_rank,
+    source_priority,
+)
 from truealpha_contracts.models import (
     AnalystRatingEvent,
     AsOfQuery,
@@ -42,7 +50,13 @@ __all__ = [
     "EntityIdentifier",
     "FinancialFact",
     "FundHolding",
+    "FUSION_RULESET_VERSION",
     "GraphEdge",
+    "METRICS",
+    "MetricSpec",
+    "UnitFamily",
+    "fusion_rank",
+    "source_priority",
     "PointInTimeRepository",
     "PriceBar",
     "RawCapture",

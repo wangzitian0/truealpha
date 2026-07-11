@@ -10,6 +10,27 @@ members = [
     "libs/runtime",
 ]
 
+[dependency-groups]
+dev = ["mypy>=1.14", "pandas-stubs>=2.2"]
+
+[tool.mypy]
+python_version = "3.12"
+files = [
+    "apps/data-engine/src",
+    "apps/llm-service/src",
+    "libs/contracts/src",
+    "libs/factors/src",
+    "libs/runtime/src",
+]
+
+# Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients).
+# Scoped per-module so a typo'd or missing dependency still fails the check.
+# mypy's `foo.*` matches `foo` itself too; bare names listed anyway so the
+# intent survives a reader who doesn't know that.
+[[tool.mypy.overrides]]
+module = ["moomoo", "moomoo.*", "boto3", "boto3.*", "botocore", "botocore.*"]
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

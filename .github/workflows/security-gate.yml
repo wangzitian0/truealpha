@@ -33,15 +33,17 @@ jobs:
           # CLAUDE.md hard constraint: this repo only ever reads moomoo market/
           # fundamental data via OpenQuoteContext. Trading contexts and order
           # calls are hard-forbidden, no exceptions — this is a public repo.
-          # \b is a GNU grep extension (works in -E mode, not PCRE-only) — the
-          # runner's grep is GNU grep, so this is a real word boundary here.
-          PATTERN='OpenSecTradeContext|OpenFutureTradeContext|OpenCryptoTradeContext|OpenHKTradeContext|OpenUSTradeContext|OpenCNTradeContext|\bplace_order\b|\bmodify_order\b|\bcancel_order\b|\bunlock_trade\b'
+          # Word boundaries via POSIX classes, not \b — git grep -E compiles
+          # with the system regcomp, where \b is a glibc extension only.
+          PATTERN='OpenSecTradeContext|OpenFutureTradeContext|OpenCryptoTradeContext|OpenHKTradeContext|OpenUSTradeContext|OpenCNTradeContext|(^|[^[:alnum:]_])(place_order|modify_order|cancel_order|unlock_trade)([^[:alnum:]_]|$)'
           # Repo-wide, excluding the docs that legitimately name these APIs
-          # (as things to forbid) and this workflow file itself.
+          # (as things to forbid), this workflow file itself, and the
+          # pre-commit config whose local gate carries the same pattern.
           if git grep -InE "$PATTERN" -- . \
               ':(exclude)CLAUDE.md' \
               ':(exclude)init.md' \
-              ':(exclude).github/workflows/security-gate.yml'; then
+              ':(exclude).github/workflows/security-gate.yml' \
+              ':(exclude).pre-commit-config.yaml'; then
             echo "::error::Forbidden moomoo trading API reference found above — this repo is quote/read-only only (see CLAUDE.md hard constraints)."
             exit 1
           fi

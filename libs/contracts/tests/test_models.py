@@ -29,6 +29,7 @@ def test_sec_fact_preserves_vintage_and_decimal_value():
         confidence=Decimal("1"),
         raw_ref="raw.fetches:1",
         source_metric="RevenueFromContractWithCustomerExcludingAssessedTax",
+        mapping_version="sec-companyfacts:1",
         accession="0001564590-20-006422",
         form="10-K",
     )
@@ -99,6 +100,7 @@ def test_backtest_dataset_rejects_lookahead_fact():
         confidence=Decimal("1"),
         raw_ref="raw.fetches:1",
         source_metric="RevenueFromContractWithCustomerExcludingAssessedTax",
+        mapping_version="sec-companyfacts:1",
     )
     with pytest.raises(ValidationError, match="not knowable"):
         BacktestDataset(query=query, financial_facts=(fact,))
