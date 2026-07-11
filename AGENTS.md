@@ -31,3 +31,40 @@ No moon — CI is GitHub Actions with path filtering (`.github/workflows/`).
 - Python: `uv sync --all-packages`, `uv run pytest`, `uv run ruff check .`
 - Web: `cd apps/app-web && bun run typecheck && bun run build`
 - DB: `make db-up` (compose applies `db/` DDL on first boot)
+
+## Issue Quality Gate
+
+Every issue must explain a complete causal path from the observed problem to the
+project goal. A task list without that argument is not ready for implementation.
+Before creating an issue, check `vision.md`, `init.md`, existing issues, and the
+current code or evidence so the proposal does not duplicate work or contradict
+the authoritative architecture.
+
+Every implementation issue must contain these sections:
+
+1. **Problem context** — Describe the observed behavior, affected users or
+   modules, current evidence, scope, and the larger goal that is blocked. Link
+   the relevant `vision.md` / `init.md` phase, parent issue, code, data, or run.
+2. **Root-cause analysis** — Explain why the problem exists at the semantic,
+   data, interface, or operational boundary. Distinguish verified causes from
+   hypotheses. Do not restate the symptom as the cause.
+3. **Remediation** — Specify the proposed changes, ownership boundaries, data or
+   interface migrations, implementation order, and explicit non-goals. Each
+   change must address a named root cause.
+4. **Acceptance criteria** — Use observable, executable outcomes wherever
+   possible: tests, queries, quality gates, replay assertions, workflow runs, or
+   artifacts. Cover negative and point-in-time cases, not only the happy path.
+5. **Why this completes the larger goal** — Provide the closure argument:
+   map root causes to changes, changes to acceptance evidence, and that evidence
+   to the downstream capability that becomes unblocked. List residual risks,
+   dependencies, and follow-up work; if any dependency still blocks the stated
+   goal, narrow the issue's claimed outcome instead of declaring completion.
+
+Exploration issues may begin with an unverified root cause, but must state the
+competing hypotheses, the evidence to collect, the decision that evidence will
+enable, and a termination criterion. They must result in either a verified
+implementation issue or a documented decision that no change is required.
+
+An issue is not ready when acceptance criteria only confirm that code was
+written, when evidence can be satisfied by manually flipping a flag, or when
+the proposed work does not prove which downstream blocker it removes.
