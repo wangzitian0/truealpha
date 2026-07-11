@@ -64,6 +64,19 @@ cd apps/app-web && bun run dev
 cd apps/app-web && bun run typecheck
 ```
 
+## Environments
+
+Four provisioned environments; staging and production are parallel container stacks on ONE VPS (`ENV_SUFFIX` namespacing), sharing one Vault/MinIO-per-env/deploy pipeline with finance_report (infra2 repo owns all of that).
+
+| env | postgres | object storage | how it's made |
+|---|---|---|---|
+| local dev | `make runtime-up` (or any localhost:5432) | MinIO localhost:9000 | `make db-migrate`, bucket auto-created |
+| GitHub CI | service container | docker-run MinIO step | per-run, ephemeral (ci-python.yml) |
+| staging (VPS) | `truealpha-postgres-staging`, host loopback :15432 | platform MinIO-staging, bucket `truealpha-raw` | infra2 release tag auto-promotes; host runtime via `scripts/setup_vps_ingest.sh` |
+| production (VPS) | `truealpha-postgres`, host loopback :15433 | platform MinIO, same bucket name | Phase-6 gated: explicit prod promotion + `provision_bucket.sh production` (infra2) |
+
+VPS host runtime (sweeps MUST run on the host — moomoo OpenD only listens on the host's 127.0.0.1): `bash apps/data-engine/scripts/setup_vps_ingest.sh [staging]` clones nothing, syncs deps, applies migrations, derives `.env` from the Vault-rendered app env, and ends with `doctor_ingest.py` (run the doctor alone anytime; `--require-opend` before moomoo sweeps). Container IPs change on redeploys — rerun the setup script to refresh `.env`.
+
 ## Conventions
 
 - Python dependency management via uv, TypeScript via Bun. No moon for repo task orchestration — GitHub Actions with path filtering is enough for CI.
