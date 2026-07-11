@@ -38,11 +38,15 @@ def ticker_to_cik(ticker: str) -> int:
     raise KeyError(f"ticker not found in SEC mapping: {ticker}")
 
 
-def fetch_company_facts(cik: int) -> dict[str, Any]:
-    with _client() as client:
+def fetch_company_facts(cik: int, client: httpx.Client | None = None) -> dict[str, Any]:
+    """Pass a client to reuse one connection across a sweep; without one, a
+    throwaway client is opened per call (fine for single fetches)."""
+    if client is not None:
         resp = client.get(COMPANY_FACTS_URL.format(cik=cik))
         resp.raise_for_status()
         return resp.json()
+    with _client() as client:
+        return fetch_company_facts(cik, client)
 
 
 def save_sample(ticker: str, out_dir: Path) -> Path:

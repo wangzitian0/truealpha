@@ -22,7 +22,7 @@ Usage:
 import json
 from pathlib import Path
 
-import pandas as pd
+from data_engine.jsonable import to_jsonable
 from data_engine.sources import moomoo as mm
 from data_engine.sources.moomoo_ledger import BudgetExceededError, calls_this_month
 
@@ -30,57 +30,13 @@ TICKERS = ["DDOG", "NICE", "SHOP", "DUOL"]
 OUT_DIR = Path(__file__).resolve().parents[1] / "samples" / "moomoo"
 CALLER = "capture_fundamental_samples"
 
-# moomoo's Python SDK doesn't expose these as enum classes (unlike e.g.
-# moomoo.Market) — it takes the raw Qot_Common.proto enum ints directly.
-FS_INCOME, FS_BALANCE_SHEET, FS_CASH_FLOW, FS_MAIN_INDEX = 1, 2, 3, 4  # FinancialStatementsType
-VALUATION_PE = 1  # ValuationType
-INTERVAL_YEAR10 = 7  # ValuationIntervalType
-
-
-def _to_jsonable(obj):
-    """moomoo's SDK return shapes aren't uniform (plain dict, DataFrame, or a
-    tuple of DataFrames) — normalize whatever comes back into something
-    json.dump can write without guessing per-endpoint ahead of time."""
-    if isinstance(obj, pd.DataFrame):
-        return json.loads(obj.to_json(orient="records"))
-    if isinstance(obj, dict):
-        return {k: _to_jsonable(v) for k, v in obj.items()}
-    if isinstance(obj, tuple | list):
-        return [_to_jsonable(v) for v in obj]
-    return obj
-
 
 def capture_ticker(ctx, ticker: str) -> dict:
     code = f"US.{ticker}"
-    endpoints: dict[str, object] = {
-        "company_profile": lambda: mm.get_company_profile(ctx, code, caller=CALLER),
-        "financials_income": lambda: mm.get_financials_statements(ctx, code, statement_type=FS_INCOME, caller=CALLER),
-        "financials_balance_sheet": lambda: mm.get_financials_statements(
-            ctx, code, statement_type=FS_BALANCE_SHEET, caller=CALLER
-        ),
-        "financials_cash_flow": lambda: mm.get_financials_statements(
-            ctx, code, statement_type=FS_CASH_FLOW, caller=CALLER
-        ),
-        "financials_main_index": lambda: mm.get_financials_statements(
-            ctx, code, statement_type=FS_MAIN_INDEX, caller=CALLER
-        ),
-        "financials_revenue_breakdown": lambda: mm.get_financials_revenue_breakdown(ctx, code, caller=CALLER),
-        "valuation_pe": lambda: mm.get_valuation_detail(
-            ctx, code, valuation_type=VALUATION_PE, interval_type=INTERVAL_YEAR10, caller=CALLER
-        ),
-        "analyst_consensus": lambda: mm.get_analyst_consensus(ctx, code, caller=CALLER),
-        "rating_summary": lambda: mm.get_rating_summary(ctx, code, analyst_dimension=True, num=20, caller=CALLER),
-        "morningstar_report": lambda: mm.get_research_morningstar_report(ctx, code, caller=CALLER),
-        "shareholders_overview": lambda: mm.get_shareholders_overview(ctx, code, caller=CALLER),
-        "insider_trades": lambda: mm.get_insider_trade_list(ctx, code, num=20, caller=CALLER),
-        "dividends": lambda: mm.get_corporate_actions_dividends(ctx, code, caller=CALLER),
-        "short_interest": lambda: mm.get_short_interest(ctx, code, num=20, caller=CALLER),
-    }
-
     results: dict[str, object] = {}
-    for name, call in endpoints.items():
+    for name, call in mm.FUNDAMENTAL_ENDPOINTS.items():
         try:
-            results[name] = {"ok": True, "data": _to_jsonable(call())}
+            results[name] = {"ok": True, "data": to_jsonable(call(ctx, code, CALLER))}
             print(f"  {ticker}.{name}: ok")
         except mm.MoomooConnectionError as e:
             results[name] = {"ok": False, "error": str(e)}
@@ -106,7 +62,7 @@ def main() -> None:
             codes = [f"US.{t}" for t in TICKERS]
             owner_plate = mm.get_owner_plate(ctx, codes, caller=CALLER)
             out_path = OUT_DIR / "owner_plate.json"
-            out_path.write_text(json.dumps(_to_jsonable(owner_plate), indent=2, ensure_ascii=False))
+            out_path.write_text(json.dumps(to_jsonable(owner_plate), indent=2, ensure_ascii=False))
             print(f"\nowner_plate (all tickers batched): ok -> {out_path}")
         except mm.MoomooConnectionError as e:
             print(f"\nowner_plate: FAILED — {e}")

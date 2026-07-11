@@ -41,12 +41,18 @@ Neither needs to be read every session — read them on demand per "Reference Do
 
 ## Commands
 
-The project is just getting started — once the scaffolding is in place, update this section with real commands. Planned:
-
 ```bash
-# Python (apps/data-engine, apps/llm-service, libs/factors)
-uv sync
-uv run pytest
+make install          # uv sync --all-packages + bun install + pre-commit
+make db-up            # dev Postgres (docker compose; applies DDL on first run)
+make db-migrate       # re-apply db/ DDL to a running Postgres (idempotent)
+make check            # ruff + typecheck + pytest (DB integration tests skip without a reachable Postgres)
+
+# Ingestion (Phase 0) — order matters; each script's docstring has the details
+uv run --package truealpha-data-engine python apps/data-engine/scripts/bootstrap_universe.py     # ETF N-PORTs + OpenFIGI -> KG universe
+uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_sec_facts.py        # company-facts -> raw (runs anywhere, no quota)
+# The two below need the moomoo OpenD host and MOOMOO_LEDGER_BACKEND=postgres:
+uv run --package truealpha-data-engine python apps/data-engine/scripts/probe_moomoo_nonus.py     # HK/CN endpoint spot check BEFORE the full sweep
+uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_moomoo_fundamentals.py [--dry-run]
 
 # TypeScript (apps/app-web)
 bun install

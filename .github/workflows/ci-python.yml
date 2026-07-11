@@ -22,6 +22,22 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Real Postgres so the KG / raw-store / ledger integration tests run in CI
+    # instead of skipping (they skip gracefully where no DB is reachable).
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: truealpha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -30,4 +46,14 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - name: Apply DB migrations
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in db/migrations/*.sql db/roles.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done
       - run: uv run pytest
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha

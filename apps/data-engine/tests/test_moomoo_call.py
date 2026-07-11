@@ -7,6 +7,9 @@ from data_engine.sources import moomoo_ledger as ledger
 def _isolated_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
     monkeypatch.setattr(ledger.settings, "moomoo_monthly_call_budget", 10)
+    # _call now throttles; keep the shared window empty so unrelated tests
+    # can't accumulate into a real 30s sleep.
+    ledger._recent_calls.clear()
 
 
 def test_call_records_success():

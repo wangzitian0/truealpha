@@ -17,8 +17,19 @@ class Settings(BaseSettings):
     # Self-imposed precautionary cap, NOT a real moomoo-side monthly quota —
     # moomoo's own docs only rate-limit fundamental/quote endpoints (bursts
     # per 30s); see init.md Section 5's 2026-07-10 correction. Kept as a
-    # defensive throttle/audit trail (init.md Section 1 rule 6).
-    moomoo_monthly_call_budget: int = 2000
+    # defensive runaway backstop / audit trail (init.md Section 1 rule 6),
+    # sized so one full-universe fundamental sweep (~1,200 listing lines x
+    # 9 core endpoints ≈ 11k calls) fits with headroom.
+    moomoo_monthly_call_budget: int = 20000
+    # Which ledger the gate reads/writes: 'json' (local file, Phase -1 probe
+    # scripts) or 'postgres' (staging.api_call_ledger — required for sweeps).
+    moomoo_ledger_backend: str = "json"
+    # Process-local burst throttle matching moomoo's real limit shape
+    # (bursts per 30s). Global across endpoints, deliberately conservative.
+    moomoo_calls_per_30s: int = 8
+    # Optional; raises OpenFIGI mapping limits from 25 req/min x 10 jobs to
+    # 25 req/6s x 100 jobs. Free key: https://www.openfigi.com/api
+    openfigi_api_key: str = ""
 
 
 settings = Settings()
