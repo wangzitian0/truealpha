@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "source_artifact": "filings/DDOG_10K_000162828026008819.html",
+  "edges": [
+    {
+      "from_entity_id": "company:amazon-web-services",
+      "to_entity_id": "company:ddog",
+      "relation_type": "supplies_to",
+      "valid_from": "2025-12-31",
+      "valid_to": null,
+      "knowable_at": "2026-02-18T00:00:00Z",
+      "confidence": "0.80",
+      "evidence_token": "Amazon Web Services"
+    },
+    {
+      "from_entity_id": "company:microsoft-azure",
+      "to_entity_id": "company:ddog",
+      "relation_type": "supplies_to",
+      "valid_from": "2025-12-31",
+      "valid_to": null,
+      "knowable_at": "2026-02-18T00:00:00Z",
+      "confidence": "0.80",
+      "evidence_token": "Microsoft Azure"
+    },
+    {
+      "from_entity_id": "company:google-cloud-platform",
+      "to_entity_id": "company:ddog",
+      "relation_type": "supplies_to",
+      "valid_from": "2025-12-31",
+      "valid_to": null,
+      "knowable_at": "2026-02-18T00:00:00Z",
+      "confidence": "0.80",
+      "evidence_token": "Google Cloud Platform"
+    }
+  ]
+}

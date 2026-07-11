@@ -46,6 +46,50 @@ class QualityStatus(StrEnum):
     FAIL = "fail"
 
 
+class EvidenceKind(StrEnum):
+    REAL = "real"
+    SYNTHETIC = "synthetic"
+
+
+class EvidenceCase(BaseModel):
+    """Immutable evidence reference used by executable readiness assertions."""
+
+    evidence_id: str = Field(pattern=r"^evidence\.[a-z0-9_.-]+$")
+    requirement_id: str = Field(pattern=r"^[a-z][a-z0-9_.]+$")
+    kind: EvidenceKind
+    artifact_paths: tuple[str, ...] = Field(min_length=1)
+    artifact_sha256: tuple[str, ...] = Field(min_length=1)
+    subject_entity_ids: tuple[str, ...] = Field(min_length=1)
+    corroborated_knowable_at: datetime | None = None
+    assertion_ids: tuple[str, ...] = Field(min_length=1)
+    notes: str = Field(min_length=1)
+
+    @field_validator("corroborated_knowable_at")
+    @classmethod
+    def validate_knowable_at(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _require_aware(value, "corroborated_knowable_at")
+
+    @field_validator("artifact_paths")
+    @classmethod
+    def validate_artifact_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if any(value.startswith("/") or ".." in value.split("/") for value in values):
+            raise ValueError("artifact paths must stay within the sample root")
+        return values
+
+    @field_validator("artifact_sha256")
+    @classmethod
+    def validate_hashes(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if any(len(value) != 64 or any(char not in "0123456789abcdef" for char in value) for value in values):
+            raise ValueError("artifact hashes must be lowercase SHA-256 values")
+        return values
+
+    @model_validator(mode="after")
+    def validate_artifact_pairs(self) -> EvidenceCase:
+        if len(self.artifact_paths) != len(self.artifact_sha256):
+            raise ValueError("artifact_paths and artifact_sha256 must have equal length")
+        return self
+
+
 class StrategyDataRequirement(BaseModel):
     """A stable requirement shared by ingestion, quality gates, and backtests."""
 
@@ -182,6 +226,14 @@ STRATEGY_DATA_REQUIREMENTS: tuple[StrategyDataRequirement, ...] = (
             }
         ),
         required_for=BACKTEST_LEVELS,
+    ),
+    StrategyDataRequirement(
+        id="financial.company_guidance",
+        domain=DataDomain.FINANCIAL_FACTS,
+        description="Company guidance retains its publication cutoff, stated period, value, range, and unit.",
+        acceptance="A filed guidance case exposes a dated forward revenue or margin range without using later actuals.",
+        strategies=frozenset({Strategy.PEG}),
+        required_for=ALL_LEVELS,
     ),
     StrategyDataRequirement(
         id="graph.supply_chain_evidence",

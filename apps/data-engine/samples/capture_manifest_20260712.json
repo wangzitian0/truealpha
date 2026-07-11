@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "capture_id": "strategy-evidence-20260712",
+  "completed_at": "2026-07-11T19:04:54.803220+00:00",
+  "artifacts": [
+    {
+      "path": "events/DDOG_RATING_CORROBORATION_20260712.html",
+      "source": "mboum",
+      "byte_length": 231768,
+      "sha256": "72923b6e007ab173b5671aee2ea9b7c57332d9fb11ccee0b6936494de307a77d"
+    },
+    {
+      "path": "events/JPM_DIVIDEND_20250519.json",
+      "source": "jpmorgan_investor_relations",
+      "byte_length": 494,
+      "sha256": "e653beff80eb61b525fb9f12c251cf26ea100fdf3741557d58e6e64340a93d4e"
+    },
+    {
+      "path": "events/JPM_YAHOO_EVENTS_20250501_20250810.json",
+      "source": "yahoo",
+      "byte_length": 8445,
+      "sha256": "ef184a85b26099b103a0a8968ee1719e4e60f55f9ab39322d07eccad2ee3a46c"
+    },
+    {
+      "path": "events/NVDA_YAHOO_EVENTS_20240501_20240701.json",
+      "source": "yahoo",
+      "byte_length": 5794,
+      "sha256": "72a6b196ea744458f5f8280212e69d613d919bb4e70584a7e68e35936de3b947"
+    },
+    {
+      "path": "filings/ADM_10K_000000708426000011.html",
+      "source": "sec",
+      "byte_length": 3214753,
+      "sha256": "969e53661a9df3d929ce3b1c6bb7e9b64ddad27927b3aa574864c50a14d0d8c7"
+    },
+    {
+      "path": "filings/JPM_10K_000162828026008131.html",
+      "source": "sec",
+      "byte_length": 12927325,
+      "sha256": "4d9febdbc2038dcdca8726053286df4cbbfd48885051cbd781efcc3becb66a23"
+    },
+    {
+      "path": "filings/META_8K_SYMBOL_000132680122000070.html",
+      "source": "sec",
+      "byte_length": 4657,
+      "sha256": "d3ec72f5f72d852e7cbe8fe760cd27fb3f809bb9aeccac6be4e7234f4ae62cac"
+    },
+    {
+      "path": "filings/NVDA_8K_GUIDANCE_000104581024000113.html",
+      "source": "sec",
+      "byte_length": 171932,
+      "sha256": "bc8f3e97c6cf9ce9196d6a11dacadfc8be0bfdf21e4eafd761cb7c22f87e1170"
+    },
+    {
+      "path": "filings/NVDA_8K_SPLIT_000104581024000144.html",
+      "source": "sec",
+      "byte_length": 22990,
+      "sha256": "047c49a59b50dd6851111d580d8c68b33fcb3bca22d5ea219793568b1bf7b0a6"
+    },
+    {
+      "path": "filings/PLUG_10KA_000155837022003577.html",
+      "source": "sec",
+      "byte_length": 13639875,
+      "sha256": "985468e206ba380f7b413c76227bb3cd759b48eef49f7ff943839776383b551f"
+    },
+    {
+      "path": "filings/PLUG_10K_000155837021007147.html",
+      "source": "sec",
+      "byte_length": 11443176,
+      "sha256": "fbe9fe64c7583f3f0b391396e9015a8787e58c8f3decb55292707c5ac6d0c9ed"
+    },
+    {
+      "path": "golden/DDOG_supply_chain_edges.json",
+      "source": "human_review",
+      "byte_length": 1067,
+      "sha256": "164841fc737999564d536a16caa196ab7101be60657200a6b81b6d5f38b71406"
+    },
+    {
+      "path": "nport/ARKK_NPORT_000094040026012617.xml",
+      "source": "sec",
+      "byte_length": 62957,
+      "sha256": "eecff11d75cb13718ef4bf98b613408213a8aea99ea57979677cb776d72525fb"
+    },
+    {
+      "path": "nport/QQQ_NPORT_000106783926000016.xml",
+      "source": "sec",
+      "byte_length": 109556,
+      "sha256": "9ea743d80b511852c238f9b4281a35f7db5f61d19f2fbd8a43cc0b921d0a3079"
+    },
+    {
+      "path": "prices/ADM_prices_3y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 80400,
+      "sha256": "9c9bb577f6ad75ff556812880f6f91808afb177106655771e2fa257d168dbaf8"
+    },
+    {
+      "path": "prices/DDOG_prices_3y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 80755,
+      "sha256": "f491bec90e64488d6dc680d9c683d6d56baded6920aa9b19f389ab25606051c4"
+    },
+    {
+      "path": "prices/DUOL_prices_3y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 78263,
+      "sha256": "6aa2c102f2920e002dea1470ad8cd9d26541056c418d8ec2995466de8d894853"
+    },
+    {
+      "path": "prices/JPM_prices_3y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 81039,
+      "sha256": "0e1ede6888ca5808df8876acad488a40606f4c65c4b575200519b2dfd3434479"
+    },
+    {
+      "path": "prices/META_prices_5y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 132971,
+      "sha256": "ee61c1358a8eefd0c430d1d55124d2043290dc24a73ca55dde110e3244b4bb70"
+    },
+    {
+      "path": "prices/NICE_prices_3y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 79783,
+      "sha256": "67ca7acde41b6d9a855a6f2a242be6ab6297c01e25c53f255640e2be979f3391"
+    },
+    {
+      "path": "prices/NVDA_prices_3y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 83463,
+      "sha256": "277301f5c45e16bcf9a581dd7b89fc72f576e16dce6ccbf1ccaa846c2d8be926"
+    },
+    {
+      "path": "prices/PLUG_prices_3y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 82536,
+      "sha256": "967e365e909fa83ceec14501aac70160c990a3e98135c63c957ed026d342edf2"
+    },
+    {
+      "path": "prices/SHOP_prices_3y_20260712.csv",
+      "source": "yahoo",
+      "byte_length": 80414,
+      "sha256": "a604b9e44dcf9a4d83fccda9c29741c267ee19178bc42214789460c4d33393d4"
+    },
+    {
+      "path": "sec/ADM_CIK0000007084.json",
+      "source": "sec",
+      "byte_length": 4570338,
+      "sha256": "50f26e0c327fe4f6ec2d62d289cce871d0d55bd03bc09b83f10ee7f34cfa8979"
+    },
+    {
+      "path": "sec/JPM_CIK0000019617.json",
+      "source": "sec",
+      "byte_length": 7714427,
+      "sha256": "8e9bcfaac1a4605711956b2e6c2d963d78d2b974496003343838133585c5332b"
+    },
+    {
+      "path": "sec/META_CIK0001326801.json",
+      "source": "sec",
+      "byte_length": 2700046,
+      "sha256": "ded9a9be1ed9c81cf94a4c1828a076438df6d43045a84f40ef392140ff638ccd"
+    },
+    {
+      "path": "sec/NVDA_CIK0001045810.json",
+      "source": "sec",
+      "byte_length": 4039082,
+      "sha256": "93edcffe24f55d08284ff1736e41aa1a8e743ab6e4a6eea52cb8e9392b0ae6be"
+    },
+    {
+      "path": "sec/PLUG_CIK0001093691.json",
+      "source": "sec",
+      "byte_length": 3158775,
+      "sha256": "f146df6c39754bb1c73e6edefa34724c14e342ab3176ffd5cf0c9e6e40e8e58a"
+    }
+  ]
+}

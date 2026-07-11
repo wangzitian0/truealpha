@@ -47,14 +47,18 @@ staging/prod runs must also satisfy the environment acceptance gates in
 
 ## Current Decision
 
-The 2026-07 sample is sufficient for toolchain development. It is not
-sufficient for a trustworthy local backtest or strategy evaluation. Run the
-executable audit after every sample change:
+The targeted 2026-07 evidence set is sufficient for toolchain and local strategy
+implementation. The sample audit intentionally keeps `local_backtest` blocked
+until a composite factor replay fixture exists; that is implementation work,
+not another raw sampling round. Strategy evaluation remains blocked by five-year
+coverage for the full universe and primary/fallback price reconciliation. Run
+the executable audit after every sample change:
 
 ```bash
 make sample-audit
 ```
 
 Non-inferable evidence is declared in
-`apps/data-engine/samples/strategy_coverage.json`. A flag may only become true
-when the referenced golden fixture or corroborating evidence is committed.
+`apps/data-engine/samples/strategy_coverage.json`. Readiness requires a typed
+evidence case, immutable artifact hashes, and registered executable assertions;
+boolean coverage claims cannot satisfy a gate.

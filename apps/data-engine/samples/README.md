@@ -11,19 +11,37 @@ and `libs/factors` in real payloads before building the `raw.fetches` + MinIO
 ingestion pipeline (Phase -1 — see `init.md` Section 11). Not refreshed by CI;
 re-run the scripts in `../scripts/` manually to recapture a new snapshot.
 
-Universe: DDOG, NICE, SHOP, DUOL (init.md Section 11's test names) + QQQ, ARKK
-(ETF holdings-weight source check).
+Initial universe: DDOG, NICE, SHOP, DUOL (init.md Section 11's test names) +
+QQQ and ARKK (ETF holdings-weight source check).
+
+Issue #14 adds a bounded evidence universe rather than a broad second sweep:
+
+- JPM — financial-company semantics and a cash-dividend replay case;
+- ADM — a traditional agricultural processor;
+- NVDA — filed company guidance and a 2024 10:1 split;
+- META — the FB to META symbol transition; and
+- PLUG — an original/amended filing pair with changed company-facts values.
+
+Run `make sample-evidence` to resume the public SEC/Yahoo/issuer capture. The
+command never overwrites differing bytes. Yahoo revised overlapping historical
+values during the 2026-07-12 capture itself; both the old one-year and new
+three-year files therefore remain immutable point-in-time vintages.
 
 Run `make sample-audit` to validate this corpus against the machine-readable
-strategy requirements. The current corpus is intentionally toolchain-ready but
-not backtest-ready; see `docs/strategy-data-quality.md` for the gate definitions.
+strategy requirements. Sampling now satisfies the local data requirements; the
+remaining local blocker is the not-yet-implemented composite factor replay
+fixture. Five-year coverage and primary/fallback price reconciliation remain
+strategy-evaluation requirements. See `docs/strategy-data-quality.md` for the
+gate definitions.
 
 ## Contents
 
 - `sec/` — SEC EDGAR company-facts JSON (`GET /api/xbrl/companyfacts/CIK##########.json`)
 - `filings/` — latest 10-K (or 20-F for NICE, a foreign private issuer) primary document, raw HTML
 - `nport/` — latest NPORT-P primary_doc.xml (ETF holdings + weights)
-- `prices/` — 1y daily OHLCV bars (`data_engine.sources.yahoo`, Yahoo Finance chart endpoint)
+- `prices/` — immutable 1y/3y/5y daily OHLCV captures (`data_engine.sources.yahoo`, Yahoo chart endpoint)
+- `events/` — normalized issuer statements plus raw Yahoo corporate-action responses
+- `golden/` — human-reviewed expected semantic records tied to raw artifact hashes
 - `moomoo/` — one JSON per ticker (`data_engine/scripts/capture_fundamental_samples.py`), captured
   2026-07-10 once OpenD login was fixed (see git log). 14 endpoints per ticker: company
   profile, financials (income/balance-sheet/cash-flow/key-metrics), revenue breakdown,
