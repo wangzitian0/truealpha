@@ -21,8 +21,8 @@ set -euo pipefail
 
 ENV_NAME="${1:-staging}"
 case "$ENV_NAME" in
-  production) SUFFIX=""; PG_PORT=15433 ;;
-  staging)    SUFFIX="-staging"; PG_PORT=15432 ;;
+  production) SUFFIX="" ;;
+  staging)    SUFFIX="-staging" ;;
   *) echo "unsupported env: $ENV_NAME" >&2; exit 1 ;;
 esac
 
@@ -55,6 +55,12 @@ for f in db/migrations/*.sql db/roles.sql; do
 done
 
 echo "== derive .env from the vault-rendered app env"
+# The compose publishes postgres on a host-loopback port (fixed per env once
+# infra2's TA_POSTGRES_HOST_PORT injection is live; ephemeral otherwise) —
+# read whatever is actually published instead of assuming the number.
+PG_PORT=$(docker port "truealpha-postgres${SUFFIX}" 5432/tcp 2>/dev/null | head -1 | awk -F: "{print \$NF}")
+[ -n "$PG_PORT" ] || { echo "truealpha-postgres${SUFFIX} publishes no host port — deploy the 01.postgres compose with the ports mapping first" >&2; exit 1; }
+echo "   postgres host port: $PG_PORT"
 RENDERED=$(docker exec "$AGENT" cat /vault/secrets/.env)
 get() { echo "$RENDERED" | grep "^$1=" | head -1 | cut -d= -f2- | tr -d '"'; }
 PG_PASSWORD=$(get DATABASE_URL | sed -E 's|^postgresql://postgres:([^@]*)@.*|\1|')
