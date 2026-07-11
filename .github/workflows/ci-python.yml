@@ -28,8 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     # Real Postgres + MinIO so the KG / raw-store / ledger integration tests run
     # in CI instead of skipping (they skip gracefully where unreachable).
-    # bitnami/minio rather than minio/minio: GitHub service containers can't
-    # override the container command, and the official image needs `server /data`.
     services:
       postgres:
         image: postgres:16-alpine
@@ -44,13 +42,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
-      minio:
-        image: bitnami/minio:2025.9.7
-        env:
-          MINIO_ROOT_USER: minio
-          MINIO_ROOT_PASSWORD: minio_local_secret
-        ports:
-          - 9000:9000
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -59,6 +50,21 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run ruff check apps libs
       - run: uv run ruff format --check apps libs
+      # A docker-run step rather than a service container: GitHub services can't
+      # override the container command, and the official minio image (the same
+      # pin docker-compose.yml uses) needs `server /data`.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio_local_secret \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          echo "MinIO did not become healthy" >&2
+          docker logs minio >&2
+          exit 1
       - name: Apply DB migrations
         env:
           PGPASSWORD: postgres

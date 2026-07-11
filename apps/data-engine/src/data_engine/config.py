@@ -1,3 +1,4 @@
+from pydantic import Field
 from truealpha_runtime import RuntimeSettings
 
 
@@ -22,7 +23,9 @@ class Settings(RuntimeSettings):
     moomoo_ledger_backend: str = "json"
     # Process-local burst throttle matching moomoo's real limit shape
     # (bursts per 30s). Global across endpoints, deliberately conservative.
-    moomoo_calls_per_30s: int = 8
+    # ge=1: 0 would make throttle() index an empty deque instead of meaning
+    # "no throttle" — misconfiguration must fail at startup, not mid-sweep.
+    moomoo_calls_per_30s: int = Field(default=8, ge=1)
     # Optional; raises OpenFIGI mapping limits from 25 req/min x 10 jobs to
     # 25 req/6s x 100 jobs. Free key: https://www.openfigi.com/api
     openfigi_api_key: str = ""
