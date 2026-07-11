@@ -95,6 +95,7 @@ _SPECS = (
     ),
 )
 
+
 def _build_registry(specs: tuple[MetricSpec, ...]) -> dict[str, MetricSpec]:
     registry: dict[str, MetricSpec] = {}
     for spec in specs:
