@@ -25,8 +25,10 @@ files = [
 
 # Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients).
 # Scoped per-module so a typo'd or missing dependency still fails the check.
+# mypy's `foo.*` matches `foo` itself too; bare names listed anyway so the
+# intent survives a reader who doesn't know that.
 [[tool.mypy.overrides]]
-module = ["moomoo.*", "boto3.*", "botocore.*"]
+module = ["moomoo", "moomoo.*", "boto3", "boto3.*", "botocore", "botocore.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
