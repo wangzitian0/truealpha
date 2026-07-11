@@ -4,7 +4,7 @@ This file is the context Claude Code loads every session when working in this re
 
 ## What This Is
 
-A monorepo for a fundamental and supply-chain research tool: ingestion (dlt) + warehouse (Postgres) + factor computation (`libs/factors`, orchestrated by Dagster) + consumption layer (App reads the database directly + LLM chat via MCP / constrained SQL).
+A monorepo for a fundamental and supply-chain research tool: ingestion (dlt) + immutable raw bytes (S3-compatible storage) + warehouse/KG metadata (Postgres) + factor computation (`libs/factors`, orchestrated by Dagster) + consumption layer (App reads the database directly + LLM chat via MCP / constrained SQL).
 
 Why this exists and what investment questions it answers → read `vision.md`.
 Full technical architecture, schema design, implementation phases, known risks → read `init.md`.
@@ -13,6 +13,7 @@ Neither needs to be read every session — read them on demand per "Reference Do
 ## Hard Constraints (IMPORTANT — violating these produces bugs that are hard to notice)
 
 - **Point-in-time correctness**: time-series/financial data distinguishes `valid_time` from `transaction_time`. Writes to the staging layer are append-only — never UPDATE or overwrite an old vintage. Factor computation and backtesting always operate on "what was visible as of a given historical point in time."
+- **Raw storage is split by responsibility**: S3-compatible storage holds immutable source-response bytes; Postgres `raw.fetches` holds checksums, object pointers, timestamps, and lineage. Apps and the LLM never use object storage as a service-to-service data path.
 - **Computation logic exists in exactly one place**: PEG / gross-profit-per-employee / supply-chain and other factor logic is implemented once, in `libs/factors`. Both `apps/data-engine` and `apps/llm-service` import from there — never reimplement. This includes screening/tagging logic like the three-tier valuation framework — it's a **composite factor** (reads other factors' mart outputs), not app-layer business logic.
 - **Factors consume `(entity_id, value, confidence, as_of)` — never the data's source.** Every staging/KG row has a mandatory `confidence` (0-1); a factor must never branch on "this came from SEC vs. moomoo vs. an LLM extraction." A composite factor's own confidence is `min()` of everything it reads.
 - **The LLM can only read the `mart` schema** — never raw/staging. This boundary is enforced by a database role (`mart_readonly`), not an application-layer convention.
@@ -43,7 +44,7 @@ Neither needs to be read every session — read them on demand per "Reference Do
 
 ## Commands
 
-The project is just getting started — once the scaffolding is in place, update this section with real commands. Planned:
+Current commands:
 
 ```bash
 # Python (apps/data-engine, apps/llm-service, libs/*)
@@ -56,9 +57,9 @@ make runtime-check
 make stack-up
 
 # TypeScript (apps/app-web)
-bun install
-bun dev
-bun test
+cd apps/app-web && bun install
+cd apps/app-web && bun run dev
+cd apps/app-web && bun run typecheck
 ```
 
 ## Conventions
@@ -79,4 +80,4 @@ bun test
 
 - `vision.md` — read when unsure why a design choice was made
 - `init.md` — read when making cross-service architecture decisions or touching schema
-- Data availability matrix (a Phase -1 deliverable, not yet produced) — what data each factor can actually get; don't assume until this exists
+- [`apps/data-engine/samples/README.md`](apps/data-engine/samples/README.md) — Phase -1 data-availability findings and captured evidence
