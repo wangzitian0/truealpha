@@ -16,8 +16,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-truealpha}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./db/migrations:/docker-entrypoint-initdb.d:ro
-      - ./db/roles.sql:/docker-entrypoint-initdb.d/zz_roles.sql:ro
+      - ./db:/truealpha-db:ro
+      - ./db/docker-init.sh:/docker-entrypoint-initdb.d/00_truealpha.sh:ro
     ports:
       - "${POSTGRES_PORTS:-127.0.0.1:5432:5432}"
     healthcheck:
