@@ -14,6 +14,10 @@ re-run the scripts in `../scripts/` manually to recapture a new snapshot.
 Universe: DDOG, NICE, SHOP, DUOL (init.md Section 11's test names) + QQQ, ARKK
 (ETF holdings-weight source check).
 
+Run `make sample-audit` to validate this corpus against the machine-readable
+strategy requirements. The current corpus is intentionally toolchain-ready but
+not backtest-ready; see `docs/strategy-data-quality.md` for the gate definitions.
+
 ## Contents
 
 - `sec/` — SEC EDGAR company-facts JSON (`GET /api/xbrl/companyfacts/CIK##########.json`)
