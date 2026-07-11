@@ -10,13 +10,20 @@ def _eq(exch, ticker):
 
 def test_home_market_beats_us_otc_line():
     # Tencent's real shape: the HK line plus a US pink-sheet record on the same ISIN.
-    listing = universe.pick_listing([_eq("US", "TCTZF"), _eq("HK", "700")])
+    listing = universe.pick_listing([_eq("US", "TCTZF"), _eq("HK", "700")], "KYG875721634")
     assert listing.exch_token == "HK" and listing.ticker == "700"
 
 
 def test_us_composite_wins_for_us_names():
-    listing = universe.pick_listing([_eq("UW", "NVDA"), _eq("US", "NVDA")])
+    listing = universe.pick_listing([_eq("UW", "NVDA"), _eq("US", "NVDA")], "US67066G1040")
     assert listing.exch_token == "US"
+
+
+def test_us_isin_beats_hkex_secondary_line():
+    # Microsoft's real shape: HKEX lists a thin secondary line (HK.04338) under
+    # the same US ISIN — the US composite must stay the primary listing.
+    listing = universe.pick_listing([_eq("HK", "4338"), _eq("US", "MSFT")], "US5949181045")
+    assert listing.exch_token == "US" and listing.ticker == "MSFT"
 
 
 def test_suffixed_and_unranked_exchcodes_yield_none():

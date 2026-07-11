@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import time
+from datetime import UTC, datetime
 
 import httpx
 from data_engine import db, raw_store
@@ -32,11 +33,11 @@ def main() -> None:
     args = parser.parse_args()
 
     conn = db.connect()
-    ciks = er.identifiers(conn, "cik")
+    ciks = er.identifiers(conn, "cik", as_of=datetime.now(UTC))
     print(f"universe: {len(ciks)} companies with a CIK")
 
     fetched = skipped = failed = 0
-    with sec._client() as client:
+    with sec.client() as client:
         for cik_str, entity_id in ciks:
             if args.limit is not None and fetched >= args.limit:
                 break
@@ -47,12 +48,14 @@ def main() -> None:
                 continue
             try:
                 facts = sec.fetch_company_facts(cik, client)
-            except httpx.HTTPStatusError as e:
-                # 404 = registrant with no XBRL facts (rare but real); anything
-                # else is worth seeing loudly in the log too, but neither should
-                # kill a 500-company sweep.
+            except httpx.HTTPError as e:
+                # HTTPError covers both status errors (404 = registrant with no
+                # XBRL facts, rare but real) and transport errors (timeouts,
+                # connection resets) — none of which should kill a 500-company
+                # sweep; the resume check retries them on the next run.
                 failed += 1
-                print(f"  {key} ({entity_id}): HTTP {e.response.status_code}, skipping")
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                print(f"  {key} ({entity_id}): {f'HTTP {status}' if status else repr(e)}, skipping")
                 continue
             raw_id = raw_store.insert_fetch(conn, source=SOURCE, endpoint=ENDPOINT, entity_key=key, payload=facts)
             conn.commit()

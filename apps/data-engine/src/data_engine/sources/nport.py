@@ -87,13 +87,20 @@ def parse_nport(xml_bytes: bytes) -> tuple[dict, list[Holding]]:
     for sec in root.findall(".//n:invstOrSec", NS):
         ids = sec.find("n:identifiers", NS)
         isin_el = ids.find("n:isin", NS) if ids is not None else None
-        pct_text = sec.findtext("n:pctVal", None, NS)
+        # pctVal gets the same placeholder tolerance as name/cusip: a literal
+        # 'N/A' (or otherwise non-numeric) weight downgrades that one line to
+        # pct None instead of aborting the whole filing's parse.
+        pct_text = _clean(sec.findtext("n:pctVal", None, NS))
+        try:
+            pct_val = float(pct_text) if pct_text is not None else None
+        except ValueError:
+            pct_val = None
         holdings.append(
             Holding(
                 name=_clean(sec.findtext("n:name", None, NS)),
                 cusip=_clean(sec.findtext("n:cusip", None, NS)),
                 isin=_clean(isin_el.attrib.get("value")) if isin_el is not None else None,
-                pct_val=float(pct_text) if pct_text is not None else None,
+                pct_val=pct_val,
                 asset_cat=_clean(sec.findtext("n:assetCat", None, NS)),
             )
         )

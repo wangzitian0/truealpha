@@ -18,11 +18,14 @@ free of any driver dependency; data-engine / llm-service pass their own
 connection in and control transaction boundaries (nothing here commits).
 
 Point-in-time: reads filter transaction_time <= as_of; writes are append-only
-vintages, never updates (CLAUDE.md hard constraints).
+vintages, never updates (CLAUDE.md hard constraints). Postgres's now() is
+transaction-scoped, so vintages written in one transaction share a
+transaction_time — "newest wins" therefore tiebreaks on the strictly-increasing
+identity id, i.e. insertion order.
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 
 
 def identifier_node_id(namespace: str, value: str) -> str:
@@ -49,27 +52,57 @@ def add_edge(
     valid_from: str,
     raw_ref: str | None = None,
     properties: dict | None = None,
+    single_target: bool = False,
 ) -> bool:
-    """Append a new edge vintage; returns False if an identical assertion already
-    exists. Identity is (from, to, relation, source, confidence, properties) —
-    valid_from and raw_ref deliberately don't count, so re-running a bootstrap on a
-    later day skips unchanged facts instead of spraying duplicate vintages, while a
-    real change (a new N-PORT period in properties, a revised confidence) appends.
-    Existence is checked against ALL vintages, not just the latest: parallel edges
-    between the same pair that differ only in properties (e.g. one 'holds' edge per
-    A-share/H-share line, discriminated by properties.isin) must coexist without
-    re-inserting each other on every run."""
+    """Append a new edge vintage; returns False if the assertion is already
+    current. Assertion identity is (from, to, relation, source, confidence,
+    properties) — valid_from and raw_ref deliberately don't count, so re-running
+    a bootstrap on a later day skips unchanged facts instead of spraying
+    duplicate vintages, while a real change (a new N-PORT period in properties,
+    a revised confidence) appends.
+
+    single_target=False (set relations, e.g. 'holds'): edges from one node
+    coexist and readers consume them as a set, so "already current" means ANY
+    vintage with this identity exists — parallel edges that differ only in
+    properties (one holds edge per A-share/H-share line, discriminated by
+    properties.isin) survive re-runs without ping-ponging.
+
+    single_target=True (pointer relations, e.g. same_as): readers take only the
+    LATEST edge from this node, so "already current" must mean the latest edge
+    IS this assertion. Comparing against all history would make a correction
+    permanent: X->A (run 1), corrected to X->B (run 2), then re-asserting X->A
+    would find the run-1 row and skip — leaving resolve() stuck on B forever."""
     props_json = json.dumps(properties, sort_keys=True) if properties is not None else None
-    exists = conn.execute(
-        """
-        select 1 from staging.kg_edges
-        where from_id = %s and to_id = %s and relation_type = %s and source = %s
-          and confidence = %s and properties is not distinct from %s::jsonb
-        limit 1
-        """,
-        (from_id, to_id, relation_type, source, confidence, props_json),
-    ).fetchone()
-    if exists:
+    if single_target:
+        latest = conn.execute(
+            """
+            select to_id, source, confidence, properties from staging.kg_edges
+            where from_id = %s and relation_type = %s
+            order by transaction_time desc, id desc
+            limit 1
+            """,
+            (from_id, relation_type),
+        ).fetchone()
+        already_current = latest is not None and (
+            latest[0] == to_id
+            and latest[1] == source
+            and float(latest[2]) == confidence
+            and (json.dumps(latest[3], sort_keys=True) if latest[3] is not None else None) == props_json
+        )
+    else:
+        already_current = (
+            conn.execute(
+                """
+                select 1 from staging.kg_edges
+                where from_id = %s and to_id = %s and relation_type = %s and source = %s
+                  and confidence = %s and properties is not distinct from %s::jsonb
+                limit 1
+                """,
+                (from_id, to_id, relation_type, source, confidence, props_json),
+            ).fetchone()
+            is not None
+        )
+    if already_current:
         return False
     conn.execute(
         """
@@ -94,7 +127,9 @@ def add_same_as(
     raw_ref: str | None = None,
 ) -> bool:
     """Assert 'this source-local identifier refers to this entity'. Creates the
-    identifier node on first sight."""
+    identifier node on first sight. same_as is a pointer relation — the newest
+    vintage wins in resolve() — so re-asserting a previously superseded mapping
+    appends a new vintage rather than being deduped away (see add_edge)."""
     node = identifier_node_id(namespace, value)
     ensure_entity(conn, node, "identifier", f"{namespace}:{value}")
     return add_edge(
@@ -106,6 +141,7 @@ def add_same_as(
         source=source,
         valid_from=valid_from,
         raw_ref=raw_ref,
+        single_target=True,
     )
 
 
@@ -114,18 +150,22 @@ def _same_as_target(conn, from_id: str, as_of: datetime):
         """
         select to_id from staging.kg_edges
         where from_id = %s and relation_type = 'same_as' and transaction_time <= %s
-        order by transaction_time desc, confidence desc
+        order by transaction_time desc, id desc
         limit 1
         """,
         (from_id, as_of),
     ).fetchone()
 
 
-def resolve(conn, namespace: str, value: str, *, as_of: datetime | None = None) -> str | None:
+def resolve(conn, namespace: str, value: str, *, as_of: datetime) -> str | None:
     """Return the unified entity id for a source-local identifier as visible at
     as_of, or None if unknown. Follows the identifier's same_as edge, then at most
-    one canonical->canonical merge hop."""
-    as_of = as_of or datetime.now(UTC)
+    one canonical->canonical merge hop.
+
+    as_of is deliberately required, not defaulted to now(): a backtest that
+    forgets to pass its historical viewpoint would silently use today's mapping
+    (lookahead bias) — the repo's point-in-time hard constraint says that must
+    be impossible by construction, not a convention."""
     row = _same_as_target(conn, identifier_node_id(namespace, value), as_of)
     if row is None:
         return None
@@ -134,11 +174,10 @@ def resolve(conn, namespace: str, value: str, *, as_of: datetime | None = None) 
     return merged[0] if merged else canonical
 
 
-def crosswalk(conn, entity_id: str, *, as_of: datetime | None = None) -> dict[str, list[str]]:
+def crosswalk(conn, entity_id: str, *, as_of: datetime) -> dict[str, list[str]]:
     """All source-local identifiers pointing at an entity, grouped by namespace:
     {'ticker': ['GOOGL', 'GOOG'], 'cik': ['1652044'], ...}. One hop only — does not
-    chase canonical merges."""
-    as_of = as_of or datetime.now(UTC)
+    chase canonical merges. as_of required for the same reason as resolve()."""
     rows = conn.execute(
         """
         select distinct from_id from staging.kg_edges
@@ -154,15 +193,15 @@ def crosswalk(conn, entity_id: str, *, as_of: datetime | None = None) -> dict[st
     return {ns: sorted(vals) for ns, vals in out.items()}
 
 
-def identifiers(conn, namespace: str, *, as_of: datetime | None = None) -> list[tuple[str, str]]:
+def identifiers(conn, namespace: str, *, as_of: datetime) -> list[tuple[str, str]]:
     """Every (value, entity_id) pair in one identifier namespace — e.g. all moomoo
-    codes in the KG, for a sweep to iterate. Latest vintage per identifier."""
-    as_of = as_of or datetime.now(UTC)
+    codes in the KG, for a sweep to iterate. Latest vintage per identifier.
+    as_of required for the same reason as resolve()."""
     rows = conn.execute(
         """
         select distinct on (from_id) from_id, to_id from staging.kg_edges
         where relation_type = 'same_as' and from_id like %s and transaction_time <= %s
-        order by from_id, transaction_time desc, confidence desc
+        order by from_id, transaction_time desc, id desc
         """,
         (f"id:{namespace}:%", as_of),
     ).fetchall()

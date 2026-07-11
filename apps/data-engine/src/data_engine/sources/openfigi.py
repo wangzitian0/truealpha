@@ -35,15 +35,23 @@ def map_isins(
     for start in range(0, len(isins), chunk_size):
         batch = isins[start : start + chunk_size]
         jobs = [{"idType": "ID_ISIN", "idValue": isin} for isin in batch]
-        while True:
+        # Keyless-tier 429s are routine (limit resets per minute); a flat wait
+        # beats parsing Retry-After (not always present). Bounded so a service
+        # incident / IP ban fails loudly instead of hanging the bootstrap
+        # forever: 30 attempts x 10s = 5 minutes of sustained 429 per batch.
+        for attempt in range(30):
             resp = client.post(MAPPING_URL, json=jobs, headers=headers)
-            if resp.status_code == 429:
-                # Keyless tier resets per minute; a flat wait is simpler than
-                # parsing Retry-After (not always present) and costs little.
-                sleep(10.0)
-                continue
-            resp.raise_for_status()
-            break
+            if resp.status_code != 429:
+                resp.raise_for_status()
+                break
+            if attempt and attempt % 6 == 0:
+                print(f"  openfigi: still rate-limited after {attempt * 10}s (batch at {start}/{len(isins)})")
+            sleep(10.0)
+        else:
+            raise RuntimeError(
+                f"OpenFIGI kept returning 429 for 5 minutes (batch at {start}/{len(isins)}) — "
+                "not a normal keyless-tier reset; check service status or set OPENFIGI_API_KEY"
+            )
         results = resp.json()
         if on_batch is not None:
             on_batch(batch, results)

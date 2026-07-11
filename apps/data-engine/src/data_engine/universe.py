@@ -18,8 +18,13 @@ CATL A+H / MediaTek / TME):
 
 from dataclasses import dataclass
 
-# Home market first; 'US' last so it only wins for genuinely US-listed instruments.
+# Home market first; 'US' last so it only wins for genuinely US-listed
+# instruments. For US-registered ISINs this order is REVERSED (see
+# pick_listing): HKEX lists thinly-traded secondary lines of US blue chips
+# (HK.04338 is Microsoft) under the same US ISIN, and those must not outrank
+# the US composite the way Tencent's home line outranks its US OTC record.
 _EXCH_PRIORITY = ("HK", "CG", "CS", "CH", "US")
+_EXCH_PRIORITY_US_ISIN = ("US", "HK", "CG", "CS", "CH")
 
 # A-share board by code range, for records that only expose the 'CH' composite:
 # 6xxxxx (incl. 688 STAR) / 9xxxxx (B) trade in Shanghai; 0xxxxx / 2xxxxx (B) /
@@ -41,18 +46,21 @@ def _exch_token(record: dict) -> str | None:
     return exch.split()[0] if exch else None
 
 
-def pick_listing(records: list[dict]) -> Listing | None:
+def pick_listing(records: list[dict], isin: str | None = None) -> Listing | None:
     """The primary listing among an ISIN's venue records, or None if no market we
-    rank appears (e.g. Taiwan-only names)."""
+    rank appears (e.g. Taiwan-only names). The ISIN's country prefix decides which
+    priority order applies — a US-registered instrument's home market is the US
+    composite even when an HKEX secondary line exists."""
+    priority = _EXCH_PRIORITY_US_ISIN if isin is not None and isin.startswith("US") else _EXCH_PRIORITY
     best = None
-    best_rank = len(_EXCH_PRIORITY)
+    best_rank = len(priority)
     for record in records:
         if record.get("marketSector") != "Equity":
             continue
         token = _exch_token(record)
-        if token not in _EXCH_PRIORITY:
+        if token not in priority:
             continue
-        rank = _EXCH_PRIORITY.index(token)
+        rank = priority.index(token)
         if rank < best_rank and record.get("ticker"):
             best = Listing(
                 exch_token=token,

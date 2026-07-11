@@ -17,7 +17,10 @@ TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 
 
-def _client() -> httpx.Client:
+def client() -> httpx.Client:
+    """The shared SEC-facing HTTP client (correct User-Agent per SEC fair-use
+    policy) — also reused for other keyless public APIs (OpenFIGI). Public API:
+    nport/bootstrap/sweep modules all construct their client here."""
     if not settings.sec_user_agent:
         raise RuntimeError("Set SEC_USER_AGENT (must include a contact email) — see .env.example")
     return httpx.Client(headers={"User-Agent": settings.sec_user_agent}, timeout=30.0, follow_redirects=True)
@@ -29,8 +32,8 @@ def ticker_to_cik(ticker: str) -> int:
     NOTE: this per-source lookup is temporary. From Phase 0 on, the crosswalk lives
     in the KG as same_as edges (factors.shared.entity_resolution).
     """
-    with _client() as client:
-        resp = client.get(TICKERS_URL)
+    with client() as c:
+        resp = c.get(TICKERS_URL)
         resp.raise_for_status()
         for row in resp.json().values():
             if row["ticker"].upper() == ticker.upper():
@@ -38,15 +41,15 @@ def ticker_to_cik(ticker: str) -> int:
     raise KeyError(f"ticker not found in SEC mapping: {ticker}")
 
 
-def fetch_company_facts(cik: int, client: httpx.Client | None = None) -> dict[str, Any]:
+def fetch_company_facts(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
     """Pass a client to reuse one connection across a sweep; without one, a
     throwaway client is opened per call (fine for single fetches)."""
-    if client is not None:
-        resp = client.get(COMPANY_FACTS_URL.format(cik=cik))
+    if http is not None:
+        resp = http.get(COMPANY_FACTS_URL.format(cik=cik))
         resp.raise_for_status()
         return resp.json()
-    with _client() as client:
-        return fetch_company_facts(cik, client)
+    with client() as c:
+        return fetch_company_facts(cik, c)
 
 
 def save_sample(ticker: str, out_dir: Path) -> Path:

@@ -34,7 +34,8 @@ from datetime import UTC, datetime
 from data_engine import db, raw_store, universe
 from data_engine.config import settings
 from data_engine.sources import nport, openfigi
-from data_engine.sources.sec import TICKERS_URL, _client
+from data_engine.sources.sec import TICKERS_URL
+from data_engine.sources.sec import client as sec_client
 from factors.shared import entity_resolution as er
 
 DEFAULT_ETFS = ["IVV", "QQQ", "AGIX", "MCHI"]
@@ -93,9 +94,30 @@ def fetch_etf(client, conn, ticker: str) -> EtfFetch:
     return EtfFetch(raw_id=raw_id, cik=cik, series_id=series_id, info=info, holdings=holdings)
 
 
+def figi_from_raw(conn, isins: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
+    """Rebuild the ISIN->records mapping from OpenFIGI batches already landed in
+    raw.fetches — newest batch wins per ISIN. Returns (mapping, still-missing
+    ISINs). This is what makes a KG rebuild cheap and offline: the keyless
+    mapping run takes minutes of rate-limit waiting that a re-run shouldn't
+    re-spend when the responses are already in the landing zone."""
+    rows = conn.execute(
+        "select params, payload from raw.fetches where source = 'openfigi' and endpoint = 'mapping' order by id"
+    ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for params, payload in rows:
+        for isin, job in zip(params["isins"], payload):
+            out[isin] = job.get("data", [])
+    return {i: out[i] for i in isins if i in out}, [i for i in isins if i not in out]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--etfs", default=",".join(DEFAULT_ETFS), help="comma-separated fund tickers")
+    parser.add_argument(
+        "--figi-from-raw",
+        action="store_true",
+        help="reuse OpenFIGI mapping batches already in raw.fetches; only still-unseen ISINs hit the API",
+    )
     args = parser.parse_args()
     etf_tickers = [t.strip().upper() for t in args.etfs.split(",") if t.strip()]
 
@@ -103,17 +125,23 @@ def main() -> None:
     conn = db.connect()
 
     # --- fetch everything (SEC + OpenFIGI), landing verbatim payloads in raw ---
-    with _client() as client:
+    with sec_client() as client:
         ticker_map = fetch_sec_ticker_map(client, conn)
         cik_titles = {cik: title for cik, title in ticker_map.values()}
         etfs = {ticker: fetch_etf(client, conn, ticker) for ticker in etf_tickers}
         conn.commit()
 
         isins = sorted({h.isin for f in etfs.values() for h in f.holdings if h.isin})
-        print(
-            f"\nOpenFIGI: mapping {len(isins)} unique ISINs "
-            f"({'with' if settings.openfigi_api_key else 'no'} API key)..."
-        )
+        figi: dict[str, list[dict]] = {}
+        if args.figi_from_raw:
+            figi, isins_to_fetch = figi_from_raw(conn, isins)
+            print(f"\nOpenFIGI: {len(figi)} ISINs reused from raw, {len(isins_to_fetch)} still to fetch")
+        else:
+            isins_to_fetch = isins
+            print(
+                f"\nOpenFIGI: mapping {len(isins_to_fetch)} unique ISINs "
+                f"({'with' if settings.openfigi_api_key else 'no'} API key)..."
+            )
         batch_ids: list[int] = []
 
         def persist_batch(batch, results):
@@ -127,12 +155,17 @@ def main() -> None:
                     payload=results,
                 )
             )
+            # Commit per batch: the keyless mapping run takes minutes, and a
+            # crash near the end shouldn't discard every batch already fetched.
+            conn.commit()
 
-        figi = openfigi.map_isins(client, isins, api_key=settings.openfigi_api_key, on_batch=persist_batch)
-        conn.commit()
+        if isins_to_fetch:
+            figi.update(
+                openfigi.map_isins(client, isins_to_fetch, api_key=settings.openfigi_api_key, on_batch=persist_batch)
+            )
         print(
             f"OpenFIGI: {sum(1 for v in figi.values() if v)} mapped, "
-            f"{sum(1 for v in figi.values() if not v)} unmapped, {len(batch_ids)} batches -> raw"
+            f"{sum(1 for v in figi.values() if not v)} unmapped, {len(batch_ids)} new batches -> raw"
         )
 
     # --- group holding lines into companies ---
@@ -142,7 +175,7 @@ def main() -> None:
     skipped_lines = 0
     for etf, f in etfs.items():
         for h in f.holdings:
-            listing = universe.pick_listing(figi.get(h.isin, [])) if h.isin else None
+            listing = universe.pick_listing(figi.get(h.isin, []), h.isin) if h.isin else None
             if h.isin is None and h.name is None:
                 skipped_lines += 1
                 continue

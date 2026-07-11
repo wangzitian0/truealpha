@@ -76,28 +76,54 @@ def _pg():
     return _pg_conn
 
 
+def _pg_execute(sql: str, params=()):
+    """Execute on the cached connection, reconnecting once on failure. psycopg
+    marks a silently dropped connection closed only AFTER an operation fails on
+    it, so the first statement after a DB restart/network blip raises — one
+    fresh-connection retry covers that without hiding a genuinely down DB
+    (the retry's exception propagates)."""
+    global _pg_conn
+    import psycopg
+
+    try:
+        return _pg().execute(sql, params)
+    except psycopg.Error:
+        try:
+            if _pg_conn is not None:
+                _pg_conn.close()
+        finally:
+            _pg_conn = None
+        return _pg().execute(sql, params)
+
+
 _MONTH_START_UTC = "date_trunc('month', now() at time zone 'utc') at time zone 'utc'"
 
 
-def calls_this_month() -> int:
-    if settings.moomoo_ledger_backend == "postgres":
-        row = (
-            _pg()
-            .execute(
-                f"select count(*) from staging.api_call_ledger where source = 'moomoo' and called_at >= {_MONTH_START_UTC}"
-            )
-            .fetchone()
-        )
-        return row[0]
+def _json_calls_this_month() -> int:
     state = _load()
     key = _month_key(datetime.now(UTC))
     return sum(1 for c in state["calls"] if c["month"] == key)
 
 
+def calls_this_month() -> int:
+    """In postgres mode this is the SUM of both stores: probe/capture sessions
+    default to the json backend, and a sweep's gate must still see what they
+    spent this month. The asymmetry (json mode does NOT consult postgres) is
+    deliberate — json-mode sessions are small manual probes that may run where
+    no warehouse is reachable, and the backstop's headroom absorbs their
+    undercount; a sweep has the warehouse by definition."""
+    if settings.moomoo_ledger_backend == "postgres":
+        row = _pg_execute(
+            f"select count(*) from staging.api_call_ledger where source = 'moomoo' and called_at >= {_MONTH_START_UTC}"
+        ).fetchone()
+        return row[0] + _json_calls_this_month()
+    return _json_calls_this_month()
+
+
 def record(endpoint: str, caller: str, ok: bool) -> None:
     """Record a call AFTER it happens — gate() below is what enforces the cap."""
     if settings.moomoo_ledger_backend == "postgres":
-        _pg().execute(
+        _pg_execute(
             "insert into staging.api_call_ledger (source, endpoint, caller, ok) values ('moomoo', %s, %s, %s)",
             (endpoint, caller, ok),
         )

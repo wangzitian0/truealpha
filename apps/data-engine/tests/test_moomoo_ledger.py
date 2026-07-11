@@ -1,4 +1,13 @@
+import pytest
 from data_engine.sources import moomoo_ledger as ledger
+
+
+@pytest.fixture(autouse=True)
+def _json_backend(monkeypatch):
+    # Pin the json backend: a developer .env with MOOMOO_LEDGER_BACKEND=postgres
+    # must not make these tests write fake rows into the real append-only
+    # staging.api_call_ledger (see test_kg_integration for the postgres path).
+    monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "json")
 
 
 def test_gate_allows_calls_under_budget(tmp_path, monkeypatch):

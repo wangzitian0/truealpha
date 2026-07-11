@@ -4,6 +4,7 @@ inside one never-committed transaction with uuid-suffixed ids, so a dev database
 with real universe data is never polluted or depended on."""
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from data_engine import raw_store
@@ -12,6 +13,8 @@ from data_engine.sources import moomoo_ledger as ledger
 from factors.shared import entity_resolution as er
 
 psycopg = pytest.importorskip("psycopg")
+
+NOW = datetime.now(UTC)
 
 
 @pytest.fixture
@@ -44,10 +47,30 @@ def test_same_as_roundtrip_idempotency_and_lookup(conn):
         conn, namespace="moomoo", value=code, entity_id=company, confidence=0.9, source="test", valid_from="2026-07-12"
     )
 
-    assert er.resolve(conn, "moomoo", code) == company
-    assert er.resolve(conn, "moomoo", "US.DOES_NOT_EXIST") is None
-    assert er.crosswalk(conn, company) == {"moomoo": [code]}
-    assert (code, company) in er.identifiers(conn, "moomoo")
+    assert er.resolve(conn, "moomoo", code, as_of=datetime.now(UTC)) == company
+    assert er.resolve(conn, "moomoo", "US.DOES_NOT_EXIST", as_of=NOW) is None
+    assert er.crosswalk(conn, company, as_of=datetime.now(UTC)) == {"moomoo": [code]}
+    assert (code, company) in er.identifiers(conn, "moomoo", as_of=datetime.now(UTC))
+
+
+def test_same_as_correction_can_be_corrected_back(conn):
+    """same_as is a pointer relation: after X->A is superseded by X->B, re-asserting
+    X->A must append a new vintage that wins in resolve() — deduping against all
+    history would make the supersession permanent."""
+    uid = uuid.uuid4().hex[:10]
+    a, b = f"company:test:{uid}a", f"company:test:{uid}b"
+    isin = f"XX{uid}"
+    er.ensure_entity(conn, a, "company", "A")
+    er.ensure_entity(conn, b, "company", "B")
+
+    kwargs = dict(namespace="isin", value=isin, confidence=1.0, source="test", valid_from="2026-07-11")
+    assert er.add_same_as(conn, entity_id=a, **kwargs)
+    assert er.add_same_as(conn, entity_id=b, **kwargs)  # bad upstream data
+    assert er.resolve(conn, "isin", isin, as_of=datetime.now(UTC)) == b
+    assert er.add_same_as(conn, entity_id=a, **kwargs)  # corrected back — must insert
+    assert er.resolve(conn, "isin", isin, as_of=datetime.now(UTC)) == a
+    # and re-asserting what is now current is still a no-op
+    assert not er.add_same_as(conn, entity_id=a, **kwargs)
 
 
 def test_resolve_follows_one_merge_hop(conn):
@@ -59,9 +82,16 @@ def test_resolve_follows_one_merge_hop(conn):
         conn, namespace="isin", value=f"XX{uid}", entity_id=a, confidence=1.0, source="test", valid_from="2026-07-11"
     )
     er.add_edge(
-        conn, from_id=a, to_id=b, relation_type="same_as", confidence=0.9, source="test", valid_from="2026-07-11"
+        conn,
+        from_id=a,
+        to_id=b,
+        relation_type="same_as",
+        confidence=0.9,
+        source="test",
+        valid_from="2026-07-11",
+        single_target=True,
     )
-    assert er.resolve(conn, "isin", f"XX{uid}") == b
+    assert er.resolve(conn, "isin", f"XX{uid}", as_of=datetime.now(UTC)) == b
 
 
 def test_parallel_holds_edges_coexist_and_rerun_skips(conn):
@@ -118,6 +148,9 @@ def test_ledger_postgres_backend(conn, monkeypatch):
     monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "postgres")
     monkeypatch.setattr(ledger, "_pg_conn", conn)  # ride the test transaction, rolled back after
 
+    # Assertions are delta-based: in postgres mode calls_this_month() also sums
+    # the local json ledger (probe sessions must stay visible to a sweep's
+    # gate), and both stores may carry real prior calls on a dev machine.
     before = ledger.calls_this_month()
     ledger.record("ep", "test", ok=True)
     ledger.record("ep", "test", ok=False)  # failures count too — they may have spent server-side quota

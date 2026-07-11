@@ -5,6 +5,7 @@ tuple of DataFrames — so ingestion normalizes whatever comes back rather than
 special-casing per endpoint."""
 
 import json
+import math
 
 import pandas as pd
 
@@ -16,4 +17,9 @@ def to_jsonable(obj):
         return {k: to_jsonable(v) for k, v in obj.items()}
     if isinstance(obj, tuple | list):
         return [to_jsonable(v) for v in obj]
+    # DataFrame.to_json already turns NaN/Inf into null; bare floats in plain
+    # dict payloads need the same treatment, or json.dumps emits literal NaN,
+    # which Postgres ::jsonb rejects at insert time.
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
     return obj

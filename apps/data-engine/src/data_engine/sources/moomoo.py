@@ -78,11 +78,27 @@ def _call(ctx, endpoint: str, caller: str, fn):
     try:
         result = fn(ctx)
     except Exception as e:
-        record(endpoint, caller, ok=False)
+        try:
+            record(endpoint, caller, ok=False)
+        except Exception as ledger_err:
+            # The ledger write failing must neither mask the original SDK error
+            # nor escape as a raw psycopg error no sweep handler knows.
+            raise MoomooConnectionError(
+                f"{endpoint} raised: {e} — and recording it failed too ({ledger_err}); this spent call is unaudited"
+            ) from e
         raise MoomooConnectionError(f"{endpoint} raised: {e}") from e
     ret, rest = result[0], result[1:]
     ok = ret == moomoo.RET_OK
-    record(endpoint, caller, ok)
+    try:
+        record(endpoint, caller, ok)
+    except Exception as ledger_err:
+        # Deliberately drop the payload: an unaudited-but-kept result would let
+        # raw fill up while the gate undercounts. Surfacing this as the one
+        # caller-facing exception type means sweeps log it, skip, and re-fetch
+        # (and re-record) the same call on a later run.
+        raise MoomooConnectionError(
+            f"{endpoint} succeeded but the ledger write failed ({ledger_err}); payload dropped — rerun re-fetches it"
+        ) from ledger_err
     if not ok:
         raise MoomooConnectionError(f"{endpoint} failed: {rest[0] if rest else 'unknown error'}")
     return rest[0] if len(rest) == 1 else rest

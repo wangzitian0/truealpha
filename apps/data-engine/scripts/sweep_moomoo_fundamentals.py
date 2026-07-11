@@ -26,6 +26,7 @@ Usage:
 
 import argparse
 from collections import Counter
+from datetime import UTC, datetime
 
 from data_engine import db, jsonable, raw_store
 from data_engine.config import settings
@@ -48,7 +49,10 @@ def plan_calls(conn, codes: list[str], endpoints: list[str], refetch: bool) -> l
 
 
 def sweep_owner_plate(conn, ctx, codes: list[str], stats: Counter) -> None:
-    """Batched, then persisted per code so the resume check stays line-granular."""
+    """Batched, then persisted per code so the resume check stays line-granular.
+    A code absent from its batch's response is counted as a failure and NOT
+    persisted — an empty raw row would satisfy already_fetched forever, turning
+    one bad response into a permanent silent gap."""
     pending = [
         c for c in codes if not raw_store.already_fetched(conn, source=SOURCE, endpoint="owner_plate", entity_key=c)
     ]
@@ -57,23 +61,25 @@ def sweep_owner_plate(conn, ctx, codes: list[str], stats: Counter) -> None:
         try:
             df = mm.get_owner_plate(ctx, chunk, caller=CALLER)
         except mm.MoomooConnectionError as e:
-            stats[("owner_plate", "batch_failed")] += len(chunk)
+            for code in chunk:
+                stats[(code.split(".")[0], "owner_plate", "fail")] += 1
             print(f"  owner_plate chunk failed: {e}")
             continue
-        rows_by_code: dict[str, list] = {c: [] for c in chunk}
+        rows_by_code: dict[str, list] = {}
         for row in jsonable.to_jsonable(df):
             rows_by_code.setdefault(row.get("code"), []).append(row)
         for code in chunk:
+            market = code.split(".")[0]
+            rows = rows_by_code.get(code)
+            if not rows:
+                stats[(market, "owner_plate", "fail")] += 1
+                print(f"  {code}.owner_plate: absent from batched response — will retry next run")
+                continue
             raw_store.insert_fetch(
-                conn,
-                source=SOURCE,
-                endpoint="owner_plate",
-                entity_key=code,
-                payload=rows_by_code.get(code, []),
-                params={"batched": True},
+                conn, source=SOURCE, endpoint="owner_plate", entity_key=code, payload=rows, params={"batched": True}
             )
+            stats[(market, "owner_plate", "ok")] += 1
         conn.commit()
-        stats[("owner_plate", "ok")] += len(chunk)
 
 
 def main() -> None:
@@ -95,7 +101,7 @@ def main() -> None:
     if args.codes:
         codes = [c.strip() for c in args.codes.split(",") if c.strip()]
     else:
-        codes = [code for code, _entity in er.identifiers(conn, "moomoo")]
+        codes = [code for code, _entity in er.identifiers(conn, "moomoo", as_of=datetime.now(UTC))]
     endpoints = list(mm.FUNDAMENTAL_ENDPOINTS) if args.all_endpoints else list(mm.CORE_ENDPOINTS)
 
     plan = plan_calls(conn, codes, endpoints, args.refetch)
@@ -139,7 +145,12 @@ def main() -> None:
                 print(f"  {made}/{len(plan)} calls done")
 
         if not aborted and args.limit is None and not args.codes:
-            sweep_owner_plate(conn, ctx, codes, stats)
+            try:
+                sweep_owner_plate(conn, ctx, codes, stats)
+            except BudgetExceededError as e:
+                # The gated get_owner_plate path raises this too; a budget hit
+                # this late must still reach the summary below, not a traceback.
+                print(f"\nABORT during owner_plate: {e}\nrerun to resume")
 
     conn.close()
     print("\nper market x endpoint:")

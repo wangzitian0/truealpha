@@ -16,14 +16,14 @@ import sys
 from pathlib import Path
 
 from data_engine.sources import nport
-from data_engine.sources.sec import _client
+from data_engine.sources.sec import client as sec_client
 
 OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "samples"
 
 
 def main() -> None:
     ticker = (sys.argv[1] if len(sys.argv) > 1 else "QQQ").upper()
-    with _client() as client:
+    with sec_client() as client:
         cik, series_id = nport.fund_series(client, ticker)
         print(f"{ticker}: CIK {cik}, series {series_id}")
         accession = nport.latest_nport_accession(client, series_id)
