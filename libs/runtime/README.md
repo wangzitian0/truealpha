@@ -13,11 +13,14 @@ Environment model:
 
 - Six logical tiers model dependency substitution: `local_dev`, `local_test`,
   `github_ci`, `preview`, `staging`, and `production`.
-- The active rollout provisions only four actual environments: Local (covering
-  both local tiers), GitHub CI, Staging, and Production.
+- The target rollout uses four actual environments: Local (covering both local
+  tiers), GitHub CI, Staging, and Production. This is a target topology, not a
+  readiness claim.
 - Local and GitHub CI use app-owned Compose PostgreSQL + MinIO.
-- Staging begins in Phase 3 and Production remains gated until Phase 6. Both
-  must receive isolated `DATABASE_URL` and `S3_*` values from infra2/Vault.
+- Persistent Staging enters during Gate 1. Production is initialized only as an
+  isolated Gate 4 shadow and remains non-authoritative until deployed-consumer,
+  natural-cadence SLO, curated-universe, and human-graduation evidence pass. Both
+  receive isolated `DATABASE_URL` and `S3_*` values from infra2/Vault.
 - Preview remains unprovisioned until the Web application needs per-PR visual review.
 - `python -m truealpha_runtime.cli check --live` asserts all declared runtime
   dependencies; absence is a failure, never a silent fallback.

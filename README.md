@@ -44,6 +44,11 @@ images — `release-images.yml` pushes `ghcr.io/wangzitian0/truealpha-app-web` a
 owns deployed Compose, Vault secrets, Traefik routes, persistent Postgres, and
 the environment-specific S3-compatible storage binding. Deploy (from `repo/`):
 
+Those two images are the current scaffold, not a complete Production release. Gate 4
+requires #11/#52 to add an immutable data-engine/Dagster artifact and bind every service,
+migration, catalog/SLO version, and configuration hash in one signed release manifest;
+manual host sweeps cannot satisfy scheduled or promotion evidence.
+
 ```bash
 python -m tools.deploy_v2 --service truealpha/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 python -m tools.deploy_v2 --service truealpha/app      --type staging --iac-ref vX.Y.Z --domain zitian.party

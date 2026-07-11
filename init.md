@@ -44,7 +44,7 @@ L1 Storage layer          ── S3-compatible object storage: immutable source-
                               including the knowledge graph (entities + edges — this is where all entity resolution lives, see Section 6)
                               → mart (clean point-in-time result tables, flattened 2D projections of the KG where applicable)
 L2 Factor computation     ── libs/factors, wrapped as Dagster assets, code_version + data_version tracked (see Section 9 exception for LLM-assisted extraction factors)
-                              - base factors    consume staging (incl. KG) data directly
+                              - base factors consume provenance-neutral views projected from durable PIT snapshots
                               - composite factors reload other factors' mart outputs; confidence cannot exceed the minimum consumed confidence, and a versioned stricter policy is allowed
 L3 Analytics modules      ── the 7 concrete tools (Section 7)
 L4 Backtest/portfolio validation ── PIT decision snapshots + a separate monotonic future market-event stream
@@ -99,9 +99,9 @@ target active rollout, not a claim that every environment has passed its gate:
 `preview` remains a logical tier but no preview environment is provisioned until
 the Web application needs per-PR visual review.
 
-Promotion is artifact-based: PRs prove code in CI; the same image digest then
-runs against real sources in Staging; Production receives that exact digest only
-after the Staging pipeline/backtest gates and a human approval. Staging and
+Promotion is artifact-based: PRs prove code in CI; one signed release manifest then
+runs against real sources in Staging; Production receives that exact complete manifest
+only after the Staging pipeline/backtest gates and a human approval. Staging and
 Production never share writable Postgres databases, S3 buckets, Dagster metadata,
 API ledgers, or Vault secret paths. Strategy computation remains in
 `libs/factors`; environments only schedule and materialize versioned results.
@@ -128,7 +128,7 @@ executable connectivity and negative-network proof.
                         no computation logic
   /factors             Python: the single implementation of the seven modules; function signatures
                         align with the executable Dagster asset convention frozen by Gates 0-1
-    /base              Factors that consume staging (incl. KG) data directly
+    /base              Factors that consume provenance-neutral views projected from PIT snapshots
     /composite         Factors that consume other factors' mart outputs (e.g., module 7's three-tier tagging);
                         confidence cannot exceed the minimum consumed confidence;
                         a versioned stricter policy is allowed
@@ -173,42 +173,50 @@ Four schemas: `raw`, `staging`, `mart`, `dagster` (Dagster's own run/event/sched
 - `transaction_time` — when the fact became **publicly knowable** (the DTO layer calls this `knowable_at`). Always set explicitly by the writer from a source property (filing date, publish time) — **never defaulted to the insert clock**. The failure mode this kills: a new source added in year N backfills five years of history; stamped with `now()` those rows are invisible to every historical as-of query, stamped correctly they are usable while `recorded_at` still tells the truth about when we got them.
 - `recorded_at` — when TrueAlpha ingested the row. Audit and reproducibility only; as-of resolution never reads it.
 
-The concrete point-in-time structure (staging layer):
+The checked-in migrations still use a transitional `unified_id`. Gate 0 does not freeze
+that representation: #57 must distinguish issuer, security, and listing identities and
+#58 must bind exact selected rows and every domain policy into a durable snapshot. The
+target financial-fact shape below shows that semantic boundary; migration work must
+preserve legacy IDs as versioned aliases rather than rewriting history.
 
 ```sql
+-- Target Gate 0 shape; current migrations remain transitional until #57/#58 land.
 create table staging.financial_facts (
     id                bigint generated always as identity primary key,
-    unified_id        text not null,          -- KG entity id, see staging.kg_entities below
+    subject_kind      text not null,          -- 'issuer' or 'security', registry-constrained
+    subject_id        text not null,
     metric            text not null,          -- canonical field name; registry: libs/contracts metrics.py
     fiscal_period     text not null,          -- '2025Q4'
     valid_time        daterange not null,     -- the period this data describes
     transaction_time  timestamptz not null,   -- knowable-at; NO default (see "Time axes")
     recorded_at       timestamptz not null default now(),  -- ingestion clock, audit only
     value             numeric,
-    unit              text not null,          -- XBRL units are not uniform across companies;
-                                               -- a bare numeric is not a fact
-    confidence        numeric not null,       -- 0-1, MANDATORY on every row, no nulls.
-                                               -- Absorbs both "extraction uncertainty" (LLM-derived
-                                               -- facts self-report a score) AND "source reliability"
-                                               -- (e.g. yfinance's lack of an SLA is expressed here,
-                                               -- not as a separate ad hoc rule). Official filed data
-                                               -- (SEC) defaults to 1.0.
-    source            text not null,          -- 'sec' | 'yfinance' | 'twelvedata' | 'moomoo'
-    source_metric     text not null,          -- the source's native tag ('Revenues', ...) — the
-                                               -- mapping layer's evidence
-    raw_ref           text not null,          -- pointer back to the original record in the raw schema
-    mapping_version   text not null,          -- '<parser-id>:<schema-version>'; a reparse under revised
-                                               -- mapping logic is distinguishable from a restatement
-    accession         text,                   -- SEC provenance, null for other sources
+    unit              text not null,
+    currency          char(3),
+    confidence        numeric not null check (confidence between 0 and 1),
+    source            text not null,
+    source_metric     text not null,
+    raw_ref           text not null,
+    mapping_version   text not null,
+    accession         text,
     form              text,
     is_restatement    boolean not null default false
 );
 
 create index idx_financial_facts_asof
-    on staging.financial_facts (unified_id, metric, fiscal_period, transaction_time desc);
+    on staging.financial_facts
+       (subject_kind, subject_id, metric, fiscal_period, transaction_time desc);
 ```
 
-**Source fusion (staging → mart).** Staging is evidence, mart is verdict. Multiple sources may assert the same `(unified_id, metric, fiscal_period)` — they coexist as separate rows, and the winner is chosen by **declared rules, never by ingestion recency**. The rules live in the metric registry (`libs/contracts/src/truealpha_contracts/metrics.py`): each canonical metric declares an ordered `source_priority`. Resolution at a cutoff:
+The transitional checked-in DDL is not a second valid identity model.
+
+**Source fusion (staging → snapshot → mart).** Staging is evidence, the durable
+snapshot is the selected fact set, and mart is its materialized projection. Multiple
+sources may assert the same `(subject_kind, subject_id, metric, fiscal_period)` and
+coexist as separate rows. The winner is chosen by **declared rules, never by ingestion
+recency**. The metric registry declares `source_priority`; the snapshot additionally
+binds fusion, metric, identity, membership, extraction, price/FX, action, and every other
+requested domain-selection policy version. The financial selection shape is:
 
 1. Rows with `transaction_time <= :as_of` and a source registered for the metric compete; unregistered sources stay in staging as evidence and never reach mart.
 2. The highest-priority source present wins.
@@ -216,23 +224,29 @@ create index idx_financial_facts_asof
 4. `confidence` rides along as data for the factor — it never arbitrates between sources (static per-source confidence must not silently decide truth).
 
 ```sql
-select distinct on (unified_id, metric, fiscal_period) *
+select distinct on (subject_kind, subject_id, metric, fiscal_period) *
 from staging.financial_facts
 where transaction_time <= :as_of_timestamp
   and array_position(:source_priority, source) is not null   -- registry order for this metric
-order by unified_id, metric, fiscal_period,
+order by subject_kind, subject_id, metric, fiscal_period,
          array_position(:source_priority, source),           -- fusion rank first
          transaction_time desc, id desc;
 ```
 
-Every row in the mart layer must already have this logic resolved — it can't be left for downstream consumers to choose. Mart rows carry two lineage fields so a number stays explainable after the rules move on: `staging_ref` (the winning staging row, `staging.financial_facts:<id>`, which chains to `raw_ref` and the immutable bytes) and `fusion_version` (`FUSION_RULESET_VERSION` at materialization time). Swapping a field's source is a registry edit that bumps `FUSION_RULESET_VERSION` — re-materialization is then attributable, and the fetch side is untouched: the new source lands in raw/staging under its own keys like any other, and old evidence is never deleted.
+This SQL is a financial-domain illustration, not the public snapshot API or a generic
+"latest row" rule. Every selected staging ID and policy version is persisted in the
+snapshot manifest before factor execution. Mart lineage points to that snapshot and its
+exact selected records, which in turn chain through mapping/extraction IDs to `raw_ref`
+and immutable bytes. Changing any selection policy creates a new snapshot/materialization;
+old evidence and results remain addressable.
 
 **Knowledge graph (replaces the old flat `symbol_mapping` table).** Entity resolution is not unique to companies — companies, ETFs, analysts, and supply-chain nodes all have the same "same real-world thing, different IDs per source" problem, so it's modeled once as a graph, implemented as plain Postgres tables (no separate graph engine — the query patterns needed here are shallow joins, not deep multi-hop traversal):
 
 ```sql
 create table staging.kg_entities (
-    id            text primary key,          -- our internal unified_id
-    entity_type   text not null,             -- 'company' | 'etf' | 'analyst' | 'supply_chain_node'
+    id            text primary key,
+    entity_type   text not null,             -- issuer | security | listing | analyst |
+                                               -- universe | theme | supply_chain_node
     display_name  text not null
 );
 
@@ -247,6 +261,7 @@ create table staging.kg_identifiers (
     identifier_value  text not null,
     valid_time        daterange not null,
     transaction_time  timestamptz not null,
+    recorded_at       timestamptz not null default now(),
     confidence        numeric not null,
     raw_ref           text not null
 );
@@ -261,9 +276,8 @@ create table staging.kg_edges (
     valid_time        daterange not null,
     transaction_time  timestamptz not null,   -- knowable-at; NO default (see "Time axes")
     recorded_at       timestamptz not null default now(),
-    confidence        numeric not null,       -- same semantics as financial_facts.confidence.
-                                               -- The supply-chain causal-reasoning kill condition
-                                               -- (Section 1, rule 10) reads confidence on 'supplies_to' edges.
+    confidence        numeric not null,       -- edge evidence confidence; scenario propagation
+                                               -- enforces a versioned minimum but cannot infer causality
     source            text not null,
     raw_ref           text not null
 );
@@ -279,8 +293,8 @@ Role permissions (`roles.sql`):
 ```sql
 alter role mart_readonly set statement_timeout = '5s';
 grant select on schema mart to mart_readonly;
--- the application layer additionally forces a LIMIT (1000 rows suggested) on LLM-generated
--- queries; don't rely solely on the database-side setting
+-- typed mart repositories additionally enforce cursor pagination and bounded row counts;
+-- MCP/chat never accept arbitrary model-generated SQL
 ```
 
 Other tables: `api_call_ledger` (moomoo quota ledger), `ingestion_health_log` (only business-specific metrics the Dagster UI doesn't already cover).
@@ -313,7 +327,7 @@ Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner
 
 **Availability and validation are separate**. Every factor output carries an
 `availability_status` such as `available`, `unavailable`, `stale`, `excluded`,
-`low_confidence`, or `error`, plus an `input_evidence_status` for the selected semantic
+`low_confidence`, or `error`, plus a `source_evidence_status` for the selected semantic
 records and a separate `factor_validation_status` for the factor version's independent
 golden/holdout gate. Only applicable, available, fresh outputs from an accepted factor
 version count toward the module's versioned usable-coverage SLO. Consumers display all
@@ -332,7 +346,7 @@ release gate cannot be declared complete out of order.
 
 - SEC XBRL tags are inconsistent across industries — don't assume field names/units are uniform
 - yfinance has no SLA — can't be the sole dependency on a critical path
-- LLM-generated ad hoc SQL touching raw/staging carries a semantic look-ahead-bias risk without raising an error — already blocked off via role permissions (Section 6)
+- Arbitrary SQL touching raw/staging carries silent look-ahead risk; roles deny it and MCP/chat expose typed mart reads only
 - dlt schema evolution must use frozen mode for core tables
 - **Dagster's `code_version`/`data_version` assumes deterministic inputs.** LLM extraction is therefore a separate, versioned, append-only step. Its invocation binds model, instructions, schema, and decoding settings; the stored semantic result and evidence spans determine downstream `data_version`. Replay reuses that stored result and never silently calls the model again. A new extraction is a new invocation/vintage, not sampling noise hidden behind the old ID.
 - **LLM self-reported confidence is not ground truth.** It may be retained as one signal, but Gate 0 freezes the confidence policy and Gate 2's sealed holdout measures calibration. `low_confidence` remains distinct from evidence verification and cannot count toward usable coverage. More expensive self-consistency or review paths are introduced only through a new versioned policy backed by that evidence.
