@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 from data_engine import instruments, raw_store
-from data_engine.capture.topt_sources import _safe_source_error
+from data_engine.capture import source_results
+from data_engine.capture.topt_sources import _normalize_moomoo_payload, _safe_source_error
 from data_engine.config import settings
 from data_engine.normalizers import moomoo
 from factors.shared import entity_resolution as er
@@ -98,3 +99,62 @@ def test_persisted_source_error_does_not_include_vendor_message():
     detail = _safe_source_error(RuntimeError("https://vendor.invalid?token=secret"))
     assert detail == "RuntimeError: source request failed"
     assert "secret" not in detail
+
+
+def test_moomoo_schema_drift_rolls_back_one_cell_and_keeps_raw(conn):
+    nonce = uuid.uuid4().hex[:10]
+    instrument_id = f"instrument:isin:US{nonce}"
+    listing_id = f"listing:vendor:US.TEST{nonce}"
+    instruments.ensure_instrument(conn, instrument_id, "equity_common", "Broken Dividend Test")
+    raw_id = _raw(
+        conn,
+        nonce,
+        "dividends",
+        {
+            "dividend_list": [
+                {
+                    "statement": "Cash Dividend: 1.25 USD Per Share",
+                    "pub_date": "01/02/2026",
+                    "ex_date": "01/09/2026",
+                },
+                {"statement": "vendor payload included a secret"},
+            ]
+        },
+    )
+
+    records, outcome, detail = _normalize_moomoo_payload(
+        conn,
+        lambda: moomoo.normalize_dividends(
+            conn,
+            raw_fetch_id=raw_id,
+            instrument_id=instrument_id,
+            listing_id=listing_id,
+        ),
+    )
+    assert records == ()
+    assert outcome is source_results.SourceResultOutcome.FAILED
+    assert detail == "ValueError: normalization failed"
+    assert (
+        conn.execute(
+            "select count(*) from staging.corporate_actions where raw_ref = %s",
+            (raw_store.raw_ref(raw_id),),
+        ).fetchone()[0]
+        == 0
+    )
+    assert conn.execute("select count(*) from raw.fetches where id = %s", (raw_id,)).fetchone()[0] == 1
+
+
+def test_moomoo_programming_errors_escape(conn):
+    def schema_drift():
+        raise ValueError("vendor payload included a secret")
+
+    records, outcome, detail = _normalize_moomoo_payload(conn, schema_drift)
+    assert records == ()
+    assert outcome is source_results.SourceResultOutcome.FAILED
+    assert detail == "ValueError: normalization failed"
+
+    def programming_error():
+        raise RuntimeError("database invariant broke")
+
+    with pytest.raises(RuntimeError, match="database invariant broke"):
+        _normalize_moomoo_payload(conn, programming_error)
