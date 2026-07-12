@@ -5,7 +5,7 @@ not frozen until the semantic closure gate in Section 18 passes.
 Converge on this semantic pipeline before implementing more factor logic:
 ```text
 RawCapture -> normalized PIT records -> ResearchSnapshot + DataSnapshotManifest
-  -> FactorDefinition.compute -> FactorOutputBatch[Metric | Classification | Relationship]
+  -> run_factor(FactorDefinition.compute) -> FactorOutputBatch[Metric | Classification | Relationship]
   -> ScreenDefinition.evaluate -> StrategyDefinition -> BacktestRunResult
 ```
 The proposal covers interface meaning, not every adapter; implementations may land incrementally
@@ -106,6 +106,9 @@ class IssuerSecurityLink(BaseModel):
     issuer_id: IssuerId
     security_id: SecurityId
     security_kind: SecurityKind
+    share_class: str | None
+    underlying_security_id: SecurityId | None
+    underlying_shares_per_security_unit: Decimal = Field(gt=0)
     valid_from: date
     valid_to: date | None
     confidence: Decimal
@@ -117,6 +120,7 @@ class SecurityListingLink(BaseModel):
     listing_id: ListingId
     exchange_mic: str
     ticker: str
+    listing_role: Literal["primary", "secondary"]
     currency: CurrencyCode
     timezone: str
     valid_from: date
@@ -131,11 +135,30 @@ class MoneyValue(BaseModel):
 class DateRange(BaseModel):
     start: date
     end: date
+
+class PriceAdjustmentMode(StrEnum):
+    RAW = "raw"
+    ADJUSTED = "adjusted"
+
+class ReturnPolicy(BaseModel):
+    policy_id: str
+    policy_version: str
+    price_mode: PriceAdjustmentMode
+    corporate_action_mode: Literal["explicit", "suppressed"]
+
+    @model_validator(mode="after")
+    def require_raw_explicit_v1(self) -> Self: ...
 ```
 
 V1 either converts monetary inputs through explicit PIT FX observations or rejects a
 cross-currency calculation. It never assumes that two bare monetary values share a
 currency.
+`PriceAdjustmentMode.ADJUSTED` exists only to classify reconciliation evidence in
+normalized storage. `ReturnPolicy.require_raw_explicit_v1` rejects every V1 combination
+except `price_mode=raw` plus `corporate_action_mode=explicit`.
+V1 execution and total return permit only raw listing bars plus explicit corporate-action
+events. Adjusted series may be stored and reconciled as evidence, but cannot enter V1
+execution, valuation, or returns.
 
 ### 4.2 Time Vocabulary
 - `valid_from` / `valid_to`: when a statement is true in the real world.
@@ -208,11 +231,12 @@ class FactorPriceInput(BaseModel):
     input_id: InputId; listing_id: ListingId; security_id: SecurityId
     trading_date: date; exchange_mic: str; timezone: str; currency: CurrencyCode
     open: Decimal; high: Decimal; low: Decimal; close: Decimal; volume: int
+    adjustment_mode: Literal[PriceAdjustmentMode.RAW] = PriceAdjustmentMode.RAW
     confidence: Decimal; as_of: datetime
 class FactorActionInput(BaseModel):
     input_id: InputId; action_id: str; security_id: SecurityId
     action_type: CorporateActionType; announced_at: datetime | None
-    ex_date: date; effective_date: date; pay_date: date | None
+    ex_date: date; record_date: date | None; effective_date: date; pay_date: date | None
     ratio: Decimal | None; cash_amount: MoneyValue | None
     resulting_security_id: SecurityId | None; confidence: Decimal; as_of: datetime
 class FactorMembershipInput(BaseModel):
@@ -261,6 +285,7 @@ class CorporateAction(BaseModel):
     action_type: CorporateActionType
     announced_at: datetime | None
     ex_date: date
+    record_date: date | None
     effective_date: date
     pay_date: date | None
     ratio: Decimal | None
@@ -275,6 +300,19 @@ Validation requires a ratio for ratio actions and amount/currency for cash divid
 Corrections append vintages.
 ### 4.5 Membership and Identifier History
 ```python
+class UniverseRef(BaseModel):
+    universe_id: UniverseId
+    universe_version: str
+    content_sha256: str
+
+class UniverseManifest(BaseModel):
+    ref: UniverseRef
+    definition_kind: Literal["fixed_cohort", "pit_membership"]
+    membership_ids: tuple[str, ...]
+    resolver_version: str | None
+    effective_at: datetime
+    owner: str
+
 class UniverseMembership(BaseModel):
     membership_id: str
     universe_id: UniverseId
@@ -307,7 +345,7 @@ class SnapshotScope(BaseModel):
     issuer_ids: tuple[IssuerId, ...] = ()
     security_ids: tuple[SecurityId, ...] = ()
     listing_ids: tuple[ListingId, ...] = ()
-    universe_id: UniverseId | None = None
+    universe: UniverseRef | None = None
 
     @model_validator(mode="after")
     def require_one_scope_mode(self) -> Self: ...
@@ -390,6 +428,8 @@ class SnapshotStore(Protocol):
 and every requested domain in one transaction. Callers do not need today's entity list in
 order to request a historical universe. `snapshot_id` derives from canonical request,
 policy versions, selected record identities, and content hashes, not creation time.
+When scope uses a universe, its resolved membership and resolver version must match the
+requested `UniverseRef`; repositories never substitute a mutable latest universe.
 `repository_kind` is diagnostic and cannot affect factors. `raw_refs_sha256` commits to
 lineage without exposing it to factor branches. `selected_records` makes that commitment
 recoverable rather than merely aggregate: an old run still resolves the exact staging row,
@@ -432,7 +472,8 @@ class OutputBase(BaseModel):
     output_id: OutputId
     output_type: str
     invocation_alias: str
-    invocation_id: str  # deterministic SHA-256 identity of the resolved execution
+    invocation_template_id: str
+    execution_id: str
     factor_id: str
     factor_version: str
     subject: SubjectRef
@@ -481,7 +522,8 @@ FactorObservation = Annotated[
 class FactorOutputBatch(BaseModel):
     batch_id: str
     invocation_alias: str
-    invocation_id: str
+    invocation_template_id: str
+    execution_id: str
     parameters_sha256: str
     parameters: dict[str, JsonValue]
     factor_id: str
@@ -499,10 +541,12 @@ says whether this exact factor/version passed its golden and sealed-holdout orac
 three are orthogonal: an output can be available on corroborated data while its formula is
 still unvalidated, or holdout-validated but stale at the requested cutoff.
 The union is top-level so schemas reliably emit `oneOf`. Input IDs are opaque semantic
-identities: factors may copy them into `consumed`, but cannot inspect source or raw
-lineage. `run_factor` rejects unknown references and verifies each output confidence
-against exactly the inputs and upstream outputs it declares; module conformance tests
-prove that domain input selectors cannot return values without also returning their IDs.
+identities: factor code can use semantic values but cannot inspect source or raw lineage.
+It never constructs final observations or a `ConsumedInputLineage`. `run_factor` creates
+one tracked scope per `output_key`, records every selector and upstream access, stamps the
+resulting IDs on drafts, and rejects access outside a scope or emission under another key.
+Module conformance tests prove that no semantic record or upstream observation can be
+read through the public view without the runner recording its identity.
 `batch_confidence` is the minimum confidence of consumed inputs and outputs unless a
 stricter declared policy applies. An empty batch needs an explanatory flag. PEG emits metrics, three-tier emits
 a classification, supply chain emits relationships, and ETF virtual company emits a
@@ -527,8 +571,10 @@ semantic closure gate passes. The invocation rules are:
 - base factors reject undeclared upstream batches;
 - composites require every declared batch to share `snapshot_id` and `as_of`;
 - screens return ranked and explicitly rejected entities;
-- every invocation has a caller-chosen stable alias and a deterministic resolved ID over
-  factor version, parameters, snapshot, dependency batch IDs, and subject scope;
+- every invocation template has a caller-chosen stable alias and a deterministic template
+  ID over factor version, parameters, and dependency templates;
+- every execution has a separate deterministic ID over the template, snapshot,
+  dependency batch IDs, and ordered subject scope;
 - persisted definitions contain versioned registry invocations and immutable parameters,
   never callables;
 - factor, screen, strategy, and rule versions make historical runs reconstructible.
@@ -539,15 +585,12 @@ class NormalizedRecordRepository(Protocol):
     def append(self, batch: NormalizedBatch) -> MaterializationResult: ...
     def candidates(self, request: SnapshotRequest) -> tuple[NormalizedRecord, ...]: ...
 
-class MembershipRepository(Protocol):
+class UniverseRepository(Protocol):
+    def get(self, ref: UniverseRef) -> UniverseManifest | None: ...
     def resolve(
-        self,
-        universe_id: UniverseId,
-        *,
-        valid_on: date,
-        as_of: datetime,
-        policy_version: str,
+        self, ref: UniverseRef, *, valid_on: date, as_of: datetime
     ) -> tuple[UniverseMembership, ...]: ...
+
 ```
 Fine-grained domain methods may remain private helpers. Atomic `build_snapshot` plus
 durable `SnapshotStore.put` is the public factor/backtest read boundary, preventing domains
@@ -581,17 +624,16 @@ scaffolding.
 ## 10. Call Graph
 ```text
 Dagster asset / local runner
-  -> registry.resolve(invocation.factor_id, invocation.factor_version)
+  -> registry.resolve(template.factor_id, template.factor_version)
   -> snapshot_repository.build_snapshot(request)
      -> resolve PIT membership, issuer/security/listing links, and eligible vintages
      -> reconcile sources, assign confidence, build canonical manifest
   -> snapshot_store.put(snapshot)
-  -> project_factor_inputs(snapshot, declared_domains)  # strips all provenance
-  -> factor.compute(inputs, subjects, parameters, upstream)
+  -> run_factor(template, snapshot, subjects)  # projects provenance-free tracked inputs
   -> output_repository.put(batch)
   -> materialize deterministic mart projection
   -> for a composite: reload declared upstream batches from the materialized mart boundary
-     -> factor.compute(inputs, subjects, parameters, materialized_upstream)
+     -> run_factor(template, snapshot, subjects, materialized_upstream)
      -> output_repository.put(batch) -> materialize composite projection
 Backtest runner
   -> resolve definition registry IDs
@@ -611,9 +653,11 @@ Point-in-time:
 - Older cutoffs reproduce pre-restatement views.
 - Composite inputs share snapshot ID and cutoff with their output.
 - Membership, identifiers, ratings, holdings, edges, actions, and prices obey PIT rules.
-- A price convention cannot expose a future action; total return declares action timing.
+- A price convention cannot expose a future action; V1 total return uses raw listing bars
+  and explicit action phases exactly once under a versioned `ReturnPolicy`.
 - Forward execution and outcome events are never members of the decision snapshot. The
   simulator observes them only after its clock reaches each event's availability time.
+
 Confidence:
 - Every staging row, including `PriceBar`, and every factor input/output has `[0, 1]`.
 - Composite confidence cannot exceed the minimum consumed confidence.
@@ -624,19 +668,53 @@ Confidence:
   inferred from another or collapsed into one boolean.
 Identity, units, and markets:
 - Issuer, security, and listing IDs are distinct; no implicit ticker-to-company coercion.
+- Fundamentals attach to an issuer, outstanding share units and corporate actions attach
+  to a security, and prices attach to a listing. Valuation resolves all links at the same
+  cutoff; share classes or ADRs require an explicit security-unit conversion ratio.
 - Monetary arithmetic requires matching currencies or a consumed PIT FX input.
 - Execution uses an exchange calendar/timezone and unadjusted listing bars; adjusted
   history cannot be combined with explicit corporate-action events.
+- Applicable financial issuers use the frozen operating-efficiency/comparison branch;
+  blanket exclusion cannot satisfy module coverage. The selected level, elasticity, or
+  combined leverage rule is an immutable factor parameter, never an implicit heuristic.
+
+Scope, applicability, and readiness:
+- Capture, snapshot, factor execution, screen, strategy, report, SLO, and audit resolve the
+  exact `UniverseRef` ID/version/hash; no repository may substitute a mutable latest value.
+- Applicability is joined from the approved catalog before execution. Producers cannot
+  self-report applicability, and a narrower scope requires a new signed catalog and claim.
+- A capture manifest has exactly one cell for every required scope/subject/domain/partition
+  key. Missing raw or normalized evidence, confidence, eligible times, mapping/policy
+  versions, passing quality, or lineage makes a required cell fail.
+- Readiness is the signed deterministic conjunction of evaluator checks. A caller cannot
+  set `ready`, relabel a required cell, or make a failed run green by removing it.
+- Unknown/restricted/expired use rights, an expired approval, or projected source cost over
+  an approved budget blocks source execution and release. Immediate retries, unchanged-byte
+  reparsing, fixture replay, and synthetic mutations never count as natural refreshes.
+- Public aliases resolve only inside the exact release-bound research catalog. There is no
+  global `current` catalog or universe, and every response returns the resolved catalog
+  identity. Canonical questions execute only through their frozen typed query contract.
+
 Provenance and determinism:
 - Normalized records retain `raw_ref`; manifests commit to the lineage set.
 - Only `FactorInputBundle`, never `ResearchSnapshot`, crosses into factor code.
 - Bundle records contain no source, raw reference, accession, or repository metadata.
 - Factors cannot access or branch on provenance; projection tests enforce this boundary.
-- Invocation hash plus snapshot ID and per-output consumption references recover output
-  lineage; factor version alone is insufficient when parameters differ.
+- Factors emit drafts only. `run_factor` alone creates final observations and automatically
+  derives input/upstream consumption lineage, confidence ceilings, status, and IDs from
+  accesses made inside each output scope.
+- Template ID, execution ID, and runner-generated per-output consumption references
+  recover output lineage; factor version alone is insufficient when parameters differ.
 - Canonical ordering and Decimal serialization define content hashes.
-- Identical definition, version, parameters, and snapshot produce identical output.
-- LLM extraction becomes versioned normalized input; replay never invokes it implicitly.
+- Identical definition, template, snapshot, ordered subjects, and upstream batches produce
+  the same execution and output IDs.
+- LLM extraction binds an immutable provider revision, decoding settings, prompt, schema,
+  source-document hash, and attempt. Each new attempt is append-only; replay reads the
+  stored result and never invokes a mutable model alias implicitly.
+- A release, asset catalog, runtime artifacts, extraction templates/model revisions,
+  universe, capture/applicability/source/SLO catalogs, and accepted evidence must agree by
+  ID and content hash before publication.
+
 ## 12. Repository Contract Test Kit
 `libs/contracts` should expose a pytest suite factory accepting a repository constructor.
 Run the same cases against fixture and ephemeral Postgres implementations:
@@ -650,14 +728,28 @@ Run the same cases against fixture and ephemeral Postgres implementations:
 - Change hashes when fusion, identifier, membership, or action-policy versions change,
   while retaining exact older snapshots through `SnapshotStore.get`.
 - Reject manifests whose counts or hashes disagree with snapshots.
+- Reject a missing `UniverseRef`, content-hash mismatch, mutable-latest substitution, or
+  cross-universe reuse in a snapshot, factor, strategy, report, SLO, or audit.
 - Keep source and raw references out of factor-ready facts.
 - Reject composite batches with mismatched snapshots or future timestamps.
-- Enforce minimum-confidence propagation.
+- Prove selector/upstream access automatically creates per-output lineage and enforces the
+  confidence ceiling; factor code has no API for constructing final lineage or status.
 - Keep two parameterizations and subject scopes of one factor/version collision-free.
 - Reject issuer/security/listing coercion, cross-currency arithmetic without PIT FX,
-  calendar-day execution, and adjusted-close plus explicit-action returns.
+  missing share-class/ADR conversion, calendar-day execution, and adjusted-close plus
+  explicit-action returns.
 - Keep future execution bars out of decision snapshots and apply each market event once.
 - Prove idempotent writes by semantic ID and append-only vintages.
+- Reject a capture manifest with a missing/duplicate required cell or incomplete evidence,
+  and reject a post-run applicability relabel that tries to shrink the denominator.
+- Reject unknown or expired rights, an over-budget full-catalog projection, and a soak that
+  counts retries or unchanged bytes as natural updates.
+- Reject a mutable model alias, unapproved extraction template/revision, or replay that
+  attempts a model call; preserve each old extraction result and evidence span.
+- Reject catalog/release hash mismatch and prove an unversioned alias resolves only inside
+  the service's bound catalog across Python and TypeScript adapters.
+- Exercise both the non-financial and financial comparison branches and every selected
+  leverage-rule boundary against frozen independent oracles.
 The kit tests behavior, not SQL. Postgres query-plan tests stay in data-engine.
 ## 13. Issue #14 Fixture and Evidence Integration
 Issue #14 should produce immutable artifacts and an evidence manifest, not broad sampling:
@@ -715,7 +807,8 @@ class MaterializationResult(BaseModel):
 class FactorExecutionContext(BaseModel):
     contract_version: str
     invocation_alias: str
-    invocation_id: str
+    invocation_template_id: str
+    execution_id: str
     parameters_sha256: str
     factor_id: str
     factor_version: str
@@ -729,11 +822,53 @@ class FactorParameters(BaseModel):
 P = TypeVar("P", bound=FactorParameters)
 I = TypeVar("I", bound=BaseModel)
 
-class SelectedInputs(BaseModel, Generic[I]):
-    records: tuple[I, ...]
-    input_ids: tuple[InputId, ...]
+class ObservationDraftBase(BaseModel):
+    output_key: str
+    output_type: str
+    subject: SubjectRef
+    valid_from: date | None
+    valid_to: date | None
+    fiscal_period: str | None
+    availability_status: AvailabilityStatus
+    confidence_cap: Decimal | None = None
+    status_reasons: tuple[str, ...] = ()
+    flags: tuple[str, ...] = ()
 
-class FactorInputView(Protocol):
+class MetricObservationDraft(ObservationDraftBase):
+    output_type: Literal["metric"] = "metric"
+    metric: str
+    value: Decimal | None
+    unit: str
+
+class ClassificationObservationDraft(ObservationDraftBase):
+    output_type: Literal["classification"] = "classification"
+    taxonomy: str
+    label: str
+    score: Decimal | None = None
+
+class RelationshipObservationDraft(ObservationDraftBase):
+    output_type: Literal["relationship"] = "relationship"
+    to_subject: SubjectRef
+    relation_type: str
+    strength: Decimal | None = None
+
+class ScenarioExposureObservationDraft(ObservationDraftBase):
+    output_type: Literal["scenario_exposure"] = "scenario_exposure"
+    scenario_id: str
+    scenario_version: str
+    direction: Literal["positive", "negative", "mixed", "unknown"]
+    exposure_value: Decimal | None
+    unit: str
+    path_count: int
+
+FactorObservationDraft = Annotated[
+    MetricObservationDraft | ClassificationObservationDraft
+    | RelationshipObservationDraft | ScenarioExposureObservationDraft,
+    Field(discriminator="output_type"),
+]
+
+class OutputComputationScope(Protocol):
+    output_key: str
     snapshot_id: str
     as_of: datetime
     def select(
@@ -741,14 +876,28 @@ class FactorInputView(Protocol):
         record_type: type[I],
         *,
         where: Mapping[str, JsonScalar],
-    ) -> SelectedInputs[I]: ...
+    ) -> tuple[I, ...]: ...
+    def upstream(self, slot: str) -> tuple[FactorObservation, ...]: ...
+    def emit(self, draft: FactorObservationDraft) -> None: ...
 
-class FactorInvocation(BaseModel):
+class TrackedFactorInputView(Protocol):
+    snapshot_id: str
+    as_of: datetime
+    def output_scope(
+        self, output_key: str
+    ) -> ContextManager[OutputComputationScope]: ...
+
+class FactorInvocationTemplate(BaseModel):
     invocation_alias: str  # stable name within a strategy/report definition
+    invocation_template_id: str
     factor_id: str
     factor_version: str
     parameters: dict[str, JsonValue]
     dependencies: dict[str, str] = Field(default_factory=dict)  # slot -> invocation_alias
+
+class CatalogAliasRef(BaseModel):
+    alias: str
+    entry_version: str | None = None
 
 class RuleInvocation(BaseModel):
     rule_id: str
@@ -769,41 +918,107 @@ class ReleaseArtifact(BaseModel):
     sbom_sha256: str
     signature_ref: str
 
+class SubjectSourceCoverage(BaseModel):
+    subject: SubjectRef
+    earliest_knowable_at: datetime
+    latest_knowable_at: datetime
+    observed_partitions: int = Field(ge=0)
+    natural_update_ids: tuple[str, ...]
+    gap_ranges: tuple[DateRange, ...]
+
+class SourceUsePermission(StrEnum):
+    PERMITTED = "permitted"
+    RESTRICTED = "restricted"
+    UNVERIFIED = "unverified"
+    EXPIRED = "expired"
+
+class ApprovedSourceBudget(BaseModel):
+    vendor: MoneyValue | None
+    api: MoneyValue | None
+    storage: MoneyValue | None
+    extraction: MoneyValue | None
+    human_review: MoneyValue | None
+
+class RightsApproval(BaseModel):
+    rights_approval_id: str
+    source: DataSource
+    environment: Literal["local", "github_ci", "staging", "production"]
+    raw_retention: SourceUsePermission
+    caching: SourceUsePermission
+    derived_metrics: SourceUsePermission
+    report_publication: SourceUsePermission
+    card_publication: SourceUsePermission
+    quotation: SourceUsePermission
+    attribution_requirement: str | None
+    approved_budget: ApprovedSourceBudget
+    valid_from: datetime
+    expires_at: datetime
+    reviewer: str
+    evidence_ids: tuple[str, ...]
+    signature_ref: str
+
 class SourceCoverageEntry(BaseModel):
     requirement_id: str
     module_id: str
     domain: DataDomain
     field_semantics: str
+    environment: Literal["local", "github_ci", "staging", "production"]
+    subject_scope: tuple[SubjectRef, ...]
+    identifier_level: Literal["issuer", "security", "listing", "analyst", "fund"]
     primary_source: DataSource
     fallback_sources: tuple[DataSource, ...]
     knowability_basis: Literal["source_publication", "independently_corroborated"]
     history_start: date
     history_end: date | None
     expected_cadence: timedelta
-    raw_storage_rights: Literal["permitted", "restricted", "unverified", "expired"]
-    derived_output_rights: Literal["permitted", "restricted", "unverified", "expired"]
-    rendered_excerpt_rights: Literal["permitted", "restricted", "unverified", "expired"]
+    rights_approval_ids: dict[DataSource, str]
     retention_policy_ref: str
     quota_policy_ref: str
-    expected_cost: MoneyValue | None
+    sla_policy_ref: str
+    projected_budget: ApprovedSourceBudget
     capture_adapter_id: str
     revision_policy_ref: str
     fallback_policy_ref: str
+    natural_refresh_observation_window: timedelta
+    minimum_naturally_changed_partitions: int = Field(ge=1)
+    refresh_alert_after: timedelta
     owner: str
     review_expires_at: datetime
     evidence_ids: tuple[str, ...]
+    observed_coverage: tuple[SubjectSourceCoverage, ...]
 
 class SourceCoverageCatalog(BaseModel):
     source_coverage_catalog_id: str
     entries: tuple[SourceCoverageEntry, ...]
     content_sha256: str
 
+class ApplicabilityCell(BaseModel):
+    module_id: str
+    catalog_entry: CatalogAliasRef
+    subject: SubjectRef
+    requirement: Literal["required", "optional", "not_applicable"]
+    reason_code: str
+    effective_from: datetime
+
+class ApplicabilityCatalog(BaseModel):
+    applicability_catalog_id: str
+    research_catalog_id: str
+    research_catalog_sha256: str
+    universe: UniverseRef
+    cells: tuple[ApplicabilityCell, ...]
+    approved_at: datetime
+    approved_by: str
+    approval_signature_ref: str
+    supersedes_catalog_id: str | None
+    change_reason: str
+    content_sha256: str
+
 class ModuleSlo(BaseModel):
     module_id: str
-    universe_id: UniverseId
-    universe_version: str
-    applicability_policy_ref: str
-    required_catalog_aliases: tuple[str, ...]
+    universe: UniverseRef
+    applicability_catalog_id: str
+    applicability_catalog_sha256: str
+    required_catalog_entries: tuple[CatalogAliasRef, ...]
     minimum_usable_coverage: Decimal = Field(ge=0, le=1)
     maximum_freshness_age: timedelta
     maximum_unavailable_rate: Decimal = Field(ge=0, le=1)
@@ -837,7 +1052,6 @@ class SloCatalog(BaseModel):
 class SloObservation(BaseModel):
     module_id: str
     subject: SubjectRef
-    applicable: bool
     availability_status: AvailabilityStatus
     observed_at: datetime | None
     evaluated_at: datetime
@@ -864,11 +1078,18 @@ class ReadinessCheck(BaseModel):
 
 class ReadinessReport(BaseModel):
     report_id: str
+    evaluator_id: str
+    evaluator_version: str
+    evaluator_artifact_digest: str
     evaluated_at: datetime
     input_content_sha256: tuple[str, ...]
     checks: tuple[ReadinessCheck, ...]
-    ready: bool
     content_sha256: str
+    signature_ref: str
+
+    @computed_field
+    @property
+    def ready(self) -> bool: ...
 
 class SourceCoverageEvaluator(Protocol):
     def evaluate(
@@ -877,17 +1098,125 @@ class SourceCoverageEvaluator(Protocol):
         *,
         as_of: datetime,
         evidence: Mapping[str, EvidenceCase],
+        rights: Sequence[RightsApproval],
     ) -> ReadinessReport: ...
 
 class SloEvaluator(Protocol):
     def evaluate(
         self,
         catalog: SloCatalog,
+        applicability: ApplicabilityCatalog,
         *,
         window: DateRange,
         observations: Sequence[SloObservation],
         consumer_observations: Sequence[ConsumerSloObservation],
     ) -> ReadinessReport: ...
+
+def evaluate_source_readiness(
+    catalog: SourceCoverageCatalog,
+    *,
+    rights: Sequence[RightsApproval],
+    evidence: Mapping[str, EvidenceCase],
+    as_of: datetime,
+    evaluator: SourceCoverageEvaluator,
+) -> ReadinessReport: ...
+
+class CaptureRequirement(BaseModel):
+    requirement_id: str
+    domain: DataDomain
+    required_fields: tuple[str, ...]
+    subject_kinds: frozenset[SubjectKind]
+    cadence: timedelta
+    partition_rule_id: str
+    freshness_policy_id: str
+    quality_policy_ids: tuple[str, ...]
+    source_coverage_entry_ids: tuple[str, ...]
+
+class CaptureScope(BaseModel):
+    capture_scope_id: str
+    environment: Literal["local", "github_ci", "staging", "production"]
+    research_catalog_id: str
+    research_catalog_sha256: str
+    universe: UniverseRef
+    applicability_catalog_id: str
+    applicability_catalog_sha256: str
+    source_coverage_catalog_id: str
+    source_coverage_catalog_sha256: str
+    slo_catalog_id: str
+    slo_catalog_sha256: str
+    requirements: tuple[CaptureRequirement, ...]
+    effective_at: datetime
+    owner: str
+    content_sha256: str
+
+class CaptureRecordEvidence(BaseModel):
+    raw_id: str
+    raw_sha256: str
+    normalized_id: str
+    knowable_at: datetime
+    recorded_at: datetime
+    confidence: Decimal = Field(ge=0, le=1)
+    mapping_version: str
+    policy_versions: dict[str, str]
+    quality_check_ids: tuple[str, ...]
+    lineage_sha256: str
+
+class CaptureCell(BaseModel):
+    subject: SubjectRef
+    domain: DataDomain
+    partition_key: str
+    requirement_id: str
+    applicability: Literal["required", "optional", "not_applicable"]
+    status: Literal[
+        "complete", "optional", "not_applicable", "missing", "stale", "unresolved", "error"
+    ]
+    evidence: tuple[CaptureRecordEvidence, ...]
+    reason_codes: tuple[str, ...]
+
+class CaptureManifest(BaseModel):
+    capture_manifest_id: str
+    capture_scope_id: str
+    capture_scope_sha256: str
+    environment: Literal["local", "github_ci", "staging", "production"]
+    partition_key: str
+    as_of: datetime
+    cells: tuple[CaptureCell, ...]
+    created_at: datetime
+    content_sha256: str
+
+class CaptureEvaluator(Protocol):
+    def evaluate(
+        self,
+        scope: CaptureScope,
+        manifest: CaptureManifest,
+        *,
+        applicability: ApplicabilityCatalog,
+        as_of: datetime,
+    ) -> ReadinessReport: ...
+
+class ModelRevisionRef(BaseModel):
+    provider: str
+    model_id: str
+    immutable_revision: str
+    endpoint_or_artifact_sha256: str
+    decoding_parameters_sha256: str
+
+class ExtractionTemplate(BaseModel):
+    extraction_template_id: str
+    extractor_id: str
+    extractor_version: str
+    model_revision: ModelRevisionRef
+    parameters_sha256: str
+    prompt_sha256: str
+    schema_sha256: str
+    content_sha256: str
+
+class ExtractionInvocation(BaseModel):
+    extraction_invocation_id: str
+    template: ExtractionTemplate
+    source_document_semantic_sha256: str
+    attempt_id: str
+    content_sha256: str
 
 class ReleaseManifest(BaseModel):
     release_manifest_id: str
@@ -895,9 +1224,14 @@ class ReleaseManifest(BaseModel):
     mart_schema_version: str
     research_catalog_id: str
     research_catalog_sha256: str
-    universe_version: str
+    universe: UniverseRef
+    capture_scope_id: str
+    capture_scope_sha256: str
+    applicability_catalog_id: str
+    applicability_catalog_sha256: str
     source_coverage_catalog_id: str
     source_coverage_catalog_sha256: str
+    source_readiness_report_sha256: str
     slo_catalog_id: str
     slo_catalog_sha256: str
     configuration_sha256: dict[str, str]
@@ -905,7 +1239,10 @@ class ReleaseManifest(BaseModel):
     migration_set_sha256: str
     artifacts: tuple[ReleaseArtifact, ...]
     accepted_evidence_ids: tuple[str, ...]
+    accepted_capture_manifest_sha256: tuple[str, ...]
     accepted_readiness_report_sha256: tuple[str, ...]
+    approved_model_revisions: tuple[ModelRevisionRef, ...]
+    approved_extraction_template_ids: tuple[str, ...]
     created_at: datetime
     manifest_sha256: str
     manifest_signature_ref: str
@@ -915,10 +1252,11 @@ class ReleaseManifestRepository(Protocol):
     def get(self, release_manifest_id: str) -> ReleaseManifest | None: ...
 
 class ResolvedFactorInvocation(BaseModel):
-    invocation: FactorInvocation
+    template: FactorInvocationTemplate
     definition_sha256: str
     parameters_sha256: str
-    invocation_id: str  # SHA-256 over definition, params, snapshot, subjects, dependencies
+    execution_id: str
+    snapshot_id: str
     subjects: tuple[SubjectRef, ...]
 
 class FactorDefinition(Protocol, Generic[P]):
@@ -935,10 +1273,9 @@ class FactorDefinition(Protocol, Generic[P]):
     def compute(
         self,
         context: FactorExecutionContext,
-        inputs: FactorInputView,
+        inputs: TrackedFactorInputView,
         parameters: P,
-        upstream: Mapping[str, FactorOutputBatch],  # dependency slot -> batch
-    ) -> FactorOutputBatch: ...
+    ) -> None: ...
 
 def project_factor_inputs(
     snapshot: ResearchSnapshot,
@@ -950,7 +1287,7 @@ def project_factor_inputs(
 def run_factor(
     definition: FactorDefinition[P],
     *,
-    invocation: FactorInvocation,
+    template: FactorInvocationTemplate,
     snapshot: ResearchSnapshot,
     subjects: Sequence[SubjectRef],
     upstream: Mapping[str, FactorOutputBatch] | None = None,
@@ -961,15 +1298,24 @@ class FactorRegistry(Protocol):
 ```
 
 `ReadinessReport.ready` is the deterministic conjunction of its checks; evaluators expose
-no override/flag setter. A release binds exact source-coverage, SLO, research catalog,
-universe, configuration, migration, artifact, evidence, and accepted readiness hashes.
+no override/flag setter. A required capture cell is `complete` only when it has at least
+one valid raw-to-normalized evidence row with mandatory confidence, eligible times,
+mapping/policy versions, passing quality checks, and a resolvable lineage hash. Optional
+or not-applicable status comes only from the pre-approved `ApplicabilityCatalog`; a run
+cannot relabel or omit a required cell. A release binds exact source-coverage, SLO,
+research catalog, universe, capture scope/manifests, applicability, configuration,
+migration, artifact, evidence, model revision, extraction template, and accepted
+readiness hashes.
 
 `run_factor` owns generic validation: definition/parameter compatibility, declared
 domains, entity scope, one snapshot/cutoff, upstream dependency completeness, output
-identity, canonical ordering, deterministic invocation/batch IDs, consumption references,
+identity, canonical ordering, deterministic template/execution/output/batch IDs,
+consumption references,
 and confidence ceilings. It is the only computation-layer function that sees the raw
-bundle; module code receives `FactorInputView`, whose selectors return record IDs with
-values. Projection derives each opaque `InputId` deterministically from the snapshot
+bundle and materialized upstream batches. Module code receives `TrackedFactorInputView`;
+every selector and upstream access is recorded inside an output scope, and only
+`scope.emit` may create an output draft. Projection derives each opaque `InputId`
+deterministically from the snapshot
 domain and selected normalized record ID; it never copies source or raw references.
 After computation, `run_factor` derives `source_evidence_status` from the consumed
 manifest records and stamps `factor_validation_status` from the immutable registry entry;
@@ -977,9 +1323,10 @@ module logic cannot branch on either status.
 The resolved definition hash binds `validation_record_id` and `oracle_version`, so a later
 holdout graduation creates a new append-only registry/materialization identity rather than
 mutating old outputs or changing a batch under the same key.
-`invocation_id` is the lowercase SHA-256 hex digest of canonical definition/version,
-parameters, snapshot ID, ordered subject scope, and dependency batch IDs. Alias equality
-never implies execution equality. Repository keys use `invocation_id`, never
+`invocation_template_id` is the hash of factor/version, canonical parameters, and
+dependency templates. `execution_id` additionally binds snapshot ID, ordered subject
+scope, and dependency batch IDs. Alias equality never implies template or execution
+equality. Repository keys use `execution_id`, never
 only `(factor_id, factor_version, snapshot_id)`. Module functions own only domain
 computation.
 
@@ -1126,6 +1473,7 @@ class PriceBarRecord(NormalizedRecordBase):
     low: Decimal
     close: Decimal
     volume: int
+    adjustment_mode: PriceAdjustmentMode
 
 class FxRateRecord(NormalizedRecordBase):
     record_type: Literal["fx_rate"] = "fx_rate"
@@ -1141,6 +1489,7 @@ class CorporateActionRecord(NormalizedRecordBase):
     action_type: CorporateActionType
     announced_at: datetime | None
     ex_date: date
+    record_date: date | None
     effective_date: date
     pay_date: date | None
     ratio: Decimal | None
@@ -1175,15 +1524,8 @@ class SourceDocumentRecord(NormalizedRecordBase):
 class ExtractionRecord(NormalizedRecordBase):
     record_type: Literal["extraction_record"] = "extraction_record"
     extraction_id: str
-    extraction_invocation_sha256: str
-    extractor_id: str
-    extractor_version: str
-    model_id: str
-    model_version: str
-    prompt_sha256: str
-    schema_sha256: str
+    invocation: ExtractionInvocation
     source_document_record_id: str
-    source_document_semantic_sha256: str
     draft_links: tuple[ExtractionDraftLink, ...]
     evidence_spans: tuple[EvidenceSpan, ...]
     result_sha256: str
@@ -1243,8 +1585,7 @@ def project_extraction_document(
 ) -> FactorDocumentInput: ...
 
 class StructuredExtractionModel(Protocol):
-    model_id: str
-    model_version: str
+    revision: ModelRevisionRef
     def complete(
         self, document: FactorDocumentInput, schema: type[BaseModel], *, instructions: str
     ) -> BaseModel: ...
@@ -1300,15 +1641,8 @@ class ExtractedDraft(BaseModel):
 
 class ExtractionResult(BaseModel):
     extraction_id: str
-    extraction_invocation_sha256: str
-    extractor_id: str
-    extractor_version: str
-    model_id: str
-    model_version: str
-    prompt_sha256: str
-    schema_sha256: str
+    invocation: ExtractionInvocation
     source_document_record_id: str
-    source_document_semantic_sha256: str
     drafts: tuple[ExtractedDraft, ...]
     evidence_spans: tuple[EvidenceSpan, ...]
     result_sha256: str
@@ -1356,9 +1690,13 @@ documents never enter `FactorInputBundle`. Extraction logic lives in
 `libs/factors/shared`, returns semantic drafts, and is invoked by data-engine. Data-engine
 alone attaches the materialization context. `ExtractionRepository.materialize` atomically
 stores one immutable `ExtractionRecord` and every produced normalized row, stamping each
-row with `extraction_id`. The record preserves invocation/model/prompt/schema versions,
-the source-document record/version, exact evidence spans, and draft-to-record links.
-Replay consumes the produced rows and never calls a model implicitly; trace reads follow
+row with `extraction_id`. The template binds the immutable provider revision, decoding
+settings, extractor, parameters, prompt, and schema; the invocation additionally binds the source
+document semantic hash and a unique attempt. A rerun or changed provider deployment is a
+new append-only invocation, even when the public model alias is unchanged. Only templates
+and model revisions approved by the exact release may execute. The record preserves that
+invocation, the source-document record/version, exact evidence spans, and draft-to-record
+links. Replay consumes the produced rows and never calls a model implicitly; trace reads follow
 semantic record -> extraction ID -> stored evidence span -> source document/raw object.
 Every normalized row carries both
 `knowable_at`/`transaction_time` and `recorded_at`, plus a parser `mapping_version`.
@@ -1388,9 +1726,9 @@ class PegParameters(FactorParameters):
 
 def compute_peg(
     context: FactorExecutionContext,
-    inputs: FactorInputView,
+    inputs: TrackedFactorInputView,
     parameters: PegParameters,
-) -> FactorOutputBatch: ...
+) -> None: ...
 ```
 
 The batch emits price/earnings, selected growth rate, PEG, convention, and explicit
@@ -1407,25 +1745,34 @@ class HeadcountExtractionParameters(FactorParameters):
     allowed_document_types: frozenset[str]
     max_document_age: timedelta
 
+class FinancialOperatingEfficiencyPolicy(BaseModel):
+    policy_id: str
+    policy_version: str
+    issuer_classification_policy_id: str
+    numerator_metric: str
+    denominator_metric: str
+    output_metric: str
+    comparison_universe: UniverseRef
+
 class GrossProfitPerEmployeeParameters(FactorParameters):
-    gross_profit_metric: str
+    non_financial_gross_profit_metric: str
     headcount_metric: str
-    financial_policy: Literal["explicit_proxy"] = "explicit_proxy"
-    financial_proxy_metric: str
-    financial_semantics_version: str
+    financial_policy: FinancialOperatingEfficiencyPolicy
     max_period_gap: timedelta
 
 def extract_headcount(
     document: FactorDocumentInput,
+    *,
+    invocation: ExtractionInvocation,
     parameters: HeadcountExtractionParameters,
     model: StructuredExtractionModel,
 ) -> ExtractionResult: ...
 
 def compute_gross_profit_per_employee(
     context: FactorExecutionContext,
-    inputs: FactorInputView,
+    inputs: TrackedFactorInputView,
     parameters: GrossProfitPerEmployeeParameters,
-) -> FactorOutputBatch: ...
+) -> None: ...
 ```
 
 Extraction selects total company headcount, not the first employee-like number, and emits
@@ -1471,15 +1818,17 @@ class SupplyChainReasoningParameters(FactorParameters):
 
 def extract_supply_chain_relationships(
     document: FactorDocumentInput,
+    *,
+    invocation: ExtractionInvocation,
     parameters: SupplyChainExtractionParameters,
     model: StructuredExtractionModel,
 ) -> ExtractionResult: ...
 
 def compute_supply_chain_exposure(
     context: FactorExecutionContext,
-    inputs: FactorInputView,
+    inputs: TrackedFactorInputView,
     parameters: SupplyChainReasoningParameters,
-) -> FactorOutputBatch: ...
+) -> None: ...
 ```
 
 The extraction result emits `RelationshipDraft` records that are resolved and materialized
@@ -1503,9 +1852,9 @@ class AnalystBacktestParameters(FactorParameters):
 
 def compute_analyst_track_record(
     context: FactorExecutionContext,
-    inputs: FactorInputView,
+    inputs: TrackedFactorInputView,
     parameters: AnalystBacktestParameters,
-) -> FactorOutputBatch: ...
+) -> None: ...
 ```
 
 Recommendation time, corroborated knowability, vendor update time, execution time, and
@@ -1540,9 +1889,9 @@ class EtfVirtualCompanyParameters(FactorParameters):
 
 def compute_etf_virtual_company(
     context: FactorExecutionContext,
-    inputs: FactorInputView,
+    inputs: TrackedFactorInputView,
     parameters: EtfVirtualCompanyParameters,
-) -> FactorOutputBatch: ...
+) -> None: ...
 ```
 
 Each holding's resolution outcome is fixed before the factor boundary; unresolved rows
@@ -1570,12 +1919,14 @@ class PureBloodParameters(FactorParameters):
 
 def compute_theme_revenue_share(
     context: FactorExecutionContext,
-    inputs: FactorInputView,
+    inputs: TrackedFactorInputView,
     parameters: PureBloodParameters,
-) -> FactorOutputBatch: ...
+) -> None: ...
 
 def extract_theme_segments(
     document: FactorDocumentInput,
+    *,
+    invocation: ExtractionInvocation,
     parameters: PureBloodParameters,
     model: StructuredExtractionModel,
 ) -> ExtractionResult: ...
@@ -1594,10 +1945,40 @@ class ValuationBand(BaseModel):
     ps_floor: Decimal = Field(gt=0)
     ps_ceiling: Decimal = Field(gt=0)
 
+class FinancialComparisonPolicy(BaseModel):
+    policy_id: str
+    policy_version: str
+    operating_efficiency_policy_id: str
+    operating_efficiency_policy_version: str
+    comparison_universe: UniverseRef
+    bands: tuple[ValuationBand, ...]
+
+class LevelLeverageRule(BaseModel):
+    rule_type: Literal["level"] = "level"
+    thresholds: tuple[Decimal, Decimal]
+
+class ElasticityLeverageRule(BaseModel):
+    rule_type: Literal["elasticity"] = "elasticity"
+    window_periods: int = Field(ge=2)
+    minimum_periods: int = Field(ge=2)
+    estimator_id: str
+    thresholds: tuple[Decimal, Decimal]
+
+class CombinedLeverageRule(BaseModel):
+    rule_type: Literal["combined"] = "combined"
+    level: LevelLeverageRule
+    elasticity: ElasticityLeverageRule
+    combination_rule_id: str
+
+LeverageRule = Annotated[
+    LevelLeverageRule | ElasticityLeverageRule | CombinedLeverageRule,
+    Field(discriminator="rule_type"),
+]
+
 class ThreeTierValuationParameters(FactorParameters):
-    gp_per_employee_thresholds: tuple[Decimal, Decimal]
-    bands: tuple[ValuationBand, ValuationBand, ValuationBand]
-    financial_policy: Literal["exclude", "separate_band"]
+    leverage_rule: LeverageRule
+    non_financial_bands: tuple[ValuationBand, ValuationBand, ValuationBand]
+    financial_comparison: FinancialComparisonPolicy
     minimum_confidence: Decimal = Field(ge=0, le=1)
 
 class PriceToSalesParameters(FactorParameters):
@@ -1605,8 +1986,10 @@ class PriceToSalesParameters(FactorParameters):
     shares_metric: str
     revenue_basis: Literal["ttm", "latest_fiscal_year"]
     shares_basis: Literal["period_end_diluted", "latest_basic"]
+    security_policy: Literal["primary_common_equity"] = "primary_common_equity"
     price_field: Literal["close"] = "close"
     listing_policy: Literal["primary_listing"] = "primary_listing"
+    security_unit_conversion_policy_id: str
     valuation_currency: CurrencyCode
     maximum_price_age: timedelta
     maximum_fx_age: timedelta
@@ -1614,27 +1997,31 @@ class PriceToSalesParameters(FactorParameters):
 
 def compute_price_to_sales(
     context: FactorExecutionContext,
-    inputs: FactorInputView,
+    inputs: TrackedFactorInputView,
     parameters: PriceToSalesParameters,
-) -> FactorOutputBatch: ...
+) -> None: ...
 
 def compute_three_tier_valuation(
     context: FactorExecutionContext,
-    inputs: FactorInputView,
+    inputs: TrackedFactorInputView,
     parameters: ThreeTierValuationParameters,
-    upstream: Mapping[str, FactorOutputBatch],
-) -> FactorOutputBatch: ...
+) -> None: ...
 ```
 
 Price-to-sales resolves issuer -> security -> primary listing at the cutoff, validates
-units, and converts revenue/market capitalization only through explicit `FactorFxInput`
-records; missing or stale FX rejects the value. The composite consumes
+that outstanding shares belong to the selected security, and applies the frozen
+share-class/ADR unit ratio before multiplying by the listing price. It validates units
+and converts revenue/market capitalization only through explicit `FactorFxInput` records;
+missing links, conversion ratios, or stale FX reject the value. The composite consumes
 gross-profit-per-employee and price-to-sales batches from the
 same snapshot/cutoff. It emits tier, band, valuation gap, eligibility, and flags. Bands
 and thresholds are research parameters, not performance-validated constants. The
 3-4x/8-10x/20-30x ranges in `vision.md` are illustrative research anchors, not executable
 defaults; #59 must freeze explicit v1 values and independent boundary oracles before a
-three-tier invocation can graduate beyond `UNVALIDATED`.
+three-tier invocation can graduate beyond `UNVALIDATED`. It must also freeze exactly one
+level, elasticity, or combined leverage rule. Applicable financial issuers use the
+versioned comparison branch, which must reference the exact operating-efficiency policy
+used by module 2; blanket exclusion is not a valid policy.
 
 ### 14.10 Screens, Strategy, and Replay
 
@@ -1643,18 +2030,19 @@ class ScreenInvocation(BaseModel):
     screen_id: str
     screen_version: str
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    factor_inputs: dict[str, str]  # screen slot -> factor invocation_alias
+    factor_inputs: dict[str, str]  # screen slot -> factor template alias
 
 class StrategyDefinition(BaseModel):
     strategy_id: str
     strategy_version: str
-    universe_id: UniverseId
-    factors: tuple[FactorInvocation, ...]
+    universe: UniverseRef
+    factors: tuple[FactorInvocationTemplate, ...]
     screen: ScreenInvocation
     rebalance_rule: RuleInvocation
     sizing_rule: RuleInvocation
     holding_rule: RuleInvocation
     return_rule: RuleInvocation
+    return_policy: ReturnPolicy
 
 class StrategyRegistry(Protocol):
     def resolve(self, strategy_id: str, strategy_version: str) -> StrategyDefinition: ...
@@ -1931,7 +2319,7 @@ class FactorBatchProvider(Protocol):
         self,
         *,
         snapshot: ResearchSnapshot,
-        invocations: Sequence[FactorInvocation],
+        templates: Sequence[FactorInvocationTemplate],
         subjects: Sequence[SubjectRef],
     ) -> Mapping[str, FactorOutputBatch]: ...
 
@@ -2011,12 +2399,12 @@ class FactorOutputRepository(Protocol):
     def get(
         self,
         *,
-        invocation_id: str,
+        execution_id: str,
     ) -> FactorOutputBatch | None: ...
 
 class MaterializedFactorOutputRepository(Protocol):
     def get_batch(
-        self, *, invocation_id: str
+        self, *, execution_id: str
     ) -> FactorOutputBatch | None: ...
 
 class StrategyRunRepository(Protocol):
@@ -2038,20 +2426,16 @@ class PageRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
     cursor: str | None = None
 
-class CatalogRef(BaseModel):
-    alias: str
-    catalog_id: str | None = None  # omitted means the current published catalog
-    entry_version: str | None = None
-
-class FactorInvocationSelector(BaseModel):
+class FactorInvocationTemplateSelector(BaseModel):
     invocation_alias: str
+    invocation_template_id: str
     factor_id: str
     factor_version: str
     parameters_sha256: str
 
 class FactorCatalogTarget(BaseModel):
     target_type: Literal["factor"] = "factor"
-    selector: FactorInvocationSelector
+    selector: FactorInvocationTemplateSelector
 
 class RankingCatalogTarget(BaseModel):
     target_type: Literal["ranking"] = "ranking"
@@ -2063,14 +2447,14 @@ class ThemeCatalogTarget(BaseModel):
     target_type: Literal["theme"] = "theme"
     theme_id: str
     theme_version: str
-    factor_selector: FactorInvocationSelector
+    factor_selector: FactorInvocationTemplateSelector
     ranking_alias: str
 
 class ScenarioCatalogTarget(BaseModel):
     target_type: Literal["scenario"] = "scenario"
     scenario_id: str
     scenario_version: str
-    factor_selector: FactorInvocationSelector
+    factor_selector: FactorInvocationTemplateSelector
 
 class StrategyCatalogTarget(BaseModel):
     target_type: Literal["strategy"] = "strategy"
@@ -2089,22 +2473,48 @@ class ResearchCatalogEntry(BaseModel):
     entry_version: str
     label: str
     target: CatalogTarget
-    universe_id: UniverseId
-    universe_version: str
-    applicability_policy_ref: str
-    slo_policy_ref: str
+    universe: UniverseRef
     published_at: datetime
+
+class CanonicalQuestion(BaseModel):
+    question_id: str
+    question_version: str
+    prompt_examples: tuple[str, ...]
+    query_kind: Literal["history", "comparison", "ranking", "strategy", "trace"]
+    catalog_aliases: tuple[CatalogAliasRef, ...]
+    required_output_types: frozenset[str]
+    required_subject_kinds: frozenset[SubjectKind]
+    required_subjects: tuple[SubjectRef, ...] = ()
+    required_universe: UniverseRef | None = None
+    argument_contract_sha256: str
+    expected_status_policy_ref: str
+
+class ResearchScopeFloor(BaseModel):
+    minimum_issuers: int = Field(ge=1)
+    minimum_funds: int = Field(ge=1)
+    minimum_themes: int = Field(ge=1)
+    minimum_analysts: int = Field(ge=1)
+    minimum_scenarios: int = Field(ge=1)
+    minimum_screens: int = Field(ge=1)
+    minimum_strategies: int = Field(ge=1)
+    required_entry_aliases: tuple[str, ...]
+    required_question_ids: tuple[str, ...]
+    approved_by: str
+    approval_signature_ref: str
 
 class ResearchCatalogManifest(BaseModel):
     catalog_id: str
     entries: tuple[ResearchCatalogEntry, ...]
+    questions: tuple[CanonicalQuestion, ...]
+    scope_floor: ResearchScopeFloor
     content_sha256: str
     published_at: datetime
 
 class ResearchCatalog(Protocol):
     def get(self, catalog_id: str) -> ResearchCatalogManifest | None: ...
-    def current(self) -> ResearchCatalogManifest: ...
-    def resolve(self, ref: CatalogRef) -> ResearchCatalogEntry: ...
+    def resolve(
+        self, catalog_id: str, ref: CatalogAliasRef
+    ) -> ResearchCatalogEntry: ...
 
 class CatalogQuery(BaseModel):
     target_type: Literal["factor", "ranking", "theme", "scenario", "strategy"] | None = None
@@ -2116,39 +2526,63 @@ class CatalogResult(BaseModel):
     entries: tuple[ResearchCatalogEntry, ...]
     next_cursor: str | None
 
-class FactorHistoryQuery(BaseModel):
-    factor: CatalogRef
+class HistoryQuery(BaseModel):
+    query_kind: Literal["history"] = "history"
+    item: CatalogAliasRef  # factor, theme, or scenario target
     subjects: tuple[SubjectRef, ...]
     observed_range: DateRange
     as_of: datetime
     page: PageRequest = Field(default_factory=PageRequest)
 
-class FactorHistory(BaseModel):
+class HistoryResult(BaseModel):
+    result_kind: Literal["history"] = "history"
     catalog_entry: ResearchCatalogEntry
     observations: tuple[FactorObservation, ...]
     next_cursor: str | None
 
 class EntityComparisonQuery(BaseModel):
-    factors: tuple[CatalogRef, ...]
+    query_kind: Literal["comparison"] = "comparison"
+    factors: tuple[CatalogAliasRef, ...]
     subjects: tuple[SubjectRef, ...]
     observed_on: date
     as_of: datetime
 
 class EntityComparison(BaseModel):
+    result_kind: Literal["comparison"] = "comparison"
     catalog_entries: tuple[ResearchCatalogEntry, ...]
     observations: tuple[FactorObservation, ...]
 
 class RankingQuery(BaseModel):
-    ranking: CatalogRef
-    universe_id: UniverseId
+    query_kind: Literal["ranking"] = "ranking"
+    ranking: CatalogAliasRef
     as_of: datetime
     page: PageRequest = Field(default_factory=PageRequest)
 
 class RankingResult(BaseModel):
+    result_kind: Literal["ranking"] = "ranking"
     catalog_entry: ResearchCatalogEntry
     screen_result_id: str
     candidates: tuple[ScreenCandidate, ...]
     next_cursor: str | None
+
+class StrategyRunQuery(BaseModel):
+    query_kind: Literal["strategy"] = "strategy"
+    strategy: CatalogAliasRef
+    run_id: str
+
+class TraceOutputQuery(BaseModel):
+    query_kind: Literal["trace"] = "trace"
+    output_id: OutputId
+
+CanonicalQuestionQuery = Annotated[
+    HistoryQuery | EntityComparisonQuery | RankingQuery | StrategyRunQuery | TraceOutputQuery,
+    Field(discriminator="query_kind"),
+]
+
+class CanonicalQuestionRequest(BaseModel):
+    question_id: str
+    question_version: str | None = None
+    query: CanonicalQuestionQuery
 
 class RawTraceRef(BaseModel):
     record_id: str
@@ -2162,22 +2596,15 @@ class RawTraceRef(BaseModel):
 
 class ExtractionTraceRef(BaseModel):
     extraction_id: str
-    extraction_invocation_sha256: str
-    extractor_id: str
-    extractor_version: str
-    model_id: str
-    model_version: str
-    prompt_sha256: str
-    schema_sha256: str
+    invocation: ExtractionInvocation
     source_document_record_id: str
-    source_document_semantic_sha256: str
     evidence_spans: tuple[EvidenceSpan, ...]
     produced_record_ids: tuple[str, ...]
 
 class TraceabilityView(BaseModel):
     output_id: OutputId
-    invocation: FactorInvocation
-    invocation_id: str
+    template: FactorInvocationTemplate
+    execution_id: str
     snapshot_id: str
     policy_versions: SelectionPolicyVersions
     consumed_input_ids: tuple[InputId, ...]
@@ -2194,9 +2621,32 @@ class StrategyRunView(BaseModel):
     metrics: tuple[BacktestMetric, ...]
     trace_output_ids: tuple[OutputId, ...]
 
+class StrategyRunQueryResult(BaseModel):
+    result_kind: Literal["strategy"] = "strategy"
+    catalog_entry: ResearchCatalogEntry
+    run: StrategyRunView
+
+class TraceOutputQueryResult(BaseModel):
+    result_kind: Literal["trace"] = "trace"
+    trace: TraceabilityView
+
+CanonicalQuestionPayload = Annotated[
+    HistoryResult | EntityComparison | RankingResult
+    | StrategyRunQueryResult | TraceOutputQueryResult,
+    Field(discriminator="result_kind"),
+]
+
+class CanonicalQuestionResult(BaseModel):
+    question: CanonicalQuestion
+    catalog_id: str
+    catalog_sha256: str
+    release_manifest_id: str
+    resolved_entries: tuple[ResearchCatalogEntry, ...]
+    payload: CanonicalQuestionPayload
+
 class ResearchReadRepository(Protocol):
     def catalog(self, query: CatalogQuery) -> CatalogResult: ...
-    def factor_history(self, query: FactorHistoryQuery) -> FactorHistory: ...
+    def history(self, query: HistoryQuery) -> HistoryResult: ...
     def entity_comparison(self, query: EntityComparisonQuery) -> EntityComparison: ...
     def ranking(self, query: RankingQuery) -> RankingResult: ...
     def strategy_run(self, run_id: str) -> StrategyRunView | None: ...
@@ -2219,6 +2669,9 @@ class CaptureAssetSpec(BaseModel):
     asset_key: str
     adapter_id: str
     source: DataSource
+    capture_scope_id: str
+    capture_scope_sha256: str
+    requirement_ids: tuple[str, ...]
     subjects: tuple[SubjectRef, ...]
     request_parameters: dict[str, JsonValue]
 
@@ -2227,16 +2680,31 @@ class NormalizationAssetSpec(BaseModel):
     capture_asset_key: str
     normalizer_id: str
 
+class ExtractionAssetSpec(BaseModel):
+    asset_key: str
+    document_asset_key: str
+    template: ExtractionTemplate
+    model_resource_key: str
+
+class CaptureManifestAssetSpec(BaseModel):
+    asset_key: str
+    capture_scope_id: str
+    capture_scope_sha256: str
+    capture_asset_keys: tuple[str, ...]
+    normalized_asset_keys: tuple[str, ...]
+    extraction_asset_keys: tuple[str, ...] = ()
+
 class SnapshotAssetSpec(BaseModel):
     asset_key: str
+    capture_manifest_asset_key: str
     normalized_asset_keys: tuple[str, ...]
-    universe_id: UniverseId
+    universe: UniverseRef
     domains: frozenset[DataDomain]
 
 class FactorAssetSpec(BaseModel):
     asset_key: str
     snapshot_asset_key: str
-    invocation: FactorInvocation
+    template: FactorInvocationTemplate
     materialized_upstream_asset_keys: dict[str, str] = Field(default_factory=dict)
 
 class StrategyAssetSpec(BaseModel):
@@ -2248,8 +2716,14 @@ class StrategyAssetSpec(BaseModel):
 class DagsterAssetCatalog:
     release_manifest_id: str
     execution_artifact_digest: str
+    capture_scope: CaptureScope
+    applicability: ApplicabilityCatalog
+    source_coverage: SourceCoverageCatalog
+    slo: SloCatalog
     capture: tuple[CaptureAssetSpec, ...]
     normalization: tuple[NormalizationAssetSpec, ...]
+    extraction: tuple[ExtractionAssetSpec, ...]
+    capture_manifest: CaptureManifestAssetSpec
     snapshots: tuple[SnapshotAssetSpec, ...]
     factors: tuple[FactorAssetSpec, ...]
     strategies: tuple[StrategyAssetSpec, ...]
@@ -2257,6 +2731,13 @@ class DagsterAssetCatalog:
 
 def build_capture_asset(spec: CaptureAssetSpec) -> AssetsDefinition: ...
 def build_normalization_asset(spec: NormalizationAssetSpec) -> AssetsDefinition: ...
+def build_extraction_asset(spec: ExtractionAssetSpec) -> AssetsDefinition: ...
+def build_capture_manifest_asset(
+    spec: CaptureManifestAssetSpec,
+) -> AssetsDefinition: ...
+def build_capture_readiness_check(
+    spec: CaptureManifestAssetSpec,
+) -> AssetChecksDefinition: ...
 def build_snapshot_asset(spec: SnapshotAssetSpec) -> AssetsDefinition: ...
 def build_factor_asset(
     spec: FactorAssetSpec, definition: FactorDefinition[Any]
@@ -2282,21 +2763,30 @@ class StrategyScheduleSpec(BaseModel):
     environment: Literal["staging", "production"]
     job_name: str
     partition_timezone: str
-    universe_id: UniverseId
+    universe: UniverseRef
     release_manifest_id: str
     execution_artifact_digest: str
 
 def build_strategy_schedule(spec: StrategyScheduleSpec) -> ScheduleDefinition: ...
+def build_release_preflight_sensor(
+    *, catalog: DagsterAssetCatalog, release: ReleaseManifest
+) -> SensorDefinition: ...
 ```
 
 Dagster is introduced with the first executable snapshot/factor slice. Local and CI use
 in-process jobs and fixture resources; Staging and Production add schedules and persistent
 metadata. `adapter_id` and `normalizer_id` resolve from Dagster resources at execution;
 service instances are never captured inside asset definitions. The shared partition is an
-aware `as_of` cutoff; universe and invocation are explicit asset-spec dimensions. A
+aware `as_of` cutoff; capture scope, universe, and invocation are explicit asset-spec
+dimensions. Capture and normalization assets may persist failure evidence, but no snapshot,
+factor, or strategy partition may materialize until the row-complete capture-manifest
+check passes for that exact scope and partition. A
 composite `FactorAssetSpec` must depend on materialized upstream asset keys and reload
-those batches from mart. Factor `data_version` is the hash of snapshot ID, invocation ID,
-and upstream batch IDs. No alternative scheduler may launch real source runs.
+those batches from mart. Factor `data_version` is the hash of snapshot ID, `execution_id`,
+and upstream batch IDs. The release preflight sensor re-evaluates rights expiry, projected
+budget, source coverage, catalog hashes, artifact digests, and every extraction template's
+immutable model revision; failure blocks source execution and downstream publication.
+No alternative scheduler may launch real source runs.
 The data-engine/Dagster code location is an immutable digest in the multi-artifact
 `ReleaseManifest`; definitions and schedules reject a digest mismatch or floating tag.
 Promotion moves the complete signed manifest, not an assumed single image.
@@ -2305,12 +2795,12 @@ Promotion moves the complete signed manifest, not an assumed single image.
 
 ```python
 class ReportItemRequest(BaseModel):
-    item: CatalogRef  # factor, ranking, theme, scenario, or strategy alias
+    item: CatalogAliasRef  # factor, ranking, theme, scenario, or strategy alias
     subjects: tuple[SubjectRef, ...] = ()
-    universe_id: UniverseId | None = None
 
 class ResearchReportRequest(BaseModel):
     subjects: tuple[SubjectRef, ...]
+    universe: UniverseRef
     as_of: datetime
     items: tuple[ReportItemRequest, ...]
     observed_range: DateRange
@@ -2346,6 +2836,10 @@ class ReportSection(BaseModel):
 
 class ResearchReport(BaseModel):
     report_id: str
+    release_manifest_id: str
+    catalog_id: str
+    catalog_sha256: str
+    universe: UniverseRef
     as_of: datetime
     sections: tuple[ReportSection, ...]
     traceability: tuple[TraceabilityView, ...]
@@ -2353,7 +2847,7 @@ class ResearchReport(BaseModel):
 def build_research_report(
     request: ResearchReportRequest,
     *,
-    read_repository: ResearchReadRepository,
+    query_service: "ResearchQueryService",
 ) -> ResearchReport: ...
 
 class ReportRenderer(Protocol):
@@ -2384,20 +2878,44 @@ class CardRenderer(Protocol):
     def render(self, deck: XiaohongshuDeck) -> tuple[RenderedArtifact, ...]: ...
 
 class ResearchQueryService:
-    def __init__(self, repository: ResearchReadRepository) -> None: ...
+    def __init__(
+        self,
+        repository: ResearchReadRepository,
+        *,
+        catalog: ResearchCatalogManifest,
+        release_manifest_id: str,
+    ) -> None: ...
     def catalog(self, request: CatalogQuery) -> CatalogResult: ...
-    def factor_history(self, request: FactorHistoryQuery) -> FactorHistory: ...
+    def history(self, request: HistoryQuery) -> HistoryResult: ...
     def compare_entities(self, request: EntityComparisonQuery) -> EntityComparison: ...
     def rank_entities(self, request: RankingQuery) -> RankingResult: ...
-    def explain_output(self, output_id: OutputId) -> TraceabilityView: ...
-    def strategy_run(self, run_id: str) -> StrategyRunView: ...
+    def explain_output(self, request: TraceOutputQuery) -> TraceOutputQueryResult: ...
+    def strategy_run(self, request: StrategyRunQuery) -> StrategyRunQueryResult: ...
+    def canonical_question(
+        self, request: CanonicalQuestionRequest
+    ) -> CanonicalQuestionResult: ...
 
-async def mcp_catalog(request: CatalogQuery) -> CatalogResult: ...
-async def mcp_factor_history(request: FactorHistoryQuery) -> FactorHistory: ...
-async def mcp_compare_entities(request: EntityComparisonQuery) -> EntityComparison: ...
-async def mcp_rank_entities(request: RankingQuery) -> RankingResult: ...
-async def mcp_explain_output(output_id: OutputId) -> TraceabilityView: ...
-async def mcp_strategy_run(run_id: str) -> StrategyRunView: ...
+async def mcp_catalog(
+    request: CatalogQuery, *, service: ResearchQueryService
+) -> CatalogResult: ...
+async def mcp_history(
+    request: HistoryQuery, *, service: ResearchQueryService
+) -> HistoryResult: ...
+async def mcp_compare_entities(
+    request: EntityComparisonQuery, *, service: ResearchQueryService
+) -> EntityComparison: ...
+async def mcp_rank_entities(
+    request: RankingQuery, *, service: ResearchQueryService
+) -> RankingResult: ...
+async def mcp_explain_output(
+    request: TraceOutputQuery, *, service: ResearchQueryService
+) -> TraceOutputQueryResult: ...
+async def mcp_strategy_run(
+    request: StrategyRunQuery, *, service: ResearchQueryService
+) -> StrategyRunQueryResult: ...
+async def mcp_canonical_question(
+    request: CanonicalQuestionRequest, *, service: ResearchQueryService
+) -> CanonicalQuestionResult: ...
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
@@ -2407,7 +2925,8 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     conversation_id: str
     messages: tuple[ChatMessage, ...]
-    as_of: datetime | None = None
+    universe: UniverseRef
+    as_of: datetime
 
 class ChatEvent(BaseModel):
     event_type: Literal["token", "tool_call", "tool_result", "error", "done"]
@@ -2435,16 +2954,23 @@ FastAPI:
 ```typescript
 export interface MartResearchRepository {
   catalog(query: CatalogQuery): Promise<CatalogResult>;
-  factorHistory(query: FactorHistoryQuery): Promise<FactorHistory>;
+  history(query: HistoryQuery): Promise<HistoryResult>;
   entityComparison(query: EntityComparisonQuery): Promise<EntityComparison>;
   ranking(query: RankingQuery): Promise<RankingResult>;
-  strategyRun(runId: string): Promise<StrategyRunView | null>;
-  traceOutput(outputId: string): Promise<TraceabilityView>;
+  strategyRun(query: StrategyRunQuery): Promise<StrategyRunQueryResult>;
+  traceOutput(query: TraceOutputQuery): Promise<TraceOutputQueryResult>;
+  canonicalQuestion(query: CanonicalQuestionRequest): Promise<CanonicalQuestionResult>;
 }
 
 export function createMartResearchRepository(
   sql: SqlExecutor,
-  options: { maxRows: number; statementTimeoutMs: number },
+  options: {
+    maxRows: number;
+    statementTimeoutMs: number;
+    releaseManifestId: string;
+    catalogId: string;
+    catalogSha256: string;
+  },
 ): MartResearchRepository;
 ```
 
@@ -2457,38 +2983,55 @@ renderers consume `ResearchReport`; deck construction only selects/reorders repo
 and cannot join mart rows into new metrics.
 `/chat` generates prose by calling the same typed tools, never by querying raw/staging
 or inventing factor values.
-Public consumers use versioned `CatalogRef` aliases such as a named PEG convention,
+Public consumers use versioned `CatalogAliasRef` aliases such as a named PEG convention,
 theme ranking, or supply scenario; they never construct parameter hashes or internal
-materialization keys. Catalog publication is append-only, and each response returns the
-resolved entry and immutable catalog ID/hash so a conversational answer remains
-reconstructible after an alias advances. Each target binds its universe version and
-applicability/SLO policy; strategy aliases are catalog targets rather than magic run names.
+materialization keys. Every repository and service instance is bound at startup to the
+exact catalog ID/hash in its signed release manifest; an omitted `entry_version` resolves
+only inside that bound catalog, never through a global current pointer. A catalog or
+release mismatch fails startup. Catalog publication is append-only and fails when its
+entries/questions do not satisfy the product-owner-approved `ResearchScopeFloor`.
+Each canonical question binds concrete subjects or an immutable universe whenever
+subject-kind-only dispatch could permit a smaller scope. Each response returns the
+resolved entry and immutable catalog ID/hash so a conversational answer
+remains reconstructible after an alias advances. Each target binds its exact `UniverseRef`
+while the enclosing release binds the downstream applicability and SLO catalogs, avoiding
+a circular catalog hash; strategy aliases are catalog targets rather than magic run names.
+`CanonicalQuestionRequest` is executable only when its query discriminator,
+aliases, subject kinds, and output schema satisfy the frozen question contract.
 
 ## 15. Complete Vision Call Graph
 
 ```text
 Dagster schedule / local in-process job
-  -> resolve signed ReleaseManifest and immutable data-engine/Dagster artifact digest
-  -> SourceCallGateway.execute(SourceAdapter.capture)
-  -> immutable object + raw.fetches
+  -> resolve signed ReleaseManifest and immutable artifact digests
+  -> verify exact Research Catalog -> Applicability -> SLO dependency chain
+  -> verify UniverseRef, CaptureScope, SourceCoverageCatalog, extraction templates,
+     immutable model revisions, and runtime artifact digest against the release
+  -> re-evaluate environment rights, projected budget, coverage, and expiry as of run time
+  -> enumerate every required CaptureScope cell for the partition
+  -> SourceCallGateway.execute(SourceAdapter.capture) -> immutable object + raw.fetches
   -> Normalizer.normalize -> append-only staging records
-  -> optional libs/factors/shared extraction -> semantic drafts
-     -> data-engine attaches lineage -> append-only staging records
+  -> optional versioned extraction invocation -> semantic drafts
+     -> data-engine atomically attaches evidence lineage -> append-only staging records
+  -> materialize CaptureManifest for every required/optional/not-applicable cell
+  -> CaptureEvaluator.evaluate -> signed readiness; fail before snapshot on any required gap
   -> MetricRegistry + select_canonical_facts(source priority, mapping/fusion version)
-  -> ResearchSnapshotRepository.build_snapshot(one as_of, PIT universe and identity links)
+  -> ResearchSnapshotRepository.build_snapshot(one as_of, exact PIT UniverseRef and links)
   -> SnapshotStore.put
   -> project_factor_inputs(strips provenance)
-  -> run_factor(base modules 1-6 and supporting metrics)
+  -> run_factor(base templates 1-6 and supporting metrics) -> execution IDs + automatic lineage
   -> FactorOutputRepository -> MartMaterializer
-  -> reload materialized upstream -> run_factor(composite module 7)
+  -> reload materialized upstream -> run_factor(composite template 7)
   -> FactorOutputRepository -> MartMaterializer
   -> ScreenDefinition.evaluate
   -> evaluate_strategy_at
   -> simulation clock consumes newly available market events -> run_backtest
   -> StrategyRunRepository -> MartMaterializer
-  -> ResearchReadRepository
+  -> SloEvaluator.evaluate(pre-approved applicability denominator, natural refreshes)
+  -> publish only when signed readiness and release hashes agree
+  -> release-bound ResearchQueryService / direct-mart repository
      -> ResearchReport -> report-card / Xiaohongshu renderers
-     -> MCP tools -> Claude/other MCP clients
+     -> canonical typed MCP questions -> Claude/other MCP clients
      -> Next.js dashboard
      -> /chat tool orchestration
 ```
@@ -2504,29 +3047,36 @@ The GitHub source of truth is the [complete Vision epic](https://github.com/wang
 
 Before implementation interfaces are called frozen, close issuer/security/listing,
 currency/time/return, universe, snapshot, extraction, invocation, replay, and lineage
-semantics; freeze independent research oracles; prove longitudinal source coverage and
-usage rights; and define module applicability, usable-coverage, freshness, and graduation
-SLOs. Tracked by [epic #56](https://github.com/wangzitian0/truealpha/issues/56), with
-#57-#61 as its closure issues. Section 18 is the executable interface portion of this gate.
+semantics; freeze the Research Catalog, `CaptureScope`, row-complete manifest,
+applicability denominator, independent research oracles, immutable extraction revisions,
+longitudinal source coverage, expiring use rights/budgets, natural-refresh rules, and
+graduation SLOs. Tracked by
+[epic #56](https://github.com/wangzitian0/truealpha/issues/56); its issue tree must own
+each of those artifacts rather than leave them implicit in a later implementation issue.
+Section 18 is the executable interface portion of this gate.
 
 ### 16.1 Gate 1: Core Strategy MVP
 
 Deliver PIT snapshots, early Dagster composition, gross profit per employee, three-tier
 valuation, `large_model_value_v0`, deterministic local replay, mart/report projection,
 and a real scheduled Staging canary. Completion proves the bounded core slice can execute
-idempotently under Dagster; it does not establish continuous all-module coverage,
+idempotently under Dagster and produce a row-complete manifest for its frozen TOPT scope;
+it does not establish continuous all-module coverage,
 Production readiness, or complete Vision delivery.
 Tracked by [epic #29](https://github.com/wangzitian0/truealpha/issues/29), with
-#14 and #21-#27 as sub-issues.
+#14, #21-#27, and #70-#71 as sub-issues. #70 owns the narrow document-to-headcount
+data plane; #71 owns the independent Core holdout before local replay.
 
 ### 16.2 Gate 2: Seven Research Modules
 
 Implement PEG's three conventions, analyst track records, ETF virtual-company metrics,
 supply-chain extraction and versioned scenario exposure with the confidence kill
-condition, and pure-blood theme ranking. Build the forecast/analyst, PIT ETF/instrument,
-and document/extraction/segment/relationship data planes in #62-#64. Run one shared
+condition, and pure-blood theme ranking. Build the forecast/analyst and PIT
+ETF/instrument data planes in #62-#63, the generic filing/extraction-result substrate in
+#64, and the domain candidates in #37/#39. Run one shared
 seven-module replay, materialize every output, and pass the independent sealed holdout in
-#65; high-confidence edges alone never justify a causal claim.
+#65. Every LLM-assisted path uses stored release-approved extraction results, and
+high-confidence edges alone never justify a causal claim.
 Tracked by [epic #30](https://github.com/wangzitian0/truealpha/issues/30), with
 #33-#40 and #62-#65 as delivery and graduation issues.
 
@@ -2535,9 +3085,12 @@ Tracked by [epic #30](https://github.com/wangzitian0/truealpha/issues/30), with
 Freeze mart read models, expose typed MCP tools, generate traceable personal report
 cards and Xiaohongshu card artifacts, add the App dashboard, and finally add `/chat`
 as a tool-orchestration surface. Completion proves every Vision question can be answered
-from mart with a filing/vintage trace.
+through a typed canonical question bound to the release catalog and exact universe, from
+mart with a filing/vintage trace. A new issuer and theme must be onboardable through new
+catalog/scope versions without factor or consumer code changes.
 Tracked by [epic #31](https://github.com/wangzitian0/truealpha/issues/31), with
-#41-#46 and #48 as sub-issues.
+#41-#46, #48, and #72 as sub-issues. #72 is the configuration-only unseen
+issuer/theme onboarding proof.
 
 ### 16.4 Gate 4: Production Validation and Graduation
 
@@ -2549,9 +3102,12 @@ with explicit approval.
 Validate the deployed Production MCP, App, chat, report, and card paths against the same
 mart outputs in #66. Expand to the owned curated universe and graduate shadow outputs only
 after the natural-refresh soak, per-module SLOs, traceability, recovery, and recorded human
-approval pass in #67.
+approval pass in #67. The Production capture audit in #68 must then prove every required
+cell in that graduated scope has complete raw-to-normalized lineage; a green Dagster run
+or raw-only payload count is insufficient.
 Tracked by [epic #32](https://github.com/wangzitian0/truealpha/issues/32), with
-#11, #49-#54, #66, and #67 as the environment, evaluation, consumer, and graduation tree.
+#11, #49-#54, #66-#68 as the environment, evaluation, consumer, graduation, and final
+capture-certification tree.
 
 Milestones are sequential release gates, not strict implementation serialization. Work
 inside a milestone may run in parallel when GitHub dependencies permit it.
@@ -2567,23 +3123,31 @@ The root `vision.md` success state is reached only when all of these are true:
 1. Every one of the seven modules has frozen semantics, a versioned implementation,
    independent golden and sealed-holdout evidence, PIT replay, mart projection,
    confidence, and output-to-evidence traceability; supply-chain output is called causal
-   only when independent causal evidence exists.
+   only when independent causal evidence exists. Financial and non-financial operating
+   efficiency branches and the selected leverage rule have separate boundary evidence.
 2. The owned curated Production universe has graduated from shadow operation. Dagster is
    its only scheduler, and every applicable module meets its versioned usable-coverage,
    freshness, and traceability SLO across natural source refreshes; unavailable, stale,
    unresolved, excluded, low-confidence, and error outputs do not count as produced.
-3. A user can ask the named research questions through the deployed Production MCP, App,
-   and `/chat` paths and receive equivalent typed results traceable to invocation
-   parameters, snapshot policy, filing/vintage or extraction evidence, and raw checksum.
+   The exact #68 Production capture audit proves every required scope cell has raw and
+   normalized evidence, eligible times, confidence, mapping/policy versions, quality, and
+   lineage under unexpired rights and approved budgets.
+3. A user can ask every frozen canonical Vision question through the deployed Production
+   MCP, App, and `/chat` paths and receive equivalent typed results from the exact
+   release-bound catalog and universe, traceable to template/execution parameters,
+   snapshot policy, filing/vintage or extraction evidence, and raw checksum.
 4. The same mart outputs produce personal report cards and Xiaohongshu card artifacts
-   without manual metric recomputation.
+   without manual metric recomputation, and a previously unseen issuer/theme can traverse
+   capture through all consumer surfaces by publishing new scope/catalog versions only.
 5. Strategy evaluation uses at least five years, independent price reconciliation,
    survivorship-safe membership, corporate actions, immutable definitions, and a known
-   strategy sanity result; no positive-alpha claim is required unless separately tested.
+   strategy sanity result. Returns use raw bars plus explicit lifecycle events without
+   double counting; no positive-alpha claim is required unless separately tested.
 6. Production uses the exact Staging-tested signed release manifest, including the
-   immutable data-engine/Dagster artifact, with isolated credentials/storage,
-   demonstrated backup/restore, append-only data, deployed-consumer evidence, a natural
-   source-refresh soak, and recorded human graduation approval.
+   immutable data-engine/Dagster artifact, catalog, universe, capture/applicability/source/
+   SLO hashes, model revisions, and extraction templates, with isolated credentials/
+   storage, demonstrated backup/restore, append-only data, deployed-consumer evidence, a
+   natural source-refresh soak, human card approval, and independent final sign-off.
 
 No milestone may claim the full Vision based on fixture readiness, code existence,
 manual flag changes, immediate repeated canary runs, or one successful happy-path run.
@@ -2593,32 +3157,49 @@ manual flag changes, immediate repeated canary runs, or one successful happy-pat
 V1 is **proposed**, not frozen. The semantic closure gate passes only when all of these
 are executable and reviewed:
 
-1. Every public model in Section 14 builds JSON Schema with no unresolved or ambiguous
-   type, and issuer/security/listing plus currency/time validators have negative tests.
-2. Fixture and Postgres repositories produce the same durable snapshot ID, exact selected
-   record set, membership, policy versions, and lineage for the same request.
-3. A competing-source/restatement test proves source-priority selection, then changes the
-   fusion ruleset and still retrieves the original snapshot by ID.
-4. A synthetic extraction contract probe runs stored document -> semantic draft -> atomic
-   extraction/row persistence -> snapshot, then replays without a model call and traces
-   exact evidence spans. This does not require the production headcount extractor or GPPE.
-5. Two dummy invocations of one probe factor/version with different parameters and subject
-   scopes coexist without repository, mart, Dagster asset, or query-key collisions.
-6. A dummy base batch is persisted/materialized and a dummy composite reloads it from mart;
-   exact consumed-input lineage enforces its confidence ceiling without requiring a real
-   research module.
-7. A synthetic replay contract probe excludes future bars from its decision snapshot,
-   advances the clock to the next eligible unadjusted bar, applies split/dividend lifecycle
-   events once, handles FX explicitly, and rejects adjusted-close/action double counting.
-8. A dummy output projected into an ephemeral mart is traceable by a mart-only role through
-   invocation, snapshot policy, staging IDs, extraction evidence, and raw checksum.
-9. Generated Python/TypeScript schema-conformance fixtures and minimal in-memory adapters
-   agree on catalog, history, comparison, ranking, pagination, and trace DTOs; deployed
-   consumer behavior remains a Gate 3/4 obligation.
-10. A signed multi-artifact release-manifest probe rejects a floating or mismatched
-    data-engine/Dagster artifact digest.
-11. A design review finds no remaining conflict with authoritative `init.md`, and every
-    implementation issue names which closure test proves its downstream boundary.
+1. Every public model in Section 14 builds JSON Schema with no unresolved, duplicate, or
+   ambiguous type; generated Python/TypeScript discriminated unions agree.
+2. Issuer/security/listing, share-class/ADR conversion, currency/time, and `ReturnPolicy`
+   validators have positive and negative fixtures at historical cutoffs.
+3. Fixture and Postgres repositories produce the same durable snapshot ID, exact selected
+   record set, `UniverseRef`, identity links, policy versions, and lineage for one request;
+   a wrong hash or mutable-latest substitution fails.
+4. A competing-source/restatement test proves source-priority selection, changes the
+   fusion ruleset, and still retrieves the exact original snapshot by ID.
+5. A synthetic `CaptureScope` probe enumerates the full applicability cross-product and
+   fails on a missing/duplicate cell, absent evidence component, stale row, post-run scope
+   shrink, or manually asserted readiness despite a green upstream asset.
+6. Source-readiness probes reject unverified/restricted/expired rights, approval expiry,
+   over-budget projection, and false natural refreshes made from retries, unchanged bytes,
+   fixtures, or synthetic mutations.
+7. A synthetic extraction probe binds an approved immutable model revision and template,
+   runs stored document -> semantic draft -> atomic extraction/row persistence -> snapshot,
+   then replays without a model call and traces exact spans. A new attempt or model
+   deployment produces a new immutable invocation and preserves the old result.
+8. Two templates of one probe factor/version with different parameters and two executions
+   with different snapshot/subject scopes coexist without repository, mart, Dagster asset,
+   or query-key collisions.
+9. A dummy base batch is persisted/materialized and a dummy composite reloads it from mart.
+   Selector/upstream access automatically creates per-output lineage and confidence caps;
+   factor code cannot construct final status or consumed IDs.
+10. A synthetic replay probe excludes future bars from its decision snapshot, advances to
+    the next eligible raw listing bar, converts an ADR/share class explicitly, applies
+    split/dividend lifecycle events once, handles FX, and rejects adjusted/action mixing.
+11. A dummy output projected into an ephemeral mart is traceable by a mart-only role through
+    template/execution, snapshot policy, staging IDs, extraction evidence, and raw checksum.
+12. Release-bound Python and TypeScript adapters agree on every canonical question's
+    catalog resolution, concrete subject/universe scope, history/comparison/ranking/
+    strategy/trace DTO, pagination, status, and lineage. Catalog publication fails below
+    `ResearchScopeFloor`, and consumer startup fails for a catalog/release hash mismatch.
+13. A signed multi-artifact release probe rejects a floating or mismatched runtime digest,
+    universe, capture/applicability/source/SLO hash, accepted manifest/readiness report,
+    extraction template, or model revision.
+14. The frozen financial operating-efficiency branch and selected level/elasticity/combined
+    leverage rule have independently reviewed semantics and boundary oracles; implementing
+    the real GPPE/valuation candidates remains Gate 1 work.
+15. A design review finds no remaining conflict with authoritative `init.md`, and every
+    implementation issue names the closure probe and later gate evidence that prove its
+    downstream boundary without depending on its own downstream verifier.
 
 After this gate, the v1 freeze covers field semantics, discriminators, identity and time
 meaning, confidence/lineage rules, port behavior, and registry identity. It does not
@@ -2626,12 +3207,18 @@ freeze storage schemas or private internals.
 
 - Contracts use major/minor semantic `contract_version` values.
 - Factor, screen, strategy, and rule versions are independent and immutable.
+- Research Catalog -> Applicability -> SLO catalogs form a one-way immutable dependency
+  chain; a signed release binds their exact content hashes with `UniverseRef` and
+  `CaptureScope`.
+- Extraction templates and immutable provider revisions are independently versioned;
+  changing either always creates a new invocation and staging vintage.
 - Removed/renamed fields, changed time meaning, confidence rules, or discriminators
   require a new major version.
 - Formula, taxonomy, default threshold, or rule behavior changes require a new
   computation version even if contract shape is unchanged.
 - Readers use explicit old-version adapters; writers emit only the current version.
-- Persisted runs retain definitions, parameters, versions, and snapshot IDs permanently.
+- Persisted runs and consumer artifacts retain release/catalog/universe identities,
+  definitions, parameters, execution IDs, and snapshot IDs permanently.
 Until every gate passes, issue acceptance may validate an incremental slice but must not
 describe these contracts as frozen or claim complete Vision closure.
 These probes close semantics only. Real GPPE/strategy evidence belongs to Gate 1, real

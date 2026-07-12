@@ -30,6 +30,7 @@ This isn't about building a flashy data platform — it's about engineering an a
 - Continuously producing results from all seven factor modules for a curated universe (the sensor portfolio and similar + core names of interest), with history that's traceable and conventions that are switchable
 - Being able to ask, in conversation, "what's this company's PEG trend" or "who's the purest play on this theme," and get an answer backed by data, traceable to a specific filing/vintage — not a number the model made up on the spot
 - Factor/ranking outputs converting directly into Xiaohongshu card material without a manual processing step in between
+- Adding a previously unseen company or theme through reviewed, versioned catalog/configuration changes, without changing factor formulas, schemas, or consumer business logic
 
 "Continuously producing" means the versioned, owned curated universe has graduated
 beyond canary/shadow operation and meets explicit per-module applicability, usable
@@ -38,3 +39,7 @@ coverage, freshness, and traceability objectives across real source refreshes. A
 produced result for an applicable subject. Success also requires the deployed MCP/App/
 chat and report/card paths to consume the same materialized outputs; fixture-only tools,
 two immediate scheduled runs, or code existence are not completion evidence.
+
+This success state proves a reproducible research product and an honest evaluation path.
+It does not by itself prove that any factor, tier, screen, or strategy produces positive
+alpha; that requires a separate empirical claim and evidence.
