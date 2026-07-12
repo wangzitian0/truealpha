@@ -1,4 +1,4 @@
-.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit lint format typecheck test contract-conformance check clean
+.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit lint format typecheck test contract-conformance issue-graph-check check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -21,6 +21,7 @@ help:
 	@echo "Quality:"
 	@echo "  make check        lint + typecheck + test"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
+	@echo "  make issue-graph-check Validate delivery manifests and Vision issue DAG"
 
 install:
 	uv sync --all-packages
@@ -96,7 +97,10 @@ contract-conformance:
 	uv run python libs/contracts/conformance/export_issue58.py --check
 	cd apps/app-web && bun run tests/issue58-conformance.test.ts
 
-check: lint typecheck test contract-conformance
+issue-graph-check:
+	python3 tools/check_delivery_governance.py
+
+check: issue-graph-check lint typecheck test contract-conformance
 	@echo "✅ All checks passed"
 
 clean:

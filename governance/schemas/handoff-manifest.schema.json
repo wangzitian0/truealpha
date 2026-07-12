@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truealpha.local/schemas/handoff-manifest.schema.json",
+  "title": "TrueAlpha HandoffManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "handoff_id",
+    "revision",
+    "state",
+    "producer",
+    "schema_epoch",
+    "readiness_ceiling",
+    "evidence",
+    "allowed_consumers",
+    "allowed_environments",
+    "retention",
+    "verification",
+    "revocation"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "handoff_id": {"type": "string", "pattern": "^handoff:[a-z0-9-]+:[0-9a-f]{64}$"},
+    "revision": {"type": "integer", "minimum": 1},
+    "state": {"enum": ["produced", "verified", "accepted", "revoked"]},
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["batch_id", "issue", "owner", "head_sha"],
+      "properties": {
+        "batch_id": {"type": "string", "minLength": 1},
+        "issue": {"type": "integer", "minimum": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "schema_epoch": {"type": "string", "minLength": 1},
+    "readiness_ceiling": {"enum": ["E2", "E3", "E4", "E5"]},
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "allowed_consumers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "allowed_environments": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"enum": ["local", "ci", "staging", "production-shadow"]}
+    },
+    "retention": {"type": "string", "minLength": 1},
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewer", "evidence_sha256", "accepted_at", "attestation_ref"],
+      "properties": {
+        "reviewer": {"type": ["string", "null"]},
+        "evidence_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "accepted_at": {"type": ["string", "null"], "format": "date-time"},
+        "attestation_ref": {"type": ["string", "null"]}
+      }
+    },
+    "revocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "revoked_at", "superseded_by"],
+      "properties": {
+        "reason": {"type": ["string", "null"]},
+        "revoked_at": {"type": ["string", "null"], "format": "date-time"},
+        "superseded_by": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

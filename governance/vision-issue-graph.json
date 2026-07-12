@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "repository": "wangzitian0/truealpha",
+  "root_issue": 28,
+  "root_accepted_evidence": null,
+  "gate_order": [56, 29, 30, 31, 32],
+  "gates": {
+    "56": {
+      "name": "Semantic & Data Closure",
+      "milestone": "0 - Semantic & Data Closure",
+      "status": "active",
+      "accepted_evidence": null,
+      "acceptance_issues": [57, 58, 59, 60, 61]
+    },
+    "29": {
+      "name": "Core Strategy MVP",
+      "milestone": "Core Strategy MVP",
+      "status": "queued",
+      "accepted_evidence": null,
+      "acceptance_issues": [14, 21, 22, 23, 24, 25, 26, 27, 70, 71]
+    },
+    "30": {
+      "name": "Seven Research Modules",
+      "milestone": "Seven Research Modules",
+      "status": "queued",
+      "accepted_evidence": null,
+      "acceptance_issues": [33, 34, 35, 36, 37, 38, 39, 40, 62, 63, 64, 65]
+    },
+    "31": {
+      "name": "Research Consumption",
+      "milestone": "Research Consumption",
+      "status": "queued",
+      "accepted_evidence": null,
+      "acceptance_issues": [41, 42, 43, 44, 45, 46, 48, 72]
+    },
+    "32": {
+      "name": "Production Strategy Validation",
+      "milestone": "Production Strategy Validation",
+      "status": "queued",
+      "accepted_evidence": null,
+      "acceptance_issues": [11, 49, 50, 51, 52, 53, 54, 66, 67, 68]
+    }
+  },
+  "issues": {
+    "11": {"gate": 32, "terminal_evidence": "E5"},
+    "14": {
+      "gate": 29,
+      "terminal_evidence": "E2",
+      "accepted_evidence": {
+        "path": "governance/evidence/issue-14.v1.json",
+        "sha256": "7790c5fdb9503a01de3ccd7cc17e69f300a80a3e63911090afd4777a4ec0ff0f"
+      }
+    },
+    "21": {"gate": 29, "terminal_evidence": "E4"},
+    "22": {
+      "gate": 29,
+      "terminal_evidence": "E2",
+      "accepted_evidence": {
+        "path": "governance/evidence/issue-22.v1.json",
+        "sha256": "924cab897b2ab204169ee29a70889f74a21d36a589f184a6838888506c5d61df"
+      }
+    },
+    "23": {"gate": 29, "terminal_evidence": "E3"},
+    "24": {"gate": 29, "terminal_evidence": "E4"},
+    "25": {"gate": 29, "terminal_evidence": "E4"},
+    "26": {"gate": 29, "terminal_evidence": "E3"},
+    "27": {"gate": 29, "terminal_evidence": "E4"},
+    "33": {"gate": 30, "terminal_evidence": "E4"},
+    "34": {"gate": 30, "terminal_evidence": "E4"},
+    "35": {"gate": 30, "terminal_evidence": "E4"},
+    "36": {"gate": 30, "terminal_evidence": "E4"},
+    "37": {"gate": 30, "terminal_evidence": "E4"},
+    "38": {"gate": 30, "terminal_evidence": "E4"},
+    "39": {"gate": 30, "terminal_evidence": "E4"},
+    "40": {"gate": 30, "terminal_evidence": "E4"},
+    "41": {"gate": 31, "terminal_evidence": "E2"},
+    "42": {"gate": 31, "terminal_evidence": "E3"},
+    "43": {"gate": 31, "terminal_evidence": "E3"},
+    "44": {"gate": 31, "terminal_evidence": "E3"},
+    "45": {"gate": 31, "terminal_evidence": "E3"},
+    "46": {"gate": 31, "terminal_evidence": "E3"},
+    "48": {"gate": 31, "terminal_evidence": "E3"},
+    "49": {"gate": 32, "terminal_evidence": "E4"},
+    "50": {"gate": 32, "terminal_evidence": "E4"},
+    "51": {"gate": 32, "terminal_evidence": "E5"},
+    "52": {"gate": 32, "terminal_evidence": "E5"},
+    "53": {"gate": 32, "terminal_evidence": "E5"},
+    "54": {"gate": 32, "terminal_evidence": "GRADUATION"},
+    "57": {
+      "gate": 56,
+      "terminal_evidence": "E2",
+      "accepted_evidence": {
+        "path": "governance/evidence/issue-57.v1.json",
+        "sha256": "15bbc1d04e93c2a155a44e3aa6dfc1a8366b0e32f565348787a382a91e05f0a6"
+      }
+    },
+    "58": {
+      "gate": 56,
+      "terminal_evidence": "E2",
+      "accepted_evidence": {
+        "path": "governance/evidence/issue-58.v1.json",
+        "sha256": "6b7094214d6a6c4f4b636b6505cd9d43a64ce1c994dd3c95260b4ebb155bef2c"
+      }
+    },
+    "59": {"gate": 56, "terminal_evidence": "E4"},
+    "60": {"gate": 56, "terminal_evidence": "E3"},
+    "61": {"gate": 56, "terminal_evidence": "E4"},
+    "62": {"gate": 30, "terminal_evidence": "E3"},
+    "63": {"gate": 30, "terminal_evidence": "E3"},
+    "64": {"gate": 30, "terminal_evidence": "E3"},
+    "65": {"gate": 30, "terminal_evidence": "E4"},
+    "66": {"gate": 32, "terminal_evidence": "E5"},
+    "67": {"gate": 32, "terminal_evidence": "E5"},
+    "68": {"gate": 32, "terminal_evidence": "E5"},
+    "70": {"gate": 29, "terminal_evidence": "E3"},
+    "71": {"gate": 29, "terminal_evidence": "E4"},
+    "72": {"gate": 31, "terminal_evidence": "E4"}
+  },
+  "batches": {
+    "S0-core-strategy-tiny": {
+      "issue": 78,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E1",
+      "manifest": "governance/batches/S0-core-strategy-tiny.v1.json",
+      "sha256": "3c638e9d1583e05e17a153fbaae9a43283fe2d53607294611093e320f8f9797e"
+    },
+    "D0-mvp-capture-tiny": {
+      "issue": 79,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E1",
+      "manifest": "governance/batches/D0-mvp-capture-tiny.v1.json",
+      "sha256": "e8c2b0d30a1206d6deb05f2ecd7420d156c6b5a48388c4f5f98dfde259828b18"
+    }
+  },
+  "artifact_edges": [
+    {"from": 57, "to": 59, "class": "start", "artifact": "identity and time semantics"},
+    {"from": 58, "to": 59, "class": "start", "artifact": "execution and lineage contracts"},
+    {"from": 59, "to": 60, "class": "freeze", "artifact": "Research Catalog input requirements"},
+    {"from": 59, "to": 61, "class": "freeze", "artifact": "Research Catalog and canonical questions"},
+    {"from": 60, "to": 61, "class": "freeze", "artifact": "accepted source and rights matrix"},
+    {"from": 22, "to": 14, "class": "start", "artifact": "PIT corpus audit contract"},
+    {"from": 22, "to": 23, "class": "start", "artifact": "Dagster and PIT execution contract"},
+    {"from": 23, "to": 70, "class": "freeze", "artifact": "normalized filing and snapshot path"},
+    {"from": 70, "to": 24, "class": "freeze", "artifact": "accepted headcount factor input handoff"},
+    {"from": 24, "to": 25, "class": "freeze", "artifact": "GPPE candidate output"},
+    {"from": 21, "to": 25, "class": "freeze", "artifact": "strategy and tier semantics"},
+    {"from": 24, "to": 71, "class": "freeze", "artifact": "frozen GPPE candidate"},
+    {"from": 25, "to": 71, "class": "freeze", "artifact": "frozen tier and strategy candidate"},
+    {"from": 14, "to": 26, "class": "start", "artifact": "accepted local replay corpus"},
+    {"from": 21, "to": 26, "class": "freeze", "artifact": "frozen strategy definition"},
+    {"from": 25, "to": 26, "class": "freeze", "artifact": "frozen strategy candidate"},
+    {"from": 61, "to": 26, "class": "freeze", "artifact": "applicability and SLO policy"},
+    {"from": 71, "to": 26, "class": "closure", "artifact": "independent Core holdout"},
+    {"from": 26, "to": 27, "class": "freeze", "artifact": "accepted local release candidate"},
+    {"from": 62, "to": 34, "class": "start", "artifact": "forecast and guidance data plane"},
+    {"from": 62, "to": 35, "class": "start", "artifact": "analyst-event data plane"},
+    {"from": 63, "to": 36, "class": "start", "artifact": "ETF holdings and instrument data plane"},
+    {"from": 64, "to": 37, "class": "start", "artifact": "versioned document extraction substrate"},
+    {"from": 64, "to": 39, "class": "start", "artifact": "versioned document extraction substrate"},
+    {"from": 37, "to": 38, "class": "freeze", "artifact": "supply-chain candidate and development corpus"},
+    {"from": 33, "to": 65, "class": "freeze", "artifact": "frozen historical PEG candidate"},
+    {"from": 34, "to": 65, "class": "freeze", "artifact": "frozen forecast PEG candidate"},
+    {"from": 35, "to": 65, "class": "freeze", "artifact": "frozen analyst candidate"},
+    {"from": 36, "to": 65, "class": "freeze", "artifact": "frozen ETF candidate"},
+    {"from": 38, "to": 65, "class": "freeze", "artifact": "frozen supply-chain candidate"},
+    {"from": 39, "to": 65, "class": "freeze", "artifact": "frozen pure-blood candidate"},
+    {"from": 65, "to": 40, "class": "closure", "artifact": "accepted module holdouts"},
+    {"from": 41, "to": 42, "class": "start", "artifact": "stable research query contract"},
+    {"from": 41, "to": 43, "class": "start", "artifact": "stable research query contract"},
+    {"from": 41, "to": 45, "class": "start", "artifact": "stable research query contract"},
+    {"from": 43, "to": 44, "class": "start", "artifact": "traceable report artifact"},
+    {"from": 42, "to": 46, "class": "start", "artifact": "typed MCP tools"},
+    {"from": 42, "to": 48, "class": "closure", "artifact": "MCP conformance"},
+    {"from": 43, "to": 48, "class": "closure", "artifact": "report conformance"},
+    {"from": 44, "to": 48, "class": "closure", "artifact": "card conformance"},
+    {"from": 45, "to": 48, "class": "closure", "artifact": "App conformance"},
+    {"from": 46, "to": 48, "class": "closure", "artifact": "chat conformance"},
+    {"from": 11, "to": 51, "class": "freeze", "artifact": "isolated Staging environment"},
+    {"from": 40, "to": 51, "class": "freeze", "artifact": "accepted all-module replay candidate"},
+    {"from": 61, "to": 51, "class": "freeze", "artifact": "natural-refresh and staging SLO policy"},
+    {"from": 51, "to": 52, "class": "closure", "artifact": "exact Staging candidate for recovery drill"},
+    {"from": 52, "to": 53, "class": "start", "artifact": "recoverable exact release"},
+    {"from": 48, "to": 66, "class": "freeze", "artifact": "accepted consumer conformance"},
+    {"from": 53, "to": 66, "class": "start", "artifact": "isolated Production shadow"},
+    {"from": 49, "to": 67, "class": "closure", "artifact": "evaluation data and independent reconciliation"},
+    {"from": 50, "to": 67, "class": "closure", "artifact": "frozen evaluation protocol and direction check"},
+    {"from": 51, "to": 67, "class": "closure", "artifact": "natural-refresh Staging evidence"},
+    {"from": 52, "to": 67, "class": "closure", "artifact": "recovery and exact-promotion evidence"},
+    {"from": 53, "to": 67, "class": "closure", "artifact": "Production shadow bootstrap"},
+    {"from": 66, "to": 67, "class": "closure", "artifact": "deployed consumer evidence"},
+    {"from": 72, "to": 67, "class": "closure", "artifact": "additive onboarding evidence"},
+    {"from": 67, "to": 68, "class": "start", "artifact": "exact graduated shadow candidate scope"},
+    {"from": 68, "to": 54, "class": "closure", "artifact": "independent row-complete capture audit"}
+  ]
+}
