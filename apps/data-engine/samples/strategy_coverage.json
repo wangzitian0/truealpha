@@ -191,6 +191,25 @@
       "corroborated_knowable_at": "2024-05-22T20:21:29Z",
       "assertion_ids": ["financial.company-guidance"],
       "notes": "Filed CFO commentary contains dated revenue and gross-margin guidance for PEG convention inputs."
+    },
+    {
+      "evidence_id": "evidence.factor.ddog.composite-pit-replay.2025",
+      "requirement_id": "factors.point_in_time_outputs",
+      "kind": "real",
+      "artifact_paths": [
+        "golden/DDOG_composite_pit_replay.json",
+        "sec/DDOG_CIK0001561550.json",
+        "filings/DDOG_10K_000162828026008819.html"
+      ],
+      "artifact_sha256": [
+        "b53cb5cf0f22c1c9692d85aa800ba2eb58b90299833dc4ae682d550e3b520bac",
+        "0b0cd6b7472d7a8fef13a0c37b0ce8f228c20c1b816bc33ac147fbdb0b7fcd98",
+        "dcdd728cc76efaa0ca2fce5c2b6fd0e1704a77092d232ce0d931eddca8debfde"
+      ],
+      "subject_entity_ids": ["company:ddog"],
+      "corroborated_knowable_at": "2026-02-18T23:59:59Z",
+      "assertion_ids": ["factors.composite-pit-replay"],
+      "notes": "The executable replay binds two real upstream artifacts to one cutoff, rejects a future-dated input, and preserves the minimum input confidence."
     }
   ],
   "requirement_evidence": {
@@ -212,7 +231,7 @@
       "evidence.universe.jpm.financial.2025",
       "evidence.universe.adm.traditional.2025"
     ],
-    "factors.point_in_time_outputs": [],
+    "factors.point_in_time_outputs": ["evidence.factor.ddog.composite-pit-replay.2025"],
     "prices.source_reconciliation": []
   }
 }

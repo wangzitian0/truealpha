@@ -470,6 +470,7 @@ def _run_probe(
     )
     output = materialize_factor_output(
         execution=execution,
+        snapshot=snapshot,
         selection=selection,
         draft=draft,
         read_events=(read_event,),
@@ -785,6 +786,7 @@ def test_additive_probe_fails_stale_wrong_type_and_missing_runner_reads() -> Non
     with pytest.raises(ValueError, match="available output requires runner-derived input"):
         materialize_factor_output(
             execution=closure.execution,
+            snapshot=closure.snapshot,
             selection=closure.selection,
             draft=draft,
             read_events=(),

@@ -6,19 +6,19 @@ from truealpha_contracts import ReadinessLevel
 SAMPLE_ROOT = Path(__file__).parents[1] / "samples"
 
 
-def test_current_samples_are_ready_for_toolchain_development_only():
+def test_current_samples_are_ready_for_local_backtest_but_not_strategy_evaluation():
     report = audit_strategy_samples(SAMPLE_ROOT)
 
     assert report.assessment(ReadinessLevel.TOOLCHAIN).ready
-    assert not report.assessment(ReadinessLevel.LOCAL_BACKTEST).ready
+    assert report.assessment(ReadinessLevel.LOCAL_BACKTEST).ready
     assert not report.assessment(ReadinessLevel.STRATEGY_EVALUATION).ready
 
 
-def test_sampling_is_complete_and_composite_replay_is_the_only_local_blocker():
+def test_strategy_evaluation_retains_only_its_independent_price_evidence_blockers():
     report = audit_strategy_samples(SAMPLE_ROOT)
-    blockers = set(report.assessment(ReadinessLevel.LOCAL_BACKTEST).blockers)
+    blockers = set(report.assessment(ReadinessLevel.STRATEGY_EVALUATION).blockers)
 
-    assert blockers == {"factors.point_in_time_outputs"}
+    assert blockers == {"prices.history", "prices.source_reconciliation"}
 
 
 def test_price_history_is_measured_per_symbol(tmp_path):

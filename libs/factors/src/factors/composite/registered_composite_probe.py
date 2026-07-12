@@ -1,4 +1,4 @@
-"""Isolated Gate 0 probe for additive registered semantic inputs."""
+"""Composite contract probe used by the Gate 1 execution spine."""
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import (
@@ -11,55 +11,47 @@ from truealpha_contracts.universe import SubjectRef
 
 from factors.registry import factor
 
-PROBE_OUTPUT_SCHEMA_SHA256 = canonical_sha256(
+COMPOSITE_PROBE_OUTPUT_SCHEMA_SHA256 = canonical_sha256(
     {
         "type": "object",
-        "properties": {"input_payload_sha256": {"type": "array", "items": {"type": "string"}}},
-        "required": ["input_payload_sha256"],
+        "properties": {"upstream_payload_sha256": {"type": "array", "items": {"type": "string"}}},
+        "required": ["upstream_payload_sha256"],
         "additionalProperties": False,
     }
 )
-PROBE_FACTOR_VERSION = "1.0.0"
-PROBE_IMPLEMENTATION_SHA256 = canonical_sha256(
-    {
-        "factor_id": "registered_semantic_probe",
-        "factor_version": PROBE_FACTOR_VERSION,
-        "input_contract": "FactorInputCapability",
-        "output_schema_sha256": PROBE_OUTPUT_SCHEMA_SHA256,
-        "operation": "hash_sorted_input_payloads",
-    }
-)
 
 
-@factor("registered_semantic_probe", kind="base", module=7)
-def registered_semantic_probe(
+@factor("registered_composite_probe", kind="composite", module=7)
+def registered_composite_probe(
     *,
     subject: SubjectRef,
     inputs: tuple[FactorInputCapability, ...],
-    output_key: str = "registered-semantic-probe",
+    output_key: str = "registered-composite-probe",
 ) -> FactorOutputDraft:
-    """Exercise a new typed input without inspecting its private handle binding."""
+    """Combine sanitized upstream outputs without observing runner metadata."""
 
     observations = tuple(item.observation for item in inputs)
     if any(observation.subject != subject for observation in observations):
-        raise ValueError("probe inputs must belong to the requested subject")
+        raise ValueError("composite probe inputs must belong to the requested subject")
+    if len({observation.as_of for observation in observations}) > 1:
+        raise ValueError("composite probe inputs must share one snapshot cutoff")
     payload_sha256 = canonical_sha256(sorted(item.payload_sha256 for item in observations))
     if not observations:
         return FactorOutputDraft(
             output_key=output_key,
             subject=subject,
-            output_model_key="contracts:RegisteredSemanticProbe",
-            output_schema_sha256=PROBE_OUTPUT_SCHEMA_SHA256,
+            output_model_key="contracts:RegisteredCompositeProbe",
+            output_schema_sha256=COMPOSITE_PROBE_OUTPUT_SCHEMA_SHA256,
             output_payload_sha256=payload_sha256,
             availability_status=AvailabilityStatus.UNAVAILABLE,
             factor_validation_status=FactorValidationStatus.NOT_EVALUATED,
-            reason_codes=("required_probe_input_missing",),
+            reason_codes=("required_upstream_probe_missing",),
         )
     return FactorOutputDraft(
         output_key=output_key,
         subject=subject,
-        output_model_key="contracts:RegisteredSemanticProbe",
-        output_schema_sha256=PROBE_OUTPUT_SCHEMA_SHA256,
+        output_model_key="contracts:RegisteredCompositeProbe",
+        output_schema_sha256=COMPOSITE_PROBE_OUTPUT_SCHEMA_SHA256,
         output_payload_sha256=payload_sha256,
         availability_status=AvailabilityStatus.AVAILABLE,
         factor_validation_status=FactorValidationStatus.NOT_EVALUATED,

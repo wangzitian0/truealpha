@@ -17,6 +17,7 @@ from truealpha_contracts.execution import (
     FactorValidationStatus,
     InputReadEvent,
     MaterializedFactorBatch,
+    MaterializedFactorOutput,
     ModelRevisionRef,
     NormalizedRecordRef,
     PolicyBinding,
@@ -280,6 +281,46 @@ def _snapshot() -> SnapshotManifest:
     )
 
 
+def _snapshot_with_confidences(*confidences: Decimal) -> SnapshotManifest:
+    registry = _registry()
+    request = _request(registry)
+    records = tuple(
+        _record(
+            registry,
+            draft=_draft(payload_sha256=f"{index:x}" * 64),
+            document_id=f"document:sec-10k-{index}",
+            raw_object_id=f"raw-object:sec-10k-{index}",
+            raw_object_sha256=f"{index:x}" * 64,
+            confidence=confidence,
+        )
+        for index, confidence in enumerate(confidences, start=1)
+    )
+    return SnapshotManifest(
+        request=request,
+        registry_snapshot=registry,
+        resolved_subjects=(SUBJECT,),
+        universe_manifest=_universe(),
+        universe_memberships=(_membership(),),
+        normalized_records=records,
+        selections=(
+            SnapshotCellSelection(
+                demand=_demand(),
+                normalized_record_ids=tuple(record.normalized_record_id for record in records),
+            ),
+        ),
+        resolved_at=NOW + timedelta(seconds=1),
+        resolver_id="snapshot-resolver",
+        resolver_version="1.0.0",
+        resolver_implementation_sha256=_hash("0"),
+    )
+
+
+def _replace_output(output: MaterializedFactorOutput, **updates) -> MaterializedFactorOutput:
+    values = output.model_dump(exclude={"materialized_output_id", "content_sha256", *updates})
+    values.update(updates)
+    return MaterializedFactorOutput.model_validate(values)
+
+
 def _template(kind: FactorKind = FactorKind.BASE) -> FactorInvocationTemplate:
     dependencies: tuple[DependencyTemplate, ...] = ()
     if kind is not FactorKind.BASE:
@@ -527,6 +568,7 @@ def test_factor_template_is_stable_while_execution_binds_snapshot_and_not_start_
 
 
 def test_runner_derives_lineage_and_confidence_from_actual_reads():
+    snapshot = _snapshot()
     execution = _execution()
     selection = _selection(execution)
     selected = selection.bindings[0]
@@ -542,6 +584,7 @@ def test_runner_derives_lineage_and_confidence_from_actual_reads():
 
     output = materialize_factor_output(
         execution=execution,
+        snapshot=snapshot,
         selection=selection,
         draft=_draft_output(),
         read_events=(read,),
@@ -580,11 +623,13 @@ def test_factor_visible_capability_is_opaque_and_cannot_forge_runner_binding():
 
 
 def test_missing_or_forged_runner_reads_cannot_create_available_output():
+    snapshot = _snapshot()
     execution = _execution()
     selection = _selection(execution)
     with pytest.raises(ValidationError, match="available output requires"):
         materialize_factor_output(
             execution=execution,
+            snapshot=snapshot,
             selection=selection,
             draft=_draft_output(),
             read_events=(),
@@ -603,6 +648,7 @@ def test_missing_or_forged_runner_reads_cannot_create_available_output():
     with pytest.raises(ValueError, match="not attributable"):
         materialize_factor_output(
             execution=execution,
+            snapshot=snapshot,
             selection=selection,
             draft=_draft_output(),
             read_events=(forged,),
@@ -642,6 +688,7 @@ def test_composites_require_a_persisted_upstream_boundary():
 
 
 def test_composite_capability_is_minted_only_from_persisted_sanitized_upstream_output():
+    snapshot = _snapshot()
     base_execution = _execution()
     base_selection = _selection(base_execution)
     base_read = InputReadEvent(
@@ -655,6 +702,7 @@ def test_composite_capability_is_minted_only_from_persisted_sanitized_upstream_o
     )
     base_output = materialize_factor_output(
         execution=base_execution,
+        snapshot=snapshot,
         selection=base_selection,
         draft=_draft_output(),
         read_events=(base_read,),
@@ -667,7 +715,6 @@ def test_composite_capability_is_minted_only_from_persisted_sanitized_upstream_o
         repository_commit_id="commit:base-batch",
         persisted_at=NOW + timedelta(seconds=3),
     )
-    snapshot = _snapshot()
     composite = FactorExecution(
         template=_template(FactorKind.COMPOSITE),
         snapshot_id=snapshot.snapshot_id,
@@ -678,6 +725,7 @@ def test_composite_capability_is_minted_only_from_persisted_sanitized_upstream_o
     )
     selection = build_runner_upstream_input_selection(
         execution=composite,
+        snapshot=snapshot,
         demand=_demand(),
         upstream_batch=batch,
         upstream_output=base_output,
@@ -702,6 +750,7 @@ def test_composite_capability_is_minted_only_from_persisted_sanitized_upstream_o
     )
     output = materialize_factor_output(
         execution=composite,
+        snapshot=snapshot,
         selection=selection,
         draft=_draft_output(),
         read_events=(read,),
@@ -709,6 +758,151 @@ def test_composite_capability_is_minted_only_from_persisted_sanitized_upstream_o
     )
     assert output.upstream_output_ids == (base_output.materialized_output_id,)
     assert output.input_lineage[0].input_id == base_output.materialized_output_id
+
+
+def test_composite_replay_rejects_cutoff_drift_and_future_outputs_and_preserves_minimum_confidence():
+    snapshot = _snapshot_with_confidences(Decimal("0.8"), Decimal("0.4"))
+    base_execution = FactorExecution(
+        template=_template(),
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_sha256=snapshot.content_sha256,
+        ordered_subjects=(SUBJECT,),
+        started_at=snapshot.resolved_at + timedelta(seconds=1),
+    )
+    base_selection = build_runner_input_selection(
+        execution=base_execution,
+        snapshot=snapshot,
+        selected_at=base_execution.started_at,
+        runner_id="factor-runner",
+        runner_version="1.0.0",
+        runner_implementation_sha256=_hash("d"),
+    )
+    base_reads = tuple(
+        InputReadEvent(
+            factor_execution_id=base_execution.factor_execution_id,
+            selection_id=base_selection.selection_id,
+            requirement_handle_id=binding.handle.requirement_handle_id,
+            output_key="gppe",
+            read_index=index,
+            trace_id=f"trace:base:{index}",
+            occurred_at=base_execution.started_at + timedelta(microseconds=index + 1),
+        )
+        for index, binding in enumerate(base_selection.bindings)
+    )
+    base_output = materialize_factor_output(
+        execution=base_execution,
+        snapshot=snapshot,
+        selection=base_selection,
+        draft=_draft_output(),
+        read_events=base_reads,
+        materialized_at=base_execution.started_at + timedelta(seconds=1),
+    )
+    batch = MaterializedFactorBatch(
+        factor_execution_id=base_execution.factor_execution_id,
+        snapshot_id=snapshot.snapshot_id,
+        output_ids=(base_output.materialized_output_id,),
+        repository_commit_id="commit:minimum-confidence",
+        persisted_at=base_output.materialized_at + timedelta(seconds=1),
+    )
+    composite = FactorExecution(
+        template=_template(FactorKind.COMPOSITE),
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_sha256=snapshot.content_sha256,
+        ordered_subjects=(SUBJECT,),
+        upstream_batch_ids=(batch.materialized_batch_id,),
+        started_at=batch.persisted_at + timedelta(seconds=1),
+    )
+    selection = build_runner_upstream_input_selection(
+        execution=composite,
+        snapshot=snapshot,
+        demand=_demand(),
+        upstream_batch=batch,
+        upstream_output=base_output,
+        selected_at=composite.started_at,
+        runner_id="factor-runner",
+        runner_version="1.0.0",
+        runner_implementation_sha256=_hash("d"),
+    )
+    composite_read = InputReadEvent(
+        factor_execution_id=composite.factor_execution_id,
+        selection_id=selection.selection_id,
+        requirement_handle_id=selection.bindings[0].handle.requirement_handle_id,
+        output_key="gppe",
+        read_index=0,
+        trace_id="trace:composite:minimum",
+        occurred_at=composite.started_at + timedelta(microseconds=1),
+    )
+    output = materialize_factor_output(
+        execution=composite,
+        snapshot=snapshot,
+        selection=selection,
+        draft=_draft_output(),
+        read_events=(composite_read,),
+        materialized_at=composite.started_at + timedelta(seconds=1),
+    )
+
+    assert base_output.minimum_consumed_confidence == Decimal("0.4")
+    assert selection.factor_inputs[0].observation.as_of == snapshot.request.as_of
+    assert output.minimum_consumed_confidence == Decimal("0.4")
+    assert output.as_of == snapshot.request.as_of
+
+    drifted_output = _replace_output(base_output, as_of=snapshot.request.as_of + timedelta(seconds=1))
+    drifted_batch = MaterializedFactorBatch(
+        factor_execution_id=base_execution.factor_execution_id,
+        snapshot_id=snapshot.snapshot_id,
+        output_ids=(drifted_output.materialized_output_id,),
+        repository_commit_id="commit:drifted-cutoff",
+        persisted_at=drifted_output.materialized_at + timedelta(seconds=1),
+    )
+    drifted_composite = FactorExecution(
+        template=_template(FactorKind.COMPOSITE),
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_sha256=snapshot.content_sha256,
+        ordered_subjects=(SUBJECT,),
+        upstream_batch_ids=(drifted_batch.materialized_batch_id,),
+        started_at=drifted_batch.persisted_at + timedelta(seconds=1),
+    )
+    with pytest.raises(ValueError, match="exact snapshot cutoff"):
+        build_runner_upstream_input_selection(
+            execution=drifted_composite,
+            snapshot=snapshot,
+            demand=_demand(),
+            upstream_batch=drifted_batch,
+            upstream_output=drifted_output,
+            selected_at=drifted_composite.started_at,
+            runner_id="factor-runner",
+            runner_version="1.0.0",
+            runner_implementation_sha256=_hash("d"),
+        )
+
+    future_output = _replace_output(base_output, materialized_at=composite.started_at + timedelta(seconds=1))
+    future_batch = MaterializedFactorBatch(
+        factor_execution_id=base_execution.factor_execution_id,
+        snapshot_id=snapshot.snapshot_id,
+        output_ids=(future_output.materialized_output_id,),
+        repository_commit_id="commit:future-output",
+        persisted_at=future_output.materialized_at + timedelta(seconds=1),
+    )
+    future_composite = FactorExecution(
+        template=_template(FactorKind.COMPOSITE),
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_sha256=snapshot.content_sha256,
+        ordered_subjects=(SUBJECT,),
+        upstream_batch_ids=(future_batch.materialized_batch_id,),
+        started_at=composite.started_at,
+    )
+    with pytest.raises(ValueError, match="future-dated upstream"):
+        build_runner_upstream_input_selection(
+            execution=future_composite,
+            snapshot=snapshot,
+            demand=_demand(),
+            upstream_batch=future_batch,
+            upstream_output=future_output,
+            selected_at=future_composite.started_at,
+            runner_id="factor-runner",
+            runner_version="1.0.0",
+            runner_implementation_sha256=_hash("d"),
+        )
 
 
 def test_future_events_are_gated_by_knowability_not_economic_date():
