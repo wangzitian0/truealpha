@@ -14,7 +14,7 @@ from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator, model_validator
 
 from truealpha_contracts.catalog import ResearchCatalogManifest
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
@@ -273,6 +273,10 @@ class SourceCoverageRequirement(BaseModel):
     requires_historical_knowability: bool = False
     fallback_policy: FallbackPolicy = FallbackPolicy.REQUIRED
     hard_dependency_reason: str | None = None
+
+    @field_serializer("required_permissions", when_used="json")
+    def serialize_required_permissions(self, values: frozenset[SourceUsagePermission]) -> list[str]:
+        return sorted(value.value for value in values)
 
     @property
     def key(self) -> tuple[CaptureEnvironment, str, str, str, DataDomain, str]:

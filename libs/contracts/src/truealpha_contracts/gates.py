@@ -14,7 +14,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator, model_validator
 
 from truealpha_contracts.capture_contracts import CaptureEvaluationReport, CaptureScope
 from truealpha_contracts.catalog import ResearchCatalogManifest
@@ -150,6 +150,10 @@ class SourceCallIntent(_StrictFrozenModel):
     required_permissions: frozenset[SourceUsagePermission] = Field(min_length=1)
     intended_call_at: datetime
     maximum_preflight_age: timedelta
+
+    @field_serializer("required_permissions", when_used="json")
+    def serialize_required_permissions(self, values: frozenset[SourceUsagePermission]) -> list[str]:
+        return sorted(value.value for value in values)
 
     @field_validator("intended_call_at")
     @classmethod

@@ -481,6 +481,10 @@ def test_preflight_requires_exact_ready_enabled_registry_entry_before_call() -> 
     assert report.blockers == ()
     assert report.preflight_report_id.startswith("source-call-preflight:")
 
+    payload = intent.model_dump(mode="json")
+    assert payload["required_permissions"] == sorted(payload["required_permissions"])
+    assert SourceCallIntent.model_validate(payload) == intent
+
     selected_state = next(
         state for state in states if state.source_registry_entry_id == intent.source_registry_entry_id
     )

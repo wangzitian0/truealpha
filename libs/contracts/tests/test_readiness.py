@@ -655,6 +655,17 @@ def test_source_readiness_is_content_addressed_and_passes_complete_matrix():
     assert not report.blockers
 
 
+def test_source_coverage_permissions_have_canonical_json_order():
+    primary = _rights("source.vendor-primary")
+    fallback = _rights("source.vendor-fallback")
+    catalog = _source_catalog(primary, fallback)
+    payload = catalog.model_dump(mode="json")
+
+    for requirement in payload["requirements"]:
+        assert requirement["required_permissions"] == sorted(requirement["required_permissions"])
+    assert SourceCoverageCatalog.model_validate(payload) == catalog
+
+
 def test_source_readiness_fails_missing_expired_or_denied_rights_and_has_no_override():
     primary = _rights("source.vendor-primary", denied=SourceUsagePermission.RAW_RETENTION)
     fallback = _rights("source.vendor-fallback", expires_at=BASE + timedelta(days=1))
