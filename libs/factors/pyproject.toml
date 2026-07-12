@@ -5,7 +5,11 @@ description = "The single implementation of the seven analytics modules (init.md
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.7.0",
+    "truealpha-contracts",
 ]
+
+[tool.uv.sources]
+truealpha-contracts = { workspace = true }
 
 [dependency-groups]
 dev = [

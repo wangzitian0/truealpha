@@ -92,6 +92,18 @@ insert into staging.contract_objects (
         '{}'::jsonb
     ),
     (
+        'usage-frequency:' || repeat('6', 64),
+        'usage_frequency_slice',
+        repeat('6', 64),
+        '{}'::jsonb
+    ),
+    (
+        'strategy-data-quality-review:' || repeat('7', 64),
+        'strategy_data_quality_review',
+        repeat('7', 64),
+        '{}'::jsonb
+    ),
+    (
         'graduation-attestation:' || repeat('5', 64),
         'graduation_attestation',
         repeat('5', 64),
@@ -120,18 +132,27 @@ begin
         'capture-evaluation:' || repeat('2', 64),
         'trace-bundle:' || repeat('3', 64),
         'strategy-usage-audit:' || repeat('4', 64),
+        'usage-frequency:' || repeat('6', 64),
+        'strategy-data-quality-review:' || repeat('7', 64),
         'graduation-attestation:' || repeat('5', 64)
     );
-    if durable_kind_count <> 10 then
+    if durable_kind_count <> 12 then
         raise exception 'staging.contract_objects does not accept every durable contract kind';
+    end if;
+
+    if to_regclass('staging.idx_contract_objects_usage_audit_run') is null then
+        raise exception 'strategy usage audits are not indexed by strategy_run_id';
+    end if;
+    if to_regclass('staging.idx_contract_objects_quality_review_run') is null then
+        raise exception 'strategy quality reviews are not indexed by strategy_run_id';
     end if;
 
     begin
         insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload)
         values (
-            'capture-scope:' || repeat('6', 64),
+            'capture-scope:' || repeat('8', 64),
             'capture_manifest',
-            repeat('6', 64),
+            repeat('8', 64),
             '{}'::jsonb
         );
     exception when check_violation then
@@ -140,9 +161,9 @@ begin
     begin
         insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload)
         values (
-            'trace-bundle:' || repeat('7', 64),
+            'trace-bundle:' || repeat('9', 64),
             'trace_bundle',
-            repeat('8', 64),
+            repeat('a', 64),
             '{}'::jsonb
         );
     exception when check_violation then
@@ -151,9 +172,9 @@ begin
     begin
         insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload)
         values (
-            'unknown-contract:' || repeat('9', 64),
+            'unknown-contract:' || repeat('0', 64),
             'unknown_contract',
-            repeat('9', 64),
+            repeat('0', 64),
             '{}'::jsonb
         );
     exception when check_violation then

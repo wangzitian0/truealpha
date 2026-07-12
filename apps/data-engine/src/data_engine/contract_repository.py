@@ -26,7 +26,18 @@ from truealpha_contracts.execution import SnapshotManifest, TraceBundle
 from truealpha_contracts.gates import GraduationAttestation
 from truealpha_contracts.registries import RegistrySnapshot
 from truealpha_contracts.release import ReleaseManifest
-from truealpha_contracts.usage import StrategyUsageAudit
+from truealpha_contracts.usage import (
+    StrategyDataQualityReview,
+    StrategyUsageAudit,
+    UsageFrequencySlice,
+)
+
+_STABLE_STRATEGY_RUN_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$")
+
+
+def _require_stable_strategy_run_id(strategy_run_id: str) -> None:
+    if _STABLE_STRATEGY_RUN_ID.fullmatch(strategy_run_id) is None:
+        raise ValueError("strategy_run_id must be a stable identifier")
 
 
 class ContractKind(StrEnum):
@@ -39,6 +50,8 @@ class ContractKind(StrEnum):
     CAPTURE_EVALUATION_REPORT = "capture_evaluation_report"
     TRACE_BUNDLE = "trace_bundle"
     STRATEGY_USAGE_AUDIT = "strategy_usage_audit"
+    USAGE_FREQUENCY_SLICE = "usage_frequency_slice"
+    STRATEGY_DATA_QUALITY_REVIEW = "strategy_data_quality_review"
     GRADUATION_ATTESTATION = "graduation_attestation"
 
 
@@ -130,6 +143,20 @@ _STRATEGY_USAGE_AUDIT_SPEC = _ContractSpec(
     hash_field="content_sha256",
     id_prefix="strategy-usage-audit",
 )
+_USAGE_FREQUENCY_SLICE_SPEC = _ContractSpec(
+    kind=ContractKind.USAGE_FREQUENCY_SLICE,
+    model_type=UsageFrequencySlice,
+    id_field="usage_frequency_slice_id",
+    hash_field="content_sha256",
+    id_prefix="usage-frequency",
+)
+_STRATEGY_DATA_QUALITY_REVIEW_SPEC = _ContractSpec(
+    kind=ContractKind.STRATEGY_DATA_QUALITY_REVIEW,
+    model_type=StrategyDataQualityReview,
+    id_field="review_id",
+    hash_field="content_sha256",
+    id_prefix="strategy-data-quality-review",
+)
 _GRADUATION_ATTESTATION_SPEC = _ContractSpec(
     kind=ContractKind.GRADUATION_ATTESTATION,
     model_type=GraduationAttestation,
@@ -212,6 +239,33 @@ class PostgresContractRepository[ContractT: BaseModel]:
         stored_kind, stored_hash, stored_payload = row
         self._require_expected_kind(contract_id, stored_kind)
         return self._validate_stored_identity(contract_id, stored_hash, stored_payload)
+
+    def _list_by_payload_text(self, field_name: str, value: str) -> tuple[ContractT, ...]:
+        """Return a deterministic, fully revalidated reverse lookup."""
+
+        rows = self._connection.execute(
+            sql.SQL(
+                """
+                select contract_id, contract_kind, content_sha256, payload
+                from {}
+                where contract_kind = %s and payload ->> %s = %s
+                order by contract_id
+                """
+            ).format(self._table),
+            (self._spec.kind.value, field_name, value),
+        ).fetchall()
+        contracts: list[ContractT] = []
+        for row in rows:
+            contract_id = str(row[0])
+            stored_kind = str(row[1])
+            stored_hash = str(row[2])
+            stored_payload = row[3]
+            if not isinstance(stored_payload, dict):
+                raise ContractIntegrityError(f"stored payload for {contract_id} is not a JSON object")
+            self._require_expected_id(contract_id)
+            self._require_expected_kind(contract_id, stored_kind)
+            contracts.append(self._validate_stored_identity(contract_id, stored_hash, stored_payload))
+        return tuple(contracts)
 
     def _select(self, contract_id: str) -> tuple[str, str, dict[str, Any]] | None:
         row = self._connection.execute(
@@ -373,6 +427,36 @@ class PostgresStrategyUsageAuditRepository(PostgresContractRepository[StrategyUs
         table: str = "contract_objects",
     ) -> None:
         super().__init__(connection, _STRATEGY_USAGE_AUDIT_SPEC, schema=schema, table=table)
+
+    def list_for_run(self, strategy_run_id: str) -> tuple[StrategyUsageAudit, ...]:
+        _require_stable_strategy_run_id(strategy_run_id)
+        return self._list_by_payload_text("strategy_run_id", strategy_run_id)
+
+
+class PostgresUsageFrequencySliceRepository(PostgresContractRepository[UsageFrequencySlice]):
+    def __init__(
+        self,
+        connection: Connection[Any],
+        *,
+        schema: str | None = "staging",
+        table: str = "contract_objects",
+    ) -> None:
+        super().__init__(connection, _USAGE_FREQUENCY_SLICE_SPEC, schema=schema, table=table)
+
+
+class PostgresStrategyDataQualityReviewRepository(PostgresContractRepository[StrategyDataQualityReview]):
+    def __init__(
+        self,
+        connection: Connection[Any],
+        *,
+        schema: str | None = "staging",
+        table: str = "contract_objects",
+    ) -> None:
+        super().__init__(connection, _STRATEGY_DATA_QUALITY_REVIEW_SPEC, schema=schema, table=table)
+
+    def list_for_run(self, strategy_run_id: str) -> tuple[StrategyDataQualityReview, ...]:
+        _require_stable_strategy_run_id(strategy_run_id)
+        return self._list_by_payload_text("strategy_run_id", strategy_run_id)
 
 
 class PostgresGraduationAttestationRepository(PostgresContractRepository[GraduationAttestation]):
