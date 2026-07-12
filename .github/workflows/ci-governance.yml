@@ -27,6 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Validate checked-in graph and manifests
         run: make issue-graph-check
       - name: Export live Vision issues
