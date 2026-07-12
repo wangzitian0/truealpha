@@ -1,0 +1,5 @@
+load_from:
+  - python_module:
+      module_name: data_engine.dagster_defs
+      attribute: defs
+      location_name: truealpha_data_engine

@@ -483,7 +483,7 @@ def capture(conn, *, reuse_openfigi_raw: bool = False, fetched_at: datetime | No
     )
 
 
-def emit_source_results(conn, *, run_id: str, scope, result: ToptIdentityResult) -> tuple[int, ...]:
+def emit_source_results(conn, *, run_id: str, scope, result: ToptIdentityResult, attempt: int = 0) -> tuple[int, ...]:
     requirements = scope.requirement_map()
     ids: list[int] = []
 
@@ -505,10 +505,11 @@ def emit_source_results(conn, *, run_id: str, scope, result: ToptIdentityResult)
                     domain_record_ids=tuple(record_ids),
                     observed_fields=tuple(fields),
                     min_knowable_at=TOPT_BASELINE_KNOWABLE_AT,
-                    max_knowable_at=result.observed_at,
+                    max_knowable_at=TOPT_BASELINE_KNOWABLE_AT,
                     observed_at=result.observed_at,
                     confidence=Decimal(str(confidence)),
                     mapping_version=mapping_version,
+                    attempt=attempt,
                 ),
             )
         )

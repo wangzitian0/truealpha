@@ -251,7 +251,7 @@ def _requirements(subjects: tuple[CaptureSubject, ...], partition_key: str) -> t
 def build_topt_scope(
     *,
     as_of: datetime = TOPT_BASELINE_KNOWABLE_AT,
-    approved_by: str = "issue:68",
+    approved_by: str = "issue:63",
 ) -> CaptureScope:
     subjects = _subjects()
     membership = [

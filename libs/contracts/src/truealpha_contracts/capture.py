@@ -302,9 +302,9 @@ class CaptureManifest(BaseModel):
             if cell.max_knowable_at is None or cell.max_knowable_at > self.as_of:
                 blockers.append(f"{prefix}: contains future knowledge")
             if requirement.maximum_age is not None:
-                if cell.observed_at is None:
+                if cell.max_knowable_at is None:
                     blockers.append(f"{prefix}: freshness cannot be evaluated")
-                elif self.as_of - cell.observed_at > requirement.maximum_age:
+                elif self.as_of - cell.max_knowable_at > requirement.maximum_age:
                     blockers.append(f"{prefix}: data is stale")
 
         object.__setattr__(self, "cells", cells)

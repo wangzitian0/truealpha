@@ -1,0 +1,25 @@
+storage:
+  postgres:
+    postgres_url:
+      env: DAGSTER_POSTGRES_URL
+
+local_artifact_storage:
+  module: dagster._core.storage.root
+  class: LocalArtifactStorage
+  config:
+    base_dir:
+      env: DAGSTER_ARTIFACT_DIR
+
+compute_logs:
+  module: dagster._core.storage.local_compute_log_manager
+  class: LocalComputeLogManager
+  config:
+    base_dir:
+      env: DAGSTER_COMPUTE_LOG_DIR
+
+# The daemon owns launch ordering and prevents overlapping real-source sweeps.
+run_queue:
+  max_concurrent_runs: 1
+
+telemetry:
+  enabled: false

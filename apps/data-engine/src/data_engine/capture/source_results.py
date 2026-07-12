@@ -34,6 +34,7 @@ class CaptureSourceResult:
     observed_at: datetime
     confidence: Decimal
     mapping_version: str
+    attempt: int = 0
     detail: str | None = None
 
     def __post_init__(self) -> None:
@@ -44,6 +45,8 @@ class CaptureSourceResult:
             raise ValueError("source result requires raw.fetches lineage")
         if not Decimal("0") <= self.confidence <= Decimal("1"):
             raise ValueError("source result confidence must be between 0 and 1")
+        if self.attempt < 0:
+            raise ValueError("source result attempt must be non-negative")
         if self.max_knowable_at is not None and self.max_knowable_at > self.observed_at:
             raise ValueError("source result cannot contain future knowledge")
         if (
@@ -56,8 +59,8 @@ class CaptureSourceResult:
             raise ValueError("failed source result requires detail")
 
     @property
-    def key(self) -> tuple[str, DataDomain, str, DataSource]:
-        return self.subject_id, self.domain, self.partition_key, self.source
+    def key(self) -> tuple[str, DataDomain, str, DataSource, int]:
+        return self.subject_id, self.domain, self.partition_key, self.source, self.attempt
 
 
 def put(conn, result: CaptureSourceResult) -> int:
@@ -68,10 +71,10 @@ def put(conn, result: CaptureSourceResult) -> int:
             (run_id, subject_id, domain, partition_key, source, outcome,
              raw_refs, domain_record_ids, observed_fields, min_knowable_at,
              max_knowable_at, observed_at, valid_time, transaction_time,
-             confidence, mapping_version, detail)
+             confidence, mapping_version, attempt, detail)
         values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb,
                 %s, %s, %s, daterange(%s::date, (%s::date + 1), '[)'), %s,
-                %s, %s, %s)
+                %s, %s, %s, %s)
         on conflict do nothing returning id
         """,
         (
@@ -92,6 +95,7 @@ def put(conn, result: CaptureSourceResult) -> int:
             transaction_time,
             result.confidence,
             result.mapping_version,
+            result.attempt,
             result.detail,
         ),
     ).fetchone()
@@ -113,6 +117,7 @@ def get(
     domain: DataDomain,
     partition_key: str,
     source: DataSource,
+    attempt: int = 0,
 ) -> tuple[int, CaptureSourceResult] | None:
     row = conn.execute(
         """
@@ -121,9 +126,9 @@ def get(
                mapping_version, detail
         from staging.capture_source_results
         where run_id = %s and subject_id = %s and domain = %s
-          and partition_key = %s and source = %s
+          and partition_key = %s and source = %s and attempt = %s
         """,
-        (run_id, subject_id, domain.value, partition_key, source.value),
+        (run_id, subject_id, domain.value, partition_key, source.value, attempt),
     ).fetchone()
     if row is None:
         return None
@@ -144,6 +149,7 @@ def get(
             observed_at=row[7],
             confidence=Decimal(row[8]),
             mapping_version=row[9],
+            attempt=attempt,
             detail=row[10],
         ),
     )
@@ -156,9 +162,10 @@ def for_cell(
 ) -> tuple[tuple[int, CaptureSourceResult], ...]:
     rows = conn.execute(
         """
-        select source from staging.capture_source_results
+        select distinct on (source) source, attempt
+        from staging.capture_source_results
         where run_id = %s and subject_id = %s and domain = %s and partition_key = %s
-        order by source
+        order by source, attempt desc
         """,
         (run_id, requirement.subject_id, requirement.domain.value, requirement.partition_key),
     ).fetchall()
@@ -170,10 +177,55 @@ def for_cell(
             requirement.domain,
             requirement.partition_key,
             DataSource(row[0]),
+            row[1],
         )
         for row in rows
     ]
     return tuple(result for result in results if result is not None)
+
+
+def evidence_digest(conn, result_ids: tuple[int, ...]) -> str:
+    """Hash semantic evidence, excluding run/attempt/ingestion clock identity."""
+    ids = sorted(set(result_ids))
+    if not ids:
+        raise ValueError("source asset produced no result rows")
+    rows = conn.execute(
+        """
+        select id, subject_id, domain, partition_key, source, outcome,
+               raw_refs, domain_record_ids, observed_fields, confidence,
+               mapping_version, detail
+        from staging.capture_source_results where id = any(%s) order by id
+        """,
+        (ids,),
+    ).fetchall()
+    if len(rows) != len(ids):
+        found = {row[0] for row in rows}
+        raise LookupError(f"missing capture source results: {sorted(set(ids) - found)}")
+    raw_ids = {int(raw_ref.removeprefix("raw.fetches:")) for row in rows for raw_ref in row[6]}
+    raw_rows = conn.execute(
+        "select id, payload_sha256 from raw.fetches where id = any(%s)",
+        (sorted(raw_ids),),
+    ).fetchall()
+    raw_hashes = {raw_id: payload_sha256 for raw_id, payload_sha256 in raw_rows}
+    if set(raw_hashes) != raw_ids:
+        raise LookupError(f"missing raw evidence: {sorted(raw_ids - set(raw_hashes))}")
+    payload = [
+        {
+            "subject_id": row[1],
+            "domain": row[2],
+            "partition_key": row[3],
+            "source": row[4],
+            "outcome": row[5],
+            "raw_sha256": sorted(raw_hashes[int(ref.removeprefix("raw.fetches:"))] for ref in row[6]),
+            "domain_record_ids": sorted(row[7]),
+            "observed_fields": sorted(row[8]),
+            "confidence": str(row[9]),
+            "mapping_version": row[10],
+            "detail": row[11],
+        }
+        for row in rows
+    ]
+    return canonical_sha256(payload)
 
 
 EMPTY_COMPLETE_DOMAINS = {

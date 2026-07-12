@@ -36,7 +36,7 @@ def _requirement(scope, subject_id: str, domain: DataDomain):
     return matches[0]
 
 
-def capture_sec_financials(conn, *, run_id: str, scope) -> tuple[int, ...]:
+def capture_sec_financials(conn, *, run_id: str, scope, attempt: int = 0) -> tuple[int, ...]:
     ids: list[int] = []
     seen_issuers: set[str] = set()
     with sec_client() as client:
@@ -89,6 +89,7 @@ def capture_sec_financials(conn, *, run_id: str, scope) -> tuple[int, ...]:
                         observed_at=fetched_at,
                         confidence=Decimal("1"),
                         mapping_version=sec_companyfacts.MAPPING_VERSION,
+                        attempt=attempt,
                     ),
                 )
             )
@@ -96,7 +97,7 @@ def capture_sec_financials(conn, *, run_id: str, scope) -> tuple[int, ...]:
     return tuple(ids)
 
 
-def capture_yahoo_prices(conn, *, run_id: str, scope, period_days: int = 365) -> tuple[int, ...]:
+def capture_yahoo_prices(conn, *, run_id: str, scope, period_days: int = 365, attempt: int = 0) -> tuple[int, ...]:
     ids: list[int] = []
     for instrument in TOPT_INSTRUMENTS:
         response = yahoo.fetch_chart_response(instrument.ticker, period_days=period_days)
@@ -144,6 +145,7 @@ def capture_yahoo_prices(conn, *, run_id: str, scope, period_days: int = 365) ->
                     observed_at=fetched_at,
                     confidence=yahoo_chart.PRICE_CONFIDENCE,
                     mapping_version=yahoo_chart.MAPPING_VERSION,
+                    attempt=attempt,
                 ),
             )
         )
@@ -170,6 +172,7 @@ def capture_yahoo_prices(conn, *, run_id: str, scope, period_days: int = 365) ->
                     observed_at=fetched_at,
                     confidence=yahoo_chart.ACTION_CONFIDENCE,
                     mapping_version=yahoo_chart.MAPPING_VERSION,
+                    attempt=attempt,
                 ),
             )
         )
@@ -196,7 +199,7 @@ def _filing_knowable_at(filing_date: str) -> datetime:
     return datetime.combine(date.fromisoformat(filing_date) + timedelta(days=1), datetime_time.min, tzinfo=UTC)
 
 
-def capture_sec_filings(conn, *, run_id: str, scope) -> tuple[int, ...]:
+def capture_sec_filings(conn, *, run_id: str, scope, attempt: int = 0) -> tuple[int, ...]:
     ids: list[int] = []
     seen_issuers: set[str] = set()
     with sec_client() as client:
@@ -331,6 +334,7 @@ def capture_sec_filings(conn, *, run_id: str, scope) -> tuple[int, ...]:
                         observed_at=observed_at,
                         confidence=Decimal("1"),
                         mapping_version=sec_filings.MAPPING_VERSION,
+                        attempt=attempt,
                         detail=None if filing_success else "No annual or current-report filing was selected.",
                     ),
                 )
@@ -358,6 +362,7 @@ def capture_sec_filings(conn, *, run_id: str, scope) -> tuple[int, ...]:
                         observed_at=observed_at,
                         confidence=Decimal("1"),
                         mapping_version=sec_filings.MAPPING_VERSION,
+                        attempt=attempt,
                         detail=None if extraction_ids else "No filing document envelope was normalized.",
                     ),
                 )
@@ -386,6 +391,7 @@ def capture_sec_filings(conn, *, run_id: str, scope) -> tuple[int, ...]:
                         observed_at=observed_at,
                         confidence=Decimal("1"),
                         mapping_version=sec_filings.MAPPING_VERSION,
+                        attempt=attempt,
                         detail=(
                             "Guidance/outlook text requires structured range extraction in: "
                             + ", ".join(guidance_signals)
@@ -399,7 +405,7 @@ def capture_sec_filings(conn, *, run_id: str, scope) -> tuple[int, ...]:
     return tuple(ids)
 
 
-def capture_moomoo_domains(conn, *, run_id: str, scope) -> tuple[int, ...]:
+def capture_moomoo_domains(conn, *, run_id: str, scope, attempt: int = 0) -> tuple[int, ...]:
     ids: list[int] = []
     issuer_instruments: dict[str, ToptInstrument] = {}
     for instrument in TOPT_INSTRUMENTS:
@@ -484,6 +490,7 @@ def capture_moomoo_domains(conn, *, run_id: str, scope) -> tuple[int, ...]:
                             observed_at=observed_at,
                             confidence=moomoo_normalizer.CONFIDENCE,
                             mapping_version=moomoo_normalizer.MAPPING_VERSION,
+                            attempt=attempt,
                             detail=detail,
                         ),
                     )
@@ -537,6 +544,7 @@ def capture_moomoo_domains(conn, *, run_id: str, scope) -> tuple[int, ...]:
                         observed_at=observed_at,
                         confidence=moomoo_normalizer.ACTION_CONFIDENCE,
                         mapping_version=moomoo_normalizer.MAPPING_VERSION,
+                        attempt=attempt,
                         detail=detail,
                     ),
                 )

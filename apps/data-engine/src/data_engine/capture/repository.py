@@ -137,3 +137,14 @@ def get_manifest(conn, capture_manifest_id: str) -> CaptureManifest:
     if row is None:
         raise LookupError(f"capture manifest {capture_manifest_id} does not exist")
     return CaptureManifest.model_validate(row[0])
+
+
+def get_manifest_for_run(conn, *, capture_scope_id: str, run_id: str) -> CaptureManifest | None:
+    row = conn.execute(
+        """
+        select payload from staging.capture_manifests
+        where capture_scope_id = %s and run_id = %s
+        """,
+        (capture_scope_id, run_id),
+    ).fetchone()
+    return None if row is None else CaptureManifest.model_validate(row[0])

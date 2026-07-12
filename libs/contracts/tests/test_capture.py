@@ -171,3 +171,26 @@ def test_applicability_cannot_change_after_scope_freeze():
     manifest = _manifest(changed, _optional_missing())
     assert manifest.status is CaptureManifestStatus.FAIL
     assert any("applicability changed" in blocker for blocker in manifest.blockers)
+
+
+def test_recent_recapture_does_not_make_old_source_knowledge_fresh():
+    stale_price = CaptureManifestCell(
+        subject_id="instrument:a",
+        domain=DataDomain.MARKET_PRICES,
+        partition_key="2026-05-28",
+        status=CaptureCellStatus.COMPLETE,
+        source=DataSource.YAHOO,
+        raw_refs=("raw.fetches:2",),
+        normalized_record_ids=("staging.market_prices:2",),
+        record_count=1,
+        content_sha256="d" * 64,
+        min_knowable_at=AS_OF - timedelta(days=4),
+        max_knowable_at=AS_OF - timedelta(days=4),
+        recorded_at=AS_OF + timedelta(minutes=2),
+        observed_at=AS_OF,
+        confidence=Decimal("0.9"),
+        mapping_version="yahoo-chart:1",
+    )
+    manifest = _manifest(_complete_fact(), stale_price)
+    assert manifest.status is CaptureManifestStatus.FAIL
+    assert any("data is stale" in blocker for blocker in manifest.blockers)
