@@ -37,8 +37,24 @@
       "class": "start",
       "issue": 57,
       "artifact": "identity-market-time-universe contracts",
-      "ref": "git:7a253f8c143b30e255f81c6cb27b95ec947b026d:libs/contracts",
-      "git_tree": "3c27d6f784051d59212b5636cc0db1d7c512db4d",
+      "evidence": {
+        "path": "governance/evidence/issue-57.v1.json",
+        "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640"
+      },
+      "git_objects": [
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/universe.py",
+          "oid": "292b73b7fd2f44a440fb581c8a9d9a9f199c2730"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/market.py",
+          "oid": "8e6e232037a05b8fa5a812076dda4b3fd447afd8"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/registries.py",
+          "oid": "d2c86876086e7f6ffccbc938bd733093906f6939"
+        }
+      ],
       "legacy_accepted": true,
       "state": "accepted"
     },
@@ -46,8 +62,12 @@
       "class": "start",
       "issue": 58,
       "artifact": "execution-lineage contract pack",
-      "ref": "git:7a253f8c143b30e255f81c6cb27b95ec947b026d:libs/contracts",
-      "git_tree": "3c27d6f784051d59212b5636cc0db1d7c512db4d",
+      "evidence": {
+        "path": "governance/evidence/issue-58.v2.json",
+        "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
+      },
+      "ref": "git:71df1a7214d28fd6e161da04769466abe5c13e82:libs/contracts",
+      "git_tree": "cc2a0ded19f3ceb28b0f5e39c83871055ca07346",
       "legacy_accepted": true,
       "state": "accepted"
     }

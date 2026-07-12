@@ -48,7 +48,7 @@
       "terminal_evidence": "E2",
       "accepted_evidence": {
         "path": "governance/evidence/issue-14.v1.json",
-        "sha256": "7790c5fdb9503a01de3ccd7cc17e69f300a80a3e63911090afd4777a4ec0ff0f"
+        "sha256": "6a824fabd79752c873b4ca7be03180b57409351de1dd9e8b1e0100bf5f4714cf"
       }
     },
     "21": {"gate": 29, "terminal_evidence": "E4"},
@@ -91,15 +91,15 @@
       "terminal_evidence": "E2",
       "accepted_evidence": {
         "path": "governance/evidence/issue-57.v1.json",
-        "sha256": "15bbc1d04e93c2a155a44e3aa6dfc1a8366b0e32f565348787a382a91e05f0a6"
+        "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640"
       }
     },
     "58": {
       "gate": 56,
       "terminal_evidence": "E2",
       "accepted_evidence": {
-        "path": "governance/evidence/issue-58.v1.json",
-        "sha256": "6b7094214d6a6c4f4b636b6505cd9d43a64ce1c994dd3c95260b4ebb155bef2c"
+        "path": "governance/evidence/issue-58.v2.json",
+        "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
       }
     },
     "59": {"gate": 56, "terminal_evidence": "E4"},
@@ -124,7 +124,7 @@
       "target_rung": "E0",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S0-core-strategy-tiny.v1.json",
-      "sha256": "3c638e9d1583e05e17a153fbaae9a43283fe2d53607294611093e320f8f9797e"
+      "sha256": "d4cd2d615e6c446f5758495b1ac4198f8bb87db4f045cfd36e533ad09b01e6e8"
     },
     "D0-mvp-capture-tiny": {
       "issue": 79,
@@ -133,7 +133,7 @@
       "target_rung": "E0",
       "terminal_rung": "E1",
       "manifest": "governance/batches/D0-mvp-capture-tiny.v1.json",
-      "sha256": "e8c2b0d30a1206d6deb05f2ecd7420d156c6b5a48388c4f5f98dfde259828b18"
+      "sha256": "2b90b192ba5914323f04f4ba4bff525b2eaebd79464463766ce4193e2f823730"
     }
   },
   "artifact_edges": [
