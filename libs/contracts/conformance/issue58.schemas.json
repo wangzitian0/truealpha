@@ -1,0 +1,2492 @@
+{
+  "contract_set": "truealpha.issue-58.exact-contracts.v1",
+  "schema_sha256": {
+    "CaptureManifest": "e84b8041857e2bfb79e8567f590b2f47ab7b80503e6ab9f944833f651ab7cbc3",
+    "CaptureScope": "90983276eef34f0c23d85718c066a3bd1dadc1247dacda3c32f5143bdf6cd04a",
+    "ReleaseManifest": "6eef8fb32b8737de34b364b381543b8e201b7ca716af145df81eb1677dc5991d",
+    "SnapshotManifest": "97d394f96d83c4a2435dbfdc11c3cba2cf5fd43e40c2c7663a51cdc50a5d0103"
+  },
+  "schemas": {
+    "CaptureManifest": {
+      "$defs": {
+        "CaptureCell": {
+          "additionalProperties": false,
+          "description": "One manifest row at subject, semantic domain, and vintage grain.",
+          "properties": {
+            "applicability": {
+              "enum": [
+                "required",
+                "optional",
+                "not_applicable"
+              ],
+              "title": "Applicability",
+              "type": "string"
+            },
+            "capture_cell_id": {
+              "default": "",
+              "pattern": "^(?:|capture-cell:[0-9a-f]{64})$",
+              "title": "Capture Cell Id",
+              "type": "string"
+            },
+            "capture_requirement_id": {
+              "pattern": "^capture-requirement:[0-9a-f]{64}$",
+              "title": "Capture Requirement Id",
+              "type": "string"
+            },
+            "content_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/DataDomain"
+            },
+            "evidence": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/CaptureRecordEvidence"
+              },
+              "title": "Evidence",
+              "type": "array"
+            },
+            "partition_key": {
+              "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+              "title": "Partition Key",
+              "type": "string"
+            },
+            "reason_codes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Reason Codes",
+              "type": "array"
+            },
+            "status": {
+              "enum": [
+                "complete",
+                "optional",
+                "not_applicable",
+                "missing",
+                "stale",
+                "unresolved",
+                "error"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/SubjectRef"
+            }
+          },
+          "required": [
+            "subject",
+            "domain",
+            "partition_key",
+            "capture_requirement_id",
+            "applicability",
+            "status"
+          ],
+          "title": "CaptureCell",
+          "type": "object"
+        },
+        "CaptureEnvironment": {
+          "enum": [
+            "local",
+            "local_dev",
+            "local_test",
+            "github_ci",
+            "preview",
+            "staging",
+            "production"
+          ],
+          "title": "CaptureEnvironment",
+          "type": "string"
+        },
+        "CaptureRecordEvidence": {
+          "additionalProperties": false,
+          "description": "One exact raw-checksum to normalized-record lineage edge.",
+          "properties": {
+            "confidence": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Confidence"
+            },
+            "content_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "evidence_id": {
+              "default": "",
+              "pattern": "^(?:|capture-evidence:[0-9a-f]{64})$",
+              "title": "Evidence Id",
+              "type": "string"
+            },
+            "knowable_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Knowable At"
+            },
+            "lineage_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Lineage Sha256"
+            },
+            "mapping_version": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mapping Version"
+            },
+            "normalized_id": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Normalized Id"
+            },
+            "policy_versions": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Policy Versions",
+              "type": "object"
+            },
+            "populated_fields": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Populated Fields",
+              "type": "array"
+            },
+            "quality_check_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Quality Check Ids",
+              "type": "array"
+            },
+            "quality_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/QualityStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "raw_id": {
+              "anyOf": [
+                {
+                  "pattern": "^raw(?:\\.[a-z][a-z0-9_]*)+:[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Raw Id"
+            },
+            "raw_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Raw Sha256"
+            },
+            "recorded_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Recorded At"
+            },
+            "semantic_type_id": {
+              "anyOf": [
+                {
+                  "pattern": "^semantic\\.[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Semantic Type Id"
+            },
+            "semantic_type_version": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Semantic Type Version"
+            },
+            "source_coverage_entry_id": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Source Coverage Entry Id"
+            },
+            "valid_from": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid From"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            }
+          },
+          "title": "CaptureRecordEvidence",
+          "type": "object"
+        },
+        "DataDomain": {
+          "enum": [
+            "entity_identity",
+            "instruments",
+            "financial_facts",
+            "forecasts",
+            "company_guidance",
+            "filings",
+            "filing_extractions",
+            "market_prices",
+            "corporate_actions",
+            "universe",
+            "knowledge_graph",
+            "analyst_ratings",
+            "fund_holdings",
+            "segments",
+            "factor_outputs"
+          ],
+          "title": "DataDomain",
+          "type": "string"
+        },
+        "QualityStatus": {
+          "enum": [
+            "pass",
+            "fail"
+          ],
+          "title": "QualityStatus",
+          "type": "string"
+        },
+        "SubjectKind": {
+          "enum": [
+            "issuer",
+            "security",
+            "listing",
+            "fund",
+            "analyst",
+            "universe",
+            "theme"
+          ],
+          "title": "SubjectKind",
+          "type": "string"
+        },
+        "SubjectRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/SubjectKind"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "title": "SubjectRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Observed capture rows plus every immutable binding needed to evaluate them.",
+      "properties": {
+        "applicability_catalog_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Applicability Catalog Id",
+          "type": "string"
+        },
+        "applicability_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Applicability Catalog Sha256",
+          "type": "string"
+        },
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "capture_manifest_id": {
+          "default": "",
+          "pattern": "^(?:|capture-manifest:[0-9a-f]{64})$",
+          "title": "Capture Manifest Id",
+          "type": "string"
+        },
+        "capture_scope_id": {
+          "pattern": "^capture-scope:[0-9a-f]{64}$",
+          "title": "Capture Scope Id",
+          "type": "string"
+        },
+        "capture_scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Capture Scope Sha256",
+          "type": "string"
+        },
+        "cells": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CaptureCell"
+          },
+          "title": "Cells",
+          "type": "array"
+        },
+        "content_sha256": {
+          "default": "",
+          "pattern": "^(?:|[0-9a-f]{64})$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "environment": {
+          "$ref": "#/$defs/CaptureEnvironment"
+        },
+        "partition_key": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Partition Key",
+          "type": "string"
+        },
+        "research_catalog_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Research Catalog Id",
+          "type": "string"
+        },
+        "research_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Research Catalog Sha256",
+          "type": "string"
+        },
+        "semantic_type_registry_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Semantic Type Registry Id",
+          "type": "string"
+        },
+        "semantic_type_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Semantic Type Registry Sha256",
+          "type": "string"
+        },
+        "slo_catalog_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Slo Catalog Id",
+          "type": "string"
+        },
+        "slo_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Slo Catalog Sha256",
+          "type": "string"
+        },
+        "source_coverage_catalog_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Source Coverage Catalog Id",
+          "type": "string"
+        },
+        "source_coverage_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Coverage Catalog Sha256",
+          "type": "string"
+        },
+        "source_registry_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Source Registry Id",
+          "type": "string"
+        },
+        "source_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Registry Sha256",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "capture_scope_id",
+        "capture_scope_sha256",
+        "environment",
+        "research_catalog_id",
+        "research_catalog_sha256",
+        "applicability_catalog_id",
+        "applicability_catalog_sha256",
+        "source_coverage_catalog_id",
+        "source_coverage_catalog_sha256",
+        "slo_catalog_id",
+        "slo_catalog_sha256",
+        "source_registry_id",
+        "source_registry_sha256",
+        "semantic_type_registry_id",
+        "semantic_type_registry_sha256",
+        "partition_key",
+        "as_of",
+        "started_at",
+        "created_at"
+      ],
+      "title": "CaptureManifest",
+      "type": "object"
+    },
+    "CaptureScope": {
+      "$defs": {
+        "CaptureRequirement": {
+          "additionalProperties": false,
+          "description": "Source-neutral semantic demand shared by every environment.",
+          "properties": {
+            "cadence": {
+              "format": "duration",
+              "title": "Cadence",
+              "type": "string"
+            },
+            "capture_requirement_id": {
+              "default": "",
+              "pattern": "^(?:|capture-requirement:[0-9a-f]{64})$",
+              "title": "Capture Requirement Id",
+              "type": "string"
+            },
+            "content_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/DataDomain"
+            },
+            "freshness_policy_id": {
+              "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+              "title": "Freshness Policy Id",
+              "type": "string"
+            },
+            "maximum_age": {
+              "format": "duration",
+              "title": "Maximum Age",
+              "type": "string"
+            },
+            "partition_rule_id": {
+              "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+              "title": "Partition Rule Id",
+              "type": "string"
+            },
+            "quality_policy_ids": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Quality Policy Ids",
+              "type": "array"
+            },
+            "required_fields": {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Required Fields",
+              "type": "array"
+            },
+            "semantic_type_id": {
+              "pattern": "^semantic\\.[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+              "title": "Semantic Type Id",
+              "type": "string"
+            },
+            "semantic_type_version": {
+              "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+              "title": "Semantic Type Version",
+              "type": "string"
+            },
+            "subject_kinds": {
+              "items": {
+                "$ref": "#/$defs/SubjectKind"
+              },
+              "minItems": 1,
+              "title": "Subject Kinds",
+              "type": "array"
+            }
+          },
+          "required": [
+            "semantic_type_id",
+            "semantic_type_version",
+            "domain",
+            "required_fields",
+            "subject_kinds",
+            "cadence",
+            "partition_rule_id",
+            "freshness_policy_id",
+            "maximum_age",
+            "quality_policy_ids"
+          ],
+          "title": "CaptureRequirement",
+          "type": "object"
+        },
+        "DataDomain": {
+          "enum": [
+            "entity_identity",
+            "instruments",
+            "financial_facts",
+            "forecasts",
+            "company_guidance",
+            "filings",
+            "filing_extractions",
+            "market_prices",
+            "corporate_actions",
+            "universe",
+            "knowledge_graph",
+            "analyst_ratings",
+            "fund_holdings",
+            "segments",
+            "factor_outputs"
+          ],
+          "title": "DataDomain",
+          "type": "string"
+        },
+        "SubjectKind": {
+          "enum": [
+            "issuer",
+            "security",
+            "listing",
+            "fund",
+            "analyst",
+            "universe",
+            "theme"
+          ],
+          "title": "SubjectKind",
+          "type": "string"
+        },
+        "UniverseRef": {
+          "additionalProperties": false,
+          "description": "Exact immutable reference to one universe manifest.",
+          "properties": {
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "universe_id": {
+              "title": "Universe Id",
+              "type": "string"
+            },
+            "universe_version": {
+              "title": "Universe Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "universe_id",
+            "universe_version",
+            "content_sha256"
+          ],
+          "title": "UniverseRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Immutable environment-neutral denominator promoted unchanged.",
+      "properties": {
+        "applicability_catalog_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Applicability Catalog Id",
+          "type": "string"
+        },
+        "applicability_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Applicability Catalog Sha256",
+          "type": "string"
+        },
+        "applicability_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Applicability Projection Sha256",
+          "type": "string"
+        },
+        "capture_scope_id": {
+          "default": "",
+          "pattern": "^(?:|capture-scope:[0-9a-f]{64})$",
+          "title": "Capture Scope Id",
+          "type": "string"
+        },
+        "content_sha256": {
+          "default": "",
+          "pattern": "^(?:|[0-9a-f]{64})$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "effective_at": {
+          "format": "date-time",
+          "title": "Effective At",
+          "type": "string"
+        },
+        "owner": {
+          "minLength": 1,
+          "title": "Owner",
+          "type": "string"
+        },
+        "requirements": {
+          "items": {
+            "$ref": "#/$defs/CaptureRequirement"
+          },
+          "minItems": 1,
+          "title": "Requirements",
+          "type": "array"
+        },
+        "research_catalog_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Research Catalog Id",
+          "type": "string"
+        },
+        "research_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Research Catalog Sha256",
+          "type": "string"
+        },
+        "semantic_type_registry_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Semantic Type Registry Id",
+          "type": "string"
+        },
+        "semantic_type_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Semantic Type Registry Sha256",
+          "type": "string"
+        },
+        "slo_catalog_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Slo Catalog Id",
+          "type": "string"
+        },
+        "slo_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Slo Catalog Sha256",
+          "type": "string"
+        },
+        "source_coverage_catalog_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Source Coverage Catalog Id",
+          "type": "string"
+        },
+        "source_coverage_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Coverage Catalog Sha256",
+          "type": "string"
+        },
+        "source_coverage_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Coverage Projection Sha256",
+          "type": "string"
+        },
+        "source_registry_id": {
+          "pattern": "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+          "title": "Source Registry Id",
+          "type": "string"
+        },
+        "source_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Registry Sha256",
+          "type": "string"
+        },
+        "universe": {
+          "$ref": "#/$defs/UniverseRef"
+        }
+      },
+      "required": [
+        "research_catalog_id",
+        "research_catalog_sha256",
+        "universe",
+        "applicability_catalog_id",
+        "applicability_catalog_sha256",
+        "applicability_projection_sha256",
+        "source_coverage_catalog_id",
+        "source_coverage_catalog_sha256",
+        "source_coverage_projection_sha256",
+        "slo_catalog_id",
+        "slo_catalog_sha256",
+        "source_registry_id",
+        "source_registry_sha256",
+        "semantic_type_registry_id",
+        "semantic_type_registry_sha256",
+        "requirements",
+        "effective_at",
+        "owner"
+      ],
+      "title": "CaptureScope",
+      "type": "object"
+    },
+    "ReleaseManifest": {
+      "$defs": {
+        "ArtifactRole": {
+          "enum": [
+            "data_engine_dagster",
+            "llm_service",
+            "app_web",
+            "db_migrations"
+          ],
+          "title": "ArtifactRole",
+          "type": "string"
+        },
+        "ExtractionTemplate": {
+          "additionalProperties": false,
+          "description": "Frozen instructions, output schema, model revision, and extractor code.",
+          "properties": {
+            "content_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "extraction_template_id": {
+              "default": "",
+              "pattern": "^(?:|extraction-template:[0-9a-f]{64})$",
+              "title": "Extraction Template Id",
+              "type": "string"
+            },
+            "extractor_implementation_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Extractor Implementation Sha256",
+              "type": "string"
+            },
+            "instructions_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Instructions Sha256",
+              "type": "string"
+            },
+            "model_revision_id": {
+              "pattern": "^model-revision:[0-9a-f]{64}$",
+              "title": "Model Revision Id",
+              "type": "string"
+            },
+            "model_revision_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Model Revision Sha256",
+              "type": "string"
+            },
+            "output_schema_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Output Schema Sha256",
+              "type": "string"
+            },
+            "payload_model_key": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Payload Model Key",
+              "type": "string"
+            },
+            "semantic_type_id": {
+              "$ref": "#/$defs/SemanticTypeId"
+            },
+            "semantic_type_version": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Semantic Type Version",
+              "type": "string"
+            },
+            "template_name": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Template Name",
+              "type": "string"
+            },
+            "template_version": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Template Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "template_name",
+            "template_version",
+            "semantic_type_id",
+            "semantic_type_version",
+            "payload_model_key",
+            "output_schema_sha256",
+            "instructions_sha256",
+            "extractor_implementation_sha256",
+            "model_revision_id",
+            "model_revision_sha256"
+          ],
+          "title": "ExtractionTemplate",
+          "type": "object"
+        },
+        "ModelRevisionRef": {
+          "additionalProperties": false,
+          "description": "One exact provider model revision and its immutable execution settings.",
+          "properties": {
+            "content_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "decoding_parameters_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Decoding Parameters Sha256",
+              "type": "string"
+            },
+            "endpoint_or_artifact_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Endpoint Or Artifact Sha256",
+              "type": "string"
+            },
+            "immutable_revision": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Immutable Revision",
+              "type": "string"
+            },
+            "model_id": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Model Id",
+              "type": "string"
+            },
+            "model_revision_id": {
+              "default": "",
+              "pattern": "^(?:|model-revision:[0-9a-f]{64})$",
+              "title": "Model Revision Id",
+              "type": "string"
+            },
+            "provider": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Provider",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "model_id",
+            "immutable_revision",
+            "endpoint_or_artifact_sha256",
+            "decoding_parameters_sha256"
+          ],
+          "title": "ModelRevisionRef",
+          "type": "object"
+        },
+        "ReleaseArtifact": {
+          "additionalProperties": false,
+          "properties": {
+            "digest": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Digest",
+              "type": "string"
+            },
+            "git_sha": {
+              "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$",
+              "title": "Git Sha",
+              "type": "string"
+            },
+            "image_or_bundle": {
+              "minLength": 1,
+              "title": "Image Or Bundle",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/ArtifactRole"
+            },
+            "sbom_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sbom Sha256",
+              "type": "string"
+            },
+            "signature_ref": {
+              "minLength": 1,
+              "title": "Signature Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "role",
+            "image_or_bundle",
+            "digest",
+            "git_sha",
+            "sbom_sha256",
+            "signature_ref"
+          ],
+          "title": "ReleaseArtifact",
+          "type": "object"
+        },
+        "SemanticTypeId": {
+          "pattern": "^semantic\\.[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+          "type": "string"
+        },
+        "UniverseRef": {
+          "additionalProperties": false,
+          "description": "Exact immutable reference to one universe manifest.",
+          "properties": {
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "universe_id": {
+              "title": "Universe Id",
+              "type": "string"
+            },
+            "universe_version": {
+              "title": "Universe Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "universe_id",
+            "universe_version",
+            "content_sha256"
+          ],
+          "title": "UniverseRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "The complete signed artifact set accepted for one exact product scope.",
+      "properties": {
+        "applicability_catalog_id": {
+          "pattern": "^applicability:[0-9a-f]{64}$",
+          "title": "Applicability Catalog Id",
+          "type": "string"
+        },
+        "applicability_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Applicability Catalog Sha256",
+          "type": "string"
+        },
+        "approved_extraction_templates": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtractionTemplate"
+          },
+          "title": "Approved Extraction Templates",
+          "type": "array"
+        },
+        "approved_model_revisions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelRevisionRef"
+          },
+          "title": "Approved Model Revisions",
+          "type": "array"
+        },
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ReleaseArtifact"
+          },
+          "minItems": 1,
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "capture_scope_id": {
+          "pattern": "^capture-scope:[0-9a-f]{64}$",
+          "title": "Capture Scope Id",
+          "type": "string"
+        },
+        "capture_scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Capture Scope Sha256",
+          "type": "string"
+        },
+        "configuration_sha256": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "minProperties": 1,
+          "title": "Configuration Sha256",
+          "type": "object"
+        },
+        "consumer_slo_catalog_id": {
+          "pattern": "^consumer-slo:[0-9a-f]{64}$",
+          "title": "Consumer Slo Catalog Id",
+          "type": "string"
+        },
+        "consumer_slo_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Consumer Slo Catalog Sha256",
+          "type": "string"
+        },
+        "contract_version": {
+          "minLength": 1,
+          "title": "Contract Version",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "identifier_type_registry_id": {
+          "pattern": "^identifier-type-registry:[0-9a-f]{64}$",
+          "title": "Identifier Type Registry Id",
+          "type": "string"
+        },
+        "identifier_type_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Identifier Type Registry Sha256",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "default": "",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "manifest_signature_ref": {
+          "minLength": 1,
+          "title": "Manifest Signature Ref",
+          "type": "string"
+        },
+        "mart_schema_version": {
+          "minLength": 1,
+          "title": "Mart Schema Version",
+          "type": "string"
+        },
+        "migration_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Migration Ids",
+          "type": "array"
+        },
+        "migration_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Migration Set Sha256",
+          "type": "string"
+        },
+        "natural_refresh_requirement_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Natural Refresh Requirement Ids",
+          "type": "array"
+        },
+        "registry_snapshot_id": {
+          "pattern": "^registry-snapshot:[0-9a-f]{64}$",
+          "title": "Registry Snapshot Id",
+          "type": "string"
+        },
+        "registry_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Registry Snapshot Sha256",
+          "type": "string"
+        },
+        "release_manifest_id": {
+          "default": "",
+          "title": "Release Manifest Id",
+          "type": "string"
+        },
+        "research_catalog_id": {
+          "pattern": "^research-catalog:[0-9a-f]{64}$",
+          "title": "Research Catalog Id",
+          "type": "string"
+        },
+        "research_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Research Catalog Sha256",
+          "type": "string"
+        },
+        "semantic_type_registry_id": {
+          "pattern": "^semantic-type-registry:[0-9a-f]{64}$",
+          "title": "Semantic Type Registry Id",
+          "type": "string"
+        },
+        "semantic_type_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Semantic Type Registry Sha256",
+          "type": "string"
+        },
+        "slo_catalog_id": {
+          "pattern": "^module-slo:[0-9a-f]{64}$",
+          "title": "Slo Catalog Id",
+          "type": "string"
+        },
+        "slo_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Slo Catalog Sha256",
+          "type": "string"
+        },
+        "source_coverage_catalog_id": {
+          "pattern": "^source-coverage:[0-9a-f]{64}$",
+          "title": "Source Coverage Catalog Id",
+          "type": "string"
+        },
+        "source_coverage_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Coverage Catalog Sha256",
+          "type": "string"
+        },
+        "source_readiness_report_id": {
+          "pattern": "^source-readiness:[0-9a-f]{64}$",
+          "title": "Source Readiness Report Id",
+          "type": "string"
+        },
+        "source_readiness_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Readiness Report Sha256",
+          "type": "string"
+        },
+        "source_registry_id": {
+          "pattern": "^source-registry:[0-9a-f]{64}$",
+          "title": "Source Registry Id",
+          "type": "string"
+        },
+        "source_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Registry Sha256",
+          "type": "string"
+        },
+        "universe": {
+          "$ref": "#/$defs/UniverseRef"
+        },
+        "usage_telemetry_slo_catalog_id": {
+          "pattern": "^usage-telemetry-slo:[0-9a-f]{64}$",
+          "title": "Usage Telemetry Slo Catalog Id",
+          "type": "string"
+        },
+        "usage_telemetry_slo_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Usage Telemetry Slo Catalog Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_version",
+        "mart_schema_version",
+        "research_catalog_id",
+        "research_catalog_sha256",
+        "universe",
+        "capture_scope_id",
+        "capture_scope_sha256",
+        "applicability_catalog_id",
+        "applicability_catalog_sha256",
+        "source_coverage_catalog_id",
+        "source_coverage_catalog_sha256",
+        "source_readiness_report_id",
+        "source_readiness_report_sha256",
+        "slo_catalog_id",
+        "slo_catalog_sha256",
+        "consumer_slo_catalog_id",
+        "consumer_slo_catalog_sha256",
+        "usage_telemetry_slo_catalog_id",
+        "usage_telemetry_slo_catalog_sha256",
+        "registry_snapshot_id",
+        "registry_snapshot_sha256",
+        "source_registry_id",
+        "source_registry_sha256",
+        "semantic_type_registry_id",
+        "semantic_type_registry_sha256",
+        "identifier_type_registry_id",
+        "identifier_type_registry_sha256",
+        "configuration_sha256",
+        "migration_ids",
+        "migration_set_sha256",
+        "artifacts",
+        "natural_refresh_requirement_ids",
+        "created_at",
+        "manifest_signature_ref"
+      ],
+      "title": "ReleaseManifest",
+      "type": "object"
+    },
+    "SnapshotManifest": {
+      "$defs": {
+        "ComponentKey": {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*(?::[A-Za-z_][A-Za-z0-9_.-]*)?$",
+          "type": "string"
+        },
+        "DataDomain": {
+          "enum": [
+            "entity_identity",
+            "instruments",
+            "financial_facts",
+            "forecasts",
+            "company_guidance",
+            "filings",
+            "filing_extractions",
+            "market_prices",
+            "corporate_actions",
+            "universe",
+            "knowledge_graph",
+            "analyst_ratings",
+            "fund_holdings",
+            "segments",
+            "factor_outputs"
+          ],
+          "title": "DataDomain",
+          "type": "string"
+        },
+        "IdentifierNamespaceKind": {
+          "description": "Reviewed identity namespaces; identifiers remain open within each kind.",
+          "enum": [
+            "entity",
+            "security",
+            "listing",
+            "instrument",
+            "document",
+            "metric",
+            "relationship"
+          ],
+          "title": "IdentifierNamespaceKind",
+          "type": "string"
+        },
+        "IdentifierTypeId": {
+          "pattern": "^identifier\\.(?:entity|security|listing|instrument|document|metric|relationship)\\.[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+          "type": "string"
+        },
+        "IdentifierTypeRegistryEntry": {
+          "additionalProperties": false,
+          "description": "One immutable implementation version of a stable identifier type.",
+          "properties": {
+            "canonicalizer_implementation_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "compatibility_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "compatible_schema_versions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/RegistryVersion"
+              },
+              "title": "Compatible Schema Versions",
+              "type": "array"
+            },
+            "identifier_type_id": {
+              "$ref": "#/$defs/IdentifierTypeId"
+            },
+            "namespace_kind": {
+              "$ref": "#/$defs/IdentifierNamespaceKind"
+            },
+            "schema_fingerprint_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "schema_version": {
+              "$ref": "#/$defs/RegistryVersion"
+            },
+            "semantic_definition_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "validator_implementation_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "version": {
+              "$ref": "#/$defs/RegistryVersion"
+            }
+          },
+          "required": [
+            "identifier_type_id",
+            "version",
+            "namespace_kind",
+            "semantic_definition_sha256",
+            "schema_version",
+            "schema_fingerprint_sha256",
+            "compatibility_sha256",
+            "validator_implementation_sha256",
+            "canonicalizer_implementation_sha256"
+          ],
+          "title": "IdentifierTypeRegistryEntry",
+          "type": "object"
+        },
+        "NormalizedRecordRef": {
+          "additionalProperties": false,
+          "description": "Append-only normalized record with data-engine-owned evidence lineage.",
+          "properties": {
+            "confidence": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "content_sha256": {
+              "default": "",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "document_id": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Document Id",
+              "type": "string"
+            },
+            "draft": {
+              "$ref": "#/$defs/SemanticDraft"
+            },
+            "is_restatement": {
+              "default": false,
+              "title": "Is Restatement",
+              "type": "boolean"
+            },
+            "mapping_implementation_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Mapping Implementation Sha256",
+              "type": "string"
+            },
+            "mapping_version": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Mapping Version",
+              "type": "string"
+            },
+            "normalized_record_id": {
+              "default": "",
+              "title": "Normalized Record Id",
+              "type": "string"
+            },
+            "raw_object_id": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Raw Object Id",
+              "type": "string"
+            },
+            "raw_object_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Raw Object Sha256",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "source_registry_entry_id": {
+              "pattern": "^source-registry-entry:[0-9a-f]{64}$",
+              "title": "Source Registry Entry Id",
+              "type": "string"
+            },
+            "source_registry_entry_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Source Registry Entry Sha256",
+              "type": "string"
+            },
+            "supersedes_record_id": {
+              "anyOf": [
+                {
+                  "pattern": "^normalized-record:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supersedes Record Id"
+            }
+          },
+          "required": [
+            "draft",
+            "document_id",
+            "raw_object_id",
+            "raw_object_sha256",
+            "source_registry_entry_id",
+            "source_registry_entry_sha256",
+            "mapping_version",
+            "mapping_implementation_sha256",
+            "recorded_at",
+            "confidence"
+          ],
+          "title": "NormalizedRecordRef",
+          "type": "object"
+        },
+        "PolicyBinding": {
+          "additionalProperties": false,
+          "properties": {
+            "implementation_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Implementation Sha256",
+              "type": "string"
+            },
+            "policy_id": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Policy Id",
+              "type": "string"
+            },
+            "policy_version": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Policy Version",
+              "type": "string"
+            },
+            "role": {
+              "$ref": "#/$defs/PolicyRole"
+            }
+          },
+          "required": [
+            "role",
+            "policy_id",
+            "policy_version",
+            "implementation_sha256"
+          ],
+          "title": "PolicyBinding",
+          "type": "object"
+        },
+        "PolicyRole": {
+          "enum": [
+            "membership",
+            "identity",
+            "metric",
+            "fusion",
+            "extraction",
+            "price",
+            "fx",
+            "corporate_action",
+            "market_calendar",
+            "applicability"
+          ],
+          "title": "PolicyRole",
+          "type": "string"
+        },
+        "RegistrySnapshot": {
+          "additionalProperties": false,
+          "description": "Content-addressed, self-contained source, record, and identity registries.",
+          "properties": {
+            "content_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "identifier_type_registry_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Identifier Type Registry Sha256",
+              "type": "string"
+            },
+            "identifier_type_registry_snapshot_id": {
+              "default": "",
+              "pattern": "^(?:|identifier-type-registry:[0-9a-f]{64})$",
+              "title": "Identifier Type Registry Snapshot Id",
+              "type": "string"
+            },
+            "identifier_types": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IdentifierTypeRegistryEntry"
+              },
+              "title": "Identifier Types",
+              "type": "array"
+            },
+            "parent_snapshot_id": {
+              "anyOf": [
+                {
+                  "pattern": "^registry-snapshot:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Parent Snapshot Id"
+            },
+            "registry_snapshot_id": {
+              "default": "",
+              "pattern": "^(?:|registry-snapshot:[0-9a-f]{64})$",
+              "title": "Registry Snapshot Id",
+              "type": "string"
+            },
+            "required_identifier_type_ids": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/IdentifierTypeId"
+              },
+              "title": "Required Identifier Type Ids",
+              "type": "array"
+            },
+            "required_type_ids": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SemanticTypeId"
+              },
+              "title": "Required Type Ids",
+              "type": "array"
+            },
+            "semantic_type_registry_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Semantic Type Registry Sha256",
+              "type": "string"
+            },
+            "semantic_type_registry_snapshot_id": {
+              "default": "",
+              "pattern": "^(?:|semantic-type-registry:[0-9a-f]{64})$",
+              "title": "Semantic Type Registry Snapshot Id",
+              "type": "string"
+            },
+            "semantic_types": {
+              "items": {
+                "$ref": "#/$defs/SemanticTypeRegistryEntry"
+              },
+              "minItems": 1,
+              "title": "Semantic Types",
+              "type": "array"
+            },
+            "source_registry_sha256": {
+              "default": "",
+              "pattern": "^(?:|[0-9a-f]{64})$",
+              "title": "Source Registry Sha256",
+              "type": "string"
+            },
+            "source_registry_snapshot_id": {
+              "default": "",
+              "pattern": "^(?:|source-registry:[0-9a-f]{64})$",
+              "title": "Source Registry Snapshot Id",
+              "type": "string"
+            },
+            "sources": {
+              "items": {
+                "$ref": "#/$defs/SourceRegistryEntry"
+              },
+              "minItems": 1,
+              "title": "Sources",
+              "type": "array"
+            }
+          },
+          "required": [
+            "sources",
+            "semantic_types"
+          ],
+          "title": "RegistrySnapshot",
+          "type": "object"
+        },
+        "RegistryVersion": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "type": "string"
+        },
+        "RequirementLevel": {
+          "enum": [
+            "required",
+            "optional"
+          ],
+          "title": "RequirementLevel",
+          "type": "string"
+        },
+        "SemanticDraft": {
+          "additionalProperties": false,
+          "description": "Typed extraction/normalization result before evidence is attached.",
+          "properties": {
+            "content_sha256": {
+              "default": "",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "extraction_invocation_id": {
+              "anyOf": [
+                {
+                  "pattern": "^extraction-invocation:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Extraction Invocation Id"
+            },
+            "extraction_invocation_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Extraction Invocation Sha256"
+            },
+            "extraction_template_id": {
+              "anyOf": [
+                {
+                  "pattern": "^extraction-template:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Extraction Template Id"
+            },
+            "extraction_template_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Extraction Template Sha256"
+            },
+            "knowable_at": {
+              "format": "date-time",
+              "title": "Knowable At",
+              "type": "string"
+            },
+            "model_revision_id": {
+              "anyOf": [
+                {
+                  "pattern": "^model-revision:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Revision Id"
+            },
+            "model_revision_sha256": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Model Revision Sha256"
+            },
+            "payload_model_key": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Payload Model Key",
+              "type": "string"
+            },
+            "payload_schema_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Schema Sha256",
+              "type": "string"
+            },
+            "payload_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Payload Sha256",
+              "type": "string"
+            },
+            "produced_at": {
+              "format": "date-time",
+              "title": "Produced At",
+              "type": "string"
+            },
+            "producer_id": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Producer Id",
+              "type": "string"
+            },
+            "producer_implementation_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Producer Implementation Sha256",
+              "type": "string"
+            },
+            "producer_kind": {
+              "$ref": "#/$defs/SemanticProducerKind"
+            },
+            "producer_version": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Producer Version",
+              "type": "string"
+            },
+            "semantic_draft_id": {
+              "default": "",
+              "title": "Semantic Draft Id",
+              "type": "string"
+            },
+            "semantic_type_id": {
+              "$ref": "#/$defs/SemanticTypeId"
+            },
+            "semantic_type_version": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Semantic Type Version",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/SubjectRef"
+            },
+            "valid_from": {
+              "format": "date",
+              "title": "Valid From",
+              "type": "string"
+            },
+            "valid_to": {
+              "format": "date",
+              "title": "Valid To",
+              "type": "string"
+            }
+          },
+          "required": [
+            "semantic_type_id",
+            "semantic_type_version",
+            "payload_model_key",
+            "payload_schema_sha256",
+            "payload_sha256",
+            "subject",
+            "valid_from",
+            "valid_to",
+            "knowable_at",
+            "produced_at",
+            "producer_kind",
+            "producer_id",
+            "producer_version",
+            "producer_implementation_sha256"
+          ],
+          "title": "SemanticDraft",
+          "type": "object"
+        },
+        "SemanticProducerKind": {
+          "enum": [
+            "deterministic_normalizer",
+            "versioned_extraction"
+          ],
+          "title": "SemanticProducerKind",
+          "type": "string"
+        },
+        "SemanticTypeId": {
+          "pattern": "^semantic\\.[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+          "type": "string"
+        },
+        "SemanticTypeRegistryEntry": {
+          "additionalProperties": false,
+          "description": "One version of a typed semantic record inside an existing domain.",
+          "properties": {
+            "compatibility_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "compatible_schema_versions": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/RegistryVersion"
+              },
+              "title": "Compatible Schema Versions",
+              "type": "array"
+            },
+            "domain": {
+              "$ref": "#/$defs/DataDomain"
+            },
+            "input_model_key": {
+              "$ref": "#/$defs/ComponentKey"
+            },
+            "model_implementation_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "normalized_model_key": {
+              "$ref": "#/$defs/ComponentKey"
+            },
+            "projector_implementation_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "projector_key": {
+              "$ref": "#/$defs/ComponentKey"
+            },
+            "repository_implementation_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "repository_key": {
+              "$ref": "#/$defs/ComponentKey"
+            },
+            "schema_fingerprint_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "schema_version": {
+              "$ref": "#/$defs/RegistryVersion"
+            },
+            "semantic_type_id": {
+              "$ref": "#/$defs/SemanticTypeId"
+            },
+            "version": {
+              "$ref": "#/$defs/RegistryVersion"
+            }
+          },
+          "required": [
+            "semantic_type_id",
+            "version",
+            "domain",
+            "schema_version",
+            "schema_fingerprint_sha256",
+            "normalized_model_key",
+            "input_model_key",
+            "repository_key",
+            "projector_key",
+            "compatibility_sha256",
+            "model_implementation_sha256",
+            "repository_implementation_sha256",
+            "projector_implementation_sha256"
+          ],
+          "title": "SemanticTypeRegistryEntry",
+          "type": "object"
+        },
+        "Sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "SnapshotCellSelection": {
+          "additionalProperties": false,
+          "properties": {
+            "demand": {
+              "$ref": "#/$defs/SnapshotDemandCell"
+            },
+            "normalized_record_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Normalized Record Ids",
+              "type": "array"
+            },
+            "reason_codes": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Reason Codes",
+              "type": "array"
+            }
+          },
+          "required": [
+            "demand"
+          ],
+          "title": "SnapshotCellSelection",
+          "type": "object"
+        },
+        "SnapshotDemandCell": {
+          "additionalProperties": false,
+          "properties": {
+            "capture_requirement_id": {
+              "pattern": "^capture-requirement:[0-9a-f]{64}$",
+              "title": "Capture Requirement Id",
+              "type": "string"
+            },
+            "domain": {
+              "$ref": "#/$defs/DataDomain"
+            },
+            "level": {
+              "$ref": "#/$defs/RequirementLevel"
+            },
+            "partition_key": {
+              "minLength": 1,
+              "title": "Partition Key",
+              "type": "string"
+            },
+            "planned_cell_id": {
+              "default": "",
+              "pattern": "^(?:|planned-demand-cell:[0-9a-f]{64})$",
+              "title": "Planned Cell Id",
+              "type": "string"
+            },
+            "requirement_id": {
+              "pattern": "^data-requirement:[0-9a-f]{64}$",
+              "title": "Requirement Id",
+              "type": "string"
+            },
+            "semantic_type_id": {
+              "$ref": "#/$defs/SemanticTypeId"
+            },
+            "semantic_type_version": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+              "title": "Semantic Type Version",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/SubjectRef"
+            }
+          },
+          "required": [
+            "requirement_id",
+            "capture_requirement_id",
+            "semantic_type_id",
+            "semantic_type_version",
+            "domain",
+            "subject",
+            "partition_key",
+            "level"
+          ],
+          "title": "SnapshotDemandCell",
+          "type": "object"
+        },
+        "SnapshotRequest": {
+          "additionalProperties": false,
+          "description": "Frozen atomic PIT request over explicit subjects or one exact universe.",
+          "properties": {
+            "as_of": {
+              "format": "date-time",
+              "title": "As Of",
+              "type": "string"
+            },
+            "content_sha256": {
+              "default": "",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "demand_cells": {
+              "items": {
+                "$ref": "#/$defs/SnapshotDemandCell"
+              },
+              "minItems": 1,
+              "title": "Demand Cells",
+              "type": "array"
+            },
+            "policy_bindings": {
+              "items": {
+                "$ref": "#/$defs/PolicyBinding"
+              },
+              "minItems": 1,
+              "title": "Policy Bindings",
+              "type": "array"
+            },
+            "registry_snapshot_id": {
+              "pattern": "^registry-snapshot:[0-9a-f]{64}$",
+              "title": "Registry Snapshot Id",
+              "type": "string"
+            },
+            "registry_snapshot_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Registry Snapshot Sha256",
+              "type": "string"
+            },
+            "semantic_type_registry_id": {
+              "pattern": "^semantic-type-registry:[0-9a-f]{64}$",
+              "title": "Semantic Type Registry Id",
+              "type": "string"
+            },
+            "semantic_type_registry_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Semantic Type Registry Sha256",
+              "type": "string"
+            },
+            "snapshot_request_id": {
+              "default": "",
+              "title": "Snapshot Request Id",
+              "type": "string"
+            },
+            "source_registry_id": {
+              "pattern": "^source-registry:[0-9a-f]{64}$",
+              "title": "Source Registry Id",
+              "type": "string"
+            },
+            "source_registry_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Source Registry Sha256",
+              "type": "string"
+            },
+            "subjects": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SubjectRef"
+              },
+              "title": "Subjects",
+              "type": "array"
+            },
+            "universe": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/UniverseRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "valid_on": {
+              "format": "date",
+              "title": "Valid On",
+              "type": "string"
+            }
+          },
+          "required": [
+            "as_of",
+            "valid_on",
+            "registry_snapshot_id",
+            "registry_snapshot_sha256",
+            "source_registry_id",
+            "source_registry_sha256",
+            "semantic_type_registry_id",
+            "semantic_type_registry_sha256",
+            "policy_bindings",
+            "demand_cells"
+          ],
+          "title": "SnapshotRequest",
+          "type": "object"
+        },
+        "SourceId": {
+          "pattern": "^source\\.[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+          "type": "string"
+        },
+        "SourceRegistryEntry": {
+          "additionalProperties": false,
+          "description": "One immutable adapter/normalizer implementation for an open source ID.",
+          "properties": {
+            "adapter_id": {
+              "$ref": "#/$defs/ComponentKey"
+            },
+            "adapter_implementation_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "adapter_version": {
+              "$ref": "#/$defs/RegistryVersion"
+            },
+            "configuration_schema_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "mapping_schema_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "normalizer_id": {
+              "$ref": "#/$defs/ComponentKey"
+            },
+            "normalizer_implementation_sha256": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "normalizer_version": {
+              "$ref": "#/$defs/RegistryVersion"
+            },
+            "source_id": {
+              "$ref": "#/$defs/SourceId"
+            },
+            "supported_domains": {
+              "items": {
+                "$ref": "#/$defs/DataDomain"
+              },
+              "minItems": 1,
+              "title": "Supported Domains",
+              "type": "array"
+            },
+            "supported_type_ids": {
+              "items": {
+                "$ref": "#/$defs/SemanticTypeId"
+              },
+              "minItems": 1,
+              "title": "Supported Type Ids",
+              "type": "array"
+            },
+            "version": {
+              "$ref": "#/$defs/RegistryVersion"
+            }
+          },
+          "required": [
+            "source_id",
+            "version",
+            "adapter_id",
+            "adapter_version",
+            "normalizer_id",
+            "normalizer_version",
+            "supported_domains",
+            "supported_type_ids",
+            "configuration_schema_sha256",
+            "mapping_schema_sha256",
+            "adapter_implementation_sha256",
+            "normalizer_implementation_sha256"
+          ],
+          "title": "SourceRegistryEntry",
+          "type": "object"
+        },
+        "SubjectKind": {
+          "enum": [
+            "issuer",
+            "security",
+            "listing",
+            "fund",
+            "analyst",
+            "universe",
+            "theme"
+          ],
+          "title": "SubjectKind",
+          "type": "string"
+        },
+        "SubjectRef": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/SubjectKind"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "title": "SubjectRef",
+          "type": "object"
+        },
+        "UniverseClaimKind": {
+          "enum": [
+            "fixed_cohort_description",
+            "point_in_time_membership",
+            "survivorship_safe_replay"
+          ],
+          "title": "UniverseClaimKind",
+          "type": "string"
+        },
+        "UniverseDefinitionKind": {
+          "enum": [
+            "fixed_cohort",
+            "pit_membership"
+          ],
+          "title": "UniverseDefinitionKind",
+          "type": "string"
+        },
+        "UniverseManifest": {
+          "additionalProperties": false,
+          "description": "Content-hashed definition of a fixed cohort or a PIT resolver.",
+          "properties": {
+            "definition_kind": {
+              "$ref": "#/$defs/UniverseDefinitionKind"
+            },
+            "effective_at": {
+              "format": "date-time",
+              "title": "Effective At",
+              "type": "string"
+            },
+            "membership_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Membership Ids",
+              "type": "array"
+            },
+            "owner": {
+              "minLength": 1,
+              "title": "Owner",
+              "type": "string"
+            },
+            "ref": {
+              "$ref": "#/$defs/UniverseRef"
+            },
+            "resolver_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolver Version"
+            },
+            "supported_claims": {
+              "items": {
+                "$ref": "#/$defs/UniverseClaimKind"
+              },
+              "title": "Supported Claims",
+              "type": "array"
+            }
+          },
+          "required": [
+            "ref",
+            "definition_kind",
+            "supported_claims",
+            "effective_at",
+            "owner"
+          ],
+          "title": "UniverseManifest",
+          "type": "object"
+        },
+        "UniverseMembership": {
+          "additionalProperties": false,
+          "description": "Append-only membership evidence selected by a fixed cohort or PIT resolver.",
+          "properties": {
+            "confidence": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                  "type": "string"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "knowable_at": {
+              "format": "date-time",
+              "title": "Knowable At",
+              "type": "string"
+            },
+            "membership_id": {
+              "title": "Membership Id",
+              "type": "string"
+            },
+            "raw_ref": {
+              "minLength": 1,
+              "title": "Raw Ref",
+              "type": "string"
+            },
+            "recorded_at": {
+              "format": "date-time",
+              "title": "Recorded At",
+              "type": "string"
+            },
+            "subject": {
+              "$ref": "#/$defs/SubjectRef"
+            },
+            "universe_id": {
+              "title": "Universe Id",
+              "type": "string"
+            },
+            "valid_from": {
+              "format": "date",
+              "title": "Valid From",
+              "type": "string"
+            },
+            "valid_to": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Valid To"
+            }
+          },
+          "required": [
+            "membership_id",
+            "universe_id",
+            "subject",
+            "valid_from",
+            "knowable_at",
+            "recorded_at",
+            "confidence",
+            "raw_ref"
+          ],
+          "title": "UniverseMembership",
+          "type": "object"
+        },
+        "UniverseRef": {
+          "additionalProperties": false,
+          "description": "Exact immutable reference to one universe manifest.",
+          "properties": {
+            "content_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Content Sha256",
+              "type": "string"
+            },
+            "universe_id": {
+              "title": "Universe Id",
+              "type": "string"
+            },
+            "universe_version": {
+              "title": "Universe Version",
+              "type": "string"
+            }
+          },
+          "required": [
+            "universe_id",
+            "universe_version",
+            "content_sha256"
+          ],
+          "title": "UniverseRef",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Immutable exact record selection resolved atomically for one request.",
+      "properties": {
+        "content_sha256": {
+          "default": "",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "normalized_records": {
+          "items": {
+            "$ref": "#/$defs/NormalizedRecordRef"
+          },
+          "minItems": 1,
+          "title": "Normalized Records",
+          "type": "array"
+        },
+        "registry_snapshot": {
+          "$ref": "#/$defs/RegistrySnapshot"
+        },
+        "request": {
+          "$ref": "#/$defs/SnapshotRequest"
+        },
+        "resolved_at": {
+          "format": "date-time",
+          "title": "Resolved At",
+          "type": "string"
+        },
+        "resolved_subjects": {
+          "items": {
+            "$ref": "#/$defs/SubjectRef"
+          },
+          "minItems": 1,
+          "title": "Resolved Subjects",
+          "type": "array"
+        },
+        "resolver_id": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+          "title": "Resolver Id",
+          "type": "string"
+        },
+        "resolver_implementation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Resolver Implementation Sha256",
+          "type": "string"
+        },
+        "resolver_version": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+          "title": "Resolver Version",
+          "type": "string"
+        },
+        "selections": {
+          "items": {
+            "$ref": "#/$defs/SnapshotCellSelection"
+          },
+          "minItems": 1,
+          "title": "Selections",
+          "type": "array"
+        },
+        "snapshot_id": {
+          "default": "",
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "universe_manifest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UniverseManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "universe_memberships": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UniverseMembership"
+          },
+          "title": "Universe Memberships",
+          "type": "array"
+        }
+      },
+      "required": [
+        "request",
+        "registry_snapshot",
+        "resolved_subjects",
+        "normalized_records",
+        "selections",
+        "resolved_at",
+        "resolver_id",
+        "resolver_version",
+        "resolver_implementation_sha256"
+      ],
+      "title": "SnapshotManifest",
+      "type": "object"
+    }
+  }
+}

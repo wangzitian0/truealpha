@@ -1017,7 +1017,7 @@ class RequirementLevel(StrEnum):
 class DataRequirement(BaseModel):
     requirement_id: str
     capture_requirement_id: str
-    semantic_type: SemanticTypeRef
+    semantic_type_id: str
     domain: DataDomain
     metric: str | None
     subject_kinds: frozenset[SubjectKind]
@@ -1025,18 +1025,16 @@ class DataRequirement(BaseModel):
     lookback: timedelta | None
     valid_period_rule_id: str
     maximum_age: timedelta
-    expected_cadence: timedelta
+    cadence: timedelta
+    content_sha256: str
 
-    def validate_semantic_type(self, registry: SemanticTypeRegistry) -> None: ...
+class RequirementHandle(BaseModel):
+    # Factors can present the capability but cannot inspect its private binding.
+    requirement_handle_id: str
 
-@dataclass(frozen=True)
-class RequirementHandle(Generic[I]):
-    handle_id: str  # opaque runner-minted capability, validated by the input view
-    requirement_id: str
-    planned_cell_id: str
-    semantic_type: SemanticTypeRef
-    subject: SubjectRef
-    input_model: type[I]
+class FactorInputCapability(BaseModel):
+    handle: RequirementHandle
+    observation: ProvenanceNeutralInput
 
 class FactorRequirementConsumerRef(BaseModel):
     consumer_kind: Literal["factor"] = "factor"
@@ -1168,122 +1166,196 @@ class ReleaseArtifact(BaseModel):
     sbom_sha256: str
     signature_ref: str
 
-class SubjectSourceCoverage(BaseModel):
-    subject: SubjectRef
-    earliest_knowable_at: datetime
-    latest_knowable_at: datetime
-    observed_partitions: int = Field(ge=0)
+class CoverageEvidence(BaseModel):
+    evidence_id: str
+    artifact_sha256: tuple[str, ...]
+    observed_at: datetime
+    observed_count: int
+    earliest_knowable_at: datetime | None
+    latest_knowable_at: datetime | None
     natural_update_ids: tuple[str, ...]
-    gap_ranges: tuple[DateRange, ...]
+    gaps: tuple[CoverageGap, ...]
 
-class SourceUsePermission(StrEnum):
-    PERMITTED = "permitted"
-    RESTRICTED = "restricted"
-    UNVERIFIED = "unverified"
-    EXPIRED = "expired"
+class SourceUsagePermission(StrEnum):
+    RAW_RETENTION = "raw_retention"
+    NORMALIZED_CACHING = "normalized_caching"
+    DERIVED_METRICS = "derived_metrics"
+    PUBLIC_REPORTS = "public_reports"
+    PUBLIC_CARDS = "public_cards"
+    QUOTATIONS = "quotations"
+    SCREENSHOTS = "screenshots"
+    ATTRIBUTION = "attribution"
 
-class ApprovedSourceBudget(BaseModel):
-    vendor: MoneyValue | None
-    api: MoneyValue | None
-    storage: MoneyValue | None
-    extraction: MoneyValue | None
-    human_review: MoneyValue | None
+class PermissionDecision(BaseModel):
+    permission: SourceUsagePermission
+    permitted: bool
+    rationale: str
 
-class RightsApproval(BaseModel):
+class SourceRightsApproval(BaseModel):
     rights_approval_id: str
-    source: SourceId
-    environment: Literal["local", "github_ci", "staging", "production"]
-    raw_retention: SourceUsePermission
-    caching: SourceUsePermission
-    derived_metrics: SourceUsePermission
-    report_publication: SourceUsePermission
-    card_publication: SourceUsePermission
-    quotation: SourceUsePermission
-    attribution_requirement: str | None
-    approved_budget: ApprovedSourceBudget
-    valid_from: datetime
+    source_id: SourceId
+    source_version: str
+    source_registry_entry_id: str
+    source_registry_entry_sha256: str
+    authorized_owner: str
+    approved_by: str
+    decision_basis: Literal["authorized_human", "legal_counsel", "provider_license"]
+    permission_decisions: tuple[PermissionDecision, ...]
+    terms_evidence_id: str
+    terms_evidence_sha256: str
+    approval_signature_id: str
+    approval_signature_sha256: str
+    approved_at: datetime
     expires_at: datetime
-    reviewer: str
-    evidence_ids: tuple[str, ...]
-    signature_ref: str
+    revoked_at: datetime | None
+    content_sha256: str
+
+class SourceCoverageRequirement(BaseModel):
+    environment: Literal["local_dev", "local_test", "github_ci", "staging", "production"]
+    data_requirement_id: str
+    semantic_type_id: str
+    semantic_type_version: str
+    subject: SubjectRef
+    domain: DataDomain
+    partition_key: str
+    required_permissions: frozenset[SourceUsagePermission]
+    minimum_observed_count: int
+    history_start: datetime | None
+    history_end: datetime | None
+    minimum_natural_updates: int
+    requires_historical_knowability: bool
+    fallback_policy: Literal["required", "documented_hard_dependency"]
+    hard_dependency_reason: str | None
 
 class SourceCoverageEntry(BaseModel):
-    requirement_id: str
-    module_id: str
+    source_coverage_entry_id: str
+    environment: Literal["local_dev", "local_test", "github_ci", "staging", "production"]
+    data_requirement_id: str
+    semantic_type_id: str
+    semantic_type_version: str
+    subject: SubjectRef
     domain: DataDomain
-    field_semantics: str
-    environment: Literal["local", "github_ci", "staging", "production"]
-    subject_scope: tuple[SubjectRef, ...]
-    identifier_level: Literal["issuer", "security", "listing", "analyst", "fund"]
-    primary: SourceRuntimeRef
-    fallbacks: tuple[SourceRuntimeRef, ...]
-    knowability_basis: Literal["source_publication", "independently_corroborated"]
-    history_start: date
-    history_end: date | None
-    expected_cadence: timedelta
-    rights_approval_ids: dict[SourceId, str]
-    retention_policy_ref: str
-    quota_policy_ref: str
-    sla_policy_ref: str
-    projected_budget: ApprovedSourceBudget
-    revision_policy_ref: str
-    fallback_policy_ref: str
-    natural_refresh_observation_window: timedelta
-    minimum_naturally_changed_partitions: int = Field(ge=1)
-    refresh_alert_after: timedelta
-    owner: str
+    partition_key: str
+    role: Literal["primary", "fallback"]
+    priority: int
+    source_id: SourceId
+    source_version: str
+    source_registry_entry_id: str
+    source_registry_entry_sha256: str
+    rights_approval_id: str
+    rights_approval_sha256: str
+    identifier_level: str
+    capture_method: str
+    credential_owner: str
+    cadence: timedelta
     review_expires_at: datetime
-    evidence_ids: tuple[str, ...]
-    observed_coverage: tuple[SubjectSourceCoverage, ...]
+    knowability: KnowabilityEvidence
+    coverage: CoverageEvidence
+    budget_lines: tuple[BudgetLine, ...]
+    content_sha256: str
 
 class SourceCoverageCatalog(BaseModel):
     source_coverage_catalog_id: str
-    source_registry_snapshot_id: RegistrySnapshotId
+    catalog_version: str
+    research_catalog_id: str
+    research_catalog_sha256: str
+    universe: UniverseRef
+    applicability_catalog_id: str
+    applicability_catalog_sha256: str
+    source_registry_id: str
     source_registry_sha256: str
+    effective_at: datetime
+    approved_at: datetime
+    approved_by: str
+    approval_signature_id: str
+    approval_signature_sha256: str
+    requirements: tuple[SourceCoverageRequirement, ...]
     entries: tuple[SourceCoverageEntry, ...]
     content_sha256: str
 
 class ApplicabilityCell(BaseModel):
     module_id: str
-    catalog_entry: CatalogAliasRef
+    catalog_alias: str
+    data_requirement_id: str
     subject: SubjectRef
-    requirement: Literal["required", "optional", "not_applicable"]
-    reason_code: str
-    effective_from: datetime
+    domain: DataDomain
+    partition_key: str
+    classification: Literal["required", "optional", "not_applicable"]
+    reason: str
+    effective_at: datetime
+
+class ApplicabilityPolicy(BaseModel):
+    applicability_policy_id: str
+    content_sha256: str
+    policy_version: str
+    module_id: str
+    catalog_alias: str
+    universe: UniverseRef
+    cells: tuple[ApplicabilityCell, ...]
+    effective_at: datetime
+    approved_at: datetime
+    approved_by: str
+    approval_signature_id: str
+    approval_signature_sha256: str
 
 class ApplicabilityCatalog(BaseModel):
     applicability_catalog_id: str
+    catalog_version: str
     research_catalog_id: str
     research_catalog_sha256: str
     universe: UniverseRef
+    effective_at: datetime
     cells: tuple[ApplicabilityCell, ...]
     approved_at: datetime
     approved_by: str
-    approval_signature_ref: str
-    supersedes_catalog_id: str | None
-    change_reason: str
+    approval_signature_id: str
+    approval_signature_sha256: str
     content_sha256: str
 
-class ModuleSlo(BaseModel):
+class ModuleSloThreshold(BaseModel):
+    slo_policy_id: str
+    content_sha256: str
     module_id: str
-    universe: UniverseRef
+    minimum_subject_count: int = Field(ge=1)
+    minimum_usable_coverage: Decimal = Field(ge=0, le=1)
+    maximum_unavailable_ratio: Decimal = Field(ge=0, le=1)
+    maximum_stale_ratio: Decimal = Field(ge=0, le=1)
+    maximum_unresolved_ratio: Decimal = Field(ge=0, le=1)
+    maximum_unclassified_ratio: Decimal = Field(ge=0, le=1)
+    maximum_low_confidence_ratio: Decimal = Field(ge=0, le=1)
+    rationale: str
+    evidence_sha256: str
+    approved_by: str
+    approved_at: datetime
+    approval_signature_id: str
+    approval_signature_sha256: str
+
+class ModuleSloCatalog(BaseModel):
+    module_slo_catalog_id: str
+    catalog_version: str
     applicability_catalog_id: str
     applicability_catalog_sha256: str
-    required_catalog_entries: tuple[CatalogAliasRef, ...]
-    minimum_usable_coverage: Decimal = Field(ge=0, le=1)
-    maximum_freshness_age: timedelta
-    maximum_unavailable_rate: Decimal = Field(ge=0, le=1)
-    maximum_stale_rate: Decimal = Field(ge=0, le=1)
-    maximum_unresolved_rate: Decimal = Field(ge=0, le=1)
-    maximum_unclassified_rate: Decimal = Field(ge=0, le=1)
-    maximum_low_confidence_rate: Decimal = Field(ge=0, le=1)
-    maximum_error_rate: Decimal = Field(ge=0, le=1)
-    minimum_trace_complete_rate: Decimal = Field(ge=0, le=1)
-    minimum_soak_duration: timedelta
-    minimum_natural_source_updates: int = Field(ge=1)
-    alert_after: timedelta
-    owner: str
-    runbook_ref: str
+    effective_at: datetime
+    approved_at: datetime
+    approved_by: str
+    approval_signature_id: str
+    approval_signature_sha256: str
+    thresholds: tuple[ModuleSloThreshold, ...]
+    content_sha256: str
+
+class CatalogPolicyClosureReport(BaseModel):
+    catalog_policy_closure_report_id: str
+    research_catalog_id: str
+    applicability_catalog_id: str
+    module_slo_catalog_id: str
+    applicability_policy_ids: tuple[str, ...]
+    slo_policy_ids: tuple[str, ...]
+    evaluated_at: datetime
+    blocking_reason_codes: tuple[str, ...]
+
+    @computed_field
+    @property
+    def ready(self) -> bool: ...
 
 class ConsumerSlo(BaseModel):
     surface: Literal["mcp", "app", "chat", "report", "card"]
@@ -1293,12 +1365,6 @@ class ConsumerSlo(BaseModel):
     maximum_rows: int = Field(ge=1)
     owner: str
     runbook_ref: str
-
-class SloCatalog(BaseModel):
-    slo_catalog_id: str
-    modules: tuple[ModuleSlo, ...]
-    consumers: tuple[ConsumerSlo, ...]
-    content_sha256: str
 
 class SloObservation(BaseModel):
     module_id: str
@@ -1349,13 +1415,13 @@ class SourceCoverageEvaluator(Protocol):
         *,
         as_of: datetime,
         evidence: Mapping[str, EvidenceCase],
-        rights: Sequence[RightsApproval],
+        rights: Sequence[SourceRightsApproval],
     ) -> ReadinessReport: ...
 
 class SloEvaluator(Protocol):
     def evaluate(
         self,
-        catalog: SloCatalog,
+        catalog: ModuleSloCatalog,
         applicability: ApplicabilityCatalog,
         *,
         window: DateRange,
@@ -1366,25 +1432,25 @@ class SloEvaluator(Protocol):
 def evaluate_source_readiness(
     catalog: SourceCoverageCatalog,
     *,
-    rights: Sequence[RightsApproval],
+    rights: Sequence[SourceRightsApproval],
     evidence: Mapping[str, EvidenceCase],
     as_of: datetime,
     evaluator: SourceCoverageEvaluator,
 ) -> ReadinessReport: ...
 
 class CaptureRequirement(BaseModel):
-    requirement_id: str
-    semantic_type: SemanticTypeRef
+    capture_requirement_id: str
+    semantic_type_id: str
+    semantic_type_version: str
     domain: DataDomain
     required_fields: tuple[str, ...]
     subject_kinds: frozenset[SubjectKind]
     cadence: timedelta
     partition_rule_id: str
     freshness_policy_id: str
+    maximum_age: timedelta
     quality_policy_ids: tuple[str, ...]
-    source_coverage_entry_ids: tuple[str, ...]
-
-    def validate_semantic_type(self, registry: SemanticTypeRegistry) -> None: ...
+    content_sha256: str
 
 class CaptureScope(BaseModel):
     capture_scope_id: str
@@ -1393,14 +1459,16 @@ class CaptureScope(BaseModel):
     universe: UniverseRef
     applicability_catalog_id: str
     applicability_catalog_sha256: str
+    applicability_projection_sha256: str
     source_coverage_catalog_id: str
     source_coverage_catalog_sha256: str
-    source_registry_snapshot_id: RegistrySnapshotId
-    source_registry_sha256: str
-    semantic_type_registry_snapshot_id: RegistrySnapshotId
-    semantic_type_registry_sha256: str
+    source_coverage_projection_sha256: str
     slo_catalog_id: str
     slo_catalog_sha256: str
+    source_registry_id: str
+    source_registry_sha256: str
+    semantic_type_registry_id: str
+    semantic_type_registry_sha256: str
     requirements: tuple[CaptureRequirement, ...]
     effective_at: datetime
     owner: str
@@ -1408,20 +1476,24 @@ class CaptureScope(BaseModel):
 
 class CaptureRecordEvidence(BaseModel):
     evidence_id: str
-    source_runtime: SourceRuntimeRef
-    semantic_type: SemanticTypeRef
+    source_coverage_entry_id: str
     raw_id: str
     raw_sha256: str
     normalized_id: str
-    normalized_sha256: str
+    semantic_type_id: str
+    semantic_type_version: str
+    populated_fields: tuple[str, ...]
     knowable_at: datetime
     recorded_at: datetime
+    valid_from: datetime
+    valid_to: datetime | None
     confidence: Decimal = Field(ge=0, le=1)
     mapping_version: str
     policy_versions: dict[str, str]
-    quality_results: tuple["SignedQualityResult", ...]
-    lineage_ref: str
+    quality_check_ids: tuple[str, ...]
+    quality_status: Literal["pass", "fail"]
     lineage_sha256: str
+    content_sha256: str
 
 class SignedQualityResult(BaseModel):
     quality_result_id: str
@@ -1438,9 +1510,8 @@ class SignedQualityResult(BaseModel):
 class CaptureCell(BaseModel):
     subject: SubjectRef
     domain: DataDomain
-    semantic_type: SemanticTypeRef
     partition_key: str
-    requirement_id: str
+    capture_requirement_id: str
     applicability: Literal["required", "optional", "not_applicable"]
     status: Literal[
         "complete", "optional", "not_applicable", "missing", "stale", "unresolved", "error"
@@ -1448,13 +1519,25 @@ class CaptureCell(BaseModel):
     evidence: tuple[CaptureRecordEvidence, ...]
     reason_codes: tuple[str, ...]
 
-    def validate_semantic_type(self, registry: SemanticTypeRegistry) -> None: ...
-
 class CaptureManifest(BaseModel):
     capture_manifest_id: str
     capture_scope_id: str
     capture_scope_sha256: str
-    environment: Literal["local", "github_ci", "staging", "production"]
+    environment: Literal[
+        "local_dev", "local_test", "github_ci", "preview", "staging", "production"
+    ]
+    research_catalog_id: str
+    research_catalog_sha256: str
+    applicability_catalog_id: str
+    applicability_catalog_sha256: str
+    source_coverage_catalog_id: str
+    source_coverage_catalog_sha256: str
+    slo_catalog_id: str
+    slo_catalog_sha256: str
+    source_registry_id: str
+    source_registry_sha256: str
+    semantic_type_registry_id: str
+    semantic_type_registry_sha256: str
     partition_key: str
     as_of: datetime
     cells: tuple[CaptureCell, ...]
@@ -1468,11 +1551,9 @@ class CaptureEvaluator(Protocol):
         manifest: CaptureManifest,
         *,
         applicability: ApplicabilityCatalog,
-        source_coverage: SourceCoverageCatalog,
-        source_readiness: ReadinessReport,
-        evidence: "CaptureEvidenceResolver",
+        source_coverage: SourceCoverageMapping,
         as_of: datetime,
-    ) -> ReadinessReport: ...
+    ) -> CaptureEvaluationReport: ...
 
 class CaptureEvidenceResolver(Protocol):
     def resolve_raw(self, raw_id: str, raw_sha256: str) -> bool: ...
@@ -1486,6 +1567,8 @@ class CaptureEvidenceResolver(Protocol):
     ) -> bool: ...
 
 class ModelRevisionRef(BaseModel):
+    model_revision_id: str
+    content_sha256: str
     provider: str
     model_id: str
     immutable_revision: str
@@ -1494,20 +1577,36 @@ class ModelRevisionRef(BaseModel):
 
 class ExtractionTemplate(BaseModel):
     extraction_template_id: str
-    extractor_id: str
-    extractor_version: str
-    model_revision: ModelRevisionRef
-    parameters_sha256: str
-    prompt_sha256: str
-    schema_sha256: str
     content_sha256: str
+    template_name: str
+    template_version: str
+    semantic_type_id: str
+    semantic_type_version: str
+    payload_model_key: str
+    output_schema_sha256: str
+    instructions_sha256: str
+    extractor_implementation_sha256: str
+    model_revision_id: str
+    model_revision_sha256: str
 
 class ExtractionInvocation(BaseModel):
     extraction_invocation_id: str
-    template: ExtractionTemplate
-    source_document_semantic_sha256: str
-    attempt_id: str
     content_sha256: str
+    model_revision_id: str
+    model_revision_sha256: str
+    extraction_template_id: str
+    extraction_template_sha256: str
+    input_sha256: str
+    response_sha256: str
+    semantic_payload_sha256: str
+    attempt_number: int
+    previous_invocation_id: str | None
+    previous_invocation_sha256: str | None
+    started_at: datetime
+    completed_at: datetime
+    invoker_id: str
+    invoker_version: str
+    invoker_implementation_sha256: str
 
 class ReleaseManifest(BaseModel):
     release_manifest_id: str
@@ -1522,19 +1621,29 @@ class ReleaseManifest(BaseModel):
     applicability_catalog_sha256: str
     source_coverage_catalog_id: str
     source_coverage_catalog_sha256: str
+    source_readiness_report_id: str
     source_readiness_report_sha256: str
-    source_registry_snapshot_id: RegistrySnapshotId
-    source_registry_sha256: str
-    semantic_type_registry_snapshot_id: RegistrySnapshotId
-    semantic_type_registry_sha256: str
     slo_catalog_id: str
     slo_catalog_sha256: str
+    consumer_slo_catalog_id: str
+    consumer_slo_catalog_sha256: str
+    usage_telemetry_slo_catalog_id: str
+    usage_telemetry_slo_catalog_sha256: str
+    registry_snapshot_id: str
+    registry_snapshot_sha256: str
+    source_registry_id: str
+    source_registry_sha256: str
+    semantic_type_registry_id: str
+    semantic_type_registry_sha256: str
+    identifier_type_registry_id: str
+    identifier_type_registry_sha256: str
     configuration_sha256: dict[str, str]
     migration_ids: tuple[str, ...]
     migration_set_sha256: str
     artifacts: tuple[ReleaseArtifact, ...]
+    natural_refresh_requirement_ids: tuple[str, ...]
     approved_model_revisions: tuple[ModelRevisionRef, ...]
-    approved_extraction_template_ids: tuple[str, ...]
+    approved_extraction_templates: tuple[ExtractionTemplate, ...]
     created_at: datetime
     manifest_sha256: str
     manifest_signature_ref: str
@@ -1544,25 +1653,23 @@ class ReleaseManifestRepository(Protocol):
     def get(self, release_manifest_id: str) -> ReleaseManifest | None: ...
 
 class GraduationAttestation(BaseModel):
-    attestation_id: str
+    graduation_attestation_id: str
     release_manifest_id: str
     release_manifest_sha256: str
     candidate_commit_sha: str
-    environment: Literal["production"] = "production"
-    accepted_evidence_ids: tuple[str, ...]
-    accepted_capture_manifest_sha256: tuple[str, ...]
-    accepted_usage_audit_sha256: tuple[str, ...]
-    accepted_data_quality_review_sha256: tuple[str, ...]
-    accepted_readiness_report_sha256: tuple[str, ...]
-    reviewer: str
-    approved_at: datetime
-    rollback_ref: str
-    content_sha256: str
+    graduation_report: ProductionGraduationReport
+    attestor_role: Literal["independent_reviewer"]
+    attested_by: str
+    attested_at: datetime
+    independence_evidence_id: str
+    independence_evidence_sha256: str
+    signed_payload_sha256: str
     signature_ref: str
+    signature_sha256: str
+    content_sha256: str
 
 class GraduationAttestationRepository(Protocol):
-    def put(self, attestation: GraduationAttestation) -> PutResult: ...
-    def get(self, attestation_id: str) -> GraduationAttestation | None: ...
+    def get(self, graduation_attestation_id: str) -> GraduationAttestation | None: ...
 
 class ResolvedFactorInvocation(BaseModel):
     template: FactorInvocationTemplate
@@ -4105,9 +4212,11 @@ are executable and reviewed:
     strategy/trace DTO, pagination, status, and lineage. Catalog publication fails below
     `ResearchScopeFloor`, and consumer startup fails for a catalog/release hash mismatch.
 13. A signed multi-artifact release probe rejects a floating or mismatched runtime digest,
-    universe, source/type registry, capture/applicability/source/SLO hash, extraction
-    template, or model revision before execution. A separate attestation probe rejects
-    post-run capture/usage/review/readiness evidence for any other release/candidate hash.
+    universe, capture/applicability/source-readiness/SLO/registry hash, exact source/type/
+    identifier registries, extraction template, or model revision. `ReleaseManifest`
+    rejects post-run capture, usage, recovery, quality, and graduation evidence; a
+    separately signed `GraduationAttestation` binds that evidence to the unchanged release
+    and exact candidate commit.
 14. The frozen financial operating-efficiency branch and selected level/elasticity/combined
     leverage rule have independently reviewed semantics and boundary oracles; implementing
     the real GPPE/valuation candidates remains Gate 1 work.

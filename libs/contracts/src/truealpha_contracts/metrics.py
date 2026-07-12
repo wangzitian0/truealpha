@@ -76,6 +76,18 @@ _SPECS = (
         financial_issuer_split=True,
     ),
     MetricSpec(
+        name="cost_of_revenue",
+        unit_family=UnitFamily.CURRENCY,
+        source_priority=(DataSource.SEC, DataSource.MOOMOO),
+        description="Reported cost of revenue; a component input, not a data-engine-derived gross profit.",
+    ),
+    MetricSpec(
+        name="operating_income",
+        unit_family=UnitFamily.CURRENCY,
+        source_priority=(DataSource.SEC, DataSource.MOOMOO),
+        description="Reported operating income for issuer branches where gross profit is not reported.",
+    ),
+    MetricSpec(
         name="net_income",
         unit_family=UnitFamily.CURRENCY,
         source_priority=(DataSource.SEC, DataSource.MOOMOO, DataSource.TWELVE_DATA),
@@ -86,6 +98,12 @@ _SPECS = (
         unit_family=UnitFamily.PER_SHARE,
         source_priority=(DataSource.SEC, DataSource.MOOMOO),
         description="Diluted earnings per share (PEG numerator input).",
+    ),
+    MetricSpec(
+        name="shares_outstanding",
+        unit_family=UnitFamily.COUNT,
+        source_priority=(DataSource.SEC, DataSource.MOOMOO),
+        description="Point-in-time common shares outstanding for the reported context.",
     ),
     MetricSpec(
         name="employees_total",

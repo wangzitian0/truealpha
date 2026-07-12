@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - "apps/app-web/**"
+      - "libs/contracts/conformance/**"
       - ".github/workflows/ci-web.yml"
   pull_request:
     paths:
       - "apps/app-web/**"
+      - "libs/contracts/conformance/**"
       - ".github/workflows/ci-web.yml"
 
 jobs:
@@ -22,4 +24,5 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - run: bun run tests/issue58-conformance.test.ts
       - run: bun run build
