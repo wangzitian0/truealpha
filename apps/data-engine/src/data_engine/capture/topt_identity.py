@@ -19,6 +19,7 @@ from data_engine.capture.topt import (
     TOPT_BASELINE_REPORT_PERIOD,
     TOPT_FUND_ID,
     TOPT_INSTRUMENTS,
+    ToptInstrument,
 )
 from data_engine.config import settings
 from data_engine.sources import nport, openfigi
@@ -28,6 +29,7 @@ from data_engine.sources.sec import client as sec_client
 MAPPING_VERSION = "topt-identity:1"
 NPORT_MAPPING_VERSION = "nport-holdings:2"
 OPENFIGI_MAPPING_VERSION = "openfigi-listing:2"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class ToptIdentityResult:
     company_map_raw_ref: str
     fund_map_raw_ref: str
     figi_raw_refs: dict[str, str]
+    sec_identity_raw_refs: dict[str, tuple[str, ...]]
     holding_record_ids: tuple[str, ...]
     membership_record_ids: tuple[str, ...]
     issuer_record_ids: dict[str, tuple[str, ...]]
@@ -100,6 +103,30 @@ def _openfigi_from_raw(conn, isins: list[str]) -> tuple[dict[str, list[dict]], d
         {isin: records[isin] for isin in isins if isin in records},
         {isin: raw_ids[isin] for isin in isins if isin in raw_ids},
     )
+
+
+def _resolve_expected_identity(
+    expected: ToptInstrument,
+    *,
+    records: list[dict],
+    issuer_name: str,
+    sec_ticker_map: dict[str, tuple[int, str]],
+) -> tuple[universe.Listing, int, str] | None:
+    listing = universe.resolve_listing(
+        records,
+        isin=expected.isin,
+        issuer_name=issuer_name,
+        sec_ticker_map=sec_ticker_map,
+    )
+    if listing is None or universe.sec_ticker(listing) != expected.ticker:
+        return None
+    sec_row = sec_ticker_map.get(expected.ticker)
+    if sec_row is None or sec_row[0] != expected.issuer_cik:
+        return None
+    moomoo = universe.moomoo_code(listing)
+    if moomoo is None or moomoo[0] != expected.moomoo_code:
+        return None
+    return listing, sec_row[0], sec_row[1]
 
 
 def _identifier_id(conn, entity_id: str, identifier_type: str, identifier_value: str) -> int:
@@ -228,32 +255,55 @@ def capture(conn, *, reuse_openfigi_raw: bool = False, fetched_at: datetime | No
     instrument_ids: dict[str, list[str]] = {}
     relationship_ids: dict[str, tuple[str, ...]] = {}
     figi_refs: dict[str, str] = {}
+    sec_identity_refs: dict[str, tuple[str, ...]] = {}
+    submissions_cache: dict[str, tuple[dict[str, tuple[int, str]], str]] = {}
 
     for expected in TOPT_INSTRUMENTS:
         holding = holdings[expected.isin]
-        listing = universe.resolve_listing(
-            figi_records[expected.isin],
-            isin=expected.isin,
-            issuer_name=holding.name,
+        resolved = _resolve_expected_identity(
+            expected,
+            records=figi_records[expected.isin],
+            issuer_name=holding.name or expected.issuer_name,
             sec_ticker_map=company_map,
         )
-        if listing is None:
-            raise ValueError(f"mandatory TOPT listing unresolved: {expected.isin}")
-        ticker = universe.sec_ticker(listing)
-        if ticker is None or ticker not in company_map:
-            raise ValueError(f"mandatory TOPT SEC ticker unresolved: {expected.isin}")
-        observed_cik, sec_name = company_map[ticker]
-        if observed_cik != expected.issuer_cik or ticker != expected.ticker:
-            raise ValueError(
-                f"TOPT identity drift for {expected.isin}: expected {expected.ticker}/{expected.issuer_cik}, "
-                f"got {ticker}/{observed_cik}"
+        identity_raw_refs: tuple[str, ...] = (company_map_ref,)
+        if resolved is None:
+            cached = submissions_cache.get(expected.issuer_id)
+            if cached is None:
+                with sec_client() as submissions_client:
+                    submissions_response = submissions_client.get(SUBMISSIONS_URL.format(cik=expected.issuer_cik))
+                submissions_raw_id = _insert_json_response(
+                    conn,
+                    source_record_id=f"submissions:CIK{expected.issuer_cik:010d}",
+                    response=submissions_response,
+                    fetched_at=observed_at,
+                )
+                payload = submissions_response.json()
+                if int(payload.get("cik", 0)) != expected.issuer_cik:
+                    raise ValueError(f"SEC submissions CIK drift for {expected.isin}")
+                submissions_map = {
+                    str(ticker).upper(): (expected.issuer_cik, str(payload.get("name") or ""))
+                    for ticker in payload.get("tickers", [])
+                }
+                cached = submissions_map, raw_store.raw_ref(submissions_raw_id)
+                submissions_cache[expected.issuer_id] = cached
+            submissions_map, submissions_ref = cached
+            resolved = _resolve_expected_identity(
+                expected,
+                records=figi_records[expected.isin],
+                issuer_name=holding.name or expected.issuer_name,
+                sec_ticker_map=submissions_map,
             )
+            identity_raw_refs = (company_map_ref, submissions_ref)
+        if resolved is None:
+            raise ValueError(f"mandatory TOPT listing unresolved: {expected.isin}")
+        listing, observed_cik, sec_name = resolved
         moomoo = universe.moomoo_code(listing)
-        if moomoo is None or moomoo[0] != expected.moomoo_code:
-            raise ValueError(f"TOPT moomoo listing drift for {expected.isin}: {moomoo}")
+        assert moomoo is not None
 
         issuer_id = expected.issuer_id
         instrument_id = expected.instrument_id
+        sec_identity_refs[issuer_id] = identity_raw_refs
         figi_ref = raw_store.raw_ref(figi_raw_ids[expected.isin])
         figi_refs[instrument_id] = figi_ref
         er.ensure_entity(conn, issuer_id, "company", sec_name)
@@ -266,7 +316,7 @@ def capture(conn, *, reuse_openfigi_raw: bool = False, fetched_at: datetime | No
             confidence=listing.confidence,
             transaction_time=observed_at,
             valid_from=observed_at.date().isoformat(),
-            raw_ref=company_map_ref,
+            raw_ref=identity_raw_refs[-1],
         )
         issuer_ids.setdefault(issuer_id, [f"staging.kg_entities:{issuer_id}"])
         cik_id = f"staging.kg_identifiers:{_identifier_id(conn, issuer_id, 'cik', str(observed_cik))}"
@@ -475,6 +525,7 @@ def capture(conn, *, reuse_openfigi_raw: bool = False, fetched_at: datetime | No
         company_map_raw_ref=company_map_ref,
         fund_map_raw_ref=fund_map_ref,
         figi_raw_refs=figi_refs,
+        sec_identity_raw_refs=sec_identity_refs,
         holding_record_ids=tuple(sorted(holding_ids)),
         membership_record_ids=tuple(sorted(membership_ids)),
         issuer_record_ids={key: tuple(sorted(value)) for key, value in issuer_ids.items()},
@@ -535,11 +586,12 @@ def emit_source_results(conn, *, run_id: str, scope, result: ToptIdentityResult,
         NPORT_MAPPING_VERSION,
     )
     for issuer_id, record_ids in result.issuer_record_ids.items():
+        sec_raw_refs = result.sec_identity_raw_refs[issuer_id]
         emit(
             issuer_id,
             DataDomain.ENTITY_IDENTITY,
             DataSource.SEC,
-            (result.company_map_raw_ref, result.nport_raw_ref),
+            (*sec_raw_refs, result.nport_raw_ref),
             record_ids,
             ("cik", "issuer_name"),
             Decimal("0.9"),
@@ -555,15 +607,17 @@ def emit_source_results(conn, *, run_id: str, scope, result: ToptIdentityResult,
             1,
             NPORT_MAPPING_VERSION,
         )
+    issuer_by_instrument = {item.instrument_id: item.issuer_id for item in TOPT_INSTRUMENTS}
     for instrument_id, record_ids in result.instrument_record_ids.items():
+        sec_raw_refs = result.sec_identity_raw_refs[issuer_by_instrument[instrument_id]]
         emit(
             instrument_id,
             DataDomain.INSTRUMENTS,
             DataSource.OPENFIGI,
             (
                 result.nport_raw_ref,
-                result.company_map_raw_ref,
                 result.figi_raw_refs[instrument_id],
+                *sec_raw_refs,
             ),
             record_ids,
             ("issuer_id", "isin", "cusip", "ticker", "listing", "currency"),

@@ -137,7 +137,12 @@ def test_phase_error_retries_before_exhaustion_then_returns_failure_evidence(
             self.closed = True
 
     connection = FakeConnection()
-    context = SimpleNamespace(run=SimpleNamespace(run_id="run:test"), retry_number=retry_number)
+    logged_messages = []
+    context = SimpleNamespace(
+        run=SimpleNamespace(run_id="run:test"),
+        retry_number=retry_number,
+        log=SimpleNamespace(error=logged_messages.append),
+    )
     emitted_attempts = []
 
     monkeypatch.setattr(dagster_defs.db, "connect", lambda: connection)
@@ -174,6 +179,14 @@ def test_phase_error_retries_before_exhaustion_then_returns_failure_evidence(
     assert connection.commits == 1
     assert connection.rollbacks == (2 if raises else 1)
     assert connection.closed
+    assert logged_messages == (
+        []
+        if raises
+        else [
+            "sec_financials exhausted 3 attempts with RuntimeError; persisted failure evidence will drive the manifest"
+        ]
+    )
+    assert all("injected outage" not in message for message in logged_messages)
 
 
 def test_instance_config_keeps_all_runtime_metadata_in_dagster_schema(monkeypatch, tmp_path):

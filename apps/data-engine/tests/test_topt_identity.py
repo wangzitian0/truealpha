@@ -4,7 +4,12 @@ from decimal import Decimal
 
 import pytest
 from data_engine.capture.topt import TOPT_BASELINE_REPORT_PERIOD, TOPT_INSTRUMENTS, build_topt_scope
-from data_engine.capture.topt_identity import ToptIdentityResult, emit_source_results, validate_baseline
+from data_engine.capture.topt_identity import (
+    ToptIdentityResult,
+    _resolve_expected_identity,
+    emit_source_results,
+    validate_baseline,
+)
 from data_engine.config import settings
 from data_engine.sources.nport import Holding
 from truealpha_runtime.testing import skip_or_fail
@@ -57,6 +62,37 @@ def test_topt_baseline_validator_fails_on_report_period_drift():
         validate_baseline({"report_period": "2026-06-30"}, holdings)
 
 
+def test_xom_identity_falls_back_to_issuer_submissions_when_current_ticker_map_drifted():
+    xom = next(item for item in TOPT_INSTRUMENTS if item.ticker == "XOM")
+    records = [
+        {
+            "exchCode": "PE",
+            "ticker": "XOM",
+            "marketSector": "Equity",
+            "securityType": "Common Stock",
+            "name": "EXXON MOBIL CORP",
+        }
+    ]
+    assert (
+        _resolve_expected_identity(
+            xom,
+            records=records,
+            issuer_name="Exxon Mobil Corp.",
+            sec_ticker_map={"XOM": (2115436, "ExxonMobil Holdings Corp")},
+        )
+        is None
+    )
+    resolved = _resolve_expected_identity(
+        xom,
+        records=records,
+        issuer_name="Exxon Mobil Corp.",
+        sec_ticker_map={"XOM": (34088, "EXXON MOBIL CORP")},
+    )
+    assert resolved is not None
+    assert resolved[0].resolution_method == "openfigi_sec_name_fallback"
+    assert resolved[1:] == (34088, "EXXON MOBIL CORP")
+
+
 def test_identity_result_emits_every_frozen_identity_holding_and_graph_cell(conn):
     nonce = uuid.uuid4().hex
     issuer_ids = {item.issuer_id for item in TOPT_INSTRUMENTS}
@@ -66,6 +102,7 @@ def test_identity_result_emits_every_frozen_identity_holding_and_graph_cell(conn
         company_map_raw_ref="raw.fetches:2",
         fund_map_raw_ref="raw.fetches:3",
         figi_raw_refs={item.instrument_id: "raw.fetches:4" for item in TOPT_INSTRUMENTS},
+        sec_identity_raw_refs={issuer_id: ("raw.fetches:2",) for issuer_id in issuer_ids},
         holding_record_ids=tuple(f"staging.fund_holding_facts:{index}" for index in range(1, 22)),
         membership_record_ids=tuple(f"staging.universe_memberships:{index}" for index in range(1, 22)),
         issuer_record_ids={issuer_id: (f"staging.kg_entities:{issuer_id}",) for issuer_id in issuer_ids},

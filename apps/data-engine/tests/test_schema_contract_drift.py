@@ -110,3 +110,27 @@ def test_kg_edges_carries_both_time_axes():
     assert "recorded_at" in by_name, "kg_edges lost its recorded_at axis"
     assert "transaction_time" in by_name, "kg_edges lost its transaction_time axis"
     assert by_name["transaction_time"] is None, "kg_edges.transaction_time regained an insert-clock default"
+
+
+def test_recorded_at_defaults_use_wall_clock_not_transaction_start():
+    try:
+        conn = psycopg.connect(settings.database_url, connect_timeout=3)
+    except psycopg.OperationalError:
+        skip_or_fail("no reachable Postgres (make runtime-up && make db-migrate)")
+    rows = conn.execute(
+        """
+        select table_schema, table_name, column_default
+        from information_schema.columns
+        where table_schema in ('raw', 'staging', 'mart')
+          and column_name = 'recorded_at'
+        order by table_schema, table_name
+        """
+    ).fetchall()
+    conn.close()
+    assert rows, "the data plane exposes no recorded_at columns"
+    transaction_start_defaults = [
+        f"{schema}.{table}={default}" for schema, table, default in rows if default != "clock_timestamp()"
+    ]
+    assert not transaction_start_defaults, "recorded_at must use a wall-clock default: " + ", ".join(
+        transaction_start_defaults
+    )

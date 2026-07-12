@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from data_engine import instruments, raw_store
+from data_engine.capture.topt_sources import _safe_source_error
 from data_engine.config import settings
 from data_engine.normalizers import moomoo
 from factors.shared import entity_resolution as er
@@ -91,3 +92,9 @@ def test_moomoo_schema_drift_fails_loudly(conn):
     raw_id = _raw(conn, nonce, "segments", {"period": "2025/FY"})
     with pytest.raises(ValueError, match="period/currency/breakdown/screen dates"):
         moomoo.normalize_segments(conn, raw_fetch_id=raw_id, issuer_id=issuer_id)
+
+
+def test_persisted_source_error_does_not_include_vendor_message():
+    detail = _safe_source_error(RuntimeError("https://vendor.invalid?token=secret"))
+    assert detail == "RuntimeError: source request failed"
+    assert "secret" not in detail

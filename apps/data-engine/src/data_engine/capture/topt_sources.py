@@ -25,6 +25,10 @@ ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{docume
 INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/index.json"
 
 
+def _safe_source_error(error: Exception) -> str:
+    return f"{type(error).__name__}: source request failed"
+
+
 def _requirement(scope, subject_id: str, domain: DataDomain):
     matches = [
         requirement
@@ -236,7 +240,7 @@ def capture_sec_filings(conn, *, run_id: str, scope, attempt: int = 0) -> tuple[
 
             raw_refs = [raw_store.raw_ref(submissions_raw_id)]
             document_ids: list[str] = []
-            extraction_ids: list[str] = []
+            extraction_ids: list[int] = []
             knowable_times: list[datetime] = []
             guidance_signals: list[str] = []
             for filing in selected:
@@ -303,7 +307,7 @@ def capture_sec_filings(conn, *, run_id: str, scope, attempt: int = 0) -> tuple[
                         knowable_at=knowable_at,
                     )
                     document_ids.append(f"staging.filing_documents:{document_id}")
-                    extraction_ids.append(f"staging.filing_extractions:{extraction_id}")
+                    extraction_ids.append(extraction_id)
                     lower_text = document_response.text.lower()
                     if "guidance" in lower_text or "outlook" in lower_text:
                         guidance_signals.append(f"{accession}/{document_name}")
@@ -340,6 +344,7 @@ def capture_sec_filings(conn, *, run_id: str, scope, attempt: int = 0) -> tuple[
                 )
             )
             extraction_requirement = _requirement(scope, issuer_id, DataDomain.FILING_EXTRACTIONS)
+            semantic_extraction_ids = sec_filings.accepted_semantic_extraction_ids(conn, extraction_ids)
             ids.append(
                 source_results.put(
                     conn,
@@ -351,24 +356,29 @@ def capture_sec_filings(conn, *, run_id: str, scope, attempt: int = 0) -> tuple[
                         source=DataSource.SEC,
                         outcome=(
                             source_results.SourceResultOutcome.SUCCESS
-                            if extraction_ids
+                            if semantic_extraction_ids
                             else source_results.SourceResultOutcome.FAILED
                         ),
                         raw_refs=tuple(raw_refs),
-                        domain_record_ids=tuple(extraction_ids),
-                        observed_fields=extraction_requirement.required_fields if extraction_ids else (),
+                        domain_record_ids=tuple(
+                            f"staging.filing_extractions:{extraction_id}" for extraction_id in semantic_extraction_ids
+                        ),
+                        observed_fields=(extraction_requirement.required_fields if semantic_extraction_ids else ()),
                         min_knowable_at=min(knowable_times) if knowable_times else None,
                         max_knowable_at=max(knowable_times) if knowable_times else None,
                         observed_at=observed_at,
-                        confidence=Decimal("1"),
+                        confidence=Decimal("1") if semantic_extraction_ids else Decimal("0"),
                         mapping_version=sec_filings.MAPPING_VERSION,
                         attempt=attempt,
-                        detail=None if extraction_ids else "No filing document envelope was normalized.",
+                        detail=(
+                            None
+                            if semantic_extraction_ids
+                            else f"{len(extraction_ids)} document envelopes contain no accepted semantic claims."
+                        ),
                     ),
                 )
             )
             guidance_requirement = _requirement(scope, issuer_id, DataDomain.COMPANY_GUIDANCE)
-            guidance_failed = bool(guidance_signals)
             ids.append(
                 source_results.put(
                     conn,
@@ -378,25 +388,21 @@ def capture_sec_filings(conn, *, run_id: str, scope, attempt: int = 0) -> tuple[
                         domain=DataDomain.COMPANY_GUIDANCE,
                         partition_key=guidance_requirement.partition_key,
                         source=DataSource.SEC,
-                        outcome=(
-                            source_results.SourceResultOutcome.FAILED
-                            if guidance_failed
-                            else source_results.SourceResultOutcome.SUCCESS
-                        ),
+                        outcome=source_results.SourceResultOutcome.FAILED,
                         raw_refs=tuple(raw_refs),
                         domain_record_ids=(),
                         observed_fields=(),
                         min_knowable_at=None,
                         max_knowable_at=None,
                         observed_at=observed_at,
-                        confidence=Decimal("1"),
+                        confidence=Decimal("0"),
                         mapping_version=sec_filings.MAPPING_VERSION,
                         attempt=attempt,
                         detail=(
                             "Guidance/outlook text requires structured range extraction in: "
                             + ", ".join(guidance_signals)
-                            if guidance_failed
-                            else None
+                            if guidance_signals
+                            else "No accepted structured guidance extractor ran; keyword absence cannot certify an empty result."
                         ),
                     ),
                 )
@@ -459,10 +465,10 @@ def capture_moomoo_domains(conn, *, run_id: str, scope, attempt: int = 0) -> tup
                     detail = None
                 except mm.MoomooConnectionError as error:
                     observed_at = datetime.now(UTC)
-                    raw_id = persist(code, f"error:{endpoint}", {"error": str(error)}, observed_at)
+                    detail = _safe_source_error(error)
+                    raw_id = persist(code, f"error:{endpoint}", {"error": detail}, observed_at)
                     record_ids = ()
                     outcome = source_results.SourceResultOutcome.FAILED
-                    detail = str(error)
                 requirement = _requirement(scope, issuer_id, domain)
                 times = (
                     conn.execute(
@@ -513,10 +519,10 @@ def capture_moomoo_domains(conn, *, run_id: str, scope, attempt: int = 0) -> tup
                 detail = None
             except mm.MoomooConnectionError as error:
                 observed_at = datetime.now(UTC)
-                raw_id = persist(code, "error:dividends", {"error": str(error)}, observed_at)
+                detail = _safe_source_error(error)
+                raw_id = persist(code, "error:dividends", {"error": detail}, observed_at)
                 record_ids = ()
                 outcome = source_results.SourceResultOutcome.FAILED
-                detail = str(error)
             requirement = _requirement(scope, instrument.instrument_id, DataDomain.CORPORATE_ACTIONS)
             times = (
                 conn.execute(

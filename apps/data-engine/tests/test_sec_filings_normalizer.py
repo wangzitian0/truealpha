@@ -50,5 +50,6 @@ def test_filing_document_and_envelope_are_idempotent_and_make_no_semantic_claim(
     assert second == first
     payload = conn.execute("select payload from staging.filing_extractions where id = %s", (first[1],)).fetchone()[0]
     assert payload == {"semantic_claims": 0}
+    assert sec_filings.accepted_semantic_extraction_ids(conn, [first[1]]) == ()
     with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
         conn.execute("delete from staging.filing_documents where id = %s", (first[0],))

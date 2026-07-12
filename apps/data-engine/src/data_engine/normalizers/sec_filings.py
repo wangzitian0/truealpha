@@ -13,6 +13,23 @@ MAPPING_VERSION = "sec-filing-document:1"
 EXTRACTOR_VERSION = "document-envelope:1"
 
 
+def accepted_semantic_extraction_ids(conn, extraction_ids: list[int]) -> tuple[int, ...]:
+    """Return reviewed semantic results; document envelopes never satisfy extraction cells."""
+    if not extraction_ids:
+        return ()
+    rows = conn.execute(
+        """
+        select id from staging.filing_extractions
+        where id = any(%s)
+          and extraction_type <> 'document_envelope'
+          and review_state in ('rule_verified', 'human_verified')
+        order by id
+        """,
+        (extraction_ids,),
+    ).fetchall()
+    return tuple(row[0] for row in rows)
+
+
 def normalize_document(
     conn,
     *,

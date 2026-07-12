@@ -28,7 +28,7 @@ from data_engine.config import settings
 GROUP_NAME = "topt_staging_capture"
 JOB_NAME = "topt_staging_capture_job"
 SCHEDULE_NAME = "topt_staging_daily_schedule"
-CODE_VERSION = "topt-capture:1"
+CODE_VERSION = "topt-capture:2"
 MAX_RETRIES = 2
 RETRY_POLICY = dg.RetryPolicy(
     max_retries=MAX_RETRIES,
@@ -225,6 +225,10 @@ def _run_phase(
             conn.commit()
             if context.retry_number < MAX_RETRIES:
                 raise
+            context.log.error(
+                f"{phase_name} exhausted {MAX_RETRIES + 1} attempts with "
+                f"{type(error).__name__}; persisted failure evidence will drive the manifest"
+            )
         else:
             conn.commit()
         return _phase_output(conn, result_ids=result_ids, phase_name=phase_name)
