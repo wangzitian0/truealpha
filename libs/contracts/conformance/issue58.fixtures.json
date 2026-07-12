@@ -1,0 +1,519 @@
+{
+  "contract_set": "truealpha.issue-58.exact-contracts.v1",
+  "contracts": {
+    "CaptureManifest": {
+      "applicability_catalog_id": "applicability:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "applicability_catalog_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "as_of": "2026-07-12T12:00:00Z",
+      "capture_manifest_id": "capture-manifest:d42a84b786f07c897adb65e6c4350322a76ce8476949e691495f1a03999a79bd",
+      "capture_scope_id": "capture-scope:a7b1ea57ae577cef6796145a9b7c3185aa31f3742ae90cc0644e8db8a5b7bf35",
+      "capture_scope_sha256": "a7b1ea57ae577cef6796145a9b7c3185aa31f3742ae90cc0644e8db8a5b7bf35",
+      "cells": [
+        {
+          "applicability": "required",
+          "capture_cell_id": "capture-cell:09aeacbd845dd4502fddae0c5d5847c78265444d14833ab0040350ae5e7fff64",
+          "capture_requirement_id": "capture-requirement:b883ceb41ba623bc01dd24cd3433f16e49da259733e1f90386384399032c7749",
+          "content_sha256": "09aeacbd845dd4502fddae0c5d5847c78265444d14833ab0040350ae5e7fff64",
+          "domain": "financial_facts",
+          "evidence": [
+            {
+              "confidence": "0.98",
+              "content_sha256": "1eb051b4e29aa4643d1153fe1ef6ac3b557df776a18be2e0655bede96fdf2e14",
+              "evidence_id": "capture-evidence:1eb051b4e29aa4643d1153fe1ef6ac3b557df776a18be2e0655bede96fdf2e14",
+              "knowable_at": "2026-07-12T10:00:00Z",
+              "lineage_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "mapping_version": "sec-companyfacts:v1",
+              "normalized_id": "staging.financial-facts:issuer-example-2025",
+              "policy_versions": {
+                "freshness.daily:v1": "v1",
+                "partition.fiscal:v1": "v1"
+              },
+              "populated_fields": [
+                "gross_profit",
+                "revenue"
+              ],
+              "quality_check_ids": [
+                "quality.non-null:v1",
+                "quality.numeric:v1"
+              ],
+              "quality_status": "pass",
+              "raw_id": "raw.fetches:financial-fact-2025",
+              "raw_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+              "recorded_at": "2026-07-12T12:01:00Z",
+              "semantic_type_id": "semantic.financial-fact",
+              "semantic_type_version": "1.0.0",
+              "source_coverage_entry_id": "source-coverage-entry:1111111111111111111111111111111111111111111111111111111111111111",
+              "valid_from": "2025-07-12T12:00:00Z",
+              "valid_to": "2026-07-12T12:00:00Z"
+            }
+          ],
+          "partition_key": "fy2025",
+          "reason_codes": [],
+          "status": "complete",
+          "subject": {
+            "id": "issuer.example",
+            "kind": "issuer"
+          }
+        }
+      ],
+      "content_sha256": "d42a84b786f07c897adb65e6c4350322a76ce8476949e691495f1a03999a79bd",
+      "created_at": "2026-07-12T12:02:00Z",
+      "environment": "staging",
+      "partition_key": "fy2025",
+      "research_catalog_id": "research-catalog:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "research_catalog_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "semantic_type_registry_id": "semantic-type-registry:0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+      "semantic_type_registry_sha256": "0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+      "slo_catalog_id": "module-slo:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "slo_catalog_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "source_coverage_catalog_id": "source-coverage:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "source_coverage_catalog_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "source_registry_id": "source-registry:8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+      "source_registry_sha256": "8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+      "started_at": "2026-07-12T12:01:00Z"
+    },
+    "CaptureScope": {
+      "applicability_catalog_id": "applicability:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "applicability_catalog_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "applicability_projection_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "capture_scope_id": "capture-scope:a7b1ea57ae577cef6796145a9b7c3185aa31f3742ae90cc0644e8db8a5b7bf35",
+      "content_sha256": "a7b1ea57ae577cef6796145a9b7c3185aa31f3742ae90cc0644e8db8a5b7bf35",
+      "effective_at": "2026-06-22T12:00:00Z",
+      "owner": "data-platform",
+      "requirements": [
+        {
+          "cadence": "P1D",
+          "capture_requirement_id": "capture-requirement:b883ceb41ba623bc01dd24cd3433f16e49da259733e1f90386384399032c7749",
+          "content_sha256": "b883ceb41ba623bc01dd24cd3433f16e49da259733e1f90386384399032c7749",
+          "domain": "financial_facts",
+          "freshness_policy_id": "freshness.daily:v1",
+          "maximum_age": "P2D",
+          "partition_rule_id": "partition.fiscal:v1",
+          "quality_policy_ids": [
+            "quality.non-null:v1",
+            "quality.numeric:v1"
+          ],
+          "required_fields": [
+            "gross_profit",
+            "revenue"
+          ],
+          "semantic_type_id": "semantic.financial-fact",
+          "semantic_type_version": "1.0.0",
+          "subject_kinds": [
+            "issuer"
+          ]
+        }
+      ],
+      "research_catalog_id": "research-catalog:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "research_catalog_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "semantic_type_registry_id": "semantic-type-registry:0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+      "semantic_type_registry_sha256": "0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+      "slo_catalog_id": "module-slo:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "slo_catalog_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "source_coverage_catalog_id": "source-coverage:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "source_coverage_catalog_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "source_coverage_projection_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source_registry_id": "source-registry:8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+      "source_registry_sha256": "8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+      "universe": {
+        "content_sha256": "a56c07aaf6d5dfd354ba9516a7b17db084c4235e71484f615611074bb67a76b5",
+        "universe_id": "universe.topt-core",
+        "universe_version": "2026-07-12"
+      }
+    },
+    "ReleaseManifest": {
+      "applicability_catalog_id": "applicability:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "applicability_catalog_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "approved_extraction_templates": [
+        {
+          "content_sha256": "f6290a89f8f716f4e1050a67c0f604f20bb29c8274436f2cdf2305494f5b5384",
+          "extraction_template_id": "extraction-template:f6290a89f8f716f4e1050a67c0f604f20bb29c8274436f2cdf2305494f5b5384",
+          "extractor_implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+          "instructions_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "model_revision_id": "model-revision:d4fc88dad61fe59e087caf6387c38bc32d005344937ac29b8045c2043831fff1",
+          "model_revision_sha256": "d4fc88dad61fe59e087caf6387c38bc32d005344937ac29b8045c2043831fff1",
+          "output_schema_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payload_model_key": "contracts:FinancialFact",
+          "semantic_type_id": "semantic.financial-fact",
+          "semantic_type_version": "1.0.0",
+          "template_name": "financial-fact",
+          "template_version": "1.0.0"
+        }
+      ],
+      "approved_model_revisions": [
+        {
+          "content_sha256": "d4fc88dad61fe59e087caf6387c38bc32d005344937ac29b8045c2043831fff1",
+          "decoding_parameters_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "endpoint_or_artifact_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "immutable_revision": "2026-07-01",
+          "model_id": "extractor.financial-fact",
+          "model_revision_id": "model-revision:d4fc88dad61fe59e087caf6387c38bc32d005344937ac29b8045c2043831fff1",
+          "provider": "provider.example"
+        }
+      ],
+      "artifacts": [
+        {
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "git_sha": "2222222222222222222222222222222222222222",
+          "image_or_bundle": "ghcr.io/truealpha/app_web@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "role": "app_web",
+          "sbom_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "signature_ref": "sigstore:app_web:sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        {
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "git_sha": "2222222222222222222222222222222222222222",
+          "image_or_bundle": "ghcr.io/truealpha/data_engine_dagster@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "role": "data_engine_dagster",
+          "sbom_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "signature_ref": "sigstore:data_engine_dagster:sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        {
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "git_sha": "2222222222222222222222222222222222222222",
+          "image_or_bundle": "ghcr.io/truealpha/db_migrations@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "role": "db_migrations",
+          "sbom_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "signature_ref": "sigstore:db_migrations:sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        {
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "git_sha": "2222222222222222222222222222222222222222",
+          "image_or_bundle": "ghcr.io/truealpha/llm_service@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "role": "llm_service",
+          "sbom_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "signature_ref": "sigstore:llm_service:sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "capture_scope_id": "capture-scope:a7b1ea57ae577cef6796145a9b7c3185aa31f3742ae90cc0644e8db8a5b7bf35",
+      "capture_scope_sha256": "a7b1ea57ae577cef6796145a9b7c3185aa31f3742ae90cc0644e8db8a5b7bf35",
+      "configuration_sha256": {
+        "app-web": "8888888888888888888888888888888888888888888888888888888888888888",
+        "data-engine": "9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "consumer_slo_catalog_id": "consumer-slo:6666666666666666666666666666666666666666666666666666666666666666",
+      "consumer_slo_catalog_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "contract_version": "contracts:v1",
+      "created_at": "2026-07-02T12:00:00Z",
+      "identifier_type_registry_id": "identifier-type-registry:1921402451ce2b323c7dbf6ace0db011fc8f03eedcc353fe8f846f9558a80f77",
+      "identifier_type_registry_sha256": "1921402451ce2b323c7dbf6ace0db011fc8f03eedcc353fe8f846f9558a80f77",
+      "manifest_sha256": "ad7d247d8f2179c1c3b263ea1d94c3f0526e4c214f08c2a113dfa6c75c0585f8",
+      "manifest_signature_ref": "sigstore:release:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mart_schema_version": "mart:v1",
+      "migration_ids": [
+        "0001_core.sql",
+        "0002_capture.sql"
+      ],
+      "migration_set_sha256": "5b7edc99b0dc0b4f69c44f26bef0445edcf9c6e42562a6668f58e4dc17181603",
+      "natural_refresh_requirement_ids": [
+        "natural-refresh:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "registry_snapshot_id": "registry-snapshot:105f282a651c3e90645e61e98ae0173053477ea70b043cfc2ae8ebf24fd5674a",
+      "registry_snapshot_sha256": "105f282a651c3e90645e61e98ae0173053477ea70b043cfc2ae8ebf24fd5674a",
+      "release_manifest_id": "release-manifest:ad7d247d8f2179c1c3b263ea1d94c3f0526e4c214f08c2a113dfa6c75c0585f8",
+      "research_catalog_id": "research-catalog:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "research_catalog_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "semantic_type_registry_id": "semantic-type-registry:0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+      "semantic_type_registry_sha256": "0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+      "slo_catalog_id": "module-slo:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "slo_catalog_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "source_coverage_catalog_id": "source-coverage:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "source_coverage_catalog_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "source_readiness_report_id": "source-readiness:5555555555555555555555555555555555555555555555555555555555555555",
+      "source_readiness_report_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "source_registry_id": "source-registry:8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+      "source_registry_sha256": "8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+      "universe": {
+        "content_sha256": "a56c07aaf6d5dfd354ba9516a7b17db084c4235e71484f615611074bb67a76b5",
+        "universe_id": "universe.topt-core",
+        "universe_version": "2026-07-12"
+      },
+      "usage_telemetry_slo_catalog_id": "usage-telemetry-slo:7777777777777777777777777777777777777777777777777777777777777777",
+      "usage_telemetry_slo_catalog_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    "SnapshotManifest": {
+      "content_sha256": "78cb696117cd400735f72d34520dd637fb35ebabd8efe42c86e57a6d2fb0084e",
+      "normalized_records": [
+        {
+          "confidence": "0.9",
+          "content_sha256": "3be48d70498900648536a57a030a53c9e27cfbe6f038030d6ff458a281746d6c",
+          "document_id": "document:sec-10k-2025",
+          "draft": {
+            "content_sha256": "2cca091db6d447950197ff614d57abf65ee406b2731e4f0e74a77eb67624dd2e",
+            "extraction_invocation_id": "extraction-invocation:6ec4e41010e326a3744d74e5dc13da8e925d51223a74f1aa20d1809a1729ef83",
+            "extraction_invocation_sha256": "6ec4e41010e326a3744d74e5dc13da8e925d51223a74f1aa20d1809a1729ef83",
+            "extraction_template_id": "extraction-template:f6290a89f8f716f4e1050a67c0f604f20bb29c8274436f2cdf2305494f5b5384",
+            "extraction_template_sha256": "f6290a89f8f716f4e1050a67c0f604f20bb29c8274436f2cdf2305494f5b5384",
+            "knowable_at": "2026-07-07T12:00:00Z",
+            "model_revision_id": "model-revision:d4fc88dad61fe59e087caf6387c38bc32d005344937ac29b8045c2043831fff1",
+            "model_revision_sha256": "d4fc88dad61fe59e087caf6387c38bc32d005344937ac29b8045c2043831fff1",
+            "payload_model_key": "contracts:FinancialFact",
+            "payload_schema_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "payload_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+            "produced_at": "2026-07-08T12:00:00Z",
+            "producer_id": "extractor.runner",
+            "producer_implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "producer_kind": "versioned_extraction",
+            "producer_version": "1.0.0",
+            "semantic_draft_id": "semantic-draft:2cca091db6d447950197ff614d57abf65ee406b2731e4f0e74a77eb67624dd2e",
+            "semantic_type_id": "semantic.financial-fact",
+            "semantic_type_version": "1.0.0",
+            "subject": {
+              "id": "issuer.example",
+              "kind": "issuer"
+            },
+            "valid_from": "2025-01-01",
+            "valid_to": "2025-12-31"
+          },
+          "is_restatement": false,
+          "mapping_implementation_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+          "mapping_version": "1.0.0",
+          "normalized_record_id": "normalized-record:3be48d70498900648536a57a030a53c9e27cfbe6f038030d6ff458a281746d6c",
+          "raw_object_id": "raw-object:sec-10k-2025",
+          "raw_object_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+          "recorded_at": "2026-07-09T12:00:00Z",
+          "source_registry_entry_id": "source-registry-entry:f843ec133fa52d7e485b59330be1871b30a7f3444a8d7acc205761251fea37e9",
+          "source_registry_entry_sha256": "f843ec133fa52d7e485b59330be1871b30a7f3444a8d7acc205761251fea37e9",
+          "supersedes_record_id": null
+        }
+      ],
+      "registry_snapshot": {
+        "content_sha256": "105f282a651c3e90645e61e98ae0173053477ea70b043cfc2ae8ebf24fd5674a",
+        "identifier_type_registry_sha256": "1921402451ce2b323c7dbf6ace0db011fc8f03eedcc353fe8f846f9558a80f77",
+        "identifier_type_registry_snapshot_id": "identifier-type-registry:1921402451ce2b323c7dbf6ace0db011fc8f03eedcc353fe8f846f9558a80f77",
+        "identifier_types": [
+          {
+            "canonicalizer_implementation_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+            "compatibility_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+            "compatible_schema_versions": [],
+            "identifier_type_id": "identifier.entity.legal-entity-id",
+            "namespace_kind": "entity",
+            "schema_fingerprint_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+            "schema_version": "1.0.0",
+            "semantic_definition_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+            "validator_implementation_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+            "version": "1.0.0"
+          }
+        ],
+        "parent_snapshot_id": null,
+        "registry_snapshot_id": "registry-snapshot:105f282a651c3e90645e61e98ae0173053477ea70b043cfc2ae8ebf24fd5674a",
+        "required_identifier_type_ids": [
+          "identifier.entity.legal-entity-id"
+        ],
+        "required_type_ids": [
+          "semantic.financial-fact"
+        ],
+        "semantic_type_registry_sha256": "0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+        "semantic_type_registry_snapshot_id": "semantic-type-registry:0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+        "semantic_types": [
+          {
+            "compatibility_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "compatible_schema_versions": [],
+            "domain": "financial_facts",
+            "input_model_key": "factors:FinancialFactInput",
+            "model_implementation_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "normalized_model_key": "contracts:FinancialFact",
+            "projector_implementation_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "projector_key": "projectors:FinancialFact",
+            "repository_implementation_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "repository_key": "repositories:FinancialFact",
+            "schema_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "schema_version": "1.0.0",
+            "semantic_type_id": "semantic.financial-fact",
+            "version": "1.0.0"
+          }
+        ],
+        "source_registry_sha256": "8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+        "source_registry_snapshot_id": "source-registry:8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+        "sources": [
+          {
+            "adapter_id": "adapter.sec",
+            "adapter_implementation_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "adapter_version": "1.0.0",
+            "configuration_schema_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "mapping_schema_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "normalizer_id": "normalizer.sec",
+            "normalizer_implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "normalizer_version": "1.0.0",
+            "source_id": "source.sec",
+            "supported_domains": [
+              "financial_facts"
+            ],
+            "supported_type_ids": [
+              "semantic.financial-fact"
+            ],
+            "version": "1.0.0"
+          }
+        ]
+      },
+      "request": {
+        "as_of": "2026-07-12T12:00:00Z",
+        "content_sha256": "8f60238025c8595162ca6e080ca496f7ee2e3749dada9e80fb0b3bd9d261594f",
+        "demand_cells": [
+          {
+            "capture_requirement_id": "capture-requirement:b883ceb41ba623bc01dd24cd3433f16e49da259733e1f90386384399032c7749",
+            "domain": "financial_facts",
+            "level": "required",
+            "partition_key": "FY2025",
+            "planned_cell_id": "planned-demand-cell:a1b3a7f92ed4d84abeb5032970d70d92d83ce5b491d8a00517f04dd1243f906f",
+            "requirement_id": "data-requirement:6666666666666666666666666666666666666666666666666666666666666666",
+            "semantic_type_id": "semantic.financial-fact",
+            "semantic_type_version": "1.0.0",
+            "subject": {
+              "id": "issuer.example",
+              "kind": "issuer"
+            }
+          }
+        ],
+        "policy_bindings": [
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.applicability",
+            "policy_version": "1.0.0",
+            "role": "applicability"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.corporate_action",
+            "policy_version": "1.0.0",
+            "role": "corporate_action"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.extraction",
+            "policy_version": "1.0.0",
+            "role": "extraction"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.fusion",
+            "policy_version": "1.0.0",
+            "role": "fusion"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.fx",
+            "policy_version": "1.0.0",
+            "role": "fx"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.identity",
+            "policy_version": "1.0.0",
+            "role": "identity"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.market_calendar",
+            "policy_version": "1.0.0",
+            "role": "market_calendar"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.membership",
+            "policy_version": "1.0.0",
+            "role": "membership"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.metric",
+            "policy_version": "1.0.0",
+            "role": "metric"
+          },
+          {
+            "implementation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "policy_id": "policy.price",
+            "policy_version": "1.0.0",
+            "role": "price"
+          }
+        ],
+        "registry_snapshot_id": "registry-snapshot:105f282a651c3e90645e61e98ae0173053477ea70b043cfc2ae8ebf24fd5674a",
+        "registry_snapshot_sha256": "105f282a651c3e90645e61e98ae0173053477ea70b043cfc2ae8ebf24fd5674a",
+        "semantic_type_registry_id": "semantic-type-registry:0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+        "semantic_type_registry_sha256": "0d3c4278b7ea9e920e46ab4d6e855829d3478be5dbb826a168493709f5746bcd",
+        "snapshot_request_id": "snapshot-request:8f60238025c8595162ca6e080ca496f7ee2e3749dada9e80fb0b3bd9d261594f",
+        "source_registry_id": "source-registry:8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+        "source_registry_sha256": "8d2502fcc26d492627fb1b20b5563ce0ebab38c5672ea06970398c33d5032b2a",
+        "subjects": [],
+        "universe": {
+          "content_sha256": "a56c07aaf6d5dfd354ba9516a7b17db084c4235e71484f615611074bb67a76b5",
+          "universe_id": "universe.topt-core",
+          "universe_version": "2026-07-12"
+        },
+        "valid_on": "2025-12-31"
+      },
+      "resolved_at": "2026-07-12T12:00:01Z",
+      "resolved_subjects": [
+        {
+          "id": "issuer.example",
+          "kind": "issuer"
+        }
+      ],
+      "resolver_id": "snapshot-resolver",
+      "resolver_implementation_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "resolver_version": "1.0.0",
+      "selections": [
+        {
+          "demand": {
+            "capture_requirement_id": "capture-requirement:b883ceb41ba623bc01dd24cd3433f16e49da259733e1f90386384399032c7749",
+            "domain": "financial_facts",
+            "level": "required",
+            "partition_key": "FY2025",
+            "planned_cell_id": "planned-demand-cell:a1b3a7f92ed4d84abeb5032970d70d92d83ce5b491d8a00517f04dd1243f906f",
+            "requirement_id": "data-requirement:6666666666666666666666666666666666666666666666666666666666666666",
+            "semantic_type_id": "semantic.financial-fact",
+            "semantic_type_version": "1.0.0",
+            "subject": {
+              "id": "issuer.example",
+              "kind": "issuer"
+            }
+          },
+          "normalized_record_ids": [
+            "normalized-record:3be48d70498900648536a57a030a53c9e27cfbe6f038030d6ff458a281746d6c"
+          ],
+          "reason_codes": []
+        }
+      ],
+      "snapshot_id": "snapshot:78cb696117cd400735f72d34520dd637fb35ebabd8efe42c86e57a6d2fb0084e",
+      "universe_manifest": {
+        "definition_kind": "fixed_cohort",
+        "effective_at": "2026-06-12T12:00:00Z",
+        "membership_ids": [
+          "membership:issuer.example"
+        ],
+        "owner": "research-owner",
+        "ref": {
+          "content_sha256": "a56c07aaf6d5dfd354ba9516a7b17db084c4235e71484f615611074bb67a76b5",
+          "universe_id": "universe.topt-core",
+          "universe_version": "2026-07-12"
+        },
+        "resolver_version": null,
+        "supported_claims": [
+          "fixed_cohort_description"
+        ]
+      },
+      "universe_memberships": [
+        {
+          "confidence": "1",
+          "knowable_at": "2026-06-22T12:00:00Z",
+          "membership_id": "membership:issuer.example",
+          "raw_ref": "raw:universe-membership",
+          "recorded_at": "2026-06-23T12:00:00Z",
+          "subject": {
+            "id": "issuer.example",
+            "kind": "issuer"
+          },
+          "universe_id": "universe.topt-core",
+          "valid_from": "2025-01-01",
+          "valid_to": null
+        }
+      ]
+    }
+  },
+  "schema_sha256": {
+    "CaptureManifest": "e84b8041857e2bfb79e8567f590b2f47ab7b80503e6ab9f944833f651ab7cbc3",
+    "CaptureScope": "90983276eef34f0c23d85718c066a3bd1dadc1247dacda3c32f5143bdf6cd04a",
+    "ReleaseManifest": "6eef8fb32b8737de34b364b381543b8e201b7ca716af145df81eb1677dc5991d",
+    "SnapshotManifest": "97d394f96d83c4a2435dbfdc11c3cba2cf5fd43e40c2c7663a51cdc50a5d0103"
+  }
+}

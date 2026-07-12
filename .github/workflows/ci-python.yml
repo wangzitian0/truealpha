@@ -51,6 +51,7 @@ jobs:
       - run: uv run ruff check apps libs
       - run: uv run ruff format --check apps libs
       - run: uv run mypy
+      - run: uv run python libs/contracts/conformance/export_issue58.py --check
       # A docker-run step rather than a service container: GitHub services can't
       # override the container command, and the official minio image (the same
       # pin docker-compose.yml uses) needs `server /data`.

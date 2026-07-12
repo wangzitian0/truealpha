@@ -31,13 +31,16 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 12. **Multi-source truth is resolved by declared fusion rules, never by ingestion recency.** Staging keeps every source's assertion side by side; the mart winner comes from the metric registry's per-field `source_priority` (Section 6, "Source fusion"), and the ruleset version is part of mart lineage. Corollary: `transaction_time` (= knowable-at) is always written explicitly from a source property, never defaulted to the insert clock, and every staging row also carries `recorded_at` (ingestion clock, audit only) plus — for parsed facts — a `mapping_version`, so "the data changed" and "the cleaning logic changed" stay distinguishable forever.
 13. **Scope is immutable and explicit.** `UniverseRef` contains the universe ID, version, and membership or resolver hash. Every capture, snapshot, factor invocation, screen, strategy, report, SLO evaluation, and audit binds that exact reference plus `as_of` and `valid_on` where applicable. Research Catalog, applicability, capture, and SLO identities remain separate immutable contracts and are bound together by the release manifest. A mutable "current universe" or an unversioned ticker list is never a valid execution scope.
 14. **Applicability is frozen before execution and scope cannot shrink to obtain green status.** Required/optional/not-applicable cells are approved before a run. Removing a subject, invocation, theme, scenario, or required cell creates a new catalog/SLO version, records product-owner approval, and narrows the claim; it cannot retroactively make a failed gate pass. The supported workflow must also onboard an issuer and theme that were absent from development evidence without changing factor or consumer code.
-15. **Capture completeness is row-level, not job-level.** A versioned `CaptureScope` enumerates every required `(scope, subject or instrument, domain, partition or vintage)` cell. Its `CaptureManifest` records raw capture, normalized record, confidence, times, mapping/policy versions, quality result, and lineage for every cell. Missing required cells fail even when Dagster is green or raw payload counts look plausible. #58/#61 own the contracts, #27/#51/#67 emit the evidence at their bounded scopes, and #68 independently audits the graduated Production scope.
+15. **Capture completeness is row-level, not job-level.** A versioned `CaptureScope` enumerates every required `(scope, subject or instrument, domain, partition or vintage)` cell. Its `CaptureManifest` records raw capture, normalized record, confidence, times, mapping/policy versions, quality result, and lineage for every cell. Missing required cells fail even when Dagster is green or raw payload counts look plausible. #58/#61 own the contracts, #27/#51/#67 emit the evidence at their bounded scopes, and #68 independently audits the complete Production shadow candidate before #54 may record authoritative graduation.
 16. **V1 total return uses unadjusted bars plus explicit corporate-action lifecycle events.** The simulator applies declaration/knowability, ex, effective, record, and pay semantics exactly once through a monotonic event clock. Adjusted-close data may be retained for reconciliation but cannot be combined with separately applied splits or dividends.
 17. **Financial issuers require a real comparison branch.** The research specification must define and independently review a financial-sector operating-efficiency semantic/proxy and comparison rule. Blanket exclusion may be a strategy eligibility choice, but it cannot satisfy the gross-profit-per-employee module or the Vision's financial/non-financial handling requirement.
 18. **Independent holdouts must be executable and blind.** A named custodian controls labels; implementation code, parameters, catalog, and thresholds are content-hashed before authors see labels or results. In a solo workflow, independence requires an external evaluator or a newly sampled post-freeze corpus. Failed results or changed logic require a new version and a fresh untouched holdout; self-reviewed public fixtures are development goldens only.
 19. **Every source has an expiring rights and budget go/no-go.** Before Production use, a named authorized owner records raw-retention, caching, derived-metric, report/card/publication, quotation, and attribution rights; quota/SLA behavior; approved vendor, API, storage, extraction, and human-review budgets; and a review expiry. Unknown rights, expired approval, or an over-budget full-catalog projection fails the gate. The only alternatives are to approve/fund a valid source or explicitly narrow `vision.md` and the Research Catalog.
 20. **Continuous operation requires natural source refreshes.** Before a soak begins, each required source class declares its cadence, maximum age, required naturally changed partitions/publication transitions, observation window, owner, and alert budget. Immediate retries, reparsing unchanged bytes, synthetic mutations, and replaying old fixtures do not count. Slow quarterly or annual sources keep graduation blocked unless their pre-approved natural-refresh requirement is observed.
 21. **Production graduation is a user-facing and independently reviewed event.** Every non-local MCP, App, `/chat`, report, and artifact endpoint requires TLS and authentication. Full-catalog load must pass approved capacity limits without starving Staging, backup, monitoring, or consumers. A destructive clean restore must meet declared database and raw-object RPO/RTO. A human approves a Production card deck against the content/visual/rights rubric, and an independent reviewer signs the final audit; automated green checks alone cannot graduate shadow output.
+22. **Extension is registry-driven and deliberately static.** Content-hashed `SourceRegistry` and `SemanticTypeRegistry` snapshots are authenticated by the signed release manifest. They resolve source adapters/normalizers and typed normalized models/factor-input projectors/repositories. Adding a source for an existing semantic type changes only source-owned code, registrations, policies, and tests. Adding a record type inside an existing domain changes only its typed model, storage/migration, projector, registration, and tests. Generic capture, manifest, snapshot, Dagster composition, factor execution, lineage, usage, and review code must not branch on source or record type. A new domain or new business meaning remains an explicit contract/factor/catalog change. V1 uses checked-in registrations at process start, not dynamic plugin discovery, runtime code loading, an event bus, or arbitrary JSON facts.
+23. **Data usage is automatic, idempotent infrastructure evidence.** Capture manifests, repositories, snapshot selection, and factor/strategy runners record append-only semantic-use identities outside factor code. Usage views distinguish planned demand, capture/normalization evidence, snapshot selection, factor consumption, and strategy consumption. Retries do not double-count one semantic use, missing telemetry is an error rather than zero use, and source attribution is recovered through lineage rather than exposed to a factor. V1 deliberately excludes page-view/query analytics so the App remains strictly `mart_readonly`.
+24. **Strategy quality review starts from expected data, not successful outputs.** The framework compiles source-neutral `DataRequirement` records from the immutable strategy, factor, and execution/return-rule graph for every scheduled cutoff and applicable subject, then left-joins actual capture, snapshot, consumption, lineage, rights, freshness, and quality evidence. Missing data that suppresses a candidate or produces no trade remains a failed expected cell with affected decisions; undeclared consumption or broken reverse lineage also fails. Observed low usage can prioritize remediation but can never relax applicability, retention, source policy, or an SLO retroactively.
 
 ---
 
@@ -59,6 +62,20 @@ L3 Analytics modules      ── the 7 concrete tools (Section 7)
 L4 Backtest/portfolio validation ── PIT decision snapshots + a separate monotonic future market-event stream
 L5 Consumption layer      ── App direct mart adapter + typed MCP/ResearchQueryService tools used by `/chat`
 ```
+
+The extensible core stays intentionally small:
+
+```text
+checked-in SourceRegistry + SemanticTypeRegistry
+  -> Capture -> Normalize -> Snapshot -> Compute -> Materialize
+                                |                    |
+                                +-> automatic usage +-> bounded usage views
+StrategyDefinition -> DataRequirement graph -> StrategyDataQualityReview
+```
+
+Dagster compiles and schedules this one write spine. The two registries select
+implementations; the usage and strategy-quality projections are read/audit slices over
+the same immutable manifests and lineage, not alternative pipelines.
 
 ### 2.2 Service Topology and Priority (the four services are not peers)
 
@@ -308,6 +325,13 @@ grant select on schema mart to mart_readonly;
 
 Other tables: `api_call_ledger` (moomoo quota ledger), `ingestion_health_log` (only business-specific metrics the Dagster UI doesn't already cover).
 
+**Data-accountability projections.** Generic runner and strategy materialization write
+idempotent input-to-output and output-to-decision lineage. `mart.data_usage_frequency`
+joins those edges with capture/snapshot/consumption records and the declared requirement
+graph; `mart.strategy_data_quality_review` starts from every expected requirement cell
+and left-joins the actual evidence. Neither projection may infer non-applicability from
+zero use, and neither becomes a second computation path for factors.
+
 ---
 
 ## 7. The Seven Analytics Modules
@@ -328,19 +352,19 @@ Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner
 
 | Gate | Goal | Verification | Infrastructure scope |
 |---|---|---|---|
-| Gate 0: Semantic & Data Closure | Freeze research semantics, issuer/security/listing and currency/time/return rules, executable snapshot/extraction/invocation/lineage contracts, longitudinal source rights, and module coverage/freshness SLOs | Contract examples and fixture/Postgres conformance pass; every required field has a viable longitudinal source and every module has an independent oracle and usable-coverage denominator | Local/CI only; no interface is called v1-frozen before this gate |
+| Gate 0: Semantic & Data Closure | Freeze research semantics, issuer/security/listing and currency/time/return rules, executable snapshot/extraction/invocation/lineage contracts, source/type registries, usage/reverse-review contracts, longitudinal source rights, and module coverage/freshness SLOs | Contract examples and fixture/Postgres conformance pass; additive source/type probes require no generic dispatch change; every required field has a viable longitudinal source and every module has an independent oracle and usable-coverage denominator | Local/CI only; no interface is called v1-frozen before this gate |
 | Gate 1: Core Strategy MVP | Gross profit per employee, financial branch, three-tier valuation, `large_model_value_v0`, deterministic replay, mart/report, and real Staging canary | Independent core oracle passes; local replay has required usable coverage and no look-ahead; Staging proves idempotent scheduled operation | Dagster enters with the first executable snapshot/factor slice; persistent Staging by gate end |
 | Gate 2: Seven Research Modules | Add all PEG conventions, analyst track records, ETF virtual company, supply-chain scenario exposure, and pure-blood screening through the shared PIT path | Every module passes a sealed independent holdout and one shared seven-module replay; required subjects cannot pass as `unavailable` | Dagster assets and module-specific longitudinal data planes in Local/CI/Staging |
-| Gate 3: Research Consumption | Stable mart reads, MCP, reports/cards, App, and deferred `/chat` | Canonical Vision questions agree across fixture consumers; report/card facts come only from materialized outputs | App reads mart directly; MCP/chat use typed read tools; no raw/staging consumer access |
-| Gate 4: Production Validation & Graduation | Multi-regime data/strategy checks, all-module Staging soak, recovery/exact-release promotion, deployed Production consumers, curated-universe expansion, and shadow graduation | Known-reference sanity, independent price/data reconciliation, SLO soak over natural source changes, backup/restore, real-client questions, and final Vision audit all pass | Isolated Production is initialized as canary/shadow and becomes authoritative research only after recorded graduation |
+| Gate 3: Research Consumption | Stable mart reads, usage/review reads, MCP, reports/cards, App, and deferred `/chat` | Canonical Vision questions agree across fixture consumers; report/card facts come only from materialized outputs; bounded usage and reverse-review reads retain exact trace identities | App reads mart directly; MCP/chat use typed read tools; no raw/staging consumer access |
+| Gate 4: Production Validation & Graduation | Multi-regime data/strategy checks, reverse data-quality review, all-module Staging soak, recovery/exact-release promotion, deployed Production consumers, curated-universe expansion, and shadow graduation | Known-reference sanity, independent price/data reconciliation, usage/reverse-review reconciliation, SLO soak over natural source changes, backup/restore, real-client questions, and final Vision audit all pass | Isolated Production remains shadow while #67 freezes the candidate and #68 certifies capture; only #54 records authoritative graduation |
 
 **Gate acceptance and issue ownership (fail closed):**
 
-- **Gate 0 — #56 (#57-#61):** `UniverseRef`, `CaptureScope`, `CaptureManifest`, catalog, applicability, source-rights/budget, holdout-custody, and natural-refresh contracts are versioned and executable. The approved catalog cannot be smaller than the product-owner-approved sensor/core scope, and an expired or unresolved source decision keeps Gate 0 open.
+- **Gate 0 — #56 (#57-#61):** `UniverseRef`, `CaptureScope`, `CaptureManifest`, source/type registry snapshots, source-neutral data requirements, automatic usage, reverse quality review, catalog, applicability, source-rights/budget, holdout-custody, and natural-refresh contracts are versioned and executable. The approved catalog cannot be smaller than the product-owner-approved sensor/core scope, and an expired or unresolved source decision keeps Gate 0 open.
 - **Gate 1 — #29 (#14, #21-#27, #70-#71):** #70 owns only the PIT document-to-headcount data path needed by the Core Strategy. After #24/#25 freeze candidate implementations, #71 runs the blind financial/non-financial GPPE, P/S, tier, and valuation-gap holdout before #26/#27 can close. Replay uses unadjusted bars and explicit actions. #27 proves the immutable TOPT Core canary; #51 later owns all-module Staging soak, and a two-run canary is not continuous operation.
 - **Gate 2 — #30 (#33-#40, #62-#65):** all catalog-required module invocations have longitudinal inputs, meet predeclared per-required-subject coverage, and pass #65 under the custody rule above. Unavailable or low-confidence placeholders and a seen/public holdout cannot satisfy this gate.
-- **Gate 3 — #31 (#41-#48, #72):** fixture consumers agree on typed materialized outputs, and #72 proves that one issuer and one theme absent from development/golden/holdout evidence can be added through a new catalog/configuration version only, then complete source/applicability checks, factors, mart, MCP/App, report, and card paths without schema or business-code changes.
-- **Gate 4 — #32 (#11, #49-#54, #66-#67; capture certification #68):** the exact signed release manifest and full approved `UniverseRef` pass natural-refresh soak, anti-shrink SLOs, mandatory Production authentication, full-scope capacity tests, database and raw-object recovery within RPO/RTO, real-client equivalence, and human card review. #54 passes only after an independent reviewer verifies the holdout, scope, rights, recovery, consumer, and graduation bundle and seeded bad evidence makes `vision-audit` fail.
+- **Gate 3 — #31 (#41-#48, #72):** fixture consumers agree on typed materialized outputs and bounded usage/review reads. #72 separately proves configuration-only onboarding for an unseen issuer/theme and additive onboarding for one test source plus one semantic type; the latter may add isolated extension code and one probe factor, but cannot change central dispatch, generic Dagster/snapshot/lineage/usage/review code, existing factors, or consumers.
+- **Gate 4 — #32 (#11, #49-#54, #66-#68):** the exact signed release manifest and full approved `UniverseRef` pass natural-refresh soak, anti-shrink SLOs, usage and reverse-quality reconciliation, mandatory Production authentication, full-scope capacity tests, database and raw-object recovery within RPO/RTO, real-client equivalence, and human card review. #67 produces the full-universe Production shadow candidate; #68 independently certifies its row-complete capture; #54 then verifies the complete holdout, scope, rights, recovery, consumer, capture, usage, and quality bundle and records authoritative graduation. Seeded bad evidence must make `vision-audit` fail.
 
 **Availability and validation are separate**. Every factor output carries an
 `availability_status` such as `available`, `unavailable`, `stale`, `excluded`,
@@ -350,12 +374,26 @@ golden/holdout gate. Only applicable, available, fresh outputs from an accepted 
 version count toward the module's versioned usable-coverage SLO. Consumers display all
 three dimensions rather than conflating source evidence with formula validation.
 
-Environment sequencing is part of the gate contract. Local/CI exist throughout;
-Dagster is introduced early in Gate 1 and is the only authority for real scheduled
-runs; Production remains isolated shadow output until Gate 4 data, strategy,
-consumer, recovery, soak, and human-graduation evidence all pass. Implementation
-inside later gates may proceed in parallel when leaf dependencies allow it, but a
-release gate cannot be declared complete out of order.
+Environment and delivery-batch sequencing are part of the gate contract. Local/CI
+exist throughout; Dagster is introduced early in Gate 1 and is the only authority
+for real scheduled runs; Production remains isolated shadow output until Gate 4
+data, strategy, consumer, recovery, soak, capture-audit, and human-graduation evidence
+all pass. A GitHub gate milestone is one delivery batch. Exactly one earliest
+incomplete gate epic carries `batch:active`; later gate epics remain `batch:queued`.
+One gate epic cannot be split across batches: its manifest must equal the complete
+transitive open closure of its required children and unresolved blockers.
+Implementation PRs may be prepared and reviewed in parallel only for issue IDs
+enumerated in the immutable active batch manifest. They never merge into the
+default/protected branch or promote independently; they target the manifest's batch
+integration branch or remain unmerged approved heads. Their approved head SHAs are
+assembled into one content-hashed candidate; one aggregate batch PR is the only
+default-branch merge, and every required environment receives only that exact complete
+candidate. A scope change cancels the candidate, invalidates its evidence, and requires
+a product-owner-approved relaunch of the same gate. Partial merge, partial promotion,
+rebuilt artifacts, and issue-level rollback are forbidden. `AGENTS.md` defines the
+operational enforcement rules. Included issues remain open until that one batch PR and
+all required whole-candidate promotions succeed, then close atomically with the gate
+epic closing last.
 
 ---
 
@@ -375,6 +413,7 @@ release gate cannot be declared complete out of order.
 
 - **Multi-user moomoo quota allocation**: not relevant while single-user; must be designed before going multi-user, no pre-modeling now
 - **Enforcement of the App-side "deterministic reformatting" boundary**: Section 1 states the rule but there's no code-level check (e.g., a lint rule preventing cross-table aggregation in the Next.js backend) — could add a CI check later, not now
+- **Consumer page/query analytics**: V1 measures semantic pipeline and strategy consumption only. Add read-frequency telemetry later only with a separate append-only audit writer that preserves the App's `mart_readonly` role and cannot recursively count usage queries.
 - If Postgres concurrency becomes a real bottleneck, re-evaluate read/write splitting or a caching layer
 
 ---
@@ -388,7 +427,10 @@ as the delayed ETF-holdings source and moomoo historical analyst events as a can
 input whose PIT public-availability and usage rights still need proof.
 
 That baseline is enough to design and test boundaries; it is not a release gate. The
-next blocking work is the [Semantic & Data Closure epic #56](https://github.com/wangzitian0/truealpha/issues/56):
+current earliest incomplete gate is Gate 0, the
+[Semantic & Data Closure epic #56](https://github.com/wangzitian0/truealpha/issues/56).
+It is implementation-authorized only while the epic carries `batch:active` and the
+work is enumerated in its frozen batch manifest:
 
 1. freeze issuer/security/listing, currency, time, return, universe, and research semantics (#57 and #59);
 2. close executable snapshot, extraction, invocation, replay, and lineage contracts (#58);
@@ -397,6 +439,7 @@ next blocking work is the [Semantic & Data Closure epic #56](https://github.com/
 
 No interface is called v1-frozen, and no sample-readiness boolean is promoted into a
 strategy or Production claim, until those issues produce their specified independent
-and executable evidence. The subsequent milestone tree includes the Gate 1 headcount
-slice (#70), blind Core holdout (#71), Gate 3 unseen issuer/theme proof (#72), and the
-post-graduation row-complete Production capture audit (#68).
+and executable evidence. The subsequent milestone tree is queued planning, not
+implementation authorization. It includes the Gate 1 headcount slice (#70), blind Core
+holdout (#71), Gate 3 additive registry/catalog proof (#72), and the pre-graduation
+row-complete Production shadow-candidate capture audit (#68).

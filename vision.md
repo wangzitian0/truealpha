@@ -31,6 +31,8 @@ This isn't about building a flashy data platform — it's about engineering an a
 - Being able to ask, in conversation, "what's this company's PEG trend" or "who's the purest play on this theme," and get an answer backed by data, traceable to a specific filing/vintage — not a number the model made up on the spot
 - Factor/ranking outputs converting directly into Xiaohongshu card material without a manual processing step in between
 - Adding a previously unseen company or theme through reviewed, versioned catalog/configuration changes, without changing factor formulas, schemas, or consumer business logic
+- Adding a source for an existing semantic type through one isolated adapter/normalizer registration, and adding a semantic record type through one typed schema/storage/projector registration, without source/type branches in the generic capture, snapshot, factor-runner, lineage, usage, or consumer path
+- Querying how often declared data is captured and actually consumed, and running an immutable strategy-to-source data-quality review that exposes required-but-missing inputs and the decisions they affected
 
 "Continuously producing" means the versioned, owned curated universe has graduated
 beyond canary/shadow operation and meets explicit per-module applicability, usable
