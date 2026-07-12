@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -65,16 +65,19 @@ class CaptureSourceResult:
 
 def put(conn, result: CaptureSourceResult) -> int:
     transaction_time = result.max_knowable_at or result.observed_at
+    # PostgreSQL now() is fixed at transaction start, which can predate a late
+    # source result in a long-running capture transaction.
+    recorded_at = datetime.now(UTC)
     row = conn.execute(
         """
         insert into staging.capture_source_results
             (run_id, subject_id, domain, partition_key, source, outcome,
              raw_refs, domain_record_ids, observed_fields, min_knowable_at,
              max_knowable_at, observed_at, valid_time, transaction_time,
-             confidence, mapping_version, attempt, detail)
+             recorded_at, confidence, mapping_version, attempt, detail)
         values (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb,
                 %s, %s, %s, daterange(%s::date, (%s::date + 1), '[)'), %s,
-                %s, %s, %s, %s)
+                %s, %s, %s, %s, %s)
         on conflict do nothing returning id
         """,
         (
@@ -93,6 +96,7 @@ def put(conn, result: CaptureSourceResult) -> int:
             result.observed_at.date(),
             result.observed_at.date(),
             transaction_time,
+            recorded_at,
             result.confidence,
             result.mapping_version,
             result.attempt,

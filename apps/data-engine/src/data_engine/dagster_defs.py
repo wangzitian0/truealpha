@@ -3,14 +3,15 @@
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import dagster as dg
 from dagster import AssetExecutionContext, ScheduleEvaluationContext
-from truealpha_contracts import CaptureManifest, CaptureScope, canonical_sha256
+from truealpha_contracts import CaptureManifest, CaptureScope, DataDomain, DataSource, canonical_sha256
 from truealpha_runtime import EnvironmentTier
 
-from data_engine import db
+from data_engine import db, raw_store
 from data_engine.capture import manifest as manifest_builder
 from data_engine.capture import repository, runs, source_results
 from data_engine.capture.topt import build_topt_scope
@@ -28,8 +29,9 @@ GROUP_NAME = "topt_staging_capture"
 JOB_NAME = "topt_staging_capture_job"
 SCHEDULE_NAME = "topt_staging_daily_schedule"
 CODE_VERSION = "topt-capture:1"
+MAX_RETRIES = 2
 RETRY_POLICY = dg.RetryPolicy(
-    max_retries=2,
+    max_retries=MAX_RETRIES,
     delay=30,
     backoff=dg.Backoff.EXPONENTIAL,
     jitter=dg.Jitter.PLUS_MINUS,
@@ -38,6 +40,42 @@ RETRY_POLICY = dg.RetryPolicy(
 ScopeOutput = dict[str, str]
 PhaseOutput = dict[str, Any]
 Phase = Callable[[Any, str, CaptureScope, int], tuple[int, ...]]
+
+_PHASE_DOMAINS = {
+    "identity": frozenset(
+        {
+            DataDomain.ENTITY_IDENTITY,
+            DataDomain.FUND_HOLDINGS,
+            DataDomain.INSTRUMENTS,
+            DataDomain.KNOWLEDGE_GRAPH,
+            DataDomain.UNIVERSE,
+        }
+    ),
+    "sec_financials": frozenset({DataDomain.FINANCIAL_FACTS}),
+    "sec_filings": frozenset(
+        {
+            DataDomain.COMPANY_GUIDANCE,
+            DataDomain.FILING_EXTRACTIONS,
+            DataDomain.FILINGS,
+        }
+    ),
+    "yahoo_prices": frozenset({DataDomain.CORPORATE_ACTIONS, DataDomain.MARKET_PRICES}),
+    "moomoo_domains": frozenset(
+        {
+            DataDomain.ANALYST_RATINGS,
+            DataDomain.CORPORATE_ACTIONS,
+            DataDomain.FORECASTS,
+            DataDomain.SEGMENTS,
+        }
+    ),
+}
+
+_PHASE_SOURCE = {
+    "sec_financials": DataSource.SEC,
+    "sec_filings": DataSource.SEC,
+    "yahoo_prices": DataSource.YAHOO,
+    "moomoo_domains": DataSource.MOOMOO,
+}
 
 
 def _required_env(name: str) -> str:
@@ -86,6 +124,82 @@ def _phase_output(conn, *, result_ids: tuple[int, ...], phase_name: str) -> dg.O
     )
 
 
+def _emit_phase_failure_results(
+    conn,
+    *,
+    run_id: str,
+    scope: CaptureScope,
+    phase_name: str,
+    attempt: int,
+    error: Exception,
+) -> tuple[int, ...]:
+    domains = _PHASE_DOMAINS[phase_name]
+    error_type = type(error).__name__
+    detail = f"{error_type}: capture phase failed"
+    raw_by_source: dict[DataSource, int] = {}
+    result_ids: list[int] = []
+    for requirement in scope.requirements:
+        if requirement.domain not in domains:
+            continue
+        source = requirement.primary_source if phase_name == "identity" else _PHASE_SOURCE[phase_name]
+        if source is None or source not in (requirement.primary_source, *requirement.fallback_sources):
+            continue
+        existing = source_results.get(
+            conn,
+            run_id,
+            requirement.subject_id,
+            requirement.domain,
+            requirement.partition_key,
+            source,
+            attempt,
+        )
+        if existing is not None:
+            result_ids.append(existing[0])
+            continue
+        raw_id = raw_by_source.get(source)
+        if raw_id is None:
+            raw_id = raw_store.insert_json_fetch(
+                conn,
+                source=source,
+                source_record_id=f"capture-error:{phase_name}:{run_id}:{attempt}",
+                payload={
+                    "phase": phase_name,
+                    "run_id": run_id,
+                    "attempt": attempt,
+                    "error_type": error_type,
+                    "detail": detail,
+                },
+                fetched_at=datetime.now(UTC),
+            )
+            raw_by_source[source] = raw_id
+        result_ids.append(
+            source_results.put(
+                conn,
+                source_results.CaptureSourceResult(
+                    run_id=run_id,
+                    subject_id=requirement.subject_id,
+                    domain=requirement.domain,
+                    partition_key=requirement.partition_key,
+                    source=source,
+                    outcome=source_results.SourceResultOutcome.FAILED,
+                    raw_refs=(raw_store.raw_ref(raw_id),),
+                    domain_record_ids=(),
+                    observed_fields=(),
+                    min_knowable_at=None,
+                    max_knowable_at=None,
+                    observed_at=datetime.now(UTC),
+                    confidence=Decimal("0"),
+                    mapping_version=f"capture-phase-error:{CODE_VERSION}",
+                    attempt=attempt,
+                    detail=detail,
+                ),
+            )
+        )
+    if not result_ids:
+        raise RuntimeError(f"phase {phase_name} has no frozen cells to mark failed") from error
+    return tuple(sorted(set(result_ids)))
+
+
 def _run_phase(
     context: AssetExecutionContext,
     scope_output: ScopeOutput,
@@ -96,8 +210,23 @@ def _run_phase(
     conn = db.connect()
     try:
         _binding, scope = _bound_scope(conn, run_id=context.run.run_id, expected=scope_output)
-        result_ids = phase(conn, context.run.run_id, scope, context.retry_number)
-        conn.commit()
+        try:
+            result_ids = phase(conn, context.run.run_id, scope, context.retry_number)
+        except Exception as error:
+            conn.rollback()
+            result_ids = _emit_phase_failure_results(
+                conn,
+                run_id=context.run.run_id,
+                scope=scope,
+                phase_name=phase_name,
+                attempt=context.retry_number,
+                error=error,
+            )
+            conn.commit()
+            if context.retry_number < MAX_RETRIES:
+                raise
+        else:
+            conn.commit()
         return _phase_output(conn, result_ids=result_ids, phase_name=phase_name)
     except Exception:
         conn.rollback()
