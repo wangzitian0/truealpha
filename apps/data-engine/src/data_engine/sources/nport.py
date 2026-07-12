@@ -15,6 +15,7 @@ Pitfalls encoded here (verified on QQQ/ARKK/IVV/AGIX/MCHI):
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 MF_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
 # browse-edgar accepts a series ID as CIK — required for multi-series trusts.
@@ -36,9 +37,9 @@ class Holding:
     cusip: str | None
     isin: str | None
     lei: str | None
-    balance: float | None  # share/contract count as filed
-    value_usd: float | None
-    pct_val: float | None  # percentage of net assets
+    balance: Decimal | None  # share/contract count as filed
+    value_usd: Decimal | None
+    pct_val: Decimal | None  # percentage of net assets
     asset_cat: str | None  # 'EC' = equity common; cash/derivative lines differ
 
 
@@ -81,7 +82,7 @@ def _clean(value: str | None) -> str | None:
     return value.strip()
 
 
-def _number(value: str | None) -> float | None:
+def _number(value: str | None) -> Decimal | None:
     """Numeric fields get the same placeholder tolerance as name/cusip: a
     literal 'N/A' (or otherwise non-numeric) downgrades that one field to None
     instead of aborting the whole filing's parse."""
@@ -89,8 +90,8 @@ def _number(value: str | None) -> float | None:
     if cleaned is None:
         return None
     try:
-        return float(cleaned)
-    except ValueError:
+        return Decimal(cleaned)
+    except InvalidOperation:
         return None
 
 

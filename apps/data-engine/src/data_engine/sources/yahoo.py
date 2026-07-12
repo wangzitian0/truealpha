@@ -11,6 +11,7 @@ string's exact content, but a non-default UA is what's actually verified to work
 """
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -20,7 +21,16 @@ USER_AGENT = "TrueAlpha research wangzitian.ai@icloud.com"
 
 
 class PriceBar:
-    def __init__(self, day: date, open_: float, high: float, low: float, close: float, adj_close: float, volume: int):
+    def __init__(
+        self,
+        day: date,
+        open_: Decimal,
+        high: Decimal,
+        low: Decimal,
+        close: Decimal,
+        adj_close: Decimal,
+        volume: int,
+    ):
         self.date = day
         self.open = open_
         self.high = high
@@ -34,15 +44,25 @@ def _epoch(d: date) -> int:
     return int(datetime.combine(d, datetime.min.time(), tzinfo=UTC).timestamp())
 
 
-def fetch_daily_bars(symbol: str, *, period_days: int = 365) -> list[PriceBar]:
-    """Fetch ~period_days of daily OHLCV bars, most recent first excluded (chronological)."""
+def fetch_chart_response(symbol: str, *, period_days: int = 365) -> httpx.Response:
+    """Fetch raw chart bytes including dividends and splits for one bounded range."""
     end = date.today()
     start = end - timedelta(days=period_days)
-    params = {"period1": str(_epoch(start)), "period2": str(_epoch(end + timedelta(days=1))), "interval": "1d"}
+    params = {
+        "period1": str(_epoch(start)),
+        "period2": str(_epoch(end + timedelta(days=1))),
+        "interval": "1d",
+        "events": "div,splits",
+    }
     with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
         resp = client.get(CHART_URL.format(symbol=symbol), params=params)
         resp.raise_for_status()
-    return _parse_chart_response(resp.json())
+    return resp
+
+
+def fetch_daily_bars(symbol: str, *, period_days: int = 365) -> list[PriceBar]:
+    """Fetch ~period_days of daily OHLCV bars in chronological order."""
+    return _parse_chart_response(fetch_chart_response(symbol, period_days=period_days).json())
 
 
 def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
@@ -62,11 +82,11 @@ def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
         bars.append(
             PriceBar(
                 day=datetime.fromtimestamp(ts, tz=UTC).date(),
-                open_=o,
-                high=h,
-                low=low,
-                close=c,
-                adj_close=adjclose[i],
+                open_=Decimal(str(o)),
+                high=Decimal(str(h)),
+                low=Decimal(str(low)),
+                close=Decimal(str(c)),
+                adj_close=Decimal(str(adjclose[i])),
                 volume=v,
             )
         )

@@ -34,9 +34,10 @@ FIELD_TO_COLUMN = {
     "form": "form",
     "is_restatement": "is_restatement",
 }
-# Columns with no DTO field: surrogate key, and source — the fusion layer reads
-# it, factors never see it (init.md Section 1, rule 3).
-TABLE_ONLY_COLUMNS = {"id", "source"}
+# Columns with no DTO field: surrogate key plus fusion-policy metadata. The
+# data-engine reads source and issuer_category when selecting the semantic fact;
+# factors never see either field (init.md Section 1, rule 3).
+TABLE_ONLY_COLUMNS = {"id", "issuer_category", "source"}
 # DTO fields that may be absent on a row (everything else must be NOT NULL).
 NULLABLE_FIELDS = {"value", "accession", "form"}
 

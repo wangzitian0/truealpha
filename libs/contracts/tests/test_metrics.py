@@ -9,7 +9,16 @@ from truealpha_contracts import (
 def test_every_module_core_metric_is_registered():
     # The seven modules' base inputs (init.md Section 7) must have a declared
     # fusion order before any parser lands them.
-    for metric in ("revenue", "gross_profit", "net_income", "eps_diluted", "employees_total"):
+    for metric in (
+        "revenue",
+        "gross_profit",
+        "cost_of_revenue",
+        "operating_income",
+        "net_income",
+        "eps_diluted",
+        "shares_outstanding",
+        "employees_total",
+    ):
         assert metric in METRICS
 
 

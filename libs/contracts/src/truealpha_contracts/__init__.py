@@ -1,5 +1,18 @@
 """Stable contracts shared by ingestion, factors, runtime, and backtests."""
 
+from truealpha_contracts.capture import (
+    CaptureCellRequirement,
+    CaptureCellStatus,
+    CaptureEnvironment,
+    CaptureManifest,
+    CaptureManifestCell,
+    CaptureManifestStatus,
+    CaptureRequirementLevel,
+    CaptureScope,
+    CaptureSubject,
+    CaptureSubjectKind,
+    canonical_sha256,
+)
 from truealpha_contracts.data_quality import (
     STRATEGY_DATA_REQUIREMENTS,
     DataDomain,
@@ -42,6 +55,17 @@ __all__ = [
     "AsOfQuery",
     "BacktestDataGateway",
     "BacktestDataset",
+    "CaptureCellRequirement",
+    "CaptureCellStatus",
+    "CaptureEnvironment",
+    "CaptureManifest",
+    "CaptureManifestCell",
+    "CaptureManifestStatus",
+    "CaptureRequirementLevel",
+    "CaptureScope",
+    "CaptureSubject",
+    "CaptureSubjectKind",
+    "canonical_sha256",
     "DataSource",
     "DataDomain",
     "DataQualityReport",

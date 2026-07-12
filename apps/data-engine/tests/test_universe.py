@@ -58,3 +58,53 @@ def test_sec_ticker_normalization():
     hk = universe.Listing(exch_token="HK", ticker="700", name=None, security_type=None)
     assert universe.sec_ticker(us) == "BRK-B"
     assert universe.sec_ticker(hk) is None
+
+
+def test_ranked_markets_have_explicit_currency_timezone_and_calendar():
+    assert universe.market_metadata("US") == ("USD", "America/New_York", "XNYS")
+    assert universe.market_metadata("HK") == ("HKD", "Asia/Hong_Kong", "XHKG")
+
+
+def test_us_isin_uses_sec_corroborated_fallback_when_openfigi_omits_us_composite():
+    # Observed for Exxon (US30231G1022): OpenFIGI returns foreign venues with
+    # ticker XOM but no US composite. SEC independently maps XOM to the same
+    # normalized issuer name, which is enough to recover the US listing at a
+    # lower confidence without a symbol-specific exception.
+    records = [
+        _eq("PE", "XOM"),
+        _eq("CB", "XOM"),
+        _eq("CP", "EXMOC"),
+    ]
+    listing = universe.resolve_listing(
+        records,
+        isin="US30231G1022",
+        issuer_name="Exxon Mobil Corp.",
+        sec_ticker_map={"XOM": (34088, "Exxon Mobil Corporation")},
+    )
+    assert listing is not None
+    assert listing.exch_token == "US" and listing.ticker == "XOM"
+    assert listing.resolution_method == "openfigi_sec_name_fallback"
+    assert universe.moomoo_code(listing) == ("US.XOM", 0.9)
+
+
+def test_sec_fallback_rejects_name_mismatch_and_non_us_isin():
+    records = [_eq("PE", "XOM")]
+    ticker_map = {"XOM": (34088, "Exxon Mobil Corporation")}
+    assert (
+        universe.resolve_listing(
+            records,
+            isin="US30231G1022",
+            issuer_name="Different Company",
+            sec_ticker_map=ticker_map,
+        )
+        is None
+    )
+    assert (
+        universe.resolve_listing(
+            records,
+            isin="CA0000000001",
+            issuer_name="Exxon Mobil Corp.",
+            sec_ticker_map=ticker_map,
+        )
+        is None
+    )

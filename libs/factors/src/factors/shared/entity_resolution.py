@@ -99,14 +99,20 @@ def add_edge(
     one transaction (on conflict do nothing)."""
     latest = conn.execute(
         """
-        select source, confidence from staging.kg_edges
+        select source, confidence, lower(valid_time), raw_ref from staging.kg_edges
         where from_id = %s and to_id = %s and relation_type = %s
         order by transaction_time desc, id desc
         limit 1
         """,
         (from_id, to_id, relation_type),
     ).fetchone()
-    if latest is not None and latest[0] == source and float(latest[1]) == confidence:
+    if (
+        latest is not None
+        and latest[0] == source
+        and float(latest[1]) == confidence
+        and latest[2].isoformat() == valid_from
+        and latest[3] == raw_ref
+    ):
         return False
     inserted = conn.execute(
         """

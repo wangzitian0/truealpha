@@ -130,6 +130,7 @@ def test_holds_edge_rerun_skips_and_new_filing_appends(conn):
     assert hold(T1, "2026-02-28")
     assert not hold(T1, "2026-02-28")  # re-run of the same filing
     assert not hold(T2, "2026-02-28")  # same assertion at a later time is still current
+    assert hold(T2, "2026-05-31")  # a new filing period is a new vintage even at equal confidence
     # a genuinely different assertion (nothing changed here except... nothing) stays skipped;
     # a new filing writes through the changed-confidence path in real life. Simulate a
     # revision: same pair, revised confidence -> new vintage.
@@ -140,7 +141,7 @@ def test_holds_edge_rerun_skips_and_new_filing_appends(conn):
         relation_type="holds",
         confidence=0.9,
         source="nport",
-        transaction_time=T2,
+        transaction_time=T3,
         valid_from="2026-05-31",
         raw_ref=REF,
     )

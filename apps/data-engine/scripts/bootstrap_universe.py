@@ -38,8 +38,9 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
-from data_engine import db, raw_store, universe
+from data_engine import db, instruments, raw_store, universe
 from data_engine.config import settings
 from data_engine.sources import nport, openfigi
 from data_engine.sources.sec import TICKERS_URL
@@ -55,6 +56,8 @@ DEFAULT_ETFS = ["IVV", "QQQ", "AGIX", "MCHI"]
 # on an exact name match within official filings, not a stated identifier.
 CONF_FILING = 1.0
 CONF_NAME_MERGE = 0.9
+NPORT_MAPPING_VERSION = "nport-holdings:2"
+OPENFIGI_MAPPING_VERSION = "openfigi-listing:2"
 
 
 @dataclass
@@ -62,6 +65,7 @@ class EtfFetch:
     raw_id: int
     cik: int
     series_id: str
+    accession: str
     filing_date: str  # transaction time of everything this filing asserts
     info: dict
     holdings: list[nport.Holding]
@@ -114,12 +118,20 @@ def fetch_etf(client, conn, ticker: str, fetched_at: datetime) -> EtfFetch:
         f"{ticker}: {info['series_name']}, period {info['report_period']}, filed {filing_date}, "
         f"{len(holdings)} equity lines (dropped {len(all_holdings) - len(holdings)}) -> raw.fetches:{raw_id}"
     )
-    return EtfFetch(raw_id=raw_id, cik=cik, series_id=series_id, filing_date=filing_date, info=info, holdings=holdings)
+    return EtfFetch(
+        raw_id=raw_id,
+        cik=cik,
+        series_id=series_id,
+        accession=accession,
+        filing_date=filing_date,
+        info=info,
+        holdings=holdings,
+    )
 
 
-def figi_from_raw(conn, isins: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
+def figi_from_raw(conn, isins: list[str]) -> tuple[dict[str, list[dict]], dict[str, int], list[str]]:
     """Rebuild the ISIN->records mapping from OpenFIGI batches already landed in
-    raw — newest batch wins per ISIN. Returns (mapping, still-missing ISINs).
+    raw — newest batch wins per ISIN. Returns (mapping, raw refs, missing ISINs).
     This is what makes a KG rebuild cheap and offline: the keyless mapping run
     takes minutes of rate-limit waiting that a re-run shouldn't re-spend when
     the responses are already in the landing zone."""
@@ -128,12 +140,18 @@ def figi_from_raw(conn, isins: list[str]) -> tuple[dict[str, list[dict]], list[s
         (DataSource.OPENFIGI.value,),
     ).fetchall()
     out: dict[str, list[dict]] = {}
+    raw_ids: dict[str, int] = {}
     for fetch_id, metadata in rows:
         batch_isins = metadata.get("isins", [])
         results = json.loads(raw_store.get_payload(conn, fetch_id))
         for isin, job in zip(batch_isins, results):
             out[isin] = job.get("data", [])
-    return {i: out[i] for i in isins if i in out}, [i for i in isins if i not in out]
+            raw_ids[isin] = fetch_id
+    return (
+        {i: out[i] for i in isins if i in out},
+        {i: raw_ids[i] for i in isins if i in raw_ids},
+        [i for i in isins if i not in out],
+    )
 
 
 def main() -> None:
@@ -160,8 +178,9 @@ def main() -> None:
 
         isins = sorted({h.isin for f in etfs.values() for h in f.holdings if h.isin})
         figi: dict[str, list[dict]] = {}
+        figi_raw_by_isin: dict[str, int] = {}
         if args.figi_from_raw:
-            figi, isins_to_fetch = figi_from_raw(conn, isins)
+            figi, figi_raw_by_isin, isins_to_fetch = figi_from_raw(conn, isins)
             print(f"\nOpenFIGI: {len(figi)} ISINs reused from raw, {len(isins_to_fetch)} still to fetch")
         else:
             isins_to_fetch = isins
@@ -172,16 +191,16 @@ def main() -> None:
         figi_raw_ids: list[int] = []
 
         def persist_batch(batch, results):
-            figi_raw_ids.append(
-                raw_store.insert_json_fetch(
-                    conn,
-                    source=DataSource.OPENFIGI,
-                    source_record_id=f"mapping:{batch[0]}",
-                    payload=results,
-                    fetched_at=run_at,
-                    metadata={"isins": batch},
-                )
+            raw_id = raw_store.insert_json_fetch(
+                conn,
+                source=DataSource.OPENFIGI,
+                source_record_id=f"mapping:{batch[0]}",
+                payload=results,
+                fetched_at=run_at,
+                metadata={"isins": batch},
             )
+            figi_raw_ids.append(raw_id)
+            figi_raw_by_isin.update({isin: raw_id for isin in batch})
             # Commit per batch: the keyless mapping run takes minutes, and a
             # crash near the end shouldn't discard every batch already fetched.
             conn.commit()
@@ -202,7 +221,16 @@ def main() -> None:
     skipped_lines = 0
     for etf, f in etfs.items():
         for h in f.holdings:
-            listing = universe.pick_listing(figi.get(h.isin, []), h.isin) if h.isin else None
+            listing = (
+                universe.resolve_listing(
+                    figi.get(h.isin, []),
+                    isin=h.isin,
+                    issuer_name=h.name,
+                    sec_ticker_map=ticker_map,
+                )
+                if h.isin
+                else None
+            )
             if h.isin is None and h.name is None:
                 skipped_lines += 1
                 continue
@@ -217,8 +245,14 @@ def main() -> None:
                 key = ("name", h.name)
             else:
                 key = ("isin", h.isin)
-            group = groups.setdefault(key, {"cik": None, "names": [], "lines": []})
+            group = groups.setdefault(
+                key,
+                {"cik": None, "cik_confidence": None, "cik_source": None, "names": [], "lines": []},
+            )
             group["cik"] = group["cik"] or cik
+            if cik is not None and listing is not None:
+                group["cik_confidence"] = listing.confidence
+                group["cik_source"] = listing.resolution_method
             if h.name and h.name not in group["names"]:
                 group["names"].append(h.name)
             group["lines"].append((etf, h, listing))
@@ -272,7 +306,7 @@ def main() -> None:
                 source="sec",
                 identifier_type="cik",
                 identifier_value=str(cik),
-                confidence=0.98,
+                confidence=group["cik_confidence"] or 0.98,
                 transaction_time=run_at,
                 valid_from=today,
                 raw_ref=map_ref,
@@ -283,6 +317,7 @@ def main() -> None:
         for etf, h, listing in group["lines"]:
             f = etfs[etf]
             filing_ref = raw_store.raw_ref(f.raw_id)
+            figi_ref = raw_store.raw_ref(figi_raw_by_isin[h.isin]) if h.isin in figi_raw_by_isin else None
             # Secondary lines of a name-merged group attach with the merge's
             # confidence, not the filing's.
             is_primary = cik is not None or h.isin == primary_isin
@@ -306,13 +341,13 @@ def main() -> None:
                     er.assert_identifier(
                         conn,
                         entity_id=entity_id,
-                        source="openfigi",
+                        source=listing.resolution_method,
                         identifier_type="ticker",
                         identifier_value=us_ticker,
-                        confidence=0.98,
+                        confidence=listing.confidence,
                         transaction_time=run_at,
                         valid_from=today,
-                        raw_ref=map_ref,
+                        raw_ref=figi_ref or map_ref,
                     )
                 mm = universe.moomoo_code(listing)
                 if mm is not None:
@@ -320,13 +355,13 @@ def main() -> None:
                     er.assert_identifier(
                         conn,
                         entity_id=entity_id,
-                        source="openfigi",
+                        source=listing.resolution_method,
                         identifier_type="moomoo",
                         identifier_value=code,
                         confidence=conf,
                         transaction_time=run_at,
                         valid_from=today,
-                        raw_ref=map_ref,
+                        raw_ref=figi_ref or map_ref,
                     )
                     if code not in seen_codes:
                         seen_codes.add(code)
@@ -335,6 +370,98 @@ def main() -> None:
                     market_coverage[f"uncovered:{listing.exch_token}"] += 1
             else:
                 market_coverage["unmapped"] += 1
+
+            instrument_id = f"instrument:isin:{h.isin}" if h.isin else None
+            listing_id = None
+            if instrument_id is not None:
+                instruments.ensure_instrument(
+                    conn,
+                    instrument_id,
+                    "equity_common" if h.asset_cat == "EC" else (h.asset_cat or "unknown"),
+                    h.name or h.isin or instrument_id,
+                )
+                instruments.assert_issuer_link(
+                    conn,
+                    instrument_id=instrument_id,
+                    issuer_id=entity_id,
+                    valid_from=f.info["report_period"] or f.filing_date,
+                    transaction_time=run_at if listing is not None else f.filing_dt,
+                    confidence=Decimal(str(listing.confidence if listing is not None else line_conf)),
+                    source=listing.resolution_method if listing is not None else "nport",
+                    raw_ref=figi_ref or filing_ref,
+                    mapping_version=(OPENFIGI_MAPPING_VERSION if listing is not None else NPORT_MAPPING_VERSION),
+                )
+                for id_type, id_value in (("isin", h.isin), ("cusip", h.cusip)):
+                    if id_value:
+                        instruments.assert_identifier(
+                            conn,
+                            instrument_id=instrument_id,
+                            identifier_type=id_type,
+                            identifier_value=id_value,
+                            valid_from=f.info["report_period"] or f.filing_date,
+                            transaction_time=f.filing_dt,
+                            confidence=Decimal(str(line_conf)),
+                            source="nport",
+                            raw_ref=filing_ref,
+                            mapping_version=NPORT_MAPPING_VERSION,
+                        )
+
+                if listing is not None and figi_ref is not None:
+                    mm = universe.moomoo_code(listing)
+                    listing_code = mm[0] if mm is not None else f"{listing.exch_token}.{listing.ticker}"
+                    listing_id = f"listing:vendor:{listing_code}"
+                    currency, trading_timezone, trading_calendar = universe.market_metadata(listing.exch_token)
+                    instruments.assert_listing(
+                        conn,
+                        listing_id=listing_id,
+                        instrument_id=instrument_id,
+                        venue_code=listing.exch_token,
+                        ticker=listing.ticker,
+                        currency=currency,
+                        trading_timezone=trading_timezone,
+                        trading_calendar=trading_calendar,
+                        price_policy="raw_plus_actions",
+                        is_primary=True,
+                        valid_from=today,
+                        transaction_time=run_at,
+                        confidence=Decimal(str(listing.confidence)),
+                        source=listing.resolution_method,
+                        raw_ref=figi_ref,
+                        mapping_version=OPENFIGI_MAPPING_VERSION,
+                    )
+                    for id_type, id_value in (
+                        ("ticker", universe.sec_ticker(listing)),
+                        ("moomoo", mm[0] if mm is not None else None),
+                    ):
+                        if id_value:
+                            instruments.assert_identifier(
+                                conn,
+                                instrument_id=instrument_id,
+                                identifier_type=id_type,
+                                identifier_value=id_value,
+                                valid_from=today,
+                                transaction_time=run_at,
+                                confidence=Decimal(str(listing.confidence)),
+                                source=listing.resolution_method,
+                                raw_ref=figi_ref,
+                                mapping_version=OPENFIGI_MAPPING_VERSION,
+                            )
+
+                instruments.assert_membership(
+                    conn,
+                    universe_id=f.entity_id,
+                    universe_version=f.info["report_period"] or f.accession,
+                    fund_id=f.entity_id,
+                    issuer_id=entity_id,
+                    instrument_id=instrument_id,
+                    listing_id=listing_id,
+                    valid_from=f.info["report_period"] or f.filing_date,
+                    transaction_time=f.filing_dt,
+                    confidence=Decimal(str(line_conf)),
+                    source="nport",
+                    raw_ref=filing_ref,
+                    mapping_version=NPORT_MAPPING_VERSION,
+                )
 
             if f.entity_id not in held_by:
                 held_by.add(f.entity_id)
@@ -358,8 +485,11 @@ def main() -> None:
                 """
                 insert into staging.fund_holding_facts
                     (fund_id, holding_id, holding_name, report_period, transaction_time,
-                     cusip, isin, lei, balance, value_usd, percent_of_net_assets, confidence, raw_ref)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     cusip, isin, lei, balance, value_usd, percent_of_net_assets,
+                     confidence, raw_ref, instrument_id, listing_id, asset_type,
+                     currency, mapping_version)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s)
                 on conflict do nothing
                 """,
                 (
@@ -376,6 +506,11 @@ def main() -> None:
                     h.pct_val,
                     line_conf,
                     filing_ref,
+                    instrument_id,
+                    listing_id,
+                    "equity_common" if h.asset_cat == "EC" else (h.asset_cat or "unknown"),
+                    "USD",
+                    NPORT_MAPPING_VERSION,
                 ),
             )
             stats["holding_fact_lines"] += 1

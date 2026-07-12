@@ -29,8 +29,12 @@ class Strategy(StrEnum):
 
 class DataDomain(StrEnum):
     ENTITY_IDENTITY = "entity_identity"
+    INSTRUMENTS = "instruments"
     FINANCIAL_FACTS = "financial_facts"
+    FORECASTS = "forecasts"
+    COMPANY_GUIDANCE = "company_guidance"
     FILINGS = "filings"
+    FILING_EXTRACTIONS = "filing_extractions"
     MARKET_PRICES = "market_prices"
     CORPORATE_ACTIONS = "corporate_actions"
     UNIVERSE = "universe"
