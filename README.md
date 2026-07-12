@@ -39,15 +39,18 @@ Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
 Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC
 (pinned here as the `repo/` submodule, same as finance_report). This repo owns the
-images — `release-images.yml` pushes `ghcr.io/wangzitian0/truealpha-app-web` and
-`truealpha-llm-service` on main/tags; infra2's `truealpha/truealpha/` service tree
-owns deployed Compose, Vault secrets, Traefik routes, persistent Postgres, and
-the environment-specific S3-compatible storage binding. Deploy (from `repo/`):
+images. `release-images.yml` builds the App, LLM service, and data-engine/Dagster
+images. Pull requests validate all three; main/tag pushes publish them, and an
+explicit reviewed `workflow_dispatch` may publish a SHA-addressed Staging
+candidate while recording its OCI digest in the workflow summary. infra2's
+`truealpha/truealpha/` service tree owns deployed Compose, Vault secrets, Traefik
+routes, persistent Postgres, and the environment-specific S3-compatible storage
+binding. Deploy (from `repo/`):
 
-Those two images are the current scaffold, not a complete Production release. Gate 4
-requires #11/#52 to add an immutable data-engine/Dagster artifact and bind every service,
-migration, catalog/SLO version, and configuration hash in one signed release manifest;
-manual host sweeps cannot satisfy scheduled or promotion evidence.
+These images and digests are build artifacts, not a complete signed release or a
+deployed scheduler. infra2 still must deploy the data-engine code location and
+Dagster daemon, mount persistent runtime paths, bind isolated credentials, and
+promote the exact multi-artifact release manifest required by #11/#52.
 
 ```bash
 python -m tools.deploy_v2 --service truealpha/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party

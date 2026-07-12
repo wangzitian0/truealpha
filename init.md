@@ -387,6 +387,27 @@ identity smoke cases, and the first typed corpus audit. It also confirmed SEC N-
 as the delayed ETF-holdings source and moomoo historical analyst events as a candidate
 input whose PIT public-availability and usage rights still need proof.
 
+The repository now also contains a bounded TOPT capture implementation slice. It
+freezes SEC N-PORT-P accession `000207169126012475` into one fund, 20 issuers,
+21 instruments, and 245 required subject/domain/partition cells. GOOG and GOOGL
+remain separate instruments under one issuer. Migrations add append-only capture,
+instrument/listing/membership, price/action, forecast, filing/extraction, and
+segment storage with raw lineage, confidence, mapping versions, and point-in-time
+timestamps.
+
+The slice persists a content-addressed scope and a pre-run binding to the release
+manifest ID, data-engine image digest, and configuration hash before source calls.
+Per-source retry attempts and exhausted failures remain append-only evidence; a
+successful zero-result query is recorded separately from a missing capture and
+does not fabricate a business fact. A bounded Dagster definition builds the
+manifest and evaluates a blocking completeness check.
+
+This is implementation and conformance evidence only. It does not prove an
+isolated real-source Staging run, natural refresh, source rights/SLO readiness,
+module outputs, or Production capture. Its current implementation DTOs are a
+bounded adapter that must still conform to the complete #58/#61 contracts before
+any interface is called v1-frozen.
+
 That baseline is enough to design and test boundaries; it is not a release gate. The
 next blocking work is the [Semantic & Data Closure epic #56](https://github.com/wangzitian0/truealpha/issues/56):
 

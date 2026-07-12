@@ -2773,6 +2773,25 @@ def build_release_preflight_sensor(
 ) -> SensorDefinition: ...
 ```
 
+The bounded TOPT implementation establishes three reusable runtime rules. First,
+each run persists its scope, release-manifest ID, image digest, and configuration
+hash before the first source call and rejects a later mismatch. Second,
+source/subject/domain/partition/attempt results are append-only; retry exhaustion
+persists confidence-zero failure evidence for the manifest instead of erasing the
+failed attempt. Third, semantic evidence versions exclude run ID, retry number,
+and ingestion-clock identity, so an identical retry has the same data version.
+
+The manifest is built only from persisted source results and raw checksums. A
+successful empty result is valid only for explicitly allowed event/assertion
+domains, retains the raw query observation, and creates no fabricated domain
+record. The current blocking Dagster asset check fails whenever the frozen cell
+set and persisted manifest do not pass.
+
+The concrete TOPT adapter currently predates the complete public models above; it
+must be migrated to the exact `UniverseRef`, Research Catalog, applicability,
+source-readiness, policy-version, quality-check, and lineage-hash bindings rather
+than redefining those contracts.
+
 Dagster is introduced with the first executable snapshot/factor slice. Local and CI use
 in-process jobs and fixture resources; Staging and Production add schedules and persistent
 metadata. `adapter_id` and `normalizer_id` resolve from Dagster resources at execution;

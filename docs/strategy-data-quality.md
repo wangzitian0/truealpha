@@ -79,8 +79,14 @@ composite-factor replay fixture exists; that is implementation work, not another
 raw-sampling round. `strategy_evaluation` corpus readiness remains blocked by five-year
 coverage for every declared evaluation subject and primary/fallback price
 reconciliation. Even after those checks pass, the Gate 0, module holdout, operational,
-consumer, and graduation gates above remain blocking. Run the executable corpus audit
-after every sample change:
+consumer, and graduation gates above remain blocking.
+
+The bounded TOPT scope, source-result, manifest, and Dagster tests exercise runtime
+capture mechanics; they do not change the checked-in corpus readiness tiers. Only
+an accepted real Staging schedule and manifest under #27/#51 count as operational
+evidence.
+
+Run the executable corpus audit after every sample change:
 
 ```bash
 make sample-audit
