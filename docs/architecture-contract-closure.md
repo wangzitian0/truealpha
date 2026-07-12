@@ -4,13 +4,16 @@ not frozen until the semantic closure gate in Section 18 passes.
 ## 1. Decision
 Converge on this semantic pipeline before implementing more factor logic:
 ```text
-RawCapture -> normalized PIT records -> ResearchSnapshot + DataSnapshotManifest
-  -> run_factor(FactorDefinition.compute) -> FactorOutputBatch[Metric | Classification | Relationship]
-  -> ScreenDefinition.evaluate -> StrategyDefinition -> BacktestRunResult
+SourceRegistry + SemanticTypeRegistry
+  -> RawCapture -> normalized PIT records -> ResearchSnapshot + DataSnapshotManifest
+  -> run_factor(FactorDefinition.compute, planned demand) -> FactorOutputBatch[Metric | Classification | Relationship]
+  -> ScreenDefinition.evaluate -> StrategyDefinition -> BacktestRunResult -> mart
+                                     |                        |
+                                     +-> planned requirements +-> usage/reverse quality review
 ```
-The proposal covers interface meaning, not every adapter; implementations may land incrementally
-only behind the closure tests in Section 18. No issue may claim an interface freeze merely because
-the signatures are written down.
+The proposal covers interface meaning, not every adapter. Implementations may land
+incrementally only from the active delivery batch and behind the closure tests in Section
+18. No issue may claim an interface freeze merely because the signatures are written down.
 `libs/contracts` owns data-only semantic types and ports. `libs/factors` owns every calculation,
 classification, screen, ranking, portfolio rule, and return calculation.
 `apps/data-engine` owns adapters, normalization, repositories, orchestration, and materialization.
@@ -22,9 +25,12 @@ Goals:
 - Separate pipeline stages while keeping all business computation in `libs/factors`.
 - Keep confidence mandatory and provenance-blind at the factor boundary.
 - Include actions, membership, and identifier history in replay contracts.
+- Add sources and semantic types through static typed registrations without central dispatch.
+- Make usage frequency and strategy-to-source data-quality review queryable from lineage.
 - Turn issue #14 evidence into executable golden cases rather than coverage claims.
 Non-goals:
 - Exposing vendor schemas to factors or selecting formula thresholds here.
+- Building dynamic plugin discovery, runtime code loading, an event bus, or arbitrary JSON facts.
 - Treating fixtures as evidence of performance or closing issue #14 prematurely.
 ## 3. Pre-Implementation Gaps
 1. `PriceBar` lacks `confidence`; add it before a price repository is conformant.
@@ -54,6 +60,9 @@ UniverseId = NewType("UniverseId", str)
 InputId = NewType("InputId", str)       # opaque semantic record identity, not provenance
 OutputId = NewType("OutputId", str)
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+SourceId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.-]{1,63}$")]
+SemanticTypeId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.-]{1,63}$")]
+RegistrySnapshotId = NewType("RegistrySnapshotId", str)
 
 class DataDomain(StrEnum):
     FINANCIAL_FACTS = "financial_facts"
@@ -71,6 +80,14 @@ class DataDomain(StrEnum):
     DOCUMENTS = "documents"
     EXTRACTIONS = "extractions"
 
+# DataDomain is the small, reviewed selection-policy vocabulary. SemanticTypeId
+# is extensible within a domain; adding a genuinely new domain changes this contract.
+
+class SemanticTypeRef(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    semantic_type_id: SemanticTypeId
+    schema_version: str
+
 class SubjectKind(StrEnum):
     ISSUER = "issuer"
     SECURITY = "security"
@@ -82,6 +99,12 @@ class SubjectKind(StrEnum):
 class SubjectRef(BaseModel):
     kind: SubjectKind
     id: str
+
+class FactorInputBase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    input_id: InputId
+    confidence: Decimal = Field(ge=0, le=1)
+    as_of: datetime
 
 class SecurityKind(StrEnum):
     COMMON_STOCK = "common_stock"
@@ -101,7 +124,7 @@ class HoldingSide(StrEnum):
     LONG = "long"
     SHORT = "short"
 
-class IssuerSecurityLink(BaseModel):
+class IssuerSecurityLink(FactorInputBase):
     input_id: InputId
     issuer_id: IssuerId
     security_id: SecurityId
@@ -114,7 +137,7 @@ class IssuerSecurityLink(BaseModel):
     confidence: Decimal
     as_of: datetime
 
-class SecurityListingLink(BaseModel):
+class SecurityListingLink(FactorInputBase):
     input_id: InputId
     security_id: SecurityId
     listing_id: ListingId
@@ -170,7 +193,7 @@ execution, valuation, or returns.
 Datetimes are aware; repositories require `knowable_at <= as_of`. Restatements append.
 ### 4.3 Factor-Ready Inputs
 ```python
-class Fact(BaseModel):
+class Fact(FactorInputBase):
     input_id: InputId
     subject: SubjectRef  # metric registry constrains issuer vs security
     metric: str
@@ -185,7 +208,7 @@ class Fact(BaseModel):
 ```
 `Fact` has no provenance. Reconciliation occurs first; the manifest preserves lineage.
 ```python
-class FactorRelationshipInput(BaseModel):
+class FactorRelationshipInput(FactorInputBase):
     input_id: InputId; from_subject: SubjectRef; to_subject: SubjectRef; relation_type: str
     valid_from: date; valid_to: date | None; confidence: Decimal; as_of: datetime
 class RatingCategory(StrEnum):
@@ -194,26 +217,25 @@ class RatingCategory(StrEnum):
 class RatingAction(StrEnum):
     INITIATE = "initiate"; REITERATE = "reiterate"
     UPGRADE = "upgrade"; DOWNGRADE = "downgrade"; RESUME = "resume"
-class FactorRatingInput(BaseModel):
+class FactorRatingInput(FactorInputBase):
     input_id: InputId; analyst_id: AnalystId; covered_subject: SubjectRef
     recommendation_at: datetime; normalized_score: Decimal = Field(ge=-1, le=1)
-    category: RatingCategory; rating_action: RatingAction; rating_scale_version: str
-    target_price: MoneyValue | None
-    vendor_updated_at: datetime | None; confidence: Decimal; as_of: datetime
-class FactorForecastInput(BaseModel):
+    category: RatingCategory; rating_action: RatingAction
+    target_price: MoneyValue | None; confidence: Decimal; as_of: datetime
+class FactorForecastInput(FactorInputBase):
     input_id: InputId; issuer_id: IssuerId; target_metric: str
     target_period: str | None; horizon_start: date | None; horizon_end: date | None
     point_value: Decimal | None; lower_bound: Decimal | None; upper_bound: Decimal | None
     unit: str; currency: CurrencyCode | None; statistic: Literal["mean", "median"]
     constituent_count: int | None; confidence: Decimal; as_of: datetime
-class FactorGuidanceInput(BaseModel):
+class FactorGuidanceInput(FactorInputBase):
     input_id: InputId; issuer_id: IssuerId; target_metric: str
     target_period: str | None; horizon_start: date | None; horizon_end: date | None
     point_value: Decimal | None; lower_bound: Decimal | None; upper_bound: Decimal | None
     unit: str; currency: CurrencyCode | None
     guidance_status: Literal["issued", "updated", "withdrawn"]
     confidence: Decimal; as_of: datetime
-class FactorHoldingInput(BaseModel):
+class FactorHoldingInput(FactorInputBase):
     input_id: InputId; fund_security_id: SecurityId
     holding_security_id: SecurityId | None; holding_issuer_id: IssuerId | None
     unresolved_holding_key: str | None; instrument_kind: SecurityKind
@@ -224,53 +246,56 @@ class FactorHoldingInput(BaseModel):
 
     @model_validator(mode="after")
     def require_resolved_subject_or_unresolved_key(self) -> Self: ...
-class FactorSegmentRevenueInput(BaseModel):
+class FactorSegmentRevenueInput(FactorInputBase):
     input_id: InputId; issuer_id: IssuerId; segment_name: str
     revenue: MoneyValue; fiscal_period: str; confidence: Decimal; as_of: datetime
-class FactorPriceInput(BaseModel):
+class FactorPriceInput(FactorInputBase):
     input_id: InputId; listing_id: ListingId; security_id: SecurityId
     trading_date: date; exchange_mic: str; timezone: str; currency: CurrencyCode
     open: Decimal; high: Decimal; low: Decimal; close: Decimal; volume: int
     adjustment_mode: Literal[PriceAdjustmentMode.RAW] = PriceAdjustmentMode.RAW
     confidence: Decimal; as_of: datetime
-class FactorActionInput(BaseModel):
+class FactorActionInput(FactorInputBase):
     input_id: InputId; action_id: str; security_id: SecurityId
     action_type: CorporateActionType; announced_at: datetime | None
     ex_date: date; record_date: date | None; effective_date: date; pay_date: date | None
     ratio: Decimal | None; cash_amount: MoneyValue | None
     resulting_security_id: SecurityId | None; confidence: Decimal; as_of: datetime
-class FactorMembershipInput(BaseModel):
+class FactorMembershipInput(FactorInputBase):
     input_id: InputId; universe_id: UniverseId; subject: SubjectRef
     valid_from: date; valid_to: date | None; confidence: Decimal; as_of: datetime
-class FactorFxInput(BaseModel):
+class FactorFxInput(FactorInputBase):
     input_id: InputId; base_currency: CurrencyCode; quote_currency: CurrencyCode
     observed_at: datetime; rate: Decimal; confidence: Decimal; as_of: datetime
-class FactorDocumentInput(BaseModel):
+class ExtractionDocumentInput(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
     input_id: InputId; issuer_id: IssuerId | None; security_id: SecurityId | None
     document_type: str; text: str; published_at: datetime
     confidence: Decimal; as_of: datetime
-class FactorInputBundle(BaseModel):
-    snapshot_id: str
-    as_of: datetime
-    facts: tuple[Fact, ...] = ()
-    relationships: tuple[FactorRelationshipInput, ...] = ()
-    ratings: tuple[FactorRatingInput, ...] = ()
-    forecasts: tuple[FactorForecastInput, ...] = ()
-    guidance: tuple[FactorGuidanceInput, ...] = ()
-    holdings: tuple[FactorHoldingInput, ...] = ()
-    segment_revenue: tuple[FactorSegmentRevenueInput, ...] = ()
-    prices: tuple[FactorPriceInput, ...] = ()
-    actions: tuple[FactorActionInput, ...] = ()
-    memberships: tuple[FactorMembershipInput, ...] = ()
-    fx_rates: tuple[FactorFxInput, ...] = ()
-    issuer_security_links: tuple[IssuerSecurityLink, ...] = ()
-    security_listing_links: tuple[SecurityListingLink, ...] = ()
+
+FORBIDDEN_FACTOR_INPUT_FIELDS = frozenset({
+    "source", "source_id", "source_runtime", "raw_id", "raw_ref", "raw_sha256",
+    "accession", "mapping_version", "policy_versions", "extraction_id",
+    "lineage_ref", "lineage_sha256", "recorded_at", "knowable_at", "repository_id",
+    "provider_id", "vendor_rating_label", "vendor_updated_at", "rating_scale_version",
+})
+
+def validate_factor_input_model(model: type[FactorInputBase]) -> None:
+    """Reject forbidden field names recursively before registry activation."""
+    ...
+
+# These are built-in registered input models, not a closed runtime union. Factors
+# receive the registry-backed TrackedFactorInputView defined in Section 14.1.
 ```
 The factor-computation inputs expose only semantic values, valid period, confidence, and `as_of`.
 They never contain `source`, `raw_ref`, accession, or repository metadata. The runner
-projects this bundle from an auditable snapshot for the factor's declared domains.
+projects a tracked typed view from an auditable snapshot for the factor's declared
+requirements. Adding a registered semantic type does not add a field to a central bundle.
 Documents take a separate extraction path defined in Section 14.2 and never enter a
-factor-computation bundle.
+factor-computation view.
+Vendor update time and rating-scale/mapping versions remain normalized-selection evidence;
+the rating factor receives only the source-neutral event time, score, category, action,
+and target value.
 ### 4.4 Corporate Actions
 ```python
 class CorporateActionType(StrEnum):
@@ -326,7 +351,7 @@ class UniverseMembership(BaseModel):
 class EntityIdentifier(BaseModel):
     identifier_id: str
     subject: SubjectRef
-    source: DataSource
+    source: SourceId
     identifier_type: str
     value: str
     valid_from: date
@@ -355,10 +380,17 @@ class SnapshotRequest(BaseModel):
     valid_on: date
     scope: SnapshotScope
     domains: frozenset[DataDomain]
+    semantic_types: frozenset[SemanticTypeRef]
     price_window: DateRange | None = None
+
+    def validate_semantic_types(self, registry: SemanticTypeRegistry) -> None: ...
 
 class SelectionPolicyVersions(BaseModel):
     contract_version: str
+    source_registry_snapshot_id: RegistrySnapshotId
+    source_registry_sha256: str
+    semantic_type_registry_snapshot_id: RegistrySnapshotId
+    semantic_type_registry_sha256: str
     fusion_ruleset_version: int
     identifier_resolution_version: str
     membership_resolution_version: str
@@ -370,8 +402,10 @@ class SelectionPolicyVersions(BaseModel):
 
 class SnapshotRecordRef(BaseModel):
     domain: DataDomain
+    semantic_type: SemanticTypeRef
+    subject: SubjectRef
     record_id: str
-    source: DataSource
+    source: SourceId
     semantic_sha256: str
     raw_ref: str
     raw_sha256: str
@@ -382,12 +416,15 @@ class SnapshotRecordRef(BaseModel):
     source_evidence_status: SourceEvidenceStatus
 
 class ManifestEntry(BaseModel):
-    domain: str
+    domain: DataDomain
+    semantic_type: SemanticTypeRef
     record_count: int
     content_sha256: str
     min_knowable_at: datetime | None
     max_knowable_at: datetime | None
     raw_refs_sha256: str
+
+    def validate_semantic_type(self, registry: SemanticTypeRegistry) -> None: ...
 class DataSnapshotManifest(BaseModel):
     snapshot_id: str
     request: SnapshotRequest
@@ -396,24 +433,12 @@ class DataSnapshotManifest(BaseModel):
     repository_kind: str
     entries: tuple[ManifestEntry, ...]
     selected_records: tuple[SnapshotRecordRef, ...]
+    source_selection_traces: tuple["SourceSelectionTrace", ...]
     selected_membership_ids: tuple[str, ...]
     content_sha256: str
 class ResearchSnapshot(BaseModel):
     manifest: DataSnapshotManifest
-    financial_facts: tuple[CanonicalFinancialFact, ...] = ()
-    graph_edges: tuple[GraphEdgeRecord, ...] = ()
-    analyst_ratings: tuple[AnalystRatingRecord, ...] = ()
-    forecasts: tuple[ForecastRecord, ...] = ()
-    guidance: tuple[GuidanceRecord, ...] = ()
-    fund_holdings: tuple[FundHoldingRecord, ...] = ()
-    segment_revenue: tuple[SegmentRevenueRecord, ...] = ()
-    price_bars: tuple[PriceBarRecord, ...] = ()
-    fx_rates: tuple[FxRateRecord, ...] = ()
-    corporate_actions: tuple[CorporateActionRecord, ...] = ()
-    universe_memberships: tuple[UniverseMembershipRecord, ...] = ()
-    identifiers: tuple[EntityIdentifierRecord, ...] = ()
-    source_documents: tuple[SourceDocumentRecord, ...] = ()
-    extraction_records: tuple[ExtractionRecord, ...] = ()
+    records: tuple["NormalizedRecordEnvelope", ...] = ()
     issuer_security_links: tuple[IssuerSecurityLink, ...] = ()
     security_listing_links: tuple[SecurityListingLink, ...] = ()
 
@@ -433,13 +458,21 @@ requested `UniverseRef`; repositories never substitute a mutable latest universe
 `repository_kind` is diagnostic and cannot affect factors. `raw_refs_sha256` commits to
 lineage without exposing it to factor branches. `selected_records` makes that commitment
 recoverable rather than merely aggregate: an old run still resolves the exact staging row,
-mapping, raw object, and fusion policy after rules change. For every selected extracted
+mapping, raw object, and fusion policy after rules change. `source_selection_traces`
+persist every eligible candidate, winner, selection policy, and disagreement result, so
+reverse review does not reconstruct source conflict from the eventual winner. For every selected extracted
 semantic row, snapshot construction also includes its immutable `ExtractionRecord` and
 source-document record as transitive lineage; those records never enter
-`FactorInputBundle`. A snapshot is immutable,
+`TrackedFactorInputView`. Built-in record models remain typed, but the snapshot stores
+lossless registered envelopes instead of adding one field per semantic type. A snapshot
+is immutable,
 persisted before factor execution, canonically sorted, consistent with its manifest, and
 replaces the narrower `BacktestDataset` role. Loaders may select domains, but the manifest
 lists exactly what was included.
+The exact source and semantic-type registry snapshots are part of the snapshot identity.
+`SnapshotRequest.validate_semantic_types` rejects unknown versions and requires `domains`
+to equal the domains derived from its exact type refs; a later additive registration
+cannot enlarge an old request.
 `domain_selection_versions` must cover every requested domain plus transitive identity,
 document, and extraction lineage. This includes analyst public-availability rules, fund
 holding selection, segment/relationship validity, price/FX bar policy, corporate actions,
@@ -447,8 +480,13 @@ and documents; no domain may silently inherit a generic latest-row rule.
 ## 5. Typed Factor Outputs
 ```python
 class ConsumedInputLineage(BaseModel):
-    input_ids: tuple[InputId, ...] = ()
+    inputs: tuple["ConsumedRequirementInputRef", ...] = ()
     upstream_output_ids: tuple[OutputId, ...] = ()
+
+class ConsumedRequirementInputRef(BaseModel):
+    requirement_id: str
+    planned_cell_id: str
+    input_id: InputId
 
 class AvailabilityStatus(StrEnum):
     AVAILABLE = "available"
@@ -519,12 +557,62 @@ FactorObservation = Annotated[
     | ScenarioExposureObservation,
     Field(discriminator="output_type"),
 ]
+
+class FactorUpstreamBase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    output_id: OutputId
+    output_type: str
+    subject: SubjectRef
+    as_of: datetime
+    valid_from: date | None
+    valid_to: date | None
+    fiscal_period: str | None
+    confidence: Decimal
+    availability_status: AvailabilityStatus
+    status_reasons: tuple[str, ...] = ()
+
+class FactorUpstreamMetric(FactorUpstreamBase):
+    output_type: Literal["metric"] = "metric"
+    metric: str
+    value: Decimal | None
+    unit: str
+
+class FactorUpstreamClassification(FactorUpstreamBase):
+    output_type: Literal["classification"] = "classification"
+    taxonomy: str
+    label: str
+    score: Decimal | None = None
+
+class FactorUpstreamRelationship(FactorUpstreamBase):
+    output_type: Literal["relationship"] = "relationship"
+    to_subject: SubjectRef
+    relation_type: str
+    strength: Decimal | None = None
+
+class FactorUpstreamScenarioExposure(FactorUpstreamBase):
+    output_type: Literal["scenario_exposure"] = "scenario_exposure"
+    scenario_id: str
+    scenario_version: str
+    direction: Literal["positive", "negative", "mixed", "unknown"]
+    exposure_value: Decimal | None
+    unit: str
+    path_count: int
+
+FactorUpstreamObservation = Annotated[
+    FactorUpstreamMetric | FactorUpstreamClassification
+    | FactorUpstreamRelationship | FactorUpstreamScenarioExposure,
+    Field(discriminator="output_type"),
+]
+
 class FactorOutputBatch(BaseModel):
     batch_id: str
     invocation_alias: str
     invocation_template_id: str
     execution_id: str
     parameters_sha256: str
+    requirements_sha256: str
+    planned_demand_id: str
+    planned_demand_sha256: str
     parameters: dict[str, JsonValue]
     factor_id: str
     factor_version: str
@@ -534,6 +622,7 @@ class FactorOutputBatch(BaseModel):
     outputs: tuple[FactorObservation, ...]
     batch_confidence: Decimal
     flags: tuple[str, ...] = ()
+    content_sha256: str
 ```
 Availability describes whether a result is usable at this cutoff. Source evidence says
 whether the consumed data is independently corroborated or synthetic. Factor validation
@@ -542,6 +631,9 @@ three are orthogonal: an output can be available on corroborated data while its 
 still unvalidated, or holdout-validated but stale at the requested cutoff.
 The union is top-level so schemas reliably emit `oneOf`. Input IDs are opaque semantic
 identities: factor code can use semantic values but cannot inspect source or raw lineage.
+Composite factors receive `FactorUpstreamObservation`, never persisted
+`FactorObservation`; the runner strips invocation, source-evidence, validation, and
+consumption-lineage fields while retaining semantic availability and confidence.
 It never constructs final observations or a `ConsumedInputLineage`. `run_factor` creates
 one tracked scope per `output_key`, records every selector and upstream access, stamps the
 resulting IDs on drafts, and rejects access outside a scope or emission under another key.
@@ -582,8 +674,12 @@ semantic closure gate passes. The invocation rules are:
 ## 8. Repository Ports
 ```python
 class NormalizedRecordRepository(Protocol):
-    def append(self, batch: NormalizedBatch) -> MaterializationResult: ...
-    def candidates(self, request: SnapshotRequest) -> tuple[NormalizedRecord, ...]: ...
+    def append(
+        self, batch: NormalizedBatch, *, semantic_types: SemanticTypeRegistry
+    ) -> MaterializationResult: ...
+    def candidates(
+        self, request: SnapshotRequest, *, semantic_types: SemanticTypeRegistry
+    ) -> tuple[NormalizedRecordEnvelope, ...]: ...
 
 class UniverseRepository(Protocol):
     def get(self, ref: UniverseRef) -> UniverseManifest | None: ...
@@ -629,11 +725,11 @@ Dagster asset / local runner
      -> resolve PIT membership, issuer/security/listing links, and eligible vintages
      -> reconcile sources, assign confidence, build canonical manifest
   -> snapshot_store.put(snapshot)
-  -> run_factor(template, snapshot, subjects)  # projects provenance-free tracked inputs
+  -> run_factor(template, snapshot, demand, subjects)  # projects provenance-free tracked inputs
   -> output_repository.put(batch)
   -> materialize deterministic mart projection
   -> for a composite: reload declared upstream batches from the materialized mart boundary
-     -> run_factor(template, snapshot, subjects, materialized_upstream)
+     -> run_factor(template, snapshot, demand, subjects, materialized_upstream)
      -> output_repository.put(batch) -> materialize composite projection
 Backtest runner
   -> resolve definition registry IDs
@@ -697,8 +793,8 @@ Scope, applicability, and readiness:
 
 Provenance and determinism:
 - Normalized records retain `raw_ref`; manifests commit to the lineage set.
-- Only `FactorInputBundle`, never `ResearchSnapshot`, crosses into factor code.
-- Bundle records contain no source, raw reference, accession, or repository metadata.
+- Only `TrackedFactorInputView`, never `ResearchSnapshot`, crosses into factor code.
+- Projected input records contain no source, raw reference, accession, or repository metadata.
 - Factors cannot access or branch on provenance; projection tests enforce this boundary.
 - Factors emit drafts only. `run_factor` alone creates final observations and automatically
   derives input/upstream consumption lineage, confidence ceilings, status, and IDs from
@@ -712,8 +808,9 @@ Provenance and determinism:
   source-document hash, and attempt. Each new attempt is append-only; replay reads the
   stored result and never invokes a mutable model alias implicitly.
 - A release, asset catalog, runtime artifacts, extraction templates/model revisions,
-  universe, capture/applicability/source/SLO catalogs, and accepted evidence must agree by
-  ID and content hash before publication.
+  universe, and capture/applicability/source/SLO catalogs must agree by ID and content
+  hash before execution. The later graduation attestation binds accepted evidence to that
+  unchanged release hash before authoritative publication.
 
 ## 12. Repository Contract Test Kit
 `libs/contracts` should expose a pytest suite factory accepting a repository constructor.
@@ -798,6 +895,14 @@ class PutResult(BaseModel):
     semantic_id: str
     inserted: bool
 
+class ContentAddressedRef(BaseModel):
+    artifact_kind: Literal[
+        "capture_manifest", "snapshot", "factor_batch", "screen_result",
+        "strategy_run", "planned_demand", "usage_audit",
+    ]
+    artifact_id: str
+    content_sha256: str
+
 class MaterializationResult(BaseModel):
     materialization_id: str
     inserted_rows: int
@@ -810,6 +915,9 @@ class FactorExecutionContext(BaseModel):
     invocation_template_id: str
     execution_id: str
     parameters_sha256: str
+    requirements_sha256: str
+    planned_demand_id: str
+    planned_demand_sha256: str
     factor_id: str
     factor_version: str
     snapshot_id: str
@@ -820,7 +928,7 @@ class FactorParameters(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 P = TypeVar("P", bound=FactorParameters)
-I = TypeVar("I", bound=BaseModel)
+I = TypeVar("I", bound=FactorInputBase)
 
 class ObservationDraftBase(BaseModel):
     output_key: str
@@ -873,16 +981,23 @@ class OutputComputationScope(Protocol):
     as_of: datetime
     def select(
         self,
-        record_type: type[I],
+        handle: "RequirementHandle[I]",
         *,
         where: Mapping[str, JsonScalar],
     ) -> tuple[I, ...]: ...
-    def upstream(self, slot: str) -> tuple[FactorObservation, ...]: ...
+    def upstream(self, slot: str) -> tuple[FactorUpstreamObservation, ...]: ...
     def emit(self, draft: FactorObservationDraft) -> None: ...
 
 class TrackedFactorInputView(Protocol):
     snapshot_id: str
     as_of: datetime
+    def requirement(
+        self,
+        requirement_id: str,
+        *,
+        subject: SubjectRef,
+        input_model: type[I],
+    ) -> "RequirementHandle[I]": ...
     def output_scope(
         self, output_key: str
     ) -> ContextManager[OutputComputationScope]: ...
@@ -894,6 +1009,141 @@ class FactorInvocationTemplate(BaseModel):
     factor_version: str
     parameters: dict[str, JsonValue]
     dependencies: dict[str, str] = Field(default_factory=dict)  # slot -> invocation_alias
+
+class RequirementLevel(StrEnum):
+    REQUIRED = "required"
+    OPTIONAL = "optional"
+
+class DataRequirement(BaseModel):
+    requirement_id: str
+    capture_requirement_id: str
+    semantic_type: SemanticTypeRef
+    domain: DataDomain
+    metric: str | None
+    subject_kinds: frozenset[SubjectKind]
+    level: RequirementLevel
+    lookback: timedelta | None
+    valid_period_rule_id: str
+    maximum_age: timedelta
+    expected_cadence: timedelta
+
+    def validate_semantic_type(self, registry: SemanticTypeRegistry) -> None: ...
+
+@dataclass(frozen=True)
+class RequirementHandle(Generic[I]):
+    handle_id: str  # opaque runner-minted capability, validated by the input view
+    requirement_id: str
+    planned_cell_id: str
+    semantic_type: SemanticTypeRef
+    subject: SubjectRef
+    input_model: type[I]
+
+class FactorRequirementConsumerRef(BaseModel):
+    consumer_kind: Literal["factor"] = "factor"
+    invocation_template_id: str
+
+class RuleRequirementConsumerRef(BaseModel):
+    consumer_kind: Literal["rule"] = "rule"
+    rule_role: Literal[
+        "rebalance", "sizing", "holding", "execution", "transaction_cost",
+        "trading_calendar", "fx", "return", "as_of_schedule",
+    ]
+    rule_id: str
+    rule_version: str
+    invocation_sha256: str
+
+RequirementConsumerRef = Annotated[
+    FactorRequirementConsumerRef | RuleRequirementConsumerRef,
+    Field(discriminator="consumer_kind"),
+]
+
+class SourceAdapterRegistration(BaseModel):
+    registration_id: str
+    source_id: SourceId
+    adapter_id: str
+    adapter_version: str
+    supported_domains: frozenset[DataDomain]
+    configuration_schema_sha256: str
+    implementation_sha256: str
+
+class NormalizerRegistration(BaseModel):
+    registration_id: str
+    source_id: SourceId
+    normalizer_id: str
+    normalizer_version: str
+    output_semantic_types: frozenset[SemanticTypeRef]
+    mapping_schema_sha256: str
+    implementation_sha256: str
+
+class SourceRuntimeRef(BaseModel):
+    source_id: SourceId
+    adapter_registration_id: str
+    normalizer_registration_ids: tuple[str, ...]
+
+class SourceRegistrySnapshot(BaseModel):
+    snapshot_id: RegistrySnapshotId
+    adapters: tuple[SourceAdapterRegistration, ...]
+    normalizers: tuple[NormalizerRegistration, ...]
+    content_sha256: str
+
+class SemanticTypeRegistration(BaseModel):
+    registration_id: str
+    semantic_type: SemanticTypeRef
+    domain: DataDomain
+    normalized_schema_sha256: str
+    factor_input_schema_sha256: str
+    normalized_model_key: str
+    projector_id: str
+    repository_id: str
+    backward_compatible_with: tuple[SemanticTypeRef, ...]
+    implementation_sha256: str
+
+class SemanticTypeRegistrySnapshot(BaseModel):
+    snapshot_id: RegistrySnapshotId
+    types: tuple[SemanticTypeRegistration, ...]
+    content_sha256: str
+
+class SourceRuntimeRegistry(Protocol):
+    snapshot: SourceRegistrySnapshot
+    def adapter(
+        self, registration_id: str
+    ) -> "SourceAdapter": ...
+    def normalizer(
+        self, registration_id: str
+    ) -> "Normalizer": ...
+
+NR = TypeVar("NR", bound="NormalizedRecordBase")
+FI = TypeVar("FI", bound=FactorInputBase)
+
+class SemanticRecordRepository(Protocol, Generic[NR]):
+    def append(self, records: Sequence[NR]) -> MaterializationResult: ...
+    def candidates(self, request: SnapshotRequest) -> tuple[NR, ...]: ...
+
+class SemanticTypeDefinition(Protocol, Generic[NR, FI]):
+    registration: SemanticTypeRegistration
+    normalized_model: type[NR]
+    factor_input_model: type[FI]
+    repository: SemanticRecordRepository[NR]
+
+    def encode(self, record: NR) -> "NormalizedRecordEnvelope": ...
+    def decode(self, envelope: "NormalizedRecordEnvelope") -> NR: ...
+
+    def project(
+        self,
+        record: NR,
+        *,
+        input_id: InputId,
+        as_of: datetime,
+    ) -> FI: ...
+
+class SemanticTypeRegistry(Protocol):
+    snapshot: SemanticTypeRegistrySnapshot
+    def resolve(
+        self, semantic_type: SemanticTypeRef
+    ) -> SemanticTypeDefinition[Any, Any]: ...
+    def for_domain(
+        self, domain: DataDomain
+    ) -> tuple[SemanticTypeDefinition[Any, Any], ...]: ...
 
 class CatalogAliasRef(BaseModel):
     alias: str
@@ -941,7 +1191,7 @@ class ApprovedSourceBudget(BaseModel):
 
 class RightsApproval(BaseModel):
     rights_approval_id: str
-    source: DataSource
+    source: SourceId
     environment: Literal["local", "github_ci", "staging", "production"]
     raw_retention: SourceUsePermission
     caching: SourceUsePermission
@@ -965,18 +1215,17 @@ class SourceCoverageEntry(BaseModel):
     environment: Literal["local", "github_ci", "staging", "production"]
     subject_scope: tuple[SubjectRef, ...]
     identifier_level: Literal["issuer", "security", "listing", "analyst", "fund"]
-    primary_source: DataSource
-    fallback_sources: tuple[DataSource, ...]
+    primary: SourceRuntimeRef
+    fallbacks: tuple[SourceRuntimeRef, ...]
     knowability_basis: Literal["source_publication", "independently_corroborated"]
     history_start: date
     history_end: date | None
     expected_cadence: timedelta
-    rights_approval_ids: dict[DataSource, str]
+    rights_approval_ids: dict[SourceId, str]
     retention_policy_ref: str
     quota_policy_ref: str
     sla_policy_ref: str
     projected_budget: ApprovedSourceBudget
-    capture_adapter_id: str
     revision_policy_ref: str
     fallback_policy_ref: str
     natural_refresh_observation_window: timedelta
@@ -989,6 +1238,8 @@ class SourceCoverageEntry(BaseModel):
 
 class SourceCoverageCatalog(BaseModel):
     source_coverage_catalog_id: str
+    source_registry_snapshot_id: RegistrySnapshotId
+    source_registry_sha256: str
     entries: tuple[SourceCoverageEntry, ...]
     content_sha256: str
 
@@ -1123,6 +1374,7 @@ def evaluate_source_readiness(
 
 class CaptureRequirement(BaseModel):
     requirement_id: str
+    semantic_type: SemanticTypeRef
     domain: DataDomain
     required_fields: tuple[str, ...]
     subject_kinds: frozenset[SubjectKind]
@@ -1132,9 +1384,10 @@ class CaptureRequirement(BaseModel):
     quality_policy_ids: tuple[str, ...]
     source_coverage_entry_ids: tuple[str, ...]
 
+    def validate_semantic_type(self, registry: SemanticTypeRegistry) -> None: ...
+
 class CaptureScope(BaseModel):
     capture_scope_id: str
-    environment: Literal["local", "github_ci", "staging", "production"]
     research_catalog_id: str
     research_catalog_sha256: str
     universe: UniverseRef
@@ -1142,6 +1395,10 @@ class CaptureScope(BaseModel):
     applicability_catalog_sha256: str
     source_coverage_catalog_id: str
     source_coverage_catalog_sha256: str
+    source_registry_snapshot_id: RegistrySnapshotId
+    source_registry_sha256: str
+    semantic_type_registry_snapshot_id: RegistrySnapshotId
+    semantic_type_registry_sha256: str
     slo_catalog_id: str
     slo_catalog_sha256: str
     requirements: tuple[CaptureRequirement, ...]
@@ -1150,20 +1407,38 @@ class CaptureScope(BaseModel):
     content_sha256: str
 
 class CaptureRecordEvidence(BaseModel):
+    evidence_id: str
+    source_runtime: SourceRuntimeRef
+    semantic_type: SemanticTypeRef
     raw_id: str
     raw_sha256: str
     normalized_id: str
+    normalized_sha256: str
     knowable_at: datetime
     recorded_at: datetime
     confidence: Decimal = Field(ge=0, le=1)
     mapping_version: str
     policy_versions: dict[str, str]
-    quality_check_ids: tuple[str, ...]
+    quality_results: tuple["SignedQualityResult", ...]
+    lineage_ref: str
     lineage_sha256: str
+
+class SignedQualityResult(BaseModel):
+    quality_result_id: str
+    check_id: str
+    check_version: str
+    passed: bool
+    observed: JsonValue
+    required: JsonValue
+    evidence_ids: tuple[str, ...]
+    evaluated_at: datetime
+    content_sha256: str
+    signature_ref: str
 
 class CaptureCell(BaseModel):
     subject: SubjectRef
     domain: DataDomain
+    semantic_type: SemanticTypeRef
     partition_key: str
     requirement_id: str
     applicability: Literal["required", "optional", "not_applicable"]
@@ -1172,6 +1447,8 @@ class CaptureCell(BaseModel):
     ]
     evidence: tuple[CaptureRecordEvidence, ...]
     reason_codes: tuple[str, ...]
+
+    def validate_semantic_type(self, registry: SemanticTypeRegistry) -> None: ...
 
 class CaptureManifest(BaseModel):
     capture_manifest_id: str
@@ -1191,8 +1468,22 @@ class CaptureEvaluator(Protocol):
         manifest: CaptureManifest,
         *,
         applicability: ApplicabilityCatalog,
+        source_coverage: SourceCoverageCatalog,
+        source_readiness: ReadinessReport,
+        evidence: "CaptureEvidenceResolver",
         as_of: datetime,
     ) -> ReadinessReport: ...
+
+class CaptureEvidenceResolver(Protocol):
+    def resolve_raw(self, raw_id: str, raw_sha256: str) -> bool: ...
+    def resolve_normalized(
+        self, normalized_id: str, normalized_sha256: str,
+        semantic_type: SemanticTypeRef
+    ) -> bool: ...
+    def verify_quality(self, result: SignedQualityResult) -> bool: ...
+    def resolve_lineage(
+        self, lineage_ref: str, lineage_sha256: str, *, raw_id: str, normalized_id: str
+    ) -> bool: ...
 
 class ModelRevisionRef(BaseModel):
     provider: str
@@ -1232,15 +1523,16 @@ class ReleaseManifest(BaseModel):
     source_coverage_catalog_id: str
     source_coverage_catalog_sha256: str
     source_readiness_report_sha256: str
+    source_registry_snapshot_id: RegistrySnapshotId
+    source_registry_sha256: str
+    semantic_type_registry_snapshot_id: RegistrySnapshotId
+    semantic_type_registry_sha256: str
     slo_catalog_id: str
     slo_catalog_sha256: str
     configuration_sha256: dict[str, str]
     migration_ids: tuple[str, ...]
     migration_set_sha256: str
     artifacts: tuple[ReleaseArtifact, ...]
-    accepted_evidence_ids: tuple[str, ...]
-    accepted_capture_manifest_sha256: tuple[str, ...]
-    accepted_readiness_report_sha256: tuple[str, ...]
     approved_model_revisions: tuple[ModelRevisionRef, ...]
     approved_extraction_template_ids: tuple[str, ...]
     created_at: datetime
@@ -1251,10 +1543,38 @@ class ReleaseManifestRepository(Protocol):
     def put(self, manifest: ReleaseManifest) -> PutResult: ...
     def get(self, release_manifest_id: str) -> ReleaseManifest | None: ...
 
+class GraduationAttestation(BaseModel):
+    attestation_id: str
+    release_manifest_id: str
+    release_manifest_sha256: str
+    candidate_commit_sha: str
+    environment: Literal["production"] = "production"
+    accepted_evidence_ids: tuple[str, ...]
+    accepted_capture_manifest_sha256: tuple[str, ...]
+    accepted_usage_audit_sha256: tuple[str, ...]
+    accepted_data_quality_review_sha256: tuple[str, ...]
+    accepted_readiness_report_sha256: tuple[str, ...]
+    reviewer: str
+    approved_at: datetime
+    rollback_ref: str
+    content_sha256: str
+    signature_ref: str
+
+class GraduationAttestationRepository(Protocol):
+    def put(self, attestation: GraduationAttestation) -> PutResult: ...
+    def get(self, attestation_id: str) -> GraduationAttestation | None: ...
+
 class ResolvedFactorInvocation(BaseModel):
     template: FactorInvocationTemplate
     definition_sha256: str
     parameters_sha256: str
+    requirements_sha256: str
+    planned_demand_id: str
+    planned_demand_sha256: str
+    source_registry_snapshot_id: RegistrySnapshotId
+    source_registry_sha256: str
+    semantic_type_registry_snapshot_id: RegistrySnapshotId
+    semantic_type_registry_sha256: str
     execution_id: str
     snapshot_id: str
     subjects: tuple[SubjectRef, ...]
@@ -1270,6 +1590,8 @@ class FactorDefinition(Protocol, Generic[P]):
     validation_record_id: str
     oracle_version: str
 
+    def data_requirements(self, parameters: P) -> tuple[DataRequirement, ...]: ...
+
     def compute(
         self,
         context: FactorExecutionContext,
@@ -1280,16 +1602,21 @@ class FactorDefinition(Protocol, Generic[P]):
 def project_factor_inputs(
     snapshot: ResearchSnapshot,
     *,
-    domains: frozenset[DataDomain],
+    demand: "PlannedDataDemand",
+    consumer: FactorRequirementConsumerRef,
+    requirements: Sequence[DataRequirement],
     subjects: Sequence[SubjectRef],
-) -> FactorInputBundle: ...
+    semantic_types: SemanticTypeRegistry,
+) -> TrackedFactorInputView: ...
 
 def run_factor(
     definition: FactorDefinition[P],
     *,
     template: FactorInvocationTemplate,
     snapshot: ResearchSnapshot,
+    demand: "PlannedDataDemand",
     subjects: Sequence[SubjectRef],
+    semantic_types: SemanticTypeRegistry,
     upstream: Mapping[str, FactorOutputBatch] | None = None,
 ) -> FactorOutputBatch: ...
 
@@ -1300,19 +1627,35 @@ class FactorRegistry(Protocol):
 `ReadinessReport.ready` is the deterministic conjunction of its checks; evaluators expose
 no override/flag setter. A required capture cell is `complete` only when it has at least
 one valid raw-to-normalized evidence row with mandatory confidence, eligible times,
-mapping/policy versions, passing quality checks, and a resolvable lineage hash. Optional
+mapping/policy versions, signed passing quality results, and raw/normalized/lineage
+references verified by `CaptureEvidenceResolver`. The evaluator also rejects a source
+runtime not named by the exact release-bound coverage entry, an expired or mismatched
+rights/readiness input, and any coverage/catalog hash that disagrees with `CaptureScope`.
+Optional
 or not-applicable status comes only from the pre-approved `ApplicabilityCatalog`; a run
-cannot relabel or omit a required cell. A release binds exact source-coverage, SLO,
-research catalog, universe, capture scope/manifests, applicability, configuration,
-migration, artifact, evidence, model revision, extraction template, and accepted
-readiness hashes.
+cannot relabel or omit a required cell. A release manifest binds only pre-run immutable
+source/type registry, source-coverage/readiness, SLO, research catalog, universe, capture
+scope, applicability, configuration, migration, artifact, model revision, and extraction
+template identities. Post-run capture, usage, quality, recovery, consumer, and graduation
+evidence belongs to a separately signed `GraduationAttestation` that references the exact
+release hash; it never mutates the release manifest.
+
+`CaptureScope` is environment-neutral so the exact scope identity promotes unchanged.
+`CaptureManifest.environment` and the run bind the actual tier; preflight selects the
+matching environment entries and rights approvals from the release-bound source catalog.
 
 `run_factor` owns generic validation: definition/parameter compatibility, declared
-domains, entity scope, one snapshot/cutoff, upstream dependency completeness, output
+domains exactly equal to the registry-derived requirement domains, entity scope, one
+snapshot/cutoff, upstream dependency completeness, output
 identity, canonical ordering, deterministic template/execution/output/batch IDs,
-consumption references,
-and confidence ceilings. It is the only computation-layer function that sees the raw
-bundle and materialized upstream batches. Module code receives `TrackedFactorInputView`;
+consumption references, and confidence ceilings. It resolves the definition's
+source-neutral `DataRequirement` records against the exact semantic-type registry and
+materialized upstream batches, hashes them into the execution context, and calls
+`project_factor_inputs` itself. The exact `PlannedDataDemand` scope/hash and factor
+consumer reference must match the snapshot cutoff, template, requirements, and subjects;
+the runner rejects missing or surplus cells. Each `RequirementHandle` contains an opaque
+capability minted by that projected view, so a factor cannot fabricate a requirement or
+borrow a handle from another execution. Module code receives `TrackedFactorInputView`;
 every selector and upstream access is recorded inside an output scope, and only
 `scope.emit` may create an output draft. Projection derives each opaque `InputId`
 deterministically from the snapshot
@@ -1323,10 +1666,10 @@ module logic cannot branch on either status.
 The resolved definition hash binds `validation_record_id` and `oracle_version`, so a later
 holdout graduation creates a new append-only registry/materialization identity rather than
 mutating old outputs or changing a batch under the same key.
-`invocation_template_id` is the hash of factor/version, canonical parameters, and
-dependency templates. `execution_id` additionally binds snapshot ID, ordered subject
-scope, and dependency batch IDs. Alias equality never implies template or execution
-equality. Repository keys use `execution_id`, never
+`invocation_template_id` is the hash of factor/version, canonical parameters, declared
+requirements, and dependency templates. `execution_id` additionally binds snapshot ID,
+both registry snapshots, ordered subject scope, and dependency batch IDs. Alias equality
+never implies template or execution equality. Repository keys use `execution_id`, never
 only `(factor_id, factor_version, snapshot_id)`. Module functions own only domain
 computation.
 
@@ -1334,14 +1677,14 @@ computation.
 
 ```python
 class SourceRequest(BaseModel):
-    source: DataSource
+    source: SourceId
     subjects: tuple[SubjectRef, ...]
     requested_at: datetime
     source_cutoff: datetime | None = None
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
 
 class SourceAdapter(Protocol):
-    source: DataSource
+    source: SourceId
     async def capture(self, request: SourceRequest) -> RawCapture: ...
 
 class SourceCallGateway(Protocol):
@@ -1351,16 +1694,29 @@ class SourceCallGateway(Protocol):
         request: SourceRequest,
     ) -> RawIngestionEnvelope: ...
 
+class NormalizedRecordEnvelope(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    record_id: str
+    semantic_type: SemanticTypeRef
+    canonical_record_json: bytes
+    content_sha256: str
+
+    def validate_decoded(
+        self, record: "NormalizedRecordBase", registration: SemanticTypeRegistration
+    ) -> None: ...
+
 class NormalizedBatch(BaseModel):
     batch_id: str
-    source: DataSource
+    source: SourceId
     raw_ref: str
-    records: tuple[NormalizedRecord, ...]
+    records: tuple[NormalizedRecordEnvelope, ...]
 
 class NormalizedRecordBase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
     record_id: str
-    record_type: str
-    source: DataSource
+    record_type: SemanticTypeId
+    schema_version: str
+    source: SourceId
     raw_ref: str
     mapping_version: str
     knowable_at: datetime
@@ -1530,7 +1886,7 @@ class ExtractionRecord(NormalizedRecordBase):
     evidence_spans: tuple[EvidenceSpan, ...]
     result_sha256: str
 
-NormalizedRecord = Annotated[
+BuiltInNormalizedRecord = Annotated[
     FinancialFact | GraphEdgeRecord | AnalystRatingRecord | ForecastRecord | GuidanceRecord
     | FundHoldingRecord
     | SegmentRevenueRecord
@@ -1539,6 +1895,9 @@ NormalizedRecord = Annotated[
     | ExtractionRecord,
     Field(discriminator="record_type"),
 ]
+
+# BuiltInNormalizedRecord is the generated v1 schema bundle. Runtime dispatch accepts
+# only envelopes decoded by the exact registered model/schema TypeAdapter.
 
 Forecast and guidance validators require exactly one target-period or explicit horizon,
 and exactly one point value or complete lower/upper range. Every correction uses a new
@@ -1551,7 +1910,7 @@ class MetricSpec(BaseModel):
     subject_kind: Literal[SubjectKind.ISSUER, SubjectKind.SECURITY]
     unit_family: Literal["currency", "count", "ratio", "per_share"]
     currency_required: bool
-    source_priority: tuple[DataSource, ...]
+    source_priority: tuple[SourceId, ...]
     financial_issuer_split: bool = False
 
 class MetricRegistry(Protocol):
@@ -1563,15 +1922,20 @@ class CanonicalFinancialFact(BaseModel):
     fusion_ruleset_version: int
     fact: FinancialFact
 
+class CanonicalSelectionResult(BaseModel):
+    facts: tuple[CanonicalFinancialFact, ...]
+    traces: tuple["SourceSelectionTrace", ...]
+    content_sha256: str
+
 def select_canonical_facts(
     records: Sequence[FinancialFact],
     *,
     request: SnapshotRequest,
     registry: MetricRegistry,
-) -> tuple[CanonicalFinancialFact, ...]: ...
+) -> CanonicalSelectionResult: ...
 
 class Normalizer(Protocol):
-    source: DataSource
+    source: SourceId
     def normalize(
         self,
         envelope: RawIngestionEnvelope,
@@ -1582,12 +1946,12 @@ def project_extraction_document(
     record: SourceDocumentRecord,
     *,
     as_of: datetime,
-) -> FactorDocumentInput: ...
+) -> ExtractionDocumentInput: ...
 
 class StructuredExtractionModel(Protocol):
     revision: ModelRevisionRef
     def complete(
-        self, document: FactorDocumentInput, schema: type[BaseModel], *, instructions: str
+        self, document: ExtractionDocumentInput, schema: type[BaseModel], *, instructions: str
     ) -> BaseModel: ...
 
 class EvidenceSpan(BaseModel):
@@ -1648,7 +2012,7 @@ class ExtractionResult(BaseModel):
     result_sha256: str
 
 class ExtractionMaterializationContext(BaseModel):
-    source: DataSource
+    source: SourceId
     raw_ref: str
     raw_sha256: str
     mapping_version: str
@@ -1673,6 +2037,7 @@ def materialize_normalized_batch(
     batch: NormalizedBatch,
     *,
     repository: NormalizedRecordRepository,
+    semantic_types: SemanticTypeRegistry,
 ) -> MaterializationResult: ...
 
 def materialize_extraction_result(
@@ -1686,7 +2051,7 @@ def materialize_extraction_result(
 The call gateway enforces source budgets and immutable raw capture. Normalizers may use
 source metadata. Data-engine selects a stored `SourceDocumentRecord` and
 `project_extraction_document` strips its provenance before calling extraction logic;
-documents never enter `FactorInputBundle`. Extraction logic lives in
+documents never enter `TrackedFactorInputView`. Extraction logic lives in
 `libs/factors/shared`, returns semantic drafts, and is invoked by data-engine. Data-engine
 alone attaches the materialization context. `ExtractionRepository.materialize` atomically
 stores one immutable `ExtractionRecord` and every produced normalized row, stamping each
@@ -1707,6 +2072,27 @@ eligible vintage within that source second. Confidence rides with the selected f
 never arbitrates between sources. Unregistered source/metric pairs remain staging
 evidence and cannot silently reach factors or mart. Canonical lineage records both the
 selected staging row and fusion-ruleset version in the durable snapshot manifest.
+
+At process start, checked-in constructors are matched to the exact content-hashed registry
+snapshots authenticated by the signed release manifest. Unknown IDs, duplicate IDs,
+schema-fingerprint drift, incompatible versions,
+missing rights, a factor-input model outside the sealed `FactorInputBase` family, or any
+recursively forbidden provenance field fails before capture or snapshot construction. A new source for an
+existing semantic type contributes a source-owned adapter, normalizer, registrations,
+policy, and conformance tests only. A new type inside an existing domain contributes its
+typed normalized/input models, repository or migration, projector, registration, and
+tests only. The common gateway, manifest evaluator, snapshot builder, Dagster factories,
+runner, lineage/usage projections, and consumers remain unchanged. This is static
+dependency injection, not runtime plugin installation.
+
+`canonical_record_json` is not an arbitrary-fact escape hatch. The registered
+`SemanticTypeDefinition.encode` first validates the exact frozen model with
+`extra="forbid"`, emits canonical bytes, and hashes them; `decode` verifies the type ref,
+schema hash, bytes, and concrete model before projection. Repositories and snapshots
+round-trip the envelope losslessly and never deserialize extension data as the base DTO.
+The common `NormalizedRecordRepository` is only a registry-driven facade: it groups
+envelopes by `SemanticTypeRef`, decodes them, and delegates to the registered typed
+repository. Adding a type adds that repository implementation, not a central switch.
 
 ### 14.3 Module 1: PEG
 
@@ -1761,7 +2147,7 @@ class GrossProfitPerEmployeeParameters(FactorParameters):
     max_period_gap: timedelta
 
 def extract_headcount(
-    document: FactorDocumentInput,
+    document: ExtractionDocumentInput,
     *,
     invocation: ExtractionInvocation,
     parameters: HeadcountExtractionParameters,
@@ -1817,7 +2203,7 @@ class SupplyChainReasoningParameters(FactorParameters):
     propagation_policy_version: str
 
 def extract_supply_chain_relationships(
-    document: FactorDocumentInput,
+    document: ExtractionDocumentInput,
     *,
     invocation: ExtractionInvocation,
     parameters: SupplyChainExtractionParameters,
@@ -1924,7 +2310,7 @@ def compute_theme_revenue_share(
 ) -> None: ...
 
 def extract_theme_segments(
-    document: FactorDocumentInput,
+    document: ExtractionDocumentInput,
     *,
     invocation: ExtractionInvocation,
     parameters: PureBloodParameters,
@@ -2051,6 +2437,7 @@ class BacktestDefinition(BaseModel):
     strategy: StrategyDefinition
     start: date
     end: date
+    schedule_timezone: str
     initial_cash: MoneyValue
     execution_rule: RuleInvocation
     transaction_cost_rule: RuleInvocation
@@ -2082,6 +2469,7 @@ class ScreenResult(BaseModel):
     snapshot_id: str
     as_of: datetime
     candidates: tuple[ScreenCandidate, ...]
+    content_sha256: str
 
 class ScreenDefinition(Protocol):
     screen_id: str
@@ -2155,18 +2543,24 @@ class SimulatedTrade(BaseModel):
     price: MoneyValue
     cost: MoneyValue
     price_record_id: str
+    consumed_market_event_ids: tuple[str, ...]
 
 class PortfolioValuation(BaseModel):
+    valuation_id: str
     at: datetime
     value: MoneyValue
     confidence: Decimal
     consumed_market_event_ids: tuple[str, ...]
 
 class BacktestMetric(BaseModel):
+    metric_id: str
     metric: str
     value: Decimal | None
     unit: str
     confidence: Decimal
+    consumed_valuation_ids: tuple[str, ...]
+    consumed_trade_ids: tuple[str, ...]
+    consumed_output_ids: tuple[OutputId, ...]
 
 class AppliedMarketEvent(BaseModel):
     event_id: str
@@ -2177,21 +2571,30 @@ class BacktestRunResult(BaseModel):
     run_id: str
     definition_sha256: str
     definition: BacktestDefinition
+    planned_demand_id: str
+    planned_demand_sha256: str
     contract_version: str
-    snapshot_ids: tuple[str, ...]
+    snapshots: tuple[ContentAddressedRef, ...]
+    factor_batches: tuple[ContentAddressedRef, ...]
+    screen_results: tuple[ContentAddressedRef, ...]
     decisions: tuple[PortfolioDecision, ...]
     trades: tuple[SimulatedTrade, ...]
     valuations: tuple[PortfolioValuation, ...]
     applied_market_events: tuple[AppliedMarketEvent, ...]
+    consumed_market_events: tuple["MarketEvent", ...]
     metrics: tuple[BacktestMetric, ...]
     release_manifest_id: str
     execution_artifact_digest: str
     flags: tuple[str, ...] = ()
+    content_sha256: str
 
 class VersionedRule(Protocol):
     rule_id: str
     rule_version: str
     parameters_model: type[BaseModel]
+    def data_requirements(
+        self, parameters: BaseModel
+    ) -> tuple[DataRequirement, ...]: ...
 
 @runtime_checkable
 class RebalanceScheduleRule(VersionedRule, Protocol):
@@ -2280,10 +2683,15 @@ class TransactionCostRule(VersionedRule, Protocol):
 class MarketEventBase(BaseModel):
     event_id: str
     event_type: str
+    semantic_type: SemanticTypeRef
+    domain: DataDomain
+    subject: SubjectRef
     available_at: datetime
     effective_at: datetime
     record_id: str
+    lineage_ref: str
     confidence: Decimal
+    content_sha256: str
 
 class PriceBarEvent(MarketEventBase):
     event_type: Literal["price_bar"] = "price_bar"
@@ -2319,6 +2727,7 @@ class FactorBatchProvider(Protocol):
         self,
         *,
         snapshot: ResearchSnapshot,
+        demand: "PlannedDataDemand",
         templates: Sequence[FactorInvocationTemplate],
         subjects: Sequence[SubjectRef],
     ) -> Mapping[str, FactorOutputBatch]: ...
@@ -2369,10 +2778,12 @@ def value_portfolio(
 def run_backtest(
     definition: BacktestDefinition,
     *,
+    demand: "PlannedDataDemand",
     snapshots: ResearchSnapshotRepository,
     snapshot_store: SnapshotStore,
     factor_batches: FactorBatchProvider,
     screens: ScreenRegistry,
+    screen_result_repository: "ScreenResultRepository",
     rules: StrategyRuleRegistry,
     market_events: MarketEventRepository,
     release: ReleaseManifest,
@@ -2401,6 +2812,7 @@ class FactorOutputRepository(Protocol):
         *,
         execution_id: str,
     ) -> FactorOutputBatch | None: ...
+    def get_by_batch_id(self, batch_id: str) -> FactorOutputBatch | None: ...
 
 class MaterializedFactorOutputRepository(Protocol):
     def get_batch(
@@ -2411,6 +2823,10 @@ class StrategyRunRepository(Protocol):
     def put(self, result: BacktestRunResult) -> PutResult: ...
     def get(self, run_id: str) -> BacktestRunResult | None: ...
 
+class ScreenResultRepository(Protocol):
+    def put(self, result: ScreenResult) -> PutResult: ...
+    def get(self, screen_result_id: str) -> ScreenResult | None: ...
+
 class MartMaterializer(Protocol):
     def project_factor_batch(
         self, batch: FactorOutputBatch, *, snapshot: ResearchSnapshot
@@ -2420,6 +2836,12 @@ class MartMaterializer(Protocol):
         result: BacktestRunResult,
         *,
         snapshots: Sequence[ResearchSnapshot],
+    ) -> MaterializationResult: ...
+    def project_data_usage(
+        self, events: Sequence["DataUsageEvent"]
+    ) -> MaterializationResult: ...
+    def project_strategy_data_quality(
+        self, review: "StrategyDataQualityReview"
     ) -> MaterializationResult: ...
 
 class PageRequest(BaseModel):
@@ -2586,7 +3008,7 @@ class CanonicalQuestionRequest(BaseModel):
 
 class RawTraceRef(BaseModel):
     record_id: str
-    source: DataSource
+    source: SourceId
     raw_ref: str
     raw_sha256: str
     mapping_version: str | None
@@ -2607,7 +3029,7 @@ class TraceabilityView(BaseModel):
     execution_id: str
     snapshot_id: str
     policy_versions: SelectionPolicyVersions
-    consumed_input_ids: tuple[InputId, ...]
+    consumed_inputs: tuple[ConsumedRequirementInputRef, ...]
     consumed_upstream_output_ids: tuple[OutputId, ...]
     raw_records: tuple[RawTraceRef, ...]
     extractions: tuple[ExtractionTraceRef, ...]
@@ -2615,6 +3037,7 @@ class TraceabilityView(BaseModel):
 class StrategyRunView(BaseModel):
     run_id: str
     definition: BacktestDefinition
+    screen_results: tuple[ScreenResult, ...]
     decisions: tuple[PortfolioDecision, ...]
     trades: tuple[SimulatedTrade, ...]
     valuations: tuple[PortfolioValuation, ...]
@@ -2629,6 +3052,240 @@ class StrategyRunQueryResult(BaseModel):
 class TraceOutputQueryResult(BaseModel):
     result_kind: Literal["trace"] = "trace"
     trace: TraceabilityView
+
+class DataUseStage(StrEnum):
+    SNAPSHOT_SELECTED = "snapshot_selected"
+    FACTOR_CONSUMED = "factor_consumed"
+    STRATEGY_CONSUMED = "strategy_consumed"
+    STATE_TRANSITION_CONSUMED = "state_transition_consumed"
+    EXECUTION_CONSUMED = "execution_consumed"
+    VALUATION_CONSUMED = "valuation_consumed"
+    METRIC_CONSUMED = "metric_consumed"
+
+class DataUsageScope(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    environment: Literal["local", "github_ci", "staging", "production"]
+    release_manifest_id: str
+    release_manifest_sha256: str
+    catalog_id: str
+    catalog_sha256: str
+    universe: UniverseRef
+    source_registry_snapshot_id: RegistrySnapshotId
+    source_registry_sha256: str
+    semantic_type_registry_snapshot_id: RegistrySnapshotId
+    semantic_type_registry_sha256: str
+
+class DataUsageEventBase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    event_id: str
+    event_type: str
+    scope: DataUsageScope
+    occurred_at: datetime
+    workload_id: str
+    planned_cell_id: str
+    requirement_id: str
+    semantic_type: SemanticTypeRef
+    domain: DataDomain
+    subject: SubjectRef
+    lineage_ref: str
+
+    def validate_semantic_type(self, registry: SemanticTypeRegistry) -> None: ...
+
+class SnapshotSelectionUsageEvent(DataUsageEventBase):
+    event_type: Literal["snapshot_selected"] = "snapshot_selected"
+    record_id: str
+    input_id: InputId
+
+class FactorConsumptionUsageEvent(DataUsageEventBase):
+    event_type: Literal["factor_consumed"] = "factor_consumed"
+    input_id: InputId
+    output_id: OutputId
+
+class StrategyConsumptionUsageEvent(DataUsageEventBase):
+    event_type: Literal["strategy_consumed"] = "strategy_consumed"
+    output_id: OutputId
+    decision_id: str
+
+class StateTransitionConsumptionUsageEvent(DataUsageEventBase):
+    event_type: Literal["state_transition_consumed"] = "state_transition_consumed"
+    record_id: str
+    market_event_id: str
+    resulting_state_sha256: str
+
+class ExecutionConsumptionUsageEvent(DataUsageEventBase):
+    event_type: Literal["execution_consumed"] = "execution_consumed"
+    record_id: str
+    market_event_id: str
+    trade_id: str
+
+class ValuationConsumptionUsageEvent(DataUsageEventBase):
+    event_type: Literal["valuation_consumed"] = "valuation_consumed"
+    record_id: str
+    market_event_id: str
+    valuation_id: str
+
+class MetricConsumptionUsageEvent(DataUsageEventBase):
+    event_type: Literal["metric_consumed"] = "metric_consumed"
+    upstream_kind: Literal["output", "trade", "valuation"]
+    upstream_id: str
+    metric_id: str
+
+DataUsageEvent = Annotated[
+    SnapshotSelectionUsageEvent | FactorConsumptionUsageEvent
+    | StrategyConsumptionUsageEvent | StateTransitionConsumptionUsageEvent
+    | ExecutionConsumptionUsageEvent
+    | ValuationConsumptionUsageEvent | MetricConsumptionUsageEvent,
+    Field(discriminator="event_type"),
+]
+
+class PlannedDataDemandCell(BaseModel):
+    planned_cell_id: str
+    consumer: RequirementConsumerRef
+    requirement: DataRequirement
+    subject: SubjectRef
+    cutoff: datetime
+    partition_keys: tuple[str, ...]
+    approved_source_paths: tuple[SourceRuntimeRef, ...]
+
+class PlannedDataDemand(BaseModel):
+    demand_id: str
+    scope: DataUsageScope
+    strategy_id: str
+    strategy_version: str
+    strategy_definition_sha256: str
+    capture_scope_id: str
+    capture_scope_sha256: str
+    cells: tuple[PlannedDataDemandCell, ...]
+    created_at: datetime
+    content_sha256: str
+
+class UsageGroupBy(StrEnum):
+    REQUIREMENT = "requirement"
+    SOURCE = "source"
+    SEMANTIC_TYPE = "semantic_type"
+    DOMAIN = "domain"
+    SUBJECT = "subject"
+    FACTOR = "factor"
+    STRATEGY = "strategy"
+
+class DataUsageQuery(BaseModel):
+    scope: DataUsageScope
+    strategy_id: str | None = None
+    strategy_run_id: str | None = None
+    consumer_ids: tuple[str, ...] = ()
+    requirement_ids: tuple[str, ...] = ()
+    subjects: tuple[SubjectRef, ...] = ()
+    domains: frozenset[DataDomain] = frozenset()
+    semantic_types: frozenset[SemanticTypeRef] = frozenset()
+    source_ids: frozenset[SourceId] = frozenset()
+    stages: frozenset[DataUseStage] = frozenset()
+    used_range: DateRange
+    group_by: UsageGroupBy
+    page: PageRequest = Field(default_factory=PageRequest)
+
+class UsageFrequencyCell(BaseModel):
+    group_key: str
+    planned_count: int = Field(ge=0)
+    captured_count: int = Field(ge=0)
+    snapshot_selected_count: int = Field(ge=0)
+    factor_consumed_count: int = Field(ge=0)
+    strategy_consumed_count: int = Field(ge=0)
+    state_transition_consumed_count: int = Field(ge=0)
+    execution_consumed_count: int = Field(ge=0)
+    valuation_consumed_count: int = Field(ge=0)
+    metric_consumed_count: int = Field(ge=0)
+    missing_required_count: int = Field(ge=0)
+    distinct_run_count: int = Field(ge=0)
+    first_used_at: datetime | None
+    last_used_at: datetime | None
+    telemetry_status: Literal["complete", "late", "missing"]
+    trace_ids: tuple[str, ...]
+
+class UsageFrequencySlice(BaseModel):
+    slice_id: str
+    query: DataUsageQuery
+    usage_audits: tuple[ContentAddressedRef, ...]
+    planned_demands: tuple[ContentAddressedRef, ...]
+    cells: tuple[UsageFrequencyCell, ...]
+    telemetry_readiness: ReadinessReport
+    content_sha256: str
+    next_cursor: str | None
+
+class StrategyUsageAudit(BaseModel):
+    audit_id: str
+    scope: DataUsageScope
+    strategy_id: str
+    strategy_version: str
+    strategy_run_id: str
+    strategy_run_sha256: str
+    planned_demand_id: str
+    planned_demand_sha256: str
+    capture_manifests: tuple[ContentAddressedRef, ...]
+    derivation_inputs: tuple[ContentAddressedRef, ...]
+    events: tuple[DataUsageEvent, ...]
+    telemetry_readiness: ReadinessReport
+    content_sha256: str
+
+class StrategyDataQualityReviewRequest(BaseModel):
+    strategy_run_id: str
+    scope: DataUsageScope
+    evaluation_window: DateRange
+
+class StrategyDataQualityFinding(BaseModel):
+    severity: Literal["error", "warning", "info"]
+    code: str
+    expected_cell_id: str | None
+    subject: SubjectRef | None
+    domain: DataDomain | None
+    semantic_type: SemanticTypeRef | None
+    source_id: SourceId | None
+    capture_manifest_id: str | None
+    input_ids: tuple[InputId, ...]
+    output_ids: tuple[OutputId, ...]
+    affected_decision_ids: tuple[str, ...]
+    affected_state_hashes: tuple[str, ...]
+    affected_trade_ids: tuple[str, ...]
+    affected_valuation_ids: tuple[str, ...]
+    affected_metric_ids: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
+
+class StrategyDataQualityReview(BaseModel):
+    review_id: str
+    request: StrategyDataQualityReviewRequest
+    planned_demand_id: str
+    planned_demand_sha256: str
+    usage_audit_id: str
+    usage_audit_sha256: str
+    expected_cell_count: int = Field(ge=0)
+    complete_capture_cell_count: int = Field(ge=0)
+    consumed_input_count: int = Field(ge=0)
+    traced_input_count: int = Field(ge=0)
+    findings: tuple[StrategyDataQualityFinding, ...]
+    readiness: ReadinessReport
+    content_sha256: str
+
+class StrategyDataQualityQuery(BaseModel):
+    review_id: str | None = None
+    strategy_run_id: str | None = None
+    page: PageRequest = Field(default_factory=PageRequest)
+
+    @model_validator(mode="after")
+    def require_one_identity(self) -> Self: ...
+
+class StrategyDataQualityResult(BaseModel):
+    reviews: tuple[StrategyDataQualityReview, ...]
+    next_cursor: str | None
+
+class SourceSelectionTrace(BaseModel):
+    snapshot_id: str
+    subject: SubjectRef
+    semantic_type: SemanticTypeRef
+    selection_key: str
+    selected_record_id: str | None
+    candidate_records: tuple[SnapshotRecordRef, ...]
+    selection_policy_version: str
+    disagreement_results: tuple["SignedQualityResult", ...]
+    content_sha256: str
 
 CanonicalQuestionPayload = Annotated[
     HistoryResult | EntityComparison | RankingResult
@@ -2651,6 +3308,82 @@ class ResearchReadRepository(Protocol):
     def ranking(self, query: RankingQuery) -> RankingResult: ...
     def strategy_run(self, run_id: str) -> StrategyRunView | None: ...
     def trace_output(self, output_id: OutputId) -> TraceabilityView: ...
+    def data_usage(self, query: DataUsageQuery) -> UsageFrequencySlice: ...
+    def strategy_data_quality(
+        self, query: StrategyDataQualityQuery
+    ) -> StrategyDataQualityResult: ...
+
+class PlannedDataDemandRepository(Protocol):
+    def put(self, demand: PlannedDataDemand) -> PutResult: ...
+    def get(self, demand_id: str) -> PlannedDataDemand | None: ...
+
+class DataUsageRepository(Protocol):
+    def put(self, event: DataUsageEvent) -> PutResult: ...
+    def put_audit(self, audit: StrategyUsageAudit) -> PutResult: ...
+    def get_audit(self, audit_id: str) -> StrategyUsageAudit | None: ...
+    def slice(
+        self,
+        query: DataUsageQuery,
+        *,
+        demands: Sequence[PlannedDataDemand],
+        audits: Sequence[StrategyUsageAudit],
+        capture_manifests: Sequence[CaptureManifest],
+    ) -> UsageFrequencySlice: ...
+
+class StrategyDataQualityReviewRepository(Protocol):
+    def put(self, review: StrategyDataQualityReview) -> PutResult: ...
+    def get(self, review_id: str) -> StrategyDataQualityReview | None: ...
+    def list_for_run(
+        self, strategy_run_id: str, *, page: PageRequest
+    ) -> StrategyDataQualityResult: ...
+
+def compile_strategy_data_requirements(
+    definition: BacktestDefinition,
+    *,
+    scope: DataUsageScope,
+    applicability: ApplicabilityCatalog,
+    capture_scope: CaptureScope,
+    source_coverage: SourceCoverageCatalog,
+    factor_registry: FactorRegistry,
+    semantic_types: SemanticTypeRegistry,
+    rule_registry: StrategyRuleRegistry,
+) -> PlannedDataDemand: ...
+
+def derive_usage_events(
+    *,
+    scope: DataUsageScope,
+    demand: PlannedDataDemand,
+    run: BacktestRunResult,
+    snapshot_store: SnapshotStore,
+    factor_outputs: FactorOutputRepository,
+    screen_results: ScreenResultRepository,
+) -> tuple[DataUsageEvent, ...]: ...
+
+def build_strategy_usage_audit(
+    *,
+    run: BacktestRunResult,
+    demand: PlannedDataDemand,
+    capture_manifests: Sequence[CaptureManifest],
+    events: Sequence[DataUsageEvent],
+    telemetry_readiness: ReadinessReport,
+) -> StrategyUsageAudit: ...
+
+def review_strategy_data_quality(
+    request: StrategyDataQualityReviewRequest,
+    *,
+    run: BacktestRunResult,
+    release: ReleaseManifest,
+    demand: PlannedDataDemand,
+    capture_manifests: Sequence[CaptureManifest],
+    usage: StrategyUsageAudit,
+    screen_results: Sequence[ScreenResult],
+    output_traces: Sequence[TraceabilityView],
+    source_selection_traces: Sequence[SourceSelectionTrace],
+    evidence: CaptureEvidenceResolver,
+    source_readiness: ReadinessReport,
+    slo: SloCatalog,
+    slo_readiness: ReadinessReport,
+) -> StrategyDataQualityReview: ...
 ```
 
 Writes are idempotent by semantic ID and append-only by version. A `FactorBatchProvider`
@@ -2661,14 +3394,56 @@ projections and immutable trace links; they perform no new factor computation. M
 tables receive exact selected-record, extraction, and consumption lineage from the
 snapshot and batch,
 so the mart-only roles can expose raw checksums without permission on raw or staging.
+Usage events are exploded leaf-level infrastructure audit records, not an event-bus API.
+The discriminated variants require record/input identity for snapshot selection,
+input/output identity for factor consumption, output/decision identity for strategy
+consumption, record/market-event plus resulting-state identity for lifecycle actions,
+and record/market-event plus trade, valuation, or metric identity for execution and
+return-rule consumption. `BacktestRunResult` persists the exact consumed `MarketEvent`
+DTOs, so derivation never joins against a mutable repository or guesses semantic type,
+subject, domain, or lineage from an ID.
+Their IDs hash semantic workload/stage/object identity, so a retry is an idempotent `put`.
+Factor code cannot create events or see source identity; source is recovered through
+snapshot lineage. Capture/normalization frequency comes from immutable manifests rather
+than duplicate events. V1 deliberately excludes page-view/query analytics, preserving the
+App's mart-readonly boundary.
+
+`compile_strategy_data_requirements` resolves the immutable factor graph plus execution,
+calendar, FX, action, cost, and return-rule requirements, applicability, subjects,
+scheduled cutoffs, exact CaptureScope requirements/partitions, and approved source paths,
+then persists `PlannedDataDemand` before the first strategy decision. Every
+`DataRequirement.capture_requirement_id` must resolve in the exact `CaptureScope`; the
+compiler rejects any semantic-type, domain, subject-kind, cadence/freshness, or partition
+incompatibility and never infers a capture requirement by metric or domain. The
+unpaginated `StrategyUsageAudit` retains every planned cell and leaf event for review;
+it binds one exact strategy run plus content-addressed snapshots, batches, screens,
+capture manifests, and run result. Reverse review rejects an audit whose scope, strategy,
+run ID/hash, demand, or derivation inputs do not match its request. Bounded
+`UsageFrequencySlice` pages are derived only for reads and may combine all matching
+immutable audits/demands in a strategy-wide or cross-run query. Counts deduplicate by
+planned cell plus semantic workload identity, so retries never inflate use. The public
+slice therefore retains required cells with zero consumption. Source grouping uses
+the demand's approved paths plus actual manifest/lineage evidence; it never guesses a
+vendor from a source-neutral factor requirement. The strategy review can fail missing
+data that caused an exclusion, all-cash decision, or no trade, and `SourceSelectionTrace`
+exposes competing assertions and signed fusion/disagreement outcomes. Reverse review
+re-verifies those outcomes through `CaptureEvidenceResolver`; a check ID without a
+resolvable signed result is failed evidence. Telemetry gaps fail
+readiness instead of appearing as zero usage. Observed frequency is diagnostic and cannot
+mutate historical policy or SLOs.
+
+`run_backtest` persists each snapshot, factor batch, and screen result before returning
+their content-addressed refs in `BacktestRunResult`. `derive_usage_events` reloads those
+exact refs through the repositories and rejects a missing artifact, hash mismatch,
+surplus in-memory artifact, or run/demand mismatch. `build_strategy_usage_audit` receives
+that run explicitly and derives its required strategy/run identities from it.
 
 ### 14.12 Dagster Composition
 
 ```python
 class CaptureAssetSpec(BaseModel):
     asset_key: str
-    adapter_id: str
-    source: DataSource
+    source_runtime: SourceRuntimeRef
     capture_scope_id: str
     capture_scope_sha256: str
     requirement_ids: tuple[str, ...]
@@ -2678,7 +3453,8 @@ class CaptureAssetSpec(BaseModel):
 class NormalizationAssetSpec(BaseModel):
     asset_key: str
     capture_asset_key: str
-    normalizer_id: str
+    normalizer_registration_id: str
+    semantic_types: frozenset[SemanticTypeRef]
 
 class ExtractionAssetSpec(BaseModel):
     asset_key: str
@@ -2700,17 +3476,50 @@ class SnapshotAssetSpec(BaseModel):
     normalized_asset_keys: tuple[str, ...]
     universe: UniverseRef
     domains: frozenset[DataDomain]
+    semantic_types: frozenset[SemanticTypeRef]
 
 class FactorAssetSpec(BaseModel):
     asset_key: str
     snapshot_asset_key: str
+    planned_demand_asset_key: str
     template: FactorInvocationTemplate
     materialized_upstream_asset_keys: dict[str, str] = Field(default_factory=dict)
 
 class StrategyAssetSpec(BaseModel):
     asset_key: str
-    definition: StrategyDefinition
+    definition: BacktestDefinition
     factor_asset_keys: tuple[str, ...]
+    planned_demand_asset_key: str
+
+class PlannedDataDemandAssetSpec(BaseModel):
+    asset_key: str
+    definition: BacktestDefinition
+    capture_scope_id: str
+    capture_scope_sha256: str
+
+class StrategyUsageAuditAssetSpec(BaseModel):
+    asset_key: str
+    planned_demand_asset_key: str
+    capture_manifest_asset_keys: tuple[str, ...]
+    snapshot_asset_keys: tuple[str, ...]
+    factor_asset_keys: tuple[str, ...]
+    strategy_asset_key: str
+
+class UsageFrequencyAssetSpec(BaseModel):
+    asset_key: str
+    strategy_usage_audit_asset_keys: tuple[str, ...]
+    query: DataUsageQuery
+
+class StrategyDataQualityAssetSpec(BaseModel):
+    asset_key: str
+    strategy_asset_key: str
+    planned_demand_asset_key: str
+    capture_manifest_asset_keys: tuple[str, ...]
+    strategy_usage_audit_asset_key: str
+    source_readiness_asset_key: str
+    slo_readiness_asset_key: str
+    snapshot_asset_keys: tuple[str, ...]
+    output_trace_asset_keys: tuple[str, ...]
 
 @dataclass(frozen=True)
 class DagsterAssetCatalog:
@@ -2719,6 +3528,8 @@ class DagsterAssetCatalog:
     capture_scope: CaptureScope
     applicability: ApplicabilityCatalog
     source_coverage: SourceCoverageCatalog
+    source_registry: SourceRegistrySnapshot
+    semantic_type_registry: SemanticTypeRegistrySnapshot
     slo: SloCatalog
     capture: tuple[CaptureAssetSpec, ...]
     normalization: tuple[NormalizationAssetSpec, ...]
@@ -2726,8 +3537,20 @@ class DagsterAssetCatalog:
     capture_manifest: CaptureManifestAssetSpec
     snapshots: tuple[SnapshotAssetSpec, ...]
     factors: tuple[FactorAssetSpec, ...]
+    planned_data_demand: tuple[PlannedDataDemandAssetSpec, ...]
     strategies: tuple[StrategyAssetSpec, ...]
+    strategy_usage_audit: tuple[StrategyUsageAuditAssetSpec, ...]
+    usage_frequency: tuple[UsageFrequencyAssetSpec, ...]
+    strategy_data_quality: tuple[StrategyDataQualityAssetSpec, ...]
     partitions_def: PartitionsDefinition
+
+def compile_ingestion_specs(
+    *,
+    scope: CaptureScope,
+    coverage: SourceCoverageCatalog,
+    sources: SourceRuntimeRegistry,
+    semantic_types: SemanticTypeRegistry,
+) -> tuple[tuple[CaptureAssetSpec, ...], tuple[NormalizationAssetSpec, ...]]: ...
 
 def build_capture_asset(spec: CaptureAssetSpec) -> AssetsDefinition: ...
 def build_normalization_asset(spec: NormalizationAssetSpec) -> AssetsDefinition: ...
@@ -2742,13 +3565,27 @@ def build_snapshot_asset(spec: SnapshotAssetSpec) -> AssetsDefinition: ...
 def build_factor_asset(
     spec: FactorAssetSpec, definition: FactorDefinition[Any]
 ) -> AssetsDefinition: ...
+def build_planned_data_demand_asset(
+    spec: PlannedDataDemandAssetSpec,
+) -> AssetsDefinition: ...
 def build_strategy_assets(spec: StrategyAssetSpec) -> Sequence[AssetsDefinition]: ...
+def build_strategy_usage_audit_asset(
+    spec: StrategyUsageAuditAssetSpec,
+) -> AssetsDefinition: ...
+def build_usage_frequency_asset(
+    spec: UsageFrequencyAssetSpec,
+) -> AssetsDefinition: ...
+def build_strategy_data_quality_asset(
+    spec: StrategyDataQualityAssetSpec,
+) -> AssetsDefinition: ...
 
 def build_definitions(
     *,
     catalog: DagsterAssetCatalog,
     release: ReleaseManifest,
     resources: Mapping[str, ResourceDefinition],
+    source_registry: SourceRuntimeRegistry,
+    semantic_type_registry: SemanticTypeRegistry,
     factor_registry: FactorRegistry,
     screen_registry: ScreenRegistry,
     rule_registry: StrategyRuleRegistry,
@@ -2759,6 +3596,7 @@ class StrategyScheduleSpec(BaseModel):
     schedule_id: str
     strategy_id: str
     strategy_version: str
+    backtest_definition_sha256: str
     cron_schedule: str
     environment: Literal["staging", "production"]
     job_name: str
@@ -2775,17 +3613,27 @@ def build_release_preflight_sensor(
 
 Dagster is introduced with the first executable snapshot/factor slice. Local and CI use
 in-process jobs and fixture resources; Staging and Production add schedules and persistent
-metadata. `adapter_id` and `normalizer_id` resolve from Dagster resources at execution;
-service instances are never captured inside asset definitions. The shared partition is an
+metadata. Adapter and normalizer registration IDs resolve from the exact static runtime
+registries at execution; service instances are never captured inside asset definitions.
+The shared partition is an
 aware `as_of` cutoff; capture scope, universe, and invocation are explicit asset-spec
-dimensions. Capture and normalization assets may persist failure evidence, but no snapshot,
+dimensions. `BacktestDefinition.schedule_timezone` is the sole timezone used by the
+cutoff builder, planned-demand compiler, asset partition, and schedule; every duplicated
+schedule field is validated equal before definitions build. Capture and normalization
+assets may persist failure evidence, but no snapshot,
 factor, or strategy partition may materialize until the row-complete capture-manifest
 check passes for that exact scope and partition. A
 composite `FactorAssetSpec` must depend on materialized upstream asset keys and reload
-those batches from mart. Factor `data_version` is the hash of snapshot ID, `execution_id`,
-and upstream batch IDs. The release preflight sensor re-evaluates rights expiry, projected
+those batches from mart. Factor `data_version` is the hash of snapshot ID, registry
+snapshots, `execution_id`, and upstream batch IDs. `compile_ingestion_specs` and the asset
+factories contain no source-name or semantic-type switch. The release preflight sensor
+re-evaluates rights expiry, projected
 budget, source coverage, catalog hashes, artifact digests, and every extraction template's
 immutable model revision; failure blocks source execution and downstream publication.
+Every accepted strategy partition first materializes its complete immutable
+`StrategyUsageAudit`; the bounded usage slice and reverse `StrategyDataQualityReview`
+both depend on that audit. A green factor or strategy asset cannot suppress a failed
+required-data cell or broken lineage finding.
 No alternative scheduler may launch real source runs.
 The data-engine/Dagster code location is an immutable digest in the multi-artifact
 `ReleaseManifest`; definitions and schedules reject a digest mismatch or floating tag.
@@ -2884,6 +3732,7 @@ class ResearchQueryService:
         *,
         catalog: ResearchCatalogManifest,
         release_manifest_id: str,
+        usage_scope: DataUsageScope,
     ) -> None: ...
     def catalog(self, request: CatalogQuery) -> CatalogResult: ...
     def history(self, request: HistoryQuery) -> HistoryResult: ...
@@ -2891,6 +3740,10 @@ class ResearchQueryService:
     def rank_entities(self, request: RankingQuery) -> RankingResult: ...
     def explain_output(self, request: TraceOutputQuery) -> TraceOutputQueryResult: ...
     def strategy_run(self, request: StrategyRunQuery) -> StrategyRunQueryResult: ...
+    def data_usage(self, request: DataUsageQuery) -> UsageFrequencySlice: ...
+    def strategy_data_quality(
+        self, request: StrategyDataQualityQuery
+    ) -> StrategyDataQualityResult: ...
     def canonical_question(
         self, request: CanonicalQuestionRequest
     ) -> CanonicalQuestionResult: ...
@@ -2913,6 +3766,12 @@ async def mcp_explain_output(
 async def mcp_strategy_run(
     request: StrategyRunQuery, *, service: ResearchQueryService
 ) -> StrategyRunQueryResult: ...
+async def mcp_data_usage(
+    request: DataUsageQuery, *, service: ResearchQueryService
+) -> UsageFrequencySlice: ...
+async def mcp_strategy_data_quality(
+    request: StrategyDataQualityQuery, *, service: ResearchQueryService
+) -> StrategyDataQualityResult: ...
 async def mcp_canonical_question(
     request: CanonicalQuestionRequest, *, service: ResearchQueryService
 ) -> CanonicalQuestionResult: ...
@@ -2959,6 +3818,8 @@ export interface MartResearchRepository {
   ranking(query: RankingQuery): Promise<RankingResult>;
   strategyRun(query: StrategyRunQuery): Promise<StrategyRunQueryResult>;
   traceOutput(query: TraceOutputQuery): Promise<TraceOutputQueryResult>;
+  dataUsage(query: DataUsageQuery): Promise<UsageFrequencySlice>;
+  strategyDataQuality(query: StrategyDataQualityQuery): Promise<StrategyDataQualityResult>;
   canonicalQuestion(query: CanonicalQuestionRequest): Promise<CanonicalQuestionResult>;
 }
 
@@ -2970,6 +3831,7 @@ export function createMartResearchRepository(
     releaseManifestId: string;
     catalogId: string;
     catalogSha256: string;
+    dataUsageScope: DataUsageScope;
   },
 ): MartResearchRepository;
 ```
@@ -2981,6 +3843,7 @@ implements the same read contract directly against mart, with no FastAPI hop. Th
 may sort, filter, paginate, convert units, and render. Report-card and Xiaohongshu
 renderers consume `ResearchReport`; deck construction only selects/reorders report blocks
 and cannot join mart rows into new metrics.
+Page-view/query analytics are outside V1; both App and MCP reads remain strictly read-only.
 `/chat` generates prose by calling the same typed tools, never by querying raw/staging
 or inventing factor values.
 Public consumers use versioned `CatalogAliasRef` aliases such as a named PEG convention,
@@ -2988,7 +3851,9 @@ theme ranking, or supply scenario; they never construct parameter hashes or inte
 materialization keys. Every repository and service instance is bound at startup to the
 exact catalog ID/hash in its signed release manifest; an omitted `entry_version` resolves
 only inside that bound catalog, never through a global current pointer. A catalog or
-release mismatch fails startup. Catalog publication is append-only and fails when its
+release mismatch fails startup. Usage queries must match the service's complete
+`DataUsageScope`; a caller-supplied partial or mismatched scope fails before SQL. Catalog
+publication is append-only and fails when its
 entries/questions do not satisfy the product-owner-approved `ResearchScopeFloor`.
 Each canonical question binds concrete subjects or an immutable universe whenever
 subject-kind-only dispatch could permit a smaller scope. Each response returns the
@@ -3002,42 +3867,63 @@ aliases, subject kinds, and output schema satisfy the frozen question contract.
 ## 15. Complete Vision Call Graph
 
 ```text
-Dagster schedule / local in-process job
+Process startup / build_definitions
   -> resolve signed ReleaseManifest and immutable artifact digests
+  -> load exact checked-in SourceRegistry and SemanticTypeRegistry snapshots
   -> verify exact Research Catalog -> Applicability -> SLO dependency chain
-  -> verify UniverseRef, CaptureScope, SourceCoverageCatalog, extraction templates,
-     immutable model revisions, and runtime artifact digest against the release
+  -> verify UniverseRef, CaptureScope, SourceCoverageCatalog, both registries,
+     extraction templates, immutable model revisions, and runtime artifact digest
+     against the release
+  -> compile_ingestion_specs(registries, scope, coverage); no source/type switches
+  -> build and freeze Dagster definitions, asset dependencies, schedules, and sensors
+
+Dagster schedule / local in-process job executes those compiled definitions
   -> re-evaluate environment rights, projected budget, coverage, and expiry as of run time
+  -> compile_strategy_data_requirements(strategy, scope, applicability, source paths,
+     every subject and scheduled cutoff) -> persist PlannedDataDemand before decisions
   -> enumerate every required CaptureScope cell for the partition
   -> SourceCallGateway.execute(SourceAdapter.capture) -> immutable object + raw.fetches
   -> Normalizer.normalize -> append-only staging records
   -> optional versioned extraction invocation -> semantic drafts
      -> data-engine atomically attaches evidence lineage -> append-only staging records
   -> materialize CaptureManifest for every required/optional/not-applicable cell
-  -> CaptureEvaluator.evaluate -> signed readiness; fail before snapshot on any required gap
-  -> MetricRegistry + select_canonical_facts(source priority, mapping/fusion version)
-  -> ResearchSnapshotRepository.build_snapshot(one as_of, exact PIT UniverseRef and links)
-  -> SnapshotStore.put
-  -> project_factor_inputs(strips provenance)
-  -> run_factor(base templates 1-6 and supporting metrics) -> execution IDs + automatic lineage
-  -> FactorOutputRepository -> MartMaterializer
-  -> reload materialized upstream -> run_factor(composite template 7)
-  -> FactorOutputRepository -> MartMaterializer
-  -> ScreenDefinition.evaluate
-  -> evaluate_strategy_at
-  -> simulation clock consumes newly available market events -> run_backtest
+  -> CaptureEvaluator.evaluate(manifest + coverage + source readiness + evidence resolver)
+     -> signed readiness; fail before snapshot on any required gap or unapproved source path
+  -> run_backtest(same demand) owns the cutoff loop and, idempotently per cutoff:
+     -> MetricRegistry + select_canonical_facts(source priority, mapping/fusion version)
+        -> persist candidates, winner, policy, disagreement in SourceSelectionTrace
+     -> ResearchSnapshotRepository.build_snapshot(exact PIT UniverseRef and links)
+        -> SnapshotStore.put
+     -> FactorBatchProvider resolves demand-bound RequirementHandles and runs base factors,
+        stripping provenance -> FactorOutputRepository -> MartMaterializer
+     -> reload materialized upstream -> run_factor(composite template 7, same demand)
+        -> FactorOutputRepository -> MartMaterializer
+     -> ScreenDefinition.evaluate -> ScreenResultRepository.put -> evaluate_strategy_at
+     -> simulation clock consumes newly available market events
   -> StrategyRunRepository -> MartMaterializer
+  -> derive_usage_events(demand + run + exact snapshot/factor/screen repositories,
+     including the run's consumed market-event DTOs)
+     -> DataUsageRepository.put + MartMaterializer.project_data_usage
+  -> build_strategy_usage_audit(run + full unpaginated demand/manifests/events)
+     -> DataUsageRepository.put_audit
   -> SloEvaluator.evaluate(pre-approved applicability denominator, natural refreshes)
-  -> publish only when signed readiness and release hashes agree
+  -> review_strategy_data_quality(usage audit + capture + selection/lineage
+     + source/SLO readiness) -> StrategyDataQualityReviewRepository -> MartMaterializer
+  -> derive bounded DataUsageRepository.slice pages from the immutable usage audit
+  -> publish candidate outputs only when signed readiness and release hashes agree
+  -> at Gate 4 only, #54 signs GraduationAttestation over the unchanged release hash
+     and all accepted post-run evidence before outputs become authoritative
   -> release-bound ResearchQueryService / direct-mart repository
      -> ResearchReport -> report-card / Xiaohongshu renderers
      -> canonical typed MCP questions -> Claude/other MCP clients
+     -> data usage frequency and strategy data-quality review
      -> Next.js dashboard
      -> /chat tool orchestration
 ```
 
 The graph has one computation path. Scheduled, backtest, MCP, App, report, and chat
-results cannot disagree because all consume the same versioned factor outputs.
+results cannot disagree because all consume the same versioned factor outputs. Usage and
+quality review observe that path; they do not compute a second answer.
 
 ## 16. Vision Delivery Milestones
 
@@ -3048,9 +3934,10 @@ The GitHub source of truth is the [complete Vision epic](https://github.com/wang
 Before implementation interfaces are called frozen, close issuer/security/listing,
 currency/time/return, universe, snapshot, extraction, invocation, replay, and lineage
 semantics; freeze the Research Catalog, `CaptureScope`, row-complete manifest,
-applicability denominator, independent research oracles, immutable extraction revisions,
-longitudinal source coverage, expiring use rights/budgets, natural-refresh rules, and
-graduation SLOs. Tracked by
+source/type registry snapshots, source-neutral data requirements, automatic usage and
+reverse-review contracts, applicability denominator, independent research oracles,
+immutable extraction revisions, longitudinal source coverage, expiring use
+rights/budgets, natural-refresh rules, and graduation SLOs. Tracked by
 [epic #56](https://github.com/wangzitian0/truealpha/issues/56); its issue tree must own
 each of those artifacts rather than leave them implicit in a later implementation issue.
 Section 18 is the executable interface portion of this gate.
@@ -3087,10 +3974,14 @@ cards and Xiaohongshu card artifacts, add the App dashboard, and finally add `/c
 as a tool-orchestration surface. Completion proves every Vision question can be answered
 through a typed canonical question bound to the release catalog and exact universe, from
 mart with a filing/vintage trace. A new issuer and theme must be onboardable through new
-catalog/scope versions without factor or consumer code changes.
+catalog/scope versions without factor or consumer code changes. Bounded reads expose
+planned-versus-actual data usage and the immutable strategy data-quality review.
 Tracked by [epic #31](https://github.com/wangzitian0/truealpha/issues/31), with
-#41-#46, #48, and #72 as sub-issues. #72 is the configuration-only unseen
-issuer/theme onboarding proof.
+#41-#46, #48, and #72 as sub-issues. #72 separately proves configuration-only unseen
+issuer/theme onboarding and additive onboarding for one test source plus one registered
+semantic type without changing generic orchestration, snapshot, lineage, usage/review,
+existing factor, or consumer code. One isolated probe factor may consume the new type to
+prove the registered projector and runner boundary.
 
 ### 16.4 Gate 4: Production Validation and Graduation
 
@@ -3100,17 +3991,31 @@ schedule all seven modules in Staging, prove backup/restore and alerting, then p
 the exact signed multi-artifact release manifest to isolated Production shadow operation
 with explicit approval.
 Validate the deployed Production MCP, App, chat, report, and card paths against the same
-mart outputs in #66. Expand to the owned curated universe and graduate shadow outputs only
-after the natural-refresh soak, per-module SLOs, traceability, recovery, and recorded human
-approval pass in #67. The Production capture audit in #68 must then prove every required
-cell in that graduated scope has complete raw-to-normalized lineage; a green Dagster run
-or raw-only payload count is insufficient.
+mart outputs in #66. #67 expands to the owned curated universe and produces the exact
+Production shadow candidate after the natural-refresh soak, per-module SLOs,
+traceability, recovery, and recorded human review. Before authoritative graduation, #68
+must prove every required cell in that candidate has complete raw-to-normalized lineage;
+a green Dagster run or raw-only payload count is insufficient. #54 independently verifies
+the complete candidate bundle, including usage and reverse-quality evidence, and records
+the authoritative transition.
 Tracked by [epic #32](https://github.com/wangzitian0/truealpha/issues/32), with
 #11, #49-#54, #66-#68 as the environment, evaluation, consumer, graduation, and final
 capture-certification tree.
 
-Milestones are sequential release gates, not strict implementation serialization. Work
-inside a milestone may run in parallel when GitHub dependencies permit it.
+A GitHub gate milestone is one delivery batch. Exactly one earliest incomplete gate epic
+may carry `batch:active`; later gate epics remain `batch:queued`. One gate epic cannot be
+split across batches; graph parity must prove its manifest equals
+the complete transitive open closure of required children and unresolved blockers.
+Implementation PRs may be prepared and reviewed in parallel only for immutable issue IDs
+in the active manifest;
+they target the manifest's batch integration branch or remain unmerged approved heads,
+and never merge into the default/protected branch or promote independently. Approved PR
+head SHAs assemble into one content-hashed candidate and one aggregate batch PR. Review,
+integration evidence, merge, promotion, and rollback all bind that exact complete
+candidate. Included issues close atomically only after the one batch PR and required
+whole-candidate promotions succeed; the gate epic closes last. A scope or dependency-
+frontier change cancels the candidate and requires a product-owner-approved relaunch of
+the same gate. `AGENTS.md` is the operational enforcement contract.
 Usable coverage counts only applicable outputs whose `availability_status` is available
 and fresh enough for the module SLO. `source_evidence_status` separately reports consumed
 data corroboration, while `factor_validation_status` records golden/holdout graduation;
@@ -3129,7 +4034,8 @@ The root `vision.md` success state is reached only when all of these are true:
    its only scheduler, and every applicable module meets its versioned usable-coverage,
    freshness, and traceability SLO across natural source refreshes; unavailable, stale,
    unresolved, excluded, low-confidence, and error outputs do not count as produced.
-   The exact #68 Production capture audit proves every required scope cell has raw and
+   Before that graduation, the exact #68 Production shadow-candidate capture audit proves
+   every required scope cell has raw and
    normalized evidence, eligible times, confidence, mapping/policy versions, quality, and
    lineage under unexpired rights and approved budgets.
 3. A user can ask every frozen canonical Vision question through the deployed Production
@@ -3139,15 +4045,21 @@ The root `vision.md` success state is reached only when all of these are true:
 4. The same mart outputs produce personal report cards and Xiaohongshu card artifacts
    without manual metric recomputation, and a previously unseen issuer/theme can traverse
    capture through all consumer surfaces by publishing new scope/catalog versions only.
+   A separate conformance proof adds one source for an existing type and one semantic type
+   through isolated registrations without modifying generic dispatch, orchestration,
+   snapshot, lineage, usage/review, existing factor, or consumer code; one isolated probe
+   factor proves the new type can cross the generic runner boundary.
 5. Strategy evaluation uses at least five years, independent price reconciliation,
    survivorship-safe membership, corporate actions, immutable definitions, and a known
    strategy sanity result. Returns use raw bars plus explicit lifecycle events without
    double counting; no positive-alpha claim is required unless separately tested.
 6. Production uses the exact Staging-tested signed release manifest, including the
-   immutable data-engine/Dagster artifact, catalog, universe, capture/applicability/source/
-   SLO hashes, model revisions, and extraction templates, with isolated credentials/
+   immutable data-engine/Dagster artifact, catalog, universe, source/type registries,
+   capture/applicability/source/SLO hashes, model revisions, and extraction templates,
+   with isolated credentials/
    storage, demonstrated backup/restore, append-only data, deployed-consumer evidence, a
-   natural source-refresh soak, human card approval, and independent final sign-off.
+   natural source-refresh soak, complete usage-frequency and strategy reverse-quality
+   artifacts, human card approval, and independent final sign-off.
 
 No milestone may claim the full Vision based on fixture readiness, code existence,
 manual flag changes, immediate repeated canary runs, or one successful happy-path run.
@@ -3157,13 +4069,14 @@ manual flag changes, immediate repeated canary runs, or one successful happy-pat
 V1 is **proposed**, not frozen. The semantic closure gate passes only when all of these
 are executable and reviewed:
 
-1. Every public model in Section 14 builds JSON Schema with no unresolved, duplicate, or
-   ambiguous type; generated Python/TypeScript discriminated unions agree.
+1. Every registered public model in Section 14 builds JSON Schema with no unresolved,
+   duplicate, or ambiguous type; generated Python/TypeScript built-in unions and registry
+   schema manifests agree.
 2. Issuer/security/listing, share-class/ADR conversion, currency/time, and `ReturnPolicy`
    validators have positive and negative fixtures at historical cutoffs.
 3. Fixture and Postgres repositories produce the same durable snapshot ID, exact selected
-   record set, `UniverseRef`, identity links, policy versions, and lineage for one request;
-   a wrong hash or mutable-latest substitution fails.
+   record set, `UniverseRef`, registry snapshots, identity links, policy versions, and
+   lineage for one request; a wrong hash or mutable-latest substitution fails.
 4. A competing-source/restatement test proves source-priority selection, changes the
    fusion ruleset, and still retrieves the exact original snapshot by ID.
 5. A synthetic `CaptureScope` probe enumerates the full applicability cross-product and
@@ -3192,12 +4105,22 @@ are executable and reviewed:
     strategy/trace DTO, pagination, status, and lineage. Catalog publication fails below
     `ResearchScopeFloor`, and consumer startup fails for a catalog/release hash mismatch.
 13. A signed multi-artifact release probe rejects a floating or mismatched runtime digest,
-    universe, capture/applicability/source/SLO hash, accepted manifest/readiness report,
-    extraction template, or model revision.
+    universe, source/type registry, capture/applicability/source/SLO hash, extraction
+    template, or model revision before execution. A separate attestation probe rejects
+    post-run capture/usage/review/readiness evidence for any other release/candidate hash.
 14. The frozen financial operating-efficiency branch and selected level/elasticity/combined
     leverage rule have independently reviewed semantics and boundary oracles; implementing
     the real GPPE/valuation candidates remains Gate 1 work.
-15. A design review finds no remaining conflict with authoritative `init.md`, and every
+15. An additive registry probe registers a second fixture source for an existing type and
+    one new typed semantic record inside an existing domain. One isolated probe factor may
+    consume the new type, while unchanged generic capture, Dagster, snapshot, runner,
+    lineage, usage/review, existing factors, and consumer code processes both; unknown,
+    duplicate, incompatible, or schema-drifted registrations fail before work.
+16. A usage/reverse-review probe proves deterministic retry deduplication, planned and
+    consumed counts, required-zero-use visibility, source recovery through lineage, and
+    affected-decision tracing. Missing telemetry, undeclared consumption, stale required
+    data, source disagreement, or broken lineage makes readiness false.
+17. A design review finds no remaining conflict with authoritative `init.md`, and every
     implementation issue names the closure probe and later gate evidence that prove its
     downstream boundary without depending on its own downstream verifier.
 
@@ -3219,8 +4142,8 @@ freeze storage schemas or private internals.
 - Readers use explicit old-version adapters; writers emit only the current version.
 - Persisted runs and consumer artifacts retain release/catalog/universe identities,
   definitions, parameters, execution IDs, and snapshot IDs permanently.
-Until every gate passes, issue acceptance may validate an incremental slice but must not
-describe these contracts as frozen or claim complete Vision closure.
+Until every gate passes, an issue in the active delivery batch may validate an incremental
+slice but must not describe these contracts as frozen or claim complete Vision closure.
 These probes close semantics only. Real GPPE/strategy evidence belongs to Gate 1, real
 seven-module and holdout evidence to Gate 2, deployed consumers to Gates 3/4, and natural
 refresh/Production graduation to Gate 4.
