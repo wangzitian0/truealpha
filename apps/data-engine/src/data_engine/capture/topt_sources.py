@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as datetime_time
 from decimal import Decimal
@@ -27,6 +28,17 @@ INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/index.jso
 
 def _safe_source_error(error: Exception) -> str:
     return f"{type(error).__name__}: source request failed"
+
+
+def _normalize_moomoo_payload(
+    conn,
+    normalize: Callable[[], tuple[int, ...]],
+) -> tuple[tuple[int, ...], source_results.SourceResultOutcome, str | None]:
+    try:
+        with conn.transaction():
+            return normalize(), source_results.SourceResultOutcome.SUCCESS, None
+    except ValueError as error:
+        return (), source_results.SourceResultOutcome.FAILED, f"{type(error).__name__}: normalization failed"
 
 
 def _requirement(scope, subject_id: str, domain: DataDomain):
@@ -456,21 +468,25 @@ def capture_moomoo_domains(conn, *, run_id: str, scope, attempt: int = 0) -> tup
                 ),
             )
             for endpoint, domain, call, normalizer, fields, table in endpoint_specs:
+                record_ids: tuple[int, ...]
+                outcome: source_results.SourceResultOutcome
+                detail: str | None
                 try:
                     payload = call()
                     observed_at = datetime.now(UTC)
                     raw_id = persist(code, endpoint, payload, observed_at)
-                    record_ids = normalizer(conn, raw_fetch_id=raw_id, issuer_id=issuer_id)
-                    outcome = source_results.SourceResultOutcome.SUCCESS
-                    detail = None
                 except mm.MoomooConnectionError as error:
                     observed_at = datetime.now(UTC)
                     detail = _safe_source_error(error)
                     raw_id = persist(code, f"error:{endpoint}", {"error": detail}, observed_at)
                     record_ids = ()
                     outcome = source_results.SourceResultOutcome.FAILED
+                else:
+                    record_ids, outcome, detail = _normalize_moomoo_payload(
+                        conn, lambda: normalizer(conn, raw_fetch_id=raw_id, issuer_id=issuer_id)
+                    )
                 requirement = _requirement(scope, issuer_id, domain)
-                times = (
+                times: list[tuple[datetime]] = (
                     conn.execute(
                         f"select transaction_time from staging.{table} where id = any(%s) order by transaction_time",
                         (list(record_ids),),
@@ -509,20 +525,22 @@ def capture_moomoo_domains(conn, *, run_id: str, scope, attempt: int = 0) -> tup
                 payload = mm.get_corporate_actions_dividends(context, code, caller="topt_capture")
                 observed_at = datetime.now(UTC)
                 raw_id = persist(code, "dividends", payload, observed_at)
-                record_ids = moomoo_normalizer.normalize_dividends(
-                    conn,
-                    raw_fetch_id=raw_id,
-                    instrument_id=instrument.instrument_id,
-                    listing_id=f"listing:vendor:{code}",
-                )
-                outcome = source_results.SourceResultOutcome.SUCCESS
-                detail = None
             except mm.MoomooConnectionError as error:
                 observed_at = datetime.now(UTC)
                 detail = _safe_source_error(error)
                 raw_id = persist(code, "error:dividends", {"error": detail}, observed_at)
                 record_ids = ()
                 outcome = source_results.SourceResultOutcome.FAILED
+            else:
+                record_ids, outcome, detail = _normalize_moomoo_payload(
+                    conn,
+                    lambda: moomoo_normalizer.normalize_dividends(
+                        conn,
+                        raw_fetch_id=raw_id,
+                        instrument_id=instrument.instrument_id,
+                        listing_id=f"listing:vendor:{code}",
+                    ),
+                )
             requirement = _requirement(scope, instrument.instrument_id, DataDomain.CORPORATE_ACTIONS)
             times = (
                 conn.execute(
