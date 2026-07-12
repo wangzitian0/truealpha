@@ -374,26 +374,42 @@ golden/holdout gate. Only applicable, available, fresh outputs from an accepted 
 version count toward the module's versioned usable-coverage SLO. Consumers display all
 three dimensions rather than conflating source evidence with formula validation.
 
-Environment and delivery-batch sequencing are part of the gate contract. Local/CI
-exist throughout; Dagster is introduced early in Gate 1 and is the only authority
-for real scheduled runs; Production remains isolated shadow output until Gate 4
-data, strategy, consumer, recovery, soak, capture-audit, and human-graduation evidence
-all pass. A GitHub gate milestone is one delivery batch. Exactly one earliest
-incomplete gate epic carries `batch:active`; later gate epics remain `batch:queued`.
-One gate epic cannot be split across batches: its manifest must equal the complete
-transitive open closure of its required children and unresolved blockers.
-Implementation PRs may be prepared and reviewed in parallel only for issue IDs
-enumerated in the immutable active batch manifest. They never merge into the
-default/protected branch or promote independently; they target the manifest's batch
-integration branch or remain unmerged approved heads. Their approved head SHAs are
-assembled into one content-hashed candidate; one aggregate batch PR is the only
-default-branch merge, and every required environment receives only that exact complete
-candidate. A scope change cancels the candidate, invalidates its evidence, and requires
-a product-owner-approved relaunch of the same gate. Partial merge, partial promotion,
-rebuilt artifacts, and issue-level rollback are forbidden. `AGENTS.md` defines the
-operational enforcement rules. Included issues remain open until that one batch PR and
-all required whole-candidate promotions succeed, then close atomically with the gate
-epic closing last.
+Environment and evidence scale are part of the gate contract. Local/CI exist
+throughout; Dagster is introduced early in Gate 1 and is the only authority for real
+scheduled runs; Production remains isolated shadow output until Gate 4 data, strategy,
+consumer, recovery, soak, capture-audit, and human-graduation evidence all pass.
+
+Release gates define claims and promotion order; capability batches define implementation
+and evidence streams. A batch owns one bounded vertical slice across an explicit contiguous
+rung range: code, tiny execution, toolkit/contract repair, medium validation,
+hardening/freeze, or large shadow execution. Each batch PR advances exactly one rung. A
+gate contains many batches, and verified rung PRs may merge independently into `main`; a
+stage merge never promotes an environment or implies gate completion.
+Disjoint capture, platform, strategy, consumption, and verification lanes may work in
+parallel against exact content-hashed handoffs. Contracts/toolkit is a shared integration
+surface rather than a sixth execution lane. One integration owner serializes shared types,
+exports, registries, migration numbering, generated contracts, lockfiles, and authoritative
+architecture documents.
+
+Dependencies state whether they block provisional implementation, candidate freeze, or
+issue/gate closure. Downstream fixture/local development may begin after its required
+contract-repair handoff even if rights, holdout, soak, or natural-refresh evidence remains
+pending. Its
+declared readiness ceiling cannot exceed its evidence: fixture tests prove contracts,
+development goldens prove candidates, sealed holdouts prove modules, Staging canaries
+prove bounded operation, and only natural-refresh plus independent Production evidence
+can prove graduation. Formula/source/applicability/SLO semantics and exact candidate
+hashes freeze before protected evaluation; post-reveal changes require a new version and
+fresh untouched evidence. PIT rules, append-only restatements, fixed denominators,
+environment-scoped rights/budgets, row-complete capture, recovery, and human approvals
+remain mandatory at their applicable rung.
+
+Gate epics still close in order at acceptance fan-in. Promotion binds one exact release
+candidate and the gate's complete fail-closed evidence bundle; subsets, rebuilt artifacts,
+and lower-rung substitutions remain invalid. `AGENTS.md` defines batch manifests, path
+ownership, merge ordering, rung acceptance, invalidation, and rollback mechanics.
+E5 large/shadow evidence is not graduation: the independent capture audit, final Vision
+audit, and recorded human approval form a separate candidate-wide fan-in.
 
 ---
 
@@ -426,11 +442,9 @@ identity smoke cases, and the first typed corpus audit. It also confirmed SEC N-
 as the delayed ETF-holdings source and moomoo historical analyst events as a candidate
 input whose PIT public-availability and usage rights still need proof.
 
-That baseline is enough to design and test boundaries; it is not a release gate. The
-current earliest incomplete gate is Gate 0, the
-[Semantic & Data Closure epic #56](https://github.com/wangzitian0/truealpha/issues/56).
-It is implementation-authorized only while the epic carries `batch:active` and the
-work is enumerated in its frozen batch manifest:
+That baseline is enough for bounded E0 code and E1 tiny discovery; it is not a release
+gate. The current earliest incomplete acceptance gate is Gate 0, the
+[Semantic & Data Closure epic #56](https://github.com/wangzitian0/truealpha/issues/56):
 
 1. freeze issuer/security/listing, currency, time, return, universe, and research semantics (#57 and #59);
 2. close executable snapshot, extraction, invocation, replay, and lineage contracts (#58);
@@ -439,7 +453,11 @@ work is enumerated in its frozen batch manifest:
 
 No interface is called v1-frozen, and no sample-readiness boolean is promoted into a
 strategy or Production claim, until those issues produce their specified independent
-and executable evidence. The subsequent milestone tree is queued planning, not
-implementation authorization. It includes the Gate 1 headcount slice (#70), blind Core
-holdout (#71), Gate 3 additive registry/catalog proof (#72), and the pre-graduation
-row-complete Production shadow-candidate capture audit (#68).
+and executable evidence. Later milestones are ordered acceptance fan-ins, not global
+implementation locks. A lower-rung batch may start only from a checked-in, content-hashed
+manifest whose exact start dependencies and path lease are valid. Such work remains
+provisional, is excluded from the accepted `ReleaseManifest` registry/configuration
+bindings, and cannot close a higher-rung issue or gate. This permits the Gate 1 headcount
+slice (#70) and similar fixture work
+to expose defects early while preserving the blind Core holdout (#71), additive registry/
+catalog proof (#72), and independent Production capture audit (#68).

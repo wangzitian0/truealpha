@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "evidence_id": "capability-evidence:issue-22:v1",
+  "issue": 22,
+  "state": "accepted",
+  "accepted_rung": "E2",
+  "producer_commit": "71df1a7214d28fd6e161da04769466abe5c13e82",
+  "source_pr": 80,
+  "accepted_by": "wangzitian0",
+  "accepted_at": "2026-07-12T19:26:02Z",
+  "commands": [
+    "make check",
+    "make sample-audit",
+    "uv run pytest apps/data-engine/tests/test_mvp_probe.py libs/factors/tests/test_registered_composite_probe.py"
+  ],
+  "git_objects": [
+    {
+      "path": "apps/data-engine/src/data_engine/mvp_probe.py",
+      "oid": "933ef1a35b51c740abd06ae083e7d81f062915b7"
+    },
+    {
+      "path": "libs/contracts/src/truealpha_contracts/execution.py",
+      "oid": "d51e6dfea82d761b6440166847e5cba56cf40c7c"
+    }
+  ],
+  "attestation_ref": "https://github.com/wangzitian0/truealpha/pull/80",
+  "claim_ceiling": "Fixture-backed Dagster and PIT execution contract",
+  "residual_risks": [
+    "No stable headcount data-plane handoff",
+    "No medium-scale or Staging claim"
+  ]
+}

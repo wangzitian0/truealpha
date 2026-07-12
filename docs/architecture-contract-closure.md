@@ -12,8 +12,9 @@ SourceRegistry + SemanticTypeRegistry
                                      +-> planned requirements +-> usage/reverse quality review
 ```
 The proposal covers interface meaning, not every adapter. Implementations may land
-incrementally only from the active delivery batch and behind the closure tests in Section
-18. No issue may claim an interface freeze merely because the signatures are written down.
+incrementally only from a checked-in, content-hashed capability-batch manifest and behind
+the closure tests in Section 18. No issue may claim an interface freeze merely because the
+signatures are written down.
 `libs/contracts` owns data-only semantic types and ports. `libs/factors` owns every calculation,
 classification, screen, ranking, portfolio rule, and return calculation.
 `apps/data-engine` owns adapters, normalization, repositories, orchestration, and materialization.
@@ -4109,20 +4110,24 @@ Tracked by [epic #32](https://github.com/wangzitian0/truealpha/issues/32), with
 #11, #49-#54, #66-#68 as the environment, evaluation, consumer, graduation, and final
 capture-certification tree.
 
-A GitHub gate milestone is one delivery batch. Exactly one earliest incomplete gate epic
-may carry `batch:active`; later gate epics remain `batch:queued`. One gate epic cannot be
-split across batches; graph parity must prove its manifest equals
-the complete transitive open closure of required children and unresolved blockers.
-Implementation PRs may be prepared and reviewed in parallel only for immutable issue IDs
-in the active manifest;
-they target the manifest's batch integration branch or remain unmerged approved heads,
-and never merge into the default/protected branch or promote independently. Approved PR
-head SHAs assemble into one content-hashed candidate and one aggregate batch PR. Review,
-integration evidence, merge, promotion, and rollback all bind that exact complete
-candidate. Included issues close atomically only after the one batch PR and required
-whole-candidate promotions succeed; the gate epic closes last. A scope or dependency-
-frontier change cancels the candidate and requires a product-owner-approved relaunch of
-the same gate. `AGENTS.md` is the operational enforcement contract.
+A gate milestone is an acceptance fan-in, not an implementation batch. A capability batch
+owns one bounded slice across a declared contiguous range of code, tiny execution, contract
+repair, medium validation, hardening/freeze, and large shadow execution; each batch PR
+advances exactly one rung. Dependencies separately block provisional implementation,
+candidate freeze, or issue/gate closure. Disjoint lanes may run concurrently after their
+exact content-hashed handoffs merge, and each rung PR may merge independently into `main`;
+no rung PR promotes an environment or implies gate completion. Shared contract
+exports, registries, migration numbering, generated artifacts, root lockfiles, and this
+architecture require one integration owner and dependency-topological merge ordering.
+
+Gate review and promotion still bind one exact release candidate plus the complete
+transitive evidence bundle. Lower-scale evidence cannot satisfy a higher claim: fixtures
+prove contracts, development goldens prove candidates, sealed holdouts prove modules,
+Staging canaries prove bounded operation, and natural-refresh plus independent Production
+evidence proves graduation. Semantic/PIT/schema/catalog/universe/threshold drift after a
+freeze invalidates dependent evidence and requires a new version and fresh untouched
+holdout where applicable. `AGENTS.md` is the operational contract for manifests, handoffs,
+path ownership, merge queues, acceptance ceilings, cancellation, and rollback.
 Usable coverage counts only applicable outputs whose `availability_status` is available
 and fresh enough for the module SLO. `source_evidence_status` separately reports consumed
 data corroboration, while `factor_validation_status` records golden/holdout graduation;
@@ -4251,8 +4256,9 @@ freeze storage schemas or private internals.
 - Readers use explicit old-version adapters; writers emit only the current version.
 - Persisted runs and consumer artifacts retain release/catalog/universe identities,
   definitions, parameters, execution IDs, and snapshot IDs permanently.
-Until every gate passes, an issue in the active delivery batch may validate an incremental
-slice but must not describe these contracts as frozen or claim complete Vision closure.
+Until every gate passes, an issue in an authorized capability batch may validate an
+incremental slice but must not describe these contracts as frozen or claim complete Vision
+closure.
 These probes close semantics only. Real GPPE/strategy evidence belongs to Gate 1, real
 seven-module and holdout evidence to Gate 2, deployed consumers to Gates 3/4, and natural
 refresh/Production graduation to Gate 4.

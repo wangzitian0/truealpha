@@ -1,0 +1,44 @@
+name: Delivery Governance
+
+on:
+  pull_request:
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]
+  push:
+    branches: [main]
+    paths:
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/workflows/ci-governance.yml"
+      - "governance/**"
+      - "tools/check_delivery_governance.py"
+      - "AGENTS.md"
+      - "init.md"
+      - "docs/iterative-delivery.md"
+      - "docs/architecture-contract-closure.md"
+      - "Makefile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate checked-in graph and manifests
+        run: make issue-graph-check
+      - name: Export live Vision issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 200
+          --label scope:vision --json number,state,body,labels,milestone
+          > "$RUNNER_TEMP/vision-issues.json"
+      - name: Validate GitHub parity
+        run: >-
+          python3 tools/check_delivery_governance.py
+          --github-issues "$RUNNER_TEMP/vision-issues.json"

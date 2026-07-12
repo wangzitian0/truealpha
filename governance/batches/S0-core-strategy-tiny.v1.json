@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "batch_id": "S0-core-strategy-tiny",
+  "revision": 1,
+  "issue": 78,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E1",
+  "objective": "Expose core GPPE, tier, and strategy interaction defects on a predeclared tiny fixture without claiming a stable interface.",
+  "claim_ceiling": "E1 tiny development evidence",
+  "capability_issues": [21, 24, 25],
+  "closes_issues": [],
+  "informational_issues": [59, 79],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "governance change merged to main",
+      "issue #81 activation enforcement accepted",
+      "base_sha updated to the current implementation PR base commit",
+      "tiny corpus path and SHA-256 frozen before execution",
+      "reviewer assigned and different from the implementation owner",
+      "GitHub issue body contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 57,
+      "artifact": "identity-market-time-universe contracts",
+      "evidence": {
+        "path": "governance/evidence/issue-57.v1.json",
+        "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640"
+      },
+      "git_objects": [
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/universe.py",
+          "oid": "292b73b7fd2f44a440fb581c8a9d9a9f199c2730"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/market.py",
+          "oid": "8e6e232037a05b8fa5a812076dda4b3fd447afd8"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/registries.py",
+          "oid": "d2c86876086e7f6ffccbc938bd733093906f6939"
+        }
+      ],
+      "legacy_accepted": true,
+      "state": "accepted"
+    },
+    {
+      "class": "start",
+      "issue": 58,
+      "artifact": "execution-lineage contract pack",
+      "evidence": {
+        "path": "governance/evidence/issue-58.v2.json",
+        "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
+      },
+      "ref": "git:71df1a7214d28fd6e161da04769466abe5c13e82:libs/contracts",
+      "git_tree": "cc2a0ded19f3ceb28b0f5e39c83871055ca07346",
+      "legacy_accepted": true,
+      "state": "accepted"
+    }
+  ],
+  "later_claim_dependencies": [
+    "#59 semantic and oracle hash before candidate freeze",
+    "accepted E2 capture handoff before a stable factor-input dependency",
+    "integration evidence consuming exact capture and strategy artifact hashes before #26 closes",
+    "#71 untouched independent holdout before module acceptance"
+  ],
+  "corpus": {
+    "environment": "local fixture",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "applicable success",
+      "financial issuer branch",
+      "missing or unavailable input",
+      "revision or restatement",
+      "dual-class or listing identity",
+      "cutoffs immediately before and after public availability",
+      "look-ahead sentinel"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/factors/src/factors/batches/core_strategy_tiny/**",
+      "libs/factors/tests/batches/core_strategy_tiny/**"
+    ],
+    "read_only": [
+      "libs/contracts/**",
+      "apps/data-engine/**"
+    ],
+    "forbidden": [
+      "db/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile",
+      "AGENTS.md",
+      "init.md",
+      "docs/architecture-contract-closure.md"
+    ],
+    "integration_surface": [
+      "libs/factors/src/factors/__init__.py",
+      "libs/factors/src/factors/registry.py",
+      "libs/factors/src/factors/base/__init__.py",
+      "libs/factors/src/factors/composite/__init__.py"
+    ],
+    "lease_owner": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "requirements": [
+      "no default registry entry",
+      "no default schedule or route",
+      "accepted ReleaseManifest registry and configuration hashes exclude the batch capability",
+      "negative test proves the accepted release cannot execute it"
+    ]
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/factors/tests/batches/core_strategy_tiny -q",
+      "uv run ruff check libs/factors/src/factors/batches/core_strategy_tiny libs/factors/tests/batches/core_strategy_tiny",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "missing and stale input",
+      "low confidence",
+      "wrong instrument or listing",
+      "cross-currency without accepted FX",
+      "future-known restatement",
+      "reordered and repeated execution",
+      "attempted default release activation"
+    ],
+    "output": {
+      "type": "CoreTinyEvidence",
+      "stable_handoff": false,
+      "state": "planned",
+      "allowed_evidence_readers": [
+        "E2 contract-repair batch",
+        "capture-strategy integration batch"
+      ],
+      "retention": "permanent"
+    }
+  },
+  "merge_predecessors": [],
+  "invalidation": [
+    "manifest or corpus change creates a new revision and invalidates prior evidence",
+    "contract tree change reruns E1",
+    "semantic or numerical output exposure remains calibration and cannot approve #59",
+    "shared-path need blocks the batch until an explicit integration lease exists"
+  ],
+  "rollback": "Revert only the provisional rung PR; no accepted release manifest may reference its unregistered code."
+}

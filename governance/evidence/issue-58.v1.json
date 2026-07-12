@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "evidence_id": "capability-evidence:issue-58:v1",
+  "issue": 58,
+  "state": "accepted",
+  "accepted_rung": "E2",
+  "producer_commit": "7a253f8c143b30e255f81c6cb27b95ec947b026d",
+  "source_pr": 77,
+  "accepted_by": "wangzitian0",
+  "accepted_at": "2026-07-12T18:23:21Z",
+  "commands": [
+    "make check",
+    "make contract-conformance"
+  ],
+  "git_objects": [
+    {
+      "path": "libs/contracts",
+      "oid": "3c27d6f784051d59212b5636cc0db1d7c512db4d"
+    },
+    {
+      "path": "apps/data-engine/src/data_engine/contract_assets.py",
+      "oid": "9e3ab793befe1bec4e6723ab91ed4f09191799ed"
+    },
+    {
+      "path": "apps/data-engine/src/data_engine/contract_repository.py",
+      "oid": "54491c2f3a49907e3cbdb6e0dee8a25119d511e8"
+    }
+  ],
+  "attestation_ref": "https://github.com/wangzitian0/truealpha/pull/77",
+  "claim_ceiling": "Execution, lineage, registry-extension, usage, and reverse-review contract handoff",
+  "residual_risks": [
+    "Research semantics, source rights, and applicability remain #59-#61"
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "evidence_id": "capability-evidence:issue-14:v1",
+  "issue": 14,
+  "state": "accepted",
+  "accepted_rung": "E2",
+  "producer_commit": "71df1a7214d28fd6e161da04769466abe5c13e82",
+  "source_pr": 80,
+  "accepted_by": "wangzitian0",
+  "accepted_at": "2026-07-12T19:26:49Z",
+  "commands": [
+    "make check",
+    "make sample-audit"
+  ],
+  "git_objects": [
+    {
+      "path": "apps/data-engine/samples/strategy_coverage.json",
+      "oid": "9dacd97813c08ca12886bf2da3d9f9c299c2c6e1"
+    },
+    {
+      "path": "apps/data-engine/samples/golden/DDOG_composite_pit_replay.json",
+      "oid": "beaf69589f4542f8216d278319136e432bb7a0d9"
+    },
+    {
+      "path": "apps/data-engine/src/data_engine/mvp_probe.py",
+      "oid": "933ef1a35b51c740abd06ae083e7d81f062915b7"
+    }
+  ],
+  "attestation_ref": "https://github.com/wangzitian0/truealpha/issues/14#issuecomment-4952461286",
+  "claim_ceiling": "Local point-in-time sample corpus and backtest-tooling readiness",
+  "residual_risks": [
+    "Five-year evaluation history remains outside #14",
+    "Independent price reconciliation remains outside #14",
+    "No strategy, Staging, or Production readiness claim"
+  ]
+}

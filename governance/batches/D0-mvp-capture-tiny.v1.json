@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "batch_id": "D0-mvp-capture-tiny",
+  "revision": 1,
+  "issue": 79,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E1",
+  "objective": "Expose raw, normalization, row-complete manifest, PIT snapshot, and Dagster interaction defects on checked-in public fixtures.",
+  "claim_ceiling": "E1 tiny capture and PIT development evidence",
+  "capability_issues": [23, 70],
+  "closes_issues": [],
+  "informational_issues": [14, 22, 60, 61, 78],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "governance change merged to main",
+      "issue #81 activation enforcement accepted",
+      "base_sha updated to the current implementation PR base commit",
+      "tiny corpus path and SHA-256 frozen before execution",
+      "reviewer assigned and different from the implementation owner",
+      "GitHub issue body contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 57,
+      "artifact": "identity-market-time-universe contracts",
+      "evidence": {
+        "path": "governance/evidence/issue-57.v1.json",
+        "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640"
+      },
+      "git_objects": [
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/universe.py",
+          "oid": "292b73b7fd2f44a440fb581c8a9d9a9f199c2730"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/market.py",
+          "oid": "8e6e232037a05b8fa5a812076dda4b3fd447afd8"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/registries.py",
+          "oid": "d2c86876086e7f6ffccbc938bd733093906f6939"
+        }
+      ],
+      "legacy_accepted": true,
+      "state": "accepted"
+    },
+    {
+      "class": "start",
+      "issue": 58,
+      "artifact": "capture-snapshot-runner-lineage contracts",
+      "evidence": {
+        "path": "governance/evidence/issue-58.v2.json",
+        "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
+      },
+      "ref": "git:71df1a7214d28fd6e161da04769466abe5c13e82:libs/contracts",
+      "git_tree": "cc2a0ded19f3ceb28b0f5e39c83871055ca07346",
+      "legacy_accepted": true,
+      "state": "accepted"
+    }
+  ],
+  "later_claim_dependencies": [
+    "#59 accepted headcount semantics before a semantic data-plane freeze",
+    "#60 exact source, model, rights, and budget policy before a live probe",
+    "#61 exact applicability and SLO denominator before readiness acceptance",
+    "separate E2 contract-repair batch after classified E1 findings",
+    "integration evidence consuming exact capture and strategy artifact hashes before #26 closes"
+  ],
+  "corpus": {
+    "environment": "local fixture plus ephemeral Postgres",
+    "manifest_path": null,
+    "sha256": null,
+    "read_only_source_manifest": "apps/data-engine/samples/capture_manifest_20260712.json",
+    "read_only_source_git_blob": "2fa62f8a422ac7c1d71c9a562184f09391584f7f",
+    "required_strata": [
+      "applicable success",
+      "missing raw or normalized evidence",
+      "revision or restatement",
+      "wrong security or listing",
+      "cutoffs immediately before and after public availability",
+      "look-ahead sentinel",
+      "reordered and repeated execution"
+    ]
+  },
+  "source_ceiling": "Checked-in public fixtures only. A live call requires a separate environment-scoped rights and budget approval.",
+  "paths": {
+    "writable": [
+      "apps/data-engine/src/data_engine/batches/mvp_capture_tiny/**",
+      "apps/data-engine/tests/batches/mvp_capture_tiny/**",
+      "apps/data-engine/tests/fixtures/mvp_capture_tiny/**"
+    ],
+    "read_only": [
+      "apps/data-engine/samples/**",
+      "apps/data-engine/src/data_engine/contract_repository.py",
+      "apps/data-engine/src/data_engine/contract_assets.py",
+      "libs/contracts/**"
+    ],
+    "forbidden": [
+      "db/**",
+      "libs/factors/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile",
+      "AGENTS.md",
+      "init.md",
+      "docs/architecture-contract-closure.md"
+    ],
+    "integration_surface": [
+      "apps/data-engine/src/data_engine/__init__.py",
+      "apps/data-engine/src/data_engine/sources/__init__.py",
+      "apps/data-engine/src/data_engine/contract_repository.py",
+      "apps/data-engine/src/data_engine/contract_assets.py"
+    ],
+    "lease_owner": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "requirements": [
+      "no default source registry entry",
+      "no default Dagster Definitions or schedule entry",
+      "no migration in E1",
+      "accepted ReleaseManifest registry and configuration hashes exclude the batch capability",
+      "negative test proves the accepted release cannot execute it"
+    ]
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest apps/data-engine/tests/batches/mvp_capture_tiny -q",
+      "uv run ruff check apps/data-engine/src/data_engine/batches/mvp_capture_tiny apps/data-engine/tests/batches/mvp_capture_tiny",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "required missing identity, raw, normalized, confidence, or freshness evidence",
+      "future-known vintage",
+      "wrong security, listing, or share class",
+      "append-only restatement",
+      "partial write and retry",
+      "fixture versus ephemeral Postgres parity",
+      "attempted default release activation"
+    ],
+    "output": {
+      "type": "MvpCaptureTinyEvidence",
+      "stable_handoff": false,
+      "state": "planned",
+      "allowed_evidence_readers": [
+        "E2 contract-repair batch",
+        "capture-strategy integration batch"
+      ],
+      "retention": "permanent"
+    }
+  },
+  "merge_predecessors": [],
+  "invalidation": [
+    "manifest or corpus change creates a new revision and invalidates prior evidence",
+    "contract tree or sample blob change reruns E1",
+    "schema or shared-toolkit finding fails E1 and opens a separately leased E2 batch",
+    "shared-path need blocks the batch until an explicit integration lease exists"
+  ],
+  "rollback": "Revert only the provisional rung PR; no accepted release manifest, schedule, source registry, or migration may reference it."
+}
