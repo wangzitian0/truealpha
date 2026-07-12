@@ -103,6 +103,27 @@ def test_yahoo_chart_normalizes_instrument_prices_and_non_double_counted_actions
     assert action_values[1][0] == "split"
     assert action_values[1][1] == pytest.approx(2)
 
+    second_instrument_id = f"instrument:isin:US{nonce}B"
+    second_listing_id = f"listing:vendor:US.TEST{nonce}B"
+    instruments.ensure_instrument(conn, second_instrument_id, "equity_common", "Yahoo Test Class B")
+    second_prices, second_actions = yahoo_chart.normalize_fetch(
+        conn,
+        raw_fetch_id=raw_id,
+        issuer_id=issuer_id,
+        instrument_id=second_instrument_id,
+        listing_id=second_listing_id,
+        symbol=f"TEST{nonce}B",
+    )
+    assert len(second_prices) == 2
+    assert len(second_actions) == 2
+    assert (
+        conn.execute(
+            "select count(*) from staging.market_prices where instrument_id = any(%s)",
+            ([instrument_id, second_instrument_id],),
+        ).fetchone()[0]
+        == 4
+    )
+
 
 def test_yahoo_schema_drift_fails_loudly():
     with pytest.raises(ValueError, match="exactly one result"):

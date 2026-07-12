@@ -134,3 +134,21 @@ def test_recorded_at_defaults_use_wall_clock_not_transaction_start():
     assert not transaction_start_defaults, "recorded_at must use a wall-clock default: " + ", ".join(
         transaction_start_defaults
     )
+
+
+def test_market_price_identity_is_instrument_level_not_issuer_level():
+    try:
+        conn = psycopg.connect(settings.database_url, connect_timeout=3)
+    except psycopg.OperationalError:
+        skip_or_fail("no reachable Postgres (make runtime-up && make db-migrate)")
+    legacy = conn.execute(
+        """
+        select conname from pg_constraint
+        where conrelid = 'staging.market_prices'::regclass
+          and contype = 'u'
+          and pg_get_constraintdef(oid) =
+              'UNIQUE (unified_id, trading_date, source, transaction_time)'
+        """
+    ).fetchall()
+    conn.close()
+    assert legacy == []
