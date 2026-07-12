@@ -1028,6 +1028,7 @@ class MaterializedFactorOutput(BaseModel):
     content_sha256: str = ""
     factor_execution_id: str = Field(pattern=r"^factor-execution:[0-9a-f]{64}$")
     snapshot_id: str = Field(pattern=r"^snapshot:[0-9a-f]{64}$")
+    as_of: datetime
     draft: FactorOutputDraft
     input_lineage: tuple[InputConsumptionLineage, ...]
     upstream_output_ids: tuple[str, ...] = ()
@@ -1035,13 +1036,15 @@ class MaterializedFactorOutput(BaseModel):
     trace_complete: bool = False
     materialized_at: datetime
 
-    @field_validator("materialized_at")
+    @field_validator("as_of", "materialized_at")
     @classmethod
-    def validate_materialized_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "materialized_at")
+    def validate_datetimes(cls, value: datetime, info) -> datetime:
+        return _require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> MaterializedFactorOutput:
+        if self.materialized_at < self.as_of:
+            raise ValueError("factor output cannot materialize before its snapshot cutoff")
         lineage = tuple(sorted(self.input_lineage, key=lambda item: item.input_lineage_id))
         if len({item.input_lineage_id for item in lineage}) != len(lineage):
             raise ValueError("materialized input lineage rows must be unique")
@@ -1081,6 +1084,7 @@ class MaterializedFactorOutput(BaseModel):
 def materialize_factor_output(
     *,
     execution: FactorExecution,
+    snapshot: SnapshotManifest,
     selection: RunnerInputSelection,
     draft: FactorOutputDraft,
     read_events: tuple[InputReadEvent, ...],
@@ -1088,6 +1092,8 @@ def materialize_factor_output(
 ) -> MaterializedFactorOutput:
     """Derive lineage/confidence from runner evidence, never from factor claims."""
 
+    if execution.snapshot_id != snapshot.snapshot_id or execution.snapshot_sha256 != snapshot.content_sha256:
+        raise ValueError("factor execution does not bind the supplied snapshot exactly")
     if selection.factor_execution_id != execution.factor_execution_id:
         raise ValueError("runner selection belongs to another factor execution")
     if selection.snapshot_id != execution.snapshot_id:
@@ -1108,6 +1114,8 @@ def materialize_factor_output(
         raise ValueError("input-read evidence contains duplicate read positions")
     consumed_handles = tuple(sorted({event.requirement_handle_id for event in relevant}))
     consumed_bindings = tuple(binding_map[handle_id] for handle_id in consumed_handles)
+    if any(binding.observation.as_of != snapshot.request.as_of for binding in consumed_bindings):
+        raise ValueError("factor inputs do not share the exact snapshot cutoff")
     undeclared = {
         binding.demand.requirement_id
         for binding in consumed_bindings
@@ -1163,6 +1171,7 @@ def materialize_factor_output(
     return MaterializedFactorOutput(
         factor_execution_id=execution.factor_execution_id,
         snapshot_id=execution.snapshot_id,
+        as_of=snapshot.request.as_of,
         draft=draft,
         input_lineage=lineage,
         upstream_output_ids=upstream_ids,
@@ -1201,6 +1210,7 @@ class MaterializedFactorBatch(BaseModel):
 def build_runner_upstream_input_selection(
     *,
     execution: FactorExecution,
+    snapshot: SnapshotManifest,
     demand: SnapshotDemandCell,
     upstream_batch: MaterializedFactorBatch,
     upstream_output: MaterializedFactorOutput,
@@ -1211,6 +1221,8 @@ def build_runner_upstream_input_selection(
 ) -> RunnerInputSelection:
     """Mint one sanitized capability from an exact persisted upstream output."""
 
+    if execution.snapshot_id != snapshot.snapshot_id or execution.snapshot_sha256 != snapshot.content_sha256:
+        raise ValueError("factor execution does not bind the supplied snapshot exactly")
     if execution.template.factor_kind is FactorKind.BASE:
         raise ValueError("base factors cannot select upstream factor outputs")
     if upstream_batch.materialized_batch_id not in execution.upstream_batch_ids:
@@ -1219,6 +1231,12 @@ def build_runner_upstream_input_selection(
         raise ValueError("upstream output is absent from the persisted batch")
     if upstream_batch.snapshot_id != execution.snapshot_id or upstream_output.snapshot_id != execution.snapshot_id:
         raise ValueError("upstream input does not belong to the execution snapshot")
+    if upstream_output.as_of != snapshot.request.as_of:
+        raise ValueError("upstream input does not share the exact snapshot cutoff")
+    if upstream_output.materialized_at > execution.started_at:
+        raise ValueError("future-dated upstream output cannot enter a composite execution")
+    if demand not in {selection.demand for selection in snapshot.selections}:
+        raise ValueError("upstream demand is absent from the frozen snapshot")
     if demand.requirement_id not in execution.template.data_requirement_ids:
         raise ValueError("upstream input is not bound to a declared data requirement")
     if (
@@ -1231,10 +1249,10 @@ def build_runner_upstream_input_selection(
         subject=upstream_output.draft.subject,
         payload_model_key=upstream_output.draft.output_model_key,
         payload_sha256=upstream_output.draft.output_payload_sha256,
-        valid_from=execution.started_at.date(),
-        valid_to=execution.started_at.date(),
+        valid_from=snapshot.request.valid_on,
+        valid_to=snapshot.request.valid_on,
         confidence=upstream_output.minimum_consumed_confidence,
-        as_of=execution.started_at,
+        as_of=snapshot.request.as_of,
     )
     handle = _mint_requirement_handle(
         factor_execution_id=execution.factor_execution_id,

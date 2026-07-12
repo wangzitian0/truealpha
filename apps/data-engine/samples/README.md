@@ -28,11 +28,10 @@ values during the 2026-07-12 capture itself; both the old one-year and new
 three-year files therefore remain immutable point-in-time vintages.
 
 Run `make sample-audit` to validate this corpus against the machine-readable
-strategy requirements. Sampling now satisfies the local data requirements; the
-remaining local blocker is the not-yet-implemented composite factor replay
-fixture. Five-year coverage and primary/fallback price reconciliation remain
-strategy-evaluation requirements. See `docs/strategy-data-quality.md` for the
-gate definitions.
+strategy requirements. Sampling and the executable composite replay now satisfy
+the local-backtest boundary. Five-year coverage and primary/fallback price
+reconciliation remain strategy-evaluation requirements. See
+`docs/strategy-data-quality.md` for the gate definitions.
 
 ## Contents
 

@@ -1,0 +1,28 @@
+{
+  "artifact_kind": "composite_factor_pit_replay",
+  "schema_version": "1.0.0",
+  "subject_entity_id": "company:ddog",
+  "snapshot_as_of": "2026-02-18T23:59:59Z",
+  "valid_from": "2025-01-01",
+  "valid_to": "2025-12-31",
+  "upstream_outputs": [
+    {
+      "output_key": "gross-profit",
+      "payload_model_key": "factors:GrossProfitOutput",
+      "payload_sha256": "0b0cd6b7472d7a8fef13a0c37b0ce8f228c20c1b816bc33ac147fbdb0b7fcd98",
+      "confidence": "0.90",
+      "source_artifact": "sec/DDOG_CIK0001561550.json",
+      "source_sha256": "0b0cd6b7472d7a8fef13a0c37b0ce8f228c20c1b816bc33ac147fbdb0b7fcd98"
+    },
+    {
+      "output_key": "employee-count",
+      "payload_model_key": "factors:EmployeeCountOutput",
+      "payload_sha256": "dcdd728cc76efaa0ca2fce5c2b6fd0e1704a77092d232ce0d931eddca8debfde",
+      "confidence": "0.65",
+      "source_artifact": "filings/DDOG_10K_000162828026008819.html",
+      "source_sha256": "dcdd728cc76efaa0ca2fce5c2b6fd0e1704a77092d232ce0d931eddca8debfde"
+    }
+  ],
+  "expected_minimum_confidence": "0.65",
+  "future_upstream_as_of": "2026-02-19T00:00:00Z"
+}

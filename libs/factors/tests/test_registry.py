@@ -5,6 +5,7 @@ from decimal import Decimal
 import factors.base.gross_profit_per_employee  # noqa: F401
 import factors.base.peg  # noqa: F401
 import factors.base.registered_semantic_probe  # noqa: F401
+import factors.composite.registered_composite_probe  # noqa: F401
 import factors.composite.three_tier_valuation  # noqa: F401
 import pytest
 from factors import FACTOR_REGISTRY, Fact, FactorResult
@@ -16,6 +17,7 @@ def test_stub_factors_are_registered():
     assert FACTOR_REGISTRY["gross_profit_per_employee"].kind == "base"
     assert FACTOR_REGISTRY["three_tier_valuation"].kind == "composite"
     assert FACTOR_REGISTRY["registered_semantic_probe"].kind == "base"
+    assert FACTOR_REGISTRY["registered_composite_probe"].kind == "composite"
 
 
 def test_confidence_is_mandatory_and_bounded():

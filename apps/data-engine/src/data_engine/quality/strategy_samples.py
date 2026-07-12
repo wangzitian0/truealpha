@@ -11,6 +11,7 @@ from html import unescape
 from pathlib import Path
 from xml.etree import ElementTree
 
+from factors.composite.registered_composite_probe import registered_composite_probe
 from truealpha_contracts import (
     STRATEGY_DATA_REQUIREMENTS,
     DataQualityReport,
@@ -21,6 +22,13 @@ from truealpha_contracts import (
     ReadinessAssessment,
     ReadinessLevel,
 )
+from truealpha_contracts.execution import (
+    AvailabilityStatus,
+    FactorInputCapability,
+    ProvenanceNeutralInput,
+    RequirementHandle,
+)
+from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 REQUIRED_TRAITS = frozenset({"software", "financial", "traditional", "loss_making"})
 
@@ -252,6 +260,55 @@ def _assert_nvda_company_guidance(sample_root: Path, evidence: EvidenceCase) -> 
     )
 
 
+def _assert_composite_pit_replay(sample_root: Path, evidence: EvidenceCase) -> bool:
+    artifact = _load_json(_artifact_with_name(sample_root, evidence, "composite_pit_replay"))
+    if artifact.get("artifact_kind") != "composite_factor_pit_replay":
+        return False
+    snapshot_as_of = datetime.fromisoformat(artifact["snapshot_as_of"].replace("Z", "+00:00"))
+    future_as_of = datetime.fromisoformat(artifact["future_upstream_as_of"].replace("Z", "+00:00"))
+    valid_from = date.fromisoformat(artifact["valid_from"])
+    valid_to = date.fromisoformat(artifact["valid_to"])
+    subject = SubjectRef(kind=SubjectKind.ISSUER, id=artifact["subject_entity_id"])
+    capabilities: list[FactorInputCapability] = []
+    for upstream in artifact["upstream_outputs"]:
+        source_path = sample_root / upstream["source_artifact"]
+        if sha256(source_path.read_bytes()).hexdigest() != upstream["source_sha256"]:
+            return False
+        handle_sha256 = sha256(f"{subject.id}:{upstream['output_key']}".encode()).hexdigest()
+        capabilities.append(
+            FactorInputCapability(
+                handle=RequirementHandle(requirement_handle_id=f"requirement-handle:{handle_sha256}"),
+                observation=ProvenanceNeutralInput(
+                    subject=subject,
+                    payload_model_key=upstream["payload_model_key"],
+                    payload_sha256=upstream["payload_sha256"],
+                    valid_from=valid_from,
+                    valid_to=valid_to,
+                    confidence=Decimal(upstream["confidence"]),
+                    as_of=snapshot_as_of,
+                ),
+            )
+        )
+    result = registered_composite_probe(subject=subject, inputs=tuple(capabilities))
+    if result.availability_status is not AvailabilityStatus.AVAILABLE:
+        return False
+    observed_minimum = min(item.observation.confidence for item in capabilities)
+    if observed_minimum != Decimal(artifact["expected_minimum_confidence"]):
+        return False
+    if future_as_of <= snapshot_as_of:
+        return False
+    future_input = capabilities[-1].model_copy(
+        update={
+            "observation": capabilities[-1].observation.model_copy(update={"as_of": future_as_of}),
+        }
+    )
+    try:
+        registered_composite_probe(subject=subject, inputs=(*capabilities[:-1], future_input))
+    except ValueError as error:
+        return "snapshot cutoff" in str(error)
+    return False
+
+
 EVIDENCE_ASSERTIONS = {
     "analyst.knowability-corroborated": _assert_ddog_rating_knowability,
     "corporate-action.dividend-replay": _assert_jpm_dividend_replay,
@@ -262,6 +319,7 @@ EVIDENCE_ASSERTIONS = {
     "filing.jpm.financial-semantics": _assert_jpm_financial_semantics,
     "financial.company-guidance": _assert_nvda_company_guidance,
     "financial.restatement-before-after": _assert_plug_restatement_replay,
+    "factors.composite-pit-replay": _assert_composite_pit_replay,
     "graph.supply-chain-pit-replay": _assert_ddog_supply_chain_pit,
     "universe.membership-replay": _assert_qqq_membership_replay,
     "universe.symbol-change-or-delisting-replay": _assert_meta_symbol_replay,
