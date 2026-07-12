@@ -13,6 +13,7 @@ from typing import Any
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contract_assets import PostgresContractEvidenceStore
 from data_engine.contract_repository import (
     ContractConflictError,
     ContractIntegrityError,
@@ -26,8 +27,10 @@ from data_engine.contract_repository import (
     PostgresReleaseManifestRepository,
     PostgresResearchCatalogRepository,
     PostgresSnapshotRepository,
+    PostgresStrategyDataQualityReviewRepository,
     PostgresStrategyUsageAuditRepository,
     PostgresTraceBundleRepository,
+    PostgresUsageFrequencySliceRepository,
 )
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ValidationError
@@ -90,12 +93,17 @@ from truealpha_contracts.universe import (
     UniverseRef,
 )
 from truealpha_contracts.usage import (
+    PlannedCellQuality,
     PlannedDemandCell,
+    QualityState,
     RequirementLevel,
     ReverseLineageEdge,
+    StrategyDataQualityReview,
     StrategyUsageAudit,
+    UsageFrequencySlice,
     UsageStage,
     build_strategy_usage_audit,
+    build_usage_frequency_slice,
 )
 
 NOW = datetime(2026, 7, 12, tzinfo=UTC)
@@ -591,6 +599,40 @@ def _strategy_usage_audit() -> StrategyUsageAudit:
     )
 
 
+def _usage_frequency_slice() -> UsageFrequencySlice:
+    return build_usage_frequency_slice(
+        audits=(_strategy_usage_audit(),),
+        window_start=NOW - timedelta(minutes=1),
+        window_end=NOW + timedelta(days=1),
+    )
+
+
+def _strategy_data_quality_review() -> StrategyDataQualityReview:
+    audit = _strategy_usage_audit()
+    planned_cell = audit.planned_cells[0]
+    quality = PlannedCellQuality(
+        planned_cell=planned_cell,
+        source_coverage_entry_ids=("source-coverage-entry:" + _sha("1"),),
+        source_readiness_report_id="source-readiness:" + _sha("2"),
+        source_readiness_report_sha256=_sha("2"),
+        semantic_quality_evidence_ids=("quality:evidence:repository",),
+        source_state=QualityState.UNKNOWN,
+        semantic_type_state=QualityState.UNKNOWN,
+        freshness_state=QualityState.UNKNOWN,
+        rights_state=QualityState.UNKNOWN,
+    )
+    return StrategyDataQualityReview(
+        strategy_run_id=audit.strategy_run_id,
+        strategy_usage_audit_id=audit.strategy_usage_audit_id,
+        usage_audit=audit,
+        cell_quality=(quality,),
+        evaluator_id="quality-review.repository",
+        evaluator_version="1.0.0",
+        evaluator_implementation_sha256=_sha("3"),
+        evaluated_at=audit.audited_at + timedelta(minutes=1),
+    )
+
+
 @cache
 def _graduation_attestation() -> GraduationAttestation:
     # Reuse the canonical contract fixture so this remains a fully derived,
@@ -703,6 +745,26 @@ CASES = (
         id_prefix="strategy-usage-audit",
         contract_factory=_strategy_usage_audit,
         postgres_repository_type=PostgresStrategyUsageAuditRepository,
+    ),
+    _RepositoryCase(
+        name="usage-frequency-slice",
+        kind=ContractKind.USAGE_FREQUENCY_SLICE,
+        model_type=UsageFrequencySlice,
+        id_field="usage_frequency_slice_id",
+        hash_field="content_sha256",
+        id_prefix="usage-frequency",
+        contract_factory=_usage_frequency_slice,
+        postgres_repository_type=PostgresUsageFrequencySliceRepository,
+    ),
+    _RepositoryCase(
+        name="strategy-data-quality-review",
+        kind=ContractKind.STRATEGY_DATA_QUALITY_REVIEW,
+        model_type=StrategyDataQualityReview,
+        id_field="review_id",
+        hash_field="content_sha256",
+        id_prefix="strategy-data-quality-review",
+        contract_factory=_strategy_data_quality_review,
+        postgres_repository_type=PostgresStrategyDataQualityReviewRepository,
     ),
     _RepositoryCase(
         name="graduation-attestation",
@@ -883,6 +945,27 @@ def _force_row(
 
 def test_repository_case_matrix_covers_every_durable_contract_kind():
     assert {case.kind for case in CASES} == set(ContractKind)
+
+
+def test_reverse_quality_query_is_anchored_to_the_persisted_usage_audit(postgres_conn) -> None:
+    store = PostgresContractEvidenceStore(postgres_conn, schema=None, table=TEMP_TABLE)
+    audit = _strategy_usage_audit()
+    review = _strategy_data_quality_review()
+
+    assert store.put_strategy_usage_audit(audit)
+    assert store.put_strategy_data_quality_review(review)
+    assert store.list_strategy_data_quality_reviews(audit.strategy_run_id) == (review,)
+    assert store.list_strategy_data_quality_reviews("strategy-run:unknown") == ()
+
+    postgres_conn.execute(
+        f"delete from {TEMP_TABLE} where contract_id = %s",
+        (audit.strategy_usage_audit_id,),
+    )
+    with pytest.raises(ContractIntegrityError, match="no persisted strategy usage audit"):
+        store.list_strategy_data_quality_reviews(audit.strategy_run_id)
+
+    with pytest.raises(ValueError, match="stable identifier"):
+        store.list_strategy_data_quality_reviews("invalid run id")
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
