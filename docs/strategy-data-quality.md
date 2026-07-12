@@ -44,8 +44,11 @@ seven-company cross-industry universe, split/dividend golden cases, historical
 membership, a restatement pair, corroborated analyst knowability, replayable
 supply-chain edges, and composite-factor replay fixtures.
 
-`strategy_evaluation` additionally requires at least five years of prices and
-a primary market-data source reconciled against an independent fallback. This is a
+`strategy_evaluation` additionally requires at least five years of prices for the
+predeclared eligible evaluation cohort and a primary market-data source reconciled
+against an independent fallback. The Production research universe is a separate
+immutable scope: recent IPOs remain visible under an explicit insufficient-history
+policy rather than being deleted to make the evaluation cohort pass. This is a
 data-corpus prerequisite, not permission to evaluate or promote a strategy by itself.
 
 The complete release path additionally requires all of the following independent
@@ -53,13 +56,16 @@ evidence:
 
 - Gate 0 semantic, executable-contract, source-rights, applicability, coverage, and
   freshness closure (#56-#61).
-- Dedicated longitudinal forecast/analyst, ETF, and filing/extraction data planes
-  (#62-#64).
+- The Core filing-to-headcount data plane and blind Core holdout (#70-#71).
+- Dedicated longitudinal forecast/analyst and ETF data planes (#62-#63), the generic
+  filing/extraction substrate (#64), and the module candidates that consume it.
 - A sealed holdout quality gate for every applicable research module (#65).
 - Natural-cadence Staging soak, multi-regime strategy validation, recovery, and exact
   release promotion (#49-#53).
-- Deployed Production consumer validation and curated-universe shadow graduation
-  (#66-#67), followed by the final Vision audit (#54).
+- Configuration-only onboarding for an unseen issuer/theme (#72), deployed Production
+  consumer validation, and curated-universe shadow graduation (#66-#67).
+- The independent row-complete Production capture audit (#68), followed by the final
+  Vision audit (#54).
 
 An `unavailable`, stale, excluded, unresolved, or low-confidence result does not count
 toward usable module coverage. Checked-in fixtures, two immediate scheduler runs, or a
