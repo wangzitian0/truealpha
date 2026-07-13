@@ -1,0 +1,37 @@
+{
+  "accepted_rung": "E2",
+  "base_sha": "3316d487d221066abdd2cccad3761f7dda6dcbc9",
+  "batch_id": "D1-mvp-normalization-handoff",
+  "commands": [
+    {
+      "command": "uv run pytest apps/data-engine/tests/test_mvp_filing_document.py -q",
+      "exit_code": 0,
+      "output_sha256": "0375013cbca6f0fa635d29fd5281cf2d7acf5e4d1bd7c3b8cda68f5821731e50"
+    },
+    {
+      "command": "uv run ruff check apps/data-engine/src/data_engine/mvp_*.py apps/data-engine/tests/test_mvp_filing_document.py",
+      "exit_code": 0,
+      "output_sha256": "c822b811c2e0019bee1324669633ca6aa6ae681c738309b0a31c13bbeebac766"
+    },
+    {
+      "command": "uv run mypy",
+      "exit_code": 0,
+      "output_sha256": "91fbd9f3c0e7b71bb3c604e0c8b2e4f46d47d0e97ab39dd1b17dce6d95edd4f9"
+    }
+  ],
+  "created_at": "2026-07-13T05:52:59.663449Z",
+  "evidence_id": "rung-evidence:D1-mvp-normalization-handoff:c927c131b314ebc8258a883ffebfb9d5f0a5aa0a9c2ce53af279e98f35874876",
+  "manifest_sha256": "1b8893edc52b454c9f5034325640575a0b95a38cdcf78e93a11710a2a062d3d7",
+  "negative_controls": [
+    "missing identity, confidence, raw lineage, or PIT timestamp",
+    "future-known filing and pre-restatement cutoff",
+    "UPDATE or DELETE against normalized vintages",
+    "filing source and semantic schema drift",
+    "factor-visible provenance leakage",
+    "disabled filing-source extension activation",
+    "release or Staging activation before a permitted handoff"
+  ],
+  "producer_head_sha": "4fdca7cdd2025e81304c9ec72a4c26569e888a07",
+  "schema_version": 1,
+  "stable_handoff": false
+}
