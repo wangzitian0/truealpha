@@ -1,6 +1,12 @@
+from decimal import Decimal
 from pathlib import Path
 
-from data_engine.quality.strategy_samples import _valid_price_inventory, _verified_evidence, audit_strategy_samples
+from data_engine.quality.strategy_samples import (
+    _price_vintage_stability,
+    _valid_price_inventory,
+    _verified_evidence,
+    audit_strategy_samples,
+)
 from truealpha_contracts import ReadinessLevel
 
 SAMPLE_ROOT = Path(__file__).parents[1] / "samples"
@@ -19,6 +25,26 @@ def test_strategy_evaluation_retains_only_its_independent_price_evidence_blocker
     blockers = set(report.assessment(ReadinessLevel.STRATEGY_EVALUATION).blockers)
 
     assert blockers == {"prices.history", "prices.source_reconciliation"}
+
+
+def test_same_source_vintage_stability_is_reported_separately_from_independent_reconciliation():
+    report = audit_strategy_samples(SAMPLE_ROOT)
+    check = next(item for item in report.checks if item.requirement_id == "prices.same_source_vintage_stability")
+
+    assert check.status.value == "pass"
+    assert "not independent corroboration" in check.expected
+
+
+def test_same_source_vintage_stability_detects_changed_overlap(tmp_path):
+    header = "Date,Open,High,Low,Close,Adj Close,Volume\n"
+    (tmp_path / "AAA_prices_1y.csv").write_text(header + "2024-01-01,1,1,1,1,1,1\n")
+    (tmp_path / "AAA_prices_3y.csv").write_text(header + "2024-01-01,1,1,1,1,1.01,1\n")
+
+    compared, matches, max_delta = _price_vintage_stability(sorted(tmp_path.glob("*.csv")))
+
+    assert compared == 1
+    assert matches == 0
+    assert max_delta == Decimal("0.01")
 
 
 def test_price_history_is_measured_per_symbol(tmp_path):

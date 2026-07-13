@@ -107,6 +107,31 @@ def _valid_price_inventory(paths: list[Path]) -> tuple[dict[str, int], dict[str,
     return rows_by_symbol, spans_by_symbol, errors
 
 
+def _price_vintage_stability(paths: list[Path]) -> tuple[int, int, Decimal | None]:
+    """Compare overlapping same-provider vintages, not independent sources."""
+    vintages: dict[str, list[dict[date, Decimal]]] = {}
+    for path in paths:
+        symbol = path.name.split("_", 1)[0]
+        vintage: dict[date, Decimal] = {}
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("Date") and row.get("Adj Close"):
+                    vintage[date.fromisoformat(row["Date"])] = Decimal(row["Adj Close"])
+        vintages.setdefault(symbol, []).append(vintage)
+    compared = matches = 0
+    max_relative_delta = Decimal("0")
+    for rows in vintages.values():
+        for left, right in zip(rows, rows[1:]):
+            for day in left.keys() & right.keys():
+                compared += 1
+                delta = abs(left[day] - right[day])
+                if delta == 0:
+                    matches += 1
+                if left[day]:
+                    max_relative_delta = max(max_relative_delta, delta / abs(left[day]))
+    return compared, matches, (max_relative_delta if compared else None)
+
+
 def _artifact_text(sample_root: Path, evidence: EvidenceCase) -> str:
     return "\n".join(
         unescape((sample_root / relative_path).read_text(encoding="utf-8", errors="ignore"))
@@ -441,6 +466,7 @@ def audit_strategy_samples(sample_root: Path) -> DataQualityReport:
     moomoo_symbols = {path.stem for path in moomoo_paths}
     filing_symbols = {path.name.split("_", 1)[0] for path in filing_paths}
     price_rows, price_spans, price_errors = _valid_price_inventory(price_paths)
+    vintage_compared, vintage_matches, vintage_max_delta = _price_vintage_stability(price_paths)
     price_symbols = set(price_rows)
     common_companies = sec_symbols & moomoo_symbols & filing_symbols & price_symbols
     strategy_companies = set(traits_by_company) & sec_symbols & filing_symbols & price_symbols
@@ -612,6 +638,12 @@ def audit_strategy_samples(sample_root: Path) -> DataQualityReport:
         has_evidence("prices.source_reconciliation", "prices.independent-source-reconciliation"),
         f"verified_cases={len(evidence.get('prices.source_reconciliation', ()))}",
         "primary source reconciled against an independent fallback",
+    )
+    add_all(
+        "prices.same_source_vintage_stability",
+        vintage_compared > 0 and vintage_matches == vintage_compared,
+        f"overlap={vintage_compared}, exact={vintage_matches}, max_relative_delta={vintage_max_delta}",
+        "overlapping same-provider vintages agree exactly; this is not independent corroboration",
     )
     add_all(
         "factors.point_in_time_outputs",

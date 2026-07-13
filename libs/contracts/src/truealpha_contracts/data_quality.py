@@ -304,6 +304,14 @@ STRATEGY_DATA_REQUIREMENTS: tuple[StrategyDataRequirement, ...] = (
         required_for=frozenset({ReadinessLevel.STRATEGY_EVALUATION}),
     ),
     StrategyDataRequirement(
+        id="prices.same_source_vintage_stability",
+        domain=DataDomain.MARKET_PRICES,
+        description="Overlapping captures from the same provider are stable and are not mistaken for independent corroboration.",
+        acceptance="Overlapping same-provider adjusted-close bars are compared and reported separately from source reconciliation.",
+        strategies=ALL_STRATEGIES,
+        required_for=ALL_LEVELS,
+    ),
+    StrategyDataRequirement(
         id="factors.point_in_time_outputs",
         domain=DataDomain.FACTOR_OUTPUTS,
         description="Composite strategies consume versioned base-factor outputs at the same as-of boundary.",
