@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "D1-mvp-normalization-handoff",
-  "revision": 7,
+  "revision": 8,
   "issue": 92,
   "owner_gate": 29,
   "status": "done",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "4fdca7cdd2025e81304c9ec72a4c26569e888a07",
+    "base_sha": "58eda7a3206ac3c6bf24e427d3991fb8c73afd6b",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",

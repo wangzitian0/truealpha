@@ -142,7 +142,7 @@
       "target_rung": "E2",
       "terminal_rung": "E2",
       "manifest": "governance/batches/D1-mvp-normalization-handoff.v1.json",
-      "sha256": "80a090f866106fb54e9110bf1cb6454ea36f2e73c600b4bda5f284bc58a70087"
+      "sha256": "315de9211c132b714f72194f8d4948fbfb50a9a44fe2ac7685c950b3167095bb"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,
