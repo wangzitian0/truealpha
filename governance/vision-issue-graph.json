@@ -151,7 +151,7 @@
       "target_rung": "E3",
       "terminal_rung": "E3",
       "manifest": "governance/batches/H0-core-headcount-extraction.v1.json",
-      "sha256": "13b11bdd5b40ed1fdefb911f4b0ec483c985ae92055085b4c9ccf2c4d0696654"
+      "sha256": "121029f9fd1b02826fa166a020ba46928bd76e458a94b487a317d0d2ab5bccc1"
     }
   },
   "artifact_edges": [

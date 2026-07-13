@@ -155,6 +155,14 @@
       "handoff_id": "core-headcount-extraction-handoff:48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
       "sha256": "48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
       "schema_epoch": "staging.employee-headcount.v0.1.0+0020",
+      "rung_evidence": {
+        "path": "governance/evidence/H0-core-headcount-extraction-E2.v1.json",
+        "sha256": "a62d2fc1dafc4093e056fb6e7939e0653013bf9b87e56a5de24a627d74940efb"
+      },
+      "handoff_manifest": {
+        "path": "governance/handoffs/H0-core-headcount-extraction.v1.json",
+        "sha256": "889a517bd51393eaed8dae03b7955b15cadb476c9647c5e0cf702aca6493247d"
+      },
       "allowed_evidence_readers": [
         "#24 gross-profit-per-employee factor batch",
         "#26 Local Core integration batch",

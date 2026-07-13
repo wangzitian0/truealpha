@@ -285,7 +285,7 @@ def run_h0_e2(
     connection: Connection[Any],
     raw_store: RawObjectStore,
 ) -> CoreHeadcountExtractionHandoff:
-    """Build one environment-neutral handoff from the stored fixture evidence."""
+    """Build one Local/CI-consumable handoff from CI-pinned fixture evidence."""
 
     evidence = run_headcount_e1(
         repository_root=repository_root,

@@ -1,0 +1,39 @@
+{
+  "accepted_rung": "E2",
+  "base_sha": "ab760ef4facb310cad1022ad28c29eafe6030c18",
+  "batch_id": "H0-core-headcount-extraction",
+  "commands": [
+    {
+      "command": "uv run pytest apps/data-engine/tests/test_headcount_extraction.py -q",
+      "exit_code": 0,
+      "output_sha256": "95f1a16d714c3f22ef5a10e2b2f09ca8227222db2b25a4b9fe31920fd2ee3761"
+    },
+    {
+      "command": "uv run ruff check apps/data-engine/src/data_engine/headcount_*.py apps/data-engine/tests/test_headcount_extraction.py",
+      "exit_code": 0,
+      "output_sha256": "98733c3446b52dc3e6b6943142b19a142025d9727521f6abc3783a20e4b6d3c6"
+    },
+    {
+      "command": "uv run mypy",
+      "exit_code": 0,
+      "output_sha256": "5ccbfe5c78b09ddf571b720e8f42b945b060471406570439eb238fa7df70fc7b"
+    }
+  ],
+  "created_at": "2026-07-13T07:57:42.412041Z",
+  "evidence_id": "rung-evidence:H0-core-headcount-extraction:c0df7983538fadbd7ede6647a9786770bdade7f340bc3b06c8e854955fa71960",
+  "manifest_sha256": "13b11bdd5b40ed1fdefb911f4b0ec483c985ae92055085b4c9ccf2c4d0696654",
+  "negative_controls": [
+    "wrong or stale D1 handoff identity",
+    "mutable model, prompt, schema, or decoding identity",
+    "partial, geographic, departmental, or contractor count selected as total",
+    "missing or invalid evidence span",
+    "future-known or backdated extraction result",
+    "missing confidence, document, raw, invocation, or review lineage",
+    "UPDATE or DELETE against invocation and semantic vintages",
+    "factor-visible source, model, prompt, span, or review provenance",
+    "source, model, release, or Staging activation"
+  ],
+  "producer_head_sha": "07cb8c55457573f7e5355b1b5e476e66ad3e3ea6",
+  "schema_version": 1,
+  "stable_handoff": false
+}
