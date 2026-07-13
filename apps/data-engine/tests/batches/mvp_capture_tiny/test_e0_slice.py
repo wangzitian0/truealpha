@@ -247,6 +247,7 @@ def test_batch_remains_outside_default_release_composition():
         "apps/data-engine/src/data_engine/__init__.py",
         "apps/data-engine/src/data_engine/sources/__init__.py",
         "apps/data-engine/src/data_engine/mvp_probe.py",
+        "apps/data-engine/src/data_engine/contract_repository.py",
         "apps/data-engine/src/data_engine/contract_assets.py",
     )
 

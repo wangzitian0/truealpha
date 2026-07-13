@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import dagster as dg
@@ -10,10 +10,16 @@ import pytest
 from data_engine.batches.mvp_capture_tiny.e0_slice import run_e0_slice
 from data_engine.batches.mvp_capture_tiny.e1_slice import (
     E1_ASSET_NAME,
+    E1CaseResult,
+    EphemeralPostgresEvidenceRepository,
     EphemeralPostgresRecordRepository,
+    FindingClass,
+    MvpCaptureTinyEvidence,
     _base_probe,
+    _restatement_pair,
     build_e1_definitions,
     evaluate_evidence_variant,
+    run_e1_suite,
     validate_boundary_probe,
 )
 from data_engine.config import settings
@@ -45,6 +51,8 @@ def test_dagster_executes_all_terminal_e1_cases(connection):
 
     result = definitions.get_implicit_global_asset_job_def().execute_in_process()
     evidence = result.output_for_node(E1_ASSET_NAME)
+    repeated = definitions.get_implicit_global_asset_job_def().execute_in_process()
+    repeated_evidence = repeated.output_for_node(E1_ASSET_NAME)
 
     assert result.success
     assert evidence.fixture_snapshot_id == evidence.postgres_snapshot_id
@@ -61,6 +69,76 @@ def test_dagster_executes_all_terminal_e1_cases(connection):
     }
     assert all(case.passed for case in evidence.cases)
     assert evidence.stable_handoff is False
+    assert repeated.success
+    assert repeated_evidence.evidence_id == evidence.evidence_id
+    assert EphemeralPostgresEvidenceRepository(connection).get(evidence.evidence_id) == evidence
+
+
+def test_restatement_pit_excludes_superseded_record(connection):
+    subject, original, amended, _ledger = _restatement_pair(REPOSITORY_ROOT)
+    repository = EphemeralPostgresRecordRepository(connection)
+    repository.put(amended)
+    repository.put(original)
+
+    before = repository.select_pit(
+        subject=subject,
+        semantic_type_id=original.draft.semantic_type_id,
+        as_of=amended.draft.knowable_at - timedelta(microseconds=1),
+        valid_on=date(2020, 12, 31),
+    )
+    after = repository.select_pit(
+        subject=subject,
+        semantic_type_id=original.draft.semantic_type_id,
+        as_of=amended.draft.knowable_at,
+        valid_on=date(2020, 12, 31),
+    )
+
+    assert before == (original,)
+    assert after == (amended,)
+
+
+def test_raw_fetch_precedes_normalization_and_recording():
+    _subject, original, amended, ledger = _restatement_pair(REPOSITORY_ROOT)
+    by_sha256 = {entry.envelope.object.sha256: entry for entry in ledger.entries}
+
+    for record in (original, amended):
+        raw = by_sha256[record.raw_object_sha256]
+        assert raw.envelope.source_published_at <= raw.envelope.fetched_at
+        assert raw.envelope.fetched_at <= record.draft.produced_at
+        assert record.draft.produced_at <= record.recorded_at
+
+
+def test_failed_case_evidence_is_content_addressed_and_append_only(connection):
+    accepted = run_e1_suite(REPOSITORY_ROOT, connection)
+    failed_case = E1CaseResult(
+        **accepted.cases[0].model_dump(exclude={"passed", "classification"}),
+        passed=False,
+        classification=FindingClass.LOCAL_CAPTURE_BUG,
+    )
+    values = accepted.model_dump(mode="python", exclude={"evidence_id", "content_sha256", "cases"})
+    failed = MvpCaptureTinyEvidence(**values, cases=(failed_case, *accepted.cases[1:]))
+    repository = EphemeralPostgresEvidenceRepository(connection)
+
+    assert repository.put(failed)
+    assert repository.put(failed) is False
+    assert repository.get(failed.evidence_id) == failed
+    with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+        connection.execute(
+            "update mvp_capture_tiny_evidence set content_sha256 = %s where evidence_id = %s",
+            ("0" * 64, failed.evidence_id),
+        )
+
+
+def test_frozen_case_outputs_bind_the_declared_artifacts(connection):
+    evidence = run_e1_suite(REPOSITORY_ROOT, connection)
+    by_case = {case.case_id: case for case in evidence.cases}
+
+    assert len(by_case["applicable-success"].observed_ids) == 4
+    assert by_case["publication-boundary"].observed_ids[0] not in {
+        identifier for identifier in by_case["applicable-success"].observed_ids if identifier.startswith("snapshot:")
+    }
+    assert by_case["wrong-listing-identity"].blocker_codes == ("wrong-listing-at-cutoff",)
+    assert by_case["look-ahead-sentinel"].blocker_codes == ("future-known-vintage",)
 
 
 def test_ephemeral_repository_rejects_update_and_delete(connection):

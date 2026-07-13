@@ -133,7 +133,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/D0-mvp-capture-tiny.v1.json",
-      "sha256": "270914c724c3bd6e2287e47dee240930f65643971ec03cbb4ffa05978df1f2e0"
+      "sha256": "4b46fe3efec900f003d7f152669ac1ab31014d54218893c61ffbf6826884b9d1"
     }
   },
   "artifact_edges": [
