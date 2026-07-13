@@ -772,6 +772,95 @@ def test_corrective_terminal_rerun_cannot_change_rungs(field):
     assert f"D0: corrective terminal rerun cannot change {field}" in validation.errors
 
 
+def test_new_batch_registration_is_queued_and_administrative_only():
+    base_graph = {"batches": {"D0": {"status": "done"}}}
+    graph = {"batches": {**base_graph["batches"], "D1": {"status": "queued", "target_rung": "E0"}}}
+    manifest = {
+        "revision": 1,
+        "status": "queued",
+        "last_accepted_rung": None,
+        "target_rung": "E0",
+        "activation": {"base_sha": None},
+        "owners": {"reviewer": None},
+    }
+    validation = governance.Validation()
+
+    governance.validate_new_batch_registration(
+        validation,
+        batch_id="D1",
+        graph=graph,
+        base_graph=base_graph,
+        manifest_path="governance/batches/D1.json",
+        manifest=manifest,
+        changed_paths=("governance/batches/D1.json", "governance/vision-issue-graph.json"),
+    )
+
+    assert validation.errors == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        (lambda manifest: manifest.update(status="active"), "must register as queued"),
+        (lambda manifest: manifest.update(revision=2), "must start at revision 1"),
+        (lambda manifest: manifest["activation"].update(base_sha="a" * 40), "cannot pin"),
+        (lambda manifest: manifest["owners"].update(reviewer="reviewer"), "cannot pre-assign"),
+    ],
+)
+def test_new_batch_registration_rejects_implementation_state(mutation, expected):
+    base_graph = {"batches": {}}
+    graph = {"batches": {"D1": {"status": "queued", "target_rung": "E0"}}}
+    manifest = {
+        "revision": 1,
+        "status": "queued",
+        "last_accepted_rung": None,
+        "target_rung": "E0",
+        "activation": {"base_sha": None},
+        "owners": {"reviewer": None},
+    }
+    mutation(manifest)
+    validation = governance.Validation()
+
+    governance.validate_new_batch_registration(
+        validation,
+        batch_id="D1",
+        graph=graph,
+        base_graph=base_graph,
+        manifest_path="governance/batches/D1.json",
+        manifest=manifest,
+        changed_paths=("governance/batches/D1.json", "governance/vision-issue-graph.json"),
+    )
+
+    assert any(expected in error for error in validation.errors)
+
+
+def test_new_batch_registration_rejects_implementation_files():
+    validation = governance.Validation()
+
+    governance.validate_new_batch_registration(
+        validation,
+        batch_id="D1",
+        graph={"batches": {"D1": {"status": "queued", "target_rung": "E0"}}},
+        base_graph={"batches": {}},
+        manifest_path="governance/batches/D1.json",
+        manifest={
+            "revision": 1,
+            "status": "queued",
+            "last_accepted_rung": None,
+            "target_rung": "E0",
+            "activation": {"base_sha": None},
+            "owners": {"reviewer": None},
+        },
+        changed_paths=(
+            "apps/data-engine/src/data_engine/mvp_models.py",
+            "governance/batches/D1.json",
+            "governance/vision-issue-graph.json",
+        ),
+    )
+
+    assert any("registration may only add" in error for error in validation.errors)
+
+
 def test_prepared_batch_uses_queued_mirror_and_rejects_contradictory_labels():
     graph = {
         "root_issue": 68,

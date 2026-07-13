@@ -1165,6 +1165,50 @@ def validate_pr_paths(
     )
 
 
+def validate_new_batch_registration(
+    validation: Validation,
+    *,
+    batch_id: str,
+    graph: dict[str, Any],
+    base_graph: dict[str, Any],
+    manifest_path: str,
+    manifest: dict[str, Any],
+    changed_paths: tuple[str, ...],
+) -> None:
+    graph_batch = graph.get("batches", {}).get(batch_id, {})
+    validation.require(manifest.get("revision") == 1, f"{batch_id}: new batch must start at revision 1")
+    validation.require(
+        manifest.get("status") == "queued"
+        and manifest.get("last_accepted_rung") is None
+        and manifest.get("target_rung") == "E0",
+        f"{batch_id}: new batch must register as queued at E0 without accepted evidence",
+    )
+    validation.require(
+        manifest.get("activation", {}).get("base_sha") is None,
+        f"{batch_id}: queued registration cannot pin an implementation base",
+    )
+    validation.require(
+        manifest.get("owners", {}).get("reviewer") is None,
+        f"{batch_id}: queued registration cannot pre-assign a reviewer",
+    )
+    validation.require(
+        graph_batch.get("status") == "queued" and graph_batch.get("target_rung") == "E0",
+        f"{batch_id}: graph registration must be queued at E0",
+    )
+    base_without_batch = json.loads(json.dumps(base_graph))
+    candidate_without_batch = json.loads(json.dumps(graph))
+    candidate_without_batch.get("batches", {}).pop(batch_id, None)
+    validation.require(
+        base_without_batch == candidate_without_batch,
+        f"{batch_id}: registration changed unrelated Vision graph content",
+    )
+    allowed_paths = {manifest_path, str(GRAPH_PATH.relative_to(ROOT))}
+    validation.require(
+        set(changed_paths) == allowed_paths,
+        f"{batch_id}: registration may only add its manifest and Vision graph entry",
+    )
+
+
 def validate_pr_advance(
     validation: Validation,
     *,
@@ -1219,9 +1263,24 @@ def validate_pr_advance(
     if not isinstance(base_graph, dict):
         return None
     base_batch = base_graph.get("batches", {}).get(batch_id)
-    validation.require(isinstance(base_batch, dict), f"{batch_id}: batch is absent from the base Vision graph")
     if not isinstance(base_batch, dict):
-        return None
+        validate_new_batch_registration(
+            validation,
+            batch_id=batch_id,
+            graph=graph,
+            base_graph=base_graph,
+            manifest_path=manifest_path,
+            manifest=manifest,
+            changed_paths=changed_paths,
+        )
+        return PullRequestAdvance(
+            batch_id=batch_id,
+            manifest_path=manifest_path,
+            base_manifest={},
+            manifest=manifest,
+            accepted_rung=None,
+            changed_paths=changed_paths,
+        )
     base_manifest_path = base_batch.get("manifest")
     base_manifest = git_json(base_sha, base_manifest_path) if isinstance(base_manifest_path, str) else None
     validation.require(isinstance(base_manifest, dict), f"{batch_id}: base manifest is unavailable")
@@ -1596,7 +1655,7 @@ def validate(
         )
     if github_path is not None:
         github_graph = graph
-        if pr_base_sha is not None:
+        if pr_base_sha is not None and (advance is None or advance.base_manifest):
             base_graph = git_json(pr_base_sha, str(GRAPH_PATH.relative_to(ROOT)))
             validation.require(isinstance(base_graph, dict), "base Vision graph is unavailable for live parity")
             if isinstance(base_graph, dict):
