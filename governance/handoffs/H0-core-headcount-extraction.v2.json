@@ -1,5 +1,5 @@
 {
-  "handoff_id": "handoff:h0-core-headcount-extraction:3c530ec448af38e56dc68857a5d2435bc9443c6ec2997af0f1bb40db6d641ddb",
+  "handoff_id": "handoff:h0-core-headcount-extraction:447ab8a382ab258eb935ab8e643456d624708773782f8aed8b0d21c4bfdd43ac",
   "schema_version": 1,
   "revision": 2,
   "state": "accepted",
@@ -10,7 +10,7 @@
     "head_sha": "ac8ea5e0b67c3441023f5112e67f1593ac862bcc"
   },
   "schema_epoch": "staging.employee-headcount.v0.1.0+0020",
-  "readiness_ceiling": "E2 Local/CI contract only; #59 semantics and #60 live policy remain pending",
+  "readiness_ceiling": "E2",
   "evidence": [
     {
       "path": "governance/evidence/H0-core-headcount-extraction-E2.v2.json",
