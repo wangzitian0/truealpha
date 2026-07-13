@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "corpus_id": "d2-mvp-medium-validation-e0-v1",
+  "source_ceiling": "Checked-in public fixture bytes only; no network, credentials, live source, Staging, or release activation.",
+  "producer_handoff": {
+    "path": "governance/handoffs/D1-mvp-normalization-handoff.v1.json",
+    "sha256": "d872123a10fa626a5f777182b1f0c822c4013c0b4375ad10c6ea93da00716137",
+    "handoff_id": "handoff:d1-mvp-normalization-handoff:6b7dee09f06996dc1635695c94c9802735ba10744964abef65e4c9f5caead7e7",
+    "state": "accepted",
+    "allowed_consumer": "D2-mvp-medium-validation",
+    "allowed_environments": [
+      "ci",
+      "local"
+    ]
+  },
+  "policy_state": {
+    "universe_semantics": "candidate-unapproved-denominator-only-pending-issue-59",
+    "source_rights_budget": "fixture-only-no-live-call-pending-issue-60",
+    "confidence_policy": "reviewed-development-fixture-only",
+    "maximum_claim": "E0 typed Local/CI price slice; no stable semantic, live-source, Staging, factor, strategy, or release claim"
+  },
+  "rung_scope": {
+    "frozen_target_rung": "E0",
+    "executable_cases": [
+      "nvda-price-2026-03-31"
+    ],
+    "terminal_denominator_frozen": false,
+    "revision_rule": "Any corpus expansion for E1-E3 creates a prospective revision and reruns every previously accepted D2 rung."
+  },
+  "universe_context": {
+    "artifact_id": "topt-candidate-denominator",
+    "state": "candidate_unapproved",
+    "purpose": "Immutable denominator and identity context only; this corpus does not accept issue #59 semantics.",
+    "universe_id": "universe:topt-us-2026-03-31",
+    "accession": "000207169126012475",
+    "report_date": "2026-03-31",
+    "primary_document_sha256": "7e46eb6babead70230986162349bb33f27d7af2a51a095b5850340aa0a534934",
+    "issuer_count": 20,
+    "instrument_count": 21,
+    "selected_instrument": {
+      "ticker": "NVDA",
+      "cusip": "67066G104",
+      "issuer_lei": "549300S4KLFTLO7GSQ80"
+    }
+  },
+  "artifacts": [
+    {
+      "artifact_id": "source-capture-manifest",
+      "path": "apps/data-engine/samples/capture_manifest_20260712.json",
+      "sha256": "d4281c12d9c00c1508895ed77b1270e6b48e3788e5b579868beec32c1fb91205",
+      "git_blob": "2fa62f8a422ac7c1d71c9a562184f09391584f7f",
+      "capture_id": "strategy-evidence-20260712",
+      "completed_at": "2026-07-11T19:04:54.803220+00:00"
+    },
+    {
+      "artifact_id": "nvda-daily-prices",
+      "path": "apps/data-engine/samples/prices/NVDA_prices_3y_20260712.csv",
+      "sha256": "277301f5c45e16bcf9a581dd7b89fc72f576e16dce6ccbf1ccaa846c2d8be926",
+      "git_blob": "63c9cec31b1ccfcf049e61d5a900971b53e68930",
+      "byte_length": 83463,
+      "source": "yahoo",
+      "semantic_type": "market-price",
+      "capture_manifest_artifact_path": "prices/NVDA_prices_3y_20260712.csv"
+    },
+    {
+      "artifact_id": "nvda-listing-identity",
+      "path": "apps/data-engine/samples/filings/NVDA_8K_SPLIT_000104581024000144.html",
+      "sha256": "047c49a59b50dd6851111d580d8c68b33fcb3bca22d5ea219793568b1bf7b0a6",
+      "git_blob": "e13e97c6fb2404db42bf49a4fe85c03a8a16b544",
+      "byte_length": 22990,
+      "source": "sec",
+      "semantic_type": "listing-identity",
+      "accepted_at": "2024-06-07T20:19:34.000Z",
+      "identity_evidence": {
+        "security_title": "Common Stock, $0.001 par value per share",
+        "ticker": "NVDA",
+        "exchange_name": "The Nasdaq Global Select Market",
+        "exchange_mic": "XNAS"
+      }
+    },
+    {
+      "artifact_id": "topt-candidate-denominator",
+      "path": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "git_blob": "1aef8a3d164e9ee06c30193faf393b25c4af2b85",
+      "state": "candidate_unapproved",
+      "semantic_type": "denominator-context"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "nvda-price-2026-03-31",
+      "artifact_ids": [
+        "source-capture-manifest",
+        "nvda-daily-prices",
+        "nvda-listing-identity",
+        "topt-candidate-denominator"
+      ],
+      "source_row": "2026-03-31,166.97000122070312,174.6199951171875,166.9600067138672,174.39999389648438,174.1969757080078,226181300",
+      "expected": {
+        "identity": {
+          "issuer_id": "issuer:lei:549300S4KLFTLO7GSQ80",
+          "security_id": "security:cusip:67066G104",
+          "listing_id": "listing:xnas:NVDA",
+          "issuer_lei": "549300S4KLFTLO7GSQ80",
+          "cusip": "67066G104",
+          "security_kind": "common-stock",
+          "share_class": "common",
+          "exchange_mic": "XNAS",
+          "ticker": "NVDA",
+          "currency": "USD",
+          "timezone": "America/New_York",
+          "trading_calendar_id": "calendar:us-equities",
+          "trading_calendar_version": "v1"
+        },
+        "trading_date": "2026-03-31",
+        "open": "166.97000122070312",
+        "high": "174.6199951171875",
+        "low": "166.9600067138672",
+        "close": "174.39999389648438",
+        "adjusted_close": "174.1969757080078",
+        "volume": "226181300",
+        "knowable_at": "2026-07-11T19:04:54.803220+00:00",
+        "recorded_at": "2026-07-11T19:04:54.803220+00:00",
+        "confidence": "0.99",
+        "raw_lineage_artifact_id": "nvda-daily-prices",
+        "source_adapter_id": "source:yahoo-csv@fixture-v1",
+        "normalizer_id": "normalizer:market-price@v1",
+        "semantic_schema_id": "schema:market-price@v1",
+        "confidence_policy_id": "policy:reviewed-fixture-price@v1",
+        "dagster_composition_id": "composition:d2-e0-local-ci@v1",
+        "adjustment_policy": "preserve-source-adjusted-close-without-applying-corporate-actions"
+      }
+    }
+  ],
+  "mutation_matrix": [
+    {
+      "mutation": "missing-confidence-identity-lineage-policy-or-pit-time",
+      "expected": "reject"
+    },
+    {
+      "mutation": "future-known-or-stale-record",
+      "expected": "reject"
+    },
+    {
+      "mutation": "wrong-issuer-security-listing-or-share-class",
+      "expected": "reject"
+    },
+    {
+      "mutation": "float-non-decimal-non-finite-or-malformed-ohlcv",
+      "expected": "reject"
+    },
+    {
+      "mutation": "adjusted-close-plus-corporate-action-double-count",
+      "expected": "reject"
+    },
+    {
+      "mutation": "update-or-delete-prior-raw-or-normalized-vintage",
+      "expected": "reject"
+    },
+    {
+      "mutation": "identical-replay",
+      "expected": "reuse-content-identical-raw-and-normalized-records"
+    },
+    {
+      "mutation": "changed-source-bytes",
+      "expected": "append-new-raw-and-normalized-vintage-with-prior-vintage-retained"
+    },
+    {
+      "mutation": "default-registry-schedule-live-source-staging-or-release-activation",
+      "expected": "reject"
+    }
+  ],
+  "execution_backends": [
+    "fixture",
+    "ephemeral-postgres"
+  ],
+  "release_isolation": {
+    "default_registry_entry": false,
+    "default_dagster_definition": false,
+    "schedule_entry": false,
+    "network_call": false,
+    "staging_route": false,
+    "release_activation": false
+  }
+}
