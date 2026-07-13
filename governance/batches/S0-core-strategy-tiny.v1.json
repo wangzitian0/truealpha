@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "batch_id": "S0-core-strategy-tiny",
-  "revision": 2,
+  "revision": 3,
   "issue": 78,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "strategy",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Expose core GPPE, tier, and strategy interaction defects on a predeclared tiny fixture without claiming a stable interface.",
   "claim_ceiling": "E1 tiny development evidence",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "c30c078b0b96890fac33694017bff7ad3f54c18d",
+    "base_sha": "61c895e92ebb7d8607569051bf2234a458764097",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance change merged to main",
