@@ -1089,8 +1089,16 @@ def validate_status_transition(
         ("active", "done"),
         ("blocked", "active"),
         ("blocked", "cancelled"),
+        ("done", "done"),
     }
     validation.require((before, after) in allowed, f"{batch_id}: invalid batch transition {before!r} -> {after!r}")
+    if (before, after) == ("done", "done"):
+        for field in ("last_accepted_rung", "target_rung", "terminal_rung"):
+            validation.require(
+                manifest.get(field) == base_manifest.get(field),
+                f"{batch_id}: corrective terminal rerun cannot change {field}",
+            )
+        return manifest.get("last_accepted_rung") if manifest.get("last_accepted_rung") in RUNGS else None
     if (before, after) == ("queued", "prepared"):
         validation.require(
             manifest.get("last_accepted_rung") == base_manifest.get("last_accepted_rung")
