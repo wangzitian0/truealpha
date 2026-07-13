@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "batch_id": "D1-mvp-normalization-handoff",
+  "revision": 1,
+  "issue": 92,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E2",
+  "objective": "Turn the D0 discovery corpus into a stable Local/CI normalized Postgres and snapshot handoff for issue #23.",
+  "claim_ceiling": "E2 stable Local/CI capture handoff for #70; no live-source or Staging claim",
+  "capability_issues": [23],
+  "closes_issues": [],
+  "informational_issues": [27, 57, 58, 59, 60, 61, 70, 79],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "governance registration merged to main",
+      "base_sha updated to the current implementation PR base commit",
+      "fixture corpus paths and SHA-256 frozen before execution",
+      "reviewer assigned and different from the implementation owner",
+      "shared integration lease accepted for migrations and composition paths",
+      "GitHub issue body contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 57,
+      "artifact": "identity-market-time-universe contracts",
+      "evidence": {
+        "path": "governance/evidence/issue-57.v1.json",
+        "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640"
+      },
+      "git_objects": [
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/universe.py",
+          "oid": "292b73b7fd2f44a440fb581c8a9d9a9f199c2730"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/market.py",
+          "oid": "8e6e232037a05b8fa5a812076dda4b3fd447afd8"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/registries.py",
+          "oid": "d2c86876086e7f6ffccbc938bd733093906f6939"
+        }
+      ],
+      "legacy_accepted": true,
+      "state": "accepted"
+    },
+    {
+      "class": "start",
+      "issue": 58,
+      "artifact": "capture-snapshot-runner-lineage contracts",
+      "evidence": {
+        "path": "governance/evidence/issue-58.v2.json",
+        "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
+      },
+      "ref": "git:71df1a7214d28fd6e161da04769466abe5c13e82:libs/contracts",
+      "git_tree": "cc2a0ded19f3ceb28b0f5e39c83871055ca07346",
+      "legacy_accepted": true,
+      "state": "accepted"
+    }
+  ],
+  "later_claim_dependencies": [
+    "#59 accepted headcount semantics before #70 freezes its semantic output",
+    "#60 accepted live source, model, rights, and budget policy before any live call",
+    "#61 accepted applicability denominator before readiness claims",
+    "separate E3 medium evidence before #23 closes",
+    "#27 owns the bounded Staging run"
+  ],
+  "corpus": {
+    "environment": "checked-in fixtures plus ephemeral Postgres",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "empty-database success",
+      "missing confidence or lineage",
+      "changed raw and normalized vintage",
+      "pre and post restatement cutoff",
+      "corporate action timing",
+      "historical universe membership timing",
+      "reordered and repeated Dagster execution",
+      "registry-only source and semantic extension"
+    ]
+  },
+  "source_ceiling": "Checked-in public fixtures only through E2. Live calls remain owned by #60 and #27.",
+  "paths": {
+    "writable": [
+      "apps/data-engine/samples/mvp/**",
+      "apps/data-engine/src/data_engine/mvp_assets.py",
+      "apps/data-engine/src/data_engine/mvp_models.py",
+      "apps/data-engine/src/data_engine/mvp_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_registry.py",
+      "apps/data-engine/src/data_engine/mvp_repository.py",
+      "apps/data-engine/src/data_engine/mvp_snapshot.py",
+      "apps/data-engine/src/data_engine/mvp_sources.py",
+      "apps/data-engine/tests/test_mvp_normalization.py",
+      "db/migrations/0019_mvp_normalized_domains.sql",
+      "db/tests/runtime_contract.sql"
+    ],
+    "read_only": [
+      "apps/data-engine/src/data_engine/batches/mvp_capture_tiny/**",
+      "apps/data-engine/tests/fixtures/mvp_capture_tiny/**",
+      "libs/factors/**"
+    ],
+    "forbidden": [
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile",
+      "AGENTS.md",
+      "init.md",
+      "docs/architecture-contract-closure.md"
+    ],
+    "integration_surface": [
+      "apps/data-engine/src/data_engine/raw_store.py",
+      "apps/data-engine/src/data_engine/__init__.py",
+      "apps/data-engine/src/data_engine/sources/__init__.py",
+      "libs/contracts/src/truealpha_contracts/models.py",
+      "db/migrations/0019_mvp_normalized_domains.sql",
+      "db/tests/runtime_contract.sql"
+    ],
+    "lease_owner": "wangzitian0"
+  },
+  "release_activation": {
+    "allowed": false,
+    "requirements": [
+      "E0 and E1 assets remain explicit test composition only",
+      "E2 handoff permits named Local/CI consumers but no default schedule",
+      "accepted ReleaseManifest configuration excludes live activation",
+      "negative test rejects activation outside the handoff allow-list"
+    ]
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest apps/data-engine/tests/test_mvp_normalization.py -q",
+      "uv run ruff check apps/data-engine/src/data_engine/mvp_*.py apps/data-engine/tests/test_mvp_normalization.py",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "missing identity, confidence, raw lineage, or PIT timestamp",
+      "future-known and stale records",
+      "UPDATE or DELETE against normalized vintages",
+      "source and semantic schema drift",
+      "factor-visible provenance leakage",
+      "disabled extension activation",
+      "release or Staging activation before a permitted handoff"
+    ],
+    "output": {
+      "type": "MvpNormalizationHandoff",
+      "stable_handoff": true,
+      "state": "planned",
+      "allowed_evidence_readers": [
+        "#70 fixture and Local/CI headcount extraction batch",
+        "#23 E3 medium validation batch"
+      ],
+      "retention": "accepted E2 handoff is permanent; failed rung evidence follows CI retention"
+    }
+  },
+  "merge_predecessors": ["D0-mvp-capture-tiny"],
+  "invalidation": [
+    "corpus, registry, schema, PIT policy, or migration change creates a new revision",
+    "shared-toolkit finding invalidates the current rung and reruns the exact corpus",
+    "handoff consumer permissions or environment ceiling change creates a new handoff",
+    "revocation preserves prior evidence and blocks new activation"
+  ],
+  "rollback": "Revert only the latest rung PR and revoke any produced handoff; append-only raw and normalized rows are never deleted."
+}

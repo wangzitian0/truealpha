@@ -134,6 +134,15 @@
       "terminal_rung": "E1",
       "manifest": "governance/batches/D0-mvp-capture-tiny.v1.json",
       "sha256": "572901c0f27505c36c4c9af173ae95259aa5bcffbf7cb3a76a661fd3c5a89718"
+    },
+    "D1-mvp-normalization-handoff": {
+      "issue": 92,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E2",
+      "manifest": "governance/batches/D1-mvp-normalization-handoff.v1.json",
+      "sha256": "8d2cea49ee10bd295b342361f77ef15152938258131cd770db0f55c7d1ea0dd8"
     }
   },
   "artifact_edges": [
