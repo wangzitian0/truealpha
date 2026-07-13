@@ -1,26 +1,26 @@
 {
   "schema_version": 1,
   "batch_id": "D1-mvp-normalization-handoff",
-  "revision": 1,
+  "revision": 2,
   "issue": 92,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E2",
-  "objective": "Turn the D0 discovery corpus into a stable Local/CI normalized Postgres and snapshot handoff for issue #23.",
+  "objective": "Build a persistent SEC filing-document vertical slice first, then turn the D0 corpus into a stable Local/CI normalized Postgres and snapshot handoff for issue #23.",
   "claim_ceiling": "E2 stable Local/CI capture handoff for #70; no live-source or Staging claim",
   "capability_issues": [23],
   "closes_issues": [],
   "informational_issues": [27, 57, 58, 59, 60, 61, 70, 79],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "acbb6358513a8488870b92675007589561cb038d",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -81,23 +81,23 @@
   ],
   "corpus": {
     "environment": "checked-in fixtures plus ephemeral Postgres",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "apps/data-engine/tests/fixtures/mvp_capture_tiny/corpus.v1.json",
+    "sha256": "82f92f5c65d8cbe9e5a26fb1182e0584de9a0bb4d51f879ed3ea41e522e98ef1",
     "required_strata": [
-      "empty-database success",
+      "empty-database PLUG 10-K and 10-K/A success",
       "missing confidence or lineage",
-      "changed raw and normalized vintage",
+      "changed filing bytes append a new raw and normalized vintage",
       "pre and post restatement cutoff",
-      "corporate action timing",
-      "historical universe membership timing",
       "reordered and repeated Dagster execution",
-      "registry-only source and semantic extension"
+      "registry-only filing source extension",
+      "frozen filing schema drift"
     ]
   },
   "source_ceiling": "Checked-in public fixtures only through E2. Live calls remain owned by #60 and #27.",
   "paths": {
     "writable": [
-      "apps/data-engine/samples/mvp/**",
+      "governance/leases/D1-mvp-normalization-handoff.v1.json",
+      "apps/data-engine/src/data_engine/raw_store.py",
       "apps/data-engine/src/data_engine/mvp_assets.py",
       "apps/data-engine/src/data_engine/mvp_models.py",
       "apps/data-engine/src/data_engine/mvp_pipeline.py",
@@ -105,8 +105,8 @@
       "apps/data-engine/src/data_engine/mvp_repository.py",
       "apps/data-engine/src/data_engine/mvp_snapshot.py",
       "apps/data-engine/src/data_engine/mvp_sources.py",
-      "apps/data-engine/tests/test_mvp_normalization.py",
-      "db/migrations/0019_mvp_normalized_domains.sql",
+      "apps/data-engine/tests/test_mvp_filing_document.py",
+      "db/migrations/0019_mvp_filing_document.sql",
       "db/tests/runtime_contract.sql"
     ],
     "read_only": [
@@ -129,7 +129,7 @@
       "apps/data-engine/src/data_engine/__init__.py",
       "apps/data-engine/src/data_engine/sources/__init__.py",
       "libs/contracts/src/truealpha_contracts/models.py",
-      "db/migrations/0019_mvp_normalized_domains.sql",
+      "db/migrations/0019_mvp_filing_document.sql",
       "db/tests/runtime_contract.sql"
     ],
     "lease_owner": "wangzitian0"
@@ -145,17 +145,17 @@
   },
   "acceptance": {
     "commands": [
-      "uv run pytest apps/data-engine/tests/test_mvp_normalization.py -q",
-      "uv run ruff check apps/data-engine/src/data_engine/mvp_*.py apps/data-engine/tests/test_mvp_normalization.py",
+      "uv run pytest apps/data-engine/tests/test_mvp_filing_document.py -q",
+      "uv run ruff check apps/data-engine/src/data_engine/mvp_*.py apps/data-engine/tests/test_mvp_filing_document.py",
       "uv run mypy"
     ],
     "negative_controls": [
       "missing identity, confidence, raw lineage, or PIT timestamp",
-      "future-known and stale records",
+      "future-known filing and pre-restatement cutoff",
       "UPDATE or DELETE against normalized vintages",
-      "source and semantic schema drift",
+      "filing source and semantic schema drift",
       "factor-visible provenance leakage",
-      "disabled extension activation",
+      "disabled filing-source extension activation",
       "release or Staging activation before a permitted handoff"
     ],
     "output": {
