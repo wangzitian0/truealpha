@@ -133,7 +133,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/D0-mvp-capture-tiny.v1.json",
-      "sha256": "8013adb7b6038ca4373e8fff505dbc063073bf25f3c0cd9f2bab404163838a46"
+      "sha256": "4e0248909d4ff0b6625dd520dc104bd3629871def8ba2a259ac39f781d0b1fbd"
     },
     "D1-mvp-normalization-handoff": {
       "issue": 92,
