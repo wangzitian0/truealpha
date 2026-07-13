@@ -1,0 +1,40 @@
+{
+  "handoff_id": "handoff:h0-core-headcount-extraction:3c530ec448af38e56dc68857a5d2435bc9443c6ec2997af0f1bb40db6d641ddb",
+  "schema_version": 1,
+  "revision": 2,
+  "state": "accepted",
+  "producer": {
+    "batch_id": "H0-core-headcount-extraction",
+    "issue": 104,
+    "owner": "wangzitian0",
+    "head_sha": "ac8ea5e0b67c3441023f5112e67f1593ac862bcc"
+  },
+  "schema_epoch": "staging.employee-headcount.v0.1.0+0020",
+  "readiness_ceiling": "E2 Local/CI contract only; #59 semantics and #60 live policy remain pending",
+  "evidence": [
+    {
+      "path": "governance/evidence/H0-core-headcount-extraction-E2.v2.json",
+      "sha256": "5944f0f3b46262a35cb8f612eac87e158e33a67a3618fe50f86f4986292695cb"
+    }
+  ],
+  "allowed_consumers": [
+    "H0-core-headcount-extraction",
+    "S0-core-strategy-tiny"
+  ],
+  "allowed_environments": [
+    "ci",
+    "local"
+  ],
+  "retention": "permanent while an allowed consumer depends on this handoff",
+  "verification": {
+    "reviewer": "copilot-pull-request-reviewer[bot]",
+    "evidence_sha256": "53f53606cef570d2b0a0d54c342077ae86bc189ef2d8f26ed620fc62e12aaa83",
+    "accepted_at": "2026-07-13T08:01:49Z",
+    "attestation_ref": "https://github.com/wangzitian0/truealpha/pull/113#pullrequestreview-4682812155"
+  },
+  "revocation": {
+    "reason": null,
+    "revoked_at": null,
+    "superseded_by": null
+  }
+}
