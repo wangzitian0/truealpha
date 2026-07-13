@@ -108,7 +108,11 @@ def _load_frozen_corpus(root: Path, corpus_path: Path) -> tuple[dict[str, Any], 
     if not isinstance(cases, list) or len(cases) != 8:
         raise ValueError("tiny corpus must retain its eight predeclared cases")
     case_ids = [case.get("case_id") for case in cases if isinstance(case, dict)]
-    if len(case_ids) != 8 or len(set(case_ids)) != 8:
+    if (
+        len(case_ids) != 8
+        or not all(isinstance(case_id, str) and bool(case_id) for case_id in case_ids)
+        or len(set(case_ids)) != 8
+    ):
         raise ValueError("tiny corpus case IDs are incomplete or duplicated")
     return payload, artifacts
 

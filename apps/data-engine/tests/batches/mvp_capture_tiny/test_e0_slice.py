@@ -19,7 +19,11 @@ from truealpha_contracts.capture_contracts import (
 )
 from truealpha_contracts.execution import NormalizedRecordRef
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
+REPOSITORY_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "governance" / "vision-issue-graph.json").is_file()
+)
 
 
 @pytest.fixture(scope="module")
@@ -171,6 +175,36 @@ def test_frozen_corpus_rejects_changed_artifact_bytes(tmp_path):
 def test_company_facts_schema_drift_fails_with_explicit_error():
     with pytest.raises(ValueError, match="company-facts schema drifted"):
         _latest_annual_gross_profit(b"{}", CUTOFF)
+
+
+def test_frozen_corpus_rejects_missing_case_id(tmp_path):
+    source = tmp_path / "source.json"
+    source.write_text("{}", encoding="utf-8")
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("{}", encoding="utf-8")
+    cases = [{"case_id": f"case-{index}"} for index in range(8)]
+    cases[0] = {"case_id": None}
+    corpus = {
+        "schema_version": 1,
+        "corpus_id": "missing-case-id",
+        "source_manifest": {
+            "path": "source.json",
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        },
+        "artifacts": [
+            {
+                "artifact_id": "nvda-company-facts",
+                "path": "artifact.json",
+                "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            }
+        ],
+        "cases": cases,
+    }
+    corpus_path = tmp_path / "corpus.json"
+    corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="case IDs are incomplete"):
+        run_e0_slice(tmp_path, corpus_path=Path("corpus.json"))
 
 
 def test_batch_remains_outside_default_release_composition():
