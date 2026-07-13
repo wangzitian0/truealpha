@@ -14,8 +14,14 @@ import pytest
 from data_engine.config import settings
 from data_engine.headcount_assets import (
     H0_E1_ASSET_NAME,
+    H0_E2_ASSET_NAME,
+    CoreHeadcountExtractionHandoff,
     H0E1Activation,
+    H0E2RunnerResource,
+    H0HandoffActivation,
     build_h0_e1_definitions,
+    build_h0_e2_definitions,
+    run_h0_e2,
 )
 from data_engine.headcount_models import (
     D1_RUNTIME_HANDOFF_ID,
@@ -35,6 +41,7 @@ from data_engine.headcount_pipeline import (
     FrozenHeadcountArtifact,
     FrozenHeadcountCase,
     HeadcountFixtureExtractor,
+    build_e1_fixture_extraction_identity,
     load_headcount_corpus,
     replay_headcount_e1,
     run_headcount_e1,
@@ -46,6 +53,7 @@ from data_engine.headcount_registry import (
 )
 from data_engine.headcount_repository import PostgresHeadcountRepository
 from data_engine.mvp_assets import D1HandoffActivation, run_d1_e2
+from data_engine.mvp_registry import build_filing_registry
 from data_engine.mvp_repository import PostgresFilingDocumentRepository
 from data_engine.raw_store import get_payload
 from pydantic import ValidationError
@@ -691,6 +699,166 @@ def test_e1_dagster_composition_is_explicit_local_ci_only(connection) -> None:
         H0E1Activation(environment="local", live_model_allowed=True)
     with pytest.raises(ValueError, match="cannot be activated by a release"):
         build_h0_e1_definitions(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            raw_store=MemoryRawObjectStore(),
+            activation=cast(Any, object()),
+        )
+
+
+def test_e2_handoff_is_content_addressed_and_provenance_free(connection) -> None:
+    handoff = run_h0_e2(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+    )
+    repeated = run_h0_e2(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+    )
+    assert repeated == handoff
+    assert handoff.handoff_id == f"core-headcount-extraction-handoff:{handoff.content_sha256}"
+    assert handoff.stable_handoff is True
+    assert handoff.readiness_ceiling == "local-ci-contract-only"
+    assert handoff.semantic_policy_state == "provisional-pending-issue-59"
+    assert handoff.model_source_policy_state == "fixture-only-pending-issue-60"
+    assert handoff.e1_evidence.environment == "ci"
+    assert handoff.live_source_calls is False
+    assert handoff.live_model_calls is False
+    assert handoff.staging_activation is False
+    assert handoff.release_activation is False
+    assert len(handoff.normalized_record_ids) == 6
+    assert len(handoff.selected_record_ids) == 5
+    assert handoff.unavailable_subject_ids == ("issuer.nvda",)
+
+    registry = build_headcount_registry(build_filing_registry())
+    assert handoff.registry_snapshot == registry
+    model_revision, template = build_e1_fixture_extraction_identity()
+    assert handoff.model_revision == model_revision
+    assert handoff.extraction_template == template
+    migration = REPOSITORY_ROOT / "db/migrations/0020_headcount_extraction.sql"
+    assert handoff.migration_sha256 == hashlib.sha256(migration.read_bytes()).hexdigest()
+
+    factor_inputs = {value.entity_id: value for value in handoff.factor_inputs}
+    assert set(factor_inputs) == {"issuer.plug", "issuer.ddog", "issuer.nice", "issuer.jpm"}
+    assert factor_inputs["issuer.plug"].value == 1285
+    assert factor_inputs["issuer.ddog"].value == 8100
+    assert factor_inputs["issuer.nice"].value == 9626
+    assert factor_inputs["issuer.jpm"].value == 318512
+    for factor_input in handoff.factor_inputs:
+        assert set(factor_input.model_dump()) == {
+            "entity_id",
+            "metric",
+            "value",
+            "confidence",
+            "as_of",
+            "fiscal_period",
+        }
+        assert factor_input.as_fact().model_dump() == factor_input.model_dump()
+    assert set(inspect.signature(run_h0_e2).parameters) == {
+        "repository_root",
+        "connection",
+        "raw_store",
+    }
+
+    wrong_hash = handoff.model_dump(mode="python")
+    wrong_hash["content_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="content_sha256"):
+        CoreHeadcountExtractionHandoff.model_validate(wrong_hash)
+    provenance_leak = handoff.model_dump(mode="python")
+    factor_payloads = list(provenance_leak["factor_inputs"])
+    factor_payloads[0]["raw_ref"] = "raw.fetches:1"
+    provenance_leak["factor_inputs"] = factor_payloads
+    provenance_leak["handoff_id"] = ""
+    provenance_leak["content_sha256"] = ""
+    with pytest.raises(ValidationError, match="raw_ref|extra"):
+        CoreHeadcountExtractionHandoff.model_validate(provenance_leak)
+
+
+def test_e2_dagster_activation_is_exact_local_ci_only(connection) -> None:
+    import data_engine.headcount_assets as headcount_assets
+
+    handoff = run_h0_e2(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+    )
+    activation = H0HandoffActivation(
+        consumer="S0-core-strategy-tiny",
+        environment="local",
+        expected_handoff_id=handoff.handoff_id,
+        expected_handoff_sha256=handoff.content_sha256,
+    )
+    definitions = build_h0_e2_definitions(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+        activation=activation,
+    )
+    dg.Definitions.validate_loadable(definitions)
+    assert not definitions.schedules
+    assert not definitions.sensors
+    assert not hasattr(headcount_assets, "defs")
+
+    result = definitions.get_implicit_global_asset_job_def().execute_in_process()
+    assert result.success
+    assert result.output_for_node(H0_E2_ASSET_NAME) == handoff
+    assert (
+        H0HandoffActivation(
+            consumer="H0-core-headcount-extraction",
+            environment="ci",
+            expected_handoff_id=handoff.handoff_id,
+            expected_handoff_sha256=handoff.content_sha256,
+        ).environment
+        == "ci"
+    )
+
+    with pytest.raises(ValidationError, match="local|ci"):
+        H0HandoffActivation(
+            consumer="S0-core-strategy-tiny",
+            environment="staging",
+            expected_handoff_id=handoff.handoff_id,
+            expected_handoff_sha256=handoff.content_sha256,
+        )
+    with pytest.raises(ValidationError, match="H0-core|S0-core"):
+        H0HandoffActivation(
+            consumer="issue-27-staging-canary",
+            environment="local",
+            expected_handoff_id=handoff.handoff_id,
+            expected_handoff_sha256=handoff.content_sha256,
+        )
+    with pytest.raises(ValidationError, match="False"):
+        H0HandoffActivation(
+            consumer="S0-core-strategy-tiny",
+            environment="local",
+            expected_handoff_id=handoff.handoff_id,
+            expected_handoff_sha256=handoff.content_sha256,
+            live_model_allowed=True,
+        )
+    with pytest.raises(ValidationError, match="ID and hash"):
+        H0HandoffActivation(
+            consumer="S0-core-strategy-tiny",
+            environment="local",
+            expected_handoff_id="core-headcount-extraction-handoff:" + "0" * 64,
+            expected_handoff_sha256="1" * 64,
+        )
+
+    stale_activation = H0HandoffActivation(
+        consumer="S0-core-strategy-tiny",
+        environment="local",
+        expected_handoff_id="core-headcount-extraction-handoff:" + "0" * 64,
+        expected_handoff_sha256="0" * 64,
+    )
+    with pytest.raises(ValueError, match="does not match its activation"):
+        H0E2RunnerResource(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            raw_store=MemoryRawObjectStore(),
+            activation=stale_activation,
+        ).run()
+    with pytest.raises(ValueError, match="cannot be activated by a release"):
+        build_h0_e2_definitions(
             repository_root=REPOSITORY_ROOT,
             connection=connection,
             raw_store=MemoryRawObjectStore(),
