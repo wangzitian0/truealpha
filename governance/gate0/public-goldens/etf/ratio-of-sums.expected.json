@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-expected-output",
+  "target": "etf-virtual-company",
+  "case_key": "etf.ratio_of_sums",
+  "expected": {
+    "status": "available",
+    "amount_basis": "ownership_scaled_look_through_amounts",
+    "fund_weight_reapplied": false,
+    "summed_numerator": "130",
+    "summed_denominator": "40",
+    "ratio_of_sums": "3.25",
+    "weighted_constituent_ratio": "3.40",
+    "accepted_result": "3.25",
+    "rejected_result": "3.40"
+  }
+}

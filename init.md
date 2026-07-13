@@ -70,12 +70,17 @@ checked-in SourceRegistry + SemanticTypeRegistry
   -> Capture -> Normalize -> Snapshot -> Compute -> Materialize
                                 |                    |
                                 +-> automatic usage +-> bounded usage views
+ResearchCatalog + RequirementGraph + Schedule + Applicability
+  -> compile_expected_demand -> run/module/emitter usage requirements
 StrategyDefinition -> DataRequirement graph -> StrategyDataQualityReview
 ```
 
 Dagster compiles and schedules this one write spine. The two registries select
-implementations; the usage and strategy-quality projections are read/audit slices over
-the same immutable manifests and lineage, not alternative pipelines.
+implementations; the demand compiler derives the exact denominator for one explicitly
+finite invocation batch and never accepts caller-supplied planned cells. Each requirement
+binds the partition-resolver output and lookback window; recurring horizon completeness
+remains Dagster's responsibility. Usage and strategy-quality projections are
+read/audit slices over the same immutable manifests and lineage, not alternative pipelines.
 
 ### 2.2 Service Topology and Priority (the four services are not peers)
 
@@ -360,7 +365,7 @@ Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner
 
 **Gate acceptance and issue ownership (fail closed):**
 
-- **Gate 0 — #56 (#57-#61):** `UniverseRef`, `CaptureScope`, `CaptureManifest`, source/type registry snapshots, source-neutral data requirements, automatic usage, reverse quality review, catalog, applicability, source-rights/budget, holdout-custody, and natural-refresh contracts are versioned and executable. The approved catalog cannot be smaller than the product-owner-approved sensor/core scope, and an expired or unresolved source decision keeps Gate 0 open.
+- **Gate 0 — #56 (#57-#61):** `UniverseRef`, `CaptureScope`, `CaptureManifest`, source/type registry snapshots, applicability-independent `SourceCapabilityCatalog`, source-neutral data requirements, requirement graph/schedule demand compilation, automatic run/module/emitter usage, reverse quality review, catalog, applicability, source-rights/budget, holdout-custody, and natural-refresh contracts are versioned and executable. #60's capability inventory cannot depend on #61 applicability; #61 projects it onto the exact denominator. The approved catalog cannot be smaller than the product-owner-approved sensor/core scope, and an expired or unresolved source decision keeps Gate 0 open.
 - **Gate 1 — #29 (#14, #21-#27, #70-#71):** #70 owns only the PIT document-to-headcount data path needed by the Core Strategy. After #24/#25 freeze candidate implementations, #71 runs the blind financial/non-financial GPPE, P/S, tier, and valuation-gap holdout before #26/#27 can close. Replay uses unadjusted bars and explicit actions. #27 proves the immutable TOPT Core canary; #51 later owns all-module Staging soak, and a two-run canary is not continuous operation.
 - **Gate 2 — #30 (#33-#40, #62-#65):** all catalog-required module invocations have longitudinal inputs, meet predeclared per-required-subject coverage, and pass #65 under the custody rule above. Unavailable or low-confidence placeholders and a seen/public holdout cannot satisfy this gate.
 - **Gate 3 — #31 (#41-#48, #72):** fixture consumers agree on typed materialized outputs and bounded usage/review reads. #72 separately proves configuration-only onboarding for an unseen issuer/theme and additive onboarding for one test source plus one semantic type; the latter may add isolated extension code and one probe factor, but cannot change central dispatch, generic Dagster/snapshot/lineage/usage/review code, existing factors, or consumers.

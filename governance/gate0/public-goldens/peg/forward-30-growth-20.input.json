@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-input",
+  "target": "peg",
+  "case_key": "peg.forward-positive-growth",
+  "input": {
+    "convention": "analyst_consensus",
+    "forward_diluted_pe": "30",
+    "growth_percentage_points": "20",
+    "period_alignment": "next_twelve_months"
+  }
+}

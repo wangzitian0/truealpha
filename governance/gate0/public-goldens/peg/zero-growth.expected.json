@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-expected-output",
+  "target": "peg",
+  "case_key": "peg.zero_growth",
+  "expected": {
+    "status": "unavailable",
+    "peg": null,
+    "availability_reason": "zero_growth",
+    "cross_convention_fallback_used": false
+  }
+}

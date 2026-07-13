@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-input",
+  "target": "supply-chain",
+  "case_key": "supply_chain.confidence_threshold",
+  "input": {
+    "minimum_graph_confidence": "0.70",
+    "edges": [
+      {
+        "edge_id": "edge-a",
+        "confidence": "0.90",
+        "evidence_status": "disclosed"
+      },
+      {
+        "edge_id": "edge-b",
+        "confidence": "0.75",
+        "evidence_status": "corroborated_public_record"
+      },
+      {
+        "edge_id": "edge-at-boundary",
+        "confidence": "0.70",
+        "evidence_status": "disclosed"
+      },
+      {
+        "edge_id": "edge-c",
+        "confidence": "0.60",
+        "evidence_status": "disclosed"
+      }
+    ],
+    "confidence_kill_threshold": "0.80",
+    "scenario_outputs": [
+      {
+        "scenario_id": "scenario-at-kill-boundary",
+        "confidence": "0.80"
+      },
+      {
+        "scenario_id": "scenario-below-kill-boundary",
+        "confidence": "0.79"
+      }
+    ],
+    "missing_edge_meaning": "unknown_coverage"
+  }
+}

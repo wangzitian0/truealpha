@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "supply-chain",
+  "case_key": "supply_chain.confidence_threshold",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Supply-chain confidence and claim boundary",
+    "derivation_steps": [
+      "Apply the lower-inclusive confidence threshold of 0.70 to every observed edge.",
+      "Include edge-at-boundary because confidence exactly equal to 0.70 satisfies the lower-inclusive threshold.",
+      "Include edge-a and edge-b because their confidence values are above 0.70.",
+      "Exclude edge-c because 0.60 is below 0.70.",
+      "Apply the scenario-output confidence kill threshold independently from edge admission: kill only when confidence is below 0.80.",
+      "Retain scenario-at-kill-boundary because confidence exactly equal to 0.80 satisfies the lower-inclusive output threshold.",
+      "Kill scenario-below-kill-boundary because confidence 0.79 is below 0.80.",
+      "Treat an absent edge as unknown coverage rather than evidence of no relationship.",
+      "Constrain the result to scenario sensitivity and prohibit causal claims."
+    ],
+    "claim_ceiling": "deterministic graph-admission, scenario-kill-boundary, and output-label regression only"
+  }
+}

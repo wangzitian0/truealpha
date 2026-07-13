@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-expected-output",
+  "target": "peg",
+  "case_key": "peg.forward-positive-growth",
+  "expected": {
+    "status": "available",
+    "peg": "1.5",
+    "formula": "pe/growth_percentage_points",
+    "convention": "analyst_consensus",
+    "cross_convention_fallback_used": false
+  }
+}

@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "artifact_type": "gate0-policy-bundle-candidate",
+  "artifact_version": "candidate-v1",
+  "issue": 61,
+  "state": "candidate_unapproved",
+  "dependencies": [
+    {
+      "issue": 59,
+      "artifact": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "required_state": "accepted"
+    },
+    {
+      "issue": 60,
+      "artifact": "governance/gate0/issue-60.source-readiness.candidate-v1.json",
+      "sha256": "a8aedb818e04389386b8fb856b84cce3307c7407e30b5444d43c9b7d322bdec2",
+      "required_state": "accepted"
+    }
+  ],
+  "acceptance_boundary": {
+    "owns": [
+      "applicability_policy",
+      "capture_slo_policy",
+      "consumer_slo_policy",
+      "module_slo_policy",
+      "natural_refresh_policy",
+      "planned_demand_compiler",
+      "production_graduation_plan_schema",
+      "usage_telemetry_slo_policy"
+    ],
+    "downstream_evidence_owners": {
+      "51": "staging natural refresh and scheduled usage/reverse-review observations",
+      "54": "final Vision audit and authoritative graduation",
+      "66": "deployed consumer SLO observations",
+      "67": "full-scope Production shadow and soak",
+      "68": "independent row-complete Production capture audit"
+    },
+    "claims_production_readiness": false
+  },
+  "scope": {
+    "universe_id": "universe:topt-us-2026-03-31",
+    "fixed_baseline": {
+      "series": "S000088434",
+      "accession": "000207169126012475",
+      "report_date": "2026-03-31",
+      "issuer_count": 20,
+      "instrument_count": 21,
+      "membership_rewrite_permitted": false
+    },
+    "rolling_canary": {
+      "scope_id_must_differ_from_fixed_baseline": true,
+      "membership_change_mode": "append_new_version",
+      "may_satisfy_fixed_baseline": false
+    }
+  },
+  "applicability": {
+    "classifications": ["not_applicable", "optional", "required"],
+    "producer_supplied_applicable_boolean": false,
+    "required_coordinates": [
+      "catalog_alias",
+      "data_requirement_id",
+      "domain",
+      "module_id",
+      "partition_key",
+      "subject",
+      "universe_hash"
+    ],
+    "effective_before_execution": true,
+    "missing_duplicate_postdated_or_wrong_scope_cell": "fail",
+    "post_result_scope_reduction": "new_version_and_invalidate_affected_evidence"
+  },
+  "proposed_module_slos": [
+    {
+      "module": "gross-profit-per-employee",
+      "minimum_subject_count": 20,
+      "minimum_usable_coverage": "0.80",
+      "maximum_unavailable_ratio": "0.20",
+      "maximum_stale_ratio": "0.00",
+      "maximum_unresolved_ratio": "0.05",
+      "maximum_unclassified_ratio": "0.00",
+      "maximum_low_confidence_ratio": "0.20"
+    },
+    {
+      "module": "peg",
+      "minimum_subject_count": 20,
+      "minimum_usable_coverage": "0.80",
+      "maximum_unavailable_ratio": "0.20",
+      "maximum_stale_ratio": "0.00",
+      "maximum_unresolved_ratio": "0.05",
+      "maximum_unclassified_ratio": "0.00",
+      "maximum_low_confidence_ratio": "0.20"
+    },
+    {
+      "module": "analyst-backtest",
+      "minimum_subject_count": 20,
+      "minimum_usable_coverage": "0.80",
+      "maximum_unavailable_ratio": "0.20",
+      "maximum_stale_ratio": "0.00",
+      "maximum_unresolved_ratio": "0.05",
+      "maximum_unclassified_ratio": "0.00",
+      "maximum_low_confidence_ratio": "0.20"
+    },
+    {
+      "module": "etf-virtual-company",
+      "minimum_subject_count": 1,
+      "minimum_usable_coverage": "1.00",
+      "maximum_unavailable_ratio": "0.00",
+      "maximum_stale_ratio": "0.00",
+      "maximum_unresolved_ratio": "0.05",
+      "maximum_unclassified_ratio": "0.00",
+      "maximum_low_confidence_ratio": "0.00"
+    },
+    {
+      "module": "theme-purity",
+      "minimum_subject_count": 20,
+      "minimum_usable_coverage": "0.80",
+      "maximum_unavailable_ratio": "0.20",
+      "maximum_stale_ratio": "0.00",
+      "maximum_unresolved_ratio": "0.05",
+      "maximum_unclassified_ratio": "0.20",
+      "maximum_low_confidence_ratio": "0.20"
+    },
+    {
+      "module": "supply-chain",
+      "minimum_subject_count": 20,
+      "minimum_usable_coverage": "0.70",
+      "maximum_unavailable_ratio": "0.30",
+      "maximum_stale_ratio": "0.00",
+      "maximum_unresolved_ratio": "0.30",
+      "maximum_unclassified_ratio": "0.00",
+      "maximum_low_confidence_ratio": "0.30"
+    },
+    {
+      "module": "three-tier-valuation",
+      "minimum_subject_count": 20,
+      "minimum_usable_coverage": "0.80",
+      "maximum_unavailable_ratio": "0.20",
+      "maximum_stale_ratio": "0.00",
+      "maximum_unresolved_ratio": "0.05",
+      "maximum_unclassified_ratio": "0.00",
+      "maximum_low_confidence_ratio": "0.20"
+    },
+    {
+      "module": "large-model-value-v0",
+      "minimum_subject_count": 20,
+      "minimum_usable_coverage": "0.80",
+      "maximum_unavailable_ratio": "0.20",
+      "maximum_stale_ratio": "0.00",
+      "maximum_unresolved_ratio": "0.05",
+      "maximum_unclassified_ratio": "0.00",
+      "maximum_low_confidence_ratio": "0.20"
+    }
+  ],
+  "capture_slo": {
+    "row_complete_coordinates": ["scope", "subject_or_instrument", "domain", "partition_or_vintage"],
+    "required_evidence": ["confidence", "freshness", "identity", "normalized_lineage", "policy_version", "raw_lineage", "required_output"],
+    "missing_required_evidence": "fail_even_when_dagster_is_green"
+  },
+  "proposed_natural_refresh_requirements": [
+    {
+      "source_class": "sec_edgar_filings",
+      "cadence": "P1D",
+      "maximum_age": "P400D",
+      "required_changed_partitions": 1,
+      "required_publication_transitions": 1,
+      "maximum_observation_window": "P400D"
+    },
+    {
+      "source_class": "sec_edgar_nport",
+      "cadence": "P1D",
+      "maximum_age": "P140D",
+      "required_changed_partitions": 1,
+      "required_publication_transitions": 1,
+      "maximum_observation_window": "P140D"
+    },
+    {
+      "source_class": "daily_market_data",
+      "cadence": "P1D",
+      "maximum_age": "P3D",
+      "required_changed_partitions": 2,
+      "required_publication_transitions": 2,
+      "maximum_observation_window": "P10D"
+    },
+    {
+      "source_class": "analyst_events",
+      "cadence": "P1D",
+      "maximum_age": "P30D",
+      "required_changed_partitions": 1,
+      "required_publication_transitions": 1,
+      "maximum_observation_window": "P45D"
+    }
+  ],
+  "natural_refresh_exclusions": ["fixture_replay", "immediate_retry", "reparse", "synthetic_mutation", "unchanged_bytes"],
+  "proposed_consumer_slos": [
+    {"surface": "app", "authenticated": true, "maximum_latency": "PT5S", "maximum_rows": 1000, "minimum_trace_complete_rate": "1.00", "maximum_error_rate": "0.01"},
+    {"surface": "mcp", "authenticated": true, "maximum_latency": "PT5S", "maximum_rows": 1000, "minimum_trace_complete_rate": "1.00", "maximum_error_rate": "0.01"},
+    {"surface": "chat", "authenticated": true, "maximum_latency": "PT30S", "maximum_rows": 100, "minimum_trace_complete_rate": "1.00", "maximum_error_rate": "0.02"},
+    {"surface": "report", "authenticated": true, "maximum_latency": "PT60S", "maximum_rows": 10000, "minimum_trace_complete_rate": "1.00", "maximum_error_rate": "0.01"},
+    {"surface": "card", "authenticated": true, "maximum_latency": "PT60S", "maximum_rows": 1000, "minimum_trace_complete_rate": "1.00", "maximum_error_rate": "0.01"}
+  ],
+  "usage_telemetry_slo": {
+    "completeness_target": "1.00",
+    "maximum_lag": "PT5M",
+    "minimum_retention": "P2555D",
+    "maximum_reconciliation_difference": 0,
+    "idempotent_event_identity": true,
+    "wrong_scope": "fail",
+    "absent_event": "fail_not_zero_use",
+    "stages": ["capture", "execution", "factor", "lifecycle", "metric", "normalization", "snapshot", "strategy", "valuation"]
+  },
+  "planned_demand_compiler": {
+    "inputs": ["applicability_catalog", "data_requirement_graph", "execution_schedule", "research_catalog", "universe"],
+    "output": "content_addressed_planned_demand_cells",
+    "producer_may_add_or_remove_cells": false,
+    "frequency_may_change_frozen_policy": false,
+    "required_input_with_zero_observed_use": "blocking_explicit_result"
+  },
+  "attestations": {
+    "product_owner_thresholds_and_wall_clock": {"status": "missing", "ref": null},
+    "independent_slo_review": {"status": "missing", "reviewer": null, "organization": null, "ref": null},
+    "topt_baseline": {"status": "missing", "ref": null},
+    "runbook_owners": {"status": "missing", "owners": [], "ref": null}
+  },
+  "blocking_reasons": [
+    "#59 is not an accepted Research Catalog and semantic artifact",
+    "#60 is not an accepted source-rights-budget matrix",
+    "module, consumer, usage, and natural-refresh proposals lack product-owner approval",
+    "independent SLO review is missing",
+    "the exact TOPT baseline artifact and separate canary scope are missing",
+    "accepted, content-addressed planned-demand compiler, runtime-wiring, and policy-bundle evidence are missing"
+  ]
+}

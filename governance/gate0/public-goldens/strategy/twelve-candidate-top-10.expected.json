@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-expected-output",
+  "target": "large-model-value-v0",
+  "case_key": "strategy.twelve_candidate_top_10",
+  "expected": {
+    "status": "available",
+    "selection_count": 10,
+    "gap_formula": "target_ps/current_ps-1",
+    "eligible_candidate_ids": [
+      "candidate-01",
+      "candidate-02",
+      "candidate-03",
+      "candidate-04",
+      "candidate-05",
+      "candidate-06",
+      "candidate-07",
+      "candidate-08",
+      "candidate-09",
+      "candidate-10",
+      "candidate-11"
+    ],
+    "ineligible_candidates": [
+      {
+        "candidate_id": "candidate-12",
+        "reason": "missing_current_ps"
+      }
+    ],
+    "ranking": [
+      {
+        "rank": 1,
+        "candidate_id": "candidate-01",
+        "gap": "1.5"
+      },
+      {
+        "rank": 2,
+        "candidate_id": "candidate-02",
+        "gap": "1"
+      },
+      {
+        "rank": 3,
+        "candidate_id": "candidate-03",
+        "gap": "0.8"
+      },
+      {
+        "rank": 4,
+        "candidate_id": "candidate-04",
+        "gap": "0.5"
+      },
+      {
+        "rank": 5,
+        "candidate_id": "candidate-05",
+        "gap": "0.4"
+      },
+      {
+        "rank": 6,
+        "candidate_id": "candidate-06",
+        "gap": "0.25"
+      },
+      {
+        "rank": 7,
+        "candidate_id": "candidate-07",
+        "gap": "0.125"
+      },
+      {
+        "rank": 8,
+        "candidate_id": "candidate-08",
+        "gap": "0.09375"
+      },
+      {
+        "rank": 9,
+        "candidate_id": "candidate-09",
+        "gap": "0"
+      },
+      {
+        "rank": 10,
+        "candidate_id": "candidate-10",
+        "gap": "-0.1"
+      },
+      {
+        "rank": 11,
+        "candidate_id": "candidate-11",
+        "gap": "-0.3"
+      }
+    ],
+    "selected_top_10": [
+      "candidate-01",
+      "candidate-02",
+      "candidate-03",
+      "candidate-04",
+      "candidate-05",
+      "candidate-06",
+      "candidate-07",
+      "candidate-08",
+      "candidate-09",
+      "candidate-10"
+    ],
+    "eligible_not_selected": [
+      "candidate-11"
+    ]
+  }
+}

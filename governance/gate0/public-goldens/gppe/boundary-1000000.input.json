@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-input",
+  "target": "gross-profit-per-employee",
+  "case_key": "gppe.boundary.1000000",
+  "input": {
+    "issuer_branch": "non_financial",
+    "annual_gross_profit": "100000000",
+    "period_average_employee_count": "100",
+    "reporting_currency": "USD"
+  }
+}

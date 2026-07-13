@@ -1211,6 +1211,60 @@ class SourceRightsApproval(BaseModel):
     revoked_at: datetime | None
     content_sha256: str
 
+class NaturalRefreshSourceRef(BaseModel):
+    source_id: SourceId
+    source_version: str
+    source_registry_entry_id: str
+    source_registry_entry_sha256: str
+
+class SourceCapability(BaseModel):
+    source_capability_id: str
+    content_sha256: str
+    source: NaturalRefreshSourceRef
+    semantic_type_id: str
+    semantic_type_version: str
+    domain: DataDomain
+    subject_kinds: frozenset[SubjectKind]
+    partition_pattern: str
+    permissions: frozenset[SourceUsagePermission]
+    rights_approval_id: str
+    rights_approval_sha256: str
+    budget_lines: tuple[BudgetLine, ...]
+
+class SourceCapabilityCatalog(BaseModel):
+    source_capability_catalog_id: str
+    content_sha256: str
+    catalog_version: str
+    research_catalog_id: str
+    research_catalog_sha256: str
+    universe: UniverseRef
+    source_registry_id: str
+    source_registry_sha256: str
+    capabilities: tuple[SourceCapability, ...]
+    effective_at: datetime
+    owner: str
+
+def evaluate_source_capability_coverage(
+    *,
+    capability_catalog: SourceCapabilityCatalog,
+    coverage_catalog: SourceCoverageCatalog,
+    registry_snapshot: RegistrySnapshot,
+    rights_approvals: tuple[SourceRightsApproval, ...],
+    evaluated_at: datetime,
+) -> SourceCapabilityCoverageReport: ...
+
+class NaturalRefreshSourceBinding(BaseModel):
+    natural_refresh_requirement_id: str
+    natural_refresh_requirement_sha256: str
+    sources: tuple[NaturalRefreshSourceRef, ...]
+
+def evaluate_exact_natural_refresh(
+    *,
+    report: NaturalRefreshReport,
+    source_binding: NaturalRefreshSourceBinding,
+    registry_snapshot: RegistrySnapshot,
+) -> ExactNaturalRefreshReport: ...
+
 class SourceCoverageRequirement(BaseModel):
     environment: Literal["local_dev", "local_test", "github_ci", "staging", "production"]
     data_requirement_id: str
@@ -1273,6 +1327,113 @@ class SourceCoverageCatalog(BaseModel):
     requirements: tuple[SourceCoverageRequirement, ...]
     entries: tuple[SourceCoverageEntry, ...]
     content_sha256: str
+
+class RequirementGraphNode(BaseModel):
+    node_id: str
+    factor_template: FactorInvocationTemplate
+    module_id: str
+    emitter_id: str
+    data_requirement_ids: tuple[str, ...]
+    upstream_node_ids: tuple[str, ...]
+    usage_stages: frozenset[UsageStage]
+
+class RequirementGraphManifest(BaseModel):
+    requirement_graph_id: str
+    content_sha256: str
+    graph_version: str
+    research_catalog_id: str
+    research_catalog_sha256: str
+    roots: tuple[CatalogRootBinding, ...]
+    nodes: tuple[RequirementGraphNode, ...]
+
+class ScheduledRequirementPartitions(BaseModel):
+    data_requirement_id: str
+    valid_period_rule_id: str
+    window_start: datetime | None
+    window_end: datetime
+    partition_keys: tuple[str, ...]
+    resolver_id: str
+    resolver_version: str
+    resolver_implementation_sha256: str
+
+class ScheduledCatalogInvocation(BaseModel):
+    run_id: str
+    catalog_entry_id: str
+    scheduled_for: datetime
+    as_of: datetime
+    valid_on: date
+    requirement_partitions: tuple[ScheduledRequirementPartitions, ...]
+
+class DemandSchedule(BaseModel):
+    demand_schedule_id: str
+    content_sha256: str
+    schedule_version: str
+    research_catalog_id: str
+    research_catalog_sha256: str
+    universe: UniverseRef
+    applicability_catalog_id: str
+    applicability_catalog_sha256: str
+    invocations: tuple[ScheduledCatalogInvocation, ...]
+    effective_at: datetime
+
+class PlannedUsageRequirement(BaseModel):
+    planned_usage_requirement_id: str
+    content_sha256: str
+    run_id: str
+    scheduled_invocation_id: str
+    catalog_entry_id: str
+    catalog_alias: str
+    graph_node_id: str
+    module_id: str
+    planned_cell_id: str
+    level: RequirementLevel
+    stage: UsageStage
+    emitter_kind: UsageEmitterKind
+    emitter_id: str
+
+class ExpectedDemandPlan(BaseModel):
+    expected_demand_plan_id: str
+    content_sha256: str
+    research_catalog_id: str
+    research_catalog_sha256: str
+    requirement_graph_id: str
+    requirement_graph_sha256: str
+    demand_schedule_id: str
+    demand_schedule_sha256: str
+    universe: UniverseRef
+    applicability_catalog_id: str
+    applicability_catalog_sha256: str
+    capture_scope_id: str
+    capture_scope_sha256: str
+    runs: tuple[CompiledRunDemand, ...]
+
+class PlannedUsageEvidence(BaseModel):
+    planned_usage_requirement_id: str
+    run_id: str
+    scheduled_invocation_id: str
+    module_id: str
+    emitter_id: str
+    stage: UsageStage
+    planned_cell_id: str
+    usage_event: DataUsageEvent
+
+def reconcile_expected_usage(
+    *,
+    expected_demand: ExpectedDemandPlan,
+    evidence: tuple[PlannedUsageEvidence, ...],
+) -> ExpectedUsageReconciliation: ...
+
+def compile_expected_demand(
+    *,
+    research_catalog: ResearchCatalogManifest,
+    requirement_graph: RequirementGraphManifest,
+    schedule: DemandSchedule,
+    universe_manifest: UniverseManifest,
+    universe_memberships: tuple[UniverseMembership, ...],
+    applicability: ApplicabilityCatalog,
+    capture_scope: CaptureScope,
+    data_requirements: tuple[DataRequirement, ...],
+) -> ExpectedDemandPlan: ...
 
 class ApplicabilityCell(BaseModel):
     module_id: str
@@ -1731,6 +1892,26 @@ def run_factor(
 class FactorRegistry(Protocol):
     def resolve(self, factor_id: str, factor_version: str) -> FactorDefinition[Any]: ...
 ```
+
+`SourceCapabilityCatalog` is #60's source/rights/budget inventory and cannot depend on
+applicability. `SourceCoverageCatalog` is #61's projection of those capabilities onto the
+exact Catalog/universe/applicability denominator. The mandatory direction is #59 Catalog
+-> #60 capability inventory -> #61 coverage/SLO policy; a reverse reference would make
+Gate 0 impossible to freeze.
+
+Expected demand is compiled, never supplied by a runner. The compiler validates exact
+content bindings, an explicitly finite fixed-cohort descriptive scope, complete Catalog
+roots, an acyclic and orphan-free graph, exact data-requirement coverage, exact
+applicability cells, explicit content-addressed partition-resolver outputs and pre-run
+effective times. It does not claim PIT/survivorship safety without a separately frozen
+resolver-output manifest, and it does not claim that a finite invocation batch proves a
+recurring Dagster schedule horizon. Shared inputs may deduplicate to one
+`PlannedDemandCell`, but each run/module/emitter/stage receives a distinct
+`PlannedUsageRequirement`; `reconcile_expected_usage` requires a one-to-one evidence
+binding, so one observed event cannot satisfy another consumer or run. Source coverage
+likewise passes only when every row matches exactly one capability and its registry,
+rights, permission and budget bindings; natural-refresh transitions must resolve through
+an exact `NaturalRefreshSourceBinding`.
 
 `ReadinessReport.ready` is the deterministic conjunction of its checks; evaluators expose
 no override/flag setter. A required capture cell is `complete` only when it has at least

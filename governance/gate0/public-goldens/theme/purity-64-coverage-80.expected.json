@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-expected-output",
+  "target": "theme-purity",
+  "case_key": "theme.purity_64_coverage_80",
+  "expected": {
+    "status": "available",
+    "total_revenue": "125",
+    "classified_revenue": "100",
+    "theme_purity": "0.64",
+    "classified_coverage": "0.80",
+    "unclassified_share": "0.20",
+    "minimum_classified_share_met": true
+  }
+}
