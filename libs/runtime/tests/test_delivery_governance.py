@@ -1,8 +1,12 @@
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 MODULE_PATH = Path(__file__).resolve().parents[3] / "tools" / "check_delivery_governance.py"
 SPEC = importlib.util.spec_from_file_location("truealpha_delivery_governance", MODULE_PATH)
@@ -179,3 +183,619 @@ def test_manifest_paths_reject_mid_segment_wildcards():
     )
 
     assert "S0: path pattern 'libs/factors/*.py' must be exact or end with '/**'" in validation.errors
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _reference(root: Path, path: Path) -> dict[str, str]:
+    return {
+        "path": path.relative_to(root).as_posix(),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def _rung_evidence(*, batch_id: str = "producer-batch", head_sha: str = "2" * 40) -> dict:
+    content = {
+        "schema_version": 1,
+        "batch_id": batch_id,
+        "manifest_sha256": "3" * 64,
+        "accepted_rung": "E2",
+        "base_sha": "1" * 40,
+        "producer_head_sha": head_sha,
+        "commands": [
+            {
+                "command": "make check",
+                "exit_code": 0,
+                "output_sha256": "4" * 64,
+            }
+        ],
+        "negative_controls": ["release remains isolated"],
+        "stable_handoff": False,
+        "created_at": "2026-07-13T00:00:00Z",
+    }
+    return {
+        "evidence_id": f"rung-evidence:{batch_id}:{governance.canonical_sha256(content)}",
+        **content,
+    }
+
+
+def _validate_handoff(tmp_path, monkeypatch, mutation=None):
+    producer_head = "2" * 40
+    evidence_path = tmp_path / "governance" / "evidence" / "producer-e2.json"
+    _write_json(evidence_path, _rung_evidence(head_sha=producer_head))
+    evidence = [_reference(tmp_path, evidence_path)]
+    content = {
+        "schema_version": 1,
+        "revision": 1,
+        "state": "accepted",
+        "producer": {
+            "batch_id": "producer-batch",
+            "issue": 99,
+            "owner": "implementer",
+            "head_sha": producer_head,
+        },
+        "schema_epoch": "v1",
+        "readiness_ceiling": "E2",
+        "evidence": evidence,
+        "allowed_consumers": ["consumer-batch"],
+        "allowed_environments": ["local"],
+        "retention": "permanent",
+        "verification": {
+            "reviewer": "reviewer",
+            "evidence_sha256": governance.canonical_sha256(evidence),
+            "accepted_at": "2026-07-13T00:00:00Z",
+            "attestation_ref": "https://example.test/attestation",
+        },
+        "revocation": {"reason": None, "revoked_at": None, "superseded_by": None},
+    }
+    if mutation is not None:
+        mutation(content)
+    handoff = {
+        "handoff_id": f"handoff:producer:{governance.canonical_sha256(content)}",
+        **content,
+    }
+    handoff_path = tmp_path / "governance" / "handoffs" / "producer.json"
+    _write_json(handoff_path, handoff)
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
+    validation = governance.Validation()
+    governance.validate_handoff_dependency(
+        validation,
+        "consumer-batch",
+        {"corpus": {"environment": "local fixture"}},
+        {"issue": 99, "handoff_manifest": _reference(tmp_path, handoff_path)},
+    )
+    return validation
+
+
+def test_handoff_accepts_bound_rung_evidence(tmp_path, monkeypatch):
+    validation = _validate_handoff(tmp_path, monkeypatch)
+
+    assert validation.errors == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        (
+            lambda handoff: handoff["verification"].update(reviewer="implementer"),
+            "handoff reviewer must be independent",
+        ),
+        (
+            lambda handoff: handoff.update(state="revoked"),
+            "HandoffManifest is not accepted",
+        ),
+        (
+            lambda handoff: handoff.update(allowed_consumers=["another-batch"]),
+            "handoff does not allow this consumer",
+        ),
+        (
+            lambda handoff: handoff.update(allowed_environments=["staging"]),
+            "handoff does not allow environment local",
+        ),
+    ],
+)
+def test_handoff_rejects_untrusted_state(tmp_path, monkeypatch, mutation, expected):
+    validation = _validate_handoff(tmp_path, monkeypatch, mutation)
+
+    assert any(expected in error for error in validation.errors)
+
+
+def test_rung_evidence_rejects_missing_command_reports():
+    evidence = _rung_evidence()
+    evidence["commands"] = []
+    validation = governance.Validation()
+
+    governance.validate_rung_evidence(
+        validation,
+        owner="test",
+        evidence=evidence,
+        producer_batch="producer-batch",
+        producer_head="2" * 40,
+    )
+
+    assert "test: command evidence is missing" in validation.errors
+
+
+def test_repository_paths_fail_closed_on_escape(tmp_path, monkeypatch):
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+
+    assert governance.repo_path("../outside.json") is None
+    assert governance.repo_path("/tmp/outside.json") is None
+    assert not governance.path_matches_pattern("../outside.json", "../**")
+
+
+def _pr_context(
+    tmp_path,
+    monkeypatch,
+    *,
+    before: str = "queued",
+    after: str = "prepared",
+    changed_paths: tuple[str, ...] | None = None,
+    corpus_sha: str | None = None,
+):
+    base_sha = "a" * 40
+    head_sha = "b" * 40
+    graph_path = tmp_path / "governance" / "vision-issue-graph.json"
+    manifest_path = tmp_path / "governance" / "batches" / "D0.json"
+    corpus_path = tmp_path / "fixtures" / "corpus.json"
+    _write_json(corpus_path, {"rows": [1, 2, 3]})
+    base_manifest = {
+        "revision": 1,
+        "status": before,
+        "last_accepted_rung": None,
+        "target_rung": "E0",
+        "terminal_rung": "E1",
+    }
+    is_acceptance = before == "prepared" and after == "active"
+    manifest = {
+        "revision": 2,
+        "status": after,
+        "last_accepted_rung": "E0" if is_acceptance else None,
+        "target_rung": "E1" if is_acceptance else "E0",
+        "terminal_rung": "E1",
+        "activation": {"base_sha": base_sha},
+        "corpus": {
+            "manifest_path": "fixtures/corpus.json",
+            "sha256": corpus_sha or hashlib.sha256(corpus_path.read_bytes()).hexdigest(),
+        },
+        "paths": {
+            "writable": ["src/**", "fixtures/**"],
+            "read_only": ["reference/**"],
+            "forbidden": ["db/**"],
+            "integration_surface": [],
+            "lease_owner": None,
+        },
+        "acceptance": {
+            "commands": ["pytest -q"],
+            "negative_controls": ["release isolation"],
+        },
+    }
+    _write_json(manifest_path, manifest)
+    base_graph = {
+        "batches": {
+            "D0": {
+                "manifest": "governance/batches/D0.json",
+                "status": before,
+                "target_rung": "E0",
+            }
+        }
+    }
+    graph = {
+        "batches": {
+            "D0": {
+                "manifest": "governance/batches/D0.json",
+                "status": after,
+                "target_rung": manifest["target_rung"],
+            }
+        }
+    }
+    _write_json(graph_path, graph)
+    default_paths = (
+        "fixtures/corpus.json",
+        "governance/batches/D0.json",
+        "governance/vision-issue-graph.json",
+    )
+    if is_acceptance:
+        default_paths = (
+            "governance/batches/D0.json",
+            "governance/vision-issue-graph.json",
+            "src/feature.py",
+        )
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(governance, "GRAPH_PATH", graph_path)
+    monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
+    monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: base_sha)
+    monkeypatch.setattr(governance, "git_changed_paths", lambda _base, _head: changed_paths or default_paths)
+    monkeypatch.setattr(
+        governance,
+        "git_json",
+        lambda _commit, path: base_graph if path == "governance/vision-issue-graph.json" else base_manifest,
+    )
+    return graph, base_sha, head_sha
+
+
+def test_preparation_pr_freezes_exact_corpus(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch)
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert validation.errors == []
+    assert advance is not None and advance.accepted_rung is None
+
+
+def test_preparation_pr_cannot_smuggle_implementation(tmp_path, monkeypatch):
+    changed = (
+        "fixtures/corpus.json",
+        "governance/batches/D0.json",
+        "governance/vision-issue-graph.json",
+        "src/feature.py",
+    )
+    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch, changed_paths=changed)
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
+
+    assert any("preparation PR may only freeze" in error for error in validation.errors)
+
+
+def test_active_pr_accepts_exactly_one_rung(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(
+        tmp_path,
+        monkeypatch,
+        before="prepared",
+        after="active",
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
+
+    assert validation.errors == []
+    assert advance is not None and advance.accepted_rung == "E0"
+
+
+def test_pr_rejects_stale_merge_base(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch)
+    monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: "c" * 40)
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
+
+    assert "PR is stale: merge-base does not equal the declared current base" in validation.errors
+
+
+def test_pr_rejects_fabricated_coordinates():
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph={"batches": {}},
+        base_sha="not-a-sha",
+        head_sha="also-not-a-sha",
+    )
+
+    assert advance is None
+    assert "PR base/head must be full Git SHAs" in validation.errors
+
+
+def test_pr_rejects_multiple_batch_manifests(monkeypatch):
+    monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
+    monkeypatch.setattr(governance, "git_merge_base", lambda base, _head: base)
+    monkeypatch.setattr(
+        governance,
+        "git_changed_paths",
+        lambda _base, _head: ("governance/batches/A.json", "governance/batches/B.json"),
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph={"batches": {}},
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+    )
+
+    assert advance is None
+    assert "PR must advance exactly one capability-batch manifest" in validation.errors
+
+
+def test_non_governance_code_pr_requires_batch_manifest(monkeypatch):
+    monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
+    monkeypatch.setattr(governance, "git_merge_base", lambda base, _head: base)
+    monkeypatch.setattr(governance, "git_changed_paths", lambda _base, _head: ("apps/data-engine/feature.py",))
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(
+        validation,
+        graph={"batches": {}},
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+    )
+
+    assert "non-governance PR must advance exactly one capability-batch manifest" in validation.errors
+
+
+def test_corpus_hash_must_match_bytes(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch, corpus_sha="0" * 64)
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
+
+    assert "D0: corpus bytes do not match the frozen hash" in validation.errors
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "expected"),
+    [
+        ("db/001.sql", "changed forbidden path"),
+        ("reference/input.json", "changed read-only path"),
+        ("outside/file.py", "changed path is outside writable scope"),
+    ],
+)
+def test_pr_paths_reject_unauthorized_changes(changed_path, expected):
+    validation = governance.Validation()
+    manifest = {
+        "paths": {
+            "writable": ["src/**"],
+            "read_only": ["reference/**"],
+            "forbidden": ["db/**"],
+            "integration_surface": [],
+        }
+    }
+
+    governance.validate_pr_paths(
+        validation,
+        batch_id="D0",
+        manifest_path="governance/batches/D0.json",
+        manifest=manifest,
+        changed_paths=(changed_path,),
+        base_sha="a" * 40,
+    )
+
+    assert any(expected in error for error in validation.errors)
+
+
+def test_global_shared_surface_requires_declared_lease():
+    validation = governance.Validation()
+
+    governance.validate_pr_paths(
+        validation,
+        batch_id="D0",
+        manifest_path="governance/batches/D0.json",
+        manifest={
+            "paths": {
+                "writable": ["db/**"],
+                "read_only": [],
+                "forbidden": [],
+                "integration_surface": [],
+            }
+        },
+        changed_paths=("db/migrations/0019.sql",),
+        base_sha="a" * 40,
+    )
+
+    assert "D0: integration lease: file reference must be an object" in validation.errors
+
+
+def _validate_lease(tmp_path, monkeypatch, mutation=None):
+    base_sha = "a" * 40
+    content = {
+        "schema_version": 1,
+        "batch_id": "D0",
+        "owner": "integrator",
+        "state": "active",
+        "paths": ["shared/**"],
+        "base_sha": base_sha,
+        "expires_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+    }
+    if mutation is not None:
+        mutation(content)
+    lease = {
+        "lease_id": f"integration-lease:{governance.canonical_sha256(content)}",
+        **content,
+    }
+    lease_path = tmp_path / "governance" / "leases" / "D0.json"
+    _write_json(lease_path, lease)
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    validation = governance.Validation()
+    governance.validate_integration_lease(
+        validation,
+        batch_id="D0",
+        manifest={
+            "paths": {
+                "lease_owner": "integrator",
+                "lease_manifest": _reference(tmp_path, lease_path),
+            }
+        },
+        changed_integration_paths=("shared/export.py",),
+        base_sha=base_sha,
+    )
+    return validation
+
+
+def test_live_integration_lease_authorizes_shared_path(tmp_path, monkeypatch):
+    validation = _validate_lease(tmp_path, monkeypatch)
+
+    assert validation.errors == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        (lambda lease: lease.update(base_sha="b" * 40), "integration lease base SHA is stale"),
+        (
+            lambda lease: lease.update(expires_at="2020-01-01T00:00:00+00:00"),
+            "integration lease is expired",
+        ),
+        (lambda lease: lease.update(paths=["other/**"]), "integration lease does not cover"),
+    ],
+)
+def test_integration_lease_rejects_stale_or_uncovered_state(tmp_path, monkeypatch, mutation, expected):
+    validation = _validate_lease(tmp_path, monkeypatch, mutation)
+
+    assert any(expected in error for error in validation.errors)
+
+
+def test_acceptance_commands_emit_head_bound_evidence(tmp_path, monkeypatch):
+    head_sha = "b" * 40
+    manifest_path = tmp_path / "governance" / "batches" / "D0.json"
+    _write_json(manifest_path, {"manifest": "bytes"})
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        governance,
+        "run_git",
+        lambda *_args: subprocess.CompletedProcess([], 0, f"{head_sha}\n", ""),
+    )
+    advance = governance.PullRequestAdvance(
+        batch_id="D0",
+        manifest_path="governance/batches/D0.json",
+        base_manifest={},
+        manifest={
+            "activation": {"base_sha": "a" * 40},
+            "acceptance": {
+                "commands": ["pytest -q"],
+                "negative_controls": ["release isolation"],
+            },
+        },
+        accepted_rung="E0",
+        changed_paths=(),
+    )
+    validation = governance.Validation()
+    output_path = tmp_path / "evidence.json"
+
+    governance.execute_acceptance_commands(
+        validation,
+        advance=advance,
+        head_sha=head_sha,
+        output_path=output_path,
+        runner=lambda command: subprocess.CompletedProcess([command], 0, "passed", ""),
+    )
+
+    evidence = json.loads(output_path.read_text(encoding="utf-8"))
+    assert validation.errors == []
+    assert evidence["producer_head_sha"] == head_sha
+    assert evidence["commands"][0]["output_sha256"] == hashlib.sha256(b"passed\n").hexdigest()
+    evidence_validation = governance.Validation()
+    governance.validate_rung_evidence(
+        evidence_validation,
+        owner="D0",
+        evidence=evidence,
+        producer_batch="D0",
+        producer_head=head_sha,
+    )
+    assert evidence_validation.errors == []
+
+
+def test_failed_acceptance_command_emits_no_evidence(tmp_path, monkeypatch):
+    head_sha = "b" * 40
+    manifest_path = tmp_path / "governance" / "batches" / "D0.json"
+    _write_json(manifest_path, {})
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        governance,
+        "run_git",
+        lambda *_args: subprocess.CompletedProcess([], 0, f"{head_sha}\n", ""),
+    )
+    advance = governance.PullRequestAdvance(
+        batch_id="D0",
+        manifest_path="governance/batches/D0.json",
+        base_manifest={},
+        manifest={
+            "activation": {"base_sha": "a" * 40},
+            "acceptance": {"commands": ["false"], "negative_controls": ["release isolation"]},
+        },
+        accepted_rung="E0",
+        changed_paths=(),
+    )
+    validation = governance.Validation()
+    output_path = tmp_path / "evidence.json"
+
+    governance.execute_acceptance_commands(
+        validation,
+        advance=advance,
+        head_sha=head_sha,
+        output_path=output_path,
+        runner=lambda command: subprocess.CompletedProcess([command], 1, "", "failed"),
+    )
+
+    assert "D0: acceptance command failed: false" in validation.errors
+    assert not output_path.exists()
+
+
+def test_prepared_batch_uses_queued_mirror_and_rejects_contradictory_labels():
+    graph = {
+        "root_issue": 68,
+        "root_accepted_evidence": None,
+        "gates": {
+            "29": {
+                "status": "active",
+                "milestone": "D0",
+                "acceptance_issues": [],
+            }
+        },
+        "issues": {},
+        "artifact_edges": [],
+        "batches": {
+            "D0": {
+                "issue": 79,
+                "owner_gate": 29,
+                "status": "prepared",
+                "target_rung": "E0",
+                "manifest": "governance/batches/D0.json",
+                "sha256": "a" * 64,
+            }
+        },
+    }
+    live = [
+        {
+            "number": 68,
+            "state": "OPEN",
+            "body": "",
+            "labels": [{"name": "scope:vision"}],
+            "milestone": None,
+        },
+        {
+            "number": 29,
+            "state": "OPEN",
+            "body": "",
+            "labels": [{"name": "scope:vision"}, {"name": "gate:active"}],
+            "milestone": {"title": "D0"},
+        },
+        {
+            "number": 79,
+            "state": "OPEN",
+            "body": "governance/batches/D0.json sha256:" + "a" * 64,
+            "labels": [
+                {"name": "scope:vision"},
+                {"name": "batch:queued"},
+                {"name": "batch:active"},
+                {"name": "rung:code"},
+                {"name": "readiness:provisional"},
+            ],
+            "milestone": {"title": "D0"},
+        },
+    ]
+    validation = governance.Validation()
+
+    governance.validate_github(validation, graph, live)
+
+    assert "#79: batch must carry exactly one batch status" in validation.errors
+
+
+def test_workflow_authorizes_every_pull_request_against_exact_head():
+    workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
+
+    assert "pull_request:\n" in workflow
+    assert "--pr-base-sha" in workflow
+    assert "--pr-head-sha" in workflow
+    assert "github.event.pull_request.head.sha" in workflow
+    assert "--execute-acceptance" in workflow

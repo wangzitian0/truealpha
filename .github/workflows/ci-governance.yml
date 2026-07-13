@@ -23,12 +23,74 @@ permissions:
   issues: read
 
 jobs:
+  sync_batch_labels:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate checked-in graph and manifests
+        run: make issue-graph-check
+      - name: Mirror merged batch status to GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          with open("governance/vision-issue-graph.json", encoding="utf-8") as stream:
+              graph = json.load(stream)
+          repository = os.environ["GITHUB_REPOSITORY"]
+          rung_labels = {"E0": "code", "E1": "tiny", "E2": "contract", "E3": "medium", "E4": "hardening", "E5": "large"}
+          for batch in graph["batches"].values():
+              status = "queued" if batch["status"] == "prepared" else batch["status"]
+              desired_status = {
+                  f"batch:{status}",
+                  f"rung:{rung_labels[batch['target_rung']]}",
+              }
+              if batch["target_rung"] in {"E0", "E1"}:
+                  desired_status.add("readiness:provisional")
+              endpoint = f"repos/{repository}/issues/{batch['issue']}"
+              response = subprocess.run(
+                  ["gh", "api", endpoint],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              issue = json.loads(response.stdout)
+              preserved = {
+                  label["name"]
+                  for label in issue["labels"]
+                  if not label["name"].startswith(("batch:", "rung:", "readiness:"))
+              }
+              desired = sorted(preserved | desired_status)
+              current = sorted(label["name"] for label in issue["labels"])
+              if current != desired:
+                  subprocess.run(
+                      ["gh", "api", "--method", "PATCH", endpoint, "--input", "-"],
+                      input=json.dumps({"labels": desired}),
+                      check=True,
+                      text=True,
+                  )
+          PY
+
   validate:
+    needs: sync_batch_labels
+    if: >-
+      always() &&
+      (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Validate checked-in graph and manifests
         run: make issue-graph-check
       - name: Export live Vision issues
@@ -39,6 +101,24 @@ jobs:
           --label scope:vision --json number,state,body,labels,milestone
           > "$RUNNER_TEMP/vision-issues.json"
       - name: Validate GitHub parity
+        if: github.event_name != 'pull_request'
         run: >-
           python3 tools/check_delivery_governance.py
           --github-issues "$RUNNER_TEMP/vision-issues.json"
+      - name: Authorize pull-request diff
+        if: github.event_name == 'pull_request'
+        run: >-
+          python3 tools/check_delivery_governance.py
+          --github-issues "$RUNNER_TEMP/vision-issues.json"
+          --pr-base-sha "${{ github.event.pull_request.base.sha }}"
+          --pr-head-sha "${{ github.event.pull_request.head.sha }}"
+          --execute-acceptance
+          --evidence-output "$RUNNER_TEMP/rung-evidence.json"
+      - name: Retain rung evidence
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rung-evidence-${{ github.event.pull_request.number }}
+          path: ${{ runner.temp }}/rung-evidence.json
+          if-no-files-found: ignore
+          retention-days: 90
