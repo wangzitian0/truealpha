@@ -361,6 +361,7 @@ def _normalize(
 ) -> NormalizedRecordRef:
     semantic_type = registry.semantic_types[0]
     source = registry.sources[0]
+    normalization_started_at = max(payload.knowable_at, raw_entry.envelope.fetched_at)
     draft = SemanticDraft(
         semantic_type_id=semantic_type.semantic_type_id,
         semantic_type_version=semantic_type.version,
@@ -371,7 +372,7 @@ def _normalize(
         valid_from=payload.valid_from,
         valid_to=payload.valid_to,
         knowable_at=payload.knowable_at,
-        produced_at=payload.knowable_at + timedelta(minutes=1),
+        produced_at=normalization_started_at + timedelta(minutes=1),
         producer_kind=SemanticProducerKind.DETERMINISTIC_NORMALIZER,
         producer_id=source.normalizer_id,
         producer_version=source.normalizer_version,
@@ -386,7 +387,7 @@ def _normalize(
         source_registry_entry_sha256=source.content_sha256,
         mapping_version="fixture-sec:1.0.0",
         mapping_implementation_sha256=source.normalizer_implementation_sha256,
-        recorded_at=payload.knowable_at + timedelta(minutes=2),
+        recorded_at=normalization_started_at + timedelta(minutes=2),
         confidence=Decimal("0.99"),
     )
 
@@ -452,7 +453,7 @@ def _capture_evidence(
         as_of=CUTOFF,
         started_at=CUTOFF,
         cells=(cell,),
-        created_at=CUTOFF + timedelta(minutes=1),
+        created_at=CUTOFF + timedelta(minutes=3),
     )
     return manifest, evaluate_capture_manifest(
         scope,

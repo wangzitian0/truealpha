@@ -27,28 +27,36 @@
       "path": "apps/data-engine/samples/filings/NVDA_8K_SPLIT_000104581024000144.html",
       "sha256": "047c49a59b50dd6851111d580d8c68b33fcb3bca22d5ea219793568b1bf7b0a6",
       "source": "sec",
-      "semantic_type": "corporate-action"
+      "semantic_type": "corporate-action",
+      "accepted_at": "2024-06-07T20:19:34.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001045810.json"
     },
     {
       "artifact_id": "plug-original-filing",
       "path": "apps/data-engine/samples/filings/PLUG_10K_000155837021007147.html",
       "sha256": "fbe9fe64c7583f3f0b391396e9015a8787e58c8f3decb55292707c5ac6d0c9ed",
       "source": "sec",
-      "semantic_type": "filing-document"
+      "semantic_type": "filing-document",
+      "accepted_at": "2021-05-14T10:20:25.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001093691.json"
     },
     {
       "artifact_id": "plug-amended-filing",
       "path": "apps/data-engine/samples/filings/PLUG_10KA_000155837022003577.html",
       "sha256": "985468e206ba380f7b413c76227bb3cd759b48eef49f7ff943839776383b551f",
       "source": "sec",
-      "semantic_type": "filing-document"
+      "semantic_type": "filing-document",
+      "accepted_at": "2022-03-14T21:30:04.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001093691.json"
     },
     {
       "artifact_id": "meta-symbol-change",
       "path": "apps/data-engine/samples/filings/META_8K_SYMBOL_000132680122000070.html",
       "sha256": "d3ec72f5f72d852e7cbe8fe760cd27fb3f809bb9aeccac6be4e7234f4ae62cac",
       "source": "sec",
-      "semantic_type": "listing-identity"
+      "semantic_type": "listing-identity",
+      "accepted_at": "2022-05-31T20:18:52.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001326801-submissions-001.json"
     }
   ],
   "cases": [

@@ -1,24 +1,34 @@
 from __future__ import annotations
 
 import os
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import dagster as dg
 import psycopg
 import pytest
-from data_engine.batches.mvp_capture_tiny.e0_slice import run_e0_slice
+from data_engine.batches.mvp_capture_tiny.e0_slice import CUTOFF, run_e0_slice
 from data_engine.batches.mvp_capture_tiny.e1_slice import (
     E1_ASSET_NAME,
+    E1CaseResult,
+    E1ProvisionalActivation,
+    EphemeralPostgresEvidenceRepository,
     EphemeralPostgresRecordRepository,
+    FindingClass,
+    MvpCaptureTinyEvidence,
     _base_probe,
+    _restatement_pair,
     build_e1_definitions,
     evaluate_evidence_variant,
+    run_e1_suite,
     validate_boundary_probe,
 )
 from data_engine.config import settings
 from pydantic import ValidationError
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import SnapshotCellSelection
+from truealpha_contracts.release import ArtifactRole, ReleaseArtifact, ReleaseManifest
+from truealpha_contracts.universe import UniverseRef
 
 REPOSITORY_ROOT = next(
     parent
@@ -40,11 +50,17 @@ def connection():
 
 
 def test_dagster_executes_all_terminal_e1_cases(connection):
-    definitions = build_e1_definitions(repository_root=REPOSITORY_ROOT, connection=connection)
+    definitions = build_e1_definitions(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        activation=E1ProvisionalActivation(),
+    )
     dg.Definitions.validate_loadable(definitions)
 
     result = definitions.get_implicit_global_asset_job_def().execute_in_process()
     evidence = result.output_for_node(E1_ASSET_NAME)
+    repeated = definitions.get_implicit_global_asset_job_def().execute_in_process()
+    repeated_evidence = repeated.output_for_node(E1_ASSET_NAME)
 
     assert result.success
     assert evidence.fixture_snapshot_id == evidence.postgres_snapshot_id
@@ -61,6 +77,141 @@ def test_dagster_executes_all_terminal_e1_cases(connection):
     }
     assert all(case.passed for case in evidence.cases)
     assert evidence.stable_handoff is False
+    assert repeated.success
+    assert repeated_evidence.evidence_id == evidence.evidence_id
+    assert EphemeralPostgresEvidenceRepository(connection).get(evidence.evidence_id) == evidence
+
+
+def test_restatement_pit_excludes_superseded_record(connection):
+    subject, original, amended, _ledger = _restatement_pair(REPOSITORY_ROOT)
+    repository = EphemeralPostgresRecordRepository(connection)
+    repository.put(amended)
+    repository.put(original)
+
+    before = repository.select_pit(
+        subject=subject,
+        semantic_type_id=original.draft.semantic_type_id,
+        as_of=amended.draft.knowable_at - timedelta(microseconds=1),
+        valid_on=date(2020, 12, 31),
+    )
+    after = repository.select_pit(
+        subject=subject,
+        semantic_type_id=original.draft.semantic_type_id,
+        as_of=amended.draft.knowable_at,
+        valid_on=date(2020, 12, 31),
+    )
+
+    assert before == (original,)
+    assert after == (amended,)
+
+
+def test_raw_fetch_precedes_normalization_and_recording():
+    _subject, original, amended, ledger = _restatement_pair(REPOSITORY_ROOT)
+    by_sha256 = {entry.envelope.object.sha256: entry for entry in ledger.entries}
+
+    for record in (original, amended):
+        raw = by_sha256[record.raw_object_sha256]
+        assert raw.envelope.source_published_at <= raw.envelope.fetched_at
+        assert raw.envelope.fetched_at <= record.draft.produced_at
+        assert record.draft.produced_at <= record.recorded_at
+
+
+def test_failed_case_evidence_is_content_addressed_and_append_only(connection):
+    accepted = run_e1_suite(REPOSITORY_ROOT, connection)
+    failed_case = E1CaseResult(
+        **accepted.cases[0].model_dump(exclude={"passed", "classification"}),
+        passed=False,
+        classification=FindingClass.LOCAL_CAPTURE_BUG,
+    )
+    values = accepted.model_dump(mode="python", exclude={"evidence_id", "content_sha256", "cases"})
+    failed = MvpCaptureTinyEvidence(**values, cases=(failed_case, *accepted.cases[1:]))
+    repository = EphemeralPostgresEvidenceRepository(connection)
+
+    assert repository.put(failed)
+    assert repository.put(failed) is False
+    assert repository.get(failed.evidence_id) == failed
+    with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+        connection.execute(
+            "update mvp_capture_tiny_evidence set content_sha256 = %s where evidence_id = %s",
+            ("0" * 64, failed.evidence_id),
+        )
+
+
+def test_frozen_case_outputs_bind_the_declared_artifacts(connection):
+    evidence = run_e1_suite(REPOSITORY_ROOT, connection)
+    by_case = {case.case_id: case for case in evidence.cases}
+
+    assert len(by_case["applicable-success"].observed_ids) == 4
+    assert by_case["publication-boundary"].observed_ids[0] not in {
+        identifier for identifier in by_case["applicable-success"].observed_ids if identifier.startswith("snapshot:")
+    }
+    assert by_case["wrong-listing-identity"].blocker_codes == ("wrong-listing-at-cutoff",)
+    assert by_case["look-ahead-sentinel"].blocker_codes == ("future-known-vintage",)
+
+
+def _accepted_release_manifest() -> ReleaseManifest:
+    migration_ids = ("0001.sql",)
+    return ReleaseManifest(
+        contract_version="contracts:v1",
+        mart_schema_version="mart:v1",
+        research_catalog_id="research-catalog:" + "1" * 64,
+        research_catalog_sha256="1" * 64,
+        universe=UniverseRef(
+            universe_id="universe:topt-test",
+            universe_version="2026-07-12",
+            content_sha256="2" * 64,
+        ),
+        capture_scope_id="capture-scope:" + "3" * 64,
+        capture_scope_sha256="3" * 64,
+        applicability_catalog_id="applicability:" + "4" * 64,
+        applicability_catalog_sha256="4" * 64,
+        source_coverage_catalog_id="source-coverage:" + "5" * 64,
+        source_coverage_catalog_sha256="5" * 64,
+        source_readiness_report_id="source-readiness:" + "6" * 64,
+        source_readiness_report_sha256="6" * 64,
+        slo_catalog_id="module-slo:" + "7" * 64,
+        slo_catalog_sha256="7" * 64,
+        consumer_slo_catalog_id="consumer-slo:" + "8" * 64,
+        consumer_slo_catalog_sha256="8" * 64,
+        usage_telemetry_slo_catalog_id="usage-telemetry-slo:" + "9" * 64,
+        usage_telemetry_slo_catalog_sha256="9" * 64,
+        registry_snapshot_id="registry-snapshot:" + "a" * 64,
+        registry_snapshot_sha256="a" * 64,
+        source_registry_id="source-registry:" + "b" * 64,
+        source_registry_sha256="b" * 64,
+        semantic_type_registry_id="semantic-type-registry:" + "c" * 64,
+        semantic_type_registry_sha256="c" * 64,
+        identifier_type_registry_id="identifier-type-registry:" + "d" * 64,
+        identifier_type_registry_sha256="d" * 64,
+        configuration_sha256={"data-engine": "e" * 64},
+        migration_ids=migration_ids,
+        migration_set_sha256=canonical_sha256(migration_ids),
+        artifacts=tuple(
+            ReleaseArtifact(
+                role=role,
+                image_or_bundle=f"ghcr.io/example/{role.value}",
+                digest="sha256:" + "f" * 64,
+                git_sha="0" * 40,
+                sbom_sha256="1" * 64,
+                signature_ref=f"sigstore:{role.value}",
+            )
+            for role in ArtifactRole
+        ),
+        natural_refresh_requirement_ids=("natural-refresh:" + "2" * 64,),
+        created_at=CUTOFF,
+        manifest_signature_ref="sigstore:accepted-release",
+    )
+
+
+def test_accepted_release_cannot_activate_the_provisional_batch(connection):
+    accepted_release = _accepted_release_manifest()
+
+    with pytest.raises(ValueError, match="not release-activated"):
+        build_e1_definitions(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            activation=accepted_release,
+        )
 
 
 def test_ephemeral_repository_rejects_update_and_delete(connection):
