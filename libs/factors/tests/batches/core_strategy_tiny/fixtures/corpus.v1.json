@@ -7,24 +7,31 @@
     "local"
   ],
   "producer_handoff": {
-    "governance_path": "governance/handoffs/H0-core-headcount-extraction.v1.json",
-    "governance_sha256": "889a517bd51393eaed8dae03b7955b15cadb476c9647c5e0cf702aca6493247d",
-    "governance_handoff_id": "handoff:h0-core-headcount-extraction:f4d7db6e69a9d49735d62918a7658ce9bc17a4b39ba551253d2a50bf200a1419",
-    "runtime_handoff_id": "core-headcount-extraction-handoff:48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
-    "runtime_sha256": "48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
-    "schema_epoch": "staging.employee-headcount.v0.1.0+0020",
+    "path": "governance/handoffs/H0-core-headcount-extraction.v2.json",
+    "sha256": "e4968b32e896d3c8dae9188e1fd47b01b62e14a5215671fed1b24c3ede510199",
+    "handoff_id": "handoff:h0-core-headcount-extraction:447ab8a382ab258eb935ab8e643456d624708773782f8aed8b0d21c4bfdd43ac",
+    "state": "accepted",
     "allowed_consumer": "S0-core-strategy-tiny",
     "allowed_environments": [
       "ci",
       "local"
-    ]
+    ],
+    "runtime": {
+      "handoff_id": "core-headcount-extraction-handoff:48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
+      "sha256": "48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
+      "schema_epoch": "staging.employee-headcount.v0.1.0+0020"
+    }
   },
   "candidate_policy": {
-    "semantics_path": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
-    "semantics_sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
-    "semantics_state": "candidate-only-not-approved",
-    "public_goldens_path": "governance/gate0/public-goldens/manifest.v1.json",
-    "public_goldens_sha256": "8a9e1d23ea633f772c16cfaff6706518acce6cbcba5d343eaa33a0acdb01a8bc",
+    "semantics": {
+      "path": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "state": "candidate-only-not-approved"
+    },
+    "public_goldens": {
+      "path": "governance/gate0/public-goldens/manifest.v1.json",
+      "sha256": "8a9e1d23ea633f772c16cfaff6706518acce6cbcba5d343eaa33a0acdb01a8bc"
+    },
     "output_disclosure": "Numerical outputs are calibration evidence and cannot approve or revise issue #59."
   },
   "required_strata": [

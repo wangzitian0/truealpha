@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "ac8ea5e0b67c3441023f5112e67f1593ac862bcc",
+    "base_sha": "c30c078b0b96890fac33694017bff7ad3f54c18d",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance change merged to main",
@@ -38,8 +38,8 @@
       "issue": 104,
       "artifact": "accepted H0 Local/CI headcount factor-input handoff",
       "handoff_manifest": {
-        "path": "governance/handoffs/H0-core-headcount-extraction.v1.json",
-        "sha256": "889a517bd51393eaed8dae03b7955b15cadb476c9647c5e0cf702aca6493247d"
+        "path": "governance/handoffs/H0-core-headcount-extraction.v2.json",
+        "sha256": "e4968b32e896d3c8dae9188e1fd47b01b62e14a5215671fed1b24c3ede510199"
       },
       "state": "accepted"
     },
@@ -90,7 +90,7 @@
   "corpus": {
     "environment": "Local/CI checked-in fixture",
     "manifest_path": "libs/factors/tests/batches/core_strategy_tiny/fixtures/corpus.v1.json",
-    "sha256": "a490751108672272aaf7976360fc30d63efa7a3d9a927049299952342e7a503a",
+    "sha256": "ba52119cd1f93dc68768b541db2d88e9a28301441c2d02ca35007d21b218f4ad",
     "required_strata": [
       "applicable success",
       "financial issuer branch",
@@ -109,8 +109,8 @@
     "read_only": [
       "libs/contracts/**",
       "apps/data-engine/**",
-      "governance/evidence/H0-core-headcount-extraction-E2.v1.json",
-      "governance/handoffs/H0-core-headcount-extraction.v1.json",
+      "governance/evidence/H0-core-headcount-extraction-E2.v2.json",
+      "governance/handoffs/H0-core-headcount-extraction.v2.json",
       "governance/gate0/issue-59.research-semantics.candidate-v1.json",
       "governance/gate0/public-goldens/manifest.v1.json"
     ],
