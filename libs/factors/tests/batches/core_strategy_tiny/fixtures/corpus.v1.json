@@ -1,0 +1,417 @@
+{
+  "schema_version": 1,
+  "corpus_id": "s0-core-strategy-tiny-v1",
+  "claim_ceiling": "E1 provisional Local/CI strategy behavior only; no semantic approval, stable handoff, holdout, Staging, release, or alpha claim",
+  "allowed_environments": [
+    "ci",
+    "local"
+  ],
+  "producer_handoff": {
+    "governance_path": "governance/handoffs/H0-core-headcount-extraction.v1.json",
+    "governance_sha256": "889a517bd51393eaed8dae03b7955b15cadb476c9647c5e0cf702aca6493247d",
+    "governance_handoff_id": "handoff:h0-core-headcount-extraction:f4d7db6e69a9d49735d62918a7658ce9bc17a4b39ba551253d2a50bf200a1419",
+    "runtime_handoff_id": "core-headcount-extraction-handoff:48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
+    "runtime_sha256": "48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
+    "schema_epoch": "staging.employee-headcount.v0.1.0+0020",
+    "allowed_consumer": "S0-core-strategy-tiny",
+    "allowed_environments": [
+      "ci",
+      "local"
+    ]
+  },
+  "candidate_policy": {
+    "semantics_path": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+    "semantics_sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+    "semantics_state": "candidate-only-not-approved",
+    "public_goldens_path": "governance/gate0/public-goldens/manifest.v1.json",
+    "public_goldens_sha256": "8a9e1d23ea633f772c16cfaff6706518acce6cbcba5d343eaa33a0acdb01a8bc",
+    "output_disclosure": "Numerical outputs are calibration evidence and cannot approve or revise issue #59."
+  },
+  "required_strata": [
+    "applicable success",
+    "financial issuer branch",
+    "missing or unavailable input",
+    "revision or restatement",
+    "dual-class or listing identity",
+    "cutoffs immediately before and after public availability",
+    "look-ahead sentinel"
+  ],
+  "cases": [
+    {
+      "case_id": "plug-restatement-publication-boundary",
+      "strata": [
+        "applicable success",
+        "revision or restatement",
+        "cutoffs immediately before and after public availability"
+      ],
+      "subject": {
+        "issuer_id": "issuer.plug",
+        "instrument_id": "instrument.us.plug",
+        "issuer_branch": "non_financial",
+        "reporting_currency": "USD"
+      },
+      "cutoffs": [
+        "2022-03-14T21:30:03.999Z",
+        "2022-03-14T21:30:04.000Z",
+        "2022-03-14T21:30:04.001Z"
+      ],
+      "headcount_vintages": [
+        {
+          "normalized_record_id": "normalized-record:dd0e02b953d4ee566b675186ded6130f7ba78acd766a6b4b7be1ce62d4716c6e",
+          "value": "1285",
+          "confidence": "0.98",
+          "knowable_at": "2021-05-14T10:20:25.000Z",
+          "valid_period": "2020-12-31"
+        },
+        {
+          "normalized_record_id": "normalized-record:0120c267f8e692bb421815ea592dee787aa0bf3e684557c2972c41a1aa1e6cab",
+          "value": "1285",
+          "confidence": "0.98",
+          "knowable_at": "2022-03-14T21:30:04.000Z",
+          "valid_period": "2020-12-31",
+          "supersedes_record_id": "normalized-record:dd0e02b953d4ee566b675186ded6130f7ba78acd766a6b4b7be1ce62d4716c6e"
+        }
+      ],
+      "observations": [
+        {
+          "metric": "annual_gross_profit",
+          "value": "1285000000",
+          "unit": "USD",
+          "confidence": "0.96",
+          "knowable_at": "2021-05-14T10:20:25.000Z",
+          "valid_period": "2020-12-31"
+        },
+        {
+          "metric": "annual_revenue",
+          "value": "1000000000",
+          "unit": "USD",
+          "confidence": "0.97",
+          "knowable_at": "2021-05-14T10:20:25.000Z",
+          "valid_period": "2020-12-31"
+        },
+        {
+          "metric": "market_cap",
+          "value": "9000000000",
+          "unit": "USD",
+          "confidence": "0.95",
+          "knowable_at": "2022-03-14T21:00:00.000Z",
+          "valid_period": "2022-03-14"
+        }
+      ],
+      "controls": [
+        "the pre-publication cutoff selects the original headcount record",
+        "the publication and post-publication cutoffs select the amendment",
+        "equal semantic values do not collapse distinct restatement identities"
+      ]
+    },
+    {
+      "case_id": "ddog-provenance-free-success",
+      "strata": [
+        "applicable success"
+      ],
+      "subject": {
+        "issuer_id": "issuer.ddog",
+        "instrument_id": "instrument.us.ddog",
+        "issuer_branch": "non_financial",
+        "reporting_currency": "USD"
+      },
+      "cutoffs": [
+        "2026-02-27T00:00:00.000Z"
+      ],
+      "headcount_binding": {
+        "normalized_record_id": "normalized-record:35009698549ac20fecda7250f7d103db64e52ffb90fe1369aa2407a4bc5ecd78",
+        "value": "8100",
+        "confidence": "0.90",
+        "as_of": "2026-02-26T21:17:11.000Z",
+        "valid_period": "2025-12-31"
+      },
+      "observations": [
+        {
+          "metric": "annual_gross_profit",
+          "value": "8100000000",
+          "unit": "USD",
+          "confidence": "0.92",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2025-12-31"
+        },
+        {
+          "metric": "annual_revenue",
+          "value": "12000000000",
+          "unit": "USD",
+          "confidence": "0.93",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2025-12-31"
+        },
+        {
+          "metric": "market_cap",
+          "value": "108000000000",
+          "unit": "USD",
+          "confidence": "0.91",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2026-02-26"
+        }
+      ],
+      "controls": [
+        "factor-visible inputs exclude raw, source, model, prompt, span, and review provenance",
+        "reordered and repeated execution produces the same content identities"
+      ]
+    },
+    {
+      "case_id": "jpm-financial-proxy-branch",
+      "strata": [
+        "financial issuer branch"
+      ],
+      "subject": {
+        "issuer_id": "issuer.jpm",
+        "instrument_id": "instrument.us.jpm",
+        "issuer_branch": "financial",
+        "reporting_currency": "USD"
+      },
+      "cutoffs": [
+        "2026-02-27T00:00:00.000Z"
+      ],
+      "headcount_binding": {
+        "normalized_record_id": "normalized-record:4a45488ac988cc5f9de85e519684ad3ece56628eae0b54267838fcd6bc66dd90",
+        "value": "318512",
+        "confidence": "0.98",
+        "as_of": "2026-02-26T21:17:11.000Z",
+        "valid_period": "2025-12-31"
+      },
+      "observations": [
+        {
+          "metric": "pre_provision_profit",
+          "value": "159256000000",
+          "unit": "USD",
+          "confidence": "0.94",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2025-12-31"
+        }
+      ],
+      "controls": [
+        "the non-financial gross-profit formula is rejected",
+        "blanket exclusion cannot satisfy the financial semantic branch"
+      ]
+    },
+    {
+      "case_id": "nvda-missing-headcount",
+      "strata": [
+        "missing or unavailable input"
+      ],
+      "subject": {
+        "issuer_id": "issuer.nvda",
+        "instrument_id": "instrument.us.nvda",
+        "issuer_branch": "non_financial",
+        "reporting_currency": "USD"
+      },
+      "cutoffs": [
+        "2026-02-27T00:00:00.000Z"
+      ],
+      "headcount_binding": {
+        "normalized_record_id": "normalized-record:dcf8d5b9e100479e848e9b6045f57d5a1db227f6111cd2bf764a8b94202ef91e",
+        "availability": "unavailable",
+        "reason": "no-total-headcount-disclosure"
+      },
+      "observations": [
+        {
+          "metric": "annual_gross_profit",
+          "value": "50000000000",
+          "unit": "USD",
+          "confidence": "0.99",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2025-12-31"
+        }
+      ],
+      "controls": [
+        "the denominator cell is retained as unavailable",
+        "no zero, silent drop, tier, rank, or decision is fabricated"
+      ]
+    },
+    {
+      "case_id": "alphabet-dual-listing-identity",
+      "strata": [
+        "dual-class or listing identity",
+        "missing or unavailable input"
+      ],
+      "subject": {
+        "issuer_id": "issuer.alphabet",
+        "issuer_branch": "non_financial",
+        "reporting_currency": "USD"
+      },
+      "cutoffs": [
+        "2026-03-31T20:00:00.000Z"
+      ],
+      "headcount_binding": {
+        "availability": "unavailable",
+        "reason": "issuer-not-present-in-h0-tiny-handoff"
+      },
+      "instrument_observations": [
+        {
+          "instrument_id": "instrument.us.goog",
+          "cusip": "02079K107",
+          "metric": "market_cap",
+          "value": "2000000000000",
+          "unit": "USD",
+          "confidence": "0.99",
+          "knowable_at": "2026-03-31T20:00:00.000Z",
+          "valid_period": "2026-03-31"
+        },
+        {
+          "instrument_id": "instrument.us.googl",
+          "cusip": "02079K305",
+          "metric": "market_cap",
+          "value": "2100000000000",
+          "unit": "USD",
+          "confidence": "0.99",
+          "knowable_at": "2026-03-31T20:00:00.000Z",
+          "valid_period": "2026-03-31"
+        }
+      ],
+      "controls": [
+        "Class A and Class C remain separate instruments under one issuer",
+        "an input from the other listing cannot satisfy an instrument-scoped demand"
+      ]
+    },
+    {
+      "case_id": "nice-lookahead-sentinel",
+      "strata": [
+        "look-ahead sentinel",
+        "cutoffs immediately before and after public availability"
+      ],
+      "subject": {
+        "issuer_id": "issuer.nice",
+        "instrument_id": "instrument.us.nice",
+        "issuer_branch": "non_financial",
+        "reporting_currency": "USD"
+      },
+      "cutoffs": [
+        "2026-02-26T21:17:10.999Z",
+        "2026-02-26T21:17:11.000Z"
+      ],
+      "headcount_binding": {
+        "normalized_record_id": "normalized-record:9dd39f931c5af96049cedcc991197410168f0a15ab6e7b1ade5025622922c336",
+        "value": "9626",
+        "confidence": "0.98",
+        "as_of": "2026-02-26T21:17:11.000Z",
+        "valid_period": "2025-12-31"
+      },
+      "observations": [
+        {
+          "metric": "annual_gross_profit",
+          "value": "28878000000",
+          "unit": "USD",
+          "confidence": "0.98",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2025-12-31"
+        }
+      ],
+      "controls": [
+        "the pre-publication cutoff rejects both future-known inputs",
+        "the exact publication cutoff may consume the same immutable inputs"
+      ]
+    },
+    {
+      "case_id": "ddog-stale-low-confidence",
+      "strata": [
+        "missing or unavailable input"
+      ],
+      "subject": {
+        "issuer_id": "issuer.ddog",
+        "instrument_id": "instrument.us.ddog",
+        "issuer_branch": "non_financial",
+        "reporting_currency": "USD"
+      },
+      "cutoffs": [
+        "2026-02-27T00:00:00.000Z"
+      ],
+      "headcount_binding": {
+        "normalized_record_id": "normalized-record:35009698549ac20fecda7250f7d103db64e52ffb90fe1369aa2407a4bc5ecd78",
+        "value": "8100",
+        "confidence": "0.90",
+        "as_of": "2026-02-26T21:17:11.000Z",
+        "valid_period": "2025-12-31"
+      },
+      "observations": [
+        {
+          "metric": "annual_gross_profit",
+          "value": "8100000000",
+          "unit": "USD",
+          "confidence": "0.49",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2023-12-31"
+        }
+      ],
+      "controls": [
+        "stale and low-confidence inputs remain distinct fail-closed reasons",
+        "low observed confidence cannot be upgraded by factor computation"
+      ]
+    },
+    {
+      "case_id": "nice-cross-currency-without-fx",
+      "strata": [
+        "missing or unavailable input"
+      ],
+      "subject": {
+        "issuer_id": "issuer.nice",
+        "instrument_id": "instrument.us.nice",
+        "issuer_branch": "non_financial",
+        "reporting_currency": "USD"
+      },
+      "cutoffs": [
+        "2026-02-27T00:00:00.000Z"
+      ],
+      "headcount_binding": {
+        "normalized_record_id": "normalized-record:9dd39f931c5af96049cedcc991197410168f0a15ab6e7b1ade5025622922c336",
+        "value": "9626",
+        "confidence": "0.98",
+        "as_of": "2026-02-26T21:17:11.000Z",
+        "valid_period": "2025-12-31"
+      },
+      "observations": [
+        {
+          "metric": "annual_revenue",
+          "value": "10000000000",
+          "unit": "USD",
+          "confidence": "0.98",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2025-12-31"
+        },
+        {
+          "metric": "market_cap",
+          "value": "90000000000",
+          "unit": "EUR",
+          "confidence": "0.98",
+          "knowable_at": "2026-02-26T21:17:11.000Z",
+          "valid_period": "2026-02-26"
+        }
+      ],
+      "controls": [
+        "cross-currency valuation fails without an exact PIT FX input",
+        "the factor cannot assume a conversion rate"
+      ]
+    },
+    {
+      "case_id": "public-golden-ordering-and-boundaries",
+      "strata": [
+        "applicable success"
+      ],
+      "public_golden_case_keys": [
+        "gppe.boundary.1000000",
+        "gppe.boundary.3000000",
+        "tier.exact_boundaries",
+        "strategy.twelve_candidate_top_10"
+      ],
+      "controls": [
+        "the batch consumes the exact pinned public-golden bytes without rewriting them",
+        "reordered and repeated ranking execution preserves the same selected identities"
+      ]
+    }
+  ],
+  "release_isolation": {
+    "default_factor_registration": false,
+    "default_dagster_definition": false,
+    "schedule_or_sensor": false,
+    "release_manifest_activation": false,
+    "staging_route": false,
+    "live_source_call": false
+  }
+}
