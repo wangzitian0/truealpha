@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "batch_id": "H0-core-headcount-extraction",
-  "revision": 4,
+  "revision": 5,
   "issue": 104,
   "owner_gate": 29,
   "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": "E1",
-  "target_rung": "E2",
+  "last_accepted_rung": "E2",
+  "target_rung": "E3",
   "terminal_rung": "E3",
   "objective": "Consume the accepted D1 filing handoff and build the append-only, replayable document-to-total-headcount data plane required by issue #70.",
   "claim_ceiling": "E3 multi-issuer Local/CI headcount extraction candidate; no live model, factor, Staging, or release claim",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "35014ffac6050172c20e8152ddc1881c6577797f",
+    "base_sha": "ab760ef4facb310cad1022ad28c29eafe6030c18",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -47,8 +47,8 @@
   ],
   "later_claim_dependencies": [
     "D1 producer evidence already pins the accepted #57/#58 contract tree; any contract-tree change reruns H0",
-    "#59 accepted total-headcount and financial-issuer semantics before the E2 semantic handoff freezes",
-    "#60 accepted exact model/source/rights/budget policy before any live call or E2 model-policy freeze",
+    "#59 accepted total-headcount and financial-issuer semantics before the E3 terminal candidate freezes or #70 closes",
+    "#60 accepted exact model/source/rights/budget policy before the E3 terminal candidate freezes, any live call, or #70 closes",
     "#61 accepted applicability and SLO denominator before downstream readiness acceptance",
     "D2 medium-domain evidence converges before #26 and #27",
     "#24 consumes only the exact accepted H0 factor-input handoff",
@@ -73,6 +73,8 @@
   "paths": {
     "writable": [
       "governance/leases/H0-core-headcount-extraction.v1.json",
+      "governance/evidence/H0-core-headcount-extraction-E2.v1.json",
+      "governance/handoffs/H0-core-headcount-extraction.v1.json",
       "apps/data-engine/src/data_engine/headcount_assets.py",
       "apps/data-engine/src/data_engine/headcount_models.py",
       "apps/data-engine/src/data_engine/headcount_pipeline.py",
@@ -149,7 +151,10 @@
     "output": {
       "type": "CoreHeadcountExtractionHandoff",
       "stable_handoff": true,
-      "state": "planned",
+      "state": "accepted",
+      "handoff_id": "core-headcount-extraction-handoff:48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
+      "sha256": "48d9265464c1da98cf480d951e3f4cc859ab63010b6489d5ec63b2bc76687ce5",
+      "schema_epoch": "staging.employee-headcount.v0.1.0+0020",
       "allowed_evidence_readers": [
         "#24 gross-profit-per-employee factor batch",
         "#26 Local Core integration batch",
