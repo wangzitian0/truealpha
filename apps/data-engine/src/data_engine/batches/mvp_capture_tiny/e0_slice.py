@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -59,6 +59,8 @@ def _hash(label: str) -> str:
 
 
 def _repository_path(root: Path, relative_path: str) -> Path:
+    if not relative_path:
+        raise ValueError("fixture path is empty")
     pure = PurePosixPath(relative_path)
     if pure.is_absolute() or "\\" in relative_path or any(part in {"", ".", ".."} for part in pure.parts):
         raise ValueError(f"fixture path escapes repository: {relative_path}")
@@ -223,28 +225,31 @@ def _latest_annual_gross_profit(body: bytes, cutoff: datetime) -> FixtureFinanci
         raise ValueError("fixture company-facts schema drifted before normalization") from error
     if not candidates:
         raise ValueError("fixture has no annual gross-profit fact visible at the cutoff")
-    selected = max(
-        candidates,
-        key=lambda row: (
-            date.fromisoformat(row["filed"]),
-            date.fromisoformat(row["end"]),
-            str(row["accn"]),
-            Decimal(str(row["val"])),
-        ),
-    )
-    filed = date.fromisoformat(selected["filed"])
-    return FixtureFinancialObservation(
-        subject=SUBJECT,
-        metric="gross_profit",
-        value=Decimal(str(selected["val"])),
-        unit="USD",
-        fiscal_period=f"FY{selected['fy']}",
-        accession=str(selected["accn"]),
-        form=str(selected["form"]),
-        valid_from=date.fromisoformat(selected["start"]),
-        valid_to=date.fromisoformat(selected["end"]),
-        knowable_at=datetime.combine(filed, time.min, UTC),
-    )
+    try:
+        selected = max(
+            candidates,
+            key=lambda row: (
+                date.fromisoformat(row["filed"]),
+                date.fromisoformat(row["end"]),
+                str(row["accn"]),
+                Decimal(str(row["val"])),
+            ),
+        )
+        filed = date.fromisoformat(selected["filed"])
+        return FixtureFinancialObservation(
+            subject=SUBJECT,
+            metric="gross_profit",
+            value=Decimal(str(selected["val"])),
+            unit="USD",
+            fiscal_period=f"FY{selected['fy']}",
+            accession=str(selected["accn"]),
+            form=str(selected["form"]),
+            valid_from=date.fromisoformat(selected["start"]),
+            valid_to=date.fromisoformat(selected["end"]),
+            knowable_at=datetime.combine(filed, time.min, UTC),
+        )
+    except (InvalidOperation, KeyError, TypeError, ValueError) as error:
+        raise ValueError("fixture company-facts schema drifted before normalization") from error
 
 
 def _registry() -> RegistrySnapshot:
@@ -559,7 +564,9 @@ def run_e0_slice(
     """Execute the exact E0 vertical slice without registering it for release."""
 
     corpus, artifacts = _load_frozen_corpus(repository_root, corpus_path)
-    artifact = artifacts["nvda-company-facts"]
+    artifact = artifacts.get("nvda-company-facts")
+    if artifact is None:
+        raise ValueError("tiny corpus required artifact is missing: nvda-company-facts")
     artifact_path = _repository_path(repository_root, artifact["path"])
     body = artifact_path.read_bytes()
     observation = _latest_annual_gross_profit(body, CUTOFF)

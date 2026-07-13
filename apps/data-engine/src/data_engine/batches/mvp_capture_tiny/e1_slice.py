@@ -587,7 +587,12 @@ def _restatement_pair(
     return subject, original, amended, ledger
 
 
-def evaluate_evidence_variant(result: E0SliceResult, **updates: Any) -> CaptureEvaluationReport:
+def evaluate_evidence_variant(
+    result: E0SliceResult,
+    *,
+    manifest_as_of: datetime | None = None,
+    **updates: Any,
+) -> CaptureEvaluationReport:
     source = result.capture_manifest.cells[0].evidence[0]
     values = source.model_dump(mode="python", exclude={"evidence_id", "content_sha256"})
     values.update(updates)
@@ -597,13 +602,13 @@ def evaluate_evidence_variant(result: E0SliceResult, **updates: Any) -> CaptureE
         **source_cell.model_dump(mode="python", exclude={"capture_cell_id", "content_sha256", "evidence"}),
         evidence=(evidence,),
     )
-    manifest = CaptureManifest(
-        **result.capture_manifest.model_dump(
-            mode="python",
-            exclude={"capture_manifest_id", "content_sha256", "cells"},
-        ),
-        cells=(cell,),
+    manifest_values = result.capture_manifest.model_dump(
+        mode="python",
+        exclude={"capture_manifest_id", "content_sha256", "cells"},
     )
+    if manifest_as_of is not None:
+        manifest_values["as_of"] = manifest_as_of
+    manifest = CaptureManifest(**manifest_values, cells=(cell,))
     return evaluate_capture_manifest(
         result.scope,
         manifest,
@@ -1033,6 +1038,14 @@ def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptu
         valid_on=date(2020, 12, 31),
     )
     plug_records = repository.all_records(subject=plug_subject)
+    future_vintage = evaluate_evidence_variant(
+        base,
+        manifest_as_of=amended.draft.knowable_at - timedelta(microseconds=1),
+        knowable_at=amended.draft.knowable_at,
+    )
+    future_vintage_rejected = not future_vintage.ready and any(
+        blocker.startswith("evidence.future_knowledge:") for blocker in future_vintage.blocking_reason_codes
+    )
 
     wrong_listing_rejected = False
     meta_subject = SubjectRef(kind=SubjectKind.ISSUER, id="issuer.meta")
@@ -1144,10 +1157,12 @@ def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptu
         ),
         E1CaseResult(
             case_id="look-ahead-sentinel",
-            passed=len(pre_amendment) == 1
+            passed=future_vintage_rejected
+            and len(pre_amendment) == 1
             and all(record.normalized_record_id != amended.normalized_record_id for record in pre_amendment)
             and case_artifacts["look-ahead-sentinel"] == ("plug-amended-filing",),
             classification=FindingClass.SEMANTIC_DECISION,
+            observed_ids=(amended.normalized_record_id,),
             blocker_codes=("future-known-vintage",),
         ),
         E1CaseResult(
