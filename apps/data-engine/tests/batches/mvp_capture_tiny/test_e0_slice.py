@@ -8,6 +8,7 @@ from data_engine.batches.mvp_capture_tiny.e0_slice import (
     CUTOFF,
     FixtureRawLedger,
     _latest_annual_gross_profit,
+    _repository_path,
     run_e0_slice,
 )
 from pydantic import ValidationError
@@ -176,6 +177,64 @@ def test_frozen_corpus_rejects_changed_artifact_bytes(tmp_path):
 def test_company_facts_schema_drift_fails_with_explicit_error():
     with pytest.raises(ValueError, match="company-facts schema drifted"):
         _latest_annual_gross_profit(b"{}", CUTOFF)
+
+
+def test_company_facts_selected_row_schema_drift_fails_with_explicit_error():
+    body = json.dumps(
+        {
+            "facts": {
+                "us-gaap": {
+                    "GrossProfit": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "form": "10-K",
+                                    "fp": "FY",
+                                    "filed": "2026-07-10",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    ).encode()
+
+    with pytest.raises(ValueError, match="company-facts schema drifted"):
+        _latest_annual_gross_profit(body, CUTOFF)
+
+
+def test_repository_path_rejects_empty_relative_path(tmp_path):
+    with pytest.raises(ValueError, match="fixture path is empty"):
+        _repository_path(tmp_path, "")
+
+
+def test_frozen_corpus_requires_the_e0_input_artifact(tmp_path):
+    source = tmp_path / "source.json"
+    source.write_text("{}", encoding="utf-8")
+    artifact = tmp_path / "other.json"
+    artifact.write_text("{}", encoding="utf-8")
+    corpus = {
+        "schema_version": 1,
+        "corpus_id": "missing-e0-input",
+        "source_manifest": {
+            "path": "source.json",
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        },
+        "artifacts": [
+            {
+                "artifact_id": "other-artifact",
+                "path": "other.json",
+                "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            }
+        ],
+        "cases": [{"case_id": f"case-{index}"} for index in range(8)],
+    }
+    corpus_path = tmp_path / "corpus.json"
+    corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="required artifact is missing: nvda-company-facts"):
+        run_e0_slice(tmp_path, corpus_path=Path("corpus.json"))
 
 
 def test_frozen_corpus_rejects_missing_case_id(tmp_path):

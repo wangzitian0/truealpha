@@ -105,6 +105,20 @@ def test_restatement_pit_excludes_superseded_record(connection):
     assert after == (amended,)
 
 
+def test_look_ahead_sentinel_rejects_a_future_known_vintage():
+    base = run_e0_slice(REPOSITORY_ROOT)
+    _subject, _original, amended, _ledger = _restatement_pair(REPOSITORY_ROOT)
+
+    evaluation = evaluate_evidence_variant(
+        base,
+        manifest_as_of=amended.draft.knowable_at - timedelta(microseconds=1),
+        knowable_at=amended.draft.knowable_at,
+    )
+
+    assert not evaluation.ready
+    assert any(reason.startswith("evidence.future_knowledge:") for reason in evaluation.blocking_reason_codes)
+
+
 def test_raw_fetch_precedes_normalization_and_recording():
     _subject, original, amended, ledger = _restatement_pair(REPOSITORY_ROOT)
     by_sha256 = {entry.envelope.object.sha256: entry for entry in ledger.entries}
