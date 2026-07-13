@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "corpus_id": "mvp-capture-tiny-v1",
+  "source_ceiling": "Checked-in public fixtures only; no network or credential access.",
+  "source_manifest": {
+    "path": "apps/data-engine/samples/capture_manifest_20260712.json",
+    "sha256": "d4281c12d9c00c1508895ed77b1270e6b48e3788e5b579868beec32c1fb91205",
+    "git_blob": "2fa62f8a422ac7c1d71c9a562184f09391584f7f"
+  },
+  "artifacts": [
+    {
+      "artifact_id": "nvda-company-facts",
+      "path": "apps/data-engine/samples/sec/NVDA_CIK0001045810.json",
+      "sha256": "93edcffe24f55d08284ff1736e41aa1a8e743ab6e4a6eea52cb8e9392b0ae6be",
+      "source": "sec",
+      "semantic_type": "financial-fact"
+    },
+    {
+      "artifact_id": "nvda-daily-price",
+      "path": "apps/data-engine/samples/prices/NVDA_prices_3y_20260712.csv",
+      "sha256": "277301f5c45e16bcf9a581dd7b89fc72f576e16dce6ccbf1ccaa846c2d8be926",
+      "source": "yahoo",
+      "semantic_type": "market-price"
+    },
+    {
+      "artifact_id": "nvda-split-filing",
+      "path": "apps/data-engine/samples/filings/NVDA_8K_SPLIT_000104581024000144.html",
+      "sha256": "047c49a59b50dd6851111d580d8c68b33fcb3bca22d5ea219793568b1bf7b0a6",
+      "source": "sec",
+      "semantic_type": "corporate-action"
+    },
+    {
+      "artifact_id": "plug-original-filing",
+      "path": "apps/data-engine/samples/filings/PLUG_10K_000155837021007147.html",
+      "sha256": "fbe9fe64c7583f3f0b391396e9015a8787e58c8f3decb55292707c5ac6d0c9ed",
+      "source": "sec",
+      "semantic_type": "filing-document"
+    },
+    {
+      "artifact_id": "plug-amended-filing",
+      "path": "apps/data-engine/samples/filings/PLUG_10KA_000155837022003577.html",
+      "sha256": "985468e206ba380f7b413c76227bb3cd759b48eef49f7ff943839776383b551f",
+      "source": "sec",
+      "semantic_type": "filing-document"
+    },
+    {
+      "artifact_id": "meta-symbol-change",
+      "path": "apps/data-engine/samples/filings/META_8K_SYMBOL_000132680122000070.html",
+      "sha256": "d3ec72f5f72d852e7cbe8fe760cd27fb3f809bb9aeccac6be4e7234f4ae62cac",
+      "source": "sec",
+      "semantic_type": "listing-identity"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "applicable-success",
+      "artifact_ids": [
+        "nvda-company-facts",
+        "nvda-daily-price",
+        "nvda-split-filing"
+      ],
+      "mutation": null,
+      "expected": {
+        "ready": true,
+        "raw_present": true,
+        "normalized_present": true,
+        "confidence_present": true,
+        "lineage_complete": true
+      }
+    },
+    {
+      "case_id": "missing-raw-evidence",
+      "artifact_ids": ["nvda-company-facts"],
+      "mutation": "remove-raw-reference",
+      "expected": {
+        "ready": false,
+        "reason": "missing-raw-evidence"
+      }
+    },
+    {
+      "case_id": "missing-normalized-evidence",
+      "artifact_ids": ["nvda-company-facts"],
+      "mutation": "skip-normalized-write",
+      "expected": {
+        "ready": false,
+        "reason": "missing-normalized-evidence"
+      }
+    },
+    {
+      "case_id": "append-only-restatement",
+      "artifact_ids": [
+        "plug-original-filing",
+        "plug-amended-filing"
+      ],
+      "mutation": null,
+      "expected": {
+        "original_retained": true,
+        "restatement_appended": true,
+        "pre_amendment_selects_original": true,
+        "post_amendment_selects_restatement": true
+      }
+    },
+    {
+      "case_id": "wrong-listing-identity",
+      "artifact_ids": ["meta-symbol-change"],
+      "mutation": "resolve-post-change-symbol-before-effective-date",
+      "expected": {
+        "ready": false,
+        "reason": "wrong-listing-at-cutoff"
+      }
+    },
+    {
+      "case_id": "publication-boundary",
+      "artifact_ids": ["nvda-split-filing"],
+      "mutation": null,
+      "cutoffs": [
+        "immediately-before-publication",
+        "at-publication",
+        "immediately-after-publication"
+      ],
+      "expected": {
+        "before_excludes": true,
+        "at_includes": true,
+        "after_includes": true
+      }
+    },
+    {
+      "case_id": "look-ahead-sentinel",
+      "artifact_ids": ["plug-amended-filing"],
+      "mutation": "request-vintage-before-publication",
+      "expected": {
+        "ready": false,
+        "reason": "future-known-vintage"
+      }
+    },
+    {
+      "case_id": "reordered-and-repeated-execution",
+      "artifact_ids": [
+        "nvda-company-facts",
+        "nvda-daily-price",
+        "nvda-split-filing"
+      ],
+      "mutation": "execute-reverse-order-then-repeat",
+      "expected": {
+        "content_identity_stable": true,
+        "no_duplicate_semantic_rows": true,
+        "append_only": true
+      }
+    }
+  ],
+  "execution_backends": [
+    "fixture",
+    "ephemeral-postgres"
+  ],
+  "release_isolation": {
+    "default_registry_entry": false,
+    "default_dagster_definition": false,
+    "schedule_entry": false,
+    "migration": false
+  }
+}
