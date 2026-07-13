@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "D0-mvp-capture-tiny",
-  "revision": 5,
+  "revision": 6,
   "issue": 79,
   "owner_gate": 29,
   "status": "done",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "ef92e7fbbfff8e2a8f9b535f8a7585547c5faea1",
+    "base_sha": "01f0e143521922cee051052853e1095e626e9328",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance change merged to main",
