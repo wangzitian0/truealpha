@@ -74,11 +74,20 @@ class FilingComponentCatalog:
     ]:
         sources = {entry.key: entry for entry in registry.sources}
         semantic_types = {entry.key: entry for entry in registry.semantic_types}
-        try:
-            source = sources[(source_id, source_version)]
-            semantic_type = semantic_types[(semantic_type_id, semantic_type_version)]
-        except KeyError:
-            raise ValueError("filing route must resolve one exact source and semantic type version")
+        source_key = (source_id, source_version)
+        semantic_type_key = (semantic_type_id, semantic_type_version)
+        source = sources.get(source_key)
+        semantic_type = semantic_types.get(semantic_type_key)
+        if source is None or semantic_type is None:
+            missing = []
+            if source is None:
+                missing.append("source")
+            if semantic_type is None:
+                missing.append("semantic type")
+            raise ValueError(
+                "filing route is missing "
+                f"{', '.join(missing)}: source={source_key!r}, semantic_type={semantic_type_key!r}"
+            )
 
         if semantic_type.semantic_type_id not in source.supported_type_ids:
             raise ValueError("registry source/type route is disconnected")

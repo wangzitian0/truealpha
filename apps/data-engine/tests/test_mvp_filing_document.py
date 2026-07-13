@@ -395,7 +395,7 @@ def test_registry_only_source_extension_runs_through_the_existing_factory(connec
     )
     assert extension.adapter_id == base_source.adapter_id
     assert extension.normalizer_id == base_source.normalizer_id
-    assert extended_registry.sources[1] == extension
+    assert {source.key: source for source in extended_registry.sources}[extension.key] == extension
 
     class RollBackProbe(Exception):
         pass
@@ -650,6 +650,21 @@ def test_schema_drift_and_unreviewed_registry_component_are_rejected() -> None:
             semantic_type_id=FILING_SEMANTIC_TYPE_ID,
             semantic_type_version=FILING_VERSION,
         )
+
+
+def test_registry_route_errors_identify_the_requested_keys() -> None:
+    with pytest.raises(ValueError) as error:
+        FilingComponentCatalog.e0().resolve(
+            build_filing_registry(),
+            source_id="source.missing",
+            source_version="9.9.9",
+            semantic_type_id="semantic.missing",
+            semantic_type_version="9.9.9",
+        )
+
+    message = str(error.value)
+    assert "source=('source.missing', '9.9.9')" in message
+    assert "semantic_type=('semantic.missing', '9.9.9')" in message
 
 
 def _accepted_release_manifest() -> ReleaseManifest:
