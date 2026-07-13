@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "batch_id": "H0-core-headcount-extraction",
-  "revision": 2,
+  "revision": 3,
   "issue": 104,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E3",
   "objective": "Consume the accepted D1 filing handoff and build the append-only, replayable document-to-total-headcount data plane required by issue #70.",
   "claim_ceiling": "E3 multi-issuer Local/CI headcount extraction candidate; no live model, factor, Staging, or release claim",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "89324c87a7b4f9d797054ef12549687d343a466b",
+    "base_sha": "cec5125fffdd8ed84013be980fdd5807ff8da270",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -114,7 +114,11 @@
       "db/migrations/0020_headcount_extraction.sql",
       "db/tests/headcount_extraction_contract.sql"
     ],
-    "lease_owner": "wangzitian0"
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/H0-core-headcount-extraction.v1.json",
+      "sha256": "2b4965f27120d7e6d3dedba14d15b647b9226f6b8d43cd35ccf01eb14f452567"
+    }
   },
   "release_activation": {
     "allowed": false,

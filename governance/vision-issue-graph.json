@@ -147,11 +147,11 @@
     "H0-core-headcount-extraction": {
       "issue": 104,
       "owner_gate": 29,
-      "status": "prepared",
-      "target_rung": "E0",
+      "status": "active",
+      "target_rung": "E1",
       "terminal_rung": "E3",
       "manifest": "governance/batches/H0-core-headcount-extraction.v1.json",
-      "sha256": "8e65ab83dd1aeaa480a3c48ccbc1abd0a15bb9fcda6cb0209067239abc6a6cfe"
+      "sha256": "64e88061e8f07b5f193d3636a8c1ba65366079e06897b0f62d5917b6ccef389e"
     }
   },
   "artifact_edges": [
