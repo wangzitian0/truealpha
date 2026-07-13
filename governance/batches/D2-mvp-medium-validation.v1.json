@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "batch_id": "D2-mvp-medium-validation",
+  "revision": 1,
+  "issue": 121,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E3",
+  "objective": "Complete issue #23 by validating the MVP raw, normalized, snapshot, and Dagster data path on the exact TOPT medium denominator.",
+  "claim_ceiling": "E3 representative Local/CI TOPT data-plane candidate; no live-source, Staging, factor, strategy, or release claim",
+  "capability_issues": [23],
+  "closes_issues": [23],
+  "informational_issues": [27, 57, 58, 59, 60, 61, 70, 92, 104],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "governance registration merged to main",
+      "accepted D1 handoff remains byte-identical and authorizes this batch",
+      "base_sha updated to the current implementation PR base commit",
+      "D2 corpus paths and SHA-256 frozen before execution",
+      "reviewer assigned and different from the implementation owner",
+      "integration lease reserves the shared MVP paths, migration 0021, and the dedicated SQL contract",
+      "GitHub issue body contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 92,
+      "artifact": "accepted D1 normalized filing, capture, snapshot, and runner handoff",
+      "handoff_manifest": {
+        "path": "governance/handoffs/D1-mvp-normalization-handoff.v1.json",
+        "sha256": "d872123a10fa626a5f777182b1f0c822c4013c0b4375ad10c6ea93da00716137"
+      },
+      "state": "accepted"
+    }
+  ],
+  "later_claim_dependencies": [
+    "D1 producer evidence already pins the accepted #57/#58 contract tree; any contract-tree change reruns D2",
+    "#59 accepted research and headcount semantics before downstream semantic freeze",
+    "#60 accepted live source, model, rights, and budget policy before any live call",
+    "#61 accepted applicability and SLO denominator before readiness acceptance",
+    "#70 consumes the complete #23 path before it freezes its E3 headcount candidate",
+    "#24, #25, #71, and #26 accept the Core factor and Local strategy candidate before #27",
+    "#27 owns the bounded real-source Staging execution"
+  ],
+  "corpus": {
+    "environment": "checked-in fixtures plus ephemeral Postgres",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "one exact TOPT NVDA price success from immutable raw bytes",
+      "missing confidence, identity, lineage, or PIT timestamp",
+      "malformed, non-Decimal, or internally inconsistent OHLCV bar",
+      "future-known and stale record",
+      "wrong issuer, security, listing, or share class",
+      "identical retry and changed source-byte vintage",
+      "split and dividend timing without adjusted-price double counting",
+      "historical universe membership timing",
+      "financial fact and filing restatement timing",
+      "fixture and ephemeral-Postgres snapshot parity",
+      "exact TOPT 20-issuer and 21-instrument empty-database run"
+    ]
+  },
+  "source_ceiling": "Checked-in public fixtures only through E3. Live calls remain owned by #60 and #27.",
+  "paths": {
+    "writable": [
+      "governance/leases/D2-mvp-medium-validation.v1.json",
+      "governance/evidence/D2-mvp-medium-validation-E2.v1.json",
+      "governance/handoffs/D2-mvp-medium-validation.v1.json",
+      "apps/data-engine/src/data_engine/batches/mvp_medium_validation/**",
+      "apps/data-engine/src/data_engine/mvp_assets.py",
+      "apps/data-engine/src/data_engine/mvp_models.py",
+      "apps/data-engine/src/data_engine/mvp_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_registry.py",
+      "apps/data-engine/src/data_engine/mvp_repository.py",
+      "apps/data-engine/src/data_engine/mvp_snapshot.py",
+      "apps/data-engine/src/data_engine/mvp_sources.py",
+      "apps/data-engine/src/data_engine/raw_store.py",
+      "apps/data-engine/tests/batches/mvp_medium_validation/**",
+      "apps/data-engine/tests/fixtures/mvp_medium_validation/**",
+      "db/migrations/0021_mvp_medium_domains.sql",
+      "db/tests/mvp_medium_validation_contract.sql"
+    ],
+    "read_only": [
+      "governance/evidence/D1-mvp-normalization-handoff-E2.v1.json",
+      "governance/handoffs/D1-mvp-normalization-handoff.v1.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "apps/data-engine/samples/**",
+      "apps/data-engine/src/data_engine/batches/mvp_capture_tiny/**",
+      "apps/data-engine/tests/fixtures/mvp_capture_tiny/**",
+      "libs/contracts/**",
+      "libs/factors/**"
+    ],
+    "forbidden": [
+      "libs/factors/**",
+      "apps/data-engine/src/data_engine/__init__.py",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile",
+      "AGENTS.md",
+      "init.md",
+      "docs/architecture-contract-closure.md",
+      "db/migrations/0019_mvp_filing_document.sql",
+      "db/migrations/0020_headcount_extraction.sql"
+    ],
+    "integration_surface": [
+      "apps/data-engine/src/data_engine/mvp_assets.py",
+      "apps/data-engine/src/data_engine/mvp_models.py",
+      "apps/data-engine/src/data_engine/mvp_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_registry.py",
+      "apps/data-engine/src/data_engine/mvp_repository.py",
+      "apps/data-engine/src/data_engine/mvp_snapshot.py",
+      "apps/data-engine/src/data_engine/mvp_sources.py",
+      "apps/data-engine/src/data_engine/raw_store.py",
+      "db/migrations/0021_mvp_medium_domains.sql",
+      "db/tests/mvp_medium_validation_contract.sql"
+    ],
+    "lease_owner": "wangzitian0"
+  },
+  "release_activation": {
+    "allowed": false,
+    "requirements": [
+      "no default Definitions, registry entry, schedule, source call, or route",
+      "E0 and E1 remain explicit Local/CI test composition only",
+      "accepted ReleaseManifest registry and configuration hashes exclude D2",
+      "negative test rejects release, Staging, live-source, and unlisted-consumer activation"
+    ]
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest apps/data-engine/tests/batches/mvp_medium_validation -q",
+      "uv run ruff check apps/data-engine/src/data_engine/batches/mvp_medium_validation apps/data-engine/tests/batches/mvp_medium_validation",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "wrong or revoked D1 handoff identity",
+      "missing identity, confidence, raw lineage, registry, policy, or PIT timestamp",
+      "future-known or stale price, fact, filing, action, or membership record",
+      "wrong issuer, security, listing, or share class",
+      "float or malformed monetary input and adjusted-action double counting",
+      "UPDATE or DELETE against raw or normalized vintages",
+      "source or semantic schema drift and central source/type branching",
+      "factor-visible source, raw, registry, or lineage provenance",
+      "denominator shrink, duplicate required cell, release activation, or Staging activation"
+    ],
+    "output": {
+      "type": "MvpMediumValidationHandoff",
+      "stable_handoff": true,
+      "state": "planned",
+      "allowed_evidence_readers": [
+        "#70 terminal headcount extraction batch",
+        "#26 Local Core integration batch",
+        "#27 bounded Staging canary batch"
+      ],
+      "retention": "accepted E2 handoff and terminal E3 evidence are permanent; failed rung evidence follows CI retention"
+    }
+  },
+  "merge_predecessors": ["D1-mvp-normalization-handoff"],
+  "invalidation": [
+    "D1 handoff, TOPT denominator, corpus bytes, registry, schema, PIT policy, confidence rule, or migration change creates a new revision",
+    "shared-toolkit finding invalidates the current rung and reruns the exact corpus",
+    "denominator or required-strata shrink creates a reviewed prospective revision and cannot repair prior evidence",
+    "handoff consumer or environment permission change creates a new handoff",
+    "revocation preserves prior evidence and blocks new activation"
+  ],
+  "rollback": "Revert only the latest D2 rung PR and revoke any produced handoff; immutable D1 evidence and append-only raw and normalized vintages are never deleted."
+}
