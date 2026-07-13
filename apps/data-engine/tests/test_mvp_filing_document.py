@@ -226,6 +226,32 @@ def test_dagster_e2_publishes_a_stable_named_consumer_handoff(connection) -> Non
         type(handoff)(**runner_values, runner_selection=tampered_selection)
 
 
+def test_e2_registry_drift_fails_with_a_targeted_error(connection, monkeypatch) -> None:
+    pipeline = run_filing_pipeline(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+    )
+    drifted_semantic_type = pipeline.registry.semantic_types[0].model_copy(
+        update={"semantic_type_id": "semantic.unrelated-filing-document"}
+    )
+    drifted_source = pipeline.registry.sources[0].model_copy(
+        update={"supported_type_ids": (drifted_semantic_type.semantic_type_id,)}
+    )
+    drifted_registry = RegistrySnapshot(
+        sources=(drifted_source,),
+        semantic_types=(drifted_semantic_type,),
+        required_type_ids=(drifted_semantic_type.semantic_type_id,),
+    )
+    monkeypatch.setattr(
+        "data_engine.mvp_assets.run_filing_pipeline",
+        lambda **_kwargs: replace(pipeline, registry=drifted_registry),
+    )
+
+    with pytest.raises(ValueError, match="semantic type/version is absent from the registry snapshot"):
+        run_d1_e2(REPOSITORY_ROOT, connection, MemoryRawObjectStore())
+
+
 def test_publication_boundary_and_factor_input_are_point_in_time_safe(connection) -> None:
     pipeline = run_filing_pipeline(
         repository_root=REPOSITORY_ROOT,
