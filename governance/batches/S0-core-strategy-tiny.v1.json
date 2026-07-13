@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "S0-core-strategy-tiny",
-  "revision": 1,
+  "revision": 2,
   "issue": 78,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "strategy",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -13,14 +13,14 @@
   "claim_ceiling": "E1 tiny development evidence",
   "capability_issues": [21, 24, 25],
   "closes_issues": [],
-  "informational_issues": [59, 79],
+  "informational_issues": [59, 70, 79, 104],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "c30c078b0b96890fac33694017bff7ad3f54c18d",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance change merged to main",
@@ -33,6 +33,16 @@
     ]
   },
   "dependencies": [
+    {
+      "class": "start",
+      "issue": 104,
+      "artifact": "accepted H0 Local/CI headcount factor-input handoff",
+      "handoff_manifest": {
+        "path": "governance/handoffs/H0-core-headcount-extraction.v2.json",
+        "sha256": "e4968b32e896d3c8dae9188e1fd47b01b62e14a5215671fed1b24c3ede510199"
+      },
+      "state": "accepted"
+    },
     {
       "class": "start",
       "issue": 57,
@@ -74,14 +84,13 @@
   ],
   "later_claim_dependencies": [
     "#59 semantic and oracle hash before candidate freeze",
-    "accepted E2 capture handoff before a stable factor-input dependency",
     "integration evidence consuming exact capture and strategy artifact hashes before #26 closes",
     "#71 untouched independent holdout before module acceptance"
   ],
   "corpus": {
-    "environment": "local fixture",
-    "manifest_path": null,
-    "sha256": null,
+    "environment": "Local/CI checked-in fixture",
+    "manifest_path": "libs/factors/tests/batches/core_strategy_tiny/fixtures/corpus.v1.json",
+    "sha256": "ba52119cd1f93dc68768b541db2d88e9a28301441c2d02ca35007d21b218f4ad",
     "required_strata": [
       "applicable success",
       "financial issuer branch",
@@ -99,7 +108,11 @@
     ],
     "read_only": [
       "libs/contracts/**",
-      "apps/data-engine/**"
+      "apps/data-engine/**",
+      "governance/evidence/H0-core-headcount-extraction-E2.v2.json",
+      "governance/handoffs/H0-core-headcount-extraction.v2.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "governance/gate0/public-goldens/manifest.v1.json"
     ],
     "forbidden": [
       "db/**",
