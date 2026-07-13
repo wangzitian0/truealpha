@@ -120,11 +120,11 @@
     "S0-core-strategy-tiny": {
       "issue": 78,
       "owner_gate": 29,
-      "status": "prepared",
-      "target_rung": "E0",
+      "status": "active",
+      "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S0-core-strategy-tiny.v1.json",
-      "sha256": "dc7481ac090ca631684c8934094c2a2943e4841f976068fd61e9ae647c8a7305"
+      "sha256": "69ed9c43adb58eb1d00e37cf8d3ad5bffad581ec9d1d66690fe156fa857ca59c"
     },
     "D0-mvp-capture-tiny": {
       "issue": 79,
