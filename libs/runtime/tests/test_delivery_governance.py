@@ -731,6 +731,47 @@ def test_failed_acceptance_command_emits_no_evidence(tmp_path, monkeypatch):
     assert not output_path.exists()
 
 
+def test_completed_batch_can_rerun_its_exact_terminal_acceptance():
+    terminal = {
+        "status": "done",
+        "last_accepted_rung": "E1",
+        "target_rung": "E1",
+        "terminal_rung": "E1",
+    }
+    validation = governance.Validation()
+
+    accepted_rung = governance.validate_status_transition(
+        validation,
+        batch_id="D0",
+        base_manifest=terminal,
+        manifest=terminal,
+    )
+
+    assert validation.errors == []
+    assert accepted_rung == "E1"
+
+
+@pytest.mark.parametrize("field", ["last_accepted_rung", "target_rung", "terminal_rung"])
+def test_corrective_terminal_rerun_cannot_change_rungs(field):
+    terminal = {
+        "status": "done",
+        "last_accepted_rung": "E1",
+        "target_rung": "E1",
+        "terminal_rung": "E1",
+    }
+    changed = {**terminal, field: "E2"}
+    validation = governance.Validation()
+
+    governance.validate_status_transition(
+        validation,
+        batch_id="D0",
+        base_manifest=terminal,
+        manifest=changed,
+    )
+
+    assert f"D0: corrective terminal rerun cannot change {field}" in validation.errors
+
+
 def test_prepared_batch_uses_queued_mirror_and_rejects_contradictory_labels():
     graph = {
         "root_issue": 68,
