@@ -1,0 +1,349 @@
+{
+  "schema_version": 1,
+  "corpus_id": "h0-core-headcount-extraction-v1",
+  "source_ceiling": "Checked-in filing bytes and embedded fixture responses only; no network, credential, source, or model call.",
+  "producer_handoff": {
+    "path": "governance/handoffs/D1-mvp-normalization-handoff.v1.json",
+    "sha256": "d872123a10fa626a5f777182b1f0c822c4013c0b4375ad10c6ea93da00716137",
+    "handoff_id": "handoff:d1-mvp-normalization-handoff:6b7dee09f06996dc1635695c94c9802735ba10744964abef65e4c9f5caead7e7",
+    "state": "accepted",
+    "allowed_consumer": "H0-core-headcount-extraction",
+    "allowed_environments": [
+      "ci",
+      "local"
+    ]
+  },
+  "policy_state": {
+    "headcount_semantics": "provisional-fixture-only-pending-issue-59",
+    "model_source_rights_budget": "fixture-only-no-live-call-pending-issue-60",
+    "confidence_policy": "reviewed-development-fixture-only",
+    "maximum_claim": "E1 contract behavior; no stable semantic, live-model, Staging, factor, or release claim"
+  },
+  "fixture_extractor": {
+    "provider": "fixture",
+    "model_id": "headcount-golden",
+    "immutable_revision": "2026-07-13.v1",
+    "response_location": "embedded-case-expected-results",
+    "network_calls": false,
+    "credentials": false
+  },
+  "artifacts": [
+    {
+      "artifact_id": "plug-original-filing",
+      "path": "apps/data-engine/samples/filings/PLUG_10K_000155837021007147.html",
+      "sha256": "fbe9fe64c7583f3f0b391396e9015a8787e58c8f3decb55292707c5ac6d0c9ed",
+      "git_blob": "dc185059537aa84f88a59ffccb4ee2a2397c40ce",
+      "subject_id": "issuer.plug",
+      "cik": "0001093691",
+      "accession": "0001558370-21-007147",
+      "form": "10-K",
+      "filing_date": "2021-05-14",
+      "report_period": "2020-12-31",
+      "accepted_at": "2021-05-14T10:20:25.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001093691.json",
+      "supersedes_artifact_id": null,
+      "d1_handoff_member": true
+    },
+    {
+      "artifact_id": "plug-amended-filing",
+      "path": "apps/data-engine/samples/filings/PLUG_10KA_000155837022003577.html",
+      "sha256": "985468e206ba380f7b413c76227bb3cd759b48eef49f7ff943839776383b551f",
+      "git_blob": "ab9c1c65baa93df22988eab46d8a7be0b6c61de0",
+      "subject_id": "issuer.plug",
+      "cik": "0001093691",
+      "accession": "0001558370-22-003577",
+      "form": "10-K/A",
+      "filing_date": "2022-03-14",
+      "report_period": "2020-12-31",
+      "accepted_at": "2022-03-14T21:30:04.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001093691.json",
+      "supersedes_artifact_id": "plug-original-filing",
+      "d1_handoff_member": true
+    },
+    {
+      "artifact_id": "ddog-2025-filing",
+      "path": "apps/data-engine/samples/filings/DDOG_10K_000162828026008819.html",
+      "sha256": "dcdd728cc76efaa0ca2fce5c2b6fd0e1704a77092d232ce0d931eddca8debfde",
+      "git_blob": "122288bd81cb78f64dcd986319dcd42a2278d432",
+      "subject_id": "issuer.ddog",
+      "cik": "0001561550",
+      "accession": "0001628280-26-008819",
+      "form": "10-K",
+      "filing_date": "2026-02-18",
+      "report_period": "2025-12-31",
+      "accepted_at": "2026-02-18T14:09:12.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001561550.json",
+      "supersedes_artifact_id": null,
+      "d1_handoff_member": false
+    },
+    {
+      "artifact_id": "nice-2025-filing",
+      "path": "apps/data-engine/samples/filings/NICE_20F_000100393526000010.html",
+      "sha256": "4a0cdd48e9e37345474abecc95249a46159ed5fcce7212967c5356921ae4bba2",
+      "git_blob": "f394cc72575b65c1d379727fd9b17f1183f9f7ce",
+      "subject_id": "issuer.nice",
+      "cik": "0001003935",
+      "accession": "0001003935-26-000010",
+      "form": "20-F",
+      "filing_date": "2026-02-26",
+      "report_period": "2025-12-31",
+      "accepted_at": "2026-02-26T21:13:09.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001003935.json",
+      "supersedes_artifact_id": null,
+      "d1_handoff_member": false
+    },
+    {
+      "artifact_id": "jpm-2025-filing",
+      "path": "apps/data-engine/samples/filings/JPM_10K_000162828026008131.html",
+      "sha256": "4d9febdbc2038dcdca8726053286df4cbbfd48885051cbd781efcc3becb66a23",
+      "git_blob": "44c0fb4ff9c055b76a7755301102f525694223d3",
+      "subject_id": "issuer.jpm",
+      "cik": "0000019617",
+      "accession": "0001628280-26-008131",
+      "form": "10-K",
+      "filing_date": "2026-02-13",
+      "report_period": "2025-12-31",
+      "accepted_at": "2026-02-13T21:20:00.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0000019617.json",
+      "supersedes_artifact_id": null,
+      "d1_handoff_member": false
+    },
+    {
+      "artifact_id": "nvda-guidance-without-headcount",
+      "path": "apps/data-engine/samples/filings/NVDA_8K_GUIDANCE_000104581024000113.html",
+      "sha256": "bc8f3e97c6cf9ce9196d6a11dacadfc8be0bfdf21e4eafd761cb7c22f87e1170",
+      "git_blob": "0fb60bf936bf35776d8e00a774112b01b52e8044",
+      "subject_id": "issuer.nvda",
+      "cik": "0001045810",
+      "accession": "0001045810-24-000113",
+      "form": "8-K",
+      "filing_date": "2024-05-22",
+      "report_period": "2024-05-22",
+      "accepted_at": "2024-05-22T20:21:29.000Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001045810.json",
+      "supersedes_artifact_id": null,
+      "d1_handoff_member": false
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "d1-selected-plug-total",
+      "artifact_ids": [
+        "plug-amended-filing"
+      ],
+      "expected": {
+        "availability": "available",
+        "selected_value": "1285",
+        "unit": "employees",
+        "scope": "total",
+        "valid_period_end": "2020-12-31",
+        "confidence": "0.98",
+        "review_status": "reviewed-fixture",
+        "evidence_spans": [
+          {
+            "view": "visible-text-v1",
+            "text": "As of December 31, 2020, we had 1,285 employees, with 1,253 located in the United States and 32 located outside of the United States, as well as 300 temporary employees.",
+            "occurrence_count": 1
+          }
+        ],
+        "rejected_candidates": [
+          {
+            "value": "1253",
+            "scope": "geographic"
+          },
+          {
+            "value": "32",
+            "scope": "geographic"
+          },
+          {
+            "value": "300",
+            "scope": "temporary"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "ddog-total-versus-departments",
+      "artifact_ids": [
+        "ddog-2025-filing"
+      ],
+      "expected": {
+        "availability": "available",
+        "selected_value": "8100",
+        "unit": "employees",
+        "scope": "total",
+        "valid_period_end": "2025-12-31",
+        "confidence": "0.90",
+        "review_status": "reviewed-fixture",
+        "evidence_spans": [
+          {
+            "view": "visible-text-v1",
+            "text": "As of December 31, 2025, we had approximately 8,100 employees operating across 35 countries.",
+            "occurrence_count": 1
+          }
+        ],
+        "rejected_candidates": [
+          {
+            "value": "3600",
+            "scope": "departmental",
+            "evidence_text": "As of December 31, 2025, we had approximately 3,600 employees in our sales and marketing organization"
+          },
+          {
+            "value": "3900",
+            "scope": "departmental",
+            "evidence_text": "As of December 31, 2025, we had approximately 3,900 employees in our research and development organization."
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "nice-worldwide-total-with-contractors",
+      "artifact_ids": [
+        "nice-2025-filing"
+      ],
+      "expected": {
+        "availability": "available",
+        "selected_value": "9626",
+        "unit": "employees",
+        "scope": "total",
+        "valid_period_end": "2025-12-31",
+        "confidence": "0.98",
+        "review_status": "reviewed-fixture",
+        "evidence_spans": [
+          {
+            "view": "visible-text-v1",
+            "text": "As of December 31, 2025, we had 9,626 employees worldwide, which represented an increase of approximately 10.3% from December 31, 2024, resulting from both organic and non-organic growth.",
+            "occurrence_count": 1
+          }
+        ],
+        "rejected_candidates": [
+          {
+            "value": "84",
+            "scope": "temporary"
+          },
+          {
+            "value": "2174",
+            "scope": "contractor",
+            "evidence_text": "On average, we employed 84 temporary employees and obtained services from 2,174 consultants (not included in the numbers set forth above) during 2025."
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing-total-headcount",
+      "artifact_ids": [
+        "nvda-guidance-without-headcount"
+      ],
+      "expected": {
+        "availability": "unavailable",
+        "selected_value": null,
+        "confidence": "0.00",
+        "review_status": "reviewed-fixture",
+        "reason": "no-total-headcount-disclosure",
+        "evidence_spans": []
+      }
+    },
+    {
+      "case_id": "jpm-financial-issuer-branch-input",
+      "artifact_ids": [
+        "jpm-2025-filing"
+      ],
+      "expected": {
+        "availability": "available",
+        "selected_value": "318512",
+        "unit": "employees",
+        "scope": "total",
+        "valid_period_end": "2025-12-31",
+        "confidence": "0.98",
+        "review_status": "reviewed-fixture",
+        "branch_input": "financial-issuer",
+        "factor_policy": "not-decided-by-H0",
+        "evidence_spans": [
+          {
+            "view": "visible-text-v1",
+            "text": "As of December 31, 2025, JPMorganChase had 318,512 employees globally.",
+            "occurrence_count": 1
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "case_id": "d1-pit-restatement-replay",
+      "artifact_ids": [
+        "plug-original-filing",
+        "plug-amended-filing"
+      ],
+      "cutoffs": [
+        {
+          "as_of": "2022-03-14T21:30:03.999Z",
+          "selected_artifact_id": "plug-original-filing"
+        },
+        {
+          "as_of": "2022-03-14T21:30:04.000Z",
+          "selected_artifact_id": "plug-amended-filing"
+        },
+        {
+          "as_of": "2022-03-14T21:30:04.001Z",
+          "selected_artifact_id": "plug-amended-filing"
+        }
+      ],
+      "expected": {
+        "prior_vintage_retained": true,
+        "changed_document_appends_invocation": true,
+        "changed_document_appends_semantic_result": true,
+        "same_visible_value_does_not_collapse_document_vintages": true
+      }
+    }
+  ],
+  "replay_matrix": [
+    {
+      "mutation": "none",
+      "expected": "reuse-stored-invocation-and-result-without-extractor-call"
+    },
+    {
+      "mutation": "document-bytes",
+      "expected": "append-new-invocation-and-semantic-vintage"
+    },
+    {
+      "mutation": "model-revision",
+      "expected": "append-new-invocation-and-semantic-vintage"
+    },
+    {
+      "mutation": "instructions",
+      "expected": "append-new-invocation-and-semantic-vintage"
+    },
+    {
+      "mutation": "output-schema",
+      "expected": "append-new-invocation-and-semantic-vintage"
+    },
+    {
+      "mutation": "decoding-parameters",
+      "expected": "append-new-invocation-and-semantic-vintage"
+    },
+    {
+      "mutation": "partial-first-match-selected-as-total",
+      "expected": "reject"
+    },
+    {
+      "mutation": "future-as-of",
+      "expected": "reject"
+    },
+    {
+      "mutation": "missing-evidence-span-or-confidence",
+      "expected": "reject"
+    }
+  ],
+  "execution_backends": [
+    "fixture",
+    "ephemeral-postgres"
+  ],
+  "release_isolation": {
+    "default_registry_entry": false,
+    "default_dagster_definition": false,
+    "schedule_entry": false,
+    "live_source_or_model": false,
+    "staging_route": false,
+    "release_activation": false
+  }
+}

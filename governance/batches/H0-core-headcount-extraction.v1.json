@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "H0-core-headcount-extraction",
-  "revision": 1,
+  "revision": 2,
   "issue": 104,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -16,11 +16,11 @@
   "informational_issues": [23, 24, 27, 59, 60, 61, 92],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "89324c87a7b4f9d797054ef12549687d343a466b",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -56,8 +56,8 @@
   ],
   "corpus": {
     "environment": "checked-in fixtures plus ephemeral Postgres",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "apps/data-engine/tests/fixtures/headcount_extraction/corpus.v1.json",
+    "sha256": "621cb9ccb6822acc497e57ccec669ac623228681747182178b1584a3234a15cf",
     "required_strata": [
       "D1 selected filing and PIT/restatement replay",
       "DDOG departmental versus total-employee ambiguity",
