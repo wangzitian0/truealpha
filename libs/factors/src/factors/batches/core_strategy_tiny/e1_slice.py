@@ -658,6 +658,19 @@ def _headcount_factor_observation(
     )
 
 
+def _requested_instrument_id(case: FrozenCoreTinyCase, subject: FrozenSubject) -> str:
+    if subject.instrument_id is not None:
+        return subject.instrument_id
+    if case.case_id != "alphabet-dual-listing-identity":
+        raise ValueError("issuer case is missing an explicit instrument demand")
+    expected_listing_ids = ("instrument.us.goog", "instrument.us.googl")
+    listing_ids = tuple(sorted(observation.instrument_id for observation in case.instrument_observations))
+    if listing_ids != expected_listing_ids:
+        raise ValueError("dual-listing fixture must declare the exact GOOG and GOOGL listings")
+    # The fixture deliberately probes a GOOG demand against a separate GOOGL listing.
+    return "instrument.us.goog"
+
+
 def _record_finding(
     findings: list[CoreTinyFinding],
     classification: FindingClass,
@@ -739,7 +752,7 @@ def _run_issuer_case(
     if case.subject is None:
         raise ValueError("issuer runner requires a corpus subject")
     subject = case.subject
-    requested_instrument_id = subject.instrument_id or "instrument.us.goog"
+    requested_instrument_id = _requested_instrument_id(case, subject)
     selections: list[CoreTinyInputSelection] = []
     observations: list[CoreObservation] = []
     findings: list[CoreTinyFinding] = []
@@ -1100,13 +1113,16 @@ def _run_public_golden_case(
 def run_e1_suite(
     repository_root: Path,
     *,
+    environment: Literal["ci", "local"] = "ci",
     reverse_case_order: bool = False,
     reverse_observation_order: bool = False,
 ) -> CoreTinyEvidence:
     """Execute the exact E1 corpus without live sources, schedules, or release activation."""
 
     corpus = load_frozen_corpus(repository_root)
-    activation = CoreTinyActivation(environment="ci")
+    if environment not in corpus.allowed_environments:
+        raise ValueError("E1 environment is not authorized by the frozen corpus")
+    activation = CoreTinyActivation(environment=environment)
     cases = tuple(reversed(corpus.cases)) if reverse_case_order else corpus.cases
     evidence_cases: list[CoreTinyCaseEvidence] = []
     for case in cases:

@@ -8,6 +8,8 @@ from factors.batches.core_strategy_tiny.e1_slice import (
     CoreTinyRunEvidence,
     FindingClass,
     InMemoryCoreTinyEvidenceRepository,
+    _requested_instrument_id,
+    load_frozen_corpus,
     run_e1_suite,
 )
 from pydantic import ValidationError
@@ -62,6 +64,30 @@ def test_e1_reordered_and_repeated_execution_preserves_every_identity() -> None:
             assert run.usage_audit.trace_id == run.trace.trace_id
             assert run.reverse_review.usage_audit_id == run.usage_audit.usage_audit_id
             assert run.reverse_review.trace_id == run.trace.trace_id
+
+
+def test_e1_environment_is_explicit_and_part_of_the_evidence_identity() -> None:
+    ci_evidence = run_e1_suite(REPOSITORY_ROOT, environment="ci")
+    local_evidence = run_e1_suite(REPOSITORY_ROOT, environment="local")
+
+    assert ci_evidence.activation.environment == "ci"
+    assert local_evidence.activation.environment == "local"
+    assert ci_evidence.evidence_id != local_evidence.evidence_id
+
+
+def test_e1_requires_an_explicit_instrument_except_for_the_named_dual_listing_probe() -> None:
+    corpus = load_frozen_corpus(REPOSITORY_ROOT)
+    cases = {case.case_id: case for case in corpus.cases}
+    alphabet = cases["alphabet-dual-listing-identity"]
+    ddog = cases["ddog-provenance-free-success"]
+
+    assert alphabet.subject is not None
+    assert _requested_instrument_id(alphabet, alphabet.subject) == "instrument.us.goog"
+    assert ddog.subject is not None
+    missing_demand = ddog.model_copy(update={"subject": ddog.subject.model_copy(update={"instrument_id": None})})
+    assert missing_demand.subject is not None
+    with pytest.raises(ValueError, match="missing an explicit instrument demand"):
+        _requested_instrument_id(missing_demand, missing_demand.subject)
 
 
 def test_e1_enforces_restatement_and_lookahead_boundaries() -> None:
