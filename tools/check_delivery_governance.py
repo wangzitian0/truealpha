@@ -1231,6 +1231,8 @@ def validate_new_batch_registration(
     changed_paths: tuple[str, ...],
 ) -> None:
     graph_batch = graph.get("batches", {}).get(batch_id, {})
+    activation = manifest.get("activation")
+    owners = manifest.get("owners")
     validation.require(manifest.get("revision") == 1, f"{batch_id}: new batch must start at revision 1")
     validation.require(
         manifest.get("status") == "queued"
@@ -1239,11 +1241,11 @@ def validate_new_batch_registration(
         f"{batch_id}: new batch must register as queued at E0 without accepted evidence",
     )
     validation.require(
-        manifest.get("activation", {}).get("base_sha") is None,
+        isinstance(activation, dict) and activation.get("base_sha") is None,
         f"{batch_id}: queued registration cannot pin an implementation base",
     )
     validation.require(
-        manifest.get("owners", {}).get("reviewer") is None,
+        isinstance(owners, dict) and owners.get("reviewer") is None,
         f"{batch_id}: queued registration cannot pre-assign a reviewer",
     )
     validation.require(
