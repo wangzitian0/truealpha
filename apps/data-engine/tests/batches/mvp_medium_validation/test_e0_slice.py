@@ -94,12 +94,20 @@ def connection():
 def _changed_artifact():
     case = FrozenPriceAdapter().load(REPOSITORY_ROOT, environment="ci")
     original = case.artifact
-    body = original.body + b"\n# deterministic D2 E0 changed-vintage sentinel\n"
+    source_row = original.source_row.encode()
+    changed_source_row = (
+        b"2026-03-31,166.97000122070312,174.6199951171875,166.9600067138672,"
+        b"174.52000000000000,174.31685974121094,226181300"
+    )
+    if original.body.count(source_row) != 1:
+        raise AssertionError("frozen source row must occur exactly once")
+    body = original.body.replace(source_row, changed_source_row)
     sha256 = hashlib.sha256(body).hexdigest()
     delta = timedelta(days=1)
     payload = MarketPricePayload.model_validate(
         {
             **original.payload.model_dump(mode="json"),
+            "close": "174.52000000000000",
             "knowable_at": original.payload.knowable_at + delta,
             "produced_at": original.payload.produced_at + delta,
             "recorded_at": original.payload.recorded_at + delta,
@@ -107,6 +115,7 @@ def _changed_artifact():
     )
     reconciliation = original.reconciliation.model_copy(
         update={
+            "source_adjusted_close": Decimal("174.31685974121094"),
             "first_observed_at": payload.knowable_at,
             "raw_object_id": f"raw-object:{sha256}",
             "raw_object_sha256": sha256,
@@ -117,6 +126,7 @@ def _changed_artifact():
         artifact_id="nvda-daily-prices-v2",
         body=body,
         sha256=sha256,
+        source_row=changed_source_row.decode(),
         payload=payload,
         reconciliation=reconciliation,
         supersedes_artifact_id=original.artifact_id,
@@ -482,10 +492,10 @@ def test_manifest_corpus_registry_and_e0_claims_are_exact() -> None:
     registry = build_price_registry()
     contract = json.loads(corpus_bytes)["cases"][0]["expected"]["registry_contract"]
 
-    assert manifest["revision"] == 3
+    assert manifest["revision"] == 4
     assert manifest["status"] == "active"
-    assert manifest["last_accepted_rung"] == "E0"
-    assert manifest["target_rung"] == "E1"
+    assert manifest["last_accepted_rung"] == "E1"
+    assert manifest["target_rung"] == "E2"
     assert manifest["corpus"]["sha256"] == hashlib.sha256(corpus_bytes).hexdigest()
     assert contract["parent_registry_snapshot_id"] == build_filing_registry().registry_snapshot_id
     assert contract["registry_snapshot_id"] == registry.registry_snapshot_id

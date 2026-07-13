@@ -294,6 +294,39 @@ def _decimal_text(value: str, *, label: str) -> Decimal:
     return parsed
 
 
+def _validate_artifact_semantics(artifact: FrozenPriceArtifact) -> None:
+    """Prove the supplied typed values were parsed from these exact CSV bytes."""
+    payload = artifact.payload
+    reconciliation = artifact.reconciliation
+    source_row, row = _selected_price_row(artifact.body, payload.trading_date)
+    if source_row != artifact.source_row:
+        raise ValueError("price artifact source-row binding drifted")
+    expected_prices = {
+        "open": _decimal_text(row["Open"], label="open"),
+        "high": _decimal_text(row["High"], label="high"),
+        "low": _decimal_text(row["Low"], label="low"),
+        "close": _decimal_text(row["Close"], label="close"),
+    }
+    if any(getattr(payload, field) != value for field, value in expected_prices.items()):
+        raise ValueError("price payload values do not match the bound CSV row")
+    try:
+        volume = int(row["Volume"])
+    except ValueError as error:
+        raise ValueError("volume is not an integer literal") from error
+    if payload.volume != volume:
+        raise ValueError("price payload volume does not match the bound CSV row")
+    adjusted_close = _decimal_text(row["Adj Close"], label="adjusted_close")
+    if (
+        reconciliation.listing_id != payload.listing_id
+        or reconciliation.trading_date != payload.trading_date
+        or reconciliation.source_adjusted_close != adjusted_close
+        or reconciliation.first_observed_at != payload.knowable_at
+        or reconciliation.raw_object_id != f"raw-object:{artifact.sha256}"
+        or reconciliation.raw_object_sha256 != artifact.sha256
+    ):
+        raise ValueError("adjusted-close reconciliation does not match the bound CSV row")
+
+
 class FrozenPriceAdapter:
     """Load one exact NVDA row and its frozen identity and policy context."""
 
@@ -692,6 +725,7 @@ class PriceNormalizer:
             or payload.ticker != case.security_listing.ticker
         ):
             raise ValueError("price payload identity does not match the frozen issuer/security/listing links")
+        _validate_artifact_semantics(artifact)
         if payload.confidence != Decimal(str(case.confidence_policy["assigned_confidence"])):
             raise ValueError("price confidence does not match the frozen policy")
         if (

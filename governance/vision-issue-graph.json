@@ -148,10 +148,10 @@
       "issue": 121,
       "owner_gate": 29,
       "status": "active",
-      "target_rung": "E1",
+      "target_rung": "E2",
       "terminal_rung": "E3",
       "manifest": "governance/batches/D2-mvp-medium-validation.v1.json",
-      "sha256": "cd1bd9bf7310cba04403dad8742b23f34416bbaef26bddd17b49406dff4c750d"
+      "sha256": "2c62622553e50f55bacae6347a85fa98b66389a3d44112e6c92ecc9c06b8065b"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,
