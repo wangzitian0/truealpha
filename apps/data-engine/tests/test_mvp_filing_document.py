@@ -12,9 +12,14 @@ import pytest
 from data_engine.config import settings
 from data_engine.mvp_assets import (
     D1_E0_ASSET_NAME,
+    D1_E2_ASSET_NAME,
+    D1_E2_CONSUMERS,
+    D1HandoffActivation,
     D1ProvisionalActivation,
     build_d1_e0_definitions,
+    build_d1_e2_definitions,
     run_d1_e0,
+    run_d1_e2,
 )
 from data_engine.mvp_models import FilingDocumentPayload
 from data_engine.mvp_pipeline import FilingComponentCatalog, run_filing_pipeline
@@ -107,6 +112,118 @@ def test_dagster_e0_is_idempotent_and_matches_postgres_snapshot(connection) -> N
     assert evidence.fixture_runner_selection_id == evidence.postgres_runner_selection_id
     assert evidence.row_counts == {"filing_documents": 2, "normalized_records": 2, "raw_fetches": 2}
     assert evidence.stable_handoff is False
+
+
+def test_dagster_e2_publishes_a_stable_named_consumer_handoff(connection) -> None:
+    expected = run_d1_e2(REPOSITORY_ROOT, connection, MemoryRawObjectStore())
+    definitions = build_d1_e2_definitions(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+        activation=D1HandoffActivation(
+            consumer="H0-core-headcount-extraction",
+            environment="local",
+            expected_handoff_id=expected.handoff_id,
+            expected_handoff_sha256=expected.content_sha256,
+        ),
+    )
+    dg.Definitions.validate_loadable(definitions)
+
+    first = definitions.get_implicit_global_asset_job_def().execute_in_process()
+    repeated = definitions.get_implicit_global_asset_job_def().execute_in_process()
+    handoff = first.output_for_node(D1_E2_ASSET_NAME)
+    repeated_handoff = repeated.output_for_node(D1_E2_ASSET_NAME)
+
+    assert first.success and repeated.success
+    assert handoff == repeated_handoff
+    assert handoff == expected
+    assert handoff.stable_handoff is True
+    assert handoff.schema_epoch == "staging.filing-document.v1+0019"
+    assert (
+        handoff.migration_sha256
+        == hashlib.sha256((REPOSITORY_ROOT / "db/migrations/0019_mvp_filing_document.sql").read_bytes()).hexdigest()
+    )
+    assert handoff.allowed_consumers == D1_E2_CONSUMERS
+    assert handoff.allowed_environments == ("ci", "local")
+    assert len(handoff.normalized_record_ids) == 2
+    assert handoff.evaluation.ready
+    assert handoff.evaluation.capture_manifest_id == handoff.capture_manifest.capture_manifest_id
+    assert handoff.capture_manifest.as_of == handoff.snapshot.request.as_of
+    assert handoff.snapshot.snapshot_id.endswith(handoff.snapshot.content_sha256)
+    assert handoff.runner_selection.snapshot_id == handoff.snapshot.snapshot_id
+    assert handoff.selected_record_id == handoff.runner_selection.bindings[0].input_id
+    selected_record = {record.normalized_record_id: record for record in handoff.snapshot.normalized_records}[
+        handoff.selected_record_id
+    ]
+    assert handoff.runner_selection.factor_inputs[0].observation.payload_sha256 == selected_record.draft.payload_sha256
+    assert type(handoff).model_validate_json(handoff.model_dump_json()) == handoff
+
+    manifest_values = handoff.capture_manifest.model_dump(
+        mode="python",
+        exclude={"capture_manifest_id", "content_sha256", "created_at"},
+    )
+    mismatched_manifest = type(handoff.capture_manifest)(
+        **manifest_values,
+        created_at=handoff.capture_manifest.created_at + timedelta(seconds=1),
+    )
+    handoff_values = {
+        name: getattr(handoff, name)
+        for name in type(handoff).model_fields
+        if name not in {"handoff_id", "content_sha256", "capture_manifest"}
+    }
+    with pytest.raises(ValidationError, match="does not bind the handoff manifest"):
+        type(handoff)(**handoff_values, capture_manifest=mismatched_manifest)
+
+    evaluation = handoff.evaluation
+    mismatched_evaluation = type(evaluation)(
+        **{
+            name: getattr(evaluation, name)
+            for name in type(evaluation).model_fields
+            if name not in {"capture_evaluation_report_id", "content_sha256", "environment"}
+        },
+        environment="staging",
+    )
+    evaluation_values = {
+        name: getattr(handoff, name)
+        for name in type(handoff).model_fields
+        if name not in {"handoff_id", "content_sha256", "evaluation"}
+    }
+    with pytest.raises(ValidationError, match="does not match the handoff manifest context"):
+        type(handoff)(**evaluation_values, evaluation=mismatched_evaluation)
+
+    pair_values = {
+        name: getattr(handoff, name)
+        for name in type(handoff).model_fields
+        if name not in {"handoff_id", "content_sha256", "normalized_record_ids"}
+    }
+    with pytest.raises(ValidationError, match="original/amendment chain"):
+        type(handoff)(
+            **pair_values,
+            normalized_record_ids=(handoff.selected_record_id, "normalized-record:" + "0" * 64),
+        )
+
+    binding = handoff.runner_selection.bindings[0]
+    tampered_observation = binding.observation.model_copy(update={"payload_sha256": "0" * 64})
+    tampered_binding = type(binding)(
+        **{name: getattr(binding, name) for name in type(binding).model_fields if name != "observation"},
+        observation=tampered_observation,
+    )
+    selection = handoff.runner_selection
+    tampered_selection = type(selection)(
+        **{
+            name: getattr(selection, name)
+            for name in type(selection).model_fields
+            if name not in {"selection_id", "content_sha256", "bindings"}
+        },
+        bindings=(tampered_binding,),
+    )
+    runner_values = {
+        name: getattr(handoff, name)
+        for name in type(handoff).model_fields
+        if name not in {"handoff_id", "content_sha256", "runner_selection"}
+    }
+    with pytest.raises(ValidationError, match="does not match the selected snapshot record"):
+        type(handoff)(**runner_values, runner_selection=tampered_selection)
 
 
 def test_publication_boundary_and_factor_input_are_point_in_time_safe(connection) -> None:
@@ -564,13 +681,51 @@ def _accepted_release_manifest() -> ReleaseManifest:
 
 
 def test_release_manifest_cannot_activate_d1_e0(connection) -> None:
+    release = _accepted_release_manifest()
     with pytest.raises(ValueError, match="not release-activated"):
         build_d1_e0_definitions(
             repository_root=REPOSITORY_ROOT,
             connection=connection,
             raw_store=MemoryRawObjectStore(),
-            activation=_accepted_release_manifest(),
+            activation=release,
         )
+    with pytest.raises(ValueError, match="cannot be release-activated"):
+        build_d1_e2_definitions(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            raw_store=MemoryRawObjectStore(),
+            activation=release,
+        )
+
+    expected = run_d1_e2(REPOSITORY_ROOT, connection, MemoryRawObjectStore())
+    with pytest.raises(ValidationError, match="environment"):
+        D1HandoffActivation(
+            consumer="H0-core-headcount-extraction",
+            environment="staging",
+            expected_handoff_id=expected.handoff_id,
+            expected_handoff_sha256=expected.content_sha256,
+        )
+    with pytest.raises(ValidationError, match="consumer"):
+        D1HandoffActivation(
+            consumer="unlisted-consumer",
+            environment="local",
+            expected_handoff_id=expected.handoff_id,
+            expected_handoff_sha256=expected.content_sha256,
+        )
+    bad_activation = D1HandoffActivation(
+        consumer="H0-core-headcount-extraction",
+        environment="local",
+        expected_handoff_id="mvp-normalization-handoff:" + "0" * 64,
+        expected_handoff_sha256="0" * 64,
+    )
+    bad_definitions = build_d1_e2_definitions(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+        activation=bad_activation,
+    )
+    with pytest.raises(ValueError, match="does not match the activated identity"):
+        bad_definitions.get_implicit_global_asset_job_def().execute_in_process()
 
 
 def test_direct_runner_evidence_is_stable(connection) -> None:
