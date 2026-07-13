@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -274,6 +275,53 @@ def validate_d1_handoff_document(
     document_payload: FilingDocumentPayload,
     raw_body: bytes,
 ) -> VisibleDocumentText:
+    visible = validate_d1_handoff_member_document(
+        handoff=handoff,
+        activation=activation,
+        document_record=document_record,
+        document_payload=document_payload,
+        raw_body=raw_body,
+    )
+    records = {record.normalized_record_id: record for record in handoff.snapshot.normalized_records}
+    if (
+        handoff.selected_record_id != document_record.normalized_record_id
+        or records.get(handoff.selected_record_id) != document_record
+    ):
+        raise ValueError("headcount document is not the D1 handoff selection")
+    return visible
+
+
+def validate_filing_document(
+    *,
+    document_record: NormalizedRecordRef,
+    document_payload: FilingDocumentPayload,
+    raw_body: bytes,
+) -> VisibleDocumentText:
+    """Validate one registry-bound filing record against its immutable raw bytes."""
+
+    if document_record.draft.semantic_type_id != "semantic.filing-document":
+        raise ValueError("headcount input must be a filing-document record")
+    raw_sha256 = hashlib.sha256(raw_body).hexdigest()
+    if (
+        raw_sha256 != document_payload.content_sha256
+        or raw_sha256 != document_record.raw_object_sha256
+        or document_record.document_id != f"document:{document_payload.accession}"
+        or document_record.draft.payload_sha256 != canonical_sha256(document_payload.model_dump(mode="json"))
+    ):
+        raise ValueError("filing payload, record, and raw bytes do not match")
+    return visible_document_text(raw_body)
+
+
+def validate_d1_handoff_member_document(
+    *,
+    handoff: MvpNormalizationHandoff,
+    activation: D1HandoffActivation,
+    document_record: NormalizedRecordRef,
+    document_payload: FilingDocumentPayload,
+    raw_body: bytes,
+) -> VisibleDocumentText:
+    """Validate either immutable PLUG vintage named by the accepted D1 handoff."""
+
     if handoff.handoff_id != D1_RUNTIME_HANDOFF_ID or handoff.content_sha256 != D1_RUNTIME_HANDOFF_SHA256:
         raise ValueError("H0 requires the exact accepted D1 runtime handoff")
     if (
@@ -284,48 +332,46 @@ def validate_d1_handoff_document(
         or activation.consumer not in handoff.allowed_consumers
     ):
         raise ValueError("D1 handoff activation does not authorize H0")
-    records = {record.normalized_record_id: record for record in handoff.snapshot.normalized_records}
-    if (
-        handoff.selected_record_id != document_record.normalized_record_id
-        or records.get(handoff.selected_record_id) != document_record
-    ):
-        raise ValueError("headcount document is not the D1 handoff selection")
-    raw_sha256 = hashlib.sha256(raw_body).hexdigest()
-    if (
-        raw_sha256 != document_payload.content_sha256
-        or raw_sha256 != document_record.raw_object_sha256
-        or document_record.document_id != f"document:{document_payload.accession}"
-        or document_record.draft.payload_sha256 != canonical_sha256(document_payload.model_dump(mode="json"))
-    ):
-        raise ValueError("D1 filing payload, record, and raw bytes do not match")
-    return visible_document_text(raw_body)
+    if document_record.normalized_record_id not in handoff.normalized_record_ids:
+        raise ValueError("headcount document is not a D1 handoff member")
+    return validate_filing_document(
+        document_record=document_record,
+        document_payload=document_payload,
+        raw_body=raw_body,
+    )
 
 
-def build_fixture_extraction_identity() -> tuple[ModelRevisionRef, ExtractionTemplate]:
+def build_fixture_extraction_identity(
+    *,
+    immutable_revision: str = "2026-07-13.v1",
+    endpoint_or_artifact_sha256: str = HEADCOUNT_CORPUS_SHA256,
+    decoding_parameters: Mapping[str, str] | None = None,
+    template_version: str = "0.1.0",
+    instructions: str | None = None,
+    output_schema_sha256: str | None = None,
+) -> tuple[ModelRevisionRef, ExtractionTemplate]:
+    active_decoding_parameters = dict(
+        decoding_parameters or {"temperature": "0", "top_p": "1", "response_mode": "frozen-fixture"}
+    )
+    active_instructions = instructions or (
+        "Select only a disclosed total employee count; retain partial, geographic, temporary, and "
+        "contractor candidates without promoting them to total."
+    )
     model_revision = ModelRevisionRef(
         provider="fixture",
         model_id="headcount-golden",
-        immutable_revision="2026-07-13.v1",
-        endpoint_or_artifact_sha256=HEADCOUNT_CORPUS_SHA256,
-        decoding_parameters_sha256=canonical_sha256(
-            {"temperature": "0", "top_p": "1", "response_mode": "frozen-fixture"}
-        ),
+        immutable_revision=immutable_revision,
+        endpoint_or_artifact_sha256=endpoint_or_artifact_sha256,
+        decoding_parameters_sha256=canonical_sha256(active_decoding_parameters),
     )
     template = ExtractionTemplate(
         template_name="total-employee-headcount",
-        template_version="0.1.0",
+        template_version=template_version,
         semantic_type_id=HEADCOUNT_SEMANTIC_TYPE_ID,
         semantic_type_version=HEADCOUNT_SEMANTIC_TYPE_VERSION,
         payload_model_key=HEADCOUNT_PAYLOAD_MODEL_KEY,
-        output_schema_sha256=canonical_sha256(HeadcountPayload.model_json_schema()),
-        instructions_sha256=canonical_sha256(
-            {
-                "instructions": (
-                    "Select only a disclosed total employee count; retain partial, geographic, temporary, and "
-                    "contractor candidates without promoting them to total."
-                )
-            }
-        ),
+        output_schema_sha256=output_schema_sha256 or canonical_sha256(HeadcountPayload.model_json_schema()),
+        instructions_sha256=canonical_sha256({"instructions": active_instructions}),
         extractor_implementation_sha256=canonical_sha256(
             {"implementation": "data_engine:build_fixture_headcount_extraction", "version": "0.1.0"}
         ),
@@ -333,6 +379,16 @@ def build_fixture_extraction_identity() -> tuple[ModelRevisionRef, ExtractionTem
         model_revision_sha256=model_revision.content_sha256,
     )
     return model_revision, template
+
+
+def headcount_input_sha256(document_record: NormalizedRecordRef) -> str:
+    return canonical_sha256(
+        {
+            "document_normalized_record_id": document_record.normalized_record_id,
+            "document_payload_sha256": document_record.draft.payload_sha256,
+            "document_content_sha256": document_record.raw_object_sha256,
+        }
+    )
 
 
 def build_fixture_headcount_extraction(
@@ -346,6 +402,9 @@ def build_fixture_headcount_extraction(
     payload: HeadcountPayload,
     started_at: datetime,
     completed_at: datetime,
+    model_revision: ModelRevisionRef | None = None,
+    template: ExtractionTemplate | None = None,
+    supersedes_record: NormalizedRecordRef | None = None,
 ) -> HeadcountExtractionBundle:
     visible = validate_d1_handoff_document(
         handoff=handoff,
@@ -354,8 +413,108 @@ def build_fixture_headcount_extraction(
         document_payload=document_payload,
         raw_body=raw_body,
     )
+    return _build_validated_fixture_headcount_extraction(
+        document_record=document_record,
+        document_payload=document_payload,
+        visible=visible,
+        raw_ref=raw_ref,
+        payload=payload,
+        started_at=started_at,
+        completed_at=completed_at,
+        model_revision=model_revision,
+        template=template,
+        supersedes_record=supersedes_record,
+    )
+
+
+def build_handoff_member_fixture_headcount_extraction(
+    *,
+    handoff: MvpNormalizationHandoff,
+    activation: D1HandoffActivation,
+    document_record: NormalizedRecordRef,
+    document_payload: FilingDocumentPayload,
+    raw_body: bytes,
+    raw_ref: str,
+    payload: HeadcountPayload,
+    started_at: datetime,
+    completed_at: datetime,
+    model_revision: ModelRevisionRef | None = None,
+    template: ExtractionTemplate | None = None,
+    supersedes_record: NormalizedRecordRef | None = None,
+) -> HeadcountExtractionBundle:
+    visible = validate_d1_handoff_member_document(
+        handoff=handoff,
+        activation=activation,
+        document_record=document_record,
+        document_payload=document_payload,
+        raw_body=raw_body,
+    )
+    return _build_validated_fixture_headcount_extraction(
+        document_record=document_record,
+        document_payload=document_payload,
+        visible=visible,
+        raw_ref=raw_ref,
+        payload=payload,
+        started_at=started_at,
+        completed_at=completed_at,
+        model_revision=model_revision,
+        template=template,
+        supersedes_record=supersedes_record,
+    )
+
+
+def build_corpus_fixture_headcount_extraction(
+    *,
+    document_record: NormalizedRecordRef,
+    document_payload: FilingDocumentPayload,
+    raw_body: bytes,
+    raw_ref: str,
+    expected_source_registry_entry_id: str,
+    expected_source_registry_entry_sha256: str,
+    payload: HeadcountPayload,
+    started_at: datetime,
+    completed_at: datetime,
+    model_revision: ModelRevisionRef | None = None,
+    template: ExtractionTemplate | None = None,
+) -> HeadcountExtractionBundle:
+    if (
+        document_record.source_registry_entry_id != expected_source_registry_entry_id
+        or document_record.source_registry_entry_sha256 != expected_source_registry_entry_sha256
+    ):
+        raise ValueError("corpus filing record is not bound to the activated H0 fixture source")
+    visible = validate_filing_document(
+        document_record=document_record,
+        document_payload=document_payload,
+        raw_body=raw_body,
+    )
+    return _build_validated_fixture_headcount_extraction(
+        document_record=document_record,
+        document_payload=document_payload,
+        visible=visible,
+        raw_ref=raw_ref,
+        payload=payload,
+        started_at=started_at,
+        completed_at=completed_at,
+        model_revision=model_revision,
+        template=template,
+    )
+
+
+def _build_validated_fixture_headcount_extraction(
+    *,
+    document_record: NormalizedRecordRef,
+    document_payload: FilingDocumentPayload,
+    visible: VisibleDocumentText,
+    raw_ref: str,
+    payload: HeadcountPayload,
+    started_at: datetime,
+    completed_at: datetime,
+    model_revision: ModelRevisionRef | None,
+    template: ExtractionTemplate | None,
+    supersedes_record: NormalizedRecordRef | None = None,
+) -> HeadcountExtractionBundle:
     if payload.valid_period_end != document_payload.report_period:
-        raise ValueError("headcount valid period does not match the D1 filing report period")
+        raise ValueError("headcount valid period does not match the filing report period")
     for candidate in payload.candidates:
         for span in candidate.evidence_spans:
             if (
@@ -364,27 +523,44 @@ def build_fixture_headcount_extraction(
                 or span.text_view_sha256 != visible.content_sha256
                 or visible.text[span.start_char : span.end_char] != span.text
             ):
-                raise ValueError("headcount evidence span does not reproduce the D1 document")
+                raise ValueError("headcount evidence span does not reproduce the filing document")
     if started_at.tzinfo is None or started_at.utcoffset() is None:
         raise ValueError("extraction start must be timezone-aware")
     if completed_at.tzinfo is None or completed_at.utcoffset() is None:
         raise ValueError("extraction completion must be timezone-aware")
     if started_at < document_record.recorded_at:
-        raise ValueError("headcount extraction cannot start before the D1 filing is recorded")
+        raise ValueError("headcount extraction cannot start before the filing is recorded")
+    if completed_at < started_at:
+        raise ValueError("headcount extraction cannot complete before it starts")
+    if (model_revision is None) != (template is None):
+        raise ValueError("fixture extraction identity requires both model revision and template")
+    active_model_revision, active_template = (
+        build_fixture_extraction_identity()
+        if model_revision is None or template is None
+        else (model_revision, template)
+    )
+    if (
+        active_template.semantic_type_id != HEADCOUNT_SEMANTIC_TYPE_ID
+        or active_template.semantic_type_version != HEADCOUNT_SEMANTIC_TYPE_VERSION
+        or active_template.payload_model_key != HEADCOUNT_PAYLOAD_MODEL_KEY
+    ):
+        raise ValueError("fixture extraction template does not bind the headcount payload")
+    if supersedes_record is not None and (
+        supersedes_record.draft.semantic_type_id != HEADCOUNT_SEMANTIC_TYPE_ID
+        or supersedes_record.draft.semantic_type_version != HEADCOUNT_SEMANTIC_TYPE_VERSION
+        or supersedes_record.draft.subject != document_record.draft.subject
+        or supersedes_record.draft.valid_to != payload.valid_period_end
+        or supersedes_record.source_registry_entry_id != document_record.source_registry_entry_id
+        or supersedes_record.draft.knowable_at >= document_record.draft.knowable_at
+    ):
+        raise ValueError("superseded headcount record belongs to another PIT coordinate")
 
-    model_revision, template = build_fixture_extraction_identity()
     invocation = ExtractionInvocation(
-        model_revision_id=model_revision.model_revision_id,
-        model_revision_sha256=model_revision.content_sha256,
-        extraction_template_id=template.extraction_template_id,
-        extraction_template_sha256=template.content_sha256,
-        input_sha256=canonical_sha256(
-            {
-                "document_normalized_record_id": document_record.normalized_record_id,
-                "document_payload_sha256": document_record.draft.payload_sha256,
-                "document_content_sha256": document_record.raw_object_sha256,
-            }
-        ),
+        model_revision_id=active_model_revision.model_revision_id,
+        model_revision_sha256=active_model_revision.content_sha256,
+        extraction_template_id=active_template.extraction_template_id,
+        extraction_template_sha256=active_template.content_sha256,
+        input_sha256=headcount_input_sha256(document_record),
         response_sha256=canonical_sha256({"fixture_response": payload.model_dump(mode="json")}),
         semantic_payload_sha256=payload.content_sha256,
         attempt_number=1,
@@ -392,13 +568,13 @@ def build_fixture_headcount_extraction(
         completed_at=completed_at,
         invoker_id="data_engine:FixtureHeadcountExtractor",
         invoker_version="0.1.0",
-        invoker_implementation_sha256=template.extractor_implementation_sha256,
+        invoker_implementation_sha256=active_template.extractor_implementation_sha256,
     )
     draft = SemanticDraft(
         semantic_type_id=HEADCOUNT_SEMANTIC_TYPE_ID,
         semantic_type_version=HEADCOUNT_SEMANTIC_TYPE_VERSION,
         payload_model_key=HEADCOUNT_PAYLOAD_MODEL_KEY,
-        payload_schema_sha256=template.output_schema_sha256,
+        payload_schema_sha256=active_template.output_schema_sha256,
         payload_sha256=payload.content_sha256,
         subject=document_record.draft.subject,
         valid_from=date(payload.valid_period_end.year, 1, 1),
@@ -409,10 +585,10 @@ def build_fixture_headcount_extraction(
         producer_id=invocation.invoker_id,
         producer_version=invocation.invoker_version,
         producer_implementation_sha256=invocation.invoker_implementation_sha256,
-        model_revision_id=model_revision.model_revision_id,
-        model_revision_sha256=model_revision.content_sha256,
-        extraction_template_id=template.extraction_template_id,
-        extraction_template_sha256=template.content_sha256,
+        model_revision_id=active_model_revision.model_revision_id,
+        model_revision_sha256=active_model_revision.content_sha256,
+        extraction_template_id=active_template.extraction_template_id,
+        extraction_template_sha256=active_template.content_sha256,
         extraction_invocation_id=invocation.extraction_invocation_id,
         extraction_invocation_sha256=invocation.content_sha256,
     )
@@ -424,15 +600,17 @@ def build_fixture_headcount_extraction(
         source_registry_entry_id=document_record.source_registry_entry_id,
         source_registry_entry_sha256=document_record.source_registry_entry_sha256,
         mapping_version="fixture-headcount-extraction:0.1.0",
-        mapping_implementation_sha256=template.extractor_implementation_sha256,
+        mapping_implementation_sha256=active_template.extractor_implementation_sha256,
         recorded_at=completed_at + timedelta(seconds=1),
         confidence=payload.confidence,
+        is_restatement=supersedes_record is not None,
+        supersedes_record_id=(None if supersedes_record is None else supersedes_record.normalized_record_id),
     )
     return HeadcountExtractionBundle(
         source_document_record_id=document_record.normalized_record_id,
         raw_ref=raw_ref,
-        model_revision=model_revision,
-        template=template,
+        model_revision=active_model_revision,
+        template=active_template,
         invocation=invocation,
         record=record,
         payload=payload,
@@ -454,8 +632,13 @@ __all__ = [
     "HeadcountReviewStatus",
     "HeadcountScope",
     "VisibleDocumentText",
+    "build_corpus_fixture_headcount_extraction",
     "build_fixture_extraction_identity",
     "build_fixture_headcount_extraction",
+    "build_handoff_member_fixture_headcount_extraction",
+    "headcount_input_sha256",
     "validate_d1_handoff_document",
+    "validate_d1_handoff_member_document",
+    "validate_filing_document",
     "visible_document_text",
 ]

@@ -148,10 +148,10 @@
       "issue": 104,
       "owner_gate": 29,
       "status": "active",
-      "target_rung": "E1",
+      "target_rung": "E2",
       "terminal_rung": "E3",
       "manifest": "governance/batches/H0-core-headcount-extraction.v1.json",
-      "sha256": "64e88061e8f07b5f193d3636a8c1ba65366079e06897b0f62d5917b6ccef389e"
+      "sha256": "c9d90f36c192edcb7d11e7525785e571cb925719db0f9cdee5a6ece75d51d903"
     }
   },
   "artifact_edges": [
