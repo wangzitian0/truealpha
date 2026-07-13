@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "D0-mvp-capture-tiny",
-  "revision": 1,
+  "revision": 2,
   "issue": 79,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -16,11 +16,11 @@
   "informational_issues": [14, 22, 60, 61, 78],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "b20ae4318fd4393a24dbd3c24af42260b6d1dd22",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance change merged to main",
@@ -81,8 +81,8 @@
   ],
   "corpus": {
     "environment": "local fixture plus ephemeral Postgres",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "apps/data-engine/tests/fixtures/mvp_capture_tiny/corpus.v1.json",
+    "sha256": "a36514fa9f0f4a7906879ae9a18569f294f2122babdde22dad2170a30d98abea",
     "read_only_source_manifest": "apps/data-engine/samples/capture_manifest_20260712.json",
     "read_only_source_git_blob": "2fa62f8a422ac7c1d71c9a562184f09391584f7f",
     "required_strata": [
