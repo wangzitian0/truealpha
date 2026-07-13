@@ -6,10 +6,17 @@ import json
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Any, cast
 
+import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.headcount_assets import (
+    H0_E1_ASSET_NAME,
+    H0E1Activation,
+    build_h0_e1_definitions,
+)
 from data_engine.headcount_models import (
     D1_RUNTIME_HANDOFF_ID,
     D1_RUNTIME_HANDOFF_SHA256,
@@ -23,6 +30,19 @@ from data_engine.headcount_models import (
     build_fixture_extraction_identity,
     build_fixture_headcount_extraction,
     visible_document_text,
+)
+from data_engine.headcount_pipeline import (
+    FrozenHeadcountArtifact,
+    FrozenHeadcountCase,
+    HeadcountFixtureExtractor,
+    load_headcount_corpus,
+    replay_headcount_e1,
+    run_headcount_e1,
+    run_headcount_variant,
+)
+from data_engine.headcount_registry import (
+    HEADCOUNT_CORPUS_SOURCE_ID,
+    build_headcount_registry,
 )
 from data_engine.headcount_repository import PostgresHeadcountRepository
 from data_engine.mvp_assets import D1HandoffActivation, run_d1_e2
@@ -71,6 +91,18 @@ class MemoryRawObjectStore:
         if hashlib.sha256(body).hexdigest() != ref.sha256:
             raise ValueError("raw object checksum mismatch")
         return body
+
+
+class ExplodingHeadcountExtractor:
+    def extract(
+        self,
+        case: FrozenHeadcountCase,
+        artifact: FrozenHeadcountArtifact,
+        document_record,
+        raw_body: bytes,
+    ) -> HeadcountPayload:
+        del case, artifact, document_record, raw_body
+        raise AssertionError("stored replay called the fixture extractor")
 
 
 @pytest.fixture
@@ -448,4 +480,219 @@ def test_unavailable_payload_cannot_claim_a_selected_value() -> None:
             confidence="0",
             review_status="reviewed-fixture",
             reason="no-total-headcount-disclosure",
+        )
+
+
+def test_e1_corpus_and_registry_extend_the_exact_d1_parent(connection) -> None:
+    corpus = load_headcount_corpus(REPOSITORY_ROOT)
+    assert corpus.producer_handoff_id.startswith("handoff:d1-mvp-normalization-handoff:")
+    assert {artifact.artifact_id for artifact in corpus.artifacts} == {
+        "plug-original-filing",
+        "plug-amended-filing",
+        "ddog-2025-filing",
+        "nice-2025-filing",
+        "jpm-2025-filing",
+        "nvda-guidance-without-headcount",
+    }
+    assert {case.case_id for case in corpus.cases} == {
+        "d1-selected-plug-total",
+        "ddog-total-versus-departments",
+        "nice-worldwide-total-with-contractors",
+        "missing-total-headcount",
+        "jpm-financial-issuer-branch-input",
+        "d1-pit-restatement-replay",
+    }
+    assert all(hashlib.sha256(artifact.body).hexdigest() == artifact.sha256 for artifact in corpus.artifacts)
+
+    handoff = run_d1_e2(REPOSITORY_ROOT, connection, MemoryRawObjectStore())
+    d1_registry = handoff.snapshot.registry_snapshot
+    registry = build_headcount_registry(d1_registry)
+    assert registry.parent_snapshot_id == d1_registry.registry_snapshot_id
+    assert set(d1_registry.sources) < set(registry.sources)
+    assert set(d1_registry.semantic_types) < set(registry.semantic_types)
+    assert next(source for source in registry.sources if source.source_id == HEADCOUNT_CORPUS_SOURCE_ID)
+    headcount_type = next(
+        semantic_type
+        for semantic_type in registry.semantic_types
+        if semantic_type.semantic_type_id == "semantic.employee-headcount"
+    )
+    assert headcount_type.domain.value == "filing_extractions"
+    assert headcount_type.input_model_key == "factors:Fact"
+
+
+def test_e1_multi_case_pit_and_stored_replay_without_calls(connection) -> None:
+    evidence = run_headcount_e1(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+        environment="local",
+    )
+    results = {result.case_id: result for result in evidence.case_results}
+    assert results["d1-selected-plug-total"].selected_value == 1285
+    assert results["ddog-total-versus-departments"].selected_value == 8100
+    assert results["nice-worldwide-total-with-contractors"].selected_value == 9626
+    assert results["missing-total-headcount"].availability is HeadcountAvailability.UNAVAILABLE
+    assert results["missing-total-headcount"].selected_value is None
+    assert results["jpm-financial-issuer-branch-input"].selected_value == 318512
+    assert results["jpm-financial-issuer-branch-input"].branch_input == "financial-issuer"
+    assert results["jpm-financial-issuer-branch-input"].factor_policy == "not-decided-by-H0"
+    assert evidence.pit_selection_ids[0] != evidence.pit_selection_ids[1]
+    assert evidence.pit_selection_ids[1] == evidence.pit_selection_ids[2]
+    assert evidence.stable_handoff is False
+    assert evidence.live_source_calls is False
+    assert evidence.live_model_calls is False
+
+    replayed = replay_headcount_e1(connection, evidence)
+    assert {bundle.invocation.extraction_invocation_id for bundle in replayed} == set(evidence.invocation_ids)
+    assert {bundle.record.normalized_record_id for bundle in replayed} == {
+        *evidence.headcount_vintage_ids,
+        *(
+            result.normalized_record_id
+            for result in evidence.case_results
+            if result.case_id != "d1-selected-plug-total"
+        ),
+    }
+    assert set(inspect.signature(replay_headcount_e1).parameters) == {"connection", "evidence"}
+
+    by_subject = {bundle.record.draft.subject.id: bundle for bundle in replayed}
+    ddog = by_subject["issuer.ddog"]
+    assert {(candidate.value, candidate.scope) for candidate in ddog.payload.candidates} == {
+        (8100, HeadcountScope.TOTAL),
+        (3600, HeadcountScope.DEPARTMENTAL),
+        (3900, HeadcountScope.DEPARTMENTAL),
+    }
+    nice = by_subject["issuer.nice"]
+    assert {(candidate.value, candidate.scope) for candidate in nice.payload.candidates} == {
+        (9626, HeadcountScope.TOTAL),
+        (84, HeadcountScope.TEMPORARY),
+        (2174, HeadcountScope.CONTRACTOR),
+    }
+    jpm_factor_input = by_subject["issuer.jpm"].factor_input(as_of=by_subject["issuer.jpm"].record.recorded_at)
+    assert jpm_factor_input.value == 318512
+    assert set(jpm_factor_input.model_dump()) == {
+        "entity_id",
+        "metric",
+        "value",
+        "confidence",
+        "as_of",
+        "fiscal_period",
+    }
+
+    original_id, amended_id = evidence.headcount_vintage_ids
+    rows = connection.execute(
+        """
+        select normalized_record_id, is_restatement, supersedes_record_id
+        from staging.normalized_records
+        where normalized_record_id = any(%s)
+        """,
+        ([original_id, amended_id],),
+    ).fetchall()
+    restatement = {row[0]: (row[1], row[2]) for row in rows}
+    assert restatement[original_id] == (False, None)
+    assert restatement[amended_id] == (True, original_id)
+
+    repeated = run_headcount_e1(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+        environment="local",
+        extractor=cast(HeadcountFixtureExtractor, ExplodingHeadcountExtractor()),
+    )
+    assert repeated == evidence
+
+
+def test_e1_identity_and_document_changes_append_new_vintages(connection) -> None:
+    evidence = run_headcount_e1(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+        environment="local",
+    )
+    assert len(set(evidence.document_vintage_ids)) == 2
+    assert len(set(evidence.headcount_vintage_ids)) == 2
+
+    identities = (
+        build_fixture_extraction_identity(
+            immutable_revision="2026-07-13.v2",
+            template_version="0.1.1",
+        ),
+        build_fixture_extraction_identity(
+            template_version="0.1.1",
+            instructions="Select only the reviewed company-wide employee total; never promote a partial count.",
+        ),
+        build_fixture_extraction_identity(
+            template_version="0.1.1",
+            output_schema_sha256=canonical_sha256(
+                {"schema": HeadcountPayload.model_json_schema(), "revision": "e1-variant"}
+            ),
+        ),
+        build_fixture_extraction_identity(
+            template_version="0.1.1",
+            decoding_parameters={"temperature": "0", "top_p": "0.9", "response_mode": "frozen-fixture"},
+        ),
+    )
+    store = MemoryRawObjectStore()
+    variants = tuple(
+        run_headcount_variant(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            raw_store=store,
+            environment="local",
+            case_id="ddog-total-versus-departments",
+            model_revision=model_revision,
+            template=template,
+        )
+        for model_revision, template in identities
+    )
+    assert len({bundle.invocation.extraction_invocation_id for bundle in variants}) == 4
+    assert len({bundle.record.normalized_record_id for bundle in variants}) == 4
+    assert not {bundle.invocation.extraction_invocation_id for bundle in variants} & set(evidence.invocation_ids)
+    persisted = connection.execute(
+        "select count(*) from staging.headcount_facts where normalized_record_id = any(%s)",
+        ([bundle.record.normalized_record_id for bundle in variants],),
+    ).fetchone()
+    assert persisted == (4,)
+
+    repeated = run_headcount_variant(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=store,
+        environment="local",
+        case_id="ddog-total-versus-departments",
+        model_revision=identities[0][0],
+        template=identities[0][1],
+    )
+    assert repeated == variants[0]
+
+
+def test_e1_dagster_composition_is_explicit_local_ci_only(connection) -> None:
+    import data_engine.headcount_assets as headcount_assets
+
+    definitions = build_h0_e1_definitions(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        raw_store=MemoryRawObjectStore(),
+        activation=H0E1Activation(environment="local"),
+    )
+    dg.Definitions.validate_loadable(definitions)
+    assert not definitions.schedules
+    assert not definitions.sensors
+    assert not hasattr(headcount_assets, "defs")
+
+    result = definitions.get_implicit_global_asset_job_def().execute_in_process()
+    evidence = result.output_for_node(H0_E1_ASSET_NAME)
+    assert result.success
+    assert evidence.environment == "local"
+    assert evidence.stable_handoff is False
+    assert H0E1Activation(environment="ci").environment == "ci"
+    with pytest.raises(ValidationError, match="local|ci"):
+        H0E1Activation(environment="staging")
+    with pytest.raises(ValidationError, match="False"):
+        H0E1Activation(environment="local", live_model_allowed=True)
+    with pytest.raises(ValueError, match="cannot be activated by a release"):
+        build_h0_e1_definitions(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            raw_store=MemoryRawObjectStore(),
+            activation=cast(Any, object()),
         )

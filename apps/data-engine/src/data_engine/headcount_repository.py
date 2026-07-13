@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 from psycopg import Connection
@@ -12,8 +13,14 @@ from truealpha_contracts.execution import (
     ModelRevisionRef,
     NormalizedRecordRef,
 )
+from truealpha_contracts.universe import SubjectRef
 
-from data_engine.headcount_models import EvidenceSpan, HeadcountExtractionBundle, HeadcountPayload
+from data_engine.headcount_models import (
+    EvidenceSpan,
+    HeadcountExtractionBundle,
+    HeadcountPayload,
+    headcount_input_sha256,
+)
 
 
 def _all_evidence_spans(payload: HeadcountPayload) -> tuple[EvidenceSpan, ...]:
@@ -71,6 +78,91 @@ class PostgresHeadcountRepository:
             record=record,
             payload=payload,
         )
+
+    def load_for_input(
+        self,
+        document_record: NormalizedRecordRef,
+        *,
+        model_revision: ModelRevisionRef,
+        template: ExtractionTemplate,
+    ) -> HeadcountExtractionBundle | None:
+        rows = self.connection.execute(
+            """
+            select extraction_invocation_id
+            from staging.headcount_extraction_invocations
+            where source_document_record_id = %s
+              and model_revision_id = %s
+              and model_revision_sha256 = %s
+              and extraction_template_id = %s
+              and extraction_template_sha256 = %s
+              and input_sha256 = %s
+            order by extraction_invocation_id
+            """,
+            (
+                document_record.normalized_record_id,
+                model_revision.model_revision_id,
+                model_revision.content_sha256,
+                template.extraction_template_id,
+                template.content_sha256,
+                headcount_input_sha256(document_record),
+            ),
+        ).fetchall()
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise ValueError("one frozen document and extraction identity produced multiple invocations")
+        return self.load(rows[0][0], model_revision=model_revision, template=template)
+
+    def select_pit(
+        self,
+        *,
+        subject: SubjectRef,
+        source_registry_entry_id: str,
+        valid_on: date,
+        as_of: datetime,
+        model_revision: ModelRevisionRef,
+        template: ExtractionTemplate,
+    ) -> tuple[HeadcountExtractionBundle, ...]:
+        rows = self.connection.execute(
+            """
+            select invocation.extraction_invocation_id
+            from staging.headcount_facts fact
+            join staging.normalized_records candidate
+              on candidate.normalized_record_id = fact.normalized_record_id
+            join staging.headcount_extraction_invocations invocation
+              on invocation.extraction_invocation_id = fact.extraction_invocation_id
+            where candidate.subject_kind = %s
+              and candidate.subject_id = %s
+              and candidate.semantic_type_id = 'semantic.employee-headcount'
+              and candidate.source_registry_entry_id = %s
+              and candidate.transaction_time <= %s
+              and candidate.valid_time @> %s::date
+              and invocation.model_revision_id = %s
+              and invocation.model_revision_sha256 = %s
+              and invocation.extraction_template_id = %s
+              and invocation.extraction_template_sha256 = %s
+              and not exists (
+                  select 1
+                  from staging.normalized_records replacement
+                  where replacement.supersedes_record_id = candidate.normalized_record_id
+                    and replacement.transaction_time <= %s
+              )
+            order by candidate.transaction_time desc, candidate.normalized_record_id desc
+            """,
+            (
+                subject.kind.value,
+                subject.id,
+                source_registry_entry_id,
+                as_of,
+                valid_on,
+                model_revision.model_revision_id,
+                model_revision.content_sha256,
+                template.extraction_template_id,
+                template.content_sha256,
+                as_of,
+            ),
+        ).fetchall()
+        return tuple(self.load(row[0], model_revision=model_revision, template=template) for row in rows)
 
     def _put_invocation(self, bundle: HeadcountExtractionBundle) -> None:
         invocation = bundle.invocation
