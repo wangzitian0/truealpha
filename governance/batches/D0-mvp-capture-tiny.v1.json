@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "batch_id": "D0-mvp-capture-tiny",
-  "revision": 2,
+  "revision": 3,
   "issue": 79,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Expose raw, normalization, row-complete manifest, PIT snapshot, and Dagster interaction defects on checked-in public fixtures.",
   "claim_ceiling": "E1 tiny capture and PIT development evidence",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "b20ae4318fd4393a24dbd3c24af42260b6d1dd22",
+    "base_sha": "60e8d8aaea6e53111b8cb3bd50aad788e6da7e41",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance change merged to main",
