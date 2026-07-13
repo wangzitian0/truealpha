@@ -1,4 +1,4 @@
-"""Explicit Dagster composition for the D1 E0 filing evidence."""
+"""Explicit Dagster composition for the D1 E0 evidence and E2 handoff."""
 
 import hashlib
 from dataclasses import dataclass
@@ -395,6 +395,17 @@ def run_d1_e2(
         raw_store=raw_store,
     )
     original, amended = pipeline.records
+    semantic_entry = next(
+        (
+            entry
+            for entry in pipeline.registry.semantic_types
+            if (entry.semantic_type_id, entry.version)
+            == (amended.draft.semantic_type_id, amended.draft.semantic_type_version)
+        ),
+        None,
+    )
+    if semantic_entry is None:
+        raise ValueError("E2 handoff semantic type/version is absent from the registry snapshot")
     selected = PostgresFilingDocumentRepository(connection).select_pit(
         subject=original.draft.subject,
         semantic_type_id=original.draft.semantic_type_id,
@@ -413,8 +424,6 @@ def run_d1_e2(
     )
     migration_id = "0019_mvp_filing_document.sql"
     migration_sha256 = hashlib.sha256((repository_root / "db" / "migrations" / migration_id).read_bytes()).hexdigest()
-    semantic_entries = {(entry.semantic_type_id, entry.version): entry for entry in pipeline.registry.semantic_types}
-    semantic_entry = semantic_entries[(amended.draft.semantic_type_id, amended.draft.semantic_type_version)]
     return MvpNormalizationHandoff(
         corpus_sha256=FROZEN_CORPUS_SHA256,
         migration_sha256=migration_sha256,
