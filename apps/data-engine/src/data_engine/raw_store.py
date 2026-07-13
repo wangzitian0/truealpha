@@ -13,7 +13,7 @@ re-pull just skips the check and lands a new vintage.
 import json
 from datetime import UTC, datetime
 
-from truealpha_contracts import DataSource, RawCapture
+from truealpha_contracts import DataSource, RawCapture, RawObjectStore
 from truealpha_runtime import S3RawObjectStore
 
 _store: S3RawObjectStore | None = None
@@ -36,24 +36,35 @@ def insert_fetch(
     fetched_at: datetime,
     source_published_at: datetime | None = None,
     metadata: dict | None = None,
+    store: RawObjectStore | None = None,
+    recorded_at: datetime | None = None,
 ) -> int:
     """Store the bytes in object storage, record the pointer row, return its id
-    (the existing row's id when these exact bytes were already recorded)."""
-    envelope = object_store().store(
-        RawCapture(
-            source=source,
-            source_record_id=source_record_id,
-            body=body,
-            content_type=content_type,
-            fetched_at=fetched_at,
-            source_published_at=source_published_at,
-            metadata=metadata or {},
-        )
+    (the existing row's id when these exact bytes were already recorded).
+
+    ``recorded_at`` is an explicit replay clock; live callers omit it and use
+    wall-clock landing time.
+    """
+    capture = RawCapture(
+        source=source,
+        source_record_id=source_record_id,
+        body=body,
+        content_type=content_type,
+        fetched_at=fetched_at,
+        source_published_at=source_published_at,
+        metadata=metadata or {},
     )
+    landing_time = recorded_at or datetime.now(UTC)
+    if landing_time.tzinfo is None or landing_time.utcoffset() is None:
+        raise ValueError("recorded_at must be timezone-aware")
+    if landing_time < fetched_at:
+        raise ValueError("recorded_at must not precede fetched_at")
+    active_store = store or object_store()
+    envelope = active_store.store(capture)
     # recorded_at is passed explicitly rather than left to its now() default:
     # Postgres's now() is the TRANSACTION start, so in a long-running sweep a
     # fetch made mid-transaction would violate check (recorded_at >= fetched_at).
-    # The wall clock at insert time is also simply the truer ingestion stamp.
+    # Live paths use wall clock; frozen replay paths provide a reviewed clock.
     row = conn.execute(
         """
         insert into raw.fetches
@@ -72,7 +83,7 @@ def insert_fetch(
             envelope.object.byte_length,
             source_published_at,
             fetched_at,
-            datetime.now(UTC),
+            landing_time,
             json.dumps(metadata or {}),
         ),
     ).fetchone()
@@ -94,6 +105,8 @@ def insert_json_fetch(
     fetched_at: datetime,
     source_published_at: datetime | None = None,
     metadata: dict | None = None,
+    store: RawObjectStore | None = None,
+    recorded_at: datetime | None = None,
 ) -> int:
     return insert_fetch(
         conn,
@@ -104,6 +117,8 @@ def insert_json_fetch(
         fetched_at=fetched_at,
         source_published_at=source_published_at,
         metadata=metadata,
+        store=store,
+        recorded_at=recorded_at,
     )
 
 
@@ -122,7 +137,7 @@ def raw_ref(fetch_id: int) -> str:
     return f"raw.fetches:{fetch_id}"
 
 
-def get_payload(conn, fetch_id: int) -> bytes:
+def get_payload(conn, fetch_id: int, *, store: RawObjectStore | None = None) -> bytes:
     """Read a fetch's bytes back through its pointer row — checksum-verified by
     the object store. This is how offline rebuilds (--figi-from-raw) reuse
     landed responses instead of re-spending API calls."""
@@ -137,4 +152,4 @@ def get_payload(conn, fetch_id: int) -> bytes:
     object_uri, sha256, byte_length, content_type = row
     bucket, _, key = object_uri.removeprefix("s3://").partition("/")
     ref = RawObjectRef(bucket=bucket, key=key, sha256=sha256, byte_length=byte_length, content_type=content_type)
-    return object_store().get(ref)
+    return (store or object_store()).get(ref)

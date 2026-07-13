@@ -138,11 +138,11 @@
     "D1-mvp-normalization-handoff": {
       "issue": 92,
       "owner_gate": 29,
-      "status": "prepared",
-      "target_rung": "E0",
+      "status": "active",
+      "target_rung": "E1",
       "terminal_rung": "E2",
       "manifest": "governance/batches/D1-mvp-normalization-handoff.v1.json",
-      "sha256": "19fa41950f4e9b322f94f3a2a67dbe84e8a5a421077ddd0ecedbe5a4bcd26fa9"
+      "sha256": "52c79e74a48bc1209b7a046468e0f7c55168034815357567031d053551f48731"
     }
   },
   "artifact_edges": [

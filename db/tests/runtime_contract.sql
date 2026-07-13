@@ -3,6 +3,8 @@ begin;
 do $$
 declare
     default_expression text;
+    required_column_count integer;
+    required_trigger_count integer;
 begin
     if to_regclass('raw.fetches') is null then
         raise exception 'raw.fetches is missing';
@@ -15,6 +17,65 @@ begin
     end if;
     if to_regclass('staging.contract_objects') is null then
         raise exception 'immutable Gate 0 contract repository is missing';
+    end if;
+    if to_regclass('staging.normalized_records') is null then
+        raise exception 'append-only normalized record repository is missing';
+    end if;
+    if to_regclass('staging.filing_documents') is null then
+        raise exception 'filing document projection is missing';
+    end if;
+
+    select count(*) into required_column_count
+    from information_schema.columns
+    where table_schema = 'staging'
+      and (
+        (
+            table_name = 'normalized_records'
+            and column_name in ('valid_time', 'transaction_time', 'recorded_at', 'confidence', 'raw_ref')
+            and is_nullable = 'NO'
+            and column_default is null
+        )
+        or (
+            table_name = 'filing_documents'
+            and column_name in ('valid_time', 'transaction_time', 'recorded_at', 'confidence', 'raw_ref')
+            and is_nullable = 'NO'
+            and column_default is null
+        )
+      );
+    if required_column_count <> 10 then
+        raise exception 'normalized filing PIT, confidence, or raw-lineage columns are not mandatory and explicit';
+    end if;
+
+    select count(*) into required_trigger_count
+    from pg_trigger
+    where not tgisinternal
+      and tgname in (
+        'trg_normalized_records_validate_raw_lineage',
+        'trg_normalized_records_validate_restatement',
+        'trg_normalized_records_append_only',
+        'trg_filing_documents_validate_projection',
+        'trg_filing_documents_append_only'
+      )
+      and tgrelid in (
+        'staging.normalized_records'::regclass,
+        'staging.filing_documents'::regclass
+      );
+    if required_trigger_count <> 5 then
+        raise exception 'normalized filing validation or append-only triggers are incomplete';
+    end if;
+    if to_regclass('staging.uq_normalized_records_single_successor') is null then
+        raise exception 'normalized restatement lineage can branch';
+    end if;
+    if exists (
+        select 1
+        from pg_constraint
+        where conrelid = 'staging.filing_documents'::regclass
+          and conname = 'filing_documents_vintage_unique'
+    ) then
+        raise exception 'filing projection blocks replay under a new normalized identity';
+    end if;
+    if to_regclass('staging.idx_normalized_records_registry_snapshot') is null then
+        raise exception 'registry-bound normalized PIT lookup is not indexed';
     end if;
 
     select column_default into default_expression
@@ -57,6 +118,191 @@ begin
     end;
     if not mutation_rejected then
         raise exception 'raw.fetches accepted an update';
+    end if;
+end;
+$$;
+
+insert into staging.normalized_records (
+    normalized_record_id,
+    content_sha256,
+    semantic_type_id,
+    semantic_type_version,
+    subject_kind,
+    subject_id,
+    valid_time,
+    transaction_time,
+    recorded_at,
+    confidence,
+    document_id,
+    raw_object_id,
+    raw_object_sha256,
+    raw_ref,
+    source_registry_entry_id,
+    source_registry_entry_sha256,
+    mapping_version,
+    mapping_implementation_sha256,
+    payload_model_key,
+    payload_schema_sha256,
+    payload_sha256,
+    payload,
+    record_ref
+) select
+    'normalized-record:' || repeat('b', 64),
+    repeat('b', 64),
+    'semantic.filing-document',
+    '1.0.0',
+    'issuer',
+    'issuer.contract-test',
+    daterange('2020-01-01', '2021-01-01', '[)'),
+    timestamptz '2021-03-01 12:00:00+00',
+    greatest(recorded_at, timestamptz '2021-03-01 12:00:00+00'),
+    1.0,
+    'document:contract-test',
+    'raw-object:' || repeat('a', 64),
+    repeat('a', 64),
+    'raw.fetches:' || id,
+    'source-registry-entry:' || repeat('c', 64),
+    repeat('c', 64),
+    'normalizer.contract-test:1.0.0',
+    repeat('d', 64),
+    'truealpha:FilingDocument',
+    repeat('e', 64),
+    repeat('f', 64),
+    '{}'::jsonb,
+    '{}'::jsonb
+from raw.fetches
+where source_record_id = 'contract-test';
+
+insert into staging.filing_documents (
+    normalized_record_id,
+    document_id,
+    issuer_id,
+    accession,
+    form,
+    filing_date,
+    report_period,
+    content_sha256,
+    content_type,
+    valid_time,
+    transaction_time,
+    recorded_at,
+    confidence,
+    raw_ref
+)
+select
+    normalized_record_id,
+    document_id,
+    subject_id,
+    '0000000000-21-000001',
+    '10-K',
+    date '2021-03-01',
+    date '2020-12-31',
+    raw_object_sha256,
+    'text/html',
+    valid_time,
+    transaction_time,
+    recorded_at,
+    confidence,
+    raw_ref
+from staging.normalized_records
+where normalized_record_id = 'normalized-record:' || repeat('b', 64);
+
+do $$
+declare
+    bad_confidence_rejected boolean := false;
+    bad_lineage_rejected boolean := false;
+    bad_projection_rejected boolean := false;
+    normalized_update_rejected boolean := false;
+    normalized_delete_rejected boolean := false;
+    filing_update_rejected boolean := false;
+    filing_delete_rejected boolean := false;
+begin
+    begin
+        insert into staging.normalized_records (
+            normalized_record_id, content_sha256, semantic_type_id, semantic_type_version,
+            subject_kind, subject_id, valid_time, transaction_time, recorded_at,
+            confidence, document_id, raw_object_id, raw_object_sha256, raw_ref,
+            source_registry_entry_id, source_registry_entry_sha256, mapping_version,
+            mapping_implementation_sha256, payload_model_key, payload_schema_sha256,
+            payload_sha256, payload, record_ref
+        ) values (
+            'normalized-record:' || repeat('1', 64), repeat('1', 64),
+            'semantic.filing-document', '1.0.0', 'issuer', 'issuer.invalid',
+            daterange('2020-01-01', '2021-01-01', '[)'), now(), now(), 2,
+            'document:invalid', 'raw-object:' || repeat('a', 64), repeat('a', 64),
+            (select 'raw.fetches:' || id from raw.fetches where source_record_id = 'contract-test'),
+            'source-registry-entry:' || repeat('c', 64), repeat('c', 64), 'invalid:1.0.0',
+            repeat('d', 64), 'truealpha:FilingDocument', repeat('e', 64), repeat('f', 64),
+            '{}'::jsonb, '{}'::jsonb
+        );
+    exception when check_violation then
+        bad_confidence_rejected := true;
+    end;
+
+    begin
+        insert into staging.normalized_records (
+            normalized_record_id, content_sha256, semantic_type_id, semantic_type_version,
+            subject_kind, subject_id, valid_time, transaction_time, recorded_at,
+            confidence, document_id, raw_object_id, raw_object_sha256, raw_ref,
+            source_registry_entry_id, source_registry_entry_sha256, mapping_version,
+            mapping_implementation_sha256, payload_model_key, payload_schema_sha256,
+            payload_sha256, payload, record_ref
+        ) values (
+            'normalized-record:' || repeat('2', 64), repeat('2', 64),
+            'semantic.filing-document', '1.0.0', 'issuer', 'issuer.invalid',
+            daterange('2020-01-01', '2021-01-01', '[)'), now(), now(), 1,
+            'document:invalid', 'raw-object:' || repeat('9', 64), repeat('9', 64),
+            (select 'raw.fetches:' || id from raw.fetches where source_record_id = 'contract-test'),
+            'source-registry-entry:' || repeat('c', 64), repeat('c', 64), 'invalid:1.0.0',
+            repeat('d', 64), 'truealpha:FilingDocument', repeat('e', 64), repeat('f', 64),
+            '{}'::jsonb, '{}'::jsonb
+        );
+    exception when check_violation then
+        bad_lineage_rejected := true;
+    end;
+
+    begin
+        insert into staging.filing_documents (
+            normalized_record_id, document_id, issuer_id, accession, form,
+            filing_date, report_period, content_sha256, content_type, valid_time,
+            transaction_time, recorded_at, confidence, raw_ref
+        )
+        select normalized_record_id, document_id, 'issuer.wrong', '0000000000-21-000001',
+               '10-K', date '2021-03-01', date '2020-12-31', raw_object_sha256,
+               'text/html', valid_time, transaction_time, recorded_at, confidence, raw_ref
+        from staging.normalized_records
+        where normalized_record_id = 'normalized-record:' || repeat('b', 64);
+    exception when check_violation then
+        bad_projection_rejected := true;
+    end;
+
+    begin
+        update staging.normalized_records set confidence = 0.9;
+    exception when raise_exception then
+        normalized_update_rejected := true;
+    end;
+    begin
+        delete from staging.normalized_records;
+    exception when raise_exception then
+        normalized_delete_rejected := true;
+    end;
+    begin
+        update staging.filing_documents set confidence = 0.9;
+    exception when raise_exception then
+        filing_update_rejected := true;
+    end;
+    begin
+        delete from staging.filing_documents;
+    exception when raise_exception then
+        filing_delete_rejected := true;
+    end;
+
+    if not bad_confidence_rejected or not bad_lineage_rejected or not bad_projection_rejected then
+        raise exception 'normalized filing constraints accepted invalid evidence';
+    end if;
+    if not normalized_update_rejected or not normalized_delete_rejected
+       or not filing_update_rejected or not filing_delete_rejected then
+        raise exception 'normalized filing tables are not append-only';
     end if;
 end;
 $$;

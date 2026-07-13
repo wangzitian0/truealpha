@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:e2cdab02e3c2bd22470c4d70501b93dbb1754e570f9b06c4288cd19b2f23a23e",
+  "batch_id": "D1-mvp-normalization-handoff",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "apps/data-engine/src/data_engine/raw_store.py",
+    "db/migrations/0019_mvp_filing_document.sql",
+    "db/tests/runtime_contract.sql"
+  ],
+  "base_sha": "a9919d02e5fad831dd161aca5eeef472ed513709",
+  "expires_at": "2026-07-20T00:00:00Z"
+}
