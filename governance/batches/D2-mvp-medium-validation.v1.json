@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 2,
+  "revision": 3,
   "issue": 121,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E3",
   "objective": "Complete issue #23 by validating the MVP raw, normalized, snapshot, and Dagster data path on the exact TOPT medium denominator.",
   "claim_ceiling": "E3 representative Local/CI TOPT data-plane candidate; no live-source, Staging, factor, strategy, or release claim",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "1fcf5639306cb1c9a3067fab0195169bb8054f40",
+    "base_sha": "394053dd168cd0e15af1ae68f1012ee4e3ea86f2",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -28,7 +28,7 @@
       "base_sha updated to the current implementation PR base commit",
       "D2 corpus paths and SHA-256 frozen before execution",
       "reviewer assigned and different from the implementation owner",
-      "integration lease reserves the shared MVP paths, migration 0021, and the dedicated SQL contract",
+      "E0 remains batch-private; an integration lease is required before the first shared MVP path, migration 0021, or SQL contract change",
       "GitHub issue body contains this manifest path and exact SHA-256",
       "Delivery Governance CI passes offline validation and live GitHub parity"
     ]
@@ -57,7 +57,7 @@
   "corpus": {
     "environment": "checked-in fixtures plus ephemeral Postgres",
     "manifest_path": "apps/data-engine/tests/fixtures/mvp_medium_validation/corpus.v1.json",
-    "sha256": "54a1f6c692d5cef580424b5060497f84e2ab1eb231c259cb78038a024e60a1b3",
+    "sha256": "48ea879b4428ae7f5ffd9183feada40c8612bf500b14006462ff61f09efcc08d",
     "required_strata": [
       "one exact TOPT NVDA price success from immutable raw bytes",
       "missing confidence, identity, lineage, or PIT timestamp",

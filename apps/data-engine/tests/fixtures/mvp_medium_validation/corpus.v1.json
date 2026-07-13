@@ -99,37 +99,141 @@
       "source_row": "2026-03-31,166.97000122070312,174.6199951171875,166.9600067138672,174.39999389648438,174.1969757080078,226181300",
       "expected": {
         "identity": {
-          "issuer_id": "issuer:lei:549300S4KLFTLO7GSQ80",
-          "security_id": "security:cusip:67066G104",
-          "listing_id": "listing:xnas:NVDA",
-          "issuer_lei": "549300S4KLFTLO7GSQ80",
-          "cusip": "67066G104",
-          "security_kind": "common-stock",
-          "share_class": "common",
-          "exchange_mic": "XNAS",
-          "ticker": "NVDA",
-          "currency": "USD",
-          "timezone": "America/New_York",
-          "trading_calendar_id": "calendar:us-equities",
-          "trading_calendar_version": "v1"
+          "issuer_security_link": {
+            "input_id": "identity-link:issuer:lei:549300S4KLFTLO7GSQ80:security:cusip:67066G104",
+            "issuer_id": "issuer:lei:549300S4KLFTLO7GSQ80",
+            "security_id": "security:cusip:67066G104",
+            "security_kind": "common_stock",
+            "share_class": "common",
+            "underlying_security_id": null,
+            "underlying_shares_per_security_unit": "1",
+            "valid_from": "2024-06-07",
+            "valid_to": null,
+            "knowable_at": "2024-06-07T20:19:34+00:00",
+            "recorded_at": "2024-06-07T20:19:34+00:00",
+            "confidence": "0.99",
+            "raw_ref": "fixture:nvda-listing-identity:047c49a59b50dd6851111d580d8c68b33fcb3bca22d5ea219793568b1bf7b0a6"
+          },
+          "security_listing_link": {
+            "input_id": "identity-link:security:cusip:67066G104:listing:xnas:nvda",
+            "security_id": "security:cusip:67066G104",
+            "listing_id": "listing:xnas:nvda",
+            "exchange_mic": "XNAS",
+            "ticker": "NVDA",
+            "listing_role": "primary",
+            "currency": "USD",
+            "timezone": "America/New_York",
+            "trading_calendar_id": "calendar:us-equities",
+            "trading_calendar_version": "2026-03-31.fixture-v1",
+            "valid_from": "2024-06-07",
+            "valid_to": null,
+            "knowable_at": "2024-06-07T20:19:34+00:00",
+            "recorded_at": "2024-06-07T20:19:34+00:00",
+            "confidence": "0.99",
+            "raw_ref": "fixture:nvda-listing-identity:047c49a59b50dd6851111d580d8c68b33fcb3bca22d5ea219793568b1bf7b0a6"
+          }
         },
-        "trading_date": "2026-03-31",
-        "open": "166.97000122070312",
-        "high": "174.6199951171875",
-        "low": "166.9600067138672",
-        "close": "174.39999389648438",
-        "adjusted_close": "174.1969757080078",
-        "volume": "226181300",
-        "knowable_at": "2026-07-11T19:04:54.803220+00:00",
-        "recorded_at": "2026-07-11T19:04:54.803220+00:00",
-        "confidence": "0.99",
-        "raw_lineage_artifact_id": "nvda-daily-prices",
-        "source_adapter_id": "source:yahoo-csv@fixture-v1",
-        "normalizer_id": "normalizer:market-price@v1",
-        "semantic_schema_id": "schema:market-price@v1",
-        "confidence_policy_id": "policy:reviewed-fixture-price@v1",
-        "dagster_composition_id": "composition:d2-e0-local-ci@v1",
-        "adjustment_policy": "preserve-source-adjusted-close-without-applying-corporate-actions"
+        "universe_ref": {
+          "universe_id": "universe:topt-us-2026-03-31",
+          "universe_version": "topt-candidate-2026-03-31-v1",
+          "content_sha256": "8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f"
+        },
+        "calendar": {
+          "calendar_id": "calendar:us-equities",
+          "calendar_version": "2026-03-31.fixture-v1",
+          "exchange_mic": "XNAS",
+          "timezone": "America/New_York",
+          "valid_from": "2026-03-31",
+          "valid_to": "2026-03-31",
+          "sessions": [
+            {
+              "session_date": "2026-03-31",
+              "opens_at": "2026-03-31T13:30:00+00:00",
+              "closes_at": "2026-03-31T20:00:00+00:00",
+              "kind": "regular"
+            }
+          ],
+          "holidays": [],
+          "content_sha256": "5d79ec55e06bd0ad04bf3c8fa5724fc1c8ecc981b1e21f6cc6c41e428530c41f"
+        },
+        "price_bar": {
+          "input_id": "price-bar:listing:xnas:nvda:2026-03-31:unadjusted",
+          "trading_date": "2026-03-31",
+          "session_close_at": "2026-03-31T20:00:00+00:00",
+          "open": "166.97000122070312",
+          "high": "174.6199951171875",
+          "low": "166.9600067138672",
+          "close": "174.39999389648438",
+          "volume": 226181300,
+          "currency": "USD",
+          "price_basis": "unadjusted",
+          "knowable_at": "2026-07-11T19:04:54.803220+00:00",
+          "recorded_at": "2026-07-11T19:04:56.803220+00:00"
+        },
+        "normalization": {
+          "source_record_id": "fixture:yahoo:NVDA:daily:2026-03-31",
+          "raw_object_id": "raw-object:277301f5c45e16bcf9a581dd7b89fc72f576e16dce6ccbf1ccaa846c2d8be926",
+          "produced_at": "2026-07-11T19:04:55.803220+00:00",
+          "confidence_policy": {
+            "policy_id": "policy.d2-e0-reviewed-fixture-confidence",
+            "version": "1.0.0",
+            "assigned_confidence": "0.99",
+            "basis": "checked-in-public-fixture-with-exact-row-binding",
+            "implementation_sha256": "8a7c729e27c2efcd47ef786aebc58031f4501ed3b26a07c2ed0b526c36358aed"
+          },
+          "price_policy": {
+            "policy_id": "policy.d2-e0-unadjusted-execution-price",
+            "version": "1.0.0",
+            "execution_price_basis": "unadjusted",
+            "adjusted_close_use": "reconciliation-only",
+            "corporate_action_application": "not-in-e0",
+            "implementation_sha256": "427ced5f0c12eb8019ebf94aab420b1c1e752eebabd56ed85dca2bfe6b58925c"
+          },
+          "freshness_policy": {
+            "policy_id": "freshness.market-price:v1",
+            "version": "1.0.0",
+            "maximum_age_days": 180,
+            "age_anchor": "first-observed-at",
+            "implementation_sha256": "041ae9732ae7e4d0c2c90a53bb4f25de52e2b4bafcb49561defd2d7ae36a58a7"
+          }
+        },
+        "reconciliation": {
+          "input_id": "price-reconciliation:listing:xnas:nvda:2026-03-31",
+          "source_adjusted_close": "174.1969757080078",
+          "use": "reconciliation-only",
+          "factor_visible": false
+        },
+        "snapshot": {
+          "valid_on": "2026-03-31",
+          "before_knowable_at": "2026-07-11T19:04:54.803219+00:00",
+          "at_knowable_at": "2026-07-11T19:04:54.803220+00:00",
+          "as_of": "2026-07-11T19:04:57.803220+00:00",
+          "stale_as_of": "2027-01-07T19:04:54.803221+00:00"
+        },
+        "registry_contract": {
+          "parent_registry_snapshot_id": "registry-snapshot:cab282910fc261be126da4ca2e3622decea39a321ff162072b57778d874f5c03",
+          "registry_snapshot_id": "registry-snapshot:9ef6e76e4bacb52ed70cac72f68566d3e509f02d79e46f283453894c597a17d2",
+          "registry_snapshot_sha256": "9ef6e76e4bacb52ed70cac72f68566d3e509f02d79e46f283453894c597a17d2",
+          "source_registry_id": "source-registry:e07e80bc7d659c05ecb98308ac9d7c8d11e55addbc7e0291948acb7f0d205b70",
+          "source_registry_sha256": "e07e80bc7d659c05ecb98308ac9d7c8d11e55addbc7e0291948acb7f0d205b70",
+          "semantic_type_registry_id": "semantic-type-registry:ccbcf9b704414e2ef0c4ec7b6e5c09d7b32d27843c240eea63f8e61f4d309cd7",
+          "semantic_type_registry_sha256": "ccbcf9b704414e2ef0c4ec7b6e5c09d7b32d27843c240eea63f8e61f4d309cd7",
+          "source_entry_id": "source-registry-entry:d87daeab40ce148ebd92ecca8170b387ea3bc5c0dac04aeb6e0855e9caab4d81",
+          "source_entry_sha256": "d87daeab40ce148ebd92ecca8170b387ea3bc5c0dac04aeb6e0855e9caab4d81",
+          "semantic_type_entry_id": "semantic-type-registry-entry:4ff82be2532dedea936153d67bbc6798be61b5cbe956c6f27777c5735563c025",
+          "semantic_type_entry_sha256": "4ff82be2532dedea936153d67bbc6798be61b5cbe956c6f27777c5735563c025",
+          "payload_schema_sha256": "aa96d53b05e0623b991842d2c67d2cf22af6df66e6f35d3d8d41f25dc6387bfc",
+          "implementation_sha256": "e31276c10531d1b67476d56903ae0b889b20df0f873a6c94f4213322a5b5aa45"
+        },
+        "factor_projection_fields": [
+          "subject",
+          "payload_model_key",
+          "payload_sha256",
+          "valid_from",
+          "valid_to",
+          "confidence",
+          "as_of"
+        ]
       }
     }
   ],
