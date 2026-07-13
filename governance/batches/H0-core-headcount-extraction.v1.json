@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "batch_id": "H0-core-headcount-extraction",
+  "revision": 1,
+  "issue": 104,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E3",
+  "objective": "Consume the accepted D1 filing handoff and build the append-only, replayable document-to-total-headcount data plane required by issue #70.",
+  "claim_ceiling": "E3 multi-issuer Local/CI headcount extraction candidate; no live model, factor, Staging, or release claim",
+  "capability_issues": [70],
+  "closes_issues": [70],
+  "informational_issues": [23, 24, 27, 59, 60, 61, 92],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "governance registration merged to main",
+      "accepted D1 handoff remains byte-identical and authorizes this batch",
+      "base_sha updated to the current implementation PR base commit",
+      "headcount corpus paths and SHA-256 frozen before execution",
+      "reviewer assigned and different from the implementation owner",
+      "migration lease reserves 0020 and the dedicated SQL contract path",
+      "GitHub issue body contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 92,
+      "artifact": "accepted D1 normalized filing, capture, snapshot, and runner handoff",
+      "handoff_manifest": {
+        "path": "governance/handoffs/D1-mvp-normalization-handoff.v1.json",
+        "sha256": "d872123a10fa626a5f777182b1f0c822c4013c0b4375ad10c6ea93da00716137"
+      },
+      "state": "accepted"
+    }
+  ],
+  "later_claim_dependencies": [
+    "D1 producer evidence already pins the accepted #57/#58 contract tree; any contract-tree change reruns H0",
+    "#59 accepted total-headcount and financial-issuer semantics before the E2 semantic handoff freezes",
+    "#60 accepted exact model/source/rights/budget policy before any live call or E2 model-policy freeze",
+    "#61 accepted applicability and SLO denominator before downstream readiness acceptance",
+    "D2 medium-domain evidence converges before #26 and #27",
+    "#24 consumes only the exact accepted H0 factor-input handoff",
+    "#71 remains an untouched independent Core holdout"
+  ],
+  "corpus": {
+    "environment": "checked-in fixtures plus ephemeral Postgres",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "D1 selected filing and PIT/restatement replay",
+      "DDOG departmental versus total-employee ambiguity",
+      "NICE conventional worldwide total",
+      "missing or ambiguous total headcount",
+      "JPM financial-issuer branch input",
+      "exact evidence-span byte reproduction",
+      "stored replay without a source or extractor call",
+      "changed document, model, prompt, schema, or decoding vintage"
+    ]
+  },
+  "source_ceiling": "Checked-in filing bytes and frozen extractor responses only through E3. Live source or model calls require accepted #60 policy and a separate environment-scoped activation.",
+  "paths": {
+    "writable": [
+      "governance/leases/H0-core-headcount-extraction.v1.json",
+      "apps/data-engine/src/data_engine/headcount_assets.py",
+      "apps/data-engine/src/data_engine/headcount_models.py",
+      "apps/data-engine/src/data_engine/headcount_pipeline.py",
+      "apps/data-engine/src/data_engine/headcount_registry.py",
+      "apps/data-engine/src/data_engine/headcount_repository.py",
+      "apps/data-engine/tests/test_headcount_extraction.py",
+      "apps/data-engine/tests/fixtures/headcount_extraction/**",
+      "db/migrations/0020_headcount_extraction.sql",
+      "db/tests/headcount_extraction_contract.sql"
+    ],
+    "read_only": [
+      "governance/evidence/D1-mvp-normalization-handoff-E2.v1.json",
+      "governance/handoffs/D1-mvp-normalization-handoff.v1.json",
+      "apps/data-engine/samples/**",
+      "apps/data-engine/src/data_engine/raw_store.py",
+      "apps/data-engine/src/data_engine/mvp_assets.py",
+      "apps/data-engine/src/data_engine/mvp_models.py",
+      "apps/data-engine/src/data_engine/mvp_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_registry.py",
+      "apps/data-engine/src/data_engine/mvp_repository.py",
+      "apps/data-engine/src/data_engine/mvp_snapshot.py",
+      "apps/data-engine/src/data_engine/mvp_sources.py",
+      "libs/contracts/**"
+    ],
+    "forbidden": [
+      "libs/factors/**",
+      "apps/data-engine/src/data_engine/__init__.py",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile",
+      "AGENTS.md",
+      "init.md",
+      "docs/architecture-contract-closure.md",
+      "db/migrations/0019_mvp_filing_document.sql"
+    ],
+    "integration_surface": [
+      "db/migrations/0020_headcount_extraction.sql",
+      "db/tests/headcount_extraction_contract.sql"
+    ],
+    "lease_owner": "wangzitian0"
+  },
+  "release_activation": {
+    "allowed": false,
+    "requirements": [
+      "no default Definitions, registry entry, schedule, or route",
+      "no source or model credential in fixture execution",
+      "accepted ReleaseManifest model, template, registry, and configuration hashes exclude H0",
+      "negative test rejects release, Staging, unlisted-consumer, and mutable-model activation"
+    ]
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest apps/data-engine/tests/test_headcount_extraction.py -q",
+      "uv run ruff check apps/data-engine/src/data_engine/headcount_*.py apps/data-engine/tests/test_headcount_extraction.py",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "wrong or stale D1 handoff identity",
+      "mutable model, prompt, schema, or decoding identity",
+      "partial, geographic, departmental, or contractor count selected as total",
+      "missing or invalid evidence span",
+      "future-known or backdated extraction result",
+      "missing confidence, document, raw, invocation, or review lineage",
+      "UPDATE or DELETE against invocation and semantic vintages",
+      "factor-visible source, model, prompt, span, or review provenance",
+      "source, model, release, or Staging activation"
+    ],
+    "output": {
+      "type": "CoreHeadcountExtractionHandoff",
+      "stable_handoff": true,
+      "state": "planned",
+      "allowed_evidence_readers": [
+        "#24 gross-profit-per-employee factor batch",
+        "#26 Local Core integration batch",
+        "#27 bounded Staging canary batch"
+      ],
+      "retention": "accepted E2 handoff and terminal E3 evidence are permanent; failed rung evidence follows CI retention"
+    }
+  },
+  "merge_predecessors": ["D1-mvp-normalization-handoff"],
+  "invalidation": [
+    "D1 handoff, filing bytes, semantic policy, model/template/invocation, schema, PIT, span, or selection change creates a new revision",
+    "shared-toolkit finding invalidates the current rung and reruns the exact corpus",
+    "denominator or required-strata shrink creates a reviewed prospective revision and cannot repair prior evidence",
+    "handoff consumer or environment permission change creates a new handoff",
+    "revocation preserves prior evidence and blocks new activation"
+  ],
+  "rollback": "Revert only the latest H0 rung PR and revoke any produced handoff; immutable D1 evidence and append-only extraction vintages are never deleted."
+}
