@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from factors.batches.core_strategy_tiny import (
+from factors.batches.core_strategy_tiny.e0_slice import (
+    FROZEN_CORPUS_SHA256,
+    H0_GOVERNANCE_HANDOFF_ID,
+    H0_GOVERNANCE_HANDOFF_SHA256,
+    H0_RUNTIME_HANDOFF_ID,
+    H0_RUNTIME_HANDOFF_SHA256,
+    PUBLIC_GOLDEN_MANIFEST_SHA256,
+    SEMANTIC_CANDIDATE_SHA256,
     CoreMetric,
     CoreObservation,
     CoreTinyActivation,
@@ -19,15 +26,6 @@ from factors.batches.core_strategy_tiny import (
     evaluate_core_tiny,
     rank_core_tiny_results,
     rank_provisional_candidates,
-)
-from factors.batches.core_strategy_tiny.e0_slice import (
-    FROZEN_CORPUS_SHA256,
-    H0_GOVERNANCE_HANDOFF_ID,
-    H0_GOVERNANCE_HANDOFF_SHA256,
-    H0_RUNTIME_HANDOFF_ID,
-    H0_RUNTIME_HANDOFF_SHA256,
-    PUBLIC_GOLDEN_MANIFEST_SHA256,
-    SEMANTIC_CANDIDATE_SHA256,
 )
 from factors.registry import FACTOR_REGISTRY
 from pydantic import ValidationError
