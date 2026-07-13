@@ -44,18 +44,13 @@ jobs:
           import os
           import subprocess
 
+          from tools.check_delivery_governance import batch_status_labels, render_batch_issue_body
+
           with open("governance/vision-issue-graph.json", encoding="utf-8") as stream:
               graph = json.load(stream)
           repository = os.environ["GITHUB_REPOSITORY"]
-          rung_labels = {"E0": "code", "E1": "tiny", "E2": "contract", "E3": "medium", "E4": "hardening", "E5": "large"}
-          for batch in graph["batches"].values():
-              status = "queued" if batch["status"] == "prepared" else batch["status"]
-              desired_status = {
-                  f"batch:{status}",
-                  f"rung:{rung_labels[batch['target_rung']]}",
-              }
-              if batch["target_rung"] in {"E0", "E1"}:
-                  desired_status.add("readiness:provisional")
+          for batch_id, batch in graph["batches"].items():
+              desired_status = batch_status_labels(batch)
               endpoint = f"repos/{repository}/issues/{batch['issue']}"
               response = subprocess.run(
                   ["gh", "api", endpoint],
@@ -70,11 +65,12 @@ jobs:
                   if not label["name"].startswith(("batch:", "rung:", "readiness:"))
               }
               desired = sorted(preserved | desired_status)
+              desired_body = render_batch_issue_body(issue.get("body") or "", batch_id, batch)
               current = sorted(label["name"] for label in issue["labels"])
-              if current != desired:
+              if current != desired or issue.get("body") != desired_body:
                   subprocess.run(
                       ["gh", "api", "--method", "PATCH", endpoint, "--input", "-"],
-                      input=json.dumps({"labels": desired}),
+                      input=json.dumps({"body": desired_body, "labels": desired}),
                       check=True,
                       text=True,
                   )

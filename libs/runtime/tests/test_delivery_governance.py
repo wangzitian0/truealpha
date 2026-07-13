@@ -791,6 +791,38 @@ def test_prepared_batch_uses_queued_mirror_and_rejects_contradictory_labels():
     assert "#79: batch must carry exactly one batch status" in validation.errors
 
 
+def test_batch_mirror_atomically_tracks_manifest_status_and_hash():
+    batch = {
+        "manifest": "governance/batches/D0.json",
+        "sha256": "a" * 64,
+        "status": "prepared",
+        "target_rung": "E0",
+    }
+
+    first = governance.render_batch_issue_body("Human-owned issue context.\n", "D0", batch)
+    updated = governance.render_batch_issue_body(
+        first,
+        "D0",
+        {**batch, "sha256": "b" * 64, "status": "active", "target_rung": "E1"},
+    )
+
+    assert "Human-owned issue context." in updated
+    assert first.count(governance.BATCH_MIRROR_START) == 1
+    assert updated.count(governance.BATCH_MIRROR_START) == 1
+    assert "sha256:" + "b" * 64 in updated
+    assert "sha256:" + "a" * 64 not in updated
+    assert "Canonical status: `active`" in updated
+    assert "Target rung: `E1`" in updated
+
+
+def test_prepared_batch_status_mirrors_as_queued_until_merge():
+    assert governance.batch_status_labels({"status": "prepared", "target_rung": "E0"}) == {
+        "batch:queued",
+        "rung:code",
+        "readiness:provisional",
+    }
+
+
 def test_workflow_authorizes_every_pull_request_against_exact_head():
     workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
 
@@ -799,3 +831,5 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     assert "--pr-head-sha" in workflow
     assert "github.event.pull_request.head.sha" in workflow
     assert "--execute-acceptance" in workflow
+    assert "render_batch_issue_body" in workflow
+    assert 'json.dumps({"body": desired_body, "labels": desired})' in workflow
