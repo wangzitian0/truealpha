@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truealpha.local/schemas/gate0-candidate-manifest.schema.json",
+  "title": "TrueAlpha Gate 0 Candidate Manifest v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "manifest_version",
+    "gate_issue",
+    "status",
+    "integration_branch",
+    "integration_base_sha",
+    "included_issues",
+    "dependency_order",
+    "candidate_payload_sha256",
+    "candidate_tree_sha256",
+    "paths",
+    "artifacts",
+    "external_attestations",
+    "merge_policy",
+    "acceptance",
+    "blocking_reasons"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "manifest_id": {"const": "gate-0-batch-v4"},
+    "manifest_version": {"const": 4},
+    "gate_issue": {"const": 56},
+    "status": {"enum": ["candidate_blocked_external_attestation", "accepted"]},
+    "integration_branch": {"const": "batch/gate-0-v4-semantic-data-closure"},
+    "integration_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "included_issues": {"const": [57, 58, 59, 60, 61]},
+    "dependency_order": {"const": [57, 58, 59, 60, 61]},
+    "candidate_payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "candidate_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "allOf": [
+        {
+          "contains": {"type": "object", "required": ["issue"], "properties": {"issue": {"const": 57}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["issue"], "properties": {"issue": {"const": 58}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["issue"], "properties": {"issue": {"const": 59}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["issue"], "properties": {"issue": {"const": 60}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["issue"], "properties": {"issue": {"const": 61}}},
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["issue", "kind", "path", "sha256", "state"],
+        "properties": {
+          "issue": {"enum": [57, 58, 59, 60, 61]},
+          "kind": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "pattern": "^governance/"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "state": {"enum": ["accepted", "candidate_unapproved", "candidate_incomplete"]},
+          "depends_on": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"enum": [57, 58, 59, 60]}
+          }
+        }
+      }
+    },
+    "external_attestations": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "allOf": [
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue59_product_owner"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue59_independent_review"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue59_holdout_custody"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue59_known_reference"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue60_rights_authority"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue60_budget_authority"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue60_live_probe_owner"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue61_product_owner_policy"}}},
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {"type": "object", "required": ["key"], "properties": {"key": {"const": "issue61_independent_slo_review"}}},
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "issue", "target_sha256", "status", "ref"],
+        "properties": {
+          "key": {"type": "string", "minLength": 1},
+          "issue": {"enum": [59, 60, 61]},
+          "target_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "status": {"enum": ["missing", "accepted"]},
+          "ref": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "merge_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_branch",
+        "remaining_partial_merge_allowed",
+        "one_immutable_candidate_required",
+        "candidate_change_invalidates_acceptance",
+        "historical_foundation_already_merged",
+        "historical_note"
+      ],
+      "properties": {
+        "target_branch": {"const": "main"},
+        "remaining_partial_merge_allowed": {"const": false},
+        "one_immutable_candidate_required": {"const": true},
+        "candidate_change_invalidates_acceptance": {"const": true},
+        "historical_foundation_already_merged": {"const": [57, 58]},
+        "historical_note": {"type": "string", "minLength": 1}
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "candidate_validation_claim", "acceptance_claim"],
+      "properties": {
+        "commands": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "candidate_validation_claim": {"type": "string", "minLength": 1},
+        "acceptance_claim": {"type": "string", "minLength": 1}
+      }
+    },
+    "blocking_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "accepted"}}},
+      "then": {
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["state"],
+              "properties": {"state": {"const": "accepted"}}
+            }
+          },
+          "external_attestations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["status", "ref"],
+              "properties": {
+                "status": {"const": "accepted"},
+                "ref": {
+                  "type": "string",
+                  "pattern": "^https://github\\.com/wangzitian0/truealpha/issues/[0-9]+#issuecomment-[0-9]+$"
+                }
+              }
+            }
+          },
+          "blocking_reasons": {"type": "array", "maxItems": 0}
+        }
+      },
+      "else": {"properties": {"blocking_reasons": {"type": "array", "minItems": 1}}}
+    }
+  ]
+}

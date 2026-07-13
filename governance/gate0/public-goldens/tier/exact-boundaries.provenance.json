@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "three-tier-valuation",
+  "case_key": "tier.exact_boundaries",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Tier boundaries and target P/S bands",
+    "derivation_steps": [
+      "Apply lower-inclusive and upper-exclusive tier boundaries.",
+      "Assign GPPE 1000000 to the tech tier and use the 8 to 10 target P/S band.",
+      "Assign GPPE 3000000 to the large-model-native tier and use the 20 to 30 target P/S band.",
+      "Compute each target P/S midpoint as the arithmetic midpoint of its band."
+    ],
+    "claim_ceiling": "deterministic tier-boundary and target-band regression only"
+  }
+}

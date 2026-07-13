@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "gross-profit-per-employee",
+  "case_key": "gppe.boundary.3000000",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Research Semantics: GPPE and financial comparison",
+    "derivation_steps": [
+      "Divide annual gross profit 300000000 by period-average employee count 100.",
+      "Apply the lower-inclusive, upper-exclusive non-financial GPPE bands.",
+      "Assign the exact 3000000 boundary to the large-model-native band."
+    ],
+    "claim_ceiling": "deterministic_formula_and_boundary_regression"
+  }
+}

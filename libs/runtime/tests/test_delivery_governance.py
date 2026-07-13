@@ -418,6 +418,64 @@ def _pr_context(
     return graph, base_sha, head_sha
 
 
+def _gate0_pr_context(
+    tmp_path,
+    monkeypatch,
+    *,
+    accepted: bool = False,
+    changed_paths: tuple[str, ...] | None = None,
+    base_sha: str | None = None,
+    integration_base_sha: str | None = None,
+    manifest_id: str = "gate-0-batch-v5",
+    manifest_version: int = 5,
+    paths: tuple[str, ...] = ("governance/gate0/**",),
+    validation_calls: list[dict[str, bool]] | None = None,
+):
+    base_sha = base_sha or "a" * 40
+    head_sha = "b" * 40
+    manifest_path = tmp_path / "governance" / "gate0" / "manifest-v4.json"
+    candidate_path = tmp_path / "governance" / "gate0" / "candidate.json"
+    _write_json(candidate_path, {"candidate": True})
+    _write_json(
+        manifest_path,
+        {
+            "manifest_id": manifest_id,
+            "manifest_version": manifest_version,
+            "integration_base_sha": integration_base_sha or base_sha,
+            "paths": list(paths),
+        },
+    )
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
+    monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: base_sha)
+    monkeypatch.setattr(
+        governance,
+        "git_changed_paths",
+        lambda _base, _head: (
+            changed_paths
+            or (
+                "governance/gate0/manifest-v4.json",
+                "governance/gate0/candidate.json",
+            )
+        ),
+    )
+
+    def validate_candidate(_path, *, root, check_live_comments, require_accepted):
+        assert root == tmp_path
+        if validation_calls is not None:
+            validation_calls.append(
+                {
+                    "check_live_comments": check_live_comments,
+                    "require_accepted": require_accepted,
+                }
+            )
+        errors = () if accepted or not require_accepted else ("Gate 0 candidate is valid but not accepted",)
+        return type("GateResult", (), {"errors": errors})()
+
+    monkeypatch.setattr(governance, "validate_gate0_candidate", validate_candidate)
+    return {"batches": {}}, base_sha, head_sha
+
+
 def test_preparation_pr_freezes_exact_corpus(tmp_path, monkeypatch):
     graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch)
     validation = governance.Validation()
@@ -506,6 +564,225 @@ def test_pr_rejects_multiple_batch_manifests(monkeypatch):
 
     assert advance is None
     assert "PR must advance exactly one capability-batch manifest" in validation.errors
+
+
+def test_gate0_aggregate_rejects_blocked_candidate_by_default(tmp_path, monkeypatch):
+    calls: list[dict[str, bool]] = []
+    graph, base_sha, head_sha = _gate0_pr_context(tmp_path, monkeypatch, validation_calls=calls)
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert advance is None
+    assert any("Gate 0 candidate is valid but not accepted" in error for error in validation.errors)
+    assert calls == [{"check_live_comments": True, "require_accepted": True}]
+
+
+def test_draft_gate0_aggregate_allows_valid_blocked_candidate(tmp_path, monkeypatch):
+    calls: list[dict[str, bool]] = []
+    graph, base_sha, head_sha = _gate0_pr_context(tmp_path, monkeypatch, validation_calls=calls)
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        allow_blocked_gate_candidate=True,
+    )
+
+    assert validation.errors == []
+    assert advance is not None
+    assert advance.kind == "gate_candidate"
+    assert advance.accepted_rung is None
+    assert calls == [{"check_live_comments": False, "require_accepted": False}]
+
+
+def test_gate0_aggregate_accepts_complete_candidate_without_draft_escape(tmp_path, monkeypatch):
+    calls: list[dict[str, bool]] = []
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        accepted=True,
+        validation_calls=calls,
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert validation.errors == []
+    assert advance is not None and advance.kind == "gate_candidate"
+    assert calls == [{"check_live_comments": True, "require_accepted": True}]
+
+
+def test_gate0_aggregate_rejects_stale_integration_base(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        accepted=True,
+        integration_base_sha="c" * 40,
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert advance is None
+    assert any("integration_base_sha does not match the PR base" in error for error in validation.errors)
+
+
+def test_gate0_aggregate_rejects_path_outside_manifest_authorization(tmp_path, monkeypatch):
+    changed_paths = (
+        "governance/gate0/manifest-v4.json",
+        "db/migrations/9999-smuggled.sql",
+    )
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        accepted=True,
+        changed_paths=changed_paths,
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert advance is None
+    assert any("outside manifest authorization" in error for error in validation.errors)
+
+
+def test_gate0_aggregate_cannot_mix_capability_batch_manifest(tmp_path, monkeypatch):
+    changed_paths = (
+        "governance/batches/D0.json",
+        "governance/gate0/manifest-v4.json",
+    )
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        accepted=True,
+        changed_paths=changed_paths,
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert advance is None
+    assert "PR cannot mix the Gate 0 aggregate manifest with capability-batch manifests" in validation.errors
+
+
+def test_accepted_gate0_candidate_rejects_future_authorization_control_changes(tmp_path, monkeypatch):
+    checker = tmp_path / "tools" / "check_gate0_candidate.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_text("# future validator\n", encoding="utf-8")
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        accepted=True,
+        changed_paths=("governance/gate0/manifest-v4.json", "tools/check_gate0_candidate.py"),
+        paths=("governance/gate0/**", "tools/check_gate0_candidate.py"),
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert advance is None
+    assert any("accepted candidate modifies authorization controls" in error for error in validation.errors)
+
+
+def test_gate0_v4_also_rejects_accepted_bootstrap_control_changes(tmp_path, monkeypatch):
+    checker = tmp_path / "tools" / "check_gate0_candidate.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_text("# bootstrap validator\n", encoding="utf-8")
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        accepted=True,
+        changed_paths=("governance/gate0/manifest-v4.json", "tools/check_gate0_candidate.py"),
+        manifest_id="gate-0-batch-v4",
+        manifest_version=4,
+        paths=("governance/gate0/**", "tools/check_gate0_candidate.py"),
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert advance is None
+    assert any("land them separately, rebase, and remove them" in error for error in validation.errors)
+
+
+def test_draft_gate0_candidate_may_iterate_on_authorization_controls(tmp_path, monkeypatch):
+    checker = tmp_path / "tools" / "check_gate0_candidate.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_text("# draft validator\n", encoding="utf-8")
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        changed_paths=("governance/gate0/manifest-v4.json", "tools/check_gate0_candidate.py"),
+        paths=("governance/gate0/**", "tools/check_gate0_candidate.py"),
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        allow_blocked_gate_candidate=True,
+    )
+
+    assert validation.errors == []
+    assert advance is not None
+
+
+def test_gate0_candidate_rejects_symlinked_candidate_file(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _gate0_pr_context(tmp_path, monkeypatch, accepted=True)
+    candidate = tmp_path / "governance" / "gate0" / "candidate.json"
+    candidate.unlink()
+    candidate.symlink_to("manifest-v4.json")
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert advance is None
+    assert any("candidate path is a symlink" in error for error in validation.errors)
 
 
 def test_non_governance_code_pr_requires_batch_manifest(monkeypatch):
@@ -693,6 +970,121 @@ def test_acceptance_commands_emit_head_bound_evidence(tmp_path, monkeypatch):
         producer_head=head_sha,
     )
     assert evidence_validation.errors == []
+
+
+def test_gate0_acceptance_executes_manifest_commands_on_exact_head(tmp_path, monkeypatch):
+    head_sha = "b" * 40
+    manifest_path = tmp_path / "governance" / "gate0" / "manifest-v4.json"
+    _write_json(manifest_path, {"manifest": "bytes"})
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        governance,
+        "run_git",
+        lambda *_args: subprocess.CompletedProcess([], 0, f"{head_sha}\n", ""),
+    )
+    advance = governance.PullRequestAdvance(
+        batch_id="gate-0-v4",
+        manifest_path="governance/gate0/manifest-v4.json",
+        base_manifest={},
+        manifest={
+            "status": "accepted",
+            "integration_base_sha": "a" * 40,
+            "acceptance": {"commands": ["make gate0-candidate-acceptance", "make check"]},
+        },
+        accepted_rung=None,
+        changed_paths=(),
+        kind="gate_candidate",
+    )
+    validation = governance.Validation()
+    output_path = tmp_path / "gate-evidence.json"
+    commands: list[str] = []
+
+    def run(command):
+        commands.append(command)
+        return subprocess.CompletedProcess([command], 0, "passed", "")
+
+    governance.execute_acceptance_commands(
+        validation,
+        advance=advance,
+        head_sha=head_sha,
+        output_path=output_path,
+        runner=run,
+    )
+
+    evidence = json.loads(output_path.read_text(encoding="utf-8"))
+    assert validation.errors == []
+    assert commands == ["make gate0-candidate-acceptance", "make check"]
+    assert evidence["evidence_id"].startswith("gate-evidence:gate-0-v4:")
+    assert evidence["base_sha"] == "a" * 40
+    assert evidence["producer_head_sha"] == head_sha
+
+
+def test_gate0_acceptance_rejects_mismatched_worktree_head(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "governance" / "gate0" / "manifest-v4.json"
+    _write_json(manifest_path, {})
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        governance,
+        "run_git",
+        lambda *_args: subprocess.CompletedProcess([], 0, f"{'c' * 40}\n", ""),
+    )
+    advance = governance.PullRequestAdvance(
+        batch_id="gate-0-v4",
+        manifest_path="governance/gate0/manifest-v4.json",
+        base_manifest={},
+        manifest={
+            "status": "accepted",
+            "integration_base_sha": "a" * 40,
+            "acceptance": {"commands": ["make check"]},
+        },
+        accepted_rung=None,
+        changed_paths=(),
+        kind="gate_candidate",
+    )
+    validation = governance.Validation()
+    output_path = tmp_path / "gate-evidence.json"
+
+    governance.execute_acceptance_commands(
+        validation,
+        advance=advance,
+        head_sha="b" * 40,
+        output_path=output_path,
+        runner=lambda command: pytest.fail(f"unexpected command: {command}"),
+    )
+
+    assert any("acceptance commands are not running on the exact PR head" in error for error in validation.errors)
+    assert not output_path.exists()
+
+
+def test_blocked_draft_gate0_candidate_does_not_run_terminal_acceptance(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "governance" / "gate0" / "manifest-v4.json"
+    _write_json(manifest_path, {})
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    advance = governance.PullRequestAdvance(
+        batch_id="gate-0-v4",
+        manifest_path="governance/gate0/manifest-v4.json",
+        base_manifest={},
+        manifest={
+            "status": "candidate_blocked_external_attestation",
+            "acceptance": {"commands": ["false"]},
+        },
+        accepted_rung=None,
+        changed_paths=(),
+        kind="gate_candidate",
+    )
+    validation = governance.Validation()
+    output_path = tmp_path / "gate-evidence.json"
+
+    governance.execute_acceptance_commands(
+        validation,
+        advance=advance,
+        head_sha="b" * 40,
+        output_path=output_path,
+        runner=lambda command: pytest.fail(f"unexpected command: {command}"),
+    )
+
+    assert validation.errors == []
+    assert not output_path.exists()
 
 
 def test_failed_acceptance_command_emits_no_evidence(tmp_path, monkeypatch):

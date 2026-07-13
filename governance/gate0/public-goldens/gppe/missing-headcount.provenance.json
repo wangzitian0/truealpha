@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "gross-profit-per-employee",
+  "case_key": "gppe.missing_headcount",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Research Semantics: GPPE and financial comparison",
+    "derivation_steps": [
+      "Observe that the required period-average employee count is absent.",
+      "Apply the explicit missing-headcount behavior instead of imputing or dividing.",
+      "Emit unavailable and retain the missing-input reason."
+    ],
+    "claim_ceiling": "deterministic_missing_input_regression"
+  }
+}

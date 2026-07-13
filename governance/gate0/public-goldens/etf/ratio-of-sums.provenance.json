@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "etf-virtual-company",
+  "case_key": "etf.ratio_of_sums",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Research Semantics: ETF virtual company",
+    "derivation_steps": [
+      "Treat each numerator and denominator as an ownership-scaled look-through amount; do not apply fund weight a second time.",
+      "Sum look-through numerators: 60 + 70 = 130.",
+      "Sum look-through denominators: 20 + 20 = 40.",
+      "Divide 130 by 40 to obtain the accepted ratio-of-sums result 3.25.",
+      "Compute 0.20 * 3.0 + 0.80 * 3.5 = 3.40 only as the explicitly rejected weighted-ratio alternative."
+    ],
+    "claim_ceiling": "deterministic_aggregation_regression"
+  }
+}

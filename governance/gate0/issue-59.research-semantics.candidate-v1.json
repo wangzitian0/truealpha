@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "artifact_type": "research-semantics-candidate",
+  "artifact_version": "candidate-v1",
+  "issue": 59,
+  "state": "candidate_unapproved",
+  "source_packet": {
+    "ref": "https://github.com/wangzitian0/truealpha/issues/59#issuecomment-4952301145",
+    "comment_id": 4952301145,
+    "sha256": "4d89b2f9d38b5b2bdd066d0ddcf5138b474c1b67ebf170066cd873ac21f27f49"
+  },
+  "dependencies": [
+    {
+      "issue": 57,
+      "artifact": "governance/evidence/issue-57.v1.json",
+      "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640",
+      "state": "accepted"
+    },
+    {
+      "issue": 58,
+      "artifact": "governance/evidence/issue-58.v2.json",
+      "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99",
+      "state": "accepted"
+    }
+  ],
+  "scope": {
+    "universe_id": "universe:topt-us-2026-03-31",
+    "kind": "fixed_point_in_time_research_cohort",
+    "source": {
+      "series": "S000088434",
+      "class": "C000254701",
+      "accession": "000207169126012475",
+      "report_date": "2026-03-31",
+      "primary_document_sha256": "7e46eb6babead70230986162349bb33f27d7af2a51a095b5850340aa0a534934"
+    },
+    "minimums": {
+      "issuers": 20,
+      "instruments": 21,
+      "funds": 1,
+      "themes": 1,
+      "analysts": 20,
+      "scenarios": 1,
+      "screens": 1,
+      "rankings": 1,
+      "strategies": 1,
+      "canonical_questions": 8
+    },
+    "issuers": [
+      "AbbVie",
+      "Alphabet",
+      "Amazon",
+      "Apple",
+      "Berkshire Hathaway",
+      "Broadcom",
+      "Costco",
+      "Eli Lilly",
+      "Exxon Mobil",
+      "JPMorgan Chase",
+      "Johnson & Johnson",
+      "Mastercard",
+      "Meta Platforms",
+      "Micron Technology",
+      "Microsoft",
+      "NVIDIA",
+      "Netflix",
+      "Tesla",
+      "Visa",
+      "Walmart"
+    ],
+    "selected_instrument_cusips": [
+      "00287Y109",
+      "02079K107",
+      "02079K305",
+      "023135106",
+      "037833100",
+      "084670702",
+      "11135F101",
+      "22160K105",
+      "30231G102",
+      "30303M102",
+      "46625H100",
+      "478160104",
+      "532457108",
+      "57636Q104",
+      "594918104",
+      "595112103",
+      "64110L106",
+      "67066G104",
+      "88160R101",
+      "92826C839",
+      "931142103"
+    ],
+    "selected_instruments": [
+      {"ticker": "AAPL", "cusip": "037833100", "issuer_lei": "HWUPKR0MPOU8FGXBT394", "filing_weight_percent": "14.07853221830"},
+      {"ticker": "ABBV", "cusip": "00287Y109", "issuer_lei": "FR5LCKFTG8054YNNRU85", "filing_weight_percent": "1.992016007385"},
+      {"ticker": "AMZN", "cusip": "023135106", "issuer_lei": "ZXTILKJKG63JELOEG630", "filing_weight_percent": "4.621104190872"},
+      {"ticker": "AVGO", "cusip": "11135F101", "issuer_lei": "549300WV6GIDOZJTV909", "filing_weight_percent": "4.275297535521"},
+      {"ticker": "BRK.B", "cusip": "084670702", "issuer_lei": "5493000C01ZX7D35SD85", "filing_weight_percent": "4.553902276008"},
+      {"ticker": "COST", "cusip": "22160K105", "issuer_lei": "29DX7H14B9S6O3FD6V18", "filing_weight_percent": "2.291811276359"},
+      {"ticker": "GOOG", "cusip": "02079K107", "issuer_lei": "5493006MHB84DD0ZWV18", "filing_weight_percent": "5.068859650551"},
+      {"ticker": "GOOGL", "cusip": "02079K305", "issuer_lei": "5493006MHB84DD0ZWV18", "filing_weight_percent": "6.326031517295"},
+      {"ticker": "JNJ", "cusip": "478160104", "issuer_lei": "549300G0CFPGEF6X2043", "filing_weight_percent": "3.053546394404"},
+      {"ticker": "JPM", "cusip": "46625H100", "issuer_lei": "8I5DZWZKVSZI1NUHU748", "filing_weight_percent": "4.111119878865"},
+      {"ticker": "LLY", "cusip": "532457108", "issuer_lei": "FRDRIPF3EKNDJ2CQJL29", "filing_weight_percent": "3.778183228935"},
+      {"ticker": "MA", "cusip": "57636Q104", "issuer_lei": "AR5L2ODV9HN37376R084", "filing_weight_percent": "2.108828939965"},
+      {"ticker": "META", "cusip": "30303M102", "issuer_lei": "BQ4BKCS1HXDV9HN80Z93", "filing_weight_percent": "4.121581025172"},
+      {"ticker": "MSFT", "cusip": "594918104", "issuer_lei": "INR2EJN1ERAN0W5ZP974", "filing_weight_percent": "5.977289949035"},
+      {"ticker": "MU", "cusip": "595112103", "issuer_lei": "B3DXGBC8GAIYWI2Z0172", "filing_weight_percent": "1.970318478027"},
+      {"ticker": "NFLX", "cusip": "64110L106", "issuer_lei": "549300Y7VHGU0I7CE873", "filing_weight_percent": "2.104164712073"},
+      {"ticker": "NVDA", "cusip": "67066G104", "issuer_lei": "549300S4KLFTLO7GSQ80", "filing_weight_percent": "16.01272878741"},
+      {"ticker": "TSLA", "cusip": "88160R101", "issuer_lei": "54930043XZGB27CTOV49", "filing_weight_percent": "4.300578515531"},
+      {"ticker": "V", "cusip": "92826C839", "issuer_lei": "549300JZ4OKEHW3DPJ59", "filing_weight_percent": "2.633866347577"},
+      {"ticker": "WMT", "cusip": "931142103", "issuer_lei": "Y87794H0US1R65VBXU25", "filing_weight_percent": "2.823880803033"},
+      {"ticker": "XOM", "cusip": "30231G102", "issuer_lei": "J3WHBG0MTS7O8ZVMDC91", "filing_weight_percent": "3.675153515521"}
+    ],
+    "identity_invariants": [
+      "Alphabet Class A and Class C remain separate instruments under one issuer",
+      "a missing required input produces an explicit unavailable result",
+      "the catalog and scope floor cannot shrink after evaluation"
+    ]
+  },
+  "catalog": {
+    "required_aliases": [
+      "analyst-backtest",
+      "etf-virtual-company",
+      "gross-profit-per-employee",
+      "large-model-value-v0",
+      "peg",
+      "supply-chain",
+      "theme-purity",
+      "three-tier-valuation"
+    ],
+    "canonical_questions": [
+      {
+        "alias": "gross-profit-per-employee",
+        "expected_output_kinds": ["gppe_level", "gppe_elasticity", "comparison_branch", "confidence", "evidence_vintages"]
+      },
+      {
+        "alias": "peg",
+        "expected_output_kinds": ["analyst_consensus_peg", "historical_cagr_peg", "guidance_peg", "availability_reason"]
+      },
+      {
+        "alias": "analyst-backtest",
+        "expected_output_kinds": ["analyst_score", "excess_return", "uncertainty", "censoring", "ranking"]
+      },
+      {
+        "alias": "etf-virtual-company",
+        "expected_output_kinds": ["ratio_of_sums", "unresolved_weight", "cash_weight", "derivative_exposure", "short_exposure", "holdings_vintage"]
+      },
+      {
+        "alias": "theme-purity",
+        "expected_output_kinds": ["theme_purity", "classified_coverage", "unclassified_share", "missing_share"]
+      },
+      {
+        "alias": "supply-chain",
+        "expected_output_kinds": ["disclosure_coverage", "graph_confidence", "scenario_sensitivity", "causal_evidence"]
+      },
+      {
+        "alias": "three-tier-valuation",
+        "expected_output_kinds": ["valuation_tier", "target_ps_band", "boundary_rule", "availability_reason"]
+      },
+      {
+        "alias": "large-model-value-v0",
+        "expected_output_kinds": ["eligible_set", "valuation_gap", "ranking", "selected_top_10", "trace"]
+      }
+    ],
+    "resolution_policy": "aliases resolve only inside the exact release-bound catalog and universe"
+  },
+  "semantics": {
+    "gppe": {
+      "leverage": "combined_level_and_time_series_elasticity",
+      "level_formula": "annual_gross_profit/period_average_employee_count",
+      "elasticity_formula": "delta_ln_gross_profit/delta_ln_employee_count",
+      "elasticity_estimator": "theil_sen",
+      "elasticity_window_periods": 5,
+      "non_financial_gppe_bands": ["[-inf,1000000)", "[1000000,3000000)", "[3000000,+inf)"],
+      "financial_proxy": "pre_provision_profit_per_period_average_employee",
+      "financial_efficiency_bands": ["[-inf,500000)", "[500000,1000000)", "[1000000,+inf)"],
+      "missing_behavior": "unavailable"
+    },
+    "peg": {
+      "pe_basis": "forward_diluted_12_month",
+      "growth_unit": "percentage_points",
+      "period_alignment": "next_twelve_months",
+      "analyst_convention": "latest_knowable_median_12_month_consensus",
+      "historical_convention": "three_complete_fiscal_year_cagr",
+      "guidance_convention": "issuer_published_12_month_range_midpoint",
+      "negative_or_zero_growth": "unavailable",
+      "cross_convention_fallback": false
+    },
+    "analyst": {
+      "rating_scale": [-2, -1, 0, 1, 2],
+      "included_actions": ["downgrade", "initiate", "maintain", "reiterate", "resume", "upgrade"],
+      "excluded_actions": ["discontinue", "suspend"],
+      "horizon_days": 365,
+      "overlap": "latest_active_signal",
+      "benchmark": "IVV",
+      "currency": "endpoint_conversion",
+      "minimum_events": 10,
+      "minimum_history_days": 730,
+      "uncertainty": "block_bootstrap_95_percent",
+      "tie_tolerance": "0.01",
+      "multiple_comparison": "benjamini_hochberg_alpha_0.05",
+      "vendor_backfill_establishes_knowability": false
+    },
+    "etf": {
+      "aggregation": "ratio_of_sums",
+      "cash": "exclude_and_report",
+      "derivatives": "delta_adjusted_look_through_and_report",
+      "shorts": "report_gross_long_and_short",
+      "maximum_unresolved_weight": "0.05",
+      "currency": "fund_base_at_holdings_report_date",
+      "instrument_resolution": "security_then_issuer",
+      "fundamentals_cutoff": "not_after_holdings_report_date"
+    },
+    "theme": {
+      "denominator": "total_issuer_revenue",
+      "unclassified": "retain_and_report",
+      "missing_segments": "partial_with_coverage",
+      "minimum_classified_share": "0.80",
+      "negative_inference_from_missing": false
+    },
+    "supply_chain": {
+      "edge_meaning": "disclosed_or_independently_evidenced_relationship",
+      "missing_edge_meaning": "unknown_coverage",
+      "minimum_graph_confidence": "0.70",
+      "traversal": "supplier_and_customer",
+      "shock_unit": "percentage_points",
+      "materiality_threshold": "0.05",
+      "horizon_days": 365,
+      "confidence_kill_threshold": "0.80",
+      "causal_label_requires_separate_evidence": true
+    },
+    "tier_and_strategy": {
+      "boundary_rule": "lower_inclusive_upper_exclusive",
+      "tiers": [
+        {"name": "traditional", "gppe": "[-inf,1000000)", "target_ps": "[3,4]"},
+        {"name": "tech", "gppe": "[1000000,3000000)", "target_ps": "[8,10]"},
+        {"name": "large_model_native", "gppe": "[3000000,+inf)", "target_ps": "[20,30]"}
+      ],
+      "target_ps": "band_midpoint",
+      "valuation_gap": "target_ps/current_ps-1",
+      "ranking": "descending_valuation_gap",
+      "selection_count": 10,
+      "rebalance_days": 90,
+      "missing_required_input": "ineligible"
+    }
+  },
+  "evaluation": {
+    "public_golden_manifest": {
+      "path": "governance/gate0/public-goldens/manifest.v1.json",
+      "sha256": "8a9e1d23ea633f772c16cfaff6706518acce6cbcba5d343eaa33a0acdb01a8bc",
+      "case_count": 10,
+      "state": "candidate_partial"
+    },
+    "development_golden_targets": [
+      "analyst-backtest",
+      "etf-virtual-company",
+      "gross-profit-per-employee",
+      "large-model-value-v0",
+      "peg",
+      "supply-chain",
+      "theme-purity",
+      "three-tier-valuation"
+    ],
+    "holdout_minimums": {
+      "gppe": "20 subjects",
+      "peg": "15 subjects",
+      "analyst": "20 analysts with 10 events each",
+      "etf": "10 filing vintages",
+      "theme": "20 issuers",
+      "supply_chain": "20 disclosures",
+      "tier": "20 issuers plus every boundary",
+      "strategy": "4 PIT cutoffs"
+    },
+    "known_reference": {
+      "target": "large-model-value-v0",
+      "absolute_tolerance": "0.000001",
+      "relative_tolerance": "0.0001",
+      "broken_engine": "shift_employee_count_vintages_forward_one_fiscal_year",
+      "required_outcome": "reference_passes_and_broken_engine_fails"
+    },
+    "protected_labels_in_repository": false,
+    "fresh_holdout_after_failure_or_change": true
+  },
+  "attestations": {
+    "product_owner": {"status": "missing", "approved_packet_sha256": null, "ref": null},
+    "independent_review": {"status": "missing", "reviewer": null, "organization": null, "conflicts": null, "ref": null},
+    "holdout_custody": {"status": "missing", "custodian": null, "authorized_evaluator": null, "protected_store_ref": null},
+    "known_reference": {"status": "missing", "independent_owner": null, "artifact_ref": null, "expected_output_ref": null, "broken_engine_result_ref": null}
+  },
+  "blocking_reasons": [
+    "product-owner approval of the exact source packet hash is missing",
+    "independent semantic and oracle approval is missing",
+    "protected holdout custody and evaluator identities are missing",
+    "independently owned known-reference and broken-engine artifacts are missing",
+    "the public golden bundle contains the first deterministic cases but not the complete independently reviewed eight-target golden program"
+  ]
+}

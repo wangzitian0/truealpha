@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-manifest",
+  "manifest_version": "1.0.0",
+  "issue": 59,
+  "source_packet": "Issue 59 Candidate Decision Packet v1",
+  "evidence_class": "public_development_regression",
+  "claim_ceiling": "deterministic public-development regression evidence only",
+  "cases": [
+    {
+      "case_key": "etf.ratio_of_sums",
+      "target": "etf-virtual-company",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/etf/ratio-of-sums.input.json",
+          "sha256": "6a974df214067d7b6c019784cc70ccfb3f280f43e7ec71ff1bf350c85beade35"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/etf/ratio-of-sums.expected.json",
+          "sha256": "2018439e8ddfd8d6c324cfb07b91990367956700be94cb5306113c427349df11"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/etf/ratio-of-sums.provenance.json",
+          "sha256": "542ed8ea9df2a73c81444e42f9ff9b92e8d4c46c28d4723b72c1317fd757b32a"
+        }
+      }
+    },
+    {
+      "case_key": "gppe.boundary.1000000",
+      "target": "gross-profit-per-employee",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/gppe/boundary-1000000.input.json",
+          "sha256": "bcab1ff428f4806b617ca7050a7d2d370c536947c3e76b21e49175d8737f1f56"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/gppe/boundary-1000000.expected.json",
+          "sha256": "f86afae236aa9497e6848e0e9997db3863cc126e42488eb6460c83fb683cfafc"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/gppe/boundary-1000000.provenance.json",
+          "sha256": "4b3c4eaf45c5560c6a414c2e380d40b1f95c312eb9dc32b6ea6204e884a61b80"
+        }
+      }
+    },
+    {
+      "case_key": "gppe.boundary.3000000",
+      "target": "gross-profit-per-employee",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/gppe/boundary-3000000.input.json",
+          "sha256": "91b69da888248bbcf55ffdbdba2f8890c4aff96185688b7cfa4d25bc4be987ea"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/gppe/boundary-3000000.expected.json",
+          "sha256": "c4910a0d8bcd998ab73c600a2b5363df075f48ac948a351c7c2f2dc5b2da907a"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/gppe/boundary-3000000.provenance.json",
+          "sha256": "513c14ef3ca53c6cd1c1dee9e8723cde83a70143dfc6eaa2113eaa8a20d27723"
+        }
+      }
+    },
+    {
+      "case_key": "gppe.missing_headcount",
+      "target": "gross-profit-per-employee",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/gppe/missing-headcount.input.json",
+          "sha256": "589e79c27117b118dbfba4a14fea7abc4a52c4edf20cce9a4c0bc775919cc96f"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/gppe/missing-headcount.expected.json",
+          "sha256": "3f61341a7b9c7a268c6cb10c762633b5efb2d9d963508faee312a263ae5f4b8a"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/gppe/missing-headcount.provenance.json",
+          "sha256": "cf8cb4ee6069757b8446e2091d87cd8de54838993e5303965f96db4b6c67c3e7"
+        }
+      }
+    },
+    {
+      "case_key": "peg.forward-positive-growth",
+      "target": "peg",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/peg/forward-30-growth-20.input.json",
+          "sha256": "c3580dd4b34099f59f7c0ed70888f57557442b310d3c8234153090f4a813a958"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/peg/forward-30-growth-20.expected.json",
+          "sha256": "869e29f2ad65b5580a50be393ed860ec25a8429a9f9ec1d055a331029f4ddfde"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/peg/forward-30-growth-20.provenance.json",
+          "sha256": "837a8e693c786295043d9c6c0c18f244473f4075fd1e679a10eb27a3991331d1"
+        }
+      }
+    },
+    {
+      "case_key": "peg.zero_growth",
+      "target": "peg",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/peg/zero-growth.input.json",
+          "sha256": "551d4379ad779906e8eebf775f13e4a7c4ec65cf8f74e0d5851fe7fc359be5a9"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/peg/zero-growth.expected.json",
+          "sha256": "f044963db6f924fae8199bcb310e9d2181f31eee8c3a1349b178a5e890978862"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/peg/zero-growth.provenance.json",
+          "sha256": "0fb2394a365eba2a2f3a45dc83b910c4361c168b2f713eaa378596d05571585c"
+        }
+      }
+    },
+    {
+      "case_key": "strategy.twelve_candidate_top_10",
+      "target": "large-model-value-v0",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/strategy/twelve-candidate-top-10.input.json",
+          "sha256": "8a229fb88ec13704441c31616fca57f722413d8524b8dfdc8beb40b2d9b30129"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/strategy/twelve-candidate-top-10.expected.json",
+          "sha256": "62b6a86bd215a770cd7c792c95bea1530846803f4e87c7f93df9499703f09911"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/strategy/twelve-candidate-top-10.provenance.json",
+          "sha256": "dbcaf845afd12c5c0240fc9988ae9bd079807cbeff705df2f48cced53165c7fc"
+        }
+      }
+    },
+    {
+      "case_key": "supply_chain.confidence_threshold",
+      "target": "supply-chain",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/supply-chain/confidence-threshold.input.json",
+          "sha256": "9b420eff0a6501fab0fbe1616055949b3124d245e404853c00e1047b79a3a312"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/supply-chain/confidence-threshold.expected.json",
+          "sha256": "fcc8ac02dd5731de83e4720a5b1c0666a28d5efa15fb44fcf8b3674afb3f0b99"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/supply-chain/confidence-threshold.provenance.json",
+          "sha256": "69d8473cf55f27dea1798ef1d56ab569285cb75dad34cff5acf317afcf0dc579"
+        }
+      }
+    },
+    {
+      "case_key": "theme.purity_64_coverage_80",
+      "target": "theme-purity",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/theme/purity-64-coverage-80.input.json",
+          "sha256": "48842629039ce2372f3a8a052dd80fbcc456e579e98184655369388110594ff1"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/theme/purity-64-coverage-80.expected.json",
+          "sha256": "3409b621605c1f974d2318f1ba10c52030c0ceac3c7662b5367acbb6c0d92f5b"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/theme/purity-64-coverage-80.provenance.json",
+          "sha256": "88515c66ea525a39ddf4e1c1c5c35145b9d309189804853b00c681da4dc1e9f8"
+        }
+      }
+    },
+    {
+      "case_key": "tier.exact_boundaries",
+      "target": "three-tier-valuation",
+      "artifacts": {
+        "input": {
+          "path": "governance/gate0/public-goldens/tier/exact-boundaries.input.json",
+          "sha256": "2fdb58343ec6acb7740ee367a8df89ed4d96b15c01d1fb1e7924d4c3cd1d5e00"
+        },
+        "expected": {
+          "path": "governance/gate0/public-goldens/tier/exact-boundaries.expected.json",
+          "sha256": "61b36f915b98daeed46da4364d32aae19fb181bc98a56035461d792259240a9f"
+        },
+        "provenance": {
+          "path": "governance/gate0/public-goldens/tier/exact-boundaries.provenance.json",
+          "sha256": "e602abb2f4ae33318f62a156b8ca53f226cdcd90482685a8985b8dcc506d4f44"
+        }
+      }
+    }
+  ]
+}

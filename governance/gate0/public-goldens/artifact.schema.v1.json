@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truealpha.local/schemas/public-development-golden-artifact.v1.json",
+  "title": "TrueAlpha Public Development Golden Artifact v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_type", "target", "case_key", "input"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "artifact_type": {"const": "public-development-golden-input"},
+        "target": {"$ref": "#/$defs/target"},
+        "case_key": {"$ref": "#/$defs/case_key"},
+        "input": {"type": "object", "minProperties": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_type", "target", "case_key", "expected"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "artifact_type": {"const": "public-development-golden-expected-output"},
+        "target": {"$ref": "#/$defs/target"},
+        "case_key": {"$ref": "#/$defs/case_key"},
+        "expected": {"type": "object", "minProperties": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_type", "target", "case_key", "provenance"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "artifact_type": {"const": "public-development-golden-provenance"},
+        "target": {"$ref": "#/$defs/target"},
+        "case_key": {"$ref": "#/$defs/case_key"},
+        "provenance": {"$ref": "#/$defs/provenance"}
+      }
+    }
+  ],
+  "$defs": {
+    "target": {
+      "enum": [
+        "analyst-backtest",
+        "etf-virtual-company",
+        "gross-profit-per-employee",
+        "large-model-value-v0",
+        "peg",
+        "supply-chain",
+        "theme-purity",
+        "three-tier-valuation"
+      ]
+    },
+    "case_key": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)+$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_class",
+        "source_issue",
+        "source_packet",
+        "source_section",
+        "derivation_steps",
+        "claim_ceiling"
+      ],
+      "properties": {
+        "evidence_class": {"const": "public_development_regression"},
+        "source_issue": {"const": 59},
+        "source_packet": {"const": "Issue 59 Candidate Decision Packet v1"},
+        "source_section": {"type": "string", "minLength": 1},
+        "derivation_steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "claim_ceiling": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

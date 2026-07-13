@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "artifact_type": "source-readiness-candidate",
+  "artifact_version": "candidate-v1",
+  "issue": 60,
+  "state": "candidate_incomplete",
+  "depends_on": {
+    "issue": 59,
+    "artifact": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+    "sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a"
+  },
+  "scope": {
+    "universe_id": "universe:topt-us-2026-03-31",
+    "series": "S000088434",
+    "accession": "000207169126012475",
+    "expected_issuers": 20,
+    "expected_instruments": 21,
+    "environments": ["github_ci", "local_dev", "local_test", "production", "staging"]
+  },
+  "observed_probe_evidence": [
+    {
+      "kind": "topt_sec_openfigi_preflight",
+      "ref": "https://github.com/wangzitian0/truealpha/issues/60#issuecomment-4952371942",
+      "comment_id": 4952371942,
+      "sha256": "645288d006366afbd8274216b587abcf4d0239bca132c79553fdf3b098252ac1",
+      "observations": {
+        "issuer_companyfacts_reachable": 20,
+        "instrument_listing_resolved": 20,
+        "instrument_listing_expected": 21,
+        "employee_tag_common_path_sufficient": false,
+        "gross_profit_common_path_sufficient": false
+      }
+    },
+    {
+      "kind": "xom_successor_transition",
+      "ref": "https://github.com/wangzitian0/truealpha/issues/60#issuecomment-4952376041",
+      "comment_id": 4952376041,
+      "sha256": "51fdec6fe3e93f94e2c9eb2d5d5356e1ac04d5f8073ccdc5189e8b8f095a6d82",
+      "observations": {
+        "predecessor_cik": "0000034088",
+        "successor_cik": "0002115436",
+        "successor_effective_date": "2026-07-01",
+        "successor_trading_date": "2026-07-02",
+        "topt_report_predates_transition": true,
+        "current_ticker_map_is_valid_historical_identity": false
+      }
+    }
+  ],
+  "source_paths": [
+    {
+      "domain": "universe_membership",
+      "primary": "sec_edgar_nport",
+      "fallback_policy": "documented_hard_dependency",
+      "fallback": null,
+      "identifier_level": "fund_series_and_instrument",
+      "knowability_rule": "filing_publication_time",
+      "capture_method": "sec_primary_document_xml",
+      "status": "probe_partial"
+    },
+    {
+      "domain": "issuer_security_listing_identity",
+      "primary": "sec_edgar",
+      "fallback_policy": "required",
+      "fallback": "openfigi",
+      "identifier_level": "issuer_security_listing",
+      "knowability_rule": "source_record_publication_and_validity_interval",
+      "capture_method": "sec_submissions_tickers_filings_and_openfigi_mapping",
+      "status": "blocked_xom_transition"
+    },
+    {
+      "domain": "financial_facts",
+      "primary": "sec_companyfacts_and_filings",
+      "fallback_policy": "documented_hard_dependency",
+      "fallback": null,
+      "identifier_level": "issuer",
+      "knowability_rule": "filing_acceptance_time",
+      "capture_method": "sec_json_and_filing_document",
+      "status": "coverage_unmeasured"
+    },
+    {
+      "domain": "headcount",
+      "primary": "sec_filing_document_extraction",
+      "fallback_policy": "documented_hard_dependency",
+      "fallback": null,
+      "identifier_level": "issuer",
+      "knowability_rule": "filing_acceptance_time",
+      "capture_method": "versioned_document_extraction",
+      "status": "coverage_unmeasured"
+    },
+    {
+      "domain": "company_guidance",
+      "primary": "sec_filing_document_extraction",
+      "fallback_policy": "documented_hard_dependency",
+      "fallback": null,
+      "identifier_level": "issuer",
+      "knowability_rule": "filing_acceptance_time",
+      "capture_method": "versioned_document_extraction",
+      "status": "coverage_unmeasured"
+    },
+    {
+      "domain": "analyst_events_and_consensus",
+      "primary": "moomoo",
+      "fallback_policy": "required",
+      "fallback": null,
+      "identifier_level": "analyst_and_security",
+      "knowability_rule": "independently_corroborated_publication_time",
+      "capture_method": "global_gateway",
+      "status": "blocked_fallback_rights_and_historical_knowability"
+    },
+    {
+      "domain": "etf_holdings",
+      "primary": "sec_edgar_nport",
+      "fallback_policy": "documented_hard_dependency",
+      "fallback": null,
+      "identifier_level": "fund_series_and_instrument",
+      "knowability_rule": "filing_publication_time",
+      "capture_method": "sec_primary_document_xml",
+      "status": "bounded_samples_only"
+    },
+    {
+      "domain": "segment_revenue",
+      "primary": "sec_filing_document_extraction",
+      "fallback_policy": "documented_hard_dependency",
+      "fallback": null,
+      "identifier_level": "issuer_and_segment",
+      "knowability_rule": "filing_acceptance_time",
+      "capture_method": "versioned_document_extraction",
+      "status": "blocked_model_revision_and_coverage"
+    },
+    {
+      "domain": "supply_chain_relationships",
+      "primary": "sec_filing_document_extraction",
+      "fallback_policy": "required",
+      "fallback": null,
+      "identifier_level": "issuer_relationship",
+      "knowability_rule": "source_disclosure_publication_time",
+      "capture_method": "versioned_document_extraction",
+      "status": "blocked_fallback_and_coverage"
+    },
+    {
+      "domain": "daily_prices",
+      "primary": "twelve_data",
+      "fallback_policy": "required",
+      "fallback": "yfinance",
+      "identifier_level": "listing",
+      "knowability_rule": "market_session_close_and_provider_publication",
+      "capture_method": "global_gateway",
+      "status": "rights_budget_and_longitudinal_coverage_unapproved"
+    },
+    {
+      "domain": "fx_rates",
+      "primary": "twelve_data",
+      "fallback_policy": "required",
+      "fallback": "yfinance",
+      "identifier_level": "currency_pair",
+      "knowability_rule": "market_session_close_and_provider_publication",
+      "capture_method": "global_gateway",
+      "status": "rights_budget_and_longitudinal_coverage_unapproved"
+    },
+    {
+      "domain": "corporate_actions",
+      "primary": "sec_filings",
+      "fallback_policy": "required",
+      "fallback": "yfinance",
+      "identifier_level": "security_and_listing",
+      "knowability_rule": "official_announcement_publication_time",
+      "capture_method": "sec_filing_and_global_gateway",
+      "status": "coverage_unmeasured"
+    }
+  ],
+  "rights_requirements": {
+    "permissions": [
+      "attribution",
+      "derived_metrics",
+      "normalized_caching",
+      "public_cards",
+      "public_reports",
+      "quotations",
+      "raw_retention",
+      "screenshots"
+    ],
+    "required_fields": [
+      "authorized_owner",
+      "approved_by",
+      "decision_basis",
+      "deletion_and_expiry_duties",
+      "expires_at",
+      "source_registry_entry_id_and_hash",
+      "terms_evidence_id_and_hash"
+    ],
+    "unknown_is_approval": false,
+    "ai_interpretation_is_approval": false,
+    "status": "missing_authoritative_decisions"
+  },
+  "budget_requirements": {
+    "dimensions": ["api_calls", "human_review", "model_tokens", "storage_database", "storage_object", "vendor_fees"],
+    "periods": ["monthly", "annual"],
+    "required_fields": ["approved_limit", "bounded_probe_use", "headroom", "owner", "projected_use"],
+    "status": "missing_authorized_budget"
+  },
+  "runtime_requirements": {
+    "immutable_model_revision": true,
+    "preflight_before_every_source_call": true,
+    "scheduled_rights_and_budget_recheck": true,
+    "full_catalog_budget_reconciliation": true,
+    "disable_preserves_historical_reproducibility": true,
+    "readiness_override_permitted": false,
+    "status": "contracts_exist_runtime_wiring_missing"
+  },
+  "attestations": {
+    "product_owner_source_plan": {"status": "missing", "ref": null},
+    "rights_authority": {"status": "missing", "approver": null, "ref": null},
+    "budget_authority": {"status": "missing", "approver": null, "ref": null},
+    "live_probe_owner": {"status": "missing", "owner": null, "artifact_ref": null}
+  },
+  "blocking_reasons": [
+    "the dependency is an unapproved #59 candidate rather than an accepted Research Catalog",
+    "the source matrix is not expanded to every environment, subject, domain, and partition cell",
+    "XOM predecessor and successor identity intervals are not materialized in the accepted matrix",
+    "analyst history lacks catalog-wide independently defensible public knowability",
+    "authoritative source usage rights are missing",
+    "the full-catalog budget and owner approval are missing",
+    "bounded live probe and observed budget reconciliation artifacts are missing",
+    "mandatory source-call preflight and scheduled Production rechecks are not wired to runtime"
+  ]
+}

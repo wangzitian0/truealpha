@@ -1,4 +1,4 @@
-.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit lint format typecheck test contract-conformance issue-graph-check check clean
+.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit lint format typecheck test contract-conformance issue-graph-check gate0-candidate-check gate0-candidate-acceptance check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -22,6 +22,8 @@ help:
 	@echo "  make check        lint + typecheck + test"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
 	@echo "  make issue-graph-check Validate delivery manifests and Vision issue DAG"
+	@echo "  make gate0-candidate-check Validate the immutable Gate 0 v4 candidate and blockers"
+	@echo "  make gate0-candidate-acceptance Require complete accepted Gate 0 evidence"
 
 install:
 	uv sync --all-packages
@@ -100,7 +102,13 @@ contract-conformance:
 issue-graph-check:
 	python3 tools/check_delivery_governance.py
 
-check: issue-graph-check lint typecheck test contract-conformance
+gate0-candidate-check:
+	python3 tools/check_gate0_candidate.py
+
+gate0-candidate-acceptance:
+	python3 tools/check_gate0_candidate.py --check-live-comments --require-accepted
+
+check: issue-graph-check gate0-candidate-check lint typecheck test contract-conformance
 	@echo "✅ All checks passed"
 
 clean:

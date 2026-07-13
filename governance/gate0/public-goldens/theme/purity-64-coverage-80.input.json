@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-input",
+  "target": "theme-purity",
+  "case_key": "theme.purity_64_coverage_80",
+  "input": {
+    "theme_revenue": "80",
+    "classified_non_theme_revenue": "20",
+    "unclassified_revenue": "25",
+    "denominator_policy": "total_issuer_revenue"
+  }
+}

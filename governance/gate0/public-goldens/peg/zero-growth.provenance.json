@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "peg",
+  "case_key": "peg.zero_growth",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Research Semantics: PEG",
+    "derivation_steps": [
+      "Observe zero growth under the selected analyst-consensus convention.",
+      "Apply the explicit zero-growth behavior instead of dividing or emitting infinity.",
+      "Do not substitute historical CAGR or company guidance."
+    ],
+    "claim_ceiling": "deterministic_unavailable_behavior_regression"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "peg",
+  "case_key": "peg.forward-positive-growth",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Research Semantics: PEG",
+    "derivation_steps": [
+      "Use the forward diluted 12-month P/E and percentage-point growth convention.",
+      "Divide 30 by 20 to obtain PEG 1.5.",
+      "Keep the analyst-consensus convention separate from historical and guidance conventions."
+    ],
+    "claim_ceiling": "deterministic_formula_regression"
+  }
+}

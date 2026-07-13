@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-input",
+  "target": "etf-virtual-company",
+  "case_key": "etf.ratio_of_sums",
+  "input": {
+    "amount_basis": "ownership_scaled_look_through_amounts",
+    "fund_weight_reapplication_permitted": false,
+    "holdings": [
+      {
+        "holding_id": "holding-a",
+        "reported_fund_weight": "0.20",
+        "look_through_numerator": "60",
+        "look_through_denominator": "20",
+        "constituent_ratio": "3.0"
+      },
+      {
+        "holding_id": "holding-b",
+        "reported_fund_weight": "0.80",
+        "look_through_numerator": "70",
+        "look_through_denominator": "20",
+        "constituent_ratio": "3.5"
+      }
+    ],
+    "aggregation_method": "ratio_of_sums"
+  }
+}

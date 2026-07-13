@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-input",
+  "target": "three-tier-valuation",
+  "case_key": "tier.exact_boundaries",
+  "input": {
+    "boundary_policy": "lower_inclusive_upper_exclusive",
+    "observations": [
+      {
+        "subject_id": "boundary-1000000",
+        "gppe": "1000000"
+      },
+      {
+        "subject_id": "boundary-3000000",
+        "gppe": "3000000"
+      }
+    ]
+  }
+}

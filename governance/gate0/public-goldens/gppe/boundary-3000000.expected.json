@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-expected-output",
+  "target": "gross-profit-per-employee",
+  "case_key": "gppe.boundary.3000000",
+  "expected": {
+    "status": "available",
+    "gppe_level": "3000000",
+    "gppe_unit": "USD_per_employee",
+    "comparison_branch": "non_financial",
+    "gppe_band": "large_model_native",
+    "boundary_rule": "lower_inclusive_upper_exclusive"
+  }
+}

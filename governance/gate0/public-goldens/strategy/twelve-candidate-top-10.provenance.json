@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "large-model-value-v0",
+  "case_key": "strategy.twelve_candidate_top_10",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Strategy ranking and top-ten selection",
+    "derivation_steps": [
+      "Exclude candidate-12 because current P/S is unavailable.",
+      "Compute target P/S divided by current P/S minus one for each eligible candidate.",
+      "Sort the eleven eligible candidates by gap in descending order.",
+      "Select ranks one through ten and leave candidate-11 eligible but unselected."
+    ],
+    "claim_ceiling": "deterministic eligibility, ranking, and top-ten regression only"
+  }
+}

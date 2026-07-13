@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-expected-output",
+  "target": "gross-profit-per-employee",
+  "case_key": "gppe.missing_headcount",
+  "expected": {
+    "status": "unavailable",
+    "gppe_level": null,
+    "gppe_band": null,
+    "availability_reason": "missing_period_average_employee_count"
+  }
+}

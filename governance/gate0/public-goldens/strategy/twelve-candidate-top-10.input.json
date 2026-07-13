@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-input",
+  "target": "large-model-value-v0",
+  "case_key": "strategy.twelve_candidate_top_10",
+  "input": {
+    "selection_count": 10,
+    "ranking_direction": "descending",
+    "gap_formula": "target_ps/current_ps-1",
+    "candidates": [
+      {
+        "candidate_id": "candidate-01",
+        "target_ps": "25",
+        "current_ps": "10"
+      },
+      {
+        "candidate_id": "candidate-02",
+        "target_ps": "25",
+        "current_ps": "12.5"
+      },
+      {
+        "candidate_id": "candidate-03",
+        "target_ps": "9",
+        "current_ps": "5"
+      },
+      {
+        "candidate_id": "candidate-04",
+        "target_ps": "9",
+        "current_ps": "6"
+      },
+      {
+        "candidate_id": "candidate-05",
+        "target_ps": "3.5",
+        "current_ps": "2.5"
+      },
+      {
+        "candidate_id": "candidate-06",
+        "target_ps": "25",
+        "current_ps": "20"
+      },
+      {
+        "candidate_id": "candidate-07",
+        "target_ps": "9",
+        "current_ps": "8"
+      },
+      {
+        "candidate_id": "candidate-08",
+        "target_ps": "3.5",
+        "current_ps": "3.2"
+      },
+      {
+        "candidate_id": "candidate-09",
+        "target_ps": "25",
+        "current_ps": "25"
+      },
+      {
+        "candidate_id": "candidate-10",
+        "target_ps": "9",
+        "current_ps": "10"
+      },
+      {
+        "candidate_id": "candidate-11",
+        "target_ps": "3.5",
+        "current_ps": "5"
+      },
+      {
+        "candidate_id": "candidate-12",
+        "target_ps": "9",
+        "current_ps": null
+      }
+    ]
+  }
+}

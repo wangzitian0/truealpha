@@ -2,6 +2,7 @@ name: Delivery Governance
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft]
   issues:
     types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]
   push:
@@ -11,6 +12,7 @@ on:
       - ".github/workflows/ci-governance.yml"
       - "governance/**"
       - "tools/check_delivery_governance.py"
+      - "tools/check_gate0_candidate.py"
       - "AGENTS.md"
       - "init.md"
       - "docs/iterative-delivery.md"
@@ -35,6 +37,8 @@ jobs:
           fetch-depth: 0
       - name: Validate checked-in graph and manifests
         run: make issue-graph-check
+      - name: Validate Gate 0 candidate chain
+        run: make gate0-candidate-check
       - name: Mirror merged batch status to GitHub
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,6 +100,8 @@ jobs:
         run: uv sync --all-packages --frozen
       - name: Validate checked-in graph and manifests
         run: make issue-graph-check
+      - name: Validate Gate 0 candidate chain
+        run: make gate0-candidate-check
       - name: Export live Vision issues
         env:
           GH_TOKEN: ${{ github.token }}
@@ -110,6 +116,9 @@ jobs:
           --github-issues "$RUNNER_TEMP/vision-issues.json"
       - name: Authorize pull-request diff
         if: github.event_name == 'pull_request'
+        env:
+          GATE0_CANDIDATE_FLAG: ${{ github.event.pull_request.draft && '--allow-blocked-gate-candidate' || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: >-
           python3 tools/check_delivery_governance.py
           --github-issues "$RUNNER_TEMP/vision-issues.json"
@@ -117,6 +126,7 @@ jobs:
           --pr-head-sha "${{ github.event.pull_request.head.sha }}"
           --execute-acceptance
           --evidence-output "$RUNNER_TEMP/rung-evidence.json"
+          $GATE0_CANDIDATE_FLAG
       - name: Retain rung evidence
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4

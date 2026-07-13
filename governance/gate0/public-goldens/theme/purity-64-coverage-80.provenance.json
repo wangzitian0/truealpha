@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-provenance",
+  "target": "theme-purity",
+  "case_key": "theme.purity_64_coverage_80",
+  "provenance": {
+    "evidence_class": "public_development_regression",
+    "source_issue": 59,
+    "source_packet": "Issue 59 Candidate Decision Packet v1",
+    "source_section": "Research Semantics: Theme purity",
+    "derivation_steps": [
+      "Retain unclassified revenue in total revenue: 80 + 20 + 25 = 125.",
+      "Divide theme revenue 80 by total revenue 125 to obtain purity 0.64.",
+      "Divide classified revenue 100 by total revenue 125 to obtain coverage 0.80."
+    ],
+    "claim_ceiling": "deterministic_denominator_and_coverage_regression"
+  }
+}

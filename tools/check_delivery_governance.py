@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -15,8 +16,27 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+GATE0_VALIDATOR_PATH = Path(__file__).with_name("check_gate0_candidate.py")
+GATE0_VALIDATOR_SPEC = importlib.util.spec_from_file_location(
+    "truealpha_gate0_candidate_validator", GATE0_VALIDATOR_PATH
+)
+assert GATE0_VALIDATOR_SPEC is not None and GATE0_VALIDATOR_SPEC.loader is not None
+gate0_validator = importlib.util.module_from_spec(GATE0_VALIDATOR_SPEC)
+sys.modules[GATE0_VALIDATOR_SPEC.name] = gate0_validator
+GATE0_VALIDATOR_SPEC.loader.exec_module(gate0_validator)
+validate_gate0_candidate = gate0_validator.validate_gate0_candidate
+
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH_PATH = ROOT / "governance" / "vision-issue-graph.json"
+GATE0_MANIFEST_PATH = "governance/gate0/manifest-v4.json"
+GATE0_AUTHORIZATION_CONTROL_PATHS = frozenset(
+    {
+        ".github/workflows/ci-governance.yml",
+        "Makefile",
+        "tools/check_delivery_governance.py",
+        "tools/check_gate0_candidate.py",
+    }
+)
 RUNGS = ("E0", "E1", "E2", "E3", "E4", "E5")
 RUNG_LABELS = {
     "E0": "code",
@@ -214,6 +234,40 @@ def matches_any(path: str, patterns: list[str] | tuple[str, ...]) -> bool:
     return any(path_matches_pattern(path, pattern) for pattern in patterns)
 
 
+def validate_gate0_candidate_paths(validation: Validation, patterns: list[str]) -> None:
+    """Reject filesystem objects whose bytes are not stable Git regular-file content."""
+    for pattern in patterns:
+        literal = pattern.removesuffix("/**")
+        candidate = ROOT.joinpath(*PurePosixPath(literal).parts)
+        if candidate.is_symlink():
+            validation.require(False, f"Gate 0 v4 aggregate candidate: candidate path is a symlink: {literal!r}")
+            continue
+        if not pattern.endswith("/**"):
+            validation.require(
+                candidate.is_file(),
+                f"Gate 0 v4 aggregate candidate: candidate path is not a regular file: {literal!r}",
+            )
+            continue
+        validation.require(
+            candidate.is_dir(),
+            f"Gate 0 v4 aggregate candidate: candidate path is not a directory: {literal!r}",
+        )
+        if not candidate.is_dir():
+            continue
+        for entry in candidate.rglob("*"):
+            relative = entry.relative_to(ROOT).as_posix()
+            if entry.is_symlink():
+                validation.require(
+                    False,
+                    f"Gate 0 v4 aggregate candidate: candidate path is a symlink: {relative!r}",
+                )
+            elif not entry.is_file() and not entry.is_dir():
+                validation.require(
+                    False,
+                    f"Gate 0 v4 aggregate candidate: candidate path is not a regular file: {relative!r}",
+                )
+
+
 def requires_integration_lease(path: str) -> bool:
     parts = PurePosixPath(path).parts
     name = parts[-1] if parts else ""
@@ -306,6 +360,7 @@ class PullRequestAdvance:
     manifest: dict[str, Any]
     accepted_rung: str | None
     changed_paths: tuple[str, ...]
+    kind: str = "capability_batch"
 
 
 def validate_gate_order(
@@ -1209,12 +1264,85 @@ def validate_new_batch_registration(
     )
 
 
+def validate_gate0_pr_advance(
+    validation: Validation,
+    *,
+    base_sha: str,
+    changed_paths: tuple[str, ...],
+    allow_blocked_gate_candidate: bool,
+) -> PullRequestAdvance | None:
+    label = "Gate 0 v4 aggregate candidate"
+    manifest_path = repo_path(GATE0_MANIFEST_PATH)
+    validation.require(
+        manifest_path is not None and manifest_path.is_file() and not manifest_path.is_symlink(),
+        f"{label}: manifest is missing from the PR head",
+    )
+    if manifest_path is None or not manifest_path.is_file() or manifest_path.is_symlink():
+        return None
+    manifest = load_json(manifest_path)
+    validation.require(isinstance(manifest, dict), f"{label}: manifest must be an object")
+    if not isinstance(manifest, dict):
+        return None
+    validation.require(
+        manifest.get("integration_base_sha") == base_sha,
+        f"{label}: integration_base_sha does not match the PR base",
+    )
+    paths = manifest.get("paths")
+    valid_paths = (
+        isinstance(paths, list)
+        and bool(paths)
+        and all(isinstance(pattern, str) and PATH_PATTERN_RE.fullmatch(pattern) is not None for pattern in paths)
+        and len(paths) == len(set(paths))
+    )
+    validation.require(valid_paths, f"{label}: paths must be unique exact files or terminal /** patterns")
+    if valid_paths:
+        assert isinstance(paths, list)
+        validate_gate0_candidate_paths(validation, paths)
+    non_manifest_paths = tuple(path for path in changed_paths if path != GATE0_MANIFEST_PATH)
+    validation.require(bool(non_manifest_paths), f"{label}: aggregate PR changes only its manifest")
+    if isinstance(paths, list):
+        for path in non_manifest_paths:
+            validation.require(
+                matches_any(path, paths),
+                f"{label}: changed path is outside manifest authorization: {path!r}",
+            )
+    changed_controls = sorted(set(non_manifest_paths) & GATE0_AUTHORIZATION_CONTROL_PATHS)
+    if changed_controls and not allow_blocked_gate_candidate:
+        # The control plane must land through a separately reviewed governance PR.
+        # The Gate candidate then rebases and removes these paths before acceptance.
+        validation.require(
+            False,
+            f"{label}: accepted candidate modifies authorization controls; "
+            f"land them separately, rebase, and remove them from this diff: {changed_controls}",
+        )
+    gate_result = validate_gate0_candidate(
+        Path(GATE0_MANIFEST_PATH),
+        root=ROOT,
+        check_live_comments=not allow_blocked_gate_candidate,
+        require_accepted=not allow_blocked_gate_candidate,
+    )
+    for error in gate_result.errors:
+        validation.require(False, f"{label}: {error}")
+    if validation.errors:
+        return None
+    return PullRequestAdvance(
+        batch_id="gate-0-v4",
+        manifest_path=GATE0_MANIFEST_PATH,
+        base_manifest={},
+        manifest=manifest,
+        accepted_rung=None,
+        changed_paths=changed_paths,
+        kind="gate_candidate",
+    )
+
+
 def validate_pr_advance(
     validation: Validation,
     *,
     graph: dict[str, Any],
     base_sha: str,
     head_sha: str,
+    allow_blocked_gate_candidate: bool = False,
 ) -> PullRequestAdvance | None:
     valid_coordinates = all(GIT_SHA_RE.fullmatch(value) is not None for value in (base_sha, head_sha))
     validation.require(valid_coordinates, "PR base/head must be full Git SHAs")
@@ -1233,6 +1361,20 @@ def validate_pr_advance(
     changed_manifests = tuple(
         path for path in changed_paths if path.startswith(MANIFEST_PREFIX) and path.endswith(".json")
     )
+    gate0_manifest_changed = GATE0_MANIFEST_PATH in changed_paths
+    validation.require(
+        not (gate0_manifest_changed and changed_manifests),
+        "PR cannot mix the Gate 0 aggregate manifest with capability-batch manifests",
+    )
+    if gate0_manifest_changed and changed_manifests:
+        return None
+    if gate0_manifest_changed:
+        return validate_gate0_pr_advance(
+            validation,
+            base_sha=base_sha,
+            changed_paths=changed_paths,
+            allow_blocked_gate_candidate=allow_blocked_gate_candidate,
+        )
     if not changed_manifests:
         validation.require(
             all(matches_any(path, GOVERNANCE_CONTROL_PATHS) for path in changed_paths),
@@ -1356,7 +1498,8 @@ def execute_acceptance_commands(
     output_path: Path,
     runner: CommandRunner = _default_command_runner,
 ) -> None:
-    if advance.accepted_rung is None:
+    gate_acceptance = advance.kind == "gate_candidate" and advance.manifest.get("status") == "accepted"
+    if advance.accepted_rung is None and not gate_acceptance:
         return
     current_head = run_git("rev-parse", "HEAD")
     validation.require(
@@ -1365,8 +1508,19 @@ def execute_acceptance_commands(
     )
     if validation.errors:
         return
+    acceptance = advance.manifest.get("acceptance")
+    commands = acceptance.get("commands") if isinstance(acceptance, dict) else None
+    validation.require(
+        isinstance(commands, list)
+        and bool(commands)
+        and all(isinstance(command, str) and command for command in commands),
+        f"{advance.batch_id}: acceptance commands are missing",
+    )
+    if validation.errors:
+        return
+    assert isinstance(commands, list)
     reports: list[dict[str, Any]] = []
-    for command in advance.manifest["acceptance"]["commands"]:
+    for command in commands:
         result = runner(command)
         output_digest = hashlib.sha256(f"{result.stdout}\n{result.stderr}".encode()).hexdigest()
         reports.append(
@@ -1379,19 +1533,26 @@ def execute_acceptance_commands(
         validation.require(result.returncode == 0, f"{advance.batch_id}: acceptance command failed: {command}")
     if validation.errors:
         return
+    if gate_acceptance:
+        base_sha = advance.manifest["integration_base_sha"]
+        negative_controls: list[str] = []
+    else:
+        base_sha = advance.manifest["activation"]["base_sha"]
+        negative_controls = advance.manifest["acceptance"]["negative_controls"]
     evidence = {
         "schema_version": 1,
         "batch_id": advance.batch_id,
         "manifest_sha256": sha256(ROOT / advance.manifest_path),
         "accepted_rung": advance.accepted_rung,
-        "base_sha": advance.manifest["activation"]["base_sha"],
+        "base_sha": base_sha,
         "producer_head_sha": head_sha,
         "commands": reports,
-        "negative_controls": advance.manifest["acceptance"]["negative_controls"],
+        "negative_controls": negative_controls,
         "stable_handoff": False,
         "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
-    evidence_id = f"rung-evidence:{advance.batch_id}:{canonical_sha256(evidence)}"
+    evidence_kind = "gate-evidence" if gate_acceptance else "rung-evidence"
+    evidence_id = f"{evidence_kind}:{advance.batch_id}:{canonical_sha256(evidence)}"
     output = {"evidence_id": evidence_id, **evidence}
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1565,6 +1726,7 @@ def validate(
     pr_head_sha: str | None = None,
     execute_acceptance: bool = False,
     evidence_output: Path | None = None,
+    allow_blocked_gate_candidate: bool = False,
 ) -> Validation:
     validation = Validation()
     graph = load_json(GRAPH_PATH)
@@ -1652,6 +1814,7 @@ def validate(
             graph=graph,
             base_sha=pr_base_sha,
             head_sha=pr_head_sha,
+            allow_blocked_gate_candidate=allow_blocked_gate_candidate,
         )
     if github_path is not None:
         github_graph = graph
@@ -1680,6 +1843,11 @@ def main() -> int:
     parser.add_argument("--pr-head-sha", help="Exact pull-request head commit")
     parser.add_argument("--execute-acceptance", action="store_true")
     parser.add_argument("--evidence-output", type=Path)
+    parser.add_argument(
+        "--allow-blocked-gate-candidate",
+        action="store_true",
+        help="Allow a structurally valid blocked Gate 0 candidate only for a draft PR",
+    )
     args = parser.parse_args()
     validation = validate(
         args.github_issues,
@@ -1687,6 +1855,7 @@ def main() -> int:
         pr_head_sha=args.pr_head_sha,
         execute_acceptance=args.execute_acceptance,
         evidence_output=args.evidence_output,
+        allow_blocked_gate_candidate=args.allow_blocked_gate_candidate,
     )
     if validation.errors:
         for error in validation.errors:

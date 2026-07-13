@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "artifact_type": "public-development-golden-expected-output",
+  "target": "three-tier-valuation",
+  "case_key": "tier.exact_boundaries",
+  "expected": {
+    "status": "available",
+    "boundary_policy": "lower_inclusive_upper_exclusive",
+    "assignments": [
+      {
+        "subject_id": "boundary-1000000",
+        "tier": "tech",
+        "target_ps_low": "8",
+        "target_ps_high": "10",
+        "target_ps_midpoint": "9"
+      },
+      {
+        "subject_id": "boundary-3000000",
+        "tier": "large_model_native",
+        "target_ps_low": "20",
+        "target_ps_high": "30",
+        "target_ps_midpoint": "25"
+      }
+    ]
+  }
+}
