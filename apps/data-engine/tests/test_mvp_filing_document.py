@@ -18,10 +18,14 @@ from data_engine.mvp_assets import (
 )
 from data_engine.mvp_models import FilingDocumentPayload
 from data_engine.mvp_pipeline import FilingComponentCatalog, run_filing_pipeline
-from data_engine.mvp_registry import build_filing_registry
+from data_engine.mvp_registry import (
+    FILING_SEMANTIC_TYPE_ID,
+    FILING_VERSION,
+    build_filing_registry,
+)
 from data_engine.mvp_repository import PostgresFilingDocumentRepository
 from data_engine.mvp_snapshot import build_filing_snapshot
-from data_engine.mvp_sources import FilingFixtureAdapter
+from data_engine.mvp_sources import FilingDocumentNormalizer, FilingFixtureAdapter
 from pydantic import ValidationError
 from truealpha_contracts import RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.common import canonical_sha256
@@ -237,6 +241,92 @@ def test_new_normalizer_identity_replays_same_raw_without_mixing_registry_snapsh
         raise RollBackProbe
 
 
+def test_registry_only_source_extension_runs_through_the_existing_factory(connection) -> None:
+    registry = build_filing_registry()
+    base_source = registry.sources[0]
+    extension = base_source.model_copy(update={"source_id": "source.fixture-sec-extension"})
+    extended_registry = RegistrySnapshot(
+        sources=(base_source, extension),
+        semantic_types=registry.semantic_types,
+        required_type_ids=registry.required_type_ids,
+    )
+    assert extension.adapter_id == base_source.adapter_id
+    assert extension.normalizer_id == base_source.normalizer_id
+    assert extended_registry.sources[1] == extension
+
+    class RollBackProbe(Exception):
+        pass
+
+    with pytest.raises(RollBackProbe), connection.transaction():
+        base = run_filing_pipeline(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            raw_store=MemoryRawObjectStore(),
+            registry=extended_registry,
+        )
+        first = run_filing_pipeline(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            raw_store=MemoryRawObjectStore(),
+            registry=extended_registry,
+            source_id=extension.source_id,
+        )
+        repeated = run_filing_pipeline(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            raw_store=MemoryRawObjectStore(),
+            registry=extended_registry,
+            source_id=extension.source_id,
+        )
+        assert first.records == repeated.records
+        assert repeated.inserted == (False, False)
+        assert first.raw_fetch_ids == base.raw_fetch_ids
+        assert {record.normalized_record_id for record in first.records}.isdisjoint(
+            record.normalized_record_id for record in base.records
+        )
+        assert all(record.source_registry_entry_id == extension.source_registry_entry_id for record in first.records)
+        assert base.records[1].supersedes_record_id == base.records[0].normalized_record_id
+        assert first.records[1].supersedes_record_id == first.records[0].normalized_record_id
+        with pytest.raises(ValueError, match="another registry route"):
+            FilingDocumentNormalizer().normalize(
+                first.artifacts[1],
+                first.raw_fetch_ids[1],
+                first.artifacts[1].sha256,
+                extension,
+                extended_registry.semantic_types[0],
+                base.records[0],
+            )
+
+        repository = PostgresFilingDocumentRepository(connection)
+        base_selected = repository.select_pit(
+            subject=base.records[0].draft.subject,
+            semantic_type_id=FILING_SEMANTIC_TYPE_ID,
+            semantic_type_version=FILING_VERSION,
+            source_registry_entry_id=base_source.source_registry_entry_id,
+            as_of=base.records[1].draft.knowable_at,
+            valid_on=base.records[0].draft.valid_to,
+        )
+        selected = repository.select_pit(
+            subject=first.records[0].draft.subject,
+            semantic_type_id=FILING_SEMANTIC_TYPE_ID,
+            semantic_type_version=FILING_VERSION,
+            source_registry_entry_id=extension.source_registry_entry_id,
+            as_of=first.records[1].draft.knowable_at,
+            valid_on=first.records[0].draft.valid_to,
+        )
+        assert base_selected == (base.records[1],)
+        assert selected == (first.records[1],)
+        bundle = build_filing_snapshot(
+            records=selected,
+            selected_record=selected[0],
+            registry=extended_registry,
+            as_of=first.records[1].draft.knowable_at,
+        )
+        assert bundle.evaluation.ready
+        assert len(bundle.runner_selection.factor_inputs) == 1
+        raise RollBackProbe
+
+
 def test_restatement_rejects_backdating_cross_registry_and_branching(connection) -> None:
     pipeline = run_filing_pipeline(
         repository_root=REPOSITORY_ROOT,
@@ -410,7 +500,13 @@ def test_schema_drift_and_unreviewed_registry_component_are_rejected() -> None:
         required_type_ids=registry.required_type_ids,
     )
     with pytest.raises(ValueError, match="not activated"):
-        FilingComponentCatalog.e0().resolve(disabled_registry)
+        FilingComponentCatalog.e0().resolve(
+            disabled_registry,
+            source_id=disabled_source.source_id,
+            source_version=disabled_source.version,
+            semantic_type_id=FILING_SEMANTIC_TYPE_ID,
+            semantic_type_version=FILING_VERSION,
+        )
 
 
 def _accepted_release_manifest() -> ReleaseManifest:

@@ -17,7 +17,7 @@ from truealpha_contracts.execution import (
     SemanticProducerKind,
 )
 from truealpha_contracts.models import DataSource, RawCapture
-from truealpha_contracts.registries import RegistrySnapshot
+from truealpha_contracts.registries import SemanticTypeRegistryEntry, SourceRegistryEntry
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 from data_engine.mvp_models import FilingDocumentPayload
@@ -180,15 +180,14 @@ class FilingDocumentNormalizer:
         artifact: FrozenFilingArtifact,
         raw_id: int,
         raw_sha256: str,
-        registry: RegistrySnapshot,
+        source_entry: SourceRegistryEntry,
+        type_entry: SemanticTypeRegistryEntry,
         supersedes: NormalizedRecordRef | None = None,
     ) -> tuple[NormalizedRecordRef, FilingDocumentPayload]:
         if raw_id < 1:
             raise ValueError("raw fetch ID must be positive")
         if raw_sha256 != artifact.sha256 or _sha256(artifact.body) != raw_sha256:
             raise ValueError("normalization raw checksum does not match the frozen filing")
-        source_entry = registry.sources[0]
-        type_entry = registry.semantic_types[0]
         if type_entry.semantic_type_id != FILING_SEMANTIC_TYPE_ID:
             raise ValueError("registry does not bind the filing semantic type")
         if FILING_SEMANTIC_TYPE_ID not in source_entry.supported_type_ids:
@@ -204,6 +203,13 @@ class FilingDocumentNormalizer:
         subject = SubjectRef(kind=SubjectKind.ISSUER, id="issuer.plug")
         valid_from = date(artifact.report_period.year, 1, 1)
         if supersedes is not None:
+            if (
+                supersedes.source_registry_entry_id != source_entry.source_registry_entry_id
+                or supersedes.source_registry_entry_sha256 != source_entry.content_sha256
+                or supersedes.draft.semantic_type_id != type_entry.semantic_type_id
+                or supersedes.draft.semantic_type_version != type_entry.version
+            ):
+                raise ValueError("filing amendment predecessor belongs to another registry route")
             if supersedes.draft.subject != subject or supersedes.draft.valid_from != valid_from:
                 raise ValueError("filing amendment predecessor belongs to another semantic coordinate")
             if supersedes.draft.valid_to != artifact.report_period:
