@@ -10,10 +10,19 @@ from typing import Any
 from psycopg import Connection
 from truealpha_contracts import RawObjectStore
 from truealpha_contracts.execution import NormalizedRecordRef
-from truealpha_contracts.registries import RegistrySnapshot
+from truealpha_contracts.registries import (
+    RegistrySnapshot,
+    SemanticTypeRegistryEntry,
+    SourceRegistryEntry,
+)
 
 from data_engine.mvp_models import FilingDocumentPayload
-from data_engine.mvp_registry import build_filing_registry
+from data_engine.mvp_registry import (
+    FILING_SEMANTIC_TYPE_ID,
+    FILING_SOURCE_ID,
+    FILING_VERSION,
+    build_filing_registry,
+)
 from data_engine.mvp_repository import PostgresFilingDocumentRepository
 from data_engine.mvp_sources import (
     FilingDocumentNormalizer,
@@ -52,15 +61,34 @@ class FilingComponentCatalog:
     def resolve(
         self,
         registry: RegistrySnapshot,
-    ) -> tuple[FilingFixtureAdapter, FilingDocumentNormalizer]:
-        if len(registry.sources) != 1 or len(registry.semantic_types) != 1:
-            raise ValueError("D1 E0 requires exactly one reviewed filing route")
-        source = registry.sources[0]
-        semantic_type = registry.semantic_types[0]
+        *,
+        source_id: str,
+        source_version: str,
+        semantic_type_id: str,
+        semantic_type_version: str,
+    ) -> tuple[
+        FilingFixtureAdapter,
+        FilingDocumentNormalizer,
+        SourceRegistryEntry,
+        SemanticTypeRegistryEntry,
+    ]:
+        sources = {entry.key: entry for entry in registry.sources}
+        semantic_types = {entry.key: entry for entry in registry.semantic_types}
+        try:
+            source = sources[(source_id, source_version)]
+            semantic_type = semantic_types[(semantic_type_id, semantic_type_version)]
+        except KeyError:
+            raise ValueError("filing route must resolve one exact source and semantic type version")
+
         if semantic_type.semantic_type_id not in source.supported_type_ids:
             raise ValueError("registry source/type route is disconnected")
         try:
-            return self.adapters[source.adapter_id], self.normalizers[source.normalizer_id]
+            return (
+                self.adapters[source.adapter_id],
+                self.normalizers[source.normalizer_id],
+                source,
+                semantic_type,
+            )
         except KeyError as error:
             raise ValueError(f"registry component is not activated: {error.args[0]}") from error
 
@@ -74,9 +102,19 @@ def run_filing_pipeline(
     registry: RegistrySnapshot | None = None,
     components: FilingComponentCatalog | None = None,
     artifacts: tuple[FrozenFilingArtifact, ...] | None = None,
+    source_id: str = FILING_SOURCE_ID,
+    source_version: str = FILING_VERSION,
+    semantic_type_id: str = FILING_SEMANTIC_TYPE_ID,
+    semantic_type_version: str = FILING_VERSION,
 ) -> FilingPipelineRun:
     active_registry = registry or build_filing_registry()
-    adapter, normalizer = (components or FilingComponentCatalog.e0()).resolve(active_registry)
+    adapter, normalizer, source_entry, semantic_type_entry = (components or FilingComponentCatalog.e0()).resolve(
+        active_registry,
+        source_id=source_id,
+        source_version=source_version,
+        semantic_type_id=semantic_type_id,
+        semantic_type_version=semantic_type_version,
+    )
     loaded = adapter.load(repository_root, corpus_path) if artifacts is None else artifacts
     ordered = tuple(sorted(loaded, key=lambda item: (item.accepted_at, item.artifact_id)))
     if not ordered:
@@ -115,7 +153,8 @@ def run_filing_pipeline(
             artifact,
             fetch_id,
             artifact.sha256,
-            active_registry,
+            source_entry,
+            semantic_type_entry,
             predecessor,
         )
         was_inserted = repository.put(record, payload, raw_ref=raw_ref(fetch_id))

@@ -139,10 +139,10 @@
       "issue": 92,
       "owner_gate": 29,
       "status": "active",
-      "target_rung": "E1",
+      "target_rung": "E2",
       "terminal_rung": "E2",
       "manifest": "governance/batches/D1-mvp-normalization-handoff.v1.json",
-      "sha256": "52c79e74a48bc1209b7a046468e0f7c55168034815357567031d053551f48731"
+      "sha256": "9edf477c65e08c87cb7a7b8dd03b5a9274b93588ecc35ed153926a9fd5116623"
     }
   },
   "artifact_edges": [

@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "batch_id": "D1-mvp-normalization-handoff",
-  "revision": 3,
+  "revision": 4,
   "issue": 92,
   "owner_gate": 29,
   "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": "E0",
-  "target_rung": "E1",
+  "last_accepted_rung": "E1",
+  "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Build a persistent SEC filing-document vertical slice first, then turn the D0 corpus into a stable Local/CI normalized Postgres and snapshot handoff for issue #23.",
   "claim_ceiling": "E2 stable Local/CI capture handoff for #70; no live-source or Staging claim",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "a9919d02e5fad831dd161aca5eeef472ed513709",
+    "base_sha": "2c0bdc5d3bda94e770608046267b0a3d84a2ae1a",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
