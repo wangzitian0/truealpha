@@ -4,7 +4,12 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from data_engine.batches.mvp_capture_tiny.e0_slice import FixtureRawLedger, run_e0_slice
+from data_engine.batches.mvp_capture_tiny.e0_slice import (
+    CUTOFF,
+    FixtureRawLedger,
+    _latest_annual_gross_profit,
+    run_e0_slice,
+)
 from pydantic import ValidationError
 from truealpha_contracts.capture_contracts import (
     CaptureCell,
@@ -161,6 +166,11 @@ def test_frozen_corpus_rejects_changed_artifact_bytes(tmp_path):
 
     with pytest.raises(ValueError, match="artifact bytes drifted"):
         run_e0_slice(tmp_path, corpus_path=Path("corpus.json"))
+
+
+def test_company_facts_schema_drift_fails_with_explicit_error():
+    with pytest.raises(ValueError, match="company-facts schema drifted"):
+        _latest_annual_gross_profit(b"{}", CUTOFF)
 
 
 def test_batch_remains_outside_default_release_composition():

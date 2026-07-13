@@ -199,13 +199,18 @@ class E0SliceResult:
 
 
 def _latest_annual_gross_profit(body: bytes, cutoff: datetime) -> FixtureFinancialObservation:
-    payload = json.loads(body)
-    rows = payload["facts"]["us-gaap"]["GrossProfit"]["units"]["USD"]
-    candidates = [
-        row
-        for row in rows
-        if row.get("form") == "10-K" and row.get("fp") == "FY" and date.fromisoformat(row["filed"]) <= cutoff.date()
-    ]
+    try:
+        payload = json.loads(body)
+        rows = payload["facts"]["us-gaap"]["GrossProfit"]["units"]["USD"]
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise TypeError("GrossProfit USD units must be a list of objects")
+        candidates = [
+            row
+            for row in rows
+            if row.get("form") == "10-K" and row.get("fp") == "FY" and date.fromisoformat(row["filed"]) <= cutoff.date()
+        ]
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("fixture company-facts schema drifted before normalization") from error
     if not candidates:
         raise ValueError("fixture has no annual gross-profit fact visible at the cutoff")
     selected = max(
@@ -383,6 +388,8 @@ def _capture_evidence(
     record: NormalizedRecordRef,
     raw_entry: RawLedgerEntry,
     coverage_entry: str,
+    applicability: ApplicabilityMapping,
+    source_coverage: SourceCoverageMapping,
 ) -> tuple[CaptureManifest, CaptureEvaluationReport]:
     evidence = CaptureRecordEvidence(
         source_coverage_entry_id=coverage_entry,
@@ -442,22 +449,8 @@ def _capture_evidence(
         manifest,
         applicability_catalog_id=scope.applicability_catalog_id,
         applicability_catalog_sha256=scope.applicability_catalog_sha256,
-        applicability={
-            (SUBJECT.kind, SUBJECT.id, requirement.domain, PARTITION, requirement.capture_requirement_id): (
-                "required",
-                CUTOFF - timedelta(days=1),
-            )
-        },
-        source_coverage={
-            (
-                CaptureEnvironment.GITHUB_CI,
-                SUBJECT.kind,
-                SUBJECT.id,
-                requirement.domain,
-                PARTITION,
-                requirement.capture_requirement_id,
-            ): (coverage_entry,)
-        },
+        applicability=applicability,
+        source_coverage=source_coverage,
         evaluated_at=manifest.created_at + timedelta(minutes=1),
     )
 
@@ -582,6 +575,8 @@ def run_e0_slice(
         record=record,
         raw_entry=raw_entry,
         coverage_entry=coverage_entry,
+        applicability=applicability,
+        source_coverage=source_coverage,
     )
     snapshot, selection = _snapshot_and_selection(
         registry=registry,
