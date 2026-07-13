@@ -124,7 +124,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S0-core-strategy-tiny.v1.json",
-      "sha256": "97132dc09a197c728581452a1dabdb6362756af0426a122b16d00d2cd2e2956f"
+      "sha256": "a8160911a676aeb1b321841f7b859240429f58b54de6fbaa0edda3cc0af26420"
     },
     "D0-mvp-capture-tiny": {
       "issue": 79,
