@@ -207,6 +207,41 @@ def test_frozen_corpus_rejects_missing_case_id(tmp_path):
         run_e0_slice(tmp_path, corpus_path=Path("corpus.json"))
 
 
+@pytest.mark.parametrize(
+    ("missing_target", "expected_error"),
+    [
+        ("source", "source manifest path is missing"),
+        ("artifact", "artifact path is missing"),
+    ],
+)
+def test_frozen_corpus_requires_explicit_paths(tmp_path, missing_target, expected_error):
+    source = tmp_path / "source.json"
+    source.write_text("{}", encoding="utf-8")
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("{}", encoding="utf-8")
+    corpus = {
+        "schema_version": 1,
+        "corpus_id": "missing-path",
+        "source_manifest": {
+            "path": None if missing_target == "source" else "source.json",
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        },
+        "artifacts": [
+            {
+                "artifact_id": "nvda-company-facts",
+                "path": None if missing_target == "artifact" else "artifact.json",
+                "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            }
+        ],
+        "cases": [{"case_id": f"case-{index}"} for index in range(8)],
+    }
+    corpus_path = tmp_path / "corpus.json"
+    corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected_error):
+        run_e0_slice(tmp_path, corpus_path=Path("corpus.json"))
+
+
 def test_batch_remains_outside_default_release_composition():
     shared_surfaces = (
         "apps/data-engine/src/data_engine/__init__.py",

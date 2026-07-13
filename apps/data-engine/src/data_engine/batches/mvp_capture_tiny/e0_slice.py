@@ -86,7 +86,10 @@ def _load_frozen_corpus(root: Path, corpus_path: Path) -> tuple[dict[str, Any], 
     source_manifest = payload.get("source_manifest")
     if not isinstance(source_manifest, dict):
         raise ValueError("tiny corpus source manifest reference is missing")
-    source_path = _repository_path(root, str(source_manifest.get("path", "")))
+    source_relative_path = source_manifest.get("path")
+    if not isinstance(source_relative_path, str) or not source_relative_path:
+        raise ValueError("tiny corpus source manifest path is missing")
+    source_path = _repository_path(root, source_relative_path)
     if not source_path.is_file() or _sha256(source_path) != source_manifest.get("sha256"):
         raise ValueError("tiny corpus source manifest bytes drifted")
 
@@ -100,7 +103,10 @@ def _load_frozen_corpus(root: Path, corpus_path: Path) -> tuple[dict[str, Any], 
         artifact_id = artifact["artifact_id"]
         if artifact_id in artifacts:
             raise ValueError(f"duplicate tiny corpus artifact: {artifact_id}")
-        artifact_path = _repository_path(root, str(artifact.get("path", "")))
+        artifact_relative_path = artifact.get("path")
+        if not isinstance(artifact_relative_path, str) or not artifact_relative_path:
+            raise ValueError(f"tiny corpus artifact path is missing: {artifact_id}")
+        artifact_path = _repository_path(root, artifact_relative_path)
         if not artifact_path.is_file() or _sha256(artifact_path) != artifact.get("sha256"):
             raise ValueError(f"tiny corpus artifact bytes drifted: {artifact_id}")
         artifacts[artifact_id] = artifact
