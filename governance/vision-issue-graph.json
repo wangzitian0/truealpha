@@ -144,6 +144,15 @@
       "manifest": "governance/batches/D1-mvp-normalization-handoff.v1.json",
       "sha256": "315de9211c132b714f72194f8d4948fbfb50a9a44fe2ac7685c950b3167095bb"
     },
+    "D2-mvp-medium-validation": {
+      "issue": 121,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E3",
+      "manifest": "governance/batches/D2-mvp-medium-validation.v1.json",
+      "sha256": "2b5d67155ceb300c7eb5ebde370183ef2598f444614718469030939961609cbc"
+    },
     "H0-core-headcount-extraction": {
       "issue": 104,
       "owner_gate": 29,
