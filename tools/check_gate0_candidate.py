@@ -9,7 +9,7 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,16 @@ EXPECTED_MANIFEST_PATHS = (
     "libs/runtime/tests/test_delivery_governance.py",
     "tools/check_gate0_candidate.py",
     "tools/check_delivery_governance.py",
+)
+CANDIDATE_CONTROL_PATHS = frozenset(
+    {
+        ".github/workflows/ci-governance.yml",
+        "Makefile",
+        "libs/runtime/tests/test_delivery_governance.py",
+        "libs/runtime/tests/test_gate0_candidate.py",
+        "tools/check_delivery_governance.py",
+        "tools/check_gate0_candidate.py",
+    }
 )
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -427,15 +437,52 @@ def candidate_tree_sha256(
     patterns: list[str] | tuple[str, ...],
     *,
     manifest_path: Path = DEFAULT_MANIFEST,
+    frozen_file_bytes: Mapping[str, bytes] | None = None,
 ) -> str:
     digest = hashlib.sha256()
     for relative_path in manifest_authorized_files(root, patterns, manifest_path=manifest_path):
-        raw = (root / relative_path).read_bytes()
+        raw = (frozen_file_bytes or {}).get(relative_path)
+        if raw is None:
+            raw = (root / relative_path).read_bytes()
         digest.update(relative_path.encode())
         digest.update(b"\0")
         digest.update(len(raw).to_bytes(8, "big"))
         digest.update(raw)
     return digest.hexdigest()
+
+
+def _git_bytes(root: Path, *args: str) -> bytes:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip()
+        raise ValueError(f"Git command failed: {' '.join(args)}: {detail}")
+    return result.stdout
+
+
+def candidate_control_snapshot_bytes(
+    root: Path,
+    patterns: list[str] | tuple[str, ...],
+    *,
+    manifest_path: Path = DEFAULT_MANIFEST,
+) -> dict[str, bytes]:
+    """Freeze control-plane files at the commit that last changed the candidate manifest."""
+
+    if not (root / ".git").exists():
+        return {}
+    manifest_relative = manifest_path.as_posix()
+    snapshot = _git_bytes(root, "log", "-1", "--format=%H", "--", manifest_relative).decode().strip()
+    if GIT_SHA_RE.fullmatch(snapshot) is None:
+        raise ValueError("Gate 0 manifest has no committed candidate snapshot")
+    return {
+        relative_path: _git_bytes(root, "show", f"{snapshot}:{relative_path}")
+        for relative_path in manifest_authorized_files(root, patterns, manifest_path=manifest_path)
+        if relative_path in CANDIDATE_CONTROL_PATHS
+    }
 
 
 def _strict_fields(validation: Validation, value: Any, expected: frozenset[str], label: str) -> bool:
@@ -1752,6 +1799,11 @@ def validate_gate0_candidate(
     if isinstance(patterns, list) and all(isinstance(pattern, str) for pattern in patterns):
         try:
             authorized_files = manifest_authorized_files(root, patterns, manifest_path=DEFAULT_MANIFEST)
+            control_snapshot = candidate_control_snapshot_bytes(
+                root,
+                patterns,
+                manifest_path=DEFAULT_MANIFEST,
+            )
             for pattern in patterns:
                 validation.require(
                     any(path_matches(authorized_file, pattern) for authorized_file in authorized_files),
@@ -1759,7 +1811,12 @@ def validate_gate0_candidate(
                 )
             validation.require(
                 manifest.get("candidate_tree_sha256")
-                == candidate_tree_sha256(root, patterns, manifest_path=DEFAULT_MANIFEST),
+                == candidate_tree_sha256(
+                    root,
+                    patterns,
+                    manifest_path=DEFAULT_MANIFEST,
+                    frozen_file_bytes=control_snapshot,
+                ),
                 "Gate 0 manifest: candidate tree SHA-256 mismatch",
             )
         except ValueError as error:

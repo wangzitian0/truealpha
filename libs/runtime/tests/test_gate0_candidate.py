@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,6 +46,12 @@ def candidate_root(tmp_path):
     evidence_dir.mkdir(parents=True)
     for filename in ("issue-57.v1.json", "issue-58.v2.json"):
         shutil.copy2(REPO_ROOT / "governance" / "evidence" / filename, evidence_dir / filename)
+    for relative_path, body in gate0.candidate_control_snapshot_bytes(
+        REPO_ROOT,
+        gate0.EXPECTED_MANIFEST_PATHS,
+    ).items():
+        (tmp_path / relative_path).write_bytes(body)
+    _commit_candidate_snapshot(tmp_path)
     return tmp_path
 
 
@@ -106,6 +113,26 @@ def _refresh_chain(root: Path) -> None:
 
 def _validate(root: Path, **kwargs):
     return gate0.validate_gate0_candidate(MANIFEST_PATH, root=root, **kwargs)
+
+
+def _commit_candidate_snapshot(root: Path) -> None:
+    subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=TrueAlpha Test",
+            "-c",
+            "user.email=truealpha-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "freeze candidate snapshot",
+        ],
+        cwd=root,
+        check=True,
+    )
 
 
 def test_checked_in_candidate_is_valid_but_blocked(candidate_root):
@@ -216,6 +243,26 @@ def test_candidate_payload_hash_cannot_be_manually_flipped(candidate_root):
 
 
 def test_candidate_tree_binds_non_artifact_authorized_files(candidate_root):
+    _refresh_chain(candidate_root)
+    architecture = candidate_root / "docs/architecture-contract-closure.md"
+    architecture.write_bytes(architecture.read_bytes() + b"\n")
+
+    result = _validate(candidate_root)
+
+    assert "Gate 0 manifest: candidate tree SHA-256 mismatch" in result.errors
+
+
+def test_candidate_tree_freezes_control_files_at_the_candidate_snapshot(candidate_root):
+    _refresh_chain(candidate_root)
+    control = candidate_root / "tools/check_delivery_governance.py"
+    control.write_bytes(control.read_bytes() + b"\n# separately reviewed governance control\n")
+
+    result = _validate(candidate_root)
+
+    assert result.valid
+
+
+def test_candidate_tree_still_binds_semantic_files_after_control_snapshot(candidate_root):
     _refresh_chain(candidate_root)
     architecture = candidate_root / "docs/architecture-contract-closure.md"
     architecture.write_bytes(architecture.read_bytes() + b"\n")

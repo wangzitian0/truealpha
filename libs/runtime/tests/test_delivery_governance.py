@@ -801,6 +801,24 @@ def test_non_governance_code_pr_requires_batch_manifest(monkeypatch):
     assert "non-governance PR must advance exactly one capability-batch manifest" in validation.errors
 
 
+@pytest.mark.parametrize("changed_path", sorted(governance.GATE0_AUTHORIZATION_CONTROL_PATHS))
+def test_standalone_governance_pr_may_change_candidate_control_paths(changed_path, monkeypatch):
+    monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
+    monkeypatch.setattr(governance, "git_merge_base", lambda base, _head: base)
+    monkeypatch.setattr(governance, "git_changed_paths", lambda _base, _head: (changed_path,))
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph={"batches": {}},
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+    )
+
+    assert validation.errors == []
+    assert advance is None
+
+
 def test_corpus_hash_must_match_bytes(tmp_path, monkeypatch):
     graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch, corpus_sha="0" * 64)
     validation = governance.Validation()

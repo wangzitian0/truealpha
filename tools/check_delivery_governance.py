@@ -29,14 +29,7 @@ validate_gate0_candidate = gate0_validator.validate_gate0_candidate
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH_PATH = ROOT / "governance" / "vision-issue-graph.json"
 GATE0_MANIFEST_PATH = "governance/gate0/manifest-v4.json"
-GATE0_AUTHORIZATION_CONTROL_PATHS = frozenset(
-    {
-        ".github/workflows/ci-governance.yml",
-        "Makefile",
-        "tools/check_delivery_governance.py",
-        "tools/check_gate0_candidate.py",
-    }
-)
+GATE0_AUTHORIZATION_CONTROL_PATHS = gate0_validator.CANDIDATE_CONTROL_PATHS
 RUNGS = ("E0", "E1", "E2", "E3", "E4", "E5")
 RUNG_LABELS = {
     "E0": "code",
@@ -57,10 +50,8 @@ MANIFEST_PREFIX = "governance/batches/"
 BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
 BATCH_MIRROR_END = "<!-- capability-batch-mirror:end -->"
 GOVERNANCE_CONTROL_PATHS = (
-    ".github/workflows/ci-governance.yml",
+    *sorted(GATE0_AUTHORIZATION_CONTROL_PATHS),
     "governance/**",
-    "libs/runtime/tests/test_delivery_governance.py",
-    "tools/check_delivery_governance.py",
 )
 LEASE_REQUIRED_EXACT_PATHS = frozenset(
     {
