@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "batch_id": "S0-core-strategy-tiny",
-  "revision": 3,
+  "revision": 4,
   "issue": 78,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Expose core GPPE, tier, and strategy interaction defects on a predeclared tiny fixture without claiming a stable interface.",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "61c895e92ebb7d8607569051bf2234a458764097",
+    "base_sha": "c9d380f32e39b253af79cb126f540f2654d6201f",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance change merged to main",
@@ -160,12 +160,12 @@
     "output": {
       "type": "CoreTinyEvidence",
       "stable_handoff": false,
-      "state": "planned",
+      "state": "accepted",
       "allowed_evidence_readers": [
         "E2 contract-repair batch",
         "capture-strategy integration batch"
       ],
-      "retention": "permanent"
+      "retention": "content-addressed Local/CI evidence is reproducible from the frozen corpus; no stable handoff is retained"
     }
   },
   "merge_predecessors": [],
