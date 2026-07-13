@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:ac1a9ae0cf3f362e69af6712a65d3ec1359a4add650b9e73cf7781d9cf700f73",
+  "batch_id": "H0-core-headcount-extraction",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "db/migrations/0020_headcount_extraction.sql",
+    "db/tests/headcount_extraction_contract.sql"
+  ],
+  "base_sha": "cec5125fffdd8ed84013be980fdd5807ff8da270",
+  "expires_at": "2026-07-20T00:00:00Z"
+}
