@@ -129,11 +129,11 @@
     "D0-mvp-capture-tiny": {
       "issue": 79,
       "owner_gate": 29,
-      "status": "active",
+      "status": "done",
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/D0-mvp-capture-tiny.v1.json",
-      "sha256": "1391a6c75549c639e41fda1f6008aac848f6c02941177705fb420b73b5de1ca9"
+      "sha256": "270914c724c3bd6e2287e47dee240930f65643971ec03cbb4ffa05978df1f2e0"
     }
   },
   "artifact_edges": [
