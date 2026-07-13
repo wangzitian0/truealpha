@@ -21,3 +21,10 @@ hashes. A parity failure blocks Gate closure and batch activation.
 E1 output is immutable `TinyEvidence`, not a stable dependency. An E2 handoff must be stored
 under `governance/handoffs/` using the lifecycle defined in `docs/iterative-delivery.md`
 before a named downstream consumer may pin it.
+
+Pull-request authorization uses `--pr-base-sha` and `--pr-head-sha`. A preparation PR
+freezes the corpus, reviewer, exact base, and paths before an implementation PR may move
+the batch to `active` and accept one rung. Shared integration paths require a content-
+addressed, unexpired `IntegrationLease`. CI executes the manifest's commands on the exact
+head and retains a `RungEvidence` report; this report is evidence for the rung only and is
+not an E2 handoff.
