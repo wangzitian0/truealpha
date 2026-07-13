@@ -830,6 +830,8 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     assert "--pr-base-sha" in workflow
     assert "--pr-head-sha" in workflow
     assert "github.event.pull_request.head.sha" in workflow
+    assert "uses: astral-sh/setup-uv@v5" in workflow
+    assert "uv sync --all-packages --frozen" in workflow
     assert "--execute-acceptance" in workflow
     assert "render_batch_issue_body" in workflow
     assert 'json.dumps({"body": desired_body, "labels": desired})' in workflow

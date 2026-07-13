@@ -87,6 +87,13 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@v5
+        if: github.event_name == 'pull_request'
+        with:
+          enable-cache: true
+      - name: Install pull-request acceptance dependencies
+        if: github.event_name == 'pull_request'
+        run: uv sync --all-packages --frozen
       - name: Validate checked-in graph and manifests
         run: make issue-graph-check
       - name: Export live Vision issues
