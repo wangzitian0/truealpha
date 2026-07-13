@@ -11,6 +11,7 @@ from data_engine.batches.mvp_capture_tiny.e0_slice import CUTOFF, run_e0_slice
 from data_engine.batches.mvp_capture_tiny.e1_slice import (
     E1_ASSET_NAME,
     E1CaseResult,
+    E1ProvisionalActivation,
     EphemeralPostgresEvidenceRepository,
     EphemeralPostgresRecordRepository,
     FindingClass,
@@ -49,7 +50,11 @@ def connection():
 
 
 def test_dagster_executes_all_terminal_e1_cases(connection):
-    definitions = build_e1_definitions(repository_root=REPOSITORY_ROOT, connection=connection)
+    definitions = build_e1_definitions(
+        repository_root=REPOSITORY_ROOT,
+        connection=connection,
+        activation=E1ProvisionalActivation(),
+    )
     dg.Definitions.validate_loadable(definitions)
 
     result = definitions.get_implicit_global_asset_job_def().execute_in_process()
@@ -205,7 +210,7 @@ def test_accepted_release_cannot_activate_the_provisional_batch(connection):
         build_e1_definitions(
             repository_root=REPOSITORY_ROOT,
             connection=connection,
-            release_manifest=accepted_release,
+            activation=accepted_release,
         )
 
 

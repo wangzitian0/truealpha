@@ -161,7 +161,7 @@
         "E2 contract-repair batch",
         "capture-strategy integration batch"
       ],
-      "retention": "CI artifact for 90 days; content identity remains reproducible from the frozen corpus"
+      "retention": "session-scoped append-only test evidence; reproducible from the frozen corpus"
     }
   },
   "merge_predecessors": [],

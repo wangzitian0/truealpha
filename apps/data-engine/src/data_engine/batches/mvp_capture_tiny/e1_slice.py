@@ -1183,6 +1183,13 @@ class E1RunnerResource:
         return run_e1_suite(self.repository_root, self.connection)
 
 
+class E1ProvisionalActivation(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    batch_id: Literal["D0-mvp-capture-tiny"] = "D0-mvp-capture-tiny"
+    release_allowed: Literal[False] = False
+
+
 @dg.asset(
     name=E1_ASSET_NAME,
     group_name="mvp_capture_tiny_e1",
@@ -1207,9 +1214,9 @@ def build_e1_definitions(
     *,
     repository_root: Path,
     connection: Connection[Any],
-    release_manifest: ReleaseManifest | None = None,
+    activation: E1ProvisionalActivation | ReleaseManifest,
 ) -> dg.Definitions:
-    if release_manifest is not None:
+    if not isinstance(activation, E1ProvisionalActivation):
         raise ValueError("the provisional E1 batch is not release-activated")
     return dg.Definitions(
         assets=[materialize_mvp_capture_tiny_e1],
@@ -1226,6 +1233,7 @@ __all__ = [
     "BoundaryProbe",
     "E1_ASSET_NAME",
     "E1CaseResult",
+    "E1ProvisionalActivation",
     "E1RunnerResource",
     "EphemeralPostgresRecordRepository",
     "FindingClass",
