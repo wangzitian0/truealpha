@@ -142,7 +142,7 @@
       "target_rung": "E2",
       "terminal_rung": "E2",
       "manifest": "governance/batches/D1-mvp-normalization-handoff.v1.json",
-      "sha256": "df2f94c977b44895dc2721fbe4f594609d9cf2baf25acf8d4a2e750d0bbe9fc3"
+      "sha256": "5a56632f356a092f941fc47c87229e6b5b963e2f73b8ee790a60a4a8f8c4795a"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,
@@ -152,7 +152,6 @@
       "terminal_rung": "E3",
       "manifest": "governance/batches/H0-core-headcount-extraction.v1.json",
       "sha256": "f2496246836791874f3502245d0ba5e0210867a4be14ca1c5e504041e111f3f9"
-    }
     }
   },
   "artifact_edges": [
