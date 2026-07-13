@@ -7,7 +7,7 @@ from pathlib import Path
 import dagster as dg
 import psycopg
 import pytest
-from data_engine.batches.mvp_capture_tiny.e0_slice import run_e0_slice
+from data_engine.batches.mvp_capture_tiny.e0_slice import CUTOFF, run_e0_slice
 from data_engine.batches.mvp_capture_tiny.e1_slice import (
     E1_ASSET_NAME,
     E1CaseResult,
@@ -24,7 +24,10 @@ from data_engine.batches.mvp_capture_tiny.e1_slice import (
 )
 from data_engine.config import settings
 from pydantic import ValidationError
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import SnapshotCellSelection
+from truealpha_contracts.release import ArtifactRole, ReleaseArtifact, ReleaseManifest
+from truealpha_contracts.universe import UniverseRef
 
 REPOSITORY_ROOT = next(
     parent
@@ -139,6 +142,71 @@ def test_frozen_case_outputs_bind_the_declared_artifacts(connection):
     }
     assert by_case["wrong-listing-identity"].blocker_codes == ("wrong-listing-at-cutoff",)
     assert by_case["look-ahead-sentinel"].blocker_codes == ("future-known-vintage",)
+
+
+def _accepted_release_manifest() -> ReleaseManifest:
+    migration_ids = ("0001.sql",)
+    return ReleaseManifest(
+        contract_version="contracts:v1",
+        mart_schema_version="mart:v1",
+        research_catalog_id="research-catalog:" + "1" * 64,
+        research_catalog_sha256="1" * 64,
+        universe=UniverseRef(
+            universe_id="universe:topt-test",
+            universe_version="2026-07-12",
+            content_sha256="2" * 64,
+        ),
+        capture_scope_id="capture-scope:" + "3" * 64,
+        capture_scope_sha256="3" * 64,
+        applicability_catalog_id="applicability:" + "4" * 64,
+        applicability_catalog_sha256="4" * 64,
+        source_coverage_catalog_id="source-coverage:" + "5" * 64,
+        source_coverage_catalog_sha256="5" * 64,
+        source_readiness_report_id="source-readiness:" + "6" * 64,
+        source_readiness_report_sha256="6" * 64,
+        slo_catalog_id="module-slo:" + "7" * 64,
+        slo_catalog_sha256="7" * 64,
+        consumer_slo_catalog_id="consumer-slo:" + "8" * 64,
+        consumer_slo_catalog_sha256="8" * 64,
+        usage_telemetry_slo_catalog_id="usage-telemetry-slo:" + "9" * 64,
+        usage_telemetry_slo_catalog_sha256="9" * 64,
+        registry_snapshot_id="registry-snapshot:" + "a" * 64,
+        registry_snapshot_sha256="a" * 64,
+        source_registry_id="source-registry:" + "b" * 64,
+        source_registry_sha256="b" * 64,
+        semantic_type_registry_id="semantic-type-registry:" + "c" * 64,
+        semantic_type_registry_sha256="c" * 64,
+        identifier_type_registry_id="identifier-type-registry:" + "d" * 64,
+        identifier_type_registry_sha256="d" * 64,
+        configuration_sha256={"data-engine": "e" * 64},
+        migration_ids=migration_ids,
+        migration_set_sha256=canonical_sha256(migration_ids),
+        artifacts=tuple(
+            ReleaseArtifact(
+                role=role,
+                image_or_bundle=f"ghcr.io/example/{role.value}",
+                digest="sha256:" + "f" * 64,
+                git_sha="0" * 40,
+                sbom_sha256="1" * 64,
+                signature_ref=f"sigstore:{role.value}",
+            )
+            for role in ArtifactRole
+        ),
+        natural_refresh_requirement_ids=("natural-refresh:" + "2" * 64,),
+        created_at=CUTOFF,
+        manifest_signature_ref="sigstore:accepted-release",
+    )
+
+
+def test_accepted_release_cannot_activate_the_provisional_batch(connection):
+    accepted_release = _accepted_release_manifest()
+
+    with pytest.raises(ValueError, match="not release-activated"):
+        build_e1_definitions(
+            repository_root=REPOSITORY_ROOT,
+            connection=connection,
+            release_manifest=accepted_release,
+        )
 
 
 def test_ephemeral_repository_rejects_update_and_delete(connection):

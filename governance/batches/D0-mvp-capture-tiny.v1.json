@@ -82,7 +82,7 @@
   "corpus": {
     "environment": "local fixture plus ephemeral Postgres",
     "manifest_path": "apps/data-engine/tests/fixtures/mvp_capture_tiny/corpus.v1.json",
-    "sha256": "a36514fa9f0f4a7906879ae9a18569f294f2122babdde22dad2170a30d98abea",
+    "sha256": "82f92f5c65d8cbe9e5a26fb1182e0584de9a0bb4d51f879ed3ea41e522e98ef1",
     "read_only_source_manifest": "apps/data-engine/samples/capture_manifest_20260712.json",
     "read_only_source_git_blob": "2fa62f8a422ac7c1d71c9a562184f09391584f7f",
     "required_strata": [
@@ -161,7 +161,7 @@
         "E2 contract-repair batch",
         "capture-strategy integration batch"
       ],
-      "retention": "permanent"
+      "retention": "CI artifact for 90 days; content identity remains reproducible from the frozen corpus"
     }
   },
   "merge_predecessors": [],

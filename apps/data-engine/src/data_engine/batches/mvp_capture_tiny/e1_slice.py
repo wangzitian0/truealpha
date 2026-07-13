@@ -1,7 +1,7 @@
 """Terminal E1 evidence for the frozen D0 tiny capture corpus."""
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -16,7 +16,6 @@ from data_engine.batches.mvp_capture_tiny.e0_slice import (
     _hash,
     _load_frozen_corpus,
     _repository_path,
-    _snapshot_and_selection,
     run_e0_slice,
 )
 from psycopg import Connection
@@ -24,22 +23,41 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from truealpha_contracts import RawCapture
 from truealpha_contracts.capture_contracts import (
+    ApplicabilityMapping,
     CaptureCell,
     CaptureEvaluationReport,
     CaptureManifest,
     CaptureRecordEvidence,
+    CaptureRequirement,
+    CaptureScope,
+    SourceCoverageMapping,
+    canonical_applicability_projection_sha256,
+    canonical_source_coverage_projection_sha256,
     evaluate_capture_manifest,
 )
-from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.data_quality import DataDomain
+from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
+from truealpha_contracts.data_quality import DataDomain, QualityStatus
 from truealpha_contracts.execution import (
+    FactorExecution,
+    FactorInvocationTemplate,
+    FactorKind,
     NormalizedRecordRef,
+    PolicyBinding,
+    PolicyRole,
+    RunnerInputSelection,
     SemanticDraft,
     SemanticProducerKind,
+    SnapshotCellSelection,
+    SnapshotDemandCell,
+    SnapshotManifest,
+    SnapshotRequest,
+    build_runner_input_selection,
 )
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.registries import RegistrySnapshot, SemanticTypeRegistryEntry, SourceRegistryEntry
+from truealpha_contracts.release import ReleaseManifest
 from truealpha_contracts.universe import SubjectKind, SubjectRef
+from truealpha_contracts.usage import DataRequirement, RequirementLevel
 
 E1_ASSET_NAME = "mvp_capture_tiny_e1_evidence"
 _TABLE = "mvp_capture_tiny_normalized_records"
@@ -294,7 +312,8 @@ class FrozenArtifactObservation(BaseModel):
     artifact_id: str
     semantic_type: str
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    valid_on: date
+    valid_from: date
+    valid_to: date
     knowable_at: datetime
 
 
@@ -405,11 +424,11 @@ def _artifact_registry(*, source: DataSource, semantic_type: str, domain: DataDo
         projector_implementation_sha256=_hash("frozen-artifact-projector"),
     )
     source_entry = SourceRegistryEntry(
-        source_id=f"source.fixture-{source.value}",
+        source_id=f"source.fixture-{source.value}-{semantic_type}",
         version="1.0.0",
-        adapter_id=f"batch:Fixture{source.value.title()}Adapter",
+        adapter_id=f"batch:Fixture{source.value.title()}-{semantic_type}Adapter",
         adapter_version="1.0.0",
-        normalizer_id="batch:FrozenArtifactNormalizer",
+        normalizer_id=f"batch:FrozenArtifact-{semantic_type}Normalizer",
         normalizer_version="1.0.0",
         supported_domains=(domain,),
         supported_type_ids=(type_entry.semantic_type_id,),
@@ -438,12 +457,24 @@ def _validate_artifact_body(artifact_id: str, body: bytes) -> None:
             raise ValueError("META listing-identity fixture semantics drifted")
 
 
+def _artifact_accepted_at(artifact: dict[str, Any]) -> datetime:
+    value = artifact.get("accepted_at")
+    source = artifact.get("acceptance_source")
+    if not isinstance(value, str) or not isinstance(source, str) or not source.startswith("https://data.sec.gov/"):
+        raise ValueError("SEC artifact acceptance evidence is missing")
+    accepted_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if accepted_at.tzinfo is None or accepted_at.utcoffset() is None:
+        raise ValueError("SEC artifact acceptance timestamp must be timezone-aware")
+    return accepted_at
+
+
 def _artifact_record(
     *,
     repository_root: Path,
     artifact: dict[str, Any],
     subject: SubjectRef,
-    valid_on: date,
+    valid_from: date,
+    valid_to: date,
     knowable_at: datetime,
     domain: DataDomain,
     ledger: FixtureRawLedger,
@@ -451,6 +482,8 @@ def _artifact_record(
     artifact_id = cast(str, artifact["artifact_id"])
     source = DataSource(cast(str, artifact["source"]))
     semantic_type = cast(str, artifact["semantic_type"])
+    if source is DataSource.SEC and knowable_at != _artifact_accepted_at(artifact):
+        raise ValueError("SEC artifact knowable_at differs from frozen acceptance evidence")
     body = _repository_path(repository_root, cast(str, artifact["path"])).read_bytes()
     _validate_artifact_body(artifact_id, body)
     registry = _artifact_registry(source=source, semantic_type=semantic_type, domain=domain)
@@ -472,7 +505,8 @@ def _artifact_record(
         artifact_id=artifact_id,
         semantic_type=semantic_type,
         content_sha256=cast(str, artifact["sha256"]),
-        valid_on=valid_on,
+        valid_from=valid_from,
+        valid_to=valid_to,
         knowable_at=knowable_at,
     )
     draft = SemanticDraft(
@@ -482,8 +516,8 @@ def _artifact_record(
         payload_schema_sha256=type_entry.schema_fingerprint_sha256,
         payload_sha256=canonical_sha256(observation.model_dump(mode="json")),
         subject=subject,
-        valid_from=valid_on,
-        valid_to=valid_on,
+        valid_from=valid_from,
+        valid_to=valid_to,
         knowable_at=knowable_at,
         produced_at=knowable_at + timedelta(minutes=1),
         producer_kind=SemanticProducerKind.DETERMINISTIC_NORMALIZER,
@@ -521,18 +555,18 @@ def _restatement_pair(
     registry = _filing_registry()
     original_meta = artifacts["plug-original-filing"]
     amended_meta = artifacts["plug-amended-filing"]
-    original_date = date(2021, 5, 14)
-    amended_date = date(2022, 3, 16)
+    original_accepted_at = _artifact_accepted_at(original_meta)
+    amended_accepted_at = _artifact_accepted_at(amended_meta)
     original = _filing_record(
         observation=FixtureFilingObservation(
             subject=subject,
             accession="0001558370-21-007147",
             form="10-K",
             content_sha256=original_meta["sha256"],
-            filing_date=original_date,
+            filing_date=original_accepted_at.date(),
         ),
         body=_repository_path(repository_root, original_meta["path"]).read_bytes(),
-        knowable_at=datetime.combine(original_date, time.min, UTC),
+        knowable_at=original_accepted_at,
         ledger=ledger,
         registry=registry,
     )
@@ -542,10 +576,10 @@ def _restatement_pair(
             accession="0001558370-22-003577",
             form="10-K/A",
             content_sha256=amended_meta["sha256"],
-            filing_date=amended_date,
+            filing_date=amended_accepted_at.date(),
         ),
         body=_repository_path(repository_root, amended_meta["path"]).read_bytes(),
-        knowable_at=datetime.combine(amended_date, time.min, UTC),
+        knowable_at=amended_accepted_at,
         ledger=ledger,
         registry=registry,
         supersedes=original,
@@ -642,6 +676,275 @@ def _base_probe(result: E0SliceResult) -> BoundaryProbe:
     )
 
 
+def _multi_capture_vertical(
+    *,
+    base: E0SliceResult,
+    records: tuple[NormalizedRecordRef, ...],
+) -> tuple[CaptureEvaluationReport, SnapshotManifest, RunnerInputSelection]:
+    record_by_type = {record.draft.semantic_type_id: record for record in records}
+    price = record_by_type["semantic.market-price"]
+    split = record_by_type["semantic.corporate-action"]
+    price_registry = _artifact_registry(
+        source=DataSource.YAHOO,
+        semantic_type="market-price",
+        domain=DataDomain.MARKET_PRICES,
+    )
+    split_registry = _artifact_registry(
+        source=DataSource.SEC,
+        semantic_type="corporate-action",
+        domain=DataDomain.CORPORATE_ACTIONS,
+    )
+    registry = RegistrySnapshot(
+        sources=(*base.registry.sources, *price_registry.sources, *split_registry.sources),
+        semantic_types=(
+            *base.registry.semantic_types,
+            *price_registry.semantic_types,
+            *split_registry.semantic_types,
+        ),
+        required_type_ids=tuple(record_by_type),
+    )
+    price_requirement = CaptureRequirement(
+        semantic_type_id=price.draft.semantic_type_id,
+        semantic_type_version=price.draft.semantic_type_version,
+        domain=DataDomain.MARKET_PRICES,
+        required_fields=("artifact_id", "content_sha256", "valid_from", "valid_to"),
+        subject_kinds=(SubjectKind.ISSUER,),
+        cadence=timedelta(days=1),
+        partition_rule_id="partition.price-history:v1",
+        freshness_policy_id="freshness.daily-price:v1",
+        maximum_age=timedelta(days=7),
+        quality_policy_ids=("quality.non-null:v1",),
+    )
+    split_requirement = CaptureRequirement(
+        semantic_type_id=split.draft.semantic_type_id,
+        semantic_type_version=split.draft.semantic_type_version,
+        domain=DataDomain.CORPORATE_ACTIONS,
+        required_fields=("artifact_id", "content_sha256", "valid_from", "valid_to"),
+        subject_kinds=(SubjectKind.ISSUER,),
+        cadence=timedelta(days=365),
+        partition_rule_id="partition.corporate-action:v1",
+        freshness_policy_id="freshness.corporate-action:v1",
+        maximum_age=timedelta(days=3650),
+        quality_policy_ids=("quality.non-null:v1",),
+    )
+    requirements = (base.capture_requirement, price_requirement, split_requirement)
+    data_requirements = (
+        base.data_requirement,
+        DataRequirement(
+            capture_requirement_id=price_requirement.capture_requirement_id,
+            semantic_type_id=price_requirement.semantic_type_id,
+            domain=price_requirement.domain,
+            metric="artifact_id",
+            subject_kinds=frozenset(price_requirement.subject_kinds),
+            level=RequirementLevel.REQUIRED,
+            lookback=timedelta(days=1096),
+            valid_period_rule_id=price_requirement.partition_rule_id,
+            maximum_age=price_requirement.maximum_age,
+            cadence=price_requirement.cadence,
+        ),
+        DataRequirement(
+            capture_requirement_id=split_requirement.capture_requirement_id,
+            semantic_type_id=split_requirement.semantic_type_id,
+            domain=split_requirement.domain,
+            metric="artifact_id",
+            subject_kinds=frozenset(split_requirement.subject_kinds),
+            level=RequirementLevel.REQUIRED,
+            lookback=timedelta(days=3650),
+            valid_period_rule_id=split_requirement.partition_rule_id,
+            maximum_age=split_requirement.maximum_age,
+            cadence=split_requirement.cadence,
+        ),
+    )
+    partitions = {requirement.capture_requirement_id: "nvda-e1-multi" for requirement in requirements}
+    applicability_rows: dict[Any, Any] = {}
+    source_coverage_rows: dict[Any, Any] = {}
+    coverage_entries: dict[str, str] = {}
+    for requirement in requirements:
+        partition = partitions[requirement.capture_requirement_id]
+        key = (
+            base.payload.subject.kind,
+            base.payload.subject.id,
+            requirement.domain,
+            partition,
+            requirement.capture_requirement_id,
+        )
+        applicability_rows[key] = ("required", CUTOFF - timedelta(days=1))
+        coverage_entry = "source-coverage-entry:" + _hash(f"e1-{requirement.semantic_type_id}-coverage")
+        coverage_entries[requirement.capture_requirement_id] = coverage_entry
+        source_coverage_rows[(CaptureEnvironment.GITHUB_CI, *key)] = (coverage_entry,)
+    applicability = cast(ApplicabilityMapping, applicability_rows)
+    source_coverage = cast(SourceCoverageMapping, source_coverage_rows)
+    scope = CaptureScope(
+        research_catalog_id="research-catalog:" + _hash("e1-multi-catalog"),
+        research_catalog_sha256=_hash("e1-multi-catalog"),
+        universe=base.scope.universe,
+        applicability_catalog_id="applicability:" + _hash("e1-multi-applicability"),
+        applicability_catalog_sha256=_hash("e1-multi-applicability"),
+        applicability_projection_sha256=canonical_applicability_projection_sha256(applicability),
+        source_coverage_catalog_id="source-coverage:" + _hash("e1-multi-source-coverage"),
+        source_coverage_catalog_sha256=_hash("e1-multi-source-coverage"),
+        source_coverage_projection_sha256=canonical_source_coverage_projection_sha256(source_coverage),
+        slo_catalog_id="module-slo:" + _hash("e1-multi-slo"),
+        slo_catalog_sha256=_hash("e1-multi-slo"),
+        source_registry_id=registry.source_registry_snapshot_id,
+        source_registry_sha256=registry.source_registry_sha256,
+        semantic_type_registry_id=registry.semantic_type_registry_snapshot_id,
+        semantic_type_registry_sha256=registry.semantic_type_registry_sha256,
+        requirements=requirements,
+        effective_at=CUTOFF - timedelta(days=1),
+        owner="batch-d0-mvp-capture-tiny-e1",
+    )
+    raw_by_sha256 = {entry.envelope.object.sha256: entry for entry in base.raw_ledger.entries}
+    cells = []
+    requirement_by_type = {requirement.semantic_type_id: requirement for requirement in requirements}
+    for record in records:
+        requirement = requirement_by_type[record.draft.semantic_type_id]
+        raw = raw_by_sha256[record.raw_object_sha256]
+        evidence = CaptureRecordEvidence(
+            source_coverage_entry_id=coverage_entries[requirement.capture_requirement_id],
+            raw_id=raw.raw_id,
+            raw_sha256=raw.envelope.object.sha256,
+            normalized_id=record.normalized_record_id,
+            semantic_type_id=requirement.semantic_type_id,
+            semantic_type_version=requirement.semantic_type_version,
+            populated_fields=requirement.required_fields,
+            knowable_at=record.draft.knowable_at,
+            recorded_at=record.recorded_at,
+            valid_from=datetime.combine(record.draft.valid_from, datetime.min.time(), UTC),
+            valid_to=datetime.combine(record.draft.valid_to, datetime.max.time(), UTC),
+            confidence=record.confidence,
+            mapping_version=record.mapping_version,
+            policy_versions={
+                requirement.freshness_policy_id: "v1",
+                requirement.partition_rule_id: "v1",
+            },
+            quality_check_ids=requirement.quality_policy_ids,
+            quality_status=QualityStatus.PASS,
+            lineage_sha256=record.content_sha256,
+        )
+        cells.append(
+            CaptureCell(
+                subject=base.payload.subject,
+                domain=requirement.domain,
+                partition_key=partitions[requirement.capture_requirement_id],
+                capture_requirement_id=requirement.capture_requirement_id,
+                applicability="required",
+                status="complete",
+                evidence=(evidence,),
+            )
+        )
+    manifest = CaptureManifest(
+        capture_scope_id=scope.capture_scope_id,
+        capture_scope_sha256=scope.content_sha256,
+        environment=CaptureEnvironment.GITHUB_CI,
+        research_catalog_id=scope.research_catalog_id,
+        research_catalog_sha256=scope.research_catalog_sha256,
+        applicability_catalog_id=scope.applicability_catalog_id,
+        applicability_catalog_sha256=scope.applicability_catalog_sha256,
+        source_coverage_catalog_id=scope.source_coverage_catalog_id,
+        source_coverage_catalog_sha256=scope.source_coverage_catalog_sha256,
+        slo_catalog_id=scope.slo_catalog_id,
+        slo_catalog_sha256=scope.slo_catalog_sha256,
+        source_registry_id=scope.source_registry_id,
+        source_registry_sha256=scope.source_registry_sha256,
+        semantic_type_registry_id=scope.semantic_type_registry_id,
+        semantic_type_registry_sha256=scope.semantic_type_registry_sha256,
+        partition_key="nvda-e1-multi",
+        as_of=CUTOFF,
+        started_at=CUTOFF,
+        cells=tuple(cells),
+        created_at=CUTOFF + timedelta(minutes=3),
+    )
+    evaluation = evaluate_capture_manifest(
+        scope,
+        manifest,
+        applicability_catalog_id=scope.applicability_catalog_id,
+        applicability_catalog_sha256=scope.applicability_catalog_sha256,
+        applicability=applicability,
+        source_coverage=source_coverage,
+        evaluated_at=manifest.created_at + timedelta(minutes=1),
+    )
+    demand_cells = tuple(
+        SnapshotDemandCell(
+            requirement_id=data_requirement.requirement_id,
+            capture_requirement_id=data_requirement.capture_requirement_id,
+            semantic_type_id=data_requirement.semantic_type_id,
+            semantic_type_version=requirement_by_type[data_requirement.semantic_type_id].semantic_type_version,
+            domain=data_requirement.domain,
+            subject=base.payload.subject,
+            partition_key=partitions[data_requirement.capture_requirement_id],
+            level=data_requirement.level,
+        )
+        for data_requirement in data_requirements
+    )
+    request = SnapshotRequest(
+        subjects=(base.payload.subject,),
+        as_of=CUTOFF + timedelta(minutes=3),
+        valid_on=base.payload.valid_to,
+        registry_snapshot_id=registry.registry_snapshot_id,
+        registry_snapshot_sha256=registry.content_sha256,
+        source_registry_id=registry.source_registry_snapshot_id,
+        source_registry_sha256=registry.source_registry_sha256,
+        semantic_type_registry_id=registry.semantic_type_registry_snapshot_id,
+        semantic_type_registry_sha256=registry.semantic_type_registry_sha256,
+        policy_bindings=tuple(
+            PolicyBinding(
+                role=role,
+                policy_id=f"policy.{role.value}",
+                policy_version="1.0.0",
+                implementation_sha256=_hash(f"policy-{role.value}"),
+            )
+            for role in PolicyRole
+            if role is not PolicyRole.MEMBERSHIP
+        ),
+        demand_cells=demand_cells,
+    )
+    record_by_type = {record.draft.semantic_type_id: record for record in records}
+    snapshot = SnapshotManifest(
+        request=request,
+        registry_snapshot=registry,
+        resolved_subjects=(base.payload.subject,),
+        normalized_records=records,
+        selections=tuple(
+            SnapshotCellSelection(
+                demand=demand,
+                normalized_record_ids=(record_by_type[demand.semantic_type_id].normalized_record_id,),
+            )
+            for demand in demand_cells
+        ),
+        resolved_at=request.as_of + timedelta(seconds=1),
+        resolver_id="batch:FixtureE1SnapshotResolver",
+        resolver_version="1.0.0",
+        resolver_implementation_sha256=_hash("e1-snapshot-resolver"),
+    )
+    template = FactorInvocationTemplate(
+        factor_id="mvp_capture_tiny_e1_probe",
+        factor_version="1.0.0",
+        factor_implementation_sha256=_hash("unregistered-e1-factor-probe"),
+        factor_kind=FactorKind.BASE,
+        parameter_model_key="batch:NoParameters",
+        parameter_schema_sha256=_hash("no-parameters-schema"),
+        canonical_parameters_sha256=_hash("no-parameters"),
+        data_requirement_ids=tuple(item.requirement_id for item in data_requirements),
+    )
+    execution = FactorExecution(
+        template=template,
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_sha256=snapshot.content_sha256,
+        ordered_subjects=(base.payload.subject,),
+        started_at=snapshot.resolved_at + timedelta(seconds=1),
+    )
+    selection = build_runner_input_selection(
+        execution=execution,
+        snapshot=snapshot,
+        selected_at=execution.started_at + timedelta(seconds=1),
+        runner_id="batch:FixtureE1Runner",
+        runner_version="1.0.0",
+        runner_implementation_sha256=_hash("fixture-e1-runner"),
+    )
+    return evaluation, snapshot, selection
+
+
 def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptureTinyEvidence:
     corpus, artifacts = _load_frozen_corpus(
         repository_root, Path("apps/data-engine/tests/fixtures/mvp_capture_tiny/corpus.v1.json")
@@ -661,19 +964,13 @@ def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptu
     )
     if duplicate or not selected:
         raise ValueError("Postgres idempotency or PIT selection failed")
-    postgres_snapshot, postgres_selection = _snapshot_and_selection(
-        registry=base.registry,
-        capture_requirement=base.capture_requirement,
-        data_requirement=base.data_requirement,
-        record=selected[0],
-        valid_on=base.payload.valid_to,
-    )
 
     price = _artifact_record(
         repository_root=repository_root,
         artifact=artifacts["nvda-daily-price"],
         subject=base.payload.subject,
-        valid_on=date(2026, 7, 10),
+        valid_from=date(2023, 7, 10),
+        valid_to=date(2026, 7, 10),
         knowable_at=datetime(2026, 7, 10, 20, 0, tzinfo=UTC),
         domain=DataDomain.MARKET_PRICES,
         ledger=base.raw_ledger,
@@ -682,8 +979,9 @@ def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptu
         repository_root=repository_root,
         artifact=artifacts["nvda-split-filing"],
         subject=base.payload.subject,
-        valid_on=date(2024, 6, 7),
-        knowable_at=datetime(2024, 6, 7, 20, 1, tzinfo=UTC),
+        valid_from=date(2024, 6, 7),
+        valid_to=CUTOFF.date(),
+        knowable_at=_artifact_accepted_at(artifacts["nvda-split-filing"]),
         domain=DataDomain.CORPORATE_ACTIONS,
         ledger=base.raw_ledger,
     )
@@ -697,6 +995,23 @@ def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptu
     persisted_nvda = repository.all_records(subject=base.payload.subject)
     persisted_nvda_ids = {record.normalized_record_id for record in persisted_nvda}
     raw_artifact_ids = {entry.envelope.source_record_id.removeprefix("fixture:") for entry in base.raw_ledger.entries}
+    fixture_evaluation, fixture_snapshot, fixture_selection = _multi_capture_vertical(
+        base=base,
+        records=tuple(nvda_records.values()),
+    )
+    postgres_records = tuple(
+        repository.select_pit(
+            subject=base.payload.subject,
+            semantic_type_id=record.draft.semantic_type_id,
+            as_of=fixture_snapshot.request.as_of,
+            valid_on=fixture_snapshot.request.valid_on,
+        )[0]
+        for record in nvda_records.values()
+    )
+    postgres_evaluation, postgres_snapshot, postgres_selection = _multi_capture_vertical(
+        base=base,
+        records=postgres_records,
+    )
 
     missing_raw = evaluate_evidence_variant(base, raw_id=None, raw_sha256=None)
     missing_normalized = evaluate_evidence_variant(base, normalized_id=None)
@@ -726,8 +1041,9 @@ def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptu
         repository_root=repository_root,
         artifact=artifacts["meta-symbol-change"],
         subject=meta_subject,
-        valid_on=date(2022, 6, 9),
-        knowable_at=datetime(2022, 5, 31, 12, 0, tzinfo=UTC),
+        valid_from=date(2022, 6, 9),
+        valid_to=CUTOFF.date(),
+        knowable_at=_artifact_accepted_at(artifacts["meta-symbol-change"]),
         domain=DataDomain.ENTITY_IDENTITY,
         ledger=meta_ledger,
     )
@@ -771,14 +1087,17 @@ def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptu
     cases = (
         E1CaseResult(
             case_id="applicable-success",
-            passed=base.capture_evaluation.ready
-            and base.snapshot.snapshot_id == postgres_snapshot.snapshot_id
-            and base.runner_selection.selection_id == postgres_selection.selection_id
+            passed=fixture_evaluation.ready
+            and postgres_evaluation.ready
+            and fixture_snapshot.snapshot_id == postgres_snapshot.snapshot_id
+            and fixture_selection.selection_id == postgres_selection.selection_id
+            and len(fixture_snapshot.selections) == len(expected_nvda_artifacts)
+            and len(fixture_selection.bindings) == len(expected_nvda_artifacts)
             and set(expected_nvda_artifacts) == set(nvda_records)
             and set(expected_nvda_artifacts) <= raw_artifact_ids
             and expected_nvda_ids <= persisted_nvda_ids,
             classification=FindingClass.NONE,
-            observed_ids=tuple(sorted(expected_nvda_ids | {base.snapshot.snapshot_id})),
+            observed_ids=tuple(sorted(expected_nvda_ids | {fixture_snapshot.snapshot_id})),
         ),
         E1CaseResult(
             case_id="missing-raw-evidence",
@@ -844,9 +1163,9 @@ def run_e1_suite(repository_root: Path, connection: Connection[Any]) -> MvpCaptu
     )
     evidence = MvpCaptureTinyEvidence(
         corpus_sha256=base.corpus_sha256,
-        fixture_snapshot_id=base.snapshot.snapshot_id,
+        fixture_snapshot_id=fixture_snapshot.snapshot_id,
         postgres_snapshot_id=postgres_snapshot.snapshot_id,
-        fixture_runner_selection_id=base.runner_selection.selection_id,
+        fixture_runner_selection_id=fixture_selection.selection_id,
         postgres_runner_selection_id=postgres_selection.selection_id,
         cases=cases,
         created_at=CUTOFF + timedelta(minutes=10),
@@ -888,7 +1207,10 @@ def build_e1_definitions(
     *,
     repository_root: Path,
     connection: Connection[Any],
+    release_manifest: ReleaseManifest | None = None,
 ) -> dg.Definitions:
+    if release_manifest is not None:
+        raise ValueError("the provisional E1 batch is not release-activated")
     return dg.Definitions(
         assets=[materialize_mvp_capture_tiny_e1],
         resources={

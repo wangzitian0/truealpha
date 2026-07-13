@@ -32,7 +32,7 @@ def result():
 
 
 def test_e0_executes_frozen_raw_to_runner_vertical_slice(result):
-    assert result.corpus_sha256 == "a36514fa9f0f4a7906879ae9a18569f294f2122babdde22dad2170a30d98abea"
+    assert result.corpus_sha256 == "82f92f5c65d8cbe9e5a26fb1182e0584de9a0bb4d51f879ed3ea41e522e98ef1"
     assert result.raw_entry.envelope.object.sha256 == hashlib.sha256(result.raw_capture.body).hexdigest()
     assert result.payload.metric == "gross_profit"
     assert result.payload.value.as_tuple().exponent == 0
@@ -42,6 +42,7 @@ def test_e0_executes_frozen_raw_to_runner_vertical_slice(result):
     assert result.record.confidence.as_tuple().exponent == -2
     assert result.record.confidence == Decimal("0.99")
     assert result.record.raw_object_id == result.raw_entry.raw_id
+    assert result.raw_capture.fetched_at <= result.record.draft.produced_at <= result.record.recorded_at
     assert result.capture_evaluation.ready
     assert result.capture_evaluation.blocking_reason_codes == ()
     assert result.snapshot.normalized_records == (result.record,)
