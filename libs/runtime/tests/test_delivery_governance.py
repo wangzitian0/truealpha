@@ -1226,6 +1226,38 @@ def test_new_batch_registration_rejects_implementation_state(mutation, expected)
     assert any(expected in error for error in validation.errors)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("activation", [], "cannot pin"),
+        ("owners", "unassigned", "cannot pre-assign"),
+    ],
+)
+def test_new_batch_registration_rejects_non_object_approval_sections(field, value, expected):
+    manifest = {
+        "revision": 1,
+        "status": "queued",
+        "last_accepted_rung": None,
+        "target_rung": "E0",
+        "activation": {"base_sha": None},
+        "owners": {"reviewer": None},
+    }
+    manifest[field] = value
+    validation = governance.Validation()
+
+    governance.validate_new_batch_registration(
+        validation,
+        batch_id="D1",
+        graph={"batches": {"D1": {"status": "queued", "target_rung": "E0"}}},
+        base_graph={"batches": {}},
+        manifest_path="governance/batches/D1.json",
+        manifest=manifest,
+        changed_paths=("governance/batches/D1.json", "governance/vision-issue-graph.json"),
+    )
+
+    assert any(expected in error for error in validation.errors)
+
+
 def test_new_batch_registration_rejects_implementation_files():
     validation = governance.Validation()
 
