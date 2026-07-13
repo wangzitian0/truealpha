@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "corpus_id": "d2-mvp-medium-validation-e0-v1",
+  "corpus_id": "d2-mvp-medium-validation-e1-v1",
   "source_ceiling": "Checked-in public fixture bytes only; no network, credentials, live source, Staging, or release activation.",
   "producer_handoff": {
     "path": "governance/handoffs/D1-mvp-normalization-handoff.v1.json",
@@ -17,12 +17,19 @@
     "universe_semantics": "candidate-unapproved-denominator-only-pending-issue-59",
     "source_rights_budget": "fixture-only-no-live-call-pending-issue-60",
     "confidence_policy": "reviewed-development-fixture-only",
-    "maximum_claim": "E0 typed Local/CI price slice; no stable semantic, live-source, Staging, factor, strategy, or release claim"
+    "maximum_claim": "E1 typed Local/CI timing and revision evidence; no stable handoff, shared-schema, live-source, Staging, factor, strategy, or release claim"
   },
   "rung_scope": {
-    "frozen_target_rung": "E0",
+    "frozen_target_rung": "E1",
     "executable_cases": [
-      "nvda-price-2026-03-31"
+      "nvda-price-2026-03-31",
+      "d0-cross-domain-regression",
+      "e0-price-changed-vintage",
+      "jpm-dividend-lifecycle",
+      "nvda-split-lifecycle",
+      "plug-financial-filing-restatement",
+      "qqq-membership-vintages",
+      "schema-registry-provenance"
     ],
     "terminal_denominator_frozen": false,
     "revision_rule": "Any corpus expansion for E1-E3 creates a prospective revision and reruns every previously accepted D2 rung."
@@ -85,6 +92,99 @@
       "git_blob": "1aef8a3d164e9ee06c30193faf393b25c4af2b85",
       "state": "candidate_unapproved",
       "semantic_type": "denominator-context"
+    },
+    {
+      "artifact_id": "strategy-coverage",
+      "path": "apps/data-engine/samples/strategy_coverage.json",
+      "sha256": "fd7d79e705ea7a1fa1700f57d3ca03f021642e5b7286e2b9d32ac299a6966df9",
+      "byte_length": 11043,
+      "semantic_type": "reviewed-fixture-evidence-map"
+    },
+    {
+      "artifact_id": "d0-e1-corpus",
+      "path": "apps/data-engine/tests/fixtures/mvp_capture_tiny/corpus.v1.json",
+      "sha256": "82f92f5c65d8cbe9e5a26fb1182e0584de9a0bb4d51f879ed3ea41e522e98ef1",
+      "byte_length": 5436,
+      "semantic_type": "accepted-tiny-regression-corpus"
+    },
+    {
+      "artifact_id": "plug-company-facts",
+      "path": "apps/data-engine/samples/sec/PLUG_CIK0001093691.json",
+      "sha256": "f146df6c39754bb1c73e6edefa34724c14e342ab3176ffd5cf0c9e6e40e8e58a",
+      "byte_length": 3158775,
+      "source": "sec",
+      "semantic_type": "financial-fact"
+    },
+    {
+      "artifact_id": "plug-original-filing",
+      "path": "apps/data-engine/samples/filings/PLUG_10K_000155837021007147.html",
+      "sha256": "fbe9fe64c7583f3f0b391396e9015a8787e58c8f3decb55292707c5ac6d0c9ed",
+      "byte_length": 11443176,
+      "source": "sec",
+      "semantic_type": "filing-document",
+      "accepted_at": "2021-05-14T10:20:25Z"
+    },
+    {
+      "artifact_id": "plug-amended-filing",
+      "path": "apps/data-engine/samples/filings/PLUG_10KA_000155837022003577.html",
+      "sha256": "985468e206ba380f7b413c76227bb3cd759b48eef49f7ff943839776383b551f",
+      "byte_length": 13639875,
+      "source": "sec",
+      "semantic_type": "filing-document",
+      "accepted_at": "2022-03-14T21:30:04Z",
+      "supersedes_artifact_id": "plug-original-filing"
+    },
+    {
+      "artifact_id": "nvda-split-events",
+      "path": "apps/data-engine/samples/events/NVDA_YAHOO_EVENTS_20240501_20240701.json",
+      "sha256": "72a6b196ea744458f5f8280212e69d613d919bb4e70584a7e68e35936de3b947",
+      "byte_length": 5794,
+      "source": "yahoo",
+      "semantic_type": "corporate-action-corroboration"
+    },
+    {
+      "artifact_id": "jpm-dividend-statement",
+      "path": "apps/data-engine/samples/events/JPM_DIVIDEND_20250519.json",
+      "sha256": "e653beff80eb61b525fb9f12c251cf26ea100fdf3741557d58e6e64340a93d4e",
+      "byte_length": 494,
+      "source": "jpmorgan_investor_relations",
+      "semantic_type": "corporate-action"
+    },
+    {
+      "artifact_id": "jpm-dividend-events",
+      "path": "apps/data-engine/samples/events/JPM_YAHOO_EVENTS_20250501_20250810.json",
+      "sha256": "ef184a85b26099b103a0a8968ee1719e4e60f55f9ab39322d07eccad2ee3a46c",
+      "byte_length": 8445,
+      "source": "yahoo",
+      "semantic_type": "corporate-action-corroboration"
+    },
+    {
+      "artifact_id": "jpm-daily-prices",
+      "path": "apps/data-engine/samples/prices/JPM_prices_3y_20260712.csv",
+      "sha256": "0e1ede6888ca5808df8876acad488a40606f4c65c4b575200519b2dfd3434479",
+      "byte_length": 81039,
+      "source": "yahoo",
+      "semantic_type": "market-price"
+    },
+    {
+      "artifact_id": "qqq-membership-2025q4",
+      "path": "apps/data-engine/samples/nport/QQQ_NPORT_000106783926000016.xml",
+      "sha256": "9ea743d80b511852c238f9b4281a35f7db5f61d19f2fbd8a43cc0b921d0a3079",
+      "byte_length": 109556,
+      "source": "sec",
+      "semantic_type": "universe-membership",
+      "accepted_at": "2026-02-27T17:04:18Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001067839.json"
+    },
+    {
+      "artifact_id": "qqq-membership-2026q1",
+      "path": "apps/data-engine/samples/nport/QQQ_NPORT_000106783926000024.xml",
+      "sha256": "9ecd92e1b08e558378ecd01f05b82d36d6caf6031138a2a01c040dbc9f5fbbbd",
+      "byte_length": 111284,
+      "source": "sec",
+      "semantic_type": "universe-membership",
+      "accepted_at": "2026-05-28T10:53:06Z",
+      "acceptance_source": "https://data.sec.gov/submissions/CIK0001067839.json"
     }
   ],
   "cases": [
@@ -212,18 +312,18 @@
         },
         "registry_contract": {
           "parent_registry_snapshot_id": "registry-snapshot:cab282910fc261be126da4ca2e3622decea39a321ff162072b57778d874f5c03",
-          "registry_snapshot_id": "registry-snapshot:9ef6e76e4bacb52ed70cac72f68566d3e509f02d79e46f283453894c597a17d2",
-          "registry_snapshot_sha256": "9ef6e76e4bacb52ed70cac72f68566d3e509f02d79e46f283453894c597a17d2",
-          "source_registry_id": "source-registry:e07e80bc7d659c05ecb98308ac9d7c8d11e55addbc7e0291948acb7f0d205b70",
-          "source_registry_sha256": "e07e80bc7d659c05ecb98308ac9d7c8d11e55addbc7e0291948acb7f0d205b70",
-          "semantic_type_registry_id": "semantic-type-registry:ccbcf9b704414e2ef0c4ec7b6e5c09d7b32d27843c240eea63f8e61f4d309cd7",
-          "semantic_type_registry_sha256": "ccbcf9b704414e2ef0c4ec7b6e5c09d7b32d27843c240eea63f8e61f4d309cd7",
-          "source_entry_id": "source-registry-entry:d87daeab40ce148ebd92ecca8170b387ea3bc5c0dac04aeb6e0855e9caab4d81",
-          "source_entry_sha256": "d87daeab40ce148ebd92ecca8170b387ea3bc5c0dac04aeb6e0855e9caab4d81",
-          "semantic_type_entry_id": "semantic-type-registry-entry:4ff82be2532dedea936153d67bbc6798be61b5cbe956c6f27777c5735563c025",
-          "semantic_type_entry_sha256": "4ff82be2532dedea936153d67bbc6798be61b5cbe956c6f27777c5735563c025",
+          "registry_snapshot_id": "registry-snapshot:d9ed216d31a91398d1762ffcf91b836b18b24b1d84ba525d931dfccdf9cef3c8",
+          "registry_snapshot_sha256": "d9ed216d31a91398d1762ffcf91b836b18b24b1d84ba525d931dfccdf9cef3c8",
+          "source_registry_id": "source-registry:38ac02f07014034e2417cb208f850d332dc84e03cc2ff8a01e587e09b03f60ae",
+          "source_registry_sha256": "38ac02f07014034e2417cb208f850d332dc84e03cc2ff8a01e587e09b03f60ae",
+          "semantic_type_registry_id": "semantic-type-registry:1330dd143f5b27ec96cf6fe1e374b6c6b998da0e98dc8672efd6e4e2b6340de1",
+          "semantic_type_registry_sha256": "1330dd143f5b27ec96cf6fe1e374b6c6b998da0e98dc8672efd6e4e2b6340de1",
+          "source_entry_id": "source-registry-entry:82fb7d4dc6574134dcf30f0332f4c3529c6a39c816e4eab98065e35c75eed8a1",
+          "source_entry_sha256": "82fb7d4dc6574134dcf30f0332f4c3529c6a39c816e4eab98065e35c75eed8a1",
+          "semantic_type_entry_id": "semantic-type-registry-entry:25d630ba89f7067083894192718a0b08174d9f00d6c293d1c4056c24eeeb59a9",
+          "semantic_type_entry_sha256": "25d630ba89f7067083894192718a0b08174d9f00d6c293d1c4056c24eeeb59a9",
           "payload_schema_sha256": "aa96d53b05e0623b991842d2c67d2cf22af6df66e6f35d3d8d41f25dc6387bfc",
-          "implementation_sha256": "e31276c10531d1b67476d56903ae0b889b20df0f873a6c94f4213322a5b5aa45"
+          "implementation_sha256": "f67ec9c9b851dffd28bad77fe947cb813613b2108a16e79e3d458060da5d0ae9"
         },
         "factor_projection_fields": [
           "subject",
@@ -237,6 +337,139 @@
       }
     }
   ],
+  "e1_cases": [
+    {
+      "case_id": "d0-cross-domain-regression",
+      "artifact_ids": [
+        "d0-e1-corpus"
+      ],
+      "expected": {
+        "case_count": 8,
+        "fixture_postgres_parity": true,
+        "reordered_and_repeated_idempotent": true,
+        "registry_routed": true
+      }
+    },
+    {
+      "case_id": "e0-price-changed-vintage",
+      "artifact_ids": [
+        "nvda-daily-prices"
+      ],
+      "correction": {
+        "source_row": "2026-03-31,166.97000122070312,174.6199951171875,166.9600067138672,174.51000000000000,174.30685974121094,226181300",
+        "derived_sha256": "ef044df5f0cb6dad00a343068920b5fec700b2f09b35f85cd260d2ffa499886a",
+        "knowable_at": "2026-07-12T19:04:54.803220Z",
+        "produced_at": "2026-07-12T19:04:55.803220Z",
+        "recorded_at": "2026-07-12T19:04:56.803220Z"
+      },
+      "expected": {
+        "raw_row_reparsed": true,
+        "interrupted_transaction_rollback": true,
+        "retry_idempotent": true,
+        "prior_vintage_retained": true,
+        "pit_cutover_at_correction": true
+      }
+    },
+    {
+      "case_id": "jpm-dividend-lifecycle",
+      "artifact_ids": [
+        "jpm-dividend-statement",
+        "jpm-dividend-events",
+        "jpm-daily-prices"
+      ],
+      "expected": {
+        "date_to_clock_policy": "end-of-publication-date-utc",
+        "knowable_at": "2025-05-19T23:59:59Z",
+        "ex_at": "2025-07-03T13:30:00Z",
+        "record_at": "2025-07-03T23:59:59Z",
+        "pay_at": "2025-07-31T23:59:59Z",
+        "recorded_at": "2026-07-11T19:04:54.803220Z",
+        "session_close_at": "2025-07-03T17:00:00Z",
+        "price_observed_at": "2026-07-11T19:04:54.803220Z",
+        "amount_per_share": "1.40",
+        "currency": "USD"
+      }
+    },
+    {
+      "case_id": "nvda-split-lifecycle",
+      "artifact_ids": [
+        "nvda-listing-identity",
+        "nvda-split-events",
+        "nvda-daily-prices"
+      ],
+      "expected": {
+        "ratio": "10:1",
+        "knowable_at": "2024-06-07T20:19:34Z",
+        "effective_at": "2024-06-07T20:01:00Z",
+        "ex_at": "2024-06-10T13:30:00Z"
+      }
+    },
+    {
+      "case_id": "plug-financial-filing-restatement",
+      "artifact_ids": [
+        "plug-company-facts",
+        "plug-original-filing",
+        "plug-amended-filing"
+      ],
+      "expected": {
+        "accessions": [
+          "0001558370-21-007147",
+          "0001558370-22-003577"
+        ],
+        "original_value": "102000",
+        "amended_value": "102000000",
+        "original_knowable_at": "2021-05-14T10:20:25Z",
+        "amended_knowable_at": "2022-03-14T21:30:04Z",
+        "recorded_at": "2026-07-11T19:04:54.803220Z"
+      }
+    },
+    {
+      "case_id": "qqq-membership-vintages",
+      "artifact_ids": [
+        "qqq-membership-2025q4",
+        "qqq-membership-2026q1"
+      ],
+      "expected": {
+        "first_report_date": "2025-12-31",
+        "first_knowable_at": "2026-02-27T17:04:18Z",
+        "second_report_date": "2026-03-31",
+        "second_knowable_at": "2026-05-28T10:53:06Z",
+        "removed_name": "AstraZeneca PLC",
+        "added_name": "Walmart Inc."
+      }
+    },
+    {
+      "case_id": "schema-registry-provenance",
+      "artifact_ids": [
+        "strategy-coverage"
+      ],
+      "expected": {
+        "schema_drift": "reject",
+        "unknown_type": "reject",
+        "factor_provenance": "exclude"
+      }
+    }
+  ],
+  "schema_contract": {
+    "corporate-action": "abdd808ab15593b7e75ee7331f3d9fc1527b11560204a0f78157f1327b2241aa",
+    "financial-fact": "26face04e8b7d7225ecfc675ed5403030592846ba1ecd1f09eb475326bdfca02",
+    "market-price": "aa96d53b05e0623b991842d2c67d2cf22af6df66e6f35d3d8d41f25dc6387bfc",
+    "provenance-neutral-input": "077bc607fa7c8f6cb5cf3563d331bccde0e0349b782a8a7cff898b8b5942e2b7",
+    "universe-membership": "e768e3b2ed9b8cbc2c57f85f3a4625181b8e3f86ca5e7e73bf188f627e5d0a0c"
+  },
+  "factor_projection_fields": [
+    "subject",
+    "payload_model_key",
+    "payload_sha256",
+    "valid_from",
+    "valid_to",
+    "confidence",
+    "as_of"
+  ],
+  "e1_evidence": {
+    "created_at": "2026-07-13T12:00:00Z",
+    "stable_handoff": false
+  },
   "mutation_matrix": [
     {
       "mutation": "missing-confidence-identity-lineage-policy-or-pit-time",
