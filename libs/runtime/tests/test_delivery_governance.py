@@ -1397,6 +1397,9 @@ def test_prepared_batch_status_mirrors_as_queued_until_merge():
 
 def test_workflow_authorizes_every_pull_request_against_exact_head():
     workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
+    python_workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-python.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert "pull_request:\n" in workflow
     assert "--pr-base-sha" in workflow
@@ -1407,3 +1410,4 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     assert "--execute-acceptance" in workflow
     assert "render_batch_issue_body" in workflow
     assert 'json.dumps({"body": desired_body, "labels": desired})' in workflow
+    assert "fetch-depth: 0" in python_workflow

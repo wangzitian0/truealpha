@@ -143,6 +143,20 @@ def test_checked_in_candidate_is_valid_but_blocked(candidate_root):
     assert len(result.blockers) == 4
 
 
+def test_candidate_control_snapshot_rejects_shallow_git_history(candidate_root, monkeypatch):
+    original_git_bytes = gate0._git_bytes
+
+    def shallow_git_bytes(root, *args):
+        if args == ("rev-parse", "--is-shallow-repository"):
+            return b"true\n"
+        return original_git_bytes(root, *args)
+
+    monkeypatch.setattr(gate0, "_git_bytes", shallow_git_bytes)
+
+    with pytest.raises(ValueError, match="requires full Git history"):
+        gate0.candidate_control_snapshot_bytes(candidate_root, gate0.EXPECTED_MANIFEST_PATHS)
+
+
 def test_require_accepted_rejects_valid_blocked_candidate(candidate_root):
     result = _validate(candidate_root, require_accepted=True)
 

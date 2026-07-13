@@ -474,6 +474,8 @@ def candidate_control_snapshot_bytes(
 
     if not (root / ".git").exists():
         return {}
+    if _git_bytes(root, "rev-parse", "--is-shallow-repository").decode().strip() == "true":
+        raise ValueError("Gate 0 candidate validation requires full Git history")
     manifest_relative = manifest_path.as_posix()
     snapshot = _git_bytes(root, "log", "-1", "--format=%H", "--", manifest_relative).decode().strip()
     if GIT_SHA_RE.fullmatch(snapshot) is None:

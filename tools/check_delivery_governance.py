@@ -29,7 +29,11 @@ validate_gate0_candidate = gate0_validator.validate_gate0_candidate
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH_PATH = ROOT / "governance" / "vision-issue-graph.json"
 GATE0_MANIFEST_PATH = "governance/gate0/manifest-v4.json"
-GATE0_AUTHORIZATION_CONTROL_PATHS = gate0_validator.CANDIDATE_CONTROL_PATHS
+# ci-python executes the candidate-validation tests and must retain the history
+# required to resolve their immutable control snapshot.
+GATE0_AUTHORIZATION_CONTROL_PATHS = gate0_validator.CANDIDATE_CONTROL_PATHS | frozenset(
+    {".github/workflows/ci-python.yml"}
+)
 RUNGS = ("E0", "E1", "E2", "E3", "E4", "E5")
 RUNG_LABELS = {
     "E0": "code",
