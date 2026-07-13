@@ -34,6 +34,8 @@ GIT_REF_RE = re.compile(r"^git:([0-9a-f]{40}):(.+)$")
 EVIDENCE_ID_RE = re.compile(r"^capability-evidence:issue-[0-9]+:v[0-9]+$")
 PATH_PATTERN_RE = re.compile(r"^[^*?\[\]]+(?:/\*\*)?$")
 MANIFEST_PREFIX = "governance/batches/"
+BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
+BATCH_MIRROR_END = "<!-- capability-batch-mirror:end -->"
 GOVERNANCE_CONTROL_PATHS = (
     ".github/workflows/ci-governance.yml",
     "governance/**",
@@ -222,6 +224,36 @@ def requires_integration_lease(path: str) -> bool:
         or "generated" in parts
         or name.endswith((".lock", ".lockb"))
     )
+
+
+def batch_status_labels(batch: dict[str, Any]) -> set[str]:
+    status = "queued" if batch.get("status") == "prepared" else batch.get("status")
+    target_rung = batch.get("target_rung")
+    if not isinstance(target_rung, str) or target_rung not in RUNG_LABELS:
+        raise ValueError(f"invalid batch target rung: {target_rung!r}")
+    desired = {f"batch:{status}", f"rung:{RUNG_LABELS[target_rung]}"}
+    if target_rung in {"E0", "E1"}:
+        desired.add("readiness:provisional")
+    return desired
+
+
+def render_batch_issue_body(body: str, batch_id: str, batch: dict[str, Any]) -> str:
+    block = "\n".join(
+        (
+            BATCH_MIRROR_START,
+            f"Batch: `{batch_id}`",
+            f"Manifest: `{batch['manifest']}`",
+            f"sha256:{batch['sha256']}",
+            f"Canonical status: `{batch['status']}`",
+            f"Target rung: `{batch['target_rung']}`",
+            BATCH_MIRROR_END,
+        )
+    )
+    pattern = re.compile(f"{re.escape(BATCH_MIRROR_START)}.*?{re.escape(BATCH_MIRROR_END)}", re.DOTALL)
+    if pattern.search(body):
+        return pattern.sub(block, body).rstrip() + "\n"
+    prefix = body.rstrip()
+    return f"{prefix}\n\n{block}\n" if prefix else f"{block}\n"
 
 
 def labels(issue: dict[str, Any]) -> set[str]:
