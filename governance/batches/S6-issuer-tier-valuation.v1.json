@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S6-issuer-tier-valuation",
-  "revision": 3,
+  "revision": 4,
   "issue": 169,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Compose one deterministic provisional issuer tier and valuation gap from a provenance-neutral GPPE observation and the accepted S5 computed P/S result.",
-  "claim_ceiling": "accepted E0 isolated tier and valuation-gap kernel pending E1 frozen-corpus evidence; no approved product semantics, GPPE computation, financial mapping, stable handoff, ranking, strategy, replay, or release-readiness claim",
+  "claim_ceiling": "E1 frozen-corpus issuer tier and valuation-gap evidence only; no approved product semantics, GPPE computation, financial mapping, stable handoff, ranking, strategy, replay, or release-readiness claim",
   "capability_issues": [25],
   "closes_issues": [],
   "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 150, 155, 161],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "08a8f02aa2f51429150b3ec1a094972d617b8f19",
+    "base_sha": "ac026ce2e3453ddbfff4cfc4394cf6f6aaa83223",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S6 registration is merged to main",
@@ -149,7 +149,7 @@
     "output": {
       "type": "IssuerTierValuationTinyEvidence",
       "stable_handoff": false,
-      "state": "accepted_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "issue #25 valuation candidate batch",
         "issue #71 independent Core holdout preparation",
