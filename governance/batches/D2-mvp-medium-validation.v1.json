@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 5,
+  "revision": 6,
   "issue": 121,
   "owner_gate": 29,
-  "status": "blocked",
+  "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": "E1",
-  "target_rung": "E2",
+  "last_accepted_rung": "E2",
+  "target_rung": "E3",
   "terminal_rung": "E3",
   "objective": "Complete issue #23 by validating the MVP raw, normalized, snapshot, and Dagster data path on the exact TOPT medium denominator.",
   "claim_ceiling": "E3 representative Local/CI TOPT data-plane candidate; no live-source, Staging, factor, strategy, or release claim",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "45ff014e6881198b6d078e33f080d2a09adb18e0",
+    "base_sha": "1f6c80588cf0e7f3921e0480672968fde16aad0b",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -173,7 +173,22 @@
     "output": {
       "type": "MvpMediumValidationHandoff",
       "stable_handoff": true,
-      "state": "planned",
+      "state": "accepted",
+      "handoff_id": "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
+      "sha256": "e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
+      "schema_epoch": "staging.mvp-medium-domains.v1+0019+0021",
+      "registry_snapshot_id": "registry-snapshot:77d61c305dc6f12b128518e6cfa5effc03f109ae5d0c25d9473e0a52df29f282",
+      "migration_set_sha256": "054ad9a5ff4b645d01d30fca83145644ce09c3419484d646776c6adda22272f6",
+      "normalized_record_count": 213,
+      "snapshot_count": 5,
+      "rung_evidence": {
+        "path": "governance/evidence/D2-mvp-medium-validation-E2.v1.json",
+        "sha256": "7540a5df13253a0766a1e6f1ebe013ea7c948498bb601857ad48fa70816b8cad"
+      },
+      "handoff_manifest": {
+        "path": "governance/handoffs/D2-mvp-medium-validation.v1.json",
+        "sha256": "0031707dbdf97b1a5d45a4ebafa5f1029bf8567e157e3d12f1ecde26b73390bb"
+      },
       "allowed_evidence_readers": [
         "#70 terminal headcount extraction batch",
         "#26 Local Core integration batch",

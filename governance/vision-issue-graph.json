@@ -147,11 +147,11 @@
     "D2-mvp-medium-validation": {
       "issue": 121,
       "owner_gate": 29,
-      "status": "blocked",
-      "target_rung": "E2",
+      "status": "active",
+      "target_rung": "E3",
       "terminal_rung": "E3",
       "manifest": "governance/batches/D2-mvp-medium-validation.v1.json",
-      "sha256": "d36894956df3bb5357aaf697bf8a42585a63008f095ee2ad81666da6c9418e81"
+      "sha256": "86ddc9479643211c52ded53bbf87e642f32a371a4e8c0a577bfb5b6d98a9dd04"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,
