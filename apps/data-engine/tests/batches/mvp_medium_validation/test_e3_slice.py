@@ -847,18 +847,21 @@ def test_e3_rejects_staging_release_and_wrong_handoff_activation(connection) -> 
 def test_e3_terminal_governance_binds_the_complete_issue_23_matrix() -> None:
     manifest_path = REPOSITORY_ROOT / "governance/batches/D2-mvp-medium-validation.v1.json"
     evidence_path = REPOSITORY_ROOT / "governance/evidence/D2-mvp-medium-validation-E3.v1.json"
+    issue_evidence_path = REPOSITORY_ROOT / "governance/evidence/issue-23.v1.json"
     manifest_bytes = manifest_path.read_bytes()
     evidence_bytes = evidence_path.read_bytes()
+    issue_evidence_bytes = issue_evidence_path.read_bytes()
     manifest = json.loads(manifest_bytes)
     evidence = json.loads(evidence_bytes)
+    issue_evidence = json.loads(issue_evidence_bytes)
     graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
     output = manifest["acceptance"]["output"]
 
-    assert manifest["revision"] == 13
+    assert manifest["revision"] == 14
     assert manifest["status"] == "done"
     assert manifest["last_accepted_rung"] == manifest["target_rung"] == manifest["terminal_rung"] == "E3"
     assert manifest["capability_issues"] == manifest["closes_issues"] == [23]
-    assert manifest["activation"]["base_sha"] == "6ae46c2f571fd97ddbed18f7d279d1f4653e5608"
+    assert manifest["activation"]["base_sha"] == "1d6d59bb7708c1de3913dd91b6949d6697d2452a"
 
     assert output["type"] == "D2E3Evidence"
     assert output["stable_handoff"] is False
@@ -920,4 +923,12 @@ def test_e3_terminal_governance_binds_the_complete_issue_23_matrix() -> None:
     assert graph_entry["status"] == "done"
     assert graph_entry["target_rung"] == "E3"
     assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
-    assert "accepted_evidence" not in graph["issues"]["23"]
+    assert graph["issues"]["23"]["accepted_evidence"] == {
+        "path": "governance/evidence/issue-23.v1.json",
+        "sha256": hashlib.sha256(issue_evidence_bytes).hexdigest(),
+    }
+    assert issue_evidence["issue"] == 23
+    assert issue_evidence["state"] == "accepted"
+    assert issue_evidence["accepted_rung"] == "E3"
+    assert issue_evidence["source_pr"] == 167
+    assert issue_evidence["producer_commit"] == "68af3a6507bbb0a43905a1a1a63df3c41b6b996e"
