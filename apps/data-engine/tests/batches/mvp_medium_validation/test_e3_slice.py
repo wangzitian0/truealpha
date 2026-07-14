@@ -920,4 +920,17 @@ def test_e3_terminal_governance_binds_the_complete_issue_23_matrix() -> None:
     assert graph_entry["status"] == "done"
     assert graph_entry["target_rung"] == "E3"
     assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
-    assert "accepted_evidence" not in graph["issues"]["23"]
+
+    accepted_evidence = graph["issues"]["23"]["accepted_evidence"]
+    assert accepted_evidence == {
+        "path": "governance/evidence/issue-23.v1.json",
+        "sha256": "9066cc06367a42ae92f4d69e008cc411ec008705edd52068861763056af98547",
+    }
+    capability_evidence_bytes = (REPOSITORY_ROOT / accepted_evidence["path"]).read_bytes()
+    assert hashlib.sha256(capability_evidence_bytes).hexdigest() == accepted_evidence["sha256"]
+    capability_evidence = json.loads(capability_evidence_bytes)
+    assert capability_evidence["issue"] == 23
+    assert capability_evidence["state"] == "accepted"
+    assert capability_evidence["accepted_rung"] == "E3"
+    assert capability_evidence["producer_commit"] == "68af3a6507bbb0a43905a1a1a63df3c41b6b996e"
+    assert capability_evidence["source_pr"] == 167
