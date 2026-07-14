@@ -1,0 +1,341 @@
+{
+  "schema_version": 1,
+  "corpus_id": "s8-qlib-factor-expression-corpus-v1",
+  "batch_id": "S8-qlib-factor-expression",
+  "claim_ceiling": "preparation-only safe typed-expression oracle for pinned Qlib 0.9.7; this corpus earns no rung and approves no product factor, real input, provider, replay, persistence, or release claim",
+  "contract_refs": {
+    "s2_terminal_manifest": {
+      "path": "governance/batches/S2-core-strategy-contract.v1.json",
+      "sha256": "2908f2a33c358c3c349f4e3ec41b1c83e7d4f78345a4629d29ae53d1539fb127",
+      "state": "accepted"
+    },
+    "s7_terminal_manifest": {
+      "path": "governance/batches/S7-issuer-strategy-selection.v1.json",
+      "sha256": "730cf2419dc7795d920998c6d57846c6878bf44c650ec16dadf2e85dc3921bf1",
+      "state": "accepted"
+    }
+  },
+  "engine_binding": {
+    "distribution": "pyqlib",
+    "version": "0.9.7",
+    "release_commit": "da920b7f954f48ab1bb64117c976710de198373e",
+    "runtime_project_path": "libs/factors/qlib-runtime/pyproject.toml",
+    "runtime_project_sha256": "2798224979aedffaacc5e31a6d5e571e0856b353debfa216ae8d32fdc0a0bf23",
+    "runtime_lock_path": "libs/factors/qlib-runtime/uv.lock",
+    "runtime_lock_sha256": "24068139dbc0e18e73e73f416d4a51695daf0fcffe067e69c3fddfcf7316c6d0",
+    "qlib_expression_source": "qlib/data/data.py@da920b7f954f48ab1bb64117c976710de198373e",
+    "expression_input": "compiler_output_only"
+  },
+  "limits": {
+    "maximum_ast_depth": 8,
+    "maximum_ast_nodes": 64,
+    "maximum_lookback_sessions": 252,
+    "maximum_feature_bindings": 32
+  },
+  "identifier_grammar": {
+    "contract_id": "^[a-z][a-z0-9._-]{0,127}$",
+    "qlib_field_name": "^[a-z][a-z0-9_]{0,62}$",
+    "compiler_adds_field_sigil": true
+  },
+  "canonicalization": {
+    "json": "UTF-8 JSON with sorted object keys, compact separators, and ASCII escaping",
+    "decimal": "finite normalized base-10 string without exponent or trailing fractional zeroes; negative zero becomes zero",
+    "operator_order": "operator_id ascending",
+    "feature_binding_order": "feature_binding_id ascending",
+    "required_feature_binding_order": "feature_binding_id ascending",
+    "expression_semantic_identity_excludes": [
+      "compiled_qlib_field",
+      "qlib_distribution_artifact_sha256",
+      "adapter_implementation_sha256"
+    ],
+    "execution_identity_includes": [
+      "expression_semantic_sha256",
+      "compiled_qlib_field",
+      "qlib_distribution_artifact_sha256",
+      "adapter_implementation_sha256"
+    ]
+  },
+  "operator_registry": {
+    "registry_version": "1.0.0",
+    "builtin_only": true,
+    "operators": [
+      {
+        "operator_id": "truealpha.qlib.add.v1",
+        "qlib_symbol": "Add",
+        "argument_kinds": ["expression", "expression"],
+        "null_behavior": "pandas_ieee",
+        "lookback_rule": "maximum_child",
+        "semantic_spec": "truealpha.qlib.add.v1|Add|expression,expression|pandas_ieee|lookback=max(children)",
+        "semantic_spec_sha256": "8d3ef188113badc0361f2f544a18596b8763e90f7585e3ee8b962a5921e75721"
+      },
+      {
+        "operator_id": "truealpha.qlib.div.v1",
+        "qlib_symbol": "Div",
+        "argument_kinds": ["expression", "expression"],
+        "null_behavior": "pandas_ieee",
+        "lookback_rule": "maximum_child",
+        "semantic_spec": "truealpha.qlib.div.v1|Div|expression,expression|pandas_ieee|lookback=max(children)",
+        "semantic_spec_sha256": "0cfc9fb5fab5e83c7b09127d0cf4a2cd14d0f854a8792a0e7f874cb88b3750d8"
+      },
+      {
+        "operator_id": "truealpha.qlib.mean.v1",
+        "qlib_symbol": "Mean",
+        "argument_kinds": ["expression", "positive_integer"],
+        "null_behavior": "skip_null_min_periods_one",
+        "lookback_rule": "child_plus_window_minus_one",
+        "semantic_spec": "truealpha.qlib.mean.v1|Mean|expression,positive_integer|skip_null_min_periods_one|lookback=child+n-1",
+        "semantic_spec_sha256": "4d81180667c2df7bd1937f2862be9b74310d8f34a8f955289eeba257a94f5d41"
+      },
+      {
+        "operator_id": "truealpha.qlib.mul.v1",
+        "qlib_symbol": "Mul",
+        "argument_kinds": ["expression", "expression"],
+        "null_behavior": "pandas_ieee",
+        "lookback_rule": "maximum_child",
+        "semantic_spec": "truealpha.qlib.mul.v1|Mul|expression,expression|pandas_ieee|lookback=max(children)",
+        "semantic_spec_sha256": "c4722906f90c7a17c4beb6a1cd954f227b09000eda9fc8715e2e7951784c37a0"
+      },
+      {
+        "operator_id": "truealpha.qlib.ref.v1",
+        "qlib_symbol": "Ref",
+        "argument_kinds": ["expression", "positive_integer"],
+        "null_behavior": "shift_preserve_null",
+        "lookback_rule": "child_plus_positive_integer",
+        "semantic_spec": "truealpha.qlib.ref.v1|Ref|expression,positive_integer|shift_preserve_null|lookback=child+n",
+        "semantic_spec_sha256": "1c63fd8415c9ca49b592de590c2b536bd7445ead82f12b942fa9bd061a55b8a1"
+      },
+      {
+        "operator_id": "truealpha.qlib.sub.v1",
+        "qlib_symbol": "Sub",
+        "argument_kinds": ["expression", "expression"],
+        "null_behavior": "pandas_ieee",
+        "lookback_rule": "maximum_child",
+        "semantic_spec": "truealpha.qlib.sub.v1|Sub|expression,expression|pandas_ieee|lookback=max(children)",
+        "semantic_spec_sha256": "9fbe00f21273b433393c62a547950b1fa81ec56f46a9eac099723ff057d57c5b"
+      }
+    ]
+  },
+  "feature_bindings": [
+    {
+      "feature_binding_id": "feature.growth.v1",
+      "qlib_field_name": "growth"
+    },
+    {
+      "feature_binding_id": "feature.price.v1",
+      "qlib_field_name": "price"
+    },
+    {
+      "feature_binding_id": "feature.quality.v1",
+      "qlib_field_name": "quality"
+    }
+  ],
+  "expressions": [
+    {
+      "case_id": "dimensionless-linear-blend",
+      "definition": {
+        "factor_id": "factor.synthetic.linear_blend",
+        "factor_version": "1.0.0",
+        "output_kind": "dimensionless_float64",
+        "null_policy": "operator_declared",
+        "root": {
+          "kind": "call",
+          "operator_id": "truealpha.qlib.add.v1",
+          "arguments": [
+            {
+              "kind": "feature",
+              "feature_binding_id": "feature.quality.v1"
+            },
+            {
+              "kind": "call",
+              "operator_id": "truealpha.qlib.mul.v1",
+              "arguments": [
+                {
+                  "kind": "numeric",
+                  "value": "0.5"
+                },
+                {
+                  "kind": "feature",
+                  "feature_binding_id": "feature.growth.v1"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "compiled_qlib_field": "Add($quality,Mul(0.5,$growth))",
+        "required_feature_binding_ids": ["feature.growth.v1", "feature.quality.v1"],
+        "maximum_lookback_sessions": 0,
+        "ast_depth": 3,
+        "ast_nodes": 5
+      }
+    },
+    {
+      "case_id": "one-session-price-change",
+      "definition": {
+        "factor_id": "factor.synthetic.one_session_price_change",
+        "factor_version": "1.0.0",
+        "output_kind": "dimensionless_float64",
+        "null_policy": "operator_declared",
+        "root": {
+          "kind": "call",
+          "operator_id": "truealpha.qlib.div.v1",
+          "arguments": [
+            {
+              "kind": "call",
+              "operator_id": "truealpha.qlib.sub.v1",
+              "arguments": [
+                {
+                  "kind": "feature",
+                  "feature_binding_id": "feature.price.v1"
+                },
+                {
+                  "kind": "call",
+                  "operator_id": "truealpha.qlib.ref.v1",
+                  "arguments": [
+                    {
+                      "kind": "feature",
+                      "feature_binding_id": "feature.price.v1"
+                    },
+                    {
+                      "kind": "numeric",
+                      "value": "1"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "call",
+              "operator_id": "truealpha.qlib.ref.v1",
+              "arguments": [
+                {
+                  "kind": "feature",
+                  "feature_binding_id": "feature.price.v1"
+                },
+                {
+                  "kind": "numeric",
+                  "value": "1"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "compiled_qlib_field": "Div(Sub($price,Ref($price,1)),Ref($price,1))",
+        "required_feature_binding_ids": ["feature.price.v1"],
+        "maximum_lookback_sessions": 1,
+        "ast_depth": 4,
+        "ast_nodes": 9
+      }
+    },
+    {
+      "case_id": "three-session-quality-mean",
+      "definition": {
+        "factor_id": "factor.synthetic.three_session_quality_mean",
+        "factor_version": "1.0.0",
+        "output_kind": "dimensionless_float64",
+        "null_policy": "operator_declared",
+        "root": {
+          "kind": "call",
+          "operator_id": "truealpha.qlib.mean.v1",
+          "arguments": [
+            {
+              "kind": "feature",
+              "feature_binding_id": "feature.quality.v1"
+            },
+            {
+              "kind": "numeric",
+              "value": "3"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "compiled_qlib_field": "Mean($quality,3)",
+        "required_feature_binding_ids": ["feature.quality.v1"],
+        "maximum_lookback_sessions": 2,
+        "ast_depth": 2,
+        "ast_nodes": 3
+      }
+    }
+  ],
+  "dimensionless_matrix": {
+    "sessions": ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"],
+    "instruments": {
+      "SYNTH_A": {
+        "growth": ["0.2", "0.4", null, "0.8", "1.0"],
+        "price": ["10", "11", "11", "13", "13"],
+        "quality": ["1", "2", "3", "4", "5"]
+      },
+      "SYNTH_B": {
+        "growth": ["-0.2", "0", "0.2", null, "0.6"],
+        "price": ["20", null, "22", "22", "11"],
+        "quality": ["2", null, "4", "6", "8"]
+      }
+    },
+    "expected_outputs": {
+      "dimensionless-linear-blend": {
+        "SYNTH_A": ["1.1", "2.2", null, "4.4", "5.5"],
+        "SYNTH_B": ["1.9", null, "4.1", null, "8.3"]
+      },
+      "one-session-price-change": {
+        "SYNTH_A": [null, "0.1", "0", "0.18181818181818182", "0"],
+        "SYNTH_B": [null, null, null, "0", "-0.5"]
+      },
+      "three-session-quality-mean": {
+        "SYNTH_A": ["1", "1.5", "2", "3", "4"],
+        "SYNTH_B": ["2", "2", "3", "5", "6"]
+      }
+    },
+    "comparison": {
+      "nulls_must_match_exactly": true,
+      "absolute_tolerance": "1e-12",
+      "relative_tolerance": "1e-12"
+    }
+  },
+  "negative_cases": [
+    {"case_id": "raw-expression-string", "mutation": "replace root with Add($quality,$growth)", "expected_error": "invalid_expression_node"},
+    {"case_id": "python-callable", "mutation": "add callable field", "expected_error": "extra_input_forbidden"},
+    {"case_id": "module-path", "mutation": "add module_path field", "expected_error": "extra_input_forbidden"},
+    {"case_id": "operator-kwargs", "mutation": "add kwargs field to call", "expected_error": "extra_input_forbidden"},
+    {"case_id": "unsafe-field-punctuation", "mutation": "set qlib_field_name to quality);__import__('os')", "expected_error": "invalid_qlib_field_name"},
+    {"case_id": "attribute-field", "mutation": "set qlib_field_name to quality.real", "expected_error": "invalid_qlib_field_name"},
+    {"case_id": "index-field", "mutation": "set qlib_field_name to quality[0]", "expected_error": "invalid_qlib_field_name"},
+    {"case_id": "unknown-feature", "mutation": "reference feature.unknown.v1", "expected_error": "unknown_feature_binding"},
+    {"case_id": "unknown-operator", "mutation": "reference truealpha.qlib.unknown.v1", "expected_error": "unknown_operator"},
+    {"case_id": "unapproved-symbol", "mutation": "set qlib_symbol to __import__", "expected_error": "unapproved_builtin_symbol"},
+    {"case_id": "duplicate-operator-id", "mutation": "duplicate truealpha.qlib.add.v1", "expected_error": "duplicate_operator_id"},
+    {"case_id": "duplicate-qlib-symbol", "mutation": "map a second operator to Add", "expected_error": "duplicate_qlib_symbol"},
+    {"case_id": "invalid-arity", "mutation": "remove right argument from Add", "expected_error": "invalid_operator_arity"},
+    {"case_id": "fractional-window", "mutation": "set Mean window to 1.5", "expected_error": "invalid_argument_kind"},
+    {"case_id": "zero-window", "mutation": "set Mean window to 0", "expected_error": "invalid_argument_kind"},
+    {"case_id": "nan-numeric", "mutation": "set numeric value to NaN", "expected_error": "non_finite_numeric"},
+    {"case_id": "infinite-numeric", "mutation": "set numeric value to Infinity", "expected_error": "non_finite_numeric"},
+    {"case_id": "excessive-depth", "mutation": "nest Add to depth 9", "expected_error": "maximum_ast_depth_exceeded"},
+    {"case_id": "excessive-node-count", "mutation": "construct 65-node tree", "expected_error": "maximum_ast_nodes_exceeded"},
+    {"case_id": "excessive-lookback", "mutation": "set Ref window to 253", "expected_error": "maximum_lookback_exceeded"},
+    {"case_id": "duplicate-feature-binding", "mutation": "duplicate feature.quality.v1", "expected_error": "duplicate_feature_binding_id"},
+    {"case_id": "stale-registry-hash", "mutation": "change an operator after computing registry hash", "expected_error": "registry_content_hash_mismatch"},
+    {"case_id": "stale-expression-hash", "mutation": "change root after computing expression hash", "expected_error": "expression_content_hash_mismatch"}
+  ],
+  "identity_relations": [
+    "operator and feature-binding input reordering does not change registry or expression semantic identity",
+    "ambient Decimal precision and rounding context does not change numeric rendering or identity",
+    "changing the AST, feature binding, operator semantic spec, null behavior, or derived lookback changes expression semantic identity",
+    "changing only the Qlib distribution artifact or adapter implementation leaves expression semantic identity unchanged",
+    "changing only the Qlib distribution artifact or adapter implementation changes combined execution identity"
+  ],
+  "forbidden_semantics": [
+    "monetary Decimal calculation",
+    "entity graph traversal",
+    "point-in-time vintage selection",
+    "confidence calculation",
+    "source provenance branching",
+    "lineage persistence",
+    "provider configuration",
+    "runner or replay state",
+    "factor registration or release activation"
+  ]
+}

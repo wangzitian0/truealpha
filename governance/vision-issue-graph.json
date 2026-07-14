@@ -244,11 +244,11 @@
     "S8-qlib-factor-expression": {
       "issue": 189,
       "owner_gate": 29,
-      "status": "queued",
+      "status": "prepared",
       "target_rung": "E0",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S8-qlib-factor-expression.v1.json",
-      "sha256": "ecac429115e177caafad906232d023ad1bc574531aa1b0e4bf7645dc3bb96eba"
+      "sha256": "3c3c6a0071f50cdd1dd3f117c882416e2c891560866015394646d6351d46c660"
     }
   },
   "artifact_edges": [
