@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D3-staging-topt-capture",
-  "revision": 2,
+  "revision": 3,
   "issue": 171,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E4",
   "objective": "Activate the accepted D2 TOPT capture spine against bounded live public sources in isolated Staging without changing the 20-issuer, 21-instrument, 84-cell denominator.",
-  "claim_ceiling": "E4 bounded live-source TOPT capture in isolated Staging; no headcount, factor, strategy, mart, continuous-schedule, source-rights graduation, Production, or release-readiness claim",
+  "claim_ceiling": "accepted E0 isolated Yahoo configuration, frozen call plan, strict Decimal parser, and mocked single-call adapter pending E1 tiny interaction; no persisted capture, live-source readiness, Staging run, schedule, strategy, Production, or release-readiness claim",
   "capability_issues": [27],
   "closes_issues": [],
   "informational_issues": [11, 23, 26, 29, 60, 61, 70, 121],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "56eb359e92e74a6bb24746ec41761dfbe7ee1413",
+    "base_sha": "4fdc70fe5fb7a18da3c9a0f28c0b10ba49553990",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D3 registration is merged to main",
@@ -196,7 +196,17 @@
     "output": {
       "type": "D3StagingToptCaptureEvidence",
       "stable_handoff": false,
-      "state": "pending",
+      "state": "accepted_e0",
+      "accepted_slice": {
+        "source_id": "source.yahoo-chart-public",
+        "source_version": "1.0.0",
+        "adapter_id": "data_engine.d3.yahoo_chart_adapter",
+        "adapter_version": "1.0.0",
+        "mocked_symbol_count": 1,
+        "network_calls": 1,
+        "persisted_raw_rows": 0,
+        "persisted_normalized_rows": 0
+      },
       "terminal_environment": "staging",
       "allowed_evidence_readers": [
         "issue #70 filing and headcount capture preparation",
