@@ -862,6 +862,24 @@ def test_non_governance_code_pr_requires_batch_manifest(monkeypatch):
     assert "non-governance PR must advance exactly one capability-batch manifest" in validation.errors
 
 
+def test_agents_guide_is_a_governance_control_and_remains_lease_protected(monkeypatch):
+    monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
+    monkeypatch.setattr(governance, "git_merge_base", lambda base, _head: base)
+    monkeypatch.setattr(governance, "git_changed_paths", lambda _base, _head: ("AGENTS.md",))
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph={"batches": {}},
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+    )
+
+    assert advance is None
+    assert validation.errors == []
+    assert governance.requires_integration_lease("AGENTS.md")
+
+
 def test_corpus_hash_must_match_bytes(tmp_path, monkeypatch):
     graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch, corpus_sha="0" * 64)
     validation = governance.Validation()

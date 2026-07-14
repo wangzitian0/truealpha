@@ -58,6 +58,7 @@ MANIFEST_PREFIX = "governance/batches/"
 BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
 BATCH_MIRROR_END = "<!-- capability-batch-mirror:end -->"
 GOVERNANCE_CONTROL_PATHS = (
+    "AGENTS.md",
     ".github/workflows/ci-governance.yml",
     "governance/**",
     "libs/runtime/tests/test_delivery_governance.py",
