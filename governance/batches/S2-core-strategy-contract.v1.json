@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "batch_id": "S2-core-strategy-contract",
+  "revision": 1,
+  "issue": 143,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Complete the strict executable large_model_value_v0 strategy-definition contract without approving product semantics or activating a strategy.",
+  "claim_ceiling": "E0 typed contract and negative validation only; no approved semantics, factor, replay, holdout, or release-readiness claim",
+  "capability_issues": [21],
+  "closes_issues": [],
+  "informational_issues": [26, 59, 78],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued S2 registration is merged to main",
+      "the strict fixture corpus is frozen in a preparation PR",
+      "the implementation PR pins its exact current main base SHA",
+      "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers the shared research contract path",
+      "issue #143 contains the exact manifest path and SHA-256"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 57,
+      "artifact": "identity-market-time-universe contracts",
+      "evidence": {
+        "path": "governance/evidence/issue-57.v1.json",
+        "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640"
+      },
+      "git_objects": [
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/universe.py",
+          "oid": "292b73b7fd2f44a440fb581c8a9d9a9f199c2730"
+        }
+      ],
+      "legacy_accepted": true,
+      "state": "accepted"
+    },
+    {
+      "class": "start",
+      "issue": 58,
+      "artifact": "execution-lineage contract pack",
+      "evidence": {
+        "path": "governance/evidence/issue-58.v2.json",
+        "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
+      },
+      "ref": "git:71df1a7214d28fd6e161da04769466abe5c13e82:libs/contracts",
+      "git_tree": "cc2a0ded19f3ceb28b0f5e39c83871055ca07346",
+      "legacy_accepted": true,
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 59,
+      "artifact": "approved research semantics and strategy parameter values",
+      "state": "pending_external_approval"
+    }
+  ],
+  "corpus": {
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "complete fixed-cohort definition",
+      "complete survivorship-safe PIT definition",
+      "unknown and missing rule rejection",
+      "invalid confidence, cost, schedule, and immutable-version rejection",
+      "universe and policy cross-binding rejection",
+      "canonical serialization and reordered factor requirements"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/contracts/src/truealpha_contracts/research.py",
+      "libs/contracts/tests/test_research.py",
+      "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
+      "governance/leases/S2-core-strategy-contract.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "libs/contracts/src/truealpha_contracts/universe.py"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "db/**",
+      "apps/data-engine/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/factors/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [
+      "libs/contracts/src/truealpha_contracts/research.py"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/S2-core-strategy-contract.v1.json",
+      "sha256": null
+    }
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "E0 defines a strict schema only; #59/#21 approval and later candidate acceptance remain mandatory"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/contracts/tests/test_research.py -q",
+      "uv run ruff check libs/contracts/src/truealpha_contracts/research.py libs/contracts/tests/test_research.py",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "unknown rule ID",
+      "missing or mutable factor version",
+      "factor ID and content hash mismatch",
+      "invalid confidence and transaction-cost ranges",
+      "naive schedule anchor",
+      "fixed-cohort performance claim",
+      "strategy and semantics universe mismatch",
+      "strategy and GPPE or tier policy mismatch"
+    ],
+    "output": {
+      "type": "LargeModelValueV0Policy contract",
+      "stable_handoff": false,
+      "state": "pending",
+      "allowed_evidence_readers": [
+        "issue #21 semantic freeze batch",
+        "issue #24 and #25 candidate batches",
+        "issue #26 replay batch"
+      ]
+    }
+  },
+  "invalidation": [
+    "strategy rule vocabulary, contract field, universe binding, or canonicalization change creates a new batch revision",
+    "shared contract path lease expiry blocks the implementation PR",
+    "candidate semantic values or approvals do not raise this E0 evidence ceiling"
+  ],
+  "rollback": "Revert the E0 schema and tests together; no accepted release manifest or runtime registry may reference this provisional contract."
+}
