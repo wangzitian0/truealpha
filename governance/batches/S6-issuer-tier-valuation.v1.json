@@ -44,6 +44,17 @@
     },
     {
       "class": "freeze",
+      "issue": 155,
+      "artifact": "accepted issuer P/S and strategy candidate identity contract",
+      "evidence": {
+        "path": "governance/batches/S4-issuer-price-sales.v1.json",
+        "sha256": "3a72c29f0c965e3aa8eaa4464726d183622aa930a7780f9a2d3b51b9e25afa16"
+      },
+      "ref": "git:7d705787342e5a0c119fdba2794b6376d9dc3852:libs/contracts/src/truealpha_contracts/research.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
       "issue": 161,
       "artifact": "accepted provisional issuer P/S kernel evidence",
       "evidence": {
