@@ -197,11 +197,6 @@
       "type": "D3StagingToptCaptureEvidence",
       "stable_handoff": false,
       "state": "accepted_e0",
-      "evidence_id": "rung-evidence:D3-staging-topt-capture:efd0a7cdd52dfa021cd2190578bb7d0abf0c2abd3e81b64a1d44ea09b3c8cc4d",
-      "rung_evidence": {
-        "path": "governance/evidence/D3-staging-topt-capture-E0.v1.json",
-        "sha256": "92396238dd5bbffff2125ae9a90fac878d249d96abaf82b9d896351ba1ffd1dc"
-      },
       "accepted_slice": {
         "source_id": "source.yahoo-chart-public",
         "source_version": "1.0.0",
