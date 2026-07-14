@@ -37,10 +37,8 @@ from data_engine.mvp_medium_pipeline import (
     normalize_medium_capture_batch,
 )
 from data_engine.mvp_medium_registry import (
-    IDENTITY_SOURCE_ID,
     ISSUER_SECURITY_TYPE_ID,
     MEDIUM_VERSION,
-    MEMBERSHIP_SOURCE_ID,
     SECURITY_LISTING_TYPE_ID,
     UNIVERSE_MEMBERSHIP_TYPE_ID,
 )
@@ -88,6 +86,9 @@ TOPT_REQUIRED_CELL_COUNT = 84
 TOPT_NORMALIZED_RECORD_COUNT = 168
 TOPT_MARKET_FIXTURE_PATH = Path("apps/data-engine/tests/fixtures/mvp_medium_validation/topt_market_2026-03-31.v1.json")
 TOPT_MARKET_FIXTURE_SHA256 = "7a160dbd1a5816d0c31e20bd1f0e1ab8d2738e1fc744fc7bf96fa2903d19e038"
+TOPT_ISSUER_SOURCE_ID = "source.fixture-topt-sec-issuer-security"
+TOPT_LISTING_SOURCE_ID = "source.fixture-topt-sec-listing"
+TOPT_MEMBERSHIP_SOURCE_ID = "source.fixture-topt-sec-membership"
 TOPT_PRICE_SOURCE_ID = "source.fixture-topt-yahoo-market"
 
 
@@ -517,7 +518,16 @@ def load_topt_denominator(repository_root: Path, corpus: FrozenE1Corpus | None =
     artifact = frozen_corpus.artifacts["topt-candidate-denominator"]
     if artifact.sha256 != TOPT_ARTIFACT_SHA256 or _sha256(artifact.body) != TOPT_ARTIFACT_SHA256:
         raise ValueError("D2 E3 TOPT artifact does not match the frozen E1 corpus")
-    payload = json.loads(artifact.body, parse_float=Decimal)
+    return _parse_topt_denominator_body(artifact.body)
+
+
+def _parse_topt_denominator_body(body: bytes) -> FrozenToptDenominator:
+    """Validate the exact TOPT denominator carried by one landed raw capture."""
+
+    try:
+        payload = json.loads(body, parse_float=Decimal)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError("D2 E3 TOPT denominator capture is not valid JSON") from error
     scope = payload.get("scope")
     if not isinstance(scope, dict):
         raise ValueError("D2 E3 TOPT scope is missing")
@@ -526,7 +536,7 @@ def load_topt_denominator(repository_root: Path, corpus: FrozenE1Corpus | None =
         raise ValueError("D2 E3 TOPT source identity is missing")
     return FrozenToptDenominator.model_validate(
         {
-            "artifact_sha256": artifact.sha256,
+            "artifact_sha256": TOPT_ARTIFACT_SHA256,
             "candidate_state": payload.get("state"),
             "universe_id": scope.get("universe_id"),
             "accession": source.get("accession"),
@@ -548,11 +558,24 @@ def load_topt_market_fixture(
     body = (repository_root / TOPT_MARKET_FIXTURE_PATH).read_bytes()
     if _sha256(body) != TOPT_MARKET_FIXTURE_SHA256:
         raise ValueError("D2 E3 TOPT market fixture bytes drifted")
-    fixture = FrozenToptMarketFixture.model_validate(json.loads(body, parse_float=Decimal))
+    return _parse_topt_market_fixture_body(body, denominator)
+
+
+def _parse_topt_market_fixture_body(
+    body: bytes,
+    denominator: FrozenToptDenominator,
+) -> FrozenToptMarketFixture:
+    """Validate the exact market packet carried by one landed raw capture."""
+
+    try:
+        payload = json.loads(body, parse_float=Decimal)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError("D2 E3 TOPT market capture is not valid JSON") from error
+    fixture = FrozenToptMarketFixture.model_validate(payload)
     denominator_coordinates = {(item.cusip, item.ticker, item.issuer_lei) for item in denominator.instruments}
     fixture_coordinates = {(item.cusip, item.ticker, item.issuer_lei) for item in fixture.rows}
     if fixture_coordinates != denominator_coordinates:
-        raise ValueError("TOPT market fixture does not match the frozen denominator")
+        raise ValueError("TOPT market capture does not match the frozen denominator")
     return fixture
 
 
@@ -560,27 +583,74 @@ def _e3_registry(parent: RegistrySnapshot) -> RegistrySnapshot:
     """Add the TOPT fixture source without mutating the accepted E2 entries."""
 
     implementation_sha256 = _sha256(Path(__file__).read_bytes())
-    source = SourceRegistryEntry(
-        source_id=TOPT_PRICE_SOURCE_ID,
-        version=MEDIUM_VERSION,
-        adapter_id="data_engine.d2_e3:topt_yahoo_market_adapter",
-        adapter_version=MEDIUM_VERSION,
-        normalizer_id="data_engine.d2_e3:topt_yahoo_market_normalizer",
-        normalizer_version=MEDIUM_VERSION,
-        supported_domains=(DataDomain.MARKET_PRICES,),
-        supported_type_ids=(MARKET_PRICE_TYPE_ID,),
-        configuration_schema_sha256=canonical_sha256(
-            {
-                "fixture_sha256": TOPT_MARKET_FIXTURE_SHA256,
-                "network": False,
-                "credentials": False,
-            }
-        ),
-        mapping_schema_sha256=canonical_sha256(MarketPricePayload.model_json_schema(mode="validation")),
-        adapter_implementation_sha256=implementation_sha256,
-        normalizer_implementation_sha256=implementation_sha256,
+
+    def source(
+        *,
+        source_id: str,
+        component_suffix: str,
+        domain: DataDomain,
+        semantic_type_id: str,
+        model_type: type[BaseModel],
+        fixture_sha256: str,
+    ) -> SourceRegistryEntry:
+        return SourceRegistryEntry(
+            source_id=source_id,
+            version=MEDIUM_VERSION,
+            adapter_id=f"data_engine.d2_e3:{component_suffix}_adapter",
+            adapter_version=MEDIUM_VERSION,
+            normalizer_id=f"data_engine.d2_e3:{component_suffix}_normalizer",
+            normalizer_version=MEDIUM_VERSION,
+            supported_domains=(domain,),
+            supported_type_ids=(semantic_type_id,),
+            configuration_schema_sha256=canonical_sha256(
+                {
+                    "source_id": source_id,
+                    "fixture_sha256": fixture_sha256,
+                    "network": False,
+                    "credentials": False,
+                }
+            ),
+            mapping_schema_sha256=canonical_sha256(model_type.model_json_schema(mode="validation")),
+            adapter_implementation_sha256=implementation_sha256,
+            normalizer_implementation_sha256=implementation_sha256,
+        )
+
+    return parent.extend(
+        sources=(
+            source(
+                source_id=TOPT_ISSUER_SOURCE_ID,
+                component_suffix="topt_sec_issuer_security",
+                domain=DataDomain.INSTRUMENTS,
+                semantic_type_id=ISSUER_SECURITY_TYPE_ID,
+                model_type=IssuerSecurityLink,
+                fixture_sha256=TOPT_ARTIFACT_SHA256,
+            ),
+            source(
+                source_id=TOPT_LISTING_SOURCE_ID,
+                component_suffix="topt_sec_listing",
+                domain=DataDomain.INSTRUMENTS,
+                semantic_type_id=SECURITY_LISTING_TYPE_ID,
+                model_type=SecurityListingLink,
+                fixture_sha256=TOPT_MARKET_FIXTURE_SHA256,
+            ),
+            source(
+                source_id=TOPT_MEMBERSHIP_SOURCE_ID,
+                component_suffix="topt_sec_membership",
+                domain=DataDomain.UNIVERSE,
+                semantic_type_id=UNIVERSE_MEMBERSHIP_TYPE_ID,
+                model_type=UniverseMembership,
+                fixture_sha256=TOPT_ARTIFACT_SHA256,
+            ),
+            source(
+                source_id=TOPT_PRICE_SOURCE_ID,
+                component_suffix="topt_yahoo_market",
+                domain=DataDomain.MARKET_PRICES,
+                semantic_type_id=MARKET_PRICE_TYPE_ID,
+                model_type=MarketPricePayload,
+                fixture_sha256=TOPT_MARKET_FIXTURE_SHA256,
+            ),
+        )
     )
-    return parent.extend(sources=(source,))
 
 
 def _verify_e2_governance_handoff(repository_root: Path) -> None:
@@ -713,8 +783,9 @@ def _e3_catalog(
     sources = {(entry.source_id, entry.version): entry for entry in registry.sources}
     semantic_types = {(entry.semantic_type_id, entry.version): entry for entry in registry.semantic_types}
     raw_sources = {
-        IDENTITY_SOURCE_ID: DataSource.SEC,
-        MEMBERSHIP_SOURCE_ID: DataSource.SEC,
+        TOPT_ISSUER_SOURCE_ID: DataSource.SEC,
+        TOPT_LISTING_SOURCE_ID: DataSource.SEC,
+        TOPT_MEMBERSHIP_SOURCE_ID: DataSource.SEC,
         TOPT_PRICE_SOURCE_ID: DataSource.YAHOO,
     }
     adapters = tuple(
@@ -732,8 +803,9 @@ def _e3_catalog(
     )
 
     def issuer_links(capture: LandedMediumCapture):
+        landed_denominator = _parse_topt_denominator_body(capture.body)
         links, _listings, _memberships, _prices = _payloads(
-            denominator,
+            landed_denominator,
             market_fixture,
             knowable_at=capture.fetched_at,
             recorded_at=capture.recorded_at,
@@ -756,9 +828,10 @@ def _e3_catalog(
         )
 
     def listings(capture: LandedMediumCapture):
+        landed_fixture = _parse_topt_market_fixture_body(capture.body, denominator)
         _links, values, _memberships, _prices = _payloads(
             denominator,
-            market_fixture,
+            landed_fixture,
             knowable_at=capture.fetched_at,
             recorded_at=capture.recorded_at,
             raw_reference=_raw_object_ref(capture),
@@ -780,8 +853,9 @@ def _e3_catalog(
         )
 
     def memberships(capture: LandedMediumCapture):
+        landed_denominator = _parse_topt_denominator_body(capture.body)
         _links, _listings, values, _prices = _payloads(
-            denominator,
+            landed_denominator,
             market_fixture,
             knowable_at=capture.fetched_at,
             recorded_at=capture.recorded_at,
@@ -804,9 +878,10 @@ def _e3_catalog(
         )
 
     def prices(capture: LandedMediumCapture):
+        landed_fixture = _parse_topt_market_fixture_body(capture.body, denominator)
         _links, _listings, _memberships, values = _payloads(
             denominator,
-            market_fixture,
+            landed_fixture,
             knowable_at=capture.fetched_at,
             recorded_at=capture.recorded_at,
             raw_reference=_raw_object_ref(capture),
@@ -828,9 +903,9 @@ def _e3_catalog(
         )
 
     routes = {
-        (IDENTITY_SOURCE_ID, ISSUER_SECURITY_TYPE_ID): issuer_links,
-        (IDENTITY_SOURCE_ID, SECURITY_LISTING_TYPE_ID): listings,
-        (MEMBERSHIP_SOURCE_ID, UNIVERSE_MEMBERSHIP_TYPE_ID): memberships,
+        (TOPT_ISSUER_SOURCE_ID, ISSUER_SECURITY_TYPE_ID): issuer_links,
+        (TOPT_LISTING_SOURCE_ID, SECURITY_LISTING_TYPE_ID): listings,
+        (TOPT_MEMBERSHIP_SOURCE_ID, UNIVERSE_MEMBERSHIP_TYPE_ID): memberships,
         (TOPT_PRICE_SOURCE_ID, MARKET_PRICE_TYPE_ID): prices,
     }
     normalizers = tuple(
@@ -865,10 +940,23 @@ def _e3_repository_registrations(registry: RegistrySnapshot):
     def rank_price_source(_payload: BaseModel, source_id: str) -> int | None:
         return 0 if source_id == TOPT_PRICE_SOURCE_ID else 1
 
+    def rank_listing_source(_payload: BaseModel, source_id: str) -> int | None:
+        return 0 if source_id == TOPT_LISTING_SOURCE_ID else 1
+
+    def rank_issuer_source(_payload: BaseModel, source_id: str) -> int | None:
+        return 0 if source_id == TOPT_ISSUER_SOURCE_ID else 1
+
+    def rank_membership_source(_payload: BaseModel, source_id: str) -> int | None:
+        return 0 if source_id == TOPT_MEMBERSHIP_SOURCE_ID else 1
+
     registrations = []
     for registration in build_medium_repository_registrations(registry):
         if registration.semantic_type_id == ISSUER_SECURITY_TYPE_ID:
-            registration = replace(registration, partition_filter=select_security)
+            registration = replace(
+                registration,
+                partition_filter=select_security,
+                source_rank=rank_issuer_source,
+            )
         elif registration.semantic_type_id == MARKET_PRICE_TYPE_ID:
             source = next(
                 entry
@@ -884,9 +972,17 @@ def _e3_repository_registrations(registry: RegistrySnapshot):
                 source_rank=rank_price_source,
             )
         elif registration.semantic_type_id == SECURITY_LISTING_TYPE_ID:
-            registration = replace(registration, partition_filter=select_listing)
+            registration = replace(
+                registration,
+                partition_filter=select_listing,
+                source_rank=rank_listing_source,
+            )
         elif registration.semantic_type_id == UNIVERSE_MEMBERSHIP_TYPE_ID:
-            registration = replace(registration, partition_filter=select_universe)
+            registration = replace(
+                registration,
+                partition_filter=select_universe,
+                source_rank=rank_membership_source,
+            )
         registrations.append(registration)
     return tuple(registrations)
 
@@ -938,12 +1034,12 @@ def _work_items(
 
     return (
         MediumCaptureWorkItem(
-            source_id=IDENTITY_SOURCE_ID,
+            source_id=TOPT_ISSUER_SOURCE_ID,
             source_version=MEDIUM_VERSION,
             semantic_type_ids=(ISSUER_SECURITY_TYPE_ID,),
             semantic_type_version=MEDIUM_VERSION,
             configuration=configuration(
-                IDENTITY_SOURCE_ID,
+                TOPT_ISSUER_SOURCE_ID,
                 artifact="denominator",
                 source=DataSource.SEC,
                 semantic_type_id=ISSUER_SECURITY_TYPE_ID,
@@ -951,12 +1047,12 @@ def _work_items(
             recorded_at=recorded_at,
         ),
         MediumCaptureWorkItem(
-            source_id=IDENTITY_SOURCE_ID,
+            source_id=TOPT_LISTING_SOURCE_ID,
             source_version=MEDIUM_VERSION,
             semantic_type_ids=(SECURITY_LISTING_TYPE_ID,),
             semantic_type_version=MEDIUM_VERSION,
             configuration=configuration(
-                IDENTITY_SOURCE_ID,
+                TOPT_LISTING_SOURCE_ID,
                 artifact="market",
                 source=DataSource.SEC,
                 semantic_type_id=SECURITY_LISTING_TYPE_ID,
@@ -964,12 +1060,12 @@ def _work_items(
             recorded_at=recorded_at,
         ),
         MediumCaptureWorkItem(
-            source_id=MEMBERSHIP_SOURCE_ID,
+            source_id=TOPT_MEMBERSHIP_SOURCE_ID,
             source_version=MEDIUM_VERSION,
             semantic_type_ids=(UNIVERSE_MEMBERSHIP_TYPE_ID,),
             semantic_type_version=MEDIUM_VERSION,
             configuration=configuration(
-                MEMBERSHIP_SOURCE_ID,
+                TOPT_MEMBERSHIP_SOURCE_ID,
                 artifact="denominator",
                 source=DataSource.SEC,
                 semantic_type_id=UNIVERSE_MEMBERSHIP_TYPE_ID,
