@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "valid_definitions": {
+    "fixed_cohort": {
+      "strategy_id": "large_model_value_v0",
+      "strategy_version": "0.1.0",
+      "universe": {
+        "universe_id": "universe:topt-us-2026-03-31",
+        "universe_version": "2026.03.31",
+        "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "universe_definition_kind": "fixed_cohort",
+      "universe_claim_kind": "fixed_cohort_description",
+      "performance_claim_policy": "prohibited_fixed_cohort",
+      "gppe_policy_id": "gppe-policy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "gppe_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tier_policy_id": "tier-policy:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "tier_policy_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "required_factors": [
+        {
+          "factor_id": "three_tier_valuation",
+          "factor_version": "0.1.0",
+          "implementation_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        {
+          "factor_id": "gross_profit_per_employee",
+          "factor_version": "0.1.0",
+          "implementation_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        {
+          "factor_id": "price_to_sales",
+          "factor_version": "0.1.0",
+          "implementation_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ],
+      "schedule": {
+        "rule_id": "fixed_interval_utc",
+        "anchor_at": "2023-06-30T20:00:00Z",
+        "interval_days": 90,
+        "cutoff_inclusive": true
+      },
+      "valuation_metric": "price_to_sales",
+      "target_ps_selection": "band_midpoint",
+      "valuation_gap_formula": "target_ps/current_ps-1",
+      "ranking_direction": "descending_valuation_gap",
+      "eligibility": {
+        "rule_id": "all_required_factors_available",
+        "minimum_confidence": "0.80",
+        "confidence_rule": "minimum_consumed_confidence",
+        "missing_input_behavior": "ineligible_missing_required_input",
+        "stale_input_behavior": "ineligible_stale_required_input",
+        "low_confidence_behavior": "ineligible_low_confidence",
+        "financial_target_behavior": "require_versioned_financial_target_band"
+      },
+      "selection_rule_id": "top_n_ranked_eligible",
+      "selection_count": 10,
+      "sizing": {
+        "rule_id": "equal_weight_selected",
+        "empty_selection_behavior": "retain_all_cash"
+      },
+      "execution": {
+        "rule_id": "next_eligible_market_session_open",
+        "lag_sessions": 1,
+        "price_field": "unadjusted_open",
+        "unfilled_order_behavior": "remain_cash"
+      },
+      "transaction_cost": {
+        "rule_id": "per_side_notional_basis_points",
+        "basis_points": "5"
+      },
+      "total_return": {
+        "rule_id": "unadjusted_bars_explicit_corporate_actions",
+        "price_basis": "unadjusted",
+        "corporate_action_processing": "explicit_event_lifecycle_once",
+        "adjusted_prices_affect_returns": false
+      },
+      "financial_issuers_use_financial_proxy": true
+    },
+    "survivorship_safe_pit": {
+      "strategy_id": "large_model_value_v0",
+      "strategy_version": "0.1.0",
+      "universe": {
+        "universe_id": "universe:topt-history",
+        "universe_version": "1.0.0",
+        "content_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "universe_definition_kind": "pit_membership",
+      "universe_claim_kind": "survivorship_safe_replay",
+      "performance_claim_policy": "research_only_survivorship_safe",
+      "gppe_policy_id": "gppe-policy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "gppe_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tier_policy_id": "tier-policy:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "tier_policy_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "required_factors": [
+        {
+          "factor_id": "gross_profit_per_employee",
+          "factor_version": "0.1.0",
+          "implementation_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        {
+          "factor_id": "price_to_sales",
+          "factor_version": "0.1.0",
+          "implementation_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        {
+          "factor_id": "three_tier_valuation",
+          "factor_version": "0.1.0",
+          "implementation_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      ],
+      "schedule": {
+        "rule_id": "fixed_interval_utc",
+        "anchor_at": "2023-06-30T20:00:00Z",
+        "interval_days": 90,
+        "cutoff_inclusive": true
+      },
+      "valuation_metric": "price_to_sales",
+      "target_ps_selection": "band_midpoint",
+      "valuation_gap_formula": "target_ps/current_ps-1",
+      "ranking_direction": "descending_valuation_gap",
+      "eligibility": {
+        "rule_id": "all_required_factors_available",
+        "minimum_confidence": "0.80",
+        "confidence_rule": "minimum_consumed_confidence",
+        "missing_input_behavior": "ineligible_missing_required_input",
+        "stale_input_behavior": "ineligible_stale_required_input",
+        "low_confidence_behavior": "ineligible_low_confidence",
+        "financial_target_behavior": "require_versioned_financial_target_band"
+      },
+      "selection_rule_id": "top_n_ranked_eligible",
+      "selection_count": 10,
+      "sizing": {
+        "rule_id": "equal_weight_selected",
+        "empty_selection_behavior": "retain_all_cash"
+      },
+      "execution": {
+        "rule_id": "next_eligible_market_session_open",
+        "lag_sessions": 1,
+        "price_field": "unadjusted_open",
+        "unfilled_order_behavior": "remain_cash"
+      },
+      "transaction_cost": {
+        "rule_id": "per_side_notional_basis_points",
+        "basis_points": "5"
+      },
+      "total_return": {
+        "rule_id": "unadjusted_bars_explicit_corporate_actions",
+        "price_basis": "unadjusted",
+        "corporate_action_processing": "explicit_event_lifecycle_once",
+        "adjusted_prices_affect_returns": false
+      },
+      "financial_issuers_use_financial_proxy": true
+    }
+  },
+  "negative_cases": [
+    {
+      "case_id": "unknown-execution-rule",
+      "operation": "replace",
+      "path": "execution.rule_id",
+      "value": "same_day_close"
+    },
+    {
+      "case_id": "missing-factor-version",
+      "operation": "remove",
+      "path": "required_factors.0.factor_version"
+    },
+    {
+      "case_id": "mutable-factor-version",
+      "operation": "replace",
+      "path": "required_factors.0.factor_version",
+      "value": "latest"
+    },
+    {
+      "case_id": "invalid-factor-hash",
+      "operation": "replace",
+      "path": "required_factors.0.implementation_sha256",
+      "value": "not-a-sha256"
+    },
+    {
+      "case_id": "confidence-above-one",
+      "operation": "replace",
+      "path": "eligibility.minimum_confidence",
+      "value": "1.01"
+    },
+    {
+      "case_id": "negative-transaction-cost",
+      "operation": "replace",
+      "path": "transaction_cost.basis_points",
+      "value": "-0.01"
+    },
+    {
+      "case_id": "naive-schedule-anchor",
+      "operation": "replace",
+      "path": "schedule.anchor_at",
+      "value": "2023-06-30T20:00:00"
+    },
+    {
+      "case_id": "fixed-cohort-performance-claim",
+      "operation": "replace",
+      "path": "performance_claim_policy",
+      "value": "research_only_survivorship_safe"
+    },
+    {
+      "case_id": "duplicate-required-factor",
+      "operation": "replace",
+      "path": "required_factors.2.factor_id",
+      "value": "price_to_sales"
+    },
+    {
+      "case_id": "missing-required-factor",
+      "operation": "remove",
+      "path": "required_factors.2"
+    },
+    {
+      "case_id": "unknown-top-level-field",
+      "operation": "add",
+      "path": "callable",
+      "value": "run_strategy"
+    }
+  ]
+}

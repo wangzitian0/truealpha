@@ -174,11 +174,11 @@
     "S2-core-strategy-contract": {
       "issue": 143,
       "owner_gate": 29,
-      "status": "queued",
+      "status": "prepared",
       "target_rung": "E0",
       "terminal_rung": "E0",
       "manifest": "governance/batches/S2-core-strategy-contract.v1.json",
-      "sha256": "fe9378d0f71a4d0daf31f54f52c7ea6e3ff425a1c963697e20e5c8715126907f"
+      "sha256": "b00f1c960d1d5687734a8a70b3efd304d695965849abb8c7a158ca2cd5b529f9"
     }
   },
   "artifact_edges": [
