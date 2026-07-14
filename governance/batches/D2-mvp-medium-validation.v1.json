@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 7,
+  "revision": 8,
   "issue": 121,
   "owner_gate": 29,
-  "status": "blocked",
+  "status": "done",
   "lane": "capture-platform",
-  "last_accepted_rung": "E2",
+  "last_accepted_rung": "E3",
   "target_rung": "E3",
   "terminal_rung": "E3",
-  "objective": "Complete issue #23 by validating the MVP raw, normalized, snapshot, and Dagster data path on the exact TOPT medium denominator.",
+  "objective": "Validate the MVP raw, normalized, snapshot, and Dagster data path on the exact TOPT medium denominator and publish permanent E3 evidence without claiming issue #23 extension closure.",
   "claim_ceiling": "E3 representative Local/CI TOPT data-plane candidate; no live-source, Staging, factor, strategy, or release claim",
   "capability_issues": [23],
-  "closes_issues": [23],
+  "closes_issues": [],
   "informational_issues": [27, 57, 58, 59, 60, 61, 70, 92, 104],
   "owners": {
     "implementation": "wangzitian0",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "2566dc6bad311f304387ba86eacac9b39c43d6da",
+    "base_sha": "8aa3fb3218fec2fb60095c248b8de2a364b0efd7",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -50,7 +50,7 @@
     "#59 accepted research and headcount semantics before downstream semantic freeze",
     "#60 accepted live source, model, rights, and budget policy before any live call",
     "#61 accepted applicability and SLO denominator before readiness acceptance",
-    "#70 consumes the complete #23 path before it freezes its E3 headcount candidate",
+    "#23 still requires empty-database source and semantic-type extension conformance before capability closure and the #70 freeze edge",
     "#24, #25, #71, and #26 accept the Core factor and Local strategy candidate before #27",
     "#27 owns the bounded real-source Staging execution"
   ],
@@ -77,6 +77,7 @@
     "writable": [
       "governance/leases/D2-mvp-medium-validation.v1.json",
       "governance/evidence/D2-mvp-medium-validation-E2.v1.json",
+      "governance/evidence/D2-mvp-medium-validation-E3.v1.json",
       "governance/handoffs/D2-mvp-medium-validation.v1.json",
       "apps/data-engine/src/data_engine/batches/mvp_medium_validation/**",
       "apps/data-engine/src/data_engine/mvp_assets.py",
@@ -171,30 +172,44 @@
       "denominator shrink, duplicate required cell, release activation, or Staging activation"
     ],
     "output": {
-      "type": "MvpMediumValidationHandoff",
-      "stable_handoff": true,
+      "type": "D2E3Evidence",
+      "stable_handoff": false,
       "state": "accepted",
-      "handoff_id": "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
-      "sha256": "e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
-      "schema_epoch": "staging.mvp-medium-domains.v1+0019+0021",
-      "registry_snapshot_id": "registry-snapshot:77d61c305dc6f12b128518e6cfa5effc03f109ae5d0c25d9473e0a52df29f282",
-      "migration_set_sha256": "054ad9a5ff4b645d01d30fca83145644ce09c3419484d646776c6adda22272f6",
-      "normalized_record_count": 213,
-      "snapshot_count": 5,
+      "evidence_id": "d2-e3-evidence:3764fed168f927795f573ec576709943bee287bfdfba9a7eee8504447536fa68",
+      "sha256": "3764fed168f927795f573ec576709943bee287bfdfba9a7eee8504447536fa68",
+      "accepted_parent": {
+        "runtime_handoff_id": "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
+        "schema_epoch": "staging.mvp-medium-domains.v1+0019+0021",
+        "registry_snapshot_id": "registry-snapshot:77d61c305dc6f12b128518e6cfa5effc03f109ae5d0c25d9473e0a52df29f282",
+        "migration_set_sha256": "054ad9a5ff4b645d01d30fca83145644ce09c3419484d646776c6adda22272f6",
+        "rung_evidence": {
+          "path": "governance/evidence/D2-mvp-medium-validation-E2.v1.json",
+          "sha256": "7540a5df13253a0766a1e6f1ebe013ea7c948498bb601857ad48fa70816b8cad"
+        },
+        "governance_handoff": {
+          "path": "governance/handoffs/D2-mvp-medium-validation.v1.json",
+          "sha256": "0031707dbdf97b1a5d45a4ebafa5f1029bf8567e157e3d12f1ecde26b73390bb"
+        },
+        "readiness_ceiling": "E2"
+      },
       "rung_evidence": {
-        "path": "governance/evidence/D2-mvp-medium-validation-E2.v1.json",
-        "sha256": "7540a5df13253a0766a1e6f1ebe013ea7c948498bb601857ad48fa70816b8cad"
+        "path": "governance/evidence/D2-mvp-medium-validation-E3.v1.json",
+        "sha256": "9e7157e1dffba79a482a3f19ad121618df44249b985859a69e25d30e6cb77e90"
       },
-      "handoff_manifest": {
-        "path": "governance/handoffs/D2-mvp-medium-validation.v1.json",
-        "sha256": "0031707dbdf97b1a5d45a4ebafa5f1029bf8567e157e3d12f1ecde26b73390bb"
+      "denominator": {
+        "universe_id": "universe:topt-us-2026-03-31",
+        "accession": "000207169126012475",
+        "issuer_count": 20,
+        "instrument_count": 21
       },
+      "normalized_record_count": 84,
+      "snapshot_count": 2,
       "allowed_evidence_readers": [
         "#70 terminal headcount extraction batch",
         "#26 Local Core integration batch",
         "#27 bounded Staging canary batch"
       ],
-      "retention": "accepted E2 handoff and terminal E3 evidence are permanent; failed rung evidence follows CI retention"
+      "retention": "the accepted E2 parent handoff and checked E3 candidate evidence are permanent; exact-head CI rung evidence follows CI retention"
     }
   },
   "merge_predecessors": ["D1-mvp-normalization-handoff"],

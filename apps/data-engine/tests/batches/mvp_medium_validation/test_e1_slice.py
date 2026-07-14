@@ -224,15 +224,15 @@ def test_e1_manifest_corpus_and_graph_transition_are_exact() -> None:
     lease_bytes = lease_path.read_bytes()
     lease = json.loads(lease_bytes)
 
-    assert manifest["revision"] == 7
-    assert manifest["activation"]["base_sha"] == "2566dc6bad311f304387ba86eacac9b39c43d6da"
-    assert manifest["last_accepted_rung"] == "E2"
+    assert manifest["revision"] == 8
+    assert manifest["activation"]["base_sha"] == "8aa3fb3218fec2fb60095c248b8de2a364b0efd7"
+    assert manifest["last_accepted_rung"] == "E3"
     assert manifest["target_rung"] == "E3"
     assert manifest["terminal_rung"] == "E3"
     assert manifest["corpus"]["sha256"] == hashlib.sha256(corpus_bytes).hexdigest()
     assert corpus["rung_scope"]["frozen_target_rung"] == "E1"
     assert corpus["e1_evidence"]["stable_handoff"] is False
-    assert graph_entry["status"] == "blocked"
+    assert graph_entry["status"] == "done"
     assert graph_entry["target_rung"] == "E3"
     assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
     assert manifest["paths"]["lease_manifest"] == {

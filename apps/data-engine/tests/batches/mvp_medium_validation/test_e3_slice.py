@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import uuid
@@ -26,6 +27,7 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from pydantic import ValidationError
 from truealpha_contracts import RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.release import ReleaseManifest
 
 REPOSITORY_ROOT = next(
@@ -284,3 +286,54 @@ def test_e3_rejects_staging_release_and_wrong_handoff_activation(connection) -> 
             raw_store=MemoryRawObjectStore(),
             activation=cast(ReleaseManifest, object()),
         )
+
+
+def test_e3_acceptance_governance_binds_terminal_runtime_without_closing_issue_23() -> None:
+    manifest_path = REPOSITORY_ROOT / "governance/batches/D2-mvp-medium-validation.v1.json"
+    evidence_path = REPOSITORY_ROOT / "governance/evidence/D2-mvp-medium-validation-E3.v1.json"
+    handoff_path = REPOSITORY_ROOT / "governance/handoffs/D2-mvp-medium-validation.v1.json"
+    graph_path = REPOSITORY_ROOT / "governance/vision-issue-graph.json"
+    manifest_bytes = manifest_path.read_bytes()
+    evidence_bytes = evidence_path.read_bytes()
+    handoff_bytes = handoff_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    evidence = json.loads(evidence_bytes)
+    graph = json.loads(graph_path.read_bytes())
+    output = manifest["acceptance"]["output"]
+
+    assert manifest["revision"] == 8
+    assert manifest["status"] == "done"
+    assert manifest["last_accepted_rung"] == manifest["target_rung"] == manifest["terminal_rung"] == "E3"
+    assert manifest["capability_issues"] == [23]
+    assert manifest["closes_issues"] == []
+    assert manifest["activation"]["base_sha"] == "8aa3fb3218fec2fb60095c248b8de2a364b0efd7"
+
+    assert output["type"] == "D2E3Evidence"
+    assert output["stable_handoff"] is False
+    assert output["evidence_id"] == ("d2-e3-evidence:3764fed168f927795f573ec576709943bee287bfdfba9a7eee8504447536fa68")
+    assert output["sha256"] == output["evidence_id"].rsplit(":", 1)[-1]
+    assert output["denominator"] == {
+        "universe_id": "universe:topt-us-2026-03-31",
+        "accession": "000207169126012475",
+        "issuer_count": 20,
+        "instrument_count": 21,
+    }
+    assert output["normalized_record_count"] == 84
+    assert output["snapshot_count"] == 2
+    assert output["rung_evidence"]["sha256"] == hashlib.sha256(evidence_bytes).hexdigest()
+    assert output["accepted_parent"]["governance_handoff"]["sha256"] == hashlib.sha256(handoff_bytes).hexdigest()
+
+    assert evidence["accepted_rung"] == "E3"
+    assert evidence["base_sha"] == "8aa3fb3218fec2fb60095c248b8de2a364b0efd7"
+    assert evidence["producer_head_sha"] == "8aa3fb3218fec2fb60095c248b8de2a364b0efd7"
+    assert evidence["manifest_sha256"] == "8cfcc3def9d5a38a886ad1e9e0fd52e4f48bf052f812f162f8ed8b64c8727e37"
+    assert [report["command"] for report in evidence["commands"]] == manifest["acceptance"]["commands"]
+    assert evidence["negative_controls"] == manifest["acceptance"]["negative_controls"]
+    evidence_content = {key: value for key, value in evidence.items() if key != "evidence_id"}
+    assert evidence["evidence_id"] == (f"rung-evidence:D2-mvp-medium-validation:{canonical_sha256(evidence_content)}")
+
+    graph_entry = graph["batches"]["D2-mvp-medium-validation"]
+    assert graph_entry["status"] == "done"
+    assert graph_entry["target_rung"] == "E3"
+    assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+    assert "accepted_evidence" not in graph["issues"]["23"]

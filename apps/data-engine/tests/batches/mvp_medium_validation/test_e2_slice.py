@@ -225,18 +225,16 @@ def test_e2_acceptance_governance_binds_merged_runtime() -> None:
     graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
     output = manifest["acceptance"]["output"]
 
-    assert manifest["revision"] == 7
-    assert manifest["status"] == "blocked"
-    assert manifest["last_accepted_rung"] == "E2"
+    assert manifest["revision"] == 8
+    assert manifest["status"] == "done"
+    assert manifest["last_accepted_rung"] == "E3"
     assert manifest["target_rung"] == "E3"
-    assert output["handoff_id"] == (
+    parent = output["accepted_parent"]
+    assert parent["runtime_handoff_id"] == (
         "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3"
     )
-    assert output["sha256"] == output["handoff_id"].rsplit(":", 1)[-1]
-    assert output["normalized_record_count"] == 213
-    assert output["snapshot_count"] == 5
-    assert output["rung_evidence"]["sha256"] == hashlib.sha256(evidence_bytes).hexdigest()
-    assert output["handoff_manifest"]["sha256"] == hashlib.sha256(handoff_bytes).hexdigest()
+    assert parent["readiness_ceiling"] == "E2"
+    assert parent["governance_handoff"]["sha256"] == hashlib.sha256(handoff_bytes).hexdigest()
 
     assert evidence["accepted_rung"] == "E2"
     assert evidence["base_sha"] == "45ff014e6881198b6d078e33f080d2a09adb18e0"
@@ -248,16 +246,16 @@ def test_e2_acceptance_governance_binds_merged_runtime() -> None:
 
     assert handoff["state"] == "accepted"
     assert handoff["producer"]["head_sha"] == evidence["producer_head_sha"]
-    assert handoff["schema_epoch"] == output["schema_epoch"]
+    assert handoff["schema_epoch"] == parent["schema_epoch"]
     assert handoff["allowed_consumers"] == ["D2-mvp-medium-validation"]
     assert handoff["allowed_environments"] == ["ci", "local"]
-    assert handoff["evidence"] == [output["rung_evidence"]]
+    assert handoff["evidence"] == [parent["rung_evidence"]]
     assert handoff["verification"]["evidence_sha256"] == canonical_sha256(handoff["evidence"])
     handoff_content = {key: value for key, value in handoff.items() if key != "handoff_id"}
     assert handoff["handoff_id"] == f"handoff:d2-mvp-medium-validation:{canonical_sha256(handoff_content)}"
 
     graph_entry = graph["batches"]["D2-mvp-medium-validation"]
-    assert graph_entry["status"] == "blocked"
+    assert graph_entry["status"] == "done"
     assert graph_entry["target_rung"] == "E3"
     assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
 
