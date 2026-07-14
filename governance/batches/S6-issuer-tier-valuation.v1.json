@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "batch_id": "S6-issuer-tier-valuation",
+  "revision": 1,
+  "issue": 169,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Compose one deterministic provisional issuer tier and valuation gap from a provenance-neutral GPPE observation and the accepted S5 computed P/S result.",
+  "claim_ceiling": "E0 isolated candidate tier and valuation-gap kernel only; no approved product semantics, GPPE computation, financial mapping, stable handoff, ranking, strategy, replay, or release-readiness claim",
+  "capability_issues": [25],
+  "closes_issues": [],
+  "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 150, 155, 161],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued S6 registration is merged to main",
+      "the implementation PR pins its exact current main base SHA",
+      "the frozen corpus path and SHA-256 are committed before execution",
+      "an independent reviewer is assigned before E0 acceptance",
+      "issue #169 contains the exact manifest path and SHA-256"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "freeze",
+      "issue": 78,
+      "artifact": "accepted provisional GPPE, tier, and valuation-gap discovery evidence",
+      "evidence": {
+        "path": "governance/batches/S0-core-strategy-tiny.v1.json",
+        "sha256": "a8160911a676aeb1b321841f7b859240429f58b54de6fbaa0edda3cc0af26420"
+      },
+      "ref": "git:394053dd168cd0e15af1ae68f1012ee4e3ea86f2:libs/factors/src/factors/batches/core_strategy_tiny/e0_slice.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 161,
+      "artifact": "accepted provisional issuer P/S kernel evidence",
+      "evidence": {
+        "path": "governance/batches/S5-issuer-price-sales-kernel.v1.json",
+        "sha256": "0b15868afa439684c8c91bdaa14afbabb09eb8580e6bc158d4428a5e0e08b7de"
+      },
+      "ref": "git:6ae46c2f571fd97ddbed18f7d279d1f4653e5608:libs/factors/src/factors/batches/issuer_price_to_sales_tiny/kernel.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 59,
+      "artifact": "approved GPPE, tier, and financial comparison semantics",
+      "state": "pending_external_approval"
+    }
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in fixture",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "computed S5 issuer P/S composed with one non-financial GPPE observation",
+      "traditional, tech, and large-model-native candidate bands at exact boundaries",
+      "target P/S midpoint and valuation-gap Decimal arithmetic",
+      "financial branch, unavailable input, and identity/time/currency mismatch rejection",
+      "ambient Decimal-context mutation and canonical semantic identity"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/factors/src/factors/batches/issuer_tier_valuation_tiny/**",
+      "libs/factors/tests/batches/issuer_tier_valuation_tiny/**"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "libs/contracts/**",
+      "governance/batches/S0-core-strategy-tiny.v1.json",
+      "governance/batches/S4-issuer-price-sales.v1.json",
+      "governance/batches/S5-issuer-price-sales-kernel.v1.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "governance/gate0/public-goldens/**",
+      "libs/factors/src/factors/batches/core_strategy_tiny/**",
+      "libs/factors/src/factors/batches/issuer_price_to_sales_tiny/**",
+      "libs/factors/tests/batches/issuer_price_to_sales_tiny/**"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "db/**",
+      "apps/data-engine/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/contracts/**",
+      "libs/factors/src/factors/registry.py",
+      "libs/factors/src/factors/base/**",
+      "libs/factors/src/factors/composite/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [],
+    "lease_owner": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "S6 is an isolated provisional composite kernel; #59/#21 approval and #24/#25 candidate acceptance remain mandatory"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/factors/tests/batches/issuer_tier_valuation_tiny -q",
+      "uv run ruff check libs/factors/src/factors/batches/issuer_tier_valuation_tiny libs/factors/tests/batches/issuer_tier_valuation_tiny",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "binding, candidate-universe, P/S policy, issuer, cutoff, or currency identity mismatch",
+      "missing, unavailable, nonpositive, future, or financial GPPE input",
+      "missing, unavailable, or nonpositive S5 P/S input",
+      "stale semantic, S5 manifest, or public-golden identity",
+      "ambient Decimal-context mutation",
+      "attempted provenance, registry, financial mapping, or release activation"
+    ],
+    "output": {
+      "type": "IssuerTierValuationTinyEvidence",
+      "stable_handoff": false,
+      "state": "pending",
+      "allowed_evidence_readers": [
+        "issue #25 valuation candidate batch",
+        "issue #71 independent Core holdout preparation",
+        "issue #26 replay integration batch"
+      ]
+    }
+  },
+  "invalidation": [
+    "tier boundaries, target-band selection, valuation-gap formula, corpus, or kernel output change creates a new batch revision",
+    "shared-path need blocks the batch until an explicit integration lease exists",
+    "product approval, GPPE implementation, or financial mapping does not raise this provisional evidence ceiling"
+  ],
+  "rollback": "Revert the isolated S6 batch paths and evidence together; no accepted factor registry or runtime release may reference this provisional kernel."
+}
