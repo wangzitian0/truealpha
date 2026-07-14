@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "batch_id": "S5-issuer-price-sales-kernel",
+  "revision": 1,
+  "issue": 161,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Compute one deterministic issuer-level point-in-time price-to-sales observation from the accepted S4 binding without activating a factor or strategy.",
+  "claim_ceiling": "E0 isolated issuer P/S kernel and negative validation only; no approved product semantics, stable handoff, factor activation, tier, strategy, replay, or release-readiness claim",
+  "capability_issues": [25],
+  "closes_issues": [],
+  "informational_issues": [21, 26, 29, 59, 78, 143, 150, 155],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued S5 registration is merged to main",
+      "the implementation PR pins its exact current main base SHA",
+      "the frozen corpus path and SHA-256 are committed before execution",
+      "an independent reviewer is assigned before E0 acceptance",
+      "issue #161 contains the exact manifest path and SHA-256"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "freeze",
+      "issue": 155,
+      "artifact": "accepted issuer P/S and strategy candidate identity contract",
+      "evidence": {
+        "path": "governance/batches/S4-issuer-price-sales.v1.json",
+        "sha256": "3a72c29f0c965e3aa8eaa4464726d183622aa930a7780f9a2d3b51b9e25afa16"
+      },
+      "ref": "git:7d705787342e5a0c119fdba2794b6376d9dc3852:libs/contracts/src/truealpha_contracts/research.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 59,
+      "artifact": "approved Core Strategy semantic values and TOPT mapping",
+      "state": "pending_external_approval"
+    }
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in fixture",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "one issuer with two security share classes and two price listings",
+      "complete market-cap aggregation with PIT price, shares, revenue, and FX",
+      "four-quarter revenue and complete-fiscal-year fallback",
+      "missing, future, stale, wrong-identity, unit, currency, and duplicate-component rejection",
+      "canonical reorder and deterministic semantic identity"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/factors/src/factors/batches/issuer_price_to_sales_tiny/**",
+      "libs/factors/tests/batches/issuer_price_to_sales_tiny/**"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "libs/contracts/**",
+      "governance/batches/S2-core-strategy-contract.v1.json",
+      "governance/batches/S3-financial-strategy-eligibility.v1.json",
+      "governance/batches/S4-issuer-price-sales.v1.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "db/**",
+      "apps/data-engine/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/contracts/**",
+      "libs/factors/src/factors/registry.py",
+      "libs/factors/src/factors/base/**",
+      "libs/factors/src/factors/composite/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [],
+    "lease_owner": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "S5 is an isolated provisional factor kernel; #59/#21 approval and #25 candidate acceptance remain mandatory"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/factors/tests/batches/issuer_price_to_sales_tiny -q",
+      "uv run ruff check libs/factors/src/factors/batches/issuer_price_to_sales_tiny libs/factors/tests/batches/issuer_price_to_sales_tiny",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "binding, candidate-universe, or P/S policy identity mismatch",
+      "missing or duplicate share-class component",
+      "future-known, stale, unavailable, or wrong-subject observation",
+      "missing FX or invalid unit and currency",
+      "nonpositive revenue or vendor precomputed P/S",
+      "reordered inputs and attempted release activation"
+    ],
+    "output": {
+      "type": "IssuerPriceToSalesTinyEvidence",
+      "stable_handoff": false,
+      "state": "pending",
+      "allowed_evidence_readers": [
+        "issue #25 valuation candidate batch",
+        "issue #71 independent Core holdout preparation",
+        "issue #26 replay integration batch"
+      ]
+    }
+  },
+  "invalidation": [
+    "P/S contract, corpus, or kernel output change creates a new batch revision",
+    "shared-path need blocks the batch until an explicit integration lease exists",
+    "product approval or a real TOPT mapping does not raise this provisional evidence ceiling"
+  ],
+  "rollback": "Revert the isolated S5 batch paths and evidence together; no accepted release manifest or runtime registry may reference this provisional kernel."
+}
