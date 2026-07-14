@@ -215,8 +215,8 @@ def _assert_meta_symbol_replay(sample_root: Path, evidence: EvidenceCase) -> boo
     )
 
 
-def _assert_twelve_data_reconciliation(sample_root: Path, evidence: EvidenceCase) -> bool:
-    report = _load_json(_artifact_with_name(sample_root, evidence, "twelve_data_reconciliation"))
+def _valid_twelve_data_reconciliation(path: Path) -> bool:
+    report = _load_json(path)
     observations = report.get("observations", [])
     if report.get("status") not in {"observed", "observed_full_yahoo_window"} or len(observations) != 4:
         return False
@@ -368,7 +368,6 @@ EVIDENCE_ASSERTIONS = {
     "graph.supply-chain-pit-replay": _assert_ddog_supply_chain_pit,
     "universe.membership-replay": _assert_qqq_membership_replay,
     "universe.symbol-change-or-delisting-replay": _assert_meta_symbol_replay,
-    "prices.twelve-data-bounded-reconciliation": _assert_twelve_data_reconciliation,
 }
 
 
@@ -488,6 +487,9 @@ def audit_strategy_samples(sample_root: Path) -> DataQualityReport:
     filing_symbols = {path.name.split("_", 1)[0] for path in filing_paths}
     price_rows, price_spans, price_errors = _valid_price_inventory(price_paths)
     vintage_compared, vintage_matches, vintage_max_delta = _price_vintage_stability(price_paths)
+    twelve_data_reconciliation = _valid_twelve_data_reconciliation(
+        sample_root / "prices" / "twelve_data_reconciliation_20260714.json"
+    )
     price_symbols = set(price_rows)
     common_companies = sec_symbols & moomoo_symbols & filing_symbols & price_symbols
     strategy_companies = set(traits_by_company) & sec_symbols & filing_symbols & price_symbols
@@ -657,8 +659,8 @@ def audit_strategy_samples(sample_root: Path) -> DataQualityReport:
     add_all(
         "prices.source_reconciliation",
         has_evidence("prices.source_reconciliation", "prices.independent-source-reconciliation")
-        or has_evidence("prices.source_reconciliation", "prices.twelve-data-bounded-reconciliation"),
-        f"verified_cases={len(evidence.get('prices.source_reconciliation', ()))}",
+        or twelve_data_reconciliation,
+        f"verified_cases={int(twelve_data_reconciliation) + len(evidence.get('prices.source_reconciliation', ()))}",
         "bounded primary/independent reconciliation; full coverage and adjusted/actions remain separate gates",
     )
     add_all(

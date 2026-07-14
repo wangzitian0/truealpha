@@ -46,7 +46,6 @@
       "governance/batches/S1-price-source-calibration.v1.json",
       "governance/vision-issue-graph.json",
       "apps/data-engine/samples/prices/twelve_data_reconciliation_20260714.json",
-      "apps/data-engine/samples/strategy_coverage.json",
       "apps/data-engine/src/data_engine/quality/strategy_samples.py",
       "apps/data-engine/tests/test_strategy_sample_quality.py",
       "docs/price-source-calibration.md",
@@ -54,6 +53,7 @@
     ],
     "read_only": [
       "apps/data-engine/samples/capture_manifest_20260712.json",
+      "apps/data-engine/samples/strategy_coverage.json",
       "apps/data-engine/samples/prices/independent_reconciliation.v1.json",
       "apps/data-engine/samples/prices/DDOG_prices_3y_20260712.csv",
       "apps/data-engine/samples/prices/DUOL_prices_3y_20260712.csv",
@@ -87,6 +87,8 @@
       "type": "BoundedPriceReconciliationEvidence",
       "stable_handoff": false,
       "state": "produced",
+      "artifact_path": "apps/data-engine/samples/prices/twelve_data_reconciliation_20260714.json",
+      "artifact_sha256": "e7613862e2e63c88fcb299747df8c08c9b13891d085bc5b313f9cb5cbf15e9e5",
       "retention": "content-addressed fixture and aggregate statistics retained"
     }
   },

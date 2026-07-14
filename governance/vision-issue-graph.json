@@ -169,7 +169,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S1-price-source-calibration.v1.json",
-      "sha256": "3bf9597db0b6019fd84d7841f9efa18969992b5cb7c54b27c49477ef26777e6f"
+      "sha256": "a067dd84d0630f297609b6583c6e868e953d2e74259df305170db4897cf6cf08"
     }
   },
   "artifact_edges": [
