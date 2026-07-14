@@ -179,6 +179,15 @@
       "terminal_rung": "E1",
       "manifest": "governance/batches/S2-core-strategy-contract.v1.json",
       "sha256": "2908f2a33c358c3c349f4e3ec41b1c83e7d4f78345a4629d29ae53d1539fb127"
+    },
+    "S3-financial-strategy-eligibility": {
+      "issue": 150,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E0",
+      "manifest": "governance/batches/S3-financial-strategy-eligibility.v1.json",
+      "sha256": "f5e327dd3162088600ff9c04afd5a98196725ddbf3f40e55af4c754660c3e542"
     }
   },
   "artifact_edges": [
