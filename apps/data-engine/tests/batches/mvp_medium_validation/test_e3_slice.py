@@ -854,11 +854,11 @@ def test_e3_terminal_governance_binds_the_complete_issue_23_matrix() -> None:
     graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
     output = manifest["acceptance"]["output"]
 
-    assert manifest["revision"] == 13
+    assert manifest["revision"] == 14
     assert manifest["status"] == "done"
     assert manifest["last_accepted_rung"] == manifest["target_rung"] == manifest["terminal_rung"] == "E3"
     assert manifest["capability_issues"] == manifest["closes_issues"] == [23]
-    assert manifest["activation"]["base_sha"] == "6ae46c2f571fd97ddbed18f7d279d1f4653e5608"
+    assert manifest["activation"]["base_sha"] == "1d6d59bb7708c1de3913dd91b6949d6697d2452a"
 
     assert output["type"] == "D2E3Evidence"
     assert output["stable_handoff"] is False

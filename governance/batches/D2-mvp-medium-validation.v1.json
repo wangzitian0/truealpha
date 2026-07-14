@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 13,
+  "revision": 14,
   "issue": 121,
   "owner_gate": 29,
   "status": "done",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "6ae46c2f571fd97ddbed18f7d279d1f4653e5608",
+    "base_sha": "1d6d59bb7708c1de3913dd91b6949d6697d2452a",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
