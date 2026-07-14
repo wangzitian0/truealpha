@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "083512c8a51dca5eb1d568c221a6400b1787e5d5",
+    "base_sha": "56eb359e92e74a6bb24746ec41761dfbe7ee1413",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D3 registration is merged to main",
