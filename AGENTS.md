@@ -32,6 +32,37 @@ No moon — CI is GitHub Actions with path filtering (`.github/workflows/`).
 - Web: `cd apps/app-web && bun run typecheck && bun run build`
 - DB: `make db-up` (compose applies `db/` DDL on first boot)
 
+## Workspace Work Prefix and Deduplication
+
+The canonical workspace name for this repository is `truealpha-data`, so its exact
+work prefix is `[truealpha-data]`. Auxiliary Git worktrees and branch-directory
+suffixes inherit this canonical prefix; names such as `truealpha-data-gate0` do not
+create a different owner identity.
+
+1. **Prefix owned work.** Agent task names and every GitHub issue or pull request
+   created or exclusively owned by this workspace must begin with
+   `[truealpha-data]`. For batch work, retain the work identity after the workspace
+   prefix, for example `[truealpha-data] [D3:E0] Freeze Yahoo parser corpus`.
+2. **Claim one work key.** The unique work key is the issue or batch ID plus its
+   target rung, or an explicit standalone task ID when no batch applies. Only one
+   active agent, issue, and pull request may own a work key at a time.
+3. **Search before creating.** Before opening an issue, branch, or pull request,
+   search open and recently closed issues and pull requests, remote branches, and
+   canonical batch manifests for the same work key. Continue the existing work
+   instead of creating a parallel copy.
+4. **Keep parallel work disjoint.** A shared prefix does not make work independent.
+   Agents in this workspace may run concurrently only when both their work keys and
+   writable paths are disjoint. Changes to shared graphs, migrations, registries,
+   exports, lockfiles, or authoritative docs remain serialized through the existing
+   integration-lease rules.
+5. **Do not claim shared parents.** Root capability and gate issues remain unprefixed
+   unless ownership is explicitly assigned to this workspace. Prefixed batch issues
+   and pull requests should reference those shared parents without relabeling them as
+   exclusively owned work.
+6. **Collapse duplicates immediately.** If duplicate work is discovered, keep the
+   complete, verified issue or pull request and close the duplicate with a cross-link
+   and a concise reason before either line advances further.
+
 ## Iterative Capability Delivery Protocol
 
 Release-gate milestones define product claims and promotion order. They are not
