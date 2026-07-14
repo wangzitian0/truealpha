@@ -19,6 +19,7 @@ from data_engine.config import settings
 from data_engine.contract_repository import (
     PostgresRegistrySnapshotRepository,
     PostgresSnapshotRepository,
+    PostgresStrategyUsageAuditRepository,
 )
 from data_engine.mvp_medium_models import MvpNormalizationDraft
 from data_engine.mvp_medium_pipeline import (
@@ -38,6 +39,16 @@ from data_engine.mvp_medium_repository import (
     project_provenance_neutral,
 )
 from data_engine.mvp_medium_snapshot import PostgresMediumSnapshotResolver
+from data_engine.mvp_probe import (
+    FixtureProbeRepository,
+    ProbeExecutionResult,
+    ProbeExecutionSpec,
+    execute_contract_probe,
+)
+from factors.base.registered_semantic_probe import (
+    PROBE_FACTOR_VERSION,
+    PROBE_IMPLEMENTATION_SHA256,
+)
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -45,6 +56,8 @@ from truealpha_contracts import DataSource, RawCapture, RawIngestionEnvelope, Ra
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.execution import (
+    FactorInvocationTemplate,
+    FactorKind,
     PolicyBinding,
     PolicyRole,
     SnapshotDemandCell,
@@ -56,8 +69,18 @@ from truealpha_contracts.registries import (
     SemanticTypeRegistryEntry,
     SourceRegistryEntry,
 )
-from truealpha_contracts.universe import SubjectKind, SubjectRef
-from truealpha_contracts.usage import DataRequirement, RequirementLevel
+from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
+from truealpha_contracts.usage import (
+    DataRequirement,
+    DataUsageEvent,
+    PlannedDemandCell,
+    RequirementLevel,
+    ReverseLineageEdge,
+    StrategyUsageAudit,
+    UsageEmitterKind,
+    UsageStage,
+    build_strategy_usage_audit,
+)
 
 REPOSITORY_ROOT = next(
     parent
@@ -536,6 +559,104 @@ def _request(
     )
 
 
+def _probe_spec(requirement: DataRequirement, *, started_at: datetime) -> ProbeExecutionSpec:
+    template = FactorInvocationTemplate(
+        factor_id="registered_semantic_probe",
+        factor_version=PROBE_FACTOR_VERSION,
+        factor_implementation_sha256=PROBE_IMPLEMENTATION_SHA256,
+        factor_kind=FactorKind.BASE,
+        parameter_model_key="d2_typed_extension:NoParameters",
+        parameter_schema_sha256=canonical_sha256({"type": "object", "additionalProperties": False}),
+        canonical_parameters_sha256=canonical_sha256({}),
+        data_requirement_ids=(requirement.requirement_id,),
+    )
+    return ProbeExecutionSpec(
+        template=template,
+        subject=SUBJECT,
+        started_at=started_at,
+        runner_id="runner.d2-typed-extension",
+        runner_version=MEDIUM_VERSION,
+        runner_implementation_sha256=canonical_sha256({"runner": "d2-typed-extension"}),
+        repository_commit_id="commit:d2-typed-extension-output-replay",
+    )
+
+
+def _usage_audit(
+    *,
+    registry: RegistrySnapshot,
+    requirement: DataRequirement,
+    record_id: str,
+    result: ProbeExecutionResult,
+) -> StrategyUsageAudit:
+    run_id = "strategy-run:d2-typed-extension-output-replay"
+    trace_id = "trace:d2-typed-extension-output-replay"
+    decision_id = "decision:d2-typed-extension-output-replay"
+    planned = PlannedDemandCell(
+        requirement_id=requirement.requirement_id,
+        capture_requirement_id=requirement.capture_requirement_id,
+        semantic_type_id=requirement.semantic_type_id,
+        domain=requirement.domain,
+        subject=SUBJECT,
+        partition_key="all",
+        level=requirement.level,
+        expected_stages=frozenset({UsageStage.FACTOR_CONSUMPTION}),
+    )
+    occurred_at = result.output.materialized_at + timedelta(seconds=1)
+    event = DataUsageEvent(
+        operation_id="operation:d2-typed-extension-factor-consumption",
+        emitter_kind=UsageEmitterKind.INSTRUMENTED_RUNNER,
+        emitter_id="runner.d2-typed-extension",
+        stage=UsageStage.FACTOR_CONSUMPTION,
+        requirement_id=requirement.requirement_id,
+        capture_requirement_id=requirement.capture_requirement_id,
+        semantic_type_id=requirement.semantic_type_id,
+        domain=requirement.domain,
+        subject=SUBJECT,
+        partition_key="all",
+        run_id=run_id,
+        trace_id=trace_id,
+        normalized_record_ids=(record_id,),
+        evidence_ids=(result.selection.selection_id, result.output.materialized_output_id),
+        occurred_at=occurred_at,
+        recorded_at=occurred_at + timedelta(seconds=1),
+        retained_until=occurred_at + timedelta(days=365),
+    )
+    consumed_ids = (record_id, result.selection.selection_id, result.output.materialized_output_id)
+    reverse_lineage = (
+        ReverseLineageEdge(downstream_id=run_id, upstream_id=decision_id, relation="produced"),
+        ReverseLineageEdge(downstream_id=decision_id, upstream_id=trace_id, relation="traced"),
+        *(ReverseLineageEdge(downstream_id=trace_id, upstream_id=item, relation="consumed") for item in consumed_ids),
+    )
+    content_hash = canonical_sha256({"audit": "d2-typed-extension"})
+    return build_strategy_usage_audit(
+        strategy_run_id=run_id,
+        planned_cells=(planned,),
+        events=(event,),
+        trace_bundle_ids=("trace-bundle:" + canonical_sha256({"trace": trace_id}),),
+        reverse_lineage=reverse_lineage,
+        affected_decision_ids=(decision_id,),
+        research_catalog_id="research-catalog:" + content_hash,
+        research_catalog_sha256=content_hash,
+        universe=UniverseRef(
+            universe_id="universe.d2-typed-extension",
+            universe_version=MEDIUM_VERSION,
+            content_sha256=canonical_sha256({"universe": SUBJECT.model_dump(mode="json")}),
+        ),
+        applicability_catalog_id="applicability:" + content_hash,
+        applicability_catalog_sha256=content_hash,
+        slo_catalog_id="slo-catalog:d2-typed-extension",
+        slo_catalog_sha256=content_hash,
+        release_manifest_id="release-manifest:" + content_hash,
+        registry_snapshot=registry,
+        run_started_at=result.execution.started_at,
+        run_completed_at=event.recorded_at + timedelta(seconds=1),
+        audited_at=event.recorded_at + timedelta(seconds=2),
+        auditor_id="auditor.d2-typed-extension",
+        auditor_version=MEDIUM_VERSION,
+        auditor_implementation_sha256=canonical_sha256({"auditor": "d2-typed-extension"}),
+    )
+
+
 @pytest.fixture(scope="module")
 def typed_extension_database_url() -> Iterator[str]:
     parameters = conninfo_to_dict(settings.database_url)
@@ -815,3 +936,109 @@ def test_typed_record_extension_rejects_schema_drift_and_missing_confidence(
     assert connection.execute("select count(*) from raw.fetches").fetchone() == (2,)
     assert connection.execute("select count(*) from staging.normalized_records").fetchone() == (0,)
     assert connection.execute("select count(*) from staging.d2_extension_signals").fetchone() == (0,)
+
+
+def test_disabled_typed_extension_replays_usage_and_factor_output(
+    connection: psycopg.Connection[Any],
+) -> None:
+    _prepare_projection_table(connection)
+    _base, registry, _history, _source, _type, catalog, repository = _extension_runtime(connection)
+    first_source, second_source = _source_rows()
+    object_store = MemoryRawObjectStore()
+    captured = land_medium_capture_plan(
+        connection,
+        object_store=object_store,
+        catalog=catalog,
+        work_items=(_work_item(first_source), _work_item(second_source)),
+    )
+    normalized = normalize_medium_capture_batch(
+        batch=captured,
+        catalog=catalog,
+        repository=repository,
+    )
+    selected_record = next(record for record in normalized.normalized_records if record.is_restatement)
+    requirement, demand = _demand()
+    request = _request(registry, demand, as_of=SECOND_KNOWABLE_AT)
+    snapshots = PostgresSnapshotRepository(connection)
+    snapshot = PostgresMediumSnapshotResolver(
+        semantic_records=repository,
+        snapshots=snapshots,
+    ).resolve(
+        request,
+        registry=registry,
+        resolved_at=SECOND_KNOWABLE_AT + timedelta(minutes=3),
+    )
+    output_repository = FixtureProbeRepository(snapshot)
+    spec = _probe_spec(requirement, started_at=snapshot.resolved_at + timedelta(seconds=1))
+    first_result = execute_contract_probe(
+        repository=output_repository,
+        snapshot=snapshot,
+        spec=spec,
+    )
+    first_audit = _usage_audit(
+        registry=registry,
+        requirement=requirement,
+        record_id=selected_record.normalized_record_id,
+        result=first_result,
+    )
+    audit_repository = PostgresStrategyUsageAuditRepository(connection)
+    assert audit_repository.put(first_audit)
+    counts_before_disable = connection.execute(
+        """
+        select
+          (select count(*) from raw.fetches),
+          (select count(*) from staging.normalized_records),
+          (select count(*) from staging.d2_extension_signals)
+        """
+    ).fetchone()
+
+    _, disabled_registry, _, _, _, disabled_catalog, disabled_repository = _extension_runtime(
+        connection,
+        disabled=True,
+    )
+    with pytest.raises(ValueError, match="disabled semantic type"):
+        land_medium_capture_plan(
+            connection,
+            object_store=object_store,
+            catalog=disabled_catalog,
+            work_items=(_work_item(second_source),),
+        )
+    replayed_snapshot = PostgresMediumSnapshotResolver(
+        semantic_records=disabled_repository,
+        snapshots=snapshots,
+    ).resolve(
+        request,
+        registry=disabled_registry,
+        resolved_at=SECOND_KNOWABLE_AT + timedelta(minutes=3),
+    )
+    replayed_result = execute_contract_probe(
+        repository=output_repository,
+        snapshot=replayed_snapshot,
+        spec=spec,
+    )
+    replayed_audit = _usage_audit(
+        registry=disabled_registry,
+        requirement=requirement,
+        record_id=selected_record.normalized_record_id,
+        result=replayed_result,
+    )
+
+    assert replayed_snapshot == snapshot
+    assert replayed_result == first_result
+    assert replayed_audit == first_audit
+    assert audit_repository.put(replayed_audit) is False
+    assert audit_repository.get(first_audit.strategy_usage_audit_id) == first_audit
+    assert output_repository.get_output(first_result.output.materialized_output_id) == first_result.output
+    assert output_repository.get_batch(first_result.batch.materialized_batch_id) == first_result.batch
+    assert first_audit.telemetry_complete
+    assert (
+        connection.execute(
+            """
+        select
+          (select count(*) from raw.fetches),
+          (select count(*) from staging.normalized_records),
+          (select count(*) from staging.d2_extension_signals)
+        """
+        ).fetchone()
+        == counts_before_disable
+    )
