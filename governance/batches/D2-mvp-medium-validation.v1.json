@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "1f6c80588cf0e7f3921e0480672968fde16aad0b",
+    "base_sha": "c1f0d0855b80846d12c32d5740d0604585b01c3a",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
