@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S4-issuer-price-sales",
-  "revision": 2,
+  "revision": 3,
   "issue": 155,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "strategy",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
-  "terminal_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
+  "terminal_rung": "E1",
   "objective": "Bind issuer-level price-to-sales construction, complete share-class market value, and one deterministic execution listing without approving product semantics.",
-  "claim_ceiling": "E0 shared-contract repair and negative validation only; no approved P/S semantics, TOPT execution mapping, factor implementation, strategy activation, or release-readiness claim",
+  "claim_ceiling": "accepted E0 shared-contract repair pending E1 frozen-corpus evidence; no approved P/S semantics, TOPT execution mapping, factor implementation, strategy activation, or release-readiness claim",
   "capability_issues": [21],
   "closes_issues": [],
   "informational_issues": [25, 26, 57, 59, 78, 143, 150],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "ac8e275bf6d36cbb76b91ff330e3411544c63ee7",
+    "base_sha": "ecc39b059f64529b9fdfc20c03beb426c052baab",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S4 registration is merged to main",
@@ -95,7 +95,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S4-issuer-price-sales.v1.json",
-      "sha256": null
+      "sha256": "7f82d07232b4a059e9a01d3c7f45541e39fef387b9c924f782d111f023bd96a3"
     }
   },
   "release_activation": {
@@ -120,7 +120,7 @@
     "output": {
       "type": "issuer P/S and strategy candidate identity contract repair",
       "stable_handoff": false,
-      "state": "pending",
+      "state": "accepted_e0",
       "allowed_evidence_readers": [
         "issue #21 semantic freeze batch",
         "issue #25 valuation candidate batch",
