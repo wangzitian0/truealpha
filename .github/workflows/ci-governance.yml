@@ -84,6 +84,7 @@ jobs:
     needs: sync_batch_labels
     if: >-
       always() &&
+      github.event_name == 'pull_request' &&
       (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
     runs-on: ubuntu-latest
     services:
@@ -104,16 +105,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: astral-sh/setup-uv@v5
-        if: github.event_name == 'pull_request'
         with:
           enable-cache: true
       - name: Install pull-request acceptance dependencies
-        if: github.event_name == 'pull_request'
         run: uv sync --all-packages --frozen
       - name: Prepare pull-request acceptance database
-        if: github.event_name == 'pull_request'
         env:
           PGPASSWORD: postgres
         run: |
@@ -132,13 +130,7 @@ jobs:
           gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 200
           --label scope:vision --json number,state,body,labels,milestone
           > "$RUNNER_TEMP/vision-issues.json"
-      - name: Validate GitHub parity
-        if: github.event_name != 'pull_request'
-        run: >-
-          python3 tools/check_delivery_governance.py
-          --github-issues "$RUNNER_TEMP/vision-issues.json"
       - name: Authorize pull-request diff
-        if: github.event_name == 'pull_request'
         env:
           GATE0_CANDIDATE_FLAG: ${{ github.event.pull_request.draft && '--allow-blocked-gate-candidate' || '' }}
           GH_TOKEN: ${{ github.token }}
@@ -153,10 +145,36 @@ jobs:
           --evidence-output "$RUNNER_TEMP/rung-evidence.json"
           $GATE0_CANDIDATE_FLAG
       - name: Retain rung evidence
-        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: rung-evidence-${{ github.event.pull_request.number }}
           path: ${{ runner.temp }}/rung-evidence.json
           if-no-files-found: ignore
           retention-days: 90
+
+  validate_non_pr:
+    needs: sync_batch_labels
+    if: >-
+      always() &&
+      github.event_name != 'pull_request' &&
+      (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate checked-in graph and manifests
+        run: make issue-graph-check
+      - name: Validate Gate 0 candidate chain
+        run: make gate0-candidate-check
+      - name: Export live Vision issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 200
+          --label scope:vision --json number,state,body,labels,milestone
+          > "$RUNNER_TEMP/vision-issues.json"
+      - name: Validate GitHub parity
+        run: >-
+          python3 tools/check_delivery_governance.py
+          --github-issues "$RUNNER_TEMP/vision-issues.json"
