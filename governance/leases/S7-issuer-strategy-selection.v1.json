@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:246b3574d891b437ad2e3ddae1dda6e814a86b241721fbd7bb18f234a06953c0",
+  "lease_id": "integration-lease:98cdb2f1fb60b66c721cc1a35f18bd84284f0d811a20084315ce22919531b8de",
   "batch_id": "S7-issuer-strategy-selection",
   "owner": "wangzitian0",
   "state": "active",
   "paths": [
     "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/__init__.py",
+    "libs/factors/qlib-runtime/**",
     "pyproject.toml"
   ],
   "base_sha": "b33446c01eefa6217c6d8fe797787af886e9ea6b",

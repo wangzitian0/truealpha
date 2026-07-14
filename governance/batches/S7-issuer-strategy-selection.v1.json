@@ -149,7 +149,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S7-issuer-strategy-selection.v1.json",
-      "sha256": "7ad28c5090565539ad85f3ed0e5ec0be7e867536579151327e56fd28358a7be0"
+      "sha256": "22a2871bf23f2fecb6e7cd0252541328c109dc2c28213a1af90c2ed5b07bc000"
     }
   },
   "release_activation": {

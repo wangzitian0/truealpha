@@ -239,7 +239,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S7-issuer-strategy-selection.v1.json",
-      "sha256": "776c4844576d1e20265d1532c853135065437327ff74897c8637f9f915f7cce1"
+      "sha256": "ccd896b55e00e495e705c29975408f3f8d5648867c87fc84ae53a61e29379c67"
     }
   },
   "artifact_edges": [
