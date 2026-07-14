@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "1d6d59bb7708c1de3913dd91b6949d6697d2452a",
+    "base_sha": "d063bba4542478c672b6f01339d14c5714caf890",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S6 registration is merged to main",

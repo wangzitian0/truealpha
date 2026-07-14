@@ -230,7 +230,7 @@
       "target_rung": "E0",
       "terminal_rung": "E0",
       "manifest": "governance/batches/S6-issuer-tier-valuation.v1.json",
-      "sha256": "48d8f9b1688080371c46a3c5bfd572624699d911543ecec15e3b079d5be275e5"
+      "sha256": "a935412def70dfba4433ba4c122c4586fbc53b03643d067b3250afaa1b2eaf6e"
     }
   },
   "artifact_edges": [
