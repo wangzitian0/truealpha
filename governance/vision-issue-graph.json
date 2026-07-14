@@ -213,6 +213,15 @@
       "terminal_rung": "E1",
       "manifest": "governance/batches/S5-issuer-price-sales-kernel.v1.json",
       "sha256": "0b15868afa439684c8c91bdaa14afbabb09eb8580e6bc158d4428a5e0e08b7de"
+    },
+    "S6-issuer-tier-valuation": {
+      "issue": 169,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E0",
+      "manifest": "governance/batches/S6-issuer-tier-valuation.v1.json",
+      "sha256": "224c0eea91d9907787375c07a2ab913f9e67722dc1bdb499d0086aa243dc06da"
     }
   },
   "artifact_edges": [
