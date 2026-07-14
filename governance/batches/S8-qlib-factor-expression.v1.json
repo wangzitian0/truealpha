@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S8-qlib-factor-expression",
-  "revision": 2,
+  "revision": 3,
   "issue": 189,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "strategy",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Define a Qlib-independent typed factor-expression AST and operator registry, then prove the TrueAlpha compiler is the only path that can supply an expression to pinned Qlib 0.9.7.",
-  "claim_ceiling": "preparation-only safe Qlib-expression corpus; this revision earns no rung and approves no implementation, product semantics, real factor, provider, registered factor, replay, persistence, or release-readiness claim",
+  "claim_ceiling": "E0 safe typed-expression contract, deterministic compiler, execution identity, and isolated Qlib 0.9.7 parity over the frozen synthetic corpus; no approved product semantics, real factor, provider, registration, replay, persistence, stable handoff, or release-readiness claim",
   "capability_issues": [21, 26],
   "closes_issues": [],
   "informational_issues": [29, 59, 143, 181],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "d62131fc54742e17594cda71518c10568db903c4",
+    "base_sha": "b85c1fcd8619c9239a69faaadae89869fe2cf5f3",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S8 registration is merged to main",
@@ -28,7 +28,7 @@
       "the implementation PR pins its exact current main base SHA",
       "the implementation reuses the S7 workspace-excluded Qlib runtime and does not change the root lock",
       "an independent reviewer is assigned before E0 acceptance",
-      "an active integration lease covers the shared contracts export path",
+      "an active integration lease covers the dedicated contract module while the Gate 0-frozen shared export remains unchanged",
       "issue #189 contains the exact manifest path and SHA-256"
     ]
   },
@@ -126,7 +126,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S8-qlib-factor-expression.v1.json",
-      "sha256": null
+      "sha256": "efb72783bc760d67697acbea62461a53b233503cc031c9eb08d039b76b0ae697"
     }
   },
   "release_activation": {
@@ -136,6 +136,7 @@
   },
   "acceptance": {
     "commands": [
+      "uv sync --project libs/factors/qlib-runtime --all-groups --frozen",
       "uv run pytest libs/contracts/tests/test_qlib_expression.py -q",
       "uv run --project libs/factors/qlib-runtime pytest libs/factors/tests/batches/qlib_expression_contract_tiny -q",
       "uv run ruff check libs/contracts/src/truealpha_contracts/qlib_expression.py libs/contracts/tests/test_qlib_expression.py libs/factors/src/factors/batches/qlib_expression_contract_tiny libs/factors/tests/batches/qlib_expression_contract_tiny",
@@ -154,7 +155,7 @@
     "output": {
       "type": "QlibFactorExpressionTinyEvidence",
       "stable_handoff": false,
-      "state": "pending",
+      "state": "accepted_e0",
       "allowed_evidence_readers": [
         "issue #21 strategy semantic freeze batch",
         "issue #24 and #25 factor candidate batches",
