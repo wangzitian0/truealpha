@@ -262,7 +262,8 @@ def test_e2_acceptance_governance_binds_merged_runtime() -> None:
     assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
 
 
-def test_e2_sql_contract_executes() -> None:
+def test_e2_sql_contract_executes(connection) -> None:
+    assert not connection.closed
     completed = subprocess.run(
         [
             "psql",
