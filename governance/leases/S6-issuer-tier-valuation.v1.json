@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:3419db95cb558cbf434a1c5928eb1e6b98b352d6ea87302cd72341a398d3ac45",
+  "batch_id": "S6-issuer-tier-valuation",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/factors/src/factors/batches/issuer_tier_valuation_tiny/__init__.py"
+  ],
+  "base_sha": "08a8f02aa2f51429150b3ec1a094972d617b8f19",
+  "expires_at": "2026-07-21T00:00:00Z"
+}
