@@ -126,7 +126,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S8-qlib-factor-expression.v1.json",
-      "sha256": "a22061f142ddac42375cdebfd7632ea954b726674b2391cae0ace8fde0c13b63"
+      "sha256": "efb72783bc760d67697acbea62461a53b233503cc031c9eb08d039b76b0ae697"
     }
   },
   "release_activation": {
