@@ -86,6 +86,20 @@ jobs:
       always() &&
       (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: truealpha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -98,6 +112,15 @@ jobs:
       - name: Install pull-request acceptance dependencies
         if: github.event_name == 'pull_request'
         run: uv sync --all-packages --frozen
+      - name: Prepare pull-request acceptance database
+        if: github.event_name == 'pull_request'
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in db/migrations/*.sql db/roles.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done
       - name: Validate checked-in graph and manifests
         run: make issue-graph-check
       - name: Validate Gate 0 candidate chain
@@ -119,6 +142,8 @@ jobs:
         env:
           GATE0_CANDIDATE_FLAG: ${{ github.event.pull_request.draft && '--allow-blocked-gate-candidate' || '' }}
           GH_TOKEN: ${{ github.token }}
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+          TRUEALPHA_REQUIRE_RUNTIME: "1"
         run: >-
           python3 tools/check_delivery_governance.py
           --github-issues "$RUNNER_TEMP/vision-issues.json"

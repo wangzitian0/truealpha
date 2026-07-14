@@ -1569,3 +1569,18 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     assert "--execute-acceptance" in workflow
     assert "render_batch_issue_body" in workflow
     assert 'json.dumps({"body": desired_body, "labels": desired})' in workflow
+
+
+def test_workflow_runs_acceptance_against_a_fresh_required_postgres_runtime():
+    workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
+
+    database_step = workflow.index("- name: Prepare pull-request acceptance database")
+    authorization_step = workflow.index("- name: Authorize pull-request diff")
+
+    assert "image: postgres:16-alpine" in workflow
+    assert '--health-cmd "pg_isready -U postgres"' in workflow
+    assert "for f in db/migrations/*.sql db/roles.sql" in workflow
+    assert "psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1" in workflow
+    assert "DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha" in workflow
+    assert 'TRUEALPHA_REQUIRE_RUNTIME: "1"' in workflow
+    assert database_step < authorization_step
