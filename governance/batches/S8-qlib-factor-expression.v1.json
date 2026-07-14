@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "batch_id": "S8-qlib-factor-expression",
+  "revision": 1,
+  "issue": 189,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E1",
+  "objective": "Define a Qlib-independent typed factor-expression AST and operator registry, then prove the TrueAlpha compiler is the only path that can supply an expression to pinned Qlib 0.9.7.",
+  "claim_ceiling": "registered E0 safe Qlib-expression contract batch only; no frozen corpus, implementation evidence, approved product semantics, real factor, provider, registered factor, replay, or release-readiness claim",
+  "capability_issues": [21, 26],
+  "closes_issues": [],
+  "informational_issues": [29, 59, 143, 181],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued S8 registration is merged to main",
+      "the typed-expression corpus path and SHA-256 are committed in a preparation PR",
+      "the implementation PR pins its exact current main base SHA",
+      "the implementation reuses the S7 workspace-excluded Qlib runtime and does not change the root lock",
+      "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers the shared contracts export path",
+      "issue #189 contains the exact manifest path and SHA-256"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "freeze",
+      "issue": 143,
+      "artifact": "accepted executable Core Strategy definition contract",
+      "evidence": {
+        "path": "governance/batches/S2-core-strategy-contract.v1.json",
+        "sha256": "2908f2a33c358c3c349f4e3ec41b1c83e7d4f78345a4629d29ae53d1539fb127"
+      },
+      "ref": "git:f1daa6eb689bd16a0b455eb66ed103e33b83f8c6:libs/contracts/src/truealpha_contracts/research.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 181,
+      "artifact": "accepted pinned Qlib runtime and selection-adapter boundary",
+      "evidence": {
+        "path": "governance/batches/S7-issuer-strategy-selection.v1.json",
+        "sha256": "730cf2419dc7795d920998c6d57846c6878bf44c650ec16dadf2e85dc3921bf1"
+      },
+      "ref": "git:891ea6982283b940df3b0973bd1940b03c81888a:libs/factors/src/factors/batches/issuer_strategy_selection_tiny/kernel.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 59,
+      "artifact": "approved matrix-compatible factor semantics and product expressions",
+      "state": "pending_external_approval"
+    },
+    {
+      "class": "freeze",
+      "issue": 26,
+      "artifact": "user-approved Qlib architecture selection and version-pinned adapter ownership",
+      "ref": "pr:182",
+      "state": "approved_design_authority_doc_merge_pending"
+    }
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in synthetic dimensionless fixture",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "canonical feature, finite numeric, and registered operator-call nodes",
+      "builtin-only arithmetic, reference, and rolling operators with exact arity and argument kinds",
+      "deterministic AST, registry, expression, compiled-field, and combined execution identities",
+      "independent typed-AST evaluator parity with pinned Qlib on a tiny dimensionless matrix",
+      "null propagation and declared maximum lookback behavior",
+      "raw string, callable, module path, kwargs, attribute, indexing, import, and punctuation injection rejection",
+      "unknown feature/operator, duplicate ID/symbol, invalid arity/type, non-finite numeric, excessive depth/node/lookback rejection",
+      "input reordering, ambient Decimal context, root-environment import, and root-lock isolation"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/contracts/src/truealpha_contracts/qlib_expression.py",
+      "libs/contracts/src/truealpha_contracts/__init__.py",
+      "libs/contracts/tests/test_qlib_expression.py",
+      "libs/contracts/tests/fixtures/qlib_expression.v1.json",
+      "libs/factors/src/factors/batches/qlib_expression_contract_tiny/**",
+      "libs/factors/tests/batches/qlib_expression_contract_tiny/**",
+      "governance/leases/S8-qlib-factor-expression.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "libs/contracts/src/truealpha_contracts/research.py",
+      "governance/batches/S2-core-strategy-contract.v1.json",
+      "governance/batches/S7-issuer-strategy-selection.v1.json",
+      "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
+      "libs/factors/qlib-runtime/**",
+      "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/**",
+      "libs/factors/tests/batches/issuer_strategy_selection_tiny/**"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "db/**",
+      "apps/data-engine/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/contracts/src/truealpha_contracts/research.py",
+      "libs/factors/src/factors/registry.py",
+      "libs/factors/src/factors/base/**",
+      "libs/factors/src/factors/composite/**",
+      "libs/factors/qlib-runtime/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [
+      "libs/contracts/src/truealpha_contracts/__init__.py"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/S8-qlib-factor-expression.v1.json",
+      "sha256": null
+    }
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "S8 defines provisional safe expression plumbing only; #59/#21 semantic approval, real factor candidates, #71 verification, and #26 replay remain mandatory"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/contracts/tests/test_qlib_expression.py -q",
+      "uv run --project libs/factors/qlib-runtime pytest libs/factors/tests/batches/qlib_expression_contract_tiny -q",
+      "uv run ruff check libs/contracts/src/truealpha_contracts/qlib_expression.py libs/contracts/tests/test_qlib_expression.py libs/factors/src/factors/batches/qlib_expression_contract_tiny libs/factors/tests/batches/qlib_expression_contract_tiny",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "raw Qlib field string, Python callable, arbitrary module path, kwargs, or engine configuration input",
+      "feature name with punctuation, quoting, attribute access, indexing, comprehension, import, or mutable coordinate",
+      "unknown feature binding or operator registry entry",
+      "duplicate operator ID or Qlib symbol and stale registry identity",
+      "invalid operator arity or argument kind",
+      "NaN, infinity, excessive AST depth, node count, or maximum lookback",
+      "expression, feature binding, registry, null policy, or lookback identity drift",
+      "attempted Decimal monetary, graph, PIT vintage, confidence, lineage, provider, runner, or release semantics"
+    ],
+    "output": {
+      "type": "QlibFactorExpressionTinyEvidence",
+      "stable_handoff": false,
+      "state": "pending",
+      "allowed_evidence_readers": [
+        "issue #21 strategy semantic freeze batch",
+        "issue #24 and #25 factor candidate batches",
+        "issue #26 Qlib provider and replay integration batch"
+      ]
+    }
+  },
+  "invalidation": [
+    "AST node vocabulary, operator semantics, feature binding, compiler grammar, identity partition, null behavior, lookback, corpus, or output change creates a new batch revision",
+    "shared contracts export requires an exact active integration lease before implementation",
+    "a Qlib runtime or lock change requires a new execution binding and rerun but must not silently change expression semantics",
+    "product semantics, real factor data, provider execution, or materialization does not raise this provisional evidence ceiling"
+  ],
+  "rollback": "Revert the isolated S8 contract, compiler, fixture, tests, and lease together; no accepted factor registry, provider, runner, or release may reference this provisional expression."
+}
