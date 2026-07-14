@@ -225,7 +225,7 @@ def test_e1_manifest_corpus_and_graph_transition_are_exact() -> None:
     lease = json.loads(lease_bytes)
 
     assert manifest["revision"] == 11
-    assert manifest["activation"]["base_sha"] == "4fb7c4b7d96deb44b1277184e12933abeea4dcf3"
+    assert manifest["activation"]["base_sha"] == "ac8e275bf6d36cbb76b91ff330e3411544c63ee7"
     assert manifest["last_accepted_rung"] == "E2"
     assert manifest["target_rung"] == "E3"
     assert manifest["terminal_rung"] == "E3"
