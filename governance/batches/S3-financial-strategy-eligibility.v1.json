@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S3-financial-strategy-eligibility",
-  "revision": 2,
+  "revision": 3,
   "issue": 150,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": null,
+  "last_accepted_rung": "E0",
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Separate mandatory financial factor applicability from explicit large_model_value_v0 strategy eligibility without inventing a financial P/S target band.",
-  "claim_ceiling": "E0 shared-contract repair and negative validation only; no approved financial semantics, factor implementation, strategy activation, or release-readiness claim",
+  "claim_ceiling": "accepted E0 shared-contract repair and negative validation only; no approved financial semantics, factor implementation, strategy activation, or release-readiness claim",
   "capability_issues": [21],
   "closes_issues": [],
   "informational_issues": [24, 25, 26, 59, 143],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "89ee8902abb827d87d0cd79949a0afdc983c8492",
+    "base_sha": "4fb7c4b7d96deb44b1277184e12933abeea4dcf3",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S3 registration is merged to main",
@@ -93,7 +93,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S3-financial-strategy-eligibility.v1.json",
-      "sha256": null
+      "sha256": "083fb2ab6e9f05918f9354098511d540c89d9d8e243fbe64817e5b39f4ea888c"
     }
   },
   "release_activation": {
@@ -117,7 +117,7 @@
     "output": {
       "type": "financial strategy eligibility contract repair",
       "stable_handoff": false,
-      "state": "pending",
+      "state": "accepted_e0",
       "allowed_evidence_readers": [
         "issue #21 semantic freeze batch",
         "issue #24 and #25 candidate batches",

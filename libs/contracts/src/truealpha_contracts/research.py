@@ -792,6 +792,11 @@ class StrategyPerformanceClaimPolicy(StrEnum):
     RESEARCH_ONLY_SURVIVORSHIP_SAFE = "research_only_survivorship_safe"
 
 
+class FinancialStrategyBehavior(StrEnum):
+    REQUIRE_VERSIONED_FINANCIAL_TARGET_BAND = "require_versioned_financial_target_band"
+    INELIGIBLE_FINANCIAL_VALUATION_NOT_COMPARABLE = "ineligible_financial_valuation_not_comparable"
+
+
 class StrategyCutoffSchedule(_StrictFrozenModel):
     rule_id: Literal["fixed_interval_utc"]
     anchor_at: datetime
@@ -811,7 +816,13 @@ class StrategyEligibilityPolicy(_StrictFrozenModel):
     missing_input_behavior: Literal["ineligible_missing_required_input"]
     stale_input_behavior: Literal["ineligible_stale_required_input"]
     low_confidence_behavior: Literal["ineligible_low_confidence"]
-    financial_target_behavior: Literal["require_versioned_financial_target_band"]
+    financial_target_behavior: FinancialStrategyBehavior
+
+    @property
+    def financial_ineligibility_reason(self) -> Literal["financial_valuation_not_comparable"] | None:
+        if self.financial_target_behavior is FinancialStrategyBehavior.INELIGIBLE_FINANCIAL_VALUATION_NOT_COMPARABLE:
+            return "financial_valuation_not_comparable"
+        return None
 
 
 class StrategySizingPolicy(_StrictFrozenModel):

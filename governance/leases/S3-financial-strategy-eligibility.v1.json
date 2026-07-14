@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:f2f88c41f88097b570b02fdb3a1812de9f61c156529417e640b1af21c5e63795",
+  "batch_id": "S3-financial-strategy-eligibility",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/contracts/src/truealpha_contracts/research.py"
+  ],
+  "base_sha": "4fb7c4b7d96deb44b1277184e12933abeea4dcf3",
+  "expires_at": "2026-07-21T00:00:00Z"
+}

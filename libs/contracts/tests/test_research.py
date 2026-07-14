@@ -52,6 +52,7 @@ from truealpha_contracts.research import (
     EvaluationProtocol,
     FinancialComparisonPolicy,
     FinancialEfficiencyProxy,
+    FinancialStrategyBehavior,
     GateOutcome,
     GppeLeverageChoice,
     GppeResearchPolicy,
@@ -126,6 +127,8 @@ EVALUATOR = "reviewer:holdout-evaluator"
 CUSTODIAN = "custodian:sealed-labels"
 STRATEGY_CORPUS_PATH = Path(__file__).with_name("fixtures") / "large_model_value_v0.v1.json"
 STRATEGY_CORPUS_SHA256 = "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4"
+FINANCIAL_STRATEGY_CORPUS_PATH = Path(__file__).with_name("fixtures") / "financial_strategy_eligibility.v1.json"
+FINANCIAL_STRATEGY_CORPUS_SHA256 = "2b16a9514af315412862a6a95f141ee138bdeb95b68b8afffde85487f76f4bbc"
 
 
 def _digest(seed: int) -> str:
@@ -502,7 +505,7 @@ def _policies(universe: UniverseRef):
             missing_input_behavior="ineligible_missing_required_input",
             stale_input_behavior="ineligible_stale_required_input",
             low_confidence_behavior="ineligible_low_confidence",
-            financial_target_behavior="require_versioned_financial_target_band",
+            financial_target_behavior=FinancialStrategyBehavior.REQUIRE_VERSIONED_FINANCIAL_TARGET_BAND,
         ),
         selection_rule_id="top_n_ranked_eligible",
         selection_count=10,
@@ -577,6 +580,10 @@ def _semantics() -> ResearchSemanticsManifest:
 
 def _strategy_corpus() -> dict[str, object]:
     return json.loads(STRATEGY_CORPUS_PATH.read_text(encoding="utf-8"))
+
+
+def _financial_strategy_corpus() -> dict[str, object]:
+    return json.loads(FINANCIAL_STRATEGY_CORPUS_PATH.read_text(encoding="utf-8"))
 
 
 def _apply_corpus_mutation(payload: dict[str, object], case: dict[str, object]) -> None:
@@ -884,7 +891,9 @@ def test_frozen_large_model_strategy_corpus_accepts_complete_definitions_and_rej
     assert tuple(item.factor_id for item in fixed.required_factors) == tuple(StrategyFactorId)
     assert fixed.execution.price_field == "unadjusted_open"
     assert fixed.total_return.adjusted_prices_affect_returns is False
-    assert fixed.eligibility.financial_target_behavior == "require_versioned_financial_target_band"
+    assert (
+        fixed.eligibility.financial_target_behavior is FinancialStrategyBehavior.REQUIRE_VERSIONED_FINANCIAL_TARGET_BAND
+    )
 
     negative_cases = corpus["negative_cases"]
     assert isinstance(negative_cases, list)
@@ -893,6 +902,61 @@ def test_frozen_large_model_strategy_corpus_accepts_complete_definitions_and_rej
         assert isinstance(case, dict)
         candidate = copy.deepcopy(definitions["fixed_cohort"])
         assert isinstance(candidate, dict)
+        _apply_corpus_mutation(candidate, case)
+        with pytest.raises(ValidationError):
+            LargeModelValueV0Policy.model_validate_json(json.dumps(candidate))
+
+
+def test_financial_strategy_eligibility_corpus_separates_factor_applicability_from_strategy_eligibility():
+    corpus_bytes = FINANCIAL_STRATEGY_CORPUS_PATH.read_bytes()
+    assert hashlib.sha256(corpus_bytes).hexdigest() == FINANCIAL_STRATEGY_CORPUS_SHA256
+    corpus = _financial_strategy_corpus()
+    base_ref = corpus["base_corpus"]
+    assert isinstance(base_ref, dict)
+    assert base_ref["path"] == "libs/contracts/tests/fixtures/large_model_value_v0.v1.json"
+    assert base_ref["sha256"] == STRATEGY_CORPUS_SHA256
+    assert hashlib.sha256(STRATEGY_CORPUS_PATH.read_bytes()).hexdigest() == base_ref["sha256"]
+
+    definitions = _strategy_corpus()["valid_definitions"]
+    assert isinstance(definitions, dict)
+    base = definitions[base_ref["definition_key"]]
+    assert isinstance(base, dict)
+
+    valid_results: dict[str, LargeModelValueV0Policy] = {}
+    valid_cases = corpus["valid_cases"]
+    assert isinstance(valid_cases, list) and len(valid_cases) == 2
+    for case in valid_cases:
+        assert isinstance(case, dict)
+        candidate = copy.deepcopy(base)
+        _apply_corpus_mutation(candidate, case)
+        result = LargeModelValueV0Policy.model_validate_json(json.dumps(candidate))
+        restored = LargeModelValueV0Policy.model_validate_json(result.model_dump_json())
+        assert restored.strategy_policy_id == result.strategy_policy_id
+        assert restored.content_sha256 == result.content_sha256
+        assert result.financial_issuers_use_financial_proxy is True
+        valid_results[str(case["case_id"])] = result
+
+    target_band = valid_results["versioned-financial-target-band"]
+    assert (
+        target_band.eligibility.financial_target_behavior
+        is FinancialStrategyBehavior.REQUIRE_VERSIONED_FINANCIAL_TARGET_BAND
+    )
+    assert target_band.eligibility.financial_ineligibility_reason is None
+
+    ineligible = valid_results["financial-factor-available-strategy-ineligible"]
+    assert (
+        ineligible.eligibility.financial_target_behavior
+        is FinancialStrategyBehavior.INELIGIBLE_FINANCIAL_VALUATION_NOT_COMPARABLE
+    )
+    assert ineligible.eligibility.financial_ineligibility_reason == "financial_valuation_not_comparable"
+    assert ineligible.strategy_policy_id != target_band.strategy_policy_id
+    assert ineligible.content_sha256 != target_band.content_sha256
+
+    negative_cases = corpus["negative_cases"]
+    assert isinstance(negative_cases, list) and len(negative_cases) == 5
+    for case in negative_cases:
+        assert isinstance(case, dict)
+        candidate = copy.deepcopy(base)
         _apply_corpus_mutation(candidate, case)
         with pytest.raises(ValidationError):
             LargeModelValueV0Policy.model_validate_json(json.dumps(candidate))
