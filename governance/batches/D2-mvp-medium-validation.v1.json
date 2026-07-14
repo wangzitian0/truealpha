@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 11,
+  "revision": 12,
   "issue": 121,
   "owner_gate": 29,
   "status": "blocked",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "ac8e275bf6d36cbb76b91ff330e3411544c63ee7",
+    "base_sha": "6aa4944936b98b2f77bcb65b13a9e51e7e5761f4",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -73,7 +73,8 @@
       "empty-database existing-type source extension through registry, raw vintages, PIT snapshot, and disabled-activation replay",
       "empty-database additive typed semantic record through registry, raw vintages, PIT repository, snapshot, and disabled-activation replay",
       "disabled extension reproduces persisted usage audit and factor output without new capture",
-      "each TOPT cutoff selects exactly 21 issuer-security, 21 security-listing, 21 universe-membership, and 21 market-price cells"
+      "each TOPT cutoff selects exactly 21 issuer-security, 21 security-listing, 21 universe-membership, and 21 market-price cells",
+      "one predeclared environment-neutral CaptureScope freezes 84 required TOPT instrument cells and dual Local Test/GitHub CI source coverage before landing; both vintages persist replayable blocker-free CaptureManifests"
     ]
   },
   "source_ceiling": "Checked-in public fixtures only through E3. Live calls remain owned by #60 and #27.",
@@ -172,7 +173,7 @@
       "UPDATE or DELETE against raw or normalized vintages",
       "source or semantic schema drift and central source/type branching",
       "factor-visible source, raw, registry, or lineage provenance",
-      "denominator shrink, duplicate required cell, release activation, or Staging activation"
+      "denominator shrink, duplicate required cell, post-output scope construction, capture projection or source-coverage substitution, release activation, or Staging activation"
     ],
     "output": {
       "type": "MvpMediumValidationHandoff",

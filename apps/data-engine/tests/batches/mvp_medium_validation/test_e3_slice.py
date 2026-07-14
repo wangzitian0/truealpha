@@ -6,6 +6,7 @@ import subprocess
 import uuid
 from collections import Counter
 from copy import deepcopy
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -17,6 +18,8 @@ from data_engine.batches.mvp_medium_validation.e3_slice import (
     D2_E2_RUNTIME_HANDOFF_ID,
     D2_E3_ASSET_NAME,
     D2E3Activation,
+    D2E3CapturePlan,
+    D2E3Evidence,
     D2E3RowCompleteManifest,
     FrozenToptDenominator,
     FrozenToptMarketFixture,
@@ -26,11 +29,21 @@ from data_engine.batches.mvp_medium_validation.e3_slice import (
     run_d2_e3,
 )
 from data_engine.config import settings
+from data_engine.contract_repository import (
+    PostgresCaptureEvaluationRepository,
+    PostgresCaptureManifestRepository,
+    PostgresCaptureScopeRepository,
+)
 from data_engine.mvp_medium_pipeline import LandedMediumCapture
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from pydantic import ValidationError
-from truealpha_contracts import RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts import (
+    CaptureManifest,
+    RawIngestionEnvelope,
+    RawObjectRef,
+    evaluate_capture_manifest,
+)
 from truealpha_contracts.release import ReleaseManifest
 
 REPOSITORY_ROOT = next(
@@ -131,6 +144,42 @@ def _count(connection, table: str) -> int:
     return cast(int, row[0])
 
 
+def _evaluate_e3_manifest(evidence: D2E3Evidence, manifest: CaptureManifest):
+    scope = evidence.capture_plan.scope
+    return evaluate_capture_manifest(
+        scope,
+        manifest,
+        applicability_catalog_id=scope.applicability_catalog_id,
+        applicability_catalog_sha256=scope.applicability_catalog_sha256,
+        applicability=evidence.capture_plan.applicability_mapping(),
+        source_coverage=evidence.capture_plan.source_coverage_mapping(),
+        evaluated_at=manifest.created_at,
+    )
+
+
+def _manifest_with_first_evidence_update(
+    manifest: CaptureManifest,
+    updates: dict[str, object],
+) -> CaptureManifest:
+    payload = manifest.model_dump(mode="python")
+    payload["capture_manifest_id"] = ""
+    payload["content_sha256"] = ""
+    cells = list(payload["cells"])
+    first_cell = dict(cells[0])
+    first_cell["capture_cell_id"] = ""
+    first_cell["content_sha256"] = ""
+    evidence_rows = list(first_cell["evidence"])
+    first_evidence = dict(evidence_rows[0])
+    first_evidence["evidence_id"] = ""
+    first_evidence["content_sha256"] = ""
+    first_evidence.update(updates)
+    evidence_rows[0] = first_evidence
+    first_cell["evidence"] = evidence_rows
+    cells[0] = first_cell
+    payload["cells"] = cells
+    return CaptureManifest.model_validate(payload)
+
+
 def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None:
     connection.execute("set local time zone 'Asia/Singapore'")
     assert _count(connection, "staging.normalized_records") == 0
@@ -149,7 +198,7 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
 
     assert first_result.success and second_result.success
     assert first == second
-    assert first.evidence_id == "d2-e3-evidence:e0268851482a397bd32fff242c81f968ae9a7d782f32b5b34980c992f5c3716e"
+    assert first.evidence_id == "d2-e3-evidence:d812369f2808942c8040a3d5f15e71ec7c147d7d547f988e312f428f15bf6139"
     assert first.accepted_e2_handoff_id == D2_E2_RUNTIME_HANDOFF_ID
     assert first.denominator.universe_id == "universe:topt-us-2026-03-31"
     assert first.denominator.accession == "000207169126012475"
@@ -163,6 +212,40 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
     assert not first.release_allowed
     assert first.market_original_raw_sha256 == ("7a160dbd1a5816d0c31e20bd1f0e1ab8d2738e1fc744fc7bf96fa2903d19e038")
     assert first.market_changed_raw_sha256 != first.market_original_raw_sha256
+    assert len(first.capture_plan.scope.requirements) == 4
+    assert len(first.capture_plan.data_requirements) == 4
+    assert len(first.capture_plan.cells) == 84
+    assert len(first.capture_plan.applicability_mapping()) == 84
+    assert len(first.capture_plan.source_coverage_mapping()) == 168
+    assert {cell.instrument.id for cell in first.capture_plan.cells} == {
+        item.security_id for item in first.denominator.instruments
+    }
+    assert all(
+        cell.capture_demand.subject == e3_slice._capture_instrument_ref(cell.instrument)
+        for cell in first.capture_plan.cells
+    )
+    assert len(first.capture_manifests) == 2
+    assert len(first.capture_evaluations) == 2
+    assert all(len(manifest.cells) == 84 for manifest in first.capture_manifests)
+    assert all(report.ready and not report.blocking_reason_codes for report in first.capture_evaluations)
+    requirement_by_id = first.capture_plan.scope.requirement_map()
+    for manifest in first.capture_manifests:
+        assert manifest.capture_scope_id == first.capture_plan.scope.capture_scope_id
+        assert manifest.capture_scope_sha256 == first.capture_plan.scope.content_sha256
+        assert {cell.key for cell in manifest.cells} == set(first.capture_plan.applicability_mapping())
+        for cell in manifest.cells:
+            assert cell.status == "complete"
+            assert len(cell.evidence) == 1
+            evidence = cell.evidence[0]
+            requirement = requirement_by_id[cell.capture_requirement_id]
+            assert evidence.raw_id is not None and evidence.raw_id.startswith("raw.fetches:")
+            assert evidence.raw_sha256 is not None
+            assert evidence.normalized_id is not None
+            assert evidence.confidence is not None
+            assert evidence.mapping_version is not None
+            assert evidence.lineage_sha256 is not None
+            assert evidence.quality_status is not None
+            assert set(requirement.required_fields).issubset(evidence.populated_fields)
     assert len(first.normalized_record_ids) == 168
     assert first.universe_manifest.ref.content_sha256 == (
         "0320f5d4d6284eb6c72d476e47dca87911c61c79527d14824f839d94c621b129"
@@ -197,9 +280,9 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
         Counter(cell.demand.semantic_type_id for cell in row.cells) == expected_type_counts
         for row in first.row_manifests
     )
-    implementation_sha256 = hashlib.sha256(
-        (REPOSITORY_ROOT / "apps/data-engine/src/data_engine/batches/mvp_medium_validation/e3_slice.py").read_bytes()
-    ).hexdigest()
+    implementation_sha256 = e3_slice.TOPT_SOURCE_IMPLEMENTATION_SHA256
+    assert implementation_sha256 == "e0509b3bb93982bc0ed29776518612f1c470efd0095b2373eba0358032d8eac1"
+    assert e3_slice._topt_source_code_sha256() == e3_slice.TOPT_SOURCE_CODE_SHA256
     expected_topt_sources = {
         "semantic.issuer-security-link": (
             "source-registry-entry:86641ce50d78bfc87d03cc0a4ab17230d04b1c3a7db964d10f39555e89d569ba"
@@ -259,6 +342,36 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
     selected = [{cell.normalized_record_id for cell in row.cells} for row in first.row_manifests]
     assert selected[0].isdisjoint(selected[1])
 
+    rebuilt_plan = e3_slice._build_e3_capture_plan(
+        denominator=first.denominator,
+        market_fixture=market_fixture,
+        registry=first.snapshots[0].registry_snapshot,
+        universe_manifest=first.universe_manifest,
+        effective_at=first.capture_plan.scope.effective_at,
+    )
+    assert rebuilt_plan == first.capture_plan
+    scope_repository = PostgresCaptureScopeRepository(connection)
+    manifest_repository = PostgresCaptureManifestRepository(connection)
+    evaluation_repository = PostgresCaptureEvaluationRepository(connection)
+    assert scope_repository.get(first.capture_plan.scope.capture_scope_id) == first.capture_plan.scope
+    for manifest in first.capture_manifests:
+        assert manifest_repository.get(manifest.capture_manifest_id) == manifest
+    for report in first.capture_evaluations:
+        assert evaluation_repository.get(report.capture_evaluation_report_id) == report
+    report_by_manifest = {report.capture_manifest_id: report for report in first.capture_evaluations}
+    for manifest in first.capture_manifests:
+        expected_report = report_by_manifest[manifest.capture_manifest_id]
+        replayed_report = evaluate_capture_manifest(
+            first.capture_plan.scope,
+            manifest,
+            applicability_catalog_id=first.capture_plan.scope.applicability_catalog_id,
+            applicability_catalog_sha256=first.capture_plan.scope.applicability_catalog_sha256,
+            applicability=rebuilt_plan.applicability_mapping(),
+            source_coverage=rebuilt_plan.source_coverage_mapping(),
+            evaluated_at=expected_report.evaluated_at,
+        )
+        assert replayed_report == expected_report
+
     assert _count(connection, "staging.normalized_records") == 381
     assert _count(connection, "staging.mvp_issuer_security_links") == 43
     assert _count(connection, "staging.mvp_market_prices") == 44
@@ -276,6 +389,226 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
     duplicate["cells"][-1] = duplicate["cells"][0]
     with pytest.raises(ValidationError, match="missing or duplicate required cells"):
         D2E3RowCompleteManifest.model_validate(duplicate)
+
+
+def test_e3_standard_capture_contract_fails_closed_on_cell_drift(connection) -> None:
+    evidence = run_d2_e3(
+        REPOSITORY_ROOT,
+        connection,
+        MemoryRawObjectStore(),
+        environment="ci",
+    )
+    manifest = evidence.capture_manifests[0]
+    payload = manifest.model_dump(mode="python")
+
+    missing = deepcopy(payload)
+    missing["capture_manifest_id"] = ""
+    missing["content_sha256"] = ""
+    missing["cells"] = missing["cells"][:-1]
+    missing_report = _evaluate_e3_manifest(evidence, CaptureManifest.model_validate(missing))
+    assert not missing_report.ready
+    assert any(reason.startswith("cell.missing:") for reason in missing_report.blocking_reason_codes)
+
+    duplicate = deepcopy(payload)
+    duplicate["capture_manifest_id"] = ""
+    duplicate["content_sha256"] = ""
+    duplicate["cells"] = list(duplicate["cells"])
+    duplicate["cells"][-1] = duplicate["cells"][0]
+    duplicate_report = _evaluate_e3_manifest(evidence, CaptureManifest.model_validate(duplicate))
+    assert not duplicate_report.ready
+    assert any(reason.startswith("cell.duplicate:") for reason in duplicate_report.blocking_reason_codes)
+
+    extra = deepcopy(payload)
+    extra["capture_manifest_id"] = ""
+    extra["content_sha256"] = ""
+    extra["cells"] = list(extra["cells"])
+    extra_cell = deepcopy(extra["cells"][0])
+    extra_cell["capture_cell_id"] = ""
+    extra_cell["content_sha256"] = ""
+    extra_cell["subject"] = {"kind": "security", "id": "security:cusip:extra"}
+    extra["cells"].append(extra_cell)
+    extra_report = _evaluate_e3_manifest(evidence, CaptureManifest.model_validate(extra))
+    assert not extra_report.ready
+    assert any(reason.startswith("cell.extra:") for reason in extra_report.blocking_reason_codes)
+
+    shrunk_plan = evidence.capture_plan.model_dump(mode="python")
+    shrunk_plan["capture_plan_id"] = ""
+    shrunk_plan["content_sha256"] = ""
+    shrunk_plan["cells"] = shrunk_plan["cells"][:-1]
+    with pytest.raises(ValidationError, match="at least 84 items"):
+        D2E3CapturePlan.model_validate(shrunk_plan)
+
+    replacement_instrument = evidence.capture_plan.cells[0].instrument.model_copy(
+        update={"id": "security:cusip:000000000"}
+    )
+    replacement_cell = evidence.capture_plan.cells[0].model_copy(update={"instrument": replacement_instrument})
+    substituted_plan = evidence.capture_plan.model_copy(
+        update={"cells": (replacement_cell, *evidence.capture_plan.cells[1:])}
+    )
+    substituted_evidence = evidence.model_dump(mode="python", exclude_computed_fields=True)
+    substituted_evidence["evidence_id"] = ""
+    substituted_evidence["content_sha256"] = ""
+    substituted_evidence["capture_plan"] = substituted_plan
+    with pytest.raises(ValidationError, match="retain 21 security instruments"):
+        D2E3Evidence.model_validate(substituted_evidence)
+
+
+def test_e3_local_and_ci_share_one_environment_neutral_capture_scope(connection) -> None:
+    store = MemoryRawObjectStore()
+    ci = run_d2_e3(REPOSITORY_ROOT, connection, store, environment="ci")
+    local = run_d2_e3(REPOSITORY_ROOT, connection, store, environment="local")
+
+    assert local.capture_plan == ci.capture_plan
+    assert local.capture_plan.scope.capture_scope_id == ci.capture_plan.scope.capture_scope_id
+    assert {manifest.environment.value for manifest in ci.capture_manifests} == {"github_ci"}
+    assert {manifest.environment.value for manifest in local.capture_manifests} == {"local_test"}
+    assert {manifest.capture_manifest_id for manifest in ci.capture_manifests}.isdisjoint(
+        manifest.capture_manifest_id for manifest in local.capture_manifests
+    )
+    assert all(report.ready for report in (*ci.capture_evaluations, *local.capture_evaluations))
+
+
+def test_e3_standard_capture_contract_rejects_incomplete_or_tampered_evidence(connection) -> None:
+    evidence = run_d2_e3(
+        REPOSITORY_ROOT,
+        connection,
+        MemoryRawObjectStore(),
+        environment="ci",
+    )
+    manifest = evidence.capture_manifests[0]
+    wrong_environment = evidence.model_dump(mode="python", exclude_computed_fields=True)
+    wrong_environment["evidence_id"] = ""
+    wrong_environment["content_sha256"] = ""
+    wrong_environment["environment"] = "local"
+    with pytest.raises(ValidationError, match="capture manifest drifted from its predeclared scope"):
+        D2E3Evidence.model_validate(wrong_environment)
+
+    for applicability, status in (
+        ("required", "missing"),
+        ("optional", "optional"),
+        ("not_applicable", "not_applicable"),
+    ):
+        status_payload = manifest.model_dump(mode="python")
+        status_payload["capture_manifest_id"] = ""
+        status_payload["content_sha256"] = ""
+        status_payload["cells"] = list(status_payload["cells"])
+        status_cell = dict(status_payload["cells"][0])
+        status_cell["capture_cell_id"] = ""
+        status_cell["content_sha256"] = ""
+        status_cell["applicability"] = applicability
+        status_cell["status"] = status
+        status_cell["evidence"] = ()
+        status_cell["reason_codes"] = ("producer-self-report",)
+        status_payload["cells"][0] = status_cell
+        status_report = _evaluate_e3_manifest(evidence, CaptureManifest.model_validate(status_payload))
+        assert not status_report.ready
+        assert any(reason.startswith("cell.required_not_complete:") for reason in status_report.blocking_reason_codes)
+
+    scope = evidence.capture_plan.scope
+    applicability = dict(evidence.capture_plan.applicability_mapping())
+    first_key = next(iter(applicability))
+    applicability[first_key] = ("required", manifest.started_at + timedelta(microseconds=1))
+    postdated_report = evaluate_capture_manifest(
+        scope,
+        manifest,
+        applicability_catalog_id=scope.applicability_catalog_id,
+        applicability_catalog_sha256=scope.applicability_catalog_sha256,
+        applicability=applicability,
+        source_coverage=evidence.capture_plan.source_coverage_mapping(),
+        evaluated_at=manifest.created_at,
+    )
+    assert not postdated_report.ready
+    assert any(reason.startswith("applicability.postdated:") for reason in postdated_report.blocking_reason_codes)
+
+    source_coverage = dict(evidence.capture_plan.source_coverage_mapping())
+    source_coverage.pop((manifest.environment, *first_key))
+    coverage_report = evaluate_capture_manifest(
+        scope,
+        manifest,
+        applicability_catalog_id=scope.applicability_catalog_id,
+        applicability_catalog_sha256=scope.applicability_catalog_sha256,
+        applicability=evidence.capture_plan.applicability_mapping(),
+        source_coverage=source_coverage,
+        evaluated_at=manifest.created_at,
+    )
+    assert not coverage_report.ready
+    assert any(reason.startswith("source_coverage.missing:") for reason in coverage_report.blocking_reason_codes)
+
+    binding_payload = manifest.model_dump(mode="python")
+    binding_payload["capture_manifest_id"] = ""
+    binding_payload["content_sha256"] = ""
+    binding_payload["research_catalog_id"] = "research-catalog:" + "0" * 64
+    binding_payload["research_catalog_sha256"] = "0" * 64
+    binding_report = _evaluate_e3_manifest(evidence, CaptureManifest.model_validate(binding_payload))
+    assert not binding_report.ready
+    assert "binding.research_catalog_id_mismatch" in binding_report.blocking_reason_codes
+    assert "binding.research_catalog_sha256_mismatch" in binding_report.blocking_reason_codes
+
+    cases = (
+        ({"raw_id": None}, "evidence.missing_raw_id:"),
+        ({"raw_sha256": None}, "evidence.missing_raw_sha256:"),
+        ({"normalized_id": None}, "evidence.missing_normalized_id:"),
+        ({"confidence": None}, "evidence.missing_confidence:"),
+        ({"mapping_version": None}, "evidence.missing_mapping_version:"),
+        ({"policy_versions": {}}, "evidence.missing_policy:"),
+        ({"quality_check_ids": ()}, "evidence.missing_quality:"),
+        ({"quality_status": None}, "evidence.missing_quality_status:"),
+        ({"lineage_sha256": None}, "evidence.missing_lineage_sha256:"),
+        ({"knowable_at": None}, "evidence.missing_knowable_at:"),
+        ({"recorded_at": None}, "evidence.missing_recorded_at:"),
+        ({"valid_from": None}, "evidence.missing_valid_from:"),
+        ({"semantic_type_id": "semantic.financial-fact"}, "evidence.semantic_type_mismatch:"),
+        ({"populated_fields": ()}, "evidence.required_fields_missing:"),
+        (
+            {"source_coverage_entry_id": "source-coverage-entry:" + "0" * 64},
+            "evidence.unapproved_source_coverage_entry:",
+        ),
+        (
+            {"knowable_at": manifest.as_of + timedelta(microseconds=1)},
+            "evidence.future_knowledge:",
+        ),
+        ({"knowable_at": manifest.as_of - timedelta(days=3)}, "evidence.stale:"),
+    )
+    for updates, expected_reason in cases:
+        tampered = _manifest_with_first_evidence_update(manifest, updates)
+        report = _evaluate_e3_manifest(evidence, tampered)
+        assert not report.ready
+        assert any(reason.startswith(expected_reason) for reason in report.blocking_reason_codes)
+
+    duplicate_lineage = manifest.model_dump(mode="python")
+    duplicate_lineage["capture_manifest_id"] = ""
+    duplicate_lineage["content_sha256"] = ""
+    duplicate_lineage["cells"] = list(duplicate_lineage["cells"])
+    duplicate_cell = dict(duplicate_lineage["cells"][0])
+    duplicate_cell["capture_cell_id"] = ""
+    duplicate_cell["content_sha256"] = ""
+    duplicate_cell["evidence"] = [duplicate_cell["evidence"][0], duplicate_cell["evidence"][0]]
+    duplicate_lineage["cells"][0] = duplicate_cell
+    duplicate_report = _evaluate_e3_manifest(
+        evidence,
+        CaptureManifest.model_validate(duplicate_lineage),
+    )
+    assert not duplicate_report.ready
+    assert any(
+        reason.startswith("evidence.duplicate_lineage_edge:") for reason in duplicate_report.blocking_reason_codes
+    )
+
+    raw_conflict = manifest.model_dump(mode="python")
+    raw_conflict["capture_manifest_id"] = ""
+    raw_conflict["content_sha256"] = ""
+    raw_conflict["cells"] = list(raw_conflict["cells"])
+    conflict_cell = dict(raw_conflict["cells"][0])
+    conflict_cell["capture_cell_id"] = ""
+    conflict_cell["content_sha256"] = ""
+    conflict_evidence = deepcopy(conflict_cell["evidence"][0])
+    conflict_evidence["evidence_id"] = ""
+    conflict_evidence["content_sha256"] = ""
+    conflict_evidence["raw_sha256"] = "0" * 64
+    conflict_cell["evidence"] = [conflict_cell["evidence"][0], conflict_evidence]
+    raw_conflict["cells"][0] = conflict_cell
+    conflict_report = _evaluate_e3_manifest(evidence, CaptureManifest.model_validate(raw_conflict))
+    assert not conflict_report.ready
+    assert any(reason.startswith("evidence.raw_checksum_conflict:") for reason in conflict_report.blocking_reason_codes)
 
 
 def test_e3_denominator_rejects_shrink_duplicate_drift_and_float() -> None:
@@ -349,9 +682,7 @@ def test_e3_market_routes_reject_corrupted_landed_bytes_and_bind_implementations
     fixture = load_topt_market_fixture(REPOSITORY_ROOT, denominator)
     registry = e3_slice._e3_registry(e2_handoff.registry_snapshot)
     catalog = e3_slice._e3_catalog(registry, denominator, fixture)
-    implementation_sha256 = hashlib.sha256(
-        (REPOSITORY_ROOT / "apps/data-engine/src/data_engine/batches/mvp_medium_validation/e3_slice.py").read_bytes()
-    ).hexdigest()
+    implementation_sha256 = e3_slice.TOPT_SOURCE_IMPLEMENTATION_SHA256
     corrupt_body = b'{"schema_version": 1}'
     routes = (
         (e3_slice.TOPT_ISSUER_SOURCE_ID, "semantic.issuer-security-link"),
@@ -385,12 +716,71 @@ def test_e3_market_routes_reject_corrupted_landed_bytes_and_bind_implementations
             catalog.normalize(capture, semantic_type_id)
 
 
+def test_e3_capture_scope_is_persisted_before_any_topt_landing(connection) -> None:
+    class PlanObserved(RuntimeError):
+        pass
+
+    observed = False
+
+    def stop_after_plan(point: e3_slice.FailurePoint) -> None:
+        nonlocal observed
+        if point != "after-capture-plan":
+            return
+        observed = True
+        assert connection.execute(
+            """
+            select count(*)
+            from staging.contract_objects
+            where contract_kind = 'capture_scope'
+              and payload ->> 'owner' = 'D2-mvp-medium-validation:E3'
+            """
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "select count(*) from raw.fetches where source_record_id like 'd2-e3:%'"
+        ).fetchone() == (0,)
+        raise PlanObserved("capture plan observed before TOPT landing")
+
+    with pytest.raises(PlanObserved, match="before TOPT landing"):
+        run_d2_e3(
+            REPOSITORY_ROOT,
+            connection,
+            MemoryRawObjectStore(),
+            environment="ci",
+            failure_injector=stop_after_plan,
+        )
+    assert observed
+    assert _count(connection, "raw.fetches") == 0
+    assert _count(connection, "staging.normalized_records") == 0
+
+
+def test_e3_capture_manifest_rejects_corrupted_persisted_raw_bytes(connection) -> None:
+    store = MemoryRawObjectStore()
+
+    def corrupt_original_raw(point: e3_slice.FailurePoint) -> None:
+        if point != "after-original-normalization":
+            return
+        uri = next(uri for uri in store.objects if uri.endswith(e3_slice.TOPT_MARKET_FIXTURE_SHA256))
+        store.objects[uri] += b"\ncorrupt"
+
+    with pytest.raises(ValueError, match="raw object checksum mismatch"):
+        run_d2_e3(
+            REPOSITORY_ROOT,
+            connection,
+            store,
+            environment="ci",
+            failure_injector=corrupt_original_raw,
+        )
+    assert _count(connection, "raw.fetches") == 0
+    assert _count(connection, "staging.normalized_records") == 0
+
+
 def test_e3_failure_rolls_back_and_retry_recovers_without_duplicates(connection) -> None:
     class InjectedFailure(RuntimeError):
         pass
 
-    def fail_after_original(_point: str) -> None:
-        raise InjectedFailure("simulated terminal interruption")
+    def fail_after_original(point: e3_slice.FailurePoint) -> None:
+        if point == "after-original-vintage":
+            raise InjectedFailure("simulated terminal interruption")
 
     store = MemoryRawObjectStore()
     with pytest.raises(InjectedFailure, match="terminal interruption"):
