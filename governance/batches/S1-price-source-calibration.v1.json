@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "batch_id": "S1-price-source-calibration",
-  "revision": 3,
+  "revision": 4,
   "issue": 129,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Execute the frozen independent daily-price reconciliation protocol against Yahoo and Twelve Data samples.",
@@ -20,10 +20,10 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "ca01f10ed16221e1140601f09a6eb5a81d6ed04c",
+    "base_sha": "1f6c80588cf0e7f3921e0480672968fde16aad0b",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "prepared S1 protocol is merged to main",
+      "active S1 E0 implementation is merged to main",
       "issue #129 contains the base manifest path and SHA-256 until this PR merges",
       "PR #128 is linked",
       "secrets remain runtime-only"
@@ -86,7 +86,7 @@
     "output": {
       "type": "BoundedPriceReconciliationEvidence",
       "stable_handoff": false,
-      "state": "produced",
+      "state": "accepted",
       "artifact_path": "apps/data-engine/samples/prices/twelve_data_reconciliation_20260714.json",
       "artifact_sha256": "e7613862e2e63c88fcb299747df8c08c9b13891d085bc5b313f9cb5cbf15e9e5",
       "retention": "content-addressed fixture and aggregate statistics retained"
