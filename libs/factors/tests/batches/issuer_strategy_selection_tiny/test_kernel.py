@@ -386,6 +386,18 @@ def test_execution_binding_drift_and_malformed_qlib_output_fail_closed(monkeypat
     assert result.reason_codes == (SelectionFailureReason.QLIB_STRATEGY_OUTPUT_INVALID,)
 
 
+def test_qlib_runtime_failure_returns_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    binding = _binding()
+
+    def fail_runtime(*_args: object) -> tuple[str, ...]:
+        raise RuntimeError("isolated Qlib runtime is unavailable")
+
+    monkeypatch.setattr(kernel, "_run_qlib_top_n", fail_runtime)
+    result = run_qlib_large_model_value_selection(binding, _request(binding))
+    assert result.availability is SelectionAvailability.UNAVAILABLE
+    assert result.reason_codes == (SelectionFailureReason.QLIB_RUNTIME_FAILURE,)
+
+
 def test_schema_rejects_provenance_supplied_values_and_release_activation() -> None:
     binding = _binding()
     payload = _request_payload(binding)

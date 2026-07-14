@@ -170,7 +170,7 @@
       "fewer eligible issuers than the configured selection count",
       "equal valuation gaps without an approved tie-break rule",
       "stale S2, S4, S6, semantic-candidate, or public-golden identity",
-      "Qlib distribution, adapter, operator-registry, strategy, or configuration identity drift",
+      "Qlib distribution, adapter, operator-registry, strategy, configuration identity drift, or runtime failure",
       "Decimal scores that collide or reverse order after the adapter's float transport conversion",
       "Qlib turnover/dropout behavior substituted for the declared full-rebalance top-N rule",
       "attempted supplied valuation inputs, provenance, registry, runner, or release activation"

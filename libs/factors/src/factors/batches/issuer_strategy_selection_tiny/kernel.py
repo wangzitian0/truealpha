@@ -85,6 +85,7 @@ class SelectionFailureReason(StrEnum):
     RANKING_TIE_BREAK_UNAPPROVED = "ranking_tie_break_unapproved"
     QLIB_SCORE_ORDER_NOT_PRESERVED = "qlib_score_order_not_preserved"
     QLIB_EXECUTION_BINDING_MISMATCH = "qlib_execution_binding_mismatch"
+    QLIB_RUNTIME_FAILURE = "qlib_runtime_failure"
     QLIB_STRATEGY_OUTPUT_INVALID = "qlib_strategy_output_invalid"
 
 
@@ -453,11 +454,14 @@ def run_qlib_large_model_value_selection(
     ):
         return _unavailable(binding, request, SelectionFailureReason.QLIB_SCORE_ORDER_NOT_PRESERVED, tuple(ineligible))
 
-    selected_ids = _run_qlib_top_n(
-        {issuer_id: float(gap) for issuer_id, gap, _confidence in eligible},
-        request.cutoff,
-        selection_count,
-    )
+    try:
+        selected_ids = _run_qlib_top_n(
+            {issuer_id: float(gap) for issuer_id, gap, _confidence in eligible},
+            request.cutoff,
+            selection_count,
+        )
+    except Exception:
+        return _unavailable(binding, request, SelectionFailureReason.QLIB_RUNTIME_FAILURE, tuple(ineligible))
     expected_ids = tuple(item[0] for item in ordered[:selection_count])
     if selected_ids != expected_ids:
         return _unavailable(binding, request, SelectionFailureReason.QLIB_STRATEGY_OUTPUT_INVALID, tuple(ineligible))
