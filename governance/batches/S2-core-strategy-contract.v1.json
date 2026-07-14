@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S2-core-strategy-contract",
-  "revision": 3,
+  "revision": 4,
   "issue": 143,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Complete the strict executable large_model_value_v0 strategy-definition contract without approving product semantics or activating a strategy.",
-  "claim_ceiling": "accepted E0 typed contract pending E1 frozen-corpus evidence; no approved semantics, factor, replay, holdout, or release-readiness claim",
+  "claim_ceiling": "E1 frozen-corpus contract evidence only; no approved semantics, stable handoff, factor, replay, holdout, or release-readiness claim",
   "capability_issues": [21],
   "closes_issues": [],
   "informational_issues": [26, 59, 78],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "a8b4bbc4f387d269df0dbcadb4d6115a065c2ea5",
+    "base_sha": "4c83ac0d8b0aae0e8f4fd62d06d5d77c5297e09c",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S2 registration is merged to main",
@@ -138,7 +138,7 @@
     "output": {
       "type": "LargeModelValueV0Policy contract",
       "stable_handoff": false,
-      "state": "implemented_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "issue #21 semantic freeze batch",
         "issue #24 and #25 candidate batches",
