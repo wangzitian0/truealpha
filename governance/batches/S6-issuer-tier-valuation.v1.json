@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "33659264038d75aa118d127d9cfa37c423503be2",
+    "base_sha": "80d74d7a304cffde440b5cc403521f8b8cac844d",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S6 registration is merged to main",
@@ -124,7 +124,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S6-issuer-tier-valuation.v1.json",
-      "sha256": "6633477368ac921a77b028dc6314913744b6f79770ad59aed0c7f5bb119600b8"
+      "sha256": "d52f5ef936f4160c369db65fa325654b3ddec657e8da40d5bbd9451c31b44eb9"
     }
   },
   "release_activation": {
