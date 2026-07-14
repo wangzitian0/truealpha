@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:cea96e9433f300d0264bd7e3c6289e2d0f636de9bba6c524895e4fd462075cb1",
+  "batch_id": "S2-core-strategy-contract",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/contracts/src/truealpha_contracts/__init__.py",
+    "libs/contracts/src/truealpha_contracts/research.py"
+  ],
+  "base_sha": "5977021e8d1ef9f00fc512d4880aa95b1a45e331",
+  "expires_at": "2026-07-21T00:00:00Z"
+}

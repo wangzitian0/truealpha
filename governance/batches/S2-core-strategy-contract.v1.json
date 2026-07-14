@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S2-core-strategy-contract",
-  "revision": 2,
+  "revision": 3,
   "issue": 143,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "strategy",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
-  "terminal_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
+  "terminal_rung": "E1",
   "objective": "Complete the strict executable large_model_value_v0 strategy-definition contract without approving product semantics or activating a strategy.",
-  "claim_ceiling": "E0 typed contract and negative validation only; no approved semantics, factor, replay, holdout, or release-readiness claim",
+  "claim_ceiling": "accepted E0 typed contract pending E1 frozen-corpus evidence; no approved semantics, factor, replay, holdout, or release-readiness claim",
   "capability_issues": [21],
   "closes_issues": [],
   "informational_issues": [26, 59, 78],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "e62afbe65ba370776e00682b97ff4e7b1dd3fe1a",
+    "base_sha": "5977021e8d1ef9f00fc512d4880aa95b1a45e331",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S2 registration is merged to main",
@@ -71,7 +71,7 @@
   ],
   "corpus": {
     "manifest_path": "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
-    "sha256": "8352d352ada53ab20e000a4651594c11a9ea8fe18ea9e7d08f730b991849278b",
+    "sha256": "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4",
     "required_strata": [
       "complete fixed-cohort definition",
       "complete survivorship-safe PIT definition",
@@ -84,6 +84,7 @@
   "paths": {
     "writable": [
       "libs/contracts/src/truealpha_contracts/research.py",
+      "libs/contracts/src/truealpha_contracts/__init__.py",
       "libs/contracts/tests/test_research.py",
       "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
       "governance/leases/S2-core-strategy-contract.v1.json"
@@ -106,12 +107,13 @@
       "Makefile"
     ],
     "integration_surface": [
+      "libs/contracts/src/truealpha_contracts/__init__.py",
       "libs/contracts/src/truealpha_contracts/research.py"
     ],
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S2-core-strategy-contract.v1.json",
-      "sha256": null
+      "sha256": "f5fa0c6b15ca11a715d4ec2c4ad8d0fcd9a3d2a0c0beb712d9083c543003109c"
     }
   },
   "release_activation": {
@@ -122,7 +124,7 @@
   "acceptance": {
     "commands": [
       "uv run pytest libs/contracts/tests/test_research.py -q",
-      "uv run ruff check libs/contracts/src/truealpha_contracts/research.py libs/contracts/tests/test_research.py",
+      "uv run ruff check libs/contracts/src/truealpha_contracts/__init__.py libs/contracts/src/truealpha_contracts/research.py libs/contracts/tests/test_research.py",
       "uv run mypy"
     ],
     "negative_controls": [
@@ -138,7 +140,7 @@
     "output": {
       "type": "LargeModelValueV0Policy contract",
       "stable_handoff": false,
-      "state": "pending",
+      "state": "implemented_e0",
       "allowed_evidence_readers": [
         "issue #21 semantic freeze batch",
         "issue #24 and #25 candidate batches",
