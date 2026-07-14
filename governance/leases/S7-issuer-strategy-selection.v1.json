@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:246b3574d891b437ad2e3ddae1dda6e814a86b241721fbd7bb18f234a06953c0",
+  "batch_id": "S7-issuer-strategy-selection",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/__init__.py",
+    "pyproject.toml"
+  ],
+  "base_sha": "b33446c01eefa6217c6d8fe797787af886e9ea6b",
+  "expires_at": "2026-07-21T00:00:00Z"
+}

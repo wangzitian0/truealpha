@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S7-issuer-strategy-selection",
-  "revision": 2,
+  "revision": 3,
   "issue": 181,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "strategy",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Freeze an engine-independent Decimal oracle for transforming exact provisional S6 issuer valuation results into deterministic top-N decisions, then require the version-pinned TrueAlpha Qlib adapter owned by #26 to reproduce it.",
-  "claim_ceiling": "preparation-only Qlib selection-adapter oracle; this revision earns no rung and authorizes no dependency installation, runtime adapter, approved product semantics, real TOPT mapping, stable handoff, factor activation, replay, or release-readiness claim",
+  "claim_ceiling": "E0 isolated Qlib 0.9.7 selection-adapter code over the frozen corpus; no approved product semantics, real TOPT mapping, stable handoff, registered factor, persistent portfolio state, sizing, replay, or release-readiness claim",
   "capability_issues": [26],
   "closes_issues": [],
   "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 155, 169],
@@ -20,14 +20,14 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "083512c8a51dca5eb1d568c221a6400b1787e5d5",
+    "base_sha": "b33446c01eefa6217c6d8fe797787af886e9ea6b",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S7 registration is merged to main",
       "the implementation PR pins its exact current main base SHA",
       "the twelve-candidate corpus path and SHA-256 are committed before execution",
-      "the Qlib architecture selection is merged before adapter implementation",
-      "a later manifest revision pins the dependency lock and authorizes the Qlib adapter paths",
+      "the user-approved Qlib boundary is recorded in #26 and draft PR #182; its authoritative-document merge may remain blocked by unrelated Gate 0 attestations",
+      "the implementation pins the dependency lock and authorizes the Qlib adapter paths",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the package export path",
       "issue #181 contains the exact manifest path and SHA-256"
@@ -87,9 +87,9 @@
     {
       "class": "freeze",
       "issue": 26,
-      "artifact": "merged Qlib architecture selection and version-pinned adapter ownership",
+      "artifact": "user-approved Qlib architecture selection and version-pinned adapter ownership",
       "ref": "pr:182",
-      "state": "pending_merge"
+      "state": "approved_design_authority_doc_merge_pending"
     }
   ],
   "corpus": {
@@ -111,7 +111,10 @@
   "paths": {
     "writable": [
       "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/**",
-      "libs/factors/tests/batches/issuer_strategy_selection_tiny/**"
+      "libs/factors/tests/batches/issuer_strategy_selection_tiny/**",
+      "libs/factors/qlib-runtime/**",
+      "pyproject.toml",
+      "governance/leases/S7-issuer-strategy-selection.v1.json"
     ],
     "read_only": [
       "vision.md",
@@ -137,15 +140,17 @@
       "libs/factors/src/factors/registry.py",
       "libs/factors/src/factors/base/**",
       "libs/factors/src/factors/composite/**",
-      "uv.lock",
-      "pyproject.toml",
       "Makefile"
     ],
     "integration_surface": [
-      "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/__init__.py"
+      "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/__init__.py",
+      "pyproject.toml"
     ],
     "lease_owner": "wangzitian0",
-    "lease_manifest": null
+    "lease_manifest": {
+      "path": "governance/leases/S7-issuer-strategy-selection.v1.json",
+      "sha256": "7ad28c5090565539ad85f3ed0e5ec0be7e867536579151327e56fd28358a7be0"
+    }
   },
   "release_activation": {
     "allowed": false,
@@ -154,7 +159,8 @@
   },
   "acceptance": {
     "commands": [
-      "uv run pytest libs/factors/tests/batches/issuer_strategy_selection_tiny -q",
+      "uv sync --project libs/factors/qlib-runtime --all-groups --frozen",
+      "uv run --project libs/factors/qlib-runtime pytest libs/factors/tests/batches/issuer_strategy_selection_tiny -q",
       "uv run ruff check libs/factors/src/factors/batches/issuer_strategy_selection_tiny libs/factors/tests/batches/issuer_strategy_selection_tiny",
       "uv run mypy"
     ],
@@ -172,7 +178,7 @@
     "output": {
       "type": "IssuerStrategySelectionTinyEvidence",
       "stable_handoff": false,
-      "state": "pending",
+      "state": "accepted_e0",
       "allowed_evidence_readers": [
         "issue #25 valuation candidate batch",
         "issue #71 independent Core holdout preparation",

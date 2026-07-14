@@ -9,6 +9,7 @@ members = [
     "libs/factors",
     "libs/runtime",
 ]
+exclude = ["libs/factors/qlib-runtime"]
 
 [dependency-groups]
 dev = ["mypy>=1.14", "pandas-stubs>=2.2"]
