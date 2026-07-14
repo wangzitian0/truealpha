@@ -1,0 +1,174 @@
+{
+  "schema": "truealpha.price-source-reconciliation@v1",
+  "status": "observed_full_yahoo_window",
+  "primary_source": "yahoo_chart",
+  "independent_source": "twelve_data",
+  "captured_at": "2026-07-14",
+  "coverage_limitations": {
+    "adjusted_close": "not_available_from_twelve_data_time_series",
+    "corporate_actions": "twelve_data_corporate_actions_endpoint_returned_http_404_for_all_symbols",
+    "confidence": "not_promoted_without_actions_and_adjusted_close_reconstruction"
+  },
+  "observations": [
+    {
+      "symbol": "DDOG",
+      "yahoo_dates": 754,
+      "common_dates": 754,
+      "date_start": "2023-07-10",
+      "date_end": "2026-07-10",
+      "twelve_data_response_sha256": "3e332ccdeb8d8fc6aed1238edad463db91632e87c7fd9a7ca48a530194cbf431",
+      "field_stats": {
+        "open": {
+          "max_relative_delta": "4.512209480973328427829502644E-8",
+          "mean_relative_delta": "1.514488461690067623631432236E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "high": {
+          "max_relative_delta": "4.009316320150590140251359373E-8",
+          "mean_relative_delta": "1.573211745105074995813296131E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "low": {
+          "max_relative_delta": "4.655618115314228708490228822E-8",
+          "mean_relative_delta": "1.647081186679353929231152764E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "close": {
+          "max_relative_delta": "4.554295750798045164884172566E-8",
+          "mean_relative_delta": "1.686310106919112756551343056E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "volume": {
+          "max_relative_delta": "0.01240352811466372657111356119",
+          "mean_relative_delta": "0.00006142557417337975202234310906",
+          "within_tolerance": 752,
+          "count": 754
+        }
+      }
+    },
+    {
+      "symbol": "DUOL",
+      "yahoo_dates": 754,
+      "common_dates": 754,
+      "date_start": "2023-07-10",
+      "date_end": "2026-07-10",
+      "twelve_data_response_sha256": "c0b2004fa22e629dd90a405b3a4a9575963059567838e03a1c48ce75ec42b134",
+      "field_stats": {
+        "open": {
+          "max_relative_delta": "3.647155902237986040510784184E-8",
+          "mean_relative_delta": "1.029464989846850026364028253E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "high": {
+          "max_relative_delta": "3.923408531904340971276155278E-8",
+          "mean_relative_delta": "1.053962491901190243969918198E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "low": {
+          "max_relative_delta": "4.118894645328503926562957926E-8",
+          "mean_relative_delta": "1.127314453668365688040366977E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "close": {
+          "max_relative_delta": "3.493046077755787925616943072E-8",
+          "mean_relative_delta": "1.130738350095170512883257818E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "volume": {
+          "max_relative_delta": "0.1305110513390246754765524500",
+          "mean_relative_delta": "0.0002340360085335279893867819192",
+          "within_tolerance": 751,
+          "count": 754
+        }
+      }
+    },
+    {
+      "symbol": "NICE",
+      "yahoo_dates": 754,
+      "common_dates": 754,
+      "date_start": "2023-07-10",
+      "date_end": "2026-07-10",
+      "twelve_data_response_sha256": "f4af6c9a09af9bf71e80aab9585d99b3aafdff59a0ded70d4f22ba7a3c76efaf",
+      "field_stats": {
+        "open": {
+          "max_relative_delta": "3.923408531904340971276155278E-8",
+          "mean_relative_delta": "1.370940303466179980485504058E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "high": {
+          "max_relative_delta": "4.291199363895493812651994739E-8",
+          "mean_relative_delta": "1.516263738655959448933347621E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "low": {
+          "max_relative_delta": "4.031384334491287702263031044E-8",
+          "mean_relative_delta": "1.537137944716908031044300062E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "close": {
+          "max_relative_delta": "4.189576966677850269958781468E-8",
+          "mean_relative_delta": "1.507362672040366020194609582E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "volume": {
+          "max_relative_delta": "0.3100961538461538461538461538",
+          "mean_relative_delta": "0.0004320106522018315808495138078",
+          "within_tolerance": 752,
+          "count": 754
+        }
+      }
+    },
+    {
+      "symbol": "SHOP",
+      "yahoo_dates": 754,
+      "common_dates": 754,
+      "date_start": "2023-07-10",
+      "date_end": "2026-07-10",
+      "twelve_data_response_sha256": "585deb890cde45b0f477577ae5f4d329a14262c44d241c232c464706f13e59e3",
+      "field_stats": {
+        "open": {
+          "max_relative_delta": "5.691808499285441317950543175E-8",
+          "mean_relative_delta": "1.643032776220297072706564727E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "high": {
+          "max_relative_delta": "5.478919181095172431935212982E-8",
+          "mean_relative_delta": "1.775639262761152648729431401E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "low": {
+          "max_relative_delta": "5.740809732227223491419987343E-8",
+          "mean_relative_delta": "1.818412687292861749368825328E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "close": {
+          "max_relative_delta": "5.438238163282194660375655669E-8",
+          "mean_relative_delta": "1.782934324706376926925780236E-8",
+          "within_tolerance": 754,
+          "count": 754
+        },
+        "volume": {
+          "max_relative_delta": "0.1014930950722766727251108356",
+          "mean_relative_delta": "0.0003587409703122098174628395032",
+          "within_tolerance": 750,
+          "count": 754
+        }
+      }
+    }
+  ]
+}
