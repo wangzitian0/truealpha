@@ -170,12 +170,6 @@
       "source": "sec",
       "byte_length": 3158775,
       "sha256": "f146df6c39754bb1c73e6edefa34724c14e342ab3176ffd5cf0c9e6e40e8e58a"
-    },
-    {
-      "path": "prices/twelve_data_reconciliation_20260714.json",
-      "source": "twelve_data",
-      "byte_length": 6165,
-      "sha256": "e7613862e2e63c88fcb299747df8c08c9b13891d085bc5b313f9cb5cbf15e9e5"
     }
   ]
 }

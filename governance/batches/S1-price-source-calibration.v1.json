@@ -1,25 +1,96 @@
 {
   "schema_version": 1,
   "batch_id": "S1-price-source-calibration",
-  "revision": 2,
+  "revision": 3,
   "issue": 129,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "strategy",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E1",
-  "objective": "Prepare independent price-source calibration for a later E1 implementation batch.",
-  "claim_ceiling": "E0 prepared registration; no data-readiness claim",
-  "capability_issues": [], "closes_issues": [], "informational_issues": [78],
-  "owners": {"implementation": "wangzitian0", "reviewer": "copilot-pull-request-reviewer", "custodian": null},
-  "activation": {"base_sha": "bcb137f27bff65d4ce4d1c91e887c8a55fb8afbe", "protocol_ref": "docs/iterative-delivery.md@same-commit", "requirements": ["preparation PR merges before implementation PR"]},
+  "objective": "Execute the frozen independent daily-price reconciliation protocol against Yahoo and Twelve Data samples.",
+  "claim_ceiling": "E1 bounded development evidence; no adjusted-price, corporate-action, production, or confidence-promotion claim",
+  "capability_issues": [],
+  "closes_issues": [],
+  "informational_issues": [78],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": "copilot-pull-request-reviewer",
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": "ca01f10ed16221e1140601f09a6eb5a81d6ed04c",
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "prepared S1 protocol is merged to main",
+      "issue #129 contains the base manifest path and SHA-256 until this PR merges",
+      "PR #128 is linked",
+      "secrets remain runtime-only"
+    ]
+  },
   "dependencies": [],
-  "corpus": {"manifest_path": "apps/data-engine/samples/prices/independent_reconciliation.v1.json", "sha256": "40727fb13c7dda863e49017c3ba841d509e401ae16d2904e72228433900fce62", "required_strata": ["four named symbols", "three-year daily comparison window", "OHLCV tolerances", "adjusted-close and corporate-action blockers"]},
-  "source_ceiling": "No source capture or live call is activated.",
-  "paths": {"writable": ["governance/batches/S1-price-source-calibration.v1.json", "governance/vision-issue-graph.json", "apps/data-engine/samples/prices/independent_reconciliation.v1.json"], "read_only": [], "forbidden": [".env/**", "credentials/**"], "integration_surface": []},
-  "release_activation": {"allowed": false, "registered": false, "reason": "prepared E0"},
-  "invalidation": ["scope or corpus change creates a new revision"],
-  "acceptance": {"commands": ["make issue-graph-check"], "negative_controls": ["no implementation or evidence activation"], "output": {"type": "PreparedBatchRegistration", "stable_handoff": false, "state": "planned", "retention": "governance history"}},
-  "merge_predecessors": [], "rollback": "Remove preparation registration before implementation starts."
+  "corpus": {
+    "manifest_path": "apps/data-engine/samples/prices/independent_reconciliation.v1.json",
+    "sha256": "40727fb13c7dda863e49017c3ba841d509e401ae16d2904e72228433900fce62",
+    "required_strata": [
+      "four named symbols",
+      "three-year daily comparison window",
+      "OHLCV tolerances",
+      "adjusted-close and corporate-action blockers"
+    ]
+  },
+  "source_ceiling": "Checked-in public fixtures only through E1. No production or final confidence-calibration claim.",
+  "paths": {
+    "writable": [
+      "governance/batches/S1-price-source-calibration.v1.json",
+      "governance/vision-issue-graph.json",
+      "apps/data-engine/samples/prices/twelve_data_reconciliation_20260714.json",
+      "apps/data-engine/samples/strategy_coverage.json",
+      "apps/data-engine/src/data_engine/quality/strategy_samples.py",
+      "apps/data-engine/tests/test_strategy_sample_quality.py",
+      "docs/price-source-calibration.md",
+      "libs/contracts/src/truealpha_contracts/data_quality.py"
+    ],
+    "read_only": [
+      "apps/data-engine/samples/capture_manifest_20260712.json",
+      "apps/data-engine/samples/prices/independent_reconciliation.v1.json",
+      "apps/data-engine/samples/prices/DDOG_prices_3y_20260712.csv",
+      "apps/data-engine/samples/prices/DUOL_prices_3y_20260712.csv",
+      "apps/data-engine/samples/prices/NICE_prices_3y_20260712.csv",
+      "apps/data-engine/samples/prices/SHOP_prices_3y_20260712.csv"
+    ],
+    "forbidden": [".env/**", "credentials/**"],
+    "integration_surface": []
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "bounded E1 calibration remains development-only"
+  },
+  "invalidation": [
+    "protocol, fixture hash, source policy, cutoff, tolerance, or denominator change creates a new revision"
+  ],
+  "acceptance": {
+    "commands": [
+      "uv run pytest apps/data-engine/tests/test_strategy_sample_quality.py -q",
+      "make issue-graph-check",
+      "make sample-audit"
+    ],
+    "negative_controls": [
+      "missing response hash",
+      "secret in fixture",
+      "denominator shrink",
+      "adjusted-close or corporate-action claim",
+      "volume disagreement hidden"
+    ],
+    "output": {
+      "type": "BoundedPriceReconciliationEvidence",
+      "stable_handoff": false,
+      "state": "produced",
+      "retention": "content-addressed fixture and aggregate statistics retained"
+    }
+  },
+  "merge_predecessors": [],
+  "rollback": "Revert only the bounded calibration implementation; prepared protocol and credentials remain unchanged."
 }

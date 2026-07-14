@@ -165,11 +165,11 @@
     "S1-price-source-calibration": {
       "issue": 129,
       "owner_gate": 29,
-      "status": "prepared",
-      "target_rung": "E0",
+      "status": "active",
+      "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S1-price-source-calibration.v1.json",
-      "sha256": "142b547be43231835bd0761237376e6cc69565c2e35b7336cdacc6c2bd91ab22"
+      "sha256": "466e97a8da7ef94009cdeb0f64fd500a0820f9669a4ea983b87a1ad16c0a1fbb"
     }
   },
   "artifact_edges": [
