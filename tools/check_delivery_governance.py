@@ -1143,6 +1143,7 @@ def validate_status_transition(
         ("active", "cancelled"),
         ("active", "done"),
         ("blocked", "active"),
+        ("blocked", "done"),
         ("blocked", "cancelled"),
         ("done", "done"),
     }
