@@ -183,11 +183,11 @@
     "S3-financial-strategy-eligibility": {
       "issue": 150,
       "owner_gate": 29,
-      "status": "prepared",
-      "target_rung": "E0",
-      "terminal_rung": "E0",
+      "status": "active",
+      "target_rung": "E1",
+      "terminal_rung": "E1",
       "manifest": "governance/batches/S3-financial-strategy-eligibility.v1.json",
-      "sha256": "f5840d0aec1dfa29d654f533af046ced36691c7229ec00bb11121b9d3f12955e"
+      "sha256": "2f9d57f0933d6ee7ec49779a11532fd026273113e81310ed804fa022b4aeb1fc"
     }
   },
   "artifact_edges": [
