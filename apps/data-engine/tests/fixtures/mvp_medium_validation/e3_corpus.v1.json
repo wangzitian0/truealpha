@@ -1,0 +1,355 @@
+{
+  "schema_version": 1,
+  "corpus_id": "d2-mvp-medium-validation-e3-v1",
+  "parent_corpus": {
+    "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/corpus.v1.json",
+    "sha256": "6a8fe0cf4775af5910b9c46a49db12ed05ec980c3c0e8b57832dfd669cfda4e1",
+    "relationship": "additive-terminal-corpus"
+  },
+  "source_ceiling": "Checked-in fixture bytes only. Runtime is limited to Local and CI and must not perform network, credentialed, live-source, Staging, factor, strategy, or release work.",
+  "producer_handoff": {
+    "path": "governance/handoffs/D2-mvp-medium-validation.v1.json",
+    "sha256": "0031707dbdf97b1a5d45a4ebafa5f1029bf8567e157e3d12f1ecde26b73390bb",
+    "handoff_id": "handoff:d2-mvp-medium-validation:46162a55a54ba053b3effef97a95e6662c5da4052ca3ef656fd9440cb58b73be",
+    "runtime_handoff_id": "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
+    "runtime_handoff_sha256": "e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
+    "registry_snapshot_id": "registry-snapshot:77d61c305dc6f12b128518e6cfa5effc03f109ae5d0c25d9473e0a52df29f282",
+    "schema_epoch": "staging.mvp-medium-domains.v1+0019+0021",
+    "state": "accepted",
+    "allowed_consumer": "D2-mvp-medium-validation",
+    "allowed_environments": ["ci", "local"]
+  },
+  "policy_state": {
+    "universe_semantics": "candidate-unapproved-denominator-only-pending-issue-59",
+    "source_policy": "fixture-only-no-live-call",
+    "confidence_policy": "reviewed-development-fixture-only",
+    "maximum_claim": "E3 representative Local/CI TOPT data-plane candidate on an exact fixed denominator",
+    "excluded_claims": [
+      "accepted issue-59 research semantics",
+      "full TOPT filing coverage",
+      "full TOPT financial-fact coverage",
+      "live-source readiness",
+      "Staging readiness",
+      "factor or strategy readiness",
+      "release activation"
+    ]
+  },
+  "rung_scope": {
+    "frozen_target_rung": "E3",
+    "terminal_denominator_frozen": true,
+    "issuer_count": 20,
+    "instrument_count": 21,
+    "required_terminal_cell_count": 84,
+    "reused_e2_cell_count": 3,
+    "new_e3_cell_count": 81,
+    "runtime": "offline-local-ci-only",
+    "revision_rule": "Any denominator, artifact byte, handoff, identity mapping, temporal contract, or required-cell change creates a prospective corpus revision and reruns E0 through E3."
+  },
+  "temporal_contract": {
+    "valid_on": "2026-03-31",
+    "target_source_timestamp": 1774963800,
+    "session_close_at": "2026-03-31T20:00:00Z",
+    "fetched_at": "2026-07-14T05:44:32Z",
+    "knowable_at": "2026-07-14T05:44:32Z",
+    "produced_at": "2026-07-14T05:44:32Z",
+    "recorded_at": "2026-07-14T05:44:33Z",
+    "currency": "USD",
+    "timezone": "America/New_York",
+    "trading_calendar_id": "calendar:us-equities",
+    "trading_calendar_version": "2026-03-31.fixture-v1",
+    "price_basis": "unadjusted",
+    "clock_rule": "valid_on is the trading date; fixture capture does not make the price knowable before fetched_at."
+  },
+  "universe": {
+    "universe_id": "universe:topt-us-2026-03-31",
+    "universe_version": "topt-candidate-2026-03-31-v1",
+    "denominator_artifact_id": "topt-candidate-denominator",
+    "state": "candidate_unapproved",
+    "purpose": "Exact immutable denominator and identity context only; no issue-59 semantic approval is implied.",
+    "source": {
+      "series": "S000088434",
+      "class": "C000254701",
+      "accession": "000207169126012475",
+      "registrant_cik": "0001100663",
+      "report_date": "2026-03-31",
+      "accepted_at": "2026-05-28T10:14:00Z",
+      "primary_document_artifact_id": "topt-nport-primary-document",
+      "primary_document_sha256": "7e46eb6babead70230986162349bb33f27d7af2a51a095b5850340aa0a534934",
+      "raw_holding_count": 23,
+      "included_asset_category": "EC",
+      "included_holding_count": 21,
+      "excluded_holding_counts": {"DE": 1, "STIV": 1},
+      "selection_rule": "Include exactly the 21 holdings whose assetCat is EC and whose CUSIP and LEI pair matches the candidate denominator; exclude DE and STIV."
+    },
+    "issuers": [
+      {"issuer_name": "AbbVie", "issuer_lei": "FR5LCKFTG8054YNNRU85"},
+      {"issuer_name": "Alphabet", "issuer_lei": "5493006MHB84DD0ZWV18"},
+      {"issuer_name": "Amazon", "issuer_lei": "ZXTILKJKG63JELOEG630"},
+      {"issuer_name": "Apple", "issuer_lei": "HWUPKR0MPOU8FGXBT394"},
+      {"issuer_name": "Berkshire Hathaway", "issuer_lei": "5493000C01ZX7D35SD85"},
+      {"issuer_name": "Broadcom", "issuer_lei": "549300WV6GIDOZJTV909"},
+      {"issuer_name": "Costco", "issuer_lei": "29DX7H14B9S6O3FD6V18"},
+      {"issuer_name": "Eli Lilly", "issuer_lei": "FRDRIPF3EKNDJ2CQJL29"},
+      {"issuer_name": "Exxon Mobil", "issuer_lei": "J3WHBG0MTS7O8ZVMDC91"},
+      {"issuer_name": "JPMorgan Chase", "issuer_lei": "8I5DZWZKVSZI1NUHU748"},
+      {"issuer_name": "Johnson & Johnson", "issuer_lei": "549300G0CFPGEF6X2043"},
+      {"issuer_name": "Mastercard", "issuer_lei": "AR5L2ODV9HN37376R084"},
+      {"issuer_name": "Meta Platforms", "issuer_lei": "BQ4BKCS1HXDV9HN80Z93"},
+      {"issuer_name": "Micron Technology", "issuer_lei": "B3DXGBC8GAIYWI2Z0172"},
+      {"issuer_name": "Microsoft", "issuer_lei": "INR2EJN1ERAN0W5ZP974"},
+      {"issuer_name": "NVIDIA", "issuer_lei": "549300S4KLFTLO7GSQ80"},
+      {"issuer_name": "Netflix", "issuer_lei": "549300Y7VHGU0I7CE873"},
+      {"issuer_name": "Tesla", "issuer_lei": "54930043XZGB27CTOV49"},
+      {"issuer_name": "Visa", "issuer_lei": "549300JZ4OKEHW3DPJ59"},
+      {"issuer_name": "Walmart", "issuer_lei": "Y87794H0US1R65VBXU25"}
+    ],
+    "instruments": [
+      {"ticker": "AAPL", "source_symbol": "AAPL", "cusip": "037833100", "issuer_lei": "HWUPKR0MPOU8FGXBT394", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:aapl", "price_artifact_id": "yahoo-price-aapl-20260331"},
+      {"ticker": "ABBV", "source_symbol": "ABBV", "cusip": "00287Y109", "issuer_lei": "FR5LCKFTG8054YNNRU85", "share_class": "common", "exchange_mic": "XNYS", "listing_id": "listing:xnys:abbv", "price_artifact_id": "yahoo-price-abbv-20260331"},
+      {"ticker": "AMZN", "source_symbol": "AMZN", "cusip": "023135106", "issuer_lei": "ZXTILKJKG63JELOEG630", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:amzn", "price_artifact_id": "yahoo-price-amzn-20260331"},
+      {"ticker": "AVGO", "source_symbol": "AVGO", "cusip": "11135F101", "issuer_lei": "549300WV6GIDOZJTV909", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:avgo", "price_artifact_id": "yahoo-price-avgo-20260331"},
+      {"ticker": "BRK.B", "source_symbol": "BRK-B", "cusip": "084670702", "issuer_lei": "5493000C01ZX7D35SD85", "share_class": "class_b", "exchange_mic": "XNYS", "listing_id": "listing:xnys:brk.b", "price_artifact_id": "yahoo-price-brk-b-20260331"},
+      {"ticker": "COST", "source_symbol": "COST", "cusip": "22160K105", "issuer_lei": "29DX7H14B9S6O3FD6V18", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:cost", "price_artifact_id": "yahoo-price-cost-20260331"},
+      {"ticker": "GOOG", "source_symbol": "GOOG", "cusip": "02079K107", "issuer_lei": "5493006MHB84DD0ZWV18", "share_class": "class_c", "exchange_mic": "XNAS", "listing_id": "listing:xnas:goog", "price_artifact_id": "yahoo-price-goog-20260331"},
+      {"ticker": "GOOGL", "source_symbol": "GOOGL", "cusip": "02079K305", "issuer_lei": "5493006MHB84DD0ZWV18", "share_class": "class_a", "exchange_mic": "XNAS", "listing_id": "listing:xnas:googl", "price_artifact_id": "yahoo-price-googl-20260331"},
+      {"ticker": "JNJ", "source_symbol": "JNJ", "cusip": "478160104", "issuer_lei": "549300G0CFPGEF6X2043", "share_class": "common", "exchange_mic": "XNYS", "listing_id": "listing:xnys:jnj", "price_artifact_id": "yahoo-price-jnj-20260331"},
+      {"ticker": "JPM", "source_symbol": "JPM", "cusip": "46625H100", "issuer_lei": "8I5DZWZKVSZI1NUHU748", "share_class": "common", "exchange_mic": "XNYS", "listing_id": "listing:xnys:jpm", "price_artifact_id": "yahoo-price-jpm-20260331"},
+      {"ticker": "LLY", "source_symbol": "LLY", "cusip": "532457108", "issuer_lei": "FRDRIPF3EKNDJ2CQJL29", "share_class": "common", "exchange_mic": "XNYS", "listing_id": "listing:xnys:lly", "price_artifact_id": "yahoo-price-lly-20260331"},
+      {"ticker": "MA", "source_symbol": "MA", "cusip": "57636Q104", "issuer_lei": "AR5L2ODV9HN37376R084", "share_class": "class_a", "exchange_mic": "XNYS", "listing_id": "listing:xnys:ma", "price_artifact_id": "yahoo-price-ma-20260331"},
+      {"ticker": "META", "source_symbol": "META", "cusip": "30303M102", "issuer_lei": "BQ4BKCS1HXDV9HN80Z93", "share_class": "class_a", "exchange_mic": "XNAS", "listing_id": "listing:xnas:meta", "price_artifact_id": "yahoo-price-meta-20260331"},
+      {"ticker": "MSFT", "source_symbol": "MSFT", "cusip": "594918104", "issuer_lei": "INR2EJN1ERAN0W5ZP974", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:msft", "price_artifact_id": "yahoo-price-msft-20260331"},
+      {"ticker": "MU", "source_symbol": "MU", "cusip": "595112103", "issuer_lei": "B3DXGBC8GAIYWI2Z0172", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:mu", "price_artifact_id": "yahoo-price-mu-20260331"},
+      {"ticker": "NFLX", "source_symbol": "NFLX", "cusip": "64110L106", "issuer_lei": "549300Y7VHGU0I7CE873", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:nflx", "price_artifact_id": "yahoo-price-nflx-20260331"},
+      {"ticker": "NVDA", "source_symbol": "NVDA", "cusip": "67066G104", "issuer_lei": "549300S4KLFTLO7GSQ80", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:nvda", "price_artifact_id": "yahoo-price-nvda-20260331"},
+      {"ticker": "TSLA", "source_symbol": "TSLA", "cusip": "88160R101", "issuer_lei": "54930043XZGB27CTOV49", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:tsla", "price_artifact_id": "yahoo-price-tsla-20260331"},
+      {"ticker": "V", "source_symbol": "V", "cusip": "92826C839", "issuer_lei": "549300JZ4OKEHW3DPJ59", "share_class": "class_a", "exchange_mic": "XNYS", "listing_id": "listing:xnys:v", "price_artifact_id": "yahoo-price-v-20260331"},
+      {"ticker": "WMT", "source_symbol": "WMT", "cusip": "931142103", "issuer_lei": "Y87794H0US1R65VBXU25", "share_class": "common", "exchange_mic": "XNAS", "listing_id": "listing:xnas:wmt", "price_artifact_id": "yahoo-price-wmt-20260331"},
+      {"ticker": "XOM", "source_symbol": "XOM", "cusip": "30231G102", "issuer_lei": "J3WHBG0MTS7O8ZVMDC91", "share_class": "common", "exchange_mic": "XNYS", "listing_id": "listing:xnys:xom", "price_artifact_id": "yahoo-price-xom-20260331"}
+    ],
+    "identity_invariants": [
+      "Alphabet Class A and Class C remain separate instruments under one issuer",
+      "the 20-issuer and 21-instrument denominator cannot shrink",
+      "ticker, source symbol, CUSIP, LEI, MIC, and share class must match the frozen instrument row"
+    ]
+  },
+  "artifacts": [
+    {
+      "artifact_id": "topt-candidate-denominator",
+      "path": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "byte_length": 12695,
+      "state": "candidate_unapproved",
+      "semantic_type": "denominator-context",
+      "purpose": "denominator-only"
+    },
+    {
+      "artifact_id": "topt-nport-primary-document",
+      "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/TOPT_NPORT_000207169126012475.xml",
+      "sha256": "7e46eb6babead70230986162349bb33f27d7af2a51a095b5850340aa0a534934",
+      "byte_length": 42138,
+      "source": "sec",
+      "semantic_type": "universe-membership",
+      "registrant_cik": "0001100663",
+      "accession": "000207169126012475",
+      "report_date": "2026-03-31",
+      "accepted_at": "2026-05-28T10:14:00Z",
+      "raw_holding_count": 23,
+      "included_asset_category": "EC",
+      "included_holding_count": 21,
+      "excluded_holding_counts": {"DE": 1, "STIV": 1}
+    },
+    {"artifact_id": "yahoo-price-aapl-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/AAPL.json", "sha256": "61e43526ec2a1a3690b7dcfbaeb8ba6dd94a98258d9aa74ad1babc46feaee9b6", "byte_length": 1301, "source": "yahoo-chart", "source_symbol": "AAPL", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-abbv-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/ABBV.json", "sha256": "080fa1ca71d6a8ac9f1e1b8946ef95969100cda394f43673507b87aaec5d9dc6", "byte_length": 1287, "source": "yahoo-chart", "source_symbol": "ABBV", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-amzn-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/AMZN.json", "sha256": "d06614160fd45710aba101f67fe1cdea5ad7c9883458b949f12d3a3009a3bc21", "byte_length": 1317, "source": "yahoo-chart", "source_symbol": "AMZN", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-avgo-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/AVGO.json", "sha256": "4449d59ef52f174c216f250fa5c07abac3f5a051e44e6ac257e2bd38cbf898f5", "byte_length": 1302, "source": "yahoo-chart", "source_symbol": "AVGO", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-brk-b-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/BRK.B.json", "sha256": "1abdd42cc0efa3a7c2b88dfd2d8e3c4c94cd293fd34a13dc841b2d8b1d1d94c0", "byte_length": 1288, "source": "yahoo-chart", "source_symbol": "BRK-B", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-cost-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/COST.json", "sha256": "1d832063b5dbc6bfbfa141074b8b2b4c196ee27fa2fca9e924ac913bd848665b", "byte_length": 1319, "source": "yahoo-chart", "source_symbol": "COST", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-goog-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/GOOG.json", "sha256": "428acfe2f587c03905f5fe8bfa2e08dea85095a0a70a21d29fae28db8a240e0d", "byte_length": 1306, "source": "yahoo-chart", "source_symbol": "GOOG", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-googl-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/GOOGL.json", "sha256": "8face56667cf120387d80b8cce09a7d1201ea3b97c42b59ff9c2e783cca166ea", "byte_length": 1305, "source": "yahoo-chart", "source_symbol": "GOOGL", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-jnj-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/JNJ.json", "sha256": "42104cf0b588d06b505bd94afece34c7583b975f36f912605e297a30df9786f4", "byte_length": 1310, "source": "yahoo-chart", "source_symbol": "JNJ", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-jpm-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/JPM.json", "sha256": "81a8a07cfddb3cdf848578704b1b6ede3a8836b5dcc125cd5a140cccdd981863", "byte_length": 1312, "source": "yahoo-chart", "source_symbol": "JPM", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-lly-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/LLY.json", "sha256": "67e2cf67b0572f498a18e4b4185c23bc28d7487b3338a6e06d376f72e42c74f0", "byte_length": 1304, "source": "yahoo-chart", "source_symbol": "LLY", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-ma-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/MA.json", "sha256": "1cce5afd74d9a35636591fe47b0b2a9bf3d930ae91f3b02f8e3ba470b8295364", "byte_length": 1291, "source": "yahoo-chart", "source_symbol": "MA", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-meta-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/META.json", "sha256": "278f982a77af80eafd90532895b43fe58c9c097a4e3dbe377c1253fed446ed1b", "byte_length": 1311, "source": "yahoo-chart", "source_symbol": "META", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-msft-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/MSFT.json", "sha256": "dae75f1c77ecec2363cebb577ceff910d969698b43eec6624f0ee2c63a59e660", "byte_length": 1320, "source": "yahoo-chart", "source_symbol": "MSFT", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-mu-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/MU.json", "sha256": "9cd975de01f9f192a428b47a7f73cda5577d6297cb29110aa867a39ec065c19f", "byte_length": 1376, "source": "yahoo-chart", "source_symbol": "MU", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-nflx-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/NFLX.json", "sha256": "a89bc04a555b398f23fe8b29bf20a74468462b8aa9a88944a29d18bc97b53534", "byte_length": 1297, "source": "yahoo-chart", "source_symbol": "NFLX", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-nvda-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/NVDA.json", "sha256": "4e0989fcedc8b0d17f43e6acd8903e244ddfebbba89637964e6a06b8a2f391c1", "byte_length": 1282, "source": "yahoo-chart", "source_symbol": "NVDA", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-tsla-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/TSLA.json", "sha256": "c62a8fc371346ad6109082d5920bf6c9aa1ae09eaf96794e49337dbf526c47cd", "byte_length": 1262, "source": "yahoo-chart", "source_symbol": "TSLA", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-v-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/V.json", "sha256": "7384fa4864f573582b545e36efc338fc12db8ffb06528a5079939f6bcb76c6a7", "byte_length": 1287, "source": "yahoo-chart", "source_symbol": "V", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-wmt-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/WMT.json", "sha256": "da8c860cd0cc96ca53672be4d8aec737ed6535e3dfb6aa0202eaf4cd1ffcec98", "byte_length": 1293, "source": "yahoo-chart", "source_symbol": "WMT", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"},
+    {"artifact_id": "yahoo-price-xom-20260331", "path": "apps/data-engine/tests/fixtures/mvp_medium_validation/topt_prices_20260331/XOM.json", "sha256": "aa956d83b8c49be49735bdb73834fbc0e8a539a8f343ec36145db1e8af2d7f86", "byte_length": 1331, "source": "yahoo-chart", "source_symbol": "XOM", "semantic_type": "market-price", "fetched_at": "2026-07-14T05:44:32Z", "knowable_at": "2026-07-14T05:44:32Z", "recorded_at": "2026-07-14T05:44:33Z"}
+  ],
+  "row_completeness_demand": {
+    "cell_key_fields": ["semantic_type", "universe_id", "valid_on", "cusip"],
+    "expected_terminal_cell_count": 84,
+    "expected_reused_e2_cell_count": 3,
+    "expected_new_e3_cell_count": 81,
+    "domains": {
+      "issuer_security_link": {
+        "semantic_type": "semantic.issuer-security-link.v1",
+        "expected_terminal_count": 21,
+        "reuse_e2_count": 1,
+        "add_e3_count": 20,
+        "reused_cell_ids": ["identity-link:issuer:lei:549300S4KLFTLO7GSQ80:security:cusip:67066G104"]
+      },
+      "security_listing_link": {
+        "semantic_type": "semantic.security-listing-link.v1",
+        "expected_terminal_count": 21,
+        "reuse_e2_count": 1,
+        "add_e3_count": 20,
+        "reused_cell_ids": ["identity-link:security:cusip:67066G104:listing:xnas:nvda"]
+      },
+      "market_price": {
+        "semantic_type": "semantic.market-price.v1",
+        "expected_terminal_count": 21,
+        "reuse_e2_count": 1,
+        "add_e3_count": 20,
+        "reused_cell_ids": ["price-bar:listing:xnas:nvda:2026-03-31:unadjusted"],
+        "nvda_rule": "The accepted E2 corrected NVDA record is terminal; the E3 NVDA raw artifact verifies the exact full-universe corpus but must not create a duplicate normalized price cell."
+      },
+      "universe_membership": {
+        "semantic_type": "semantic.universe-membership.v1",
+        "expected_terminal_count": 21,
+        "reuse_e2_count": 0,
+        "add_e3_count": 21,
+        "universe_id": "universe:topt-us-2026-03-31",
+        "source_artifact_id": "topt-nport-primary-document",
+        "valid_on": "2026-03-31",
+        "knowable_at": "2026-05-28T10:14:00Z",
+        "raw_holding_count": 23,
+        "included_asset_category": "EC",
+        "included_holding_count": 21,
+        "included_unique_lei_count": 20,
+        "excluded_holding_counts": {"DE": 1, "STIV": 1},
+        "candidate_cross_check": {
+          "artifact_id": "topt-candidate-denominator",
+          "required": true,
+          "match_fields": ["cusip", "issuer_lei"],
+          "expected_instrument_count": 21,
+          "expected_issuer_count": 20
+        }
+      }
+    },
+    "required_cusips": [
+      "00287Y109",
+      "02079K107",
+      "02079K305",
+      "023135106",
+      "037833100",
+      "084670702",
+      "11135F101",
+      "22160K105",
+      "30231G102",
+      "30303M102",
+      "46625H100",
+      "478160104",
+      "532457108",
+      "57636Q104",
+      "594918104",
+      "595112103",
+      "64110L106",
+      "67066G104",
+      "88160R101",
+      "92826C839",
+      "931142103"
+    ],
+    "excluded_from_topt_row_completeness": [
+      "filing-document",
+      "financial-fact",
+      "corporate-action"
+    ]
+  },
+  "action_window_coverage_demand": {
+    "purpose": "Prove a bounded Yahoo action-window response exists for every TOPT instrument; this is capture coverage, not 21 normalized action assertions.",
+    "window_start": "2026-03-31",
+    "window_end_exclusive": "2026-04-02",
+    "requested_events": ["div", "splits"],
+    "expected_coverage_cell_count": 21,
+    "empty_event_cell_count": 20,
+    "observed_event_cell_count": 1,
+    "decision_snapshot_cell_count": 0,
+    "cell_key_fields": ["cusip", "window_start", "window_end_exclusive"],
+    "cells": [
+      {"ticker": "AAPL", "cusip": "037833100", "artifact_id": "yahoo-price-aapl-20260331", "status": "captured_empty"},
+      {"ticker": "ABBV", "cusip": "00287Y109", "artifact_id": "yahoo-price-abbv-20260331", "status": "captured_empty"},
+      {"ticker": "AMZN", "cusip": "023135106", "artifact_id": "yahoo-price-amzn-20260331", "status": "captured_empty"},
+      {"ticker": "AVGO", "cusip": "11135F101", "artifact_id": "yahoo-price-avgo-20260331", "status": "captured_empty"},
+      {"ticker": "BRK.B", "cusip": "084670702", "artifact_id": "yahoo-price-brk-b-20260331", "status": "captured_empty"},
+      {"ticker": "COST", "cusip": "22160K105", "artifact_id": "yahoo-price-cost-20260331", "status": "captured_empty"},
+      {"ticker": "GOOG", "cusip": "02079K107", "artifact_id": "yahoo-price-goog-20260331", "status": "captured_empty"},
+      {"ticker": "GOOGL", "cusip": "02079K305", "artifact_id": "yahoo-price-googl-20260331", "status": "captured_empty"},
+      {"ticker": "JNJ", "cusip": "478160104", "artifact_id": "yahoo-price-jnj-20260331", "status": "captured_empty"},
+      {"ticker": "JPM", "cusip": "46625H100", "artifact_id": "yahoo-price-jpm-20260331", "status": "captured_empty"},
+      {"ticker": "LLY", "cusip": "532457108", "artifact_id": "yahoo-price-lly-20260331", "status": "captured_empty"},
+      {"ticker": "MA", "cusip": "57636Q104", "artifact_id": "yahoo-price-ma-20260331", "status": "captured_empty"},
+      {"ticker": "META", "cusip": "30303M102", "artifact_id": "yahoo-price-meta-20260331", "status": "captured_empty"},
+      {"ticker": "MSFT", "cusip": "594918104", "artifact_id": "yahoo-price-msft-20260331", "status": "captured_empty"},
+      {"ticker": "MU", "cusip": "595112103", "artifact_id": "yahoo-price-mu-20260331", "status": "captured_event_observed", "observed_events": [{"event_type": "dividend", "source_event_key": 1774963800, "source_event_date": 1774877400, "amount": "0.15"}]},
+      {"ticker": "NFLX", "cusip": "64110L106", "artifact_id": "yahoo-price-nflx-20260331", "status": "captured_empty"},
+      {"ticker": "NVDA", "cusip": "67066G104", "artifact_id": "yahoo-price-nvda-20260331", "status": "captured_empty"},
+      {"ticker": "TSLA", "cusip": "88160R101", "artifact_id": "yahoo-price-tsla-20260331", "status": "captured_empty"},
+      {"ticker": "V", "cusip": "92826C839", "artifact_id": "yahoo-price-v-20260331", "status": "captured_empty"},
+      {"ticker": "WMT", "cusip": "931142103", "artifact_id": "yahoo-price-wmt-20260331", "status": "captured_empty"},
+      {"ticker": "XOM", "cusip": "30231G102", "artifact_id": "yahoo-price-xom-20260331", "status": "captured_empty"}
+    ],
+    "normalization_rule": "E3 records event presence from every bounded response but does not synthesize no-action rows or claim a complete action lifecycle from a Yahoo event alone.",
+    "sentinel_rule": "The accepted E2 NVDA split and JPM dividend remain the semantic action lifecycle sentinels outside decision snapshots."
+  },
+  "retained_e2_evidence": {
+    "source": "parent corpus and accepted E2 runtime handoff",
+    "purpose": "Cross-domain regression evidence only; these sentinels are not TOPT filing or financial-fact completeness claims.",
+    "artifact_ids": [
+      "plug-company-facts",
+      "plug-original-filing",
+      "plug-amended-filing",
+      "nvda-split-events",
+      "jpm-dividend-statement",
+      "jpm-dividend-events"
+    ],
+    "filing_sentinel": "PLUG original and amended filing restatement",
+    "financial_fact_sentinel": "PLUG original and amended fact restatement",
+    "corporate_action_sentinels": ["NVDA split", "JPM dividend"],
+    "full_topt_filing_claim": false,
+    "full_topt_financial_fact_claim": false,
+    "action_stream_boundary": "Corporate actions remain monotonic event evidence outside decision snapshots."
+  },
+  "controls": {
+    "fail_closed": true,
+    "checks": [
+      {
+        "control_id": "missing-required-cell",
+        "mutation": {"operation": "remove", "target": "one required terminal cell"},
+        "expected_outcome": "reject"
+      },
+      {
+        "control_id": "duplicate-required-cell",
+        "mutation": {"operation": "duplicate", "target": "one required terminal cell key"},
+        "expected_outcome": "reject"
+      },
+      {
+        "control_id": "denominator-shrink",
+        "mutation": {"operation": "remove", "target": "universe.instruments[0]"},
+        "expected_outcome": "reject"
+      },
+      {
+        "control_id": "wrong-subject",
+        "mutation": {"operation": "replace", "target": "universe.instruments[0].issuer_lei", "value": "5493006MHB84DD0ZWV18"},
+        "expected_outcome": "reject"
+      },
+      {
+        "control_id": "schema-drift",
+        "mutation": {"operation": "replace", "target": "schema_version", "value": 2},
+        "expected_outcome": "reject"
+      },
+      {
+        "control_id": "checksum-mismatch",
+        "mutation": {"operation": "replace", "target": "artifacts[artifact_id=yahoo-price-aapl-20260331].sha256", "value": "0000000000000000000000000000000000000000000000000000000000000000"},
+        "expected_outcome": "reject"
+      }
+    ],
+    "subject_match_fields": ["ticker", "source_symbol", "cusip", "issuer_lei", "share_class", "exchange_mic"],
+    "artifact_match_fields": ["path", "sha256", "byte_length"],
+    "required_failures": ["missing", "duplicate", "shrink", "wrong-subject", "schema", "checksum"]
+  }
+}

@@ -492,8 +492,8 @@ def test_manifest_corpus_registry_and_e0_claims_are_exact() -> None:
     registry = build_price_registry()
     contract = json.loads(corpus_bytes)["cases"][0]["expected"]["registry_contract"]
 
-    assert manifest["revision"] == 6
-    assert manifest["status"] == "active"
+    assert manifest["revision"] == 7
+    assert manifest["status"] == "blocked"
     assert manifest["last_accepted_rung"] == "E2"
     assert manifest["target_rung"] == "E3"
     assert manifest["corpus"]["sha256"] == hashlib.sha256(corpus_bytes).hexdigest()

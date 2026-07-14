@@ -225,8 +225,8 @@ def test_e2_acceptance_governance_binds_merged_runtime() -> None:
     graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
     output = manifest["acceptance"]["output"]
 
-    assert manifest["revision"] == 6
-    assert manifest["status"] == "active"
+    assert manifest["revision"] == 7
+    assert manifest["status"] == "blocked"
     assert manifest["last_accepted_rung"] == "E2"
     assert manifest["target_rung"] == "E3"
     assert output["handoff_id"] == (
@@ -257,7 +257,7 @@ def test_e2_acceptance_governance_binds_merged_runtime() -> None:
     assert handoff["handoff_id"] == f"handoff:d2-mvp-medium-validation:{canonical_sha256(handoff_content)}"
 
     graph_entry = graph["batches"]["D2-mvp-medium-validation"]
-    assert graph_entry["status"] == "active"
+    assert graph_entry["status"] == "blocked"
     assert graph_entry["target_rung"] == "E3"
     assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
 

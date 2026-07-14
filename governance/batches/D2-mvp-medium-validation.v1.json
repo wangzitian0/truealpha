@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 6,
+  "revision": 7,
   "issue": 121,
   "owner_gate": 29,
-  "status": "active",
+  "status": "blocked",
   "lane": "capture-platform",
   "last_accepted_rung": "E2",
   "target_rung": "E3",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "c1f0d0855b80846d12c32d5740d0604585b01c3a",
+    "base_sha": "2566dc6bad311f304387ba86eacac9b39c43d6da",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -71,6 +71,10 @@
       "fixture and ephemeral-Postgres snapshot parity",
       "exact TOPT 20-issuer and 21-instrument empty-database run"
     ]
+  },
+  "terminal_corpus": {
+    "manifest_path": "apps/data-engine/tests/fixtures/mvp_medium_validation/e3_corpus.v1.json",
+    "sha256": "aedfb76aedbac6785013bcd70c8255be171e7adf2464526357ccc801604c1c95"
   },
   "source_ceiling": "Checked-in public fixtures only through E3. Live calls remain owned by #60 and #27.",
   "paths": {
