@@ -192,11 +192,11 @@
     "S4-issuer-price-sales": {
       "issue": 155,
       "owner_gate": 29,
-      "status": "active",
+      "status": "done",
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S4-issuer-price-sales.v1.json",
-      "sha256": "c6eb54a909c31ec0256d3e03ad8ad42fd97224d6d986a42c42e816ea74c2727c"
+      "sha256": "3a72c29f0c965e3aa8eaa4464726d183622aa930a7780f9a2d3b51b9e25afa16"
     }
   },
   "artifact_edges": [
