@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "5977021e8d1ef9f00fc512d4880aa95b1a45e331",
+    "base_sha": "a8b4bbc4f387d269df0dbcadb4d6115a065c2ea5",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S2 registration is merged to main",
@@ -113,7 +113,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S2-core-strategy-contract.v1.json",
-      "sha256": "f5fa0c6b15ca11a715d4ec2c4ad8d0fcd9a3d2a0c0beb712d9083c543003109c"
+      "sha256": "74d864265082122092bd071f0578b9822ee7431e5e255d879fd2fdbe35266836"
     }
   },
   "release_activation": {

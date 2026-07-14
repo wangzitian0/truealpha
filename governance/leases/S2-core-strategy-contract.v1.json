@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:cea96e9433f300d0264bd7e3c6289e2d0f636de9bba6c524895e4fd462075cb1",
+  "lease_id": "integration-lease:fe60c875e54fa8c7eee7c061330c950d1574f9a04b24e378ac1bda86a2277f32",
   "batch_id": "S2-core-strategy-contract",
   "owner": "wangzitian0",
   "state": "active",
@@ -8,6 +8,6 @@
     "libs/contracts/src/truealpha_contracts/__init__.py",
     "libs/contracts/src/truealpha_contracts/research.py"
   ],
-  "base_sha": "5977021e8d1ef9f00fc512d4880aa95b1a45e331",
+  "base_sha": "a8b4bbc4f387d269df0dbcadb4d6115a065c2ea5",
   "expires_at": "2026-07-21T00:00:00Z"
 }
