@@ -1143,6 +1143,56 @@ def test_completed_batch_can_rerun_its_exact_terminal_acceptance():
     assert accepted_rung == "E1"
 
 
+def test_blocked_terminal_batch_can_accept_target_and_finish():
+    blocked = {
+        "status": "blocked",
+        "last_accepted_rung": "E2",
+        "target_rung": "E3",
+        "terminal_rung": "E3",
+    }
+    done = {
+        **blocked,
+        "status": "done",
+        "last_accepted_rung": "E3",
+    }
+    validation = governance.Validation()
+
+    accepted_rung = governance.validate_status_transition(
+        validation,
+        batch_id="D0",
+        base_manifest=blocked,
+        manifest=done,
+    )
+
+    assert validation.errors == []
+    assert accepted_rung == "E3"
+
+
+def test_blocked_nonterminal_batch_cannot_skip_to_done():
+    blocked = {
+        "status": "blocked",
+        "last_accepted_rung": "E1",
+        "target_rung": "E2",
+        "terminal_rung": "E3",
+    }
+    invalid = {
+        **blocked,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E3",
+    }
+    validation = governance.Validation()
+
+    governance.validate_status_transition(
+        validation,
+        batch_id="D0",
+        base_manifest=blocked,
+        manifest=invalid,
+    )
+
+    assert "D0: only terminal-rung acceptance may mark the batch done" in validation.errors
+
+
 @pytest.mark.parametrize("field", ["last_accepted_rung", "target_rung", "terminal_rung"])
 def test_corrective_terminal_rerun_cannot_change_rungs(field):
     terminal = {
