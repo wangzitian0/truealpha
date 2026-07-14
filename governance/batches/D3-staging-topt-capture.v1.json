@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "D3-staging-topt-capture",
-  "revision": 1,
+  "revision": 2,
   "issue": 171,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -16,11 +16,11 @@
   "informational_issues": [11, 23, 26, 29, 60, 61, 70, 121],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "1d6d59bb7708c1de3913dd91b6949d6697d2452a",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D3 registration is merged to main",
@@ -62,8 +62,8 @@
   ],
   "corpus": {
     "environment": "E0-E3 Local/CI frozen mocks and ephemeral stores; E4 isolated Staging public-source run",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "apps/data-engine/tests/fixtures/staging_topt_capture/corpus.v1.json",
+    "sha256": "61717398e32ca5204d08938dffd2d735eef87fc0702e94c7c0d05a1c3973313b",
     "denominator": {
       "universe_id": "universe:topt-us-2026-03-31",
       "series": "S000088434",
