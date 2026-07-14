@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:bc129504d02f61b4e48f23dc069742b42ec6831fc50eae494031a1e8bd86e4fb",
+  "batch_id": "D2-mvp-medium-validation",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "apps/data-engine/src/data_engine/mvp_medium_models.py",
+    "apps/data-engine/src/data_engine/mvp_medium_pipeline.py",
+    "apps/data-engine/src/data_engine/mvp_medium_registry.py",
+    "apps/data-engine/src/data_engine/mvp_medium_repository.py",
+    "apps/data-engine/src/data_engine/mvp_medium_snapshot.py",
+    "db/migrations/0021_mvp_medium_domains.sql",
+    "db/tests/mvp_medium_validation_contract.sql"
+  ],
+  "base_sha": "45ff014e6881198b6d078e33f080d2a09adb18e0",
+  "expires_at": "2026-07-21T00:00:00Z"
+}

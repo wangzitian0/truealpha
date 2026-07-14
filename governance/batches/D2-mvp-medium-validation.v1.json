@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 4,
+  "revision": 5,
   "issue": 121,
   "owner_gate": 29,
-  "status": "active",
+  "status": "blocked",
   "lane": "capture-platform",
   "last_accepted_rung": "E1",
   "target_rung": "E2",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "fbe38d342fb1f554c2618639abadf6cce2061849",
+    "base_sha": "45ff014e6881198b6d078e33f080d2a09adb18e0",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -80,6 +80,11 @@
       "governance/handoffs/D2-mvp-medium-validation.v1.json",
       "apps/data-engine/src/data_engine/batches/mvp_medium_validation/**",
       "apps/data-engine/src/data_engine/mvp_assets.py",
+      "apps/data-engine/src/data_engine/mvp_medium_models.py",
+      "apps/data-engine/src/data_engine/mvp_medium_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_medium_registry.py",
+      "apps/data-engine/src/data_engine/mvp_medium_repository.py",
+      "apps/data-engine/src/data_engine/mvp_medium_snapshot.py",
       "apps/data-engine/src/data_engine/mvp_models.py",
       "apps/data-engine/src/data_engine/mvp_pipeline.py",
       "apps/data-engine/src/data_engine/mvp_registry.py",
@@ -118,6 +123,11 @@
     ],
     "integration_surface": [
       "apps/data-engine/src/data_engine/mvp_assets.py",
+      "apps/data-engine/src/data_engine/mvp_medium_models.py",
+      "apps/data-engine/src/data_engine/mvp_medium_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_medium_registry.py",
+      "apps/data-engine/src/data_engine/mvp_medium_repository.py",
+      "apps/data-engine/src/data_engine/mvp_medium_snapshot.py",
       "apps/data-engine/src/data_engine/mvp_models.py",
       "apps/data-engine/src/data_engine/mvp_pipeline.py",
       "apps/data-engine/src/data_engine/mvp_registry.py",
@@ -128,7 +138,11 @@
       "db/migrations/0021_mvp_medium_domains.sql",
       "db/tests/mvp_medium_validation_contract.sql"
     ],
-    "lease_owner": "wangzitian0"
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/D2-mvp-medium-validation.v1.json",
+      "sha256": "00399ad4b7fd2da38c10e00c2dca34af6ce6167ddceedbd59549cb16fc50b249"
+    }
   },
   "release_activation": {
     "allowed": false,

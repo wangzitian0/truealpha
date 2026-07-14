@@ -649,7 +649,13 @@ def _split_case(corpus: FrozenE1Corpus, price_run: PricePipelineRun) -> tuple[Co
         confidence=Decimal("0.99"),
         raw_ref=f"fixture:nvda-split-filing:{corpus.artifacts['nvda-listing-identity'].sha256}",
     )
-    bar = price_run.price_bars[-1]
+    # Replay identity must not depend on an environment-local raw.fetches sequence.
+    bar = ListingPriceBar.model_validate(
+        {
+            **price_run.price_bars[-1].model_dump(mode="python"),
+            "raw_ref": price_run.records[-1].raw_object_id,
+        }
+    )
     as_of = price_run.payloads[-1].recorded_at
     replay = V1ReturnReplay.create(
         replay_id="replay:nvda:e1-split",
