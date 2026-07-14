@@ -2,7 +2,7 @@
   "schema_version": 1,
   "artifact_type": "issuer_tier_valuation_tiny_corpus",
   "corpus_id": "s6-issuer-tier-valuation-tiny-v1",
-  "claim_ceiling": "E1 isolated Local/CI issuer tier and valuation-gap evidence only; no approved product semantics, GPPE computation, financial mapping, stable handoff, ranking, strategy, replay, or release claim",
+  "claim_ceiling": "E1 maximum frozen-corpus scope; preparation alone earns no rung, and later evidence remains isolated Local/CI issuer tier and valuation-gap evidence with no approved product semantics, GPPE computation, financial mapping, stable handoff, ranking, strategy, replay, or release claim",
   "contract_refs": {
     "binding": {
       "path": "libs/contracts/tests/fixtures/issuer_price_to_sales.v1.json",

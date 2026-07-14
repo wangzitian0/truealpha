@@ -74,7 +74,7 @@
   "corpus": {
     "environment": "Local/CI checked-in fixture",
     "manifest_path": "libs/factors/tests/batches/issuer_tier_valuation_tiny/fixtures/corpus.v1.json",
-    "sha256": "351884e2fd60a2a118d727c3b46dc5d463d5235d651af099b111d3706fba4810",
+    "sha256": "8e0c10c1e0a1ceac78e17daa8e577bb85442f61b9f031f56de872313c8677476",
     "required_strata": [
       "computed S5 issuer P/S composed with one non-financial GPPE observation",
       "traditional, tech, and large-model-native candidate bands at exact boundaries",
