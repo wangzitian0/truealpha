@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "6aa4944936b98b2f77bcb65b13a9e51e7e5761f4",
+    "base_sha": "d7fc688dfd58c9c732272afe92c5bfebaa04796f",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S5 registration is merged to main",
@@ -97,7 +97,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S5-issuer-price-sales-kernel.v1.json",
-      "sha256": "194a5cabea884214132e30dd67b1465af87108e9fbafefd1f45f3dfa63990a47"
+      "sha256": "92c1ef1fb21ff9202f31898bccc850bb45379fef25fd488c7f6185b83d0c6e46"
     }
   },
   "release_activation": {

@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:b7490561dd3908abe6ce72b6e4ed1ccdbd3ec42deb6e65b200488acc89a8159f",
+  "lease_id": "integration-lease:5eaf21183f0dbd6aa20151b3b1125be4d49f7419625a5598f3d0253f2833199f",
   "batch_id": "S5-issuer-price-sales-kernel",
   "owner": "wangzitian0",
   "state": "active",
   "paths": [
     "libs/factors/src/factors/batches/issuer_price_to_sales_tiny/__init__.py"
   ],
-  "base_sha": "6aa4944936b98b2f77bcb65b13a9e51e7e5761f4",
+  "base_sha": "d7fc688dfd58c9c732272afe92c5bfebaa04796f",
   "expires_at": "2026-07-21T00:00:00Z"
 }

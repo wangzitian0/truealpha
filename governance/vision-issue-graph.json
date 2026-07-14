@@ -205,7 +205,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S5-issuer-price-sales-kernel.v1.json",
-      "sha256": "17c17de2d7bb17d04d8f0955339824b782cdcdcf85d03f8a6ee1aea84bcc7177"
+      "sha256": "41902acd6e4a2ae8ae4307af199f75a1adc5822d1ac3a9b5c27eb86180c7ea96"
     }
   },
   "artifact_edges": [
