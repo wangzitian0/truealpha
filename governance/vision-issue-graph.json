@@ -60,7 +60,14 @@
         "sha256": "924cab897b2ab204169ee29a70889f74a21d36a589f184a6838888506c5d61df"
       }
     },
-    "23": {"gate": 29, "terminal_evidence": "E3"},
+    "23": {
+      "gate": 29,
+      "terminal_evidence": "E3",
+      "accepted_evidence": {
+        "path": "governance/evidence/issue-23.v1.json",
+        "sha256": "9066cc06367a42ae92f4d69e008cc411ec008705edd52068861763056af98547"
+      }
+    },
     "24": {"gate": 29, "terminal_evidence": "E4"},
     "25": {"gate": 29, "terminal_evidence": "E4"},
     "26": {"gate": 29, "terminal_evidence": "E3"},
