@@ -1,0 +1,39 @@
+{
+  "accepted_rung": "E3",
+  "base_sha": "d7fc688dfd58c9c732272afe92c5bfebaa04796f",
+  "batch_id": "D2-mvp-medium-validation",
+  "commands": [
+    {
+      "command": "uv run pytest apps/data-engine/tests/batches/mvp_medium_validation -q",
+      "exit_code": 0,
+      "output_sha256": "5c7cff5ca7a0ede85adc517a5851313fe07746b0e0bc76ee09c9726fc4831325"
+    },
+    {
+      "command": "uv run ruff check apps/data-engine/src/data_engine/batches/mvp_medium_validation apps/data-engine/tests/batches/mvp_medium_validation",
+      "exit_code": 0,
+      "output_sha256": "c822b811c2e0019bee1324669633ca6aa6ae681c738309b0a31c13bbeebac766"
+    },
+    {
+      "command": "uv run mypy",
+      "exit_code": 0,
+      "output_sha256": "f283fa7d720678d03af79542de7999d579ff780ee3ee245f2f413a20c78b50fa"
+    }
+  ],
+  "created_at": "2026-07-14T09:46:27Z",
+  "evidence_id": "rung-evidence:D2-mvp-medium-validation:5d13e00f051bc4909375923bfd38bd1f4059ec2c55ee88c84d9a92effc737ac2",
+  "manifest_sha256": "14d1561023d613d4deea37ec72174dac202c8b95df3e45c8e7ad9799924f215a",
+  "negative_controls": [
+    "wrong or revoked D1 handoff identity",
+    "missing identity, confidence, raw lineage, registry, policy, or PIT timestamp",
+    "future-known or stale price, fact, filing, action, or membership record",
+    "wrong issuer, security, listing, or share class",
+    "float or malformed monetary input and adjusted-action double counting",
+    "UPDATE or DELETE against raw or normalized vintages",
+    "source or semantic schema drift and central source/type branching",
+    "factor-visible source, raw, registry, or lineage provenance",
+    "denominator shrink, duplicate required cell, post-output scope construction, capture projection or source-coverage substitution, release activation, or Staging activation"
+  ],
+  "producer_head_sha": "d7fc688dfd58c9c732272afe92c5bfebaa04796f",
+  "schema_version": 1,
+  "stable_handoff": false
+}

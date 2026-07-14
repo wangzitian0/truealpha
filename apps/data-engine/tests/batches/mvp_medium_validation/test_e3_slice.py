@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import uuid
@@ -44,6 +45,7 @@ from truealpha_contracts import (
     RawObjectRef,
     evaluate_capture_manifest,
 )
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.release import ReleaseManifest
 
 REPOSITORY_ROOT = next(
@@ -840,3 +842,82 @@ def test_e3_rejects_staging_release_and_wrong_handoff_activation(connection) -> 
             raw_store=MemoryRawObjectStore(),
             activation=cast(ReleaseManifest, object()),
         )
+
+
+def test_e3_terminal_governance_binds_the_complete_issue_23_matrix() -> None:
+    manifest_path = REPOSITORY_ROOT / "governance/batches/D2-mvp-medium-validation.v1.json"
+    evidence_path = REPOSITORY_ROOT / "governance/evidence/D2-mvp-medium-validation-E3.v1.json"
+    manifest_bytes = manifest_path.read_bytes()
+    evidence_bytes = evidence_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    evidence = json.loads(evidence_bytes)
+    graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
+    output = manifest["acceptance"]["output"]
+
+    assert manifest["revision"] == 13
+    assert manifest["status"] == "done"
+    assert manifest["last_accepted_rung"] == manifest["target_rung"] == manifest["terminal_rung"] == "E3"
+    assert manifest["capability_issues"] == manifest["closes_issues"] == [23]
+    assert manifest["activation"]["base_sha"] == "6ae46c2f571fd97ddbed18f7d279d1f4653e5608"
+
+    assert output["type"] == "D2E3Evidence"
+    assert output["stable_handoff"] is False
+    assert output["evidence_id"] == ("d2-e3-evidence:d812369f2808942c8040a3d5f15e71ec7c147d7d547f988e312f428f15bf6139")
+    assert output["sha256"] == output["evidence_id"].rsplit(":", 1)[-1]
+    assert output["denominator"] == {
+        "universe_id": "universe:topt-us-2026-03-31",
+        "accession": "000207169126012475",
+        "issuer_count": 20,
+        "instrument_count": 21,
+    }
+    assert output["capture_contract"] == {
+        "environment_neutral_scope": True,
+        "required_cell_count_per_cutoff": 84,
+        "source_coverage_count": 168,
+        "capture_manifest_count": 2,
+        "blocker_free_evaluation_count": 2,
+        "normalized_record_count": 168,
+        "snapshot_count": 2,
+    }
+    assert output["accepted_strata"] == [
+        {
+            "name": "existing-type-source-extension",
+            "source_pr": 142,
+            "producer_commit": "2ef14df27b6226e86faa775be8358ad30c123031",
+        },
+        {
+            "name": "additive-typed-record",
+            "source_pr": 146,
+            "producer_commit": "a8b4bbc4f387d269df0dbcadb4d6115a065c2ea5",
+        },
+        {
+            "name": "disabled-extension-output-replay",
+            "source_pr": 149,
+            "producer_commit": "4102d248aeb451e4d7153b956593952f4c5c4fe9",
+        },
+        {
+            "name": "topt-four-domain-cells",
+            "source_pr": 157,
+            "producer_commit": "7251a14008397cd3daa7464a9fb0ceaa9d967109",
+        },
+        {
+            "name": "predeclared-capture-contracts",
+            "source_pr": 164,
+            "producer_commit": "d7fc688dfd58c9c732272afe92c5bfebaa04796f",
+        },
+    ]
+
+    assert output["rung_evidence"]["sha256"] == hashlib.sha256(evidence_bytes).hexdigest()
+    assert evidence["accepted_rung"] == "E3"
+    assert evidence["base_sha"] == evidence["producer_head_sha"] == "d7fc688dfd58c9c732272afe92c5bfebaa04796f"
+    assert evidence["manifest_sha256"] == "14d1561023d613d4deea37ec72174dac202c8b95df3e45c8e7ad9799924f215a"
+    assert [report["command"] for report in evidence["commands"]] == manifest["acceptance"]["commands"]
+    assert evidence["negative_controls"] == manifest["acceptance"]["negative_controls"]
+    evidence_content = {key: value for key, value in evidence.items() if key != "evidence_id"}
+    assert evidence["evidence_id"] == (f"rung-evidence:D2-mvp-medium-validation:{canonical_sha256(evidence_content)}")
+
+    graph_entry = graph["batches"]["D2-mvp-medium-validation"]
+    assert graph_entry["status"] == "done"
+    assert graph_entry["target_rung"] == "E3"
+    assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+    assert "accepted_evidence" not in graph["issues"]["23"]
