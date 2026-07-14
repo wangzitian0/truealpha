@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 8,
+  "revision": 9,
   "issue": 121,
   "owner_gate": 29,
   "status": "blocked",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "8aa3fb3218fec2fb60095c248b8de2a364b0efd7",
+    "base_sha": "e62afbe65ba370776e00682b97ff4e7b1dd3fe1a",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -70,7 +70,8 @@
       "financial fact and filing restatement timing",
       "fixture and ephemeral-Postgres snapshot parity",
       "exact TOPT 20-issuer and 21-instrument empty-database run",
-      "empty-database existing-type source extension through registry, raw vintages, PIT snapshot, and disabled-activation replay"
+      "empty-database existing-type source extension through registry, raw vintages, PIT snapshot, and disabled-activation replay",
+      "empty-database additive typed semantic record through registry, raw vintages, PIT repository, snapshot, and disabled-activation replay"
     ]
   },
   "source_ceiling": "Checked-in public fixtures only through E3. Live calls remain owned by #60 and #27.",
