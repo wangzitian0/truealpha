@@ -329,6 +329,8 @@ def test_e2_rows_are_append_only(connection, statement: str) -> None:
 
 
 def test_e2_round_trips_through_configured_s3_compatible_store(connection) -> None:
+    if not os.environ.get("S3_ENDPOINT"):
+        pytest.skip("no S3-compatible endpoint is configured for this job")
     context, execution = _execution()
     store = shared_raw_store.object_store()
     try:
