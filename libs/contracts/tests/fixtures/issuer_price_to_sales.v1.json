@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "artifact_type": "issuer_price_to_sales_contract_corpus",
+  "base_strategy": {
+    "path": "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
+    "sha256": "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4",
+    "definition_key": "fixed_cohort"
+  },
+  "valid_binding": {
+    "price_to_sales_policy": {
+      "policy_version": "0.1.0",
+      "ratio_subject_kind": "issuer",
+      "market_cap_rule": "sum_security_price_times_shares",
+      "price_rule": "last_eligible_unadjusted_close_at_or_before_cutoff",
+      "shares_rule": "latest_knowable_security_shares_on_or_before_price_date",
+      "revenue_rule": "latest_four_complete_quarters_else_latest_complete_fiscal_year",
+      "currency_rule": "convert_market_values_to_reporting_currency_at_price_session_close",
+      "corporate_action_rule": "unadjusted_price_with_effective_shares_once",
+      "input_cutoff_rule": "all_inputs_knowable_at_or_before_cutoff",
+      "precomputed_vendor_ratio_allowed": false,
+      "missing_component_behavior": "unavailable"
+    },
+    "candidate_universe": {
+      "universe": {
+        "universe_id": "universe:topt-us-2026-03-31",
+        "universe_version": "2026.03.31",
+        "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "ranking_subject_kind": "issuer",
+      "candidate_key": "issuer_id",
+      "one_candidate_per_issuer": true,
+      "candidates": [
+        {
+          "issuer": {
+            "kind": "issuer",
+            "id": "issuer.alphabet"
+          },
+          "execution_listing": {
+            "kind": "listing",
+            "id": "listing.xnas.googl"
+          },
+          "market_value_components": [
+            {
+              "security": {
+                "kind": "security",
+                "id": "security.alphabet.class-a"
+              },
+              "price_listing": {
+                "kind": "listing",
+                "id": "listing.xnas.googl"
+              }
+            },
+            {
+              "security": {
+                "kind": "security",
+                "id": "security.alphabet.class-c"
+              },
+              "price_listing": {
+                "kind": "listing",
+                "id": "listing.xnas.goog"
+              }
+            }
+          ],
+          "complete_share_class_coverage": true
+        },
+        {
+          "issuer": {
+            "kind": "issuer",
+            "id": "issuer.nvidia"
+          },
+          "execution_listing": {
+            "kind": "listing",
+            "id": "listing.xnas.nvda"
+          },
+          "market_value_components": [
+            {
+              "security": {
+                "kind": "security",
+                "id": "security.nvidia.common"
+              },
+              "price_listing": {
+                "kind": "listing",
+                "id": "listing.xnas.nvda"
+              }
+            }
+          ],
+          "complete_share_class_coverage": true
+        }
+      ]
+    }
+  },
+  "expected": {
+    "ratio_subject_kind": "issuer",
+    "candidate_count": 2,
+    "alphabet_candidate_count": 1,
+    "alphabet_market_value_component_count": 2,
+    "canonical_identity_stable_under": [
+      "candidate_reordering",
+      "market_value_component_reordering"
+    ]
+  },
+  "negative_cases": [
+    {
+      "case_id": "instrument-level-ratio",
+      "target": "price_to_sales_policy",
+      "operation": "replace",
+      "path": "ratio_subject_kind",
+      "value": "security"
+    },
+    {
+      "case_id": "unknown-market-cap-rule",
+      "target": "price_to_sales_policy",
+      "operation": "replace",
+      "path": "market_cap_rule",
+      "value": "vendor_market_cap"
+    },
+    {
+      "case_id": "mutable-policy-version",
+      "target": "price_to_sales_policy",
+      "operation": "replace",
+      "path": "policy_version",
+      "value": "latest"
+    },
+    {
+      "case_id": "precomputed-vendor-ratio",
+      "target": "price_to_sales_policy",
+      "operation": "replace",
+      "path": "precomputed_vendor_ratio_allowed",
+      "value": true
+    },
+    {
+      "case_id": "duplicate-issuer-candidate",
+      "target": "candidate_universe",
+      "operation": "copy",
+      "from": "candidates.0.issuer",
+      "path": "candidates.1.issuer"
+    },
+    {
+      "case_id": "issuer-has-security-kind",
+      "target": "candidate_universe",
+      "operation": "replace",
+      "path": "candidates.0.issuer.kind",
+      "value": "security"
+    },
+    {
+      "case_id": "execution-target-has-security-kind",
+      "target": "candidate_universe",
+      "operation": "replace",
+      "path": "candidates.0.execution_listing.kind",
+      "value": "security"
+    },
+    {
+      "case_id": "component-has-listing-kind",
+      "target": "candidate_universe",
+      "operation": "replace",
+      "path": "candidates.0.market_value_components.0.security.kind",
+      "value": "listing"
+    },
+    {
+      "case_id": "component-price-has-security-kind",
+      "target": "candidate_universe",
+      "operation": "replace",
+      "path": "candidates.0.market_value_components.0.price_listing.kind",
+      "value": "security"
+    },
+    {
+      "case_id": "duplicate-market-value-component",
+      "target": "candidate_universe",
+      "operation": "copy",
+      "from": "candidates.0.market_value_components.0",
+      "path": "candidates.0.market_value_components.1"
+    },
+    {
+      "case_id": "incomplete-share-class-coverage",
+      "target": "candidate_universe",
+      "operation": "replace",
+      "path": "candidates.0.complete_share_class_coverage",
+      "value": false
+    },
+    {
+      "case_id": "execution-listing-outside-components",
+      "target": "candidate_universe",
+      "operation": "replace",
+      "path": "candidates.0.execution_listing.id",
+      "value": "listing.xnys.unbound"
+    },
+    {
+      "case_id": "candidate-universe-mismatch",
+      "target": "candidate_universe",
+      "operation": "replace",
+      "path": "universe.content_sha256",
+      "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "case_id": "unknown-binding-field",
+      "target": "binding",
+      "operation": "add",
+      "path": "ranking_callable",
+      "value": "rank_instruments"
+    }
+  ]
+}
