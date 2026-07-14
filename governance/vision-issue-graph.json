@@ -163,11 +163,11 @@
     "D3-staging-topt-capture": {
       "issue": 171,
       "owner_gate": 29,
-      "status": "prepared",
-      "target_rung": "E0",
+      "status": "active",
+      "target_rung": "E1",
       "terminal_rung": "E4",
       "manifest": "governance/batches/D3-staging-topt-capture.v1.json",
-      "sha256": "dbb9b10636cea5f0a586cfd4e5dd39278e9ad383f62d38acfe1f79c8cae6e7c9"
+      "sha256": "cb40df31a2df3f6e5ebeaf9a0b13a8a25cc518dfe7ba3db816f0941986a06796"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,

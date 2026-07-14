@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "batch_id": "D3-staging-topt-capture",
+  "accepted_rung": "E0",
+  "base_sha": "b33446c01eefa6217c6d8fe797787af886e9ea6b",
+  "producer_head_sha": "c49a867d67504761c45d04781e12748062041053",
+  "manifest_sha256": "dbb9b10636cea5f0a586cfd4e5dd39278e9ad383f62d38acfe1f79c8cae6e7c9",
+  "corpus_sha256": "0261ec9f9b3763c3182a6daabf2e5e4652d351f0342a491f8279cc818d7af9e9",
+  "created_at": "2026-07-14T12:05:33Z",
+  "evidence_id": "rung-evidence:D3-staging-topt-capture:efd0a7cdd52dfa021cd2190578bb7d0abf0c2abd3e81b64a1d44ea09b3c8cc4d",
+  "stable_handoff": false,
+  "claim_ceiling": "accepted isolated typed Yahoo configuration, frozen call plan, strict Decimal parser, and mocked single-call adapter only; no persisted raw or normalized data, live-source readiness, Staging run, schedule, strategy, Production, or release claim",
+  "commands": [
+    {
+      "command": "uv run pytest apps/data-engine/tests/batches/staging_topt_capture -q",
+      "exit_code": 0,
+      "output_sha256": "8211600cd456f05df46c938eb97d8020592beb3a8c5619fa996403479eef016e"
+    },
+    {
+      "command": "uv run ruff check apps/data-engine/src/data_engine/batches/staging_topt_capture apps/data-engine/tests/batches/staging_topt_capture",
+      "exit_code": 0,
+      "output_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "command": "uv run mypy",
+      "exit_code": 0,
+      "output_sha256": "14c86ee194cc9406b4f38866ce2eb1ba7e54c55437faf1ccc89f0195c485674d"
+    },
+    {
+      "command": "make issue-graph-check",
+      "exit_code": 0,
+      "output_sha256": "9714967e19d592326e226ffd94ee83938c29116c6aa5a1512924ec811cc3f903"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "apps/data-engine/src/data_engine/batches/staging_topt_capture/e0_slice.py",
+      "sha256": "15ee4d167bea44499c09a41b147a9cc4e883ba4f2c40587602d7fcdb3b710902"
+    },
+    {
+      "path": "apps/data-engine/tests/batches/staging_topt_capture/test_e0_slice.py",
+      "sha256": "31c2987e223b98ea4f7a4eb88ee8759e5e380bdb31619cfe190238b33fe0a0c1"
+    },
+    {
+      "path": "apps/data-engine/tests/fixtures/staging_topt_capture/corpus.v1.json",
+      "sha256": "0261ec9f9b3763c3182a6daabf2e5e4652d351f0342a491f8279cc818d7af9e9"
+    }
+  ],
+  "negative_controls": [
+    "HTTP cannot execute without a content-addressed frozen scope and call plan",
+    "wrong source, adapter, identity, date window, or attempt ceiling fails validation",
+    "malformed, duplicate-key, non-finite, error-envelope, zero-result, or multiple-result JSON fails closed",
+    "wrong symbol, currency, instrument type, exchange, timezone, GMT offset, or session timestamp fails closed",
+    "null, binary-float, nonintegral, negative, nonpositive, unequal-length, or inconsistent OHLCV fails closed",
+    "adjusted close remains reconciliation-only and factor-invisible",
+    "HTTP status and non-JSON content type fail before normalization",
+    "no source registration, default client, retry loop, persistence, Dagster definition, release activation, or Production binding exists"
+  ]
+}
