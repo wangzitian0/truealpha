@@ -63,7 +63,7 @@
   "corpus": {
     "environment": "E0-E3 Local/CI frozen mocks and ephemeral stores; E4 isolated Staging public-source run",
     "manifest_path": "apps/data-engine/tests/fixtures/staging_topt_capture/corpus.v1.json",
-    "sha256": "61717398e32ca5204d08938dffd2d735eef87fc0702e94c7c0d05a1c3973313b",
+    "sha256": "0261ec9f9b3763c3182a6daabf2e5e4652d351f0342a491f8279cc818d7af9e9",
     "denominator": {
       "universe_id": "universe:topt-us-2026-03-31",
       "series": "S000088434",
