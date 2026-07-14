@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 6,
+  "revision": 7,
   "issue": 121,
   "owner_gate": 29,
-  "status": "active",
+  "status": "blocked",
   "lane": "capture-platform",
   "last_accepted_rung": "E2",
   "target_rung": "E3",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "c1f0d0855b80846d12c32d5740d0604585b01c3a",
+    "base_sha": "2566dc6bad311f304387ba86eacac9b39c43d6da",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
