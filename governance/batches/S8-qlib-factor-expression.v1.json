@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S8-qlib-factor-expression",
-  "revision": 3,
+  "revision": 4,
   "issue": 189,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Define a Qlib-independent typed factor-expression AST and operator registry, then prove the TrueAlpha compiler is the only path that can supply an expression to pinned Qlib 0.9.7.",
-  "claim_ceiling": "E0 safe typed-expression contract, deterministic compiler, execution identity, and isolated Qlib 0.9.7 parity over the frozen synthetic corpus; no approved product semantics, real factor, provider, registration, replay, persistence, stable handoff, or release-readiness claim",
+  "claim_ceiling": "E1 frozen-corpus safe Qlib expression-contract evidence only; no approved product semantics, real factor, provider, registration, replay, persistence, stable handoff, or release-readiness claim",
   "capability_issues": [21, 26],
   "closes_issues": [],
   "informational_issues": [29, 59, 143, 181],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "b85c1fcd8619c9239a69faaadae89869fe2cf5f3",
+    "base_sha": "462977a745543da6700a127f6091016bdbb867bc",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S8 registration is merged to main",
@@ -155,7 +155,7 @@
     "output": {
       "type": "QlibFactorExpressionTinyEvidence",
       "stable_handoff": false,
-      "state": "accepted_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "issue #21 strategy semantic freeze batch",
         "issue #24 and #25 factor candidate batches",
