@@ -170,6 +170,15 @@
       "terminal_rung": "E1",
       "manifest": "governance/batches/S1-price-source-calibration.v1.json",
       "sha256": "377c4af2db584d691c82f9af1ccf9604256250ccf55fa295cd8d12f50f6f64bc"
+    },
+    "S2-core-strategy-contract": {
+      "issue": 143,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E0",
+      "manifest": "governance/batches/S2-core-strategy-contract.v1.json",
+      "sha256": "fe9378d0f71a4d0daf31f54f52c7ea6e3ff425a1c963697e20e5c8715126907f"
     }
   },
   "artifact_edges": [
