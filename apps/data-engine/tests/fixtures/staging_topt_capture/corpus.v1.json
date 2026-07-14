@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "batch_id": "D3-staging-topt-capture",
+  "target_rung": "E0",
+  "fixture_kind": "synthetic-contract-probe",
+  "accepted_parent": {
+    "issue": 23,
+    "evidence_path": "governance/evidence/issue-23.v1.json",
+    "evidence_sha256": "9066cc06367a42ae92f4d69e008cc411ec008705edd52068861763056af98547",
+    "d2_e3_evidence_id": "d2-e3-evidence:d812369f2808942c8040a3d5f15e71ec7c147d7d547f988e312f428f15bf6139",
+    "d2_e3_evidence_sha256": "d812369f2808942c8040a3d5f15e71ec7c147d7d547f988e312f428f15bf6139"
+  },
+  "denominator": {
+    "universe_id": "universe:topt-us-2026-03-31",
+    "accession": "000207169126012475",
+    "issuer_count": 20,
+    "instrument_count": 21,
+    "required_cell_count": 84
+  },
+  "request": {
+    "source_id": "source.yahoo-chart-public",
+    "source_version": "1.0.0",
+    "adapter_id": "data_engine.d3.yahoo_chart_adapter",
+    "adapter_version": "1.0.0",
+    "semantic_type_id": "semantic.market-price",
+    "semantic_type_version": "1.0.0",
+    "issuer_id": "issuer:lei:549300S4KLFTLO7GSQ80",
+    "security_id": "security:cusip:67066G104",
+    "listing_id": "listing:xnas:nvda",
+    "symbol": "NVDA",
+    "exchange_mic": "XNAS",
+    "currency": "USD",
+    "query_start": "2026-03-31",
+    "query_end_exclusive": "2026-04-01",
+    "expected_trading_date": "2026-03-31",
+    "maximum_attempts": 3
+  },
+  "raw_response": {
+    "path": "apps/data-engine/tests/fixtures/staging_topt_capture/yahoo_nvda_2026-03-31.json",
+    "sha256": "24aced840be4a6230b389559b447297d9372ff8235b66857a84cf1df0e268f41",
+    "content_type": "application/json"
+  },
+  "expected_bar": {
+    "symbol": "NVDA",
+    "security_id": "security:cusip:67066G104",
+    "listing_id": "listing:xnas:nvda",
+    "trading_date": "2026-03-31",
+    "session_close_at": "2026-03-31T20:00:00Z",
+    "open": "166.97000122070312",
+    "high": "174.6199951171875",
+    "low": "166.9600067138672",
+    "close": "174.39999389648438",
+    "adjusted_close": "174.39999389648438",
+    "volume": 226181300,
+    "currency": "USD",
+    "confidence": "0.80"
+  },
+  "negative_controls": [
+    "binary float configuration input",
+    "malformed JSON or Yahoo error envelope",
+    "zero or multiple chart results",
+    "wrong response symbol, currency, instrument type, or exchange timezone",
+    "wrong trading date or unequal series lengths",
+    "null OHLCV or adjusted-close value",
+    "nonintegral or negative volume",
+    "nonpositive price or invalid OHLC ordering",
+    "query window wider than one day",
+    "attempt budget above the registered ceiling"
+  ]
+}
