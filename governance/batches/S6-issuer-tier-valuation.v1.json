@@ -78,6 +78,7 @@
     "required_strata": [
       "computed S5 issuer P/S composed with one non-financial GPPE observation",
       "traditional, tech, and large-model-native candidate bands at exact boundaries",
+      "negative and zero GPPE remain valid traditional-tier observations",
       "target P/S midpoint and valuation-gap Decimal arithmetic",
       "financial branch, unavailable input, and identity/time/currency mismatch rejection",
       "ambient Decimal-context mutation and canonical semantic identity"
@@ -131,7 +132,7 @@
     ],
     "negative_controls": [
       "binding, candidate-universe, P/S policy, issuer, cutoff, or currency identity mismatch",
-      "missing, unavailable, nonpositive, future, or financial GPPE input",
+      "missing, unavailable, future, or financial GPPE input",
       "missing, unavailable, or nonpositive S5 P/S input",
       "stale semantic, S5 manifest, or public-golden identity",
       "ambient Decimal-context mutation",
