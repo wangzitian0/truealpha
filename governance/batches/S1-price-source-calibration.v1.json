@@ -15,7 +15,7 @@
   "owners": {"implementation": "wangzitian0", "reviewer": "copilot-pull-request-reviewer", "custodian": null},
   "activation": {"base_sha": "bcb137f27bff65d4ce4d1c91e887c8a55fb8afbe", "protocol_ref": "docs/iterative-delivery.md@same-commit", "requirements": ["preparation PR merges before implementation PR"]},
   "dependencies": [],
-  "corpus": {"manifest_path": "apps/data-engine/samples/prices/independent_reconciliation.v1.json", "sha256": "e7613862e2e63c88fcb299747df8c08c9b13891d085bc5b313f9cb5cbf15e9e5", "required_strata": ["754-date Yahoo/Twelve Data comparison"]},
+  "corpus": {"manifest_path": "apps/data-engine/samples/prices/independent_reconciliation.v1.json", "sha256": "40727fb13c7dda863e49017c3ba841d509e401ae16d2904e72228433900fce62", "required_strata": ["four named symbols", "three-year daily comparison window", "OHLCV tolerances", "adjusted-close and corporate-action blockers"]},
   "source_ceiling": "No source capture or live call is activated.",
   "paths": {"writable": ["governance/batches/S1-price-source-calibration.v1.json", "governance/vision-issue-graph.json"], "read_only": [], "forbidden": [".env/**", "credentials/**"], "integration_surface": []},
   "release_activation": {"allowed": false, "registered": false, "reason": "prepared E0"},

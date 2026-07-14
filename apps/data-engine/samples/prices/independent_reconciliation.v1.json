@@ -1,0 +1,34 @@
+{
+  "schema": "truealpha.price-source-reconciliation@v1",
+  "status": "blocked_missing_independent_capture",
+  "primary_source": "yahoo_chart",
+  "independent_source": "twelve_data",
+  "captured_at": null,
+  "universe": ["DDOG", "DUOL", "NICE", "SHOP"],
+  "comparison": {
+    "calendar": "intersection_of_provider_trading_dates",
+    "fields": ["open", "high", "low", "close", "adjusted_close", "volume"],
+    "tolerances": {
+      "prices_relative": "0.0005",
+      "volume_relative": "0.01"
+    },
+    "corporate_actions": ["split", "dividend"],
+    "required_cutoffs": ["before_public_availability", "after_public_availability"]
+  },
+  "primary_artifacts": [
+    {"symbol": "DDOG", "path": "prices/DDOG_prices_3y_20260712.csv", "sha256": "f491bec90e64488d6dc680d9c683d6d56baded6920aa9b19f389ab25606051c4"},
+    {"symbol": "DUOL", "path": "prices/DUOL_prices_3y_20260712.csv", "sha256": "6aa2c102f2920e002dea1470ad8cd9d26541056c418d8ec2995466de8d894853"},
+    {"symbol": "NICE", "path": "prices/NICE_prices_3y_20260712.csv", "sha256": "67ca7acde41b6d9a855a6f2a242be6ab6297c01e25c53f255640e2be979f3391"},
+    {"symbol": "SHOP", "path": "prices/SHOP_prices_3y_20260712.csv", "sha256": "a604b9e44dcf9a4d83fccda9c29741c267ee19178bc42214789460c4d33393d4"}
+  ],
+  "observations": [],
+  "blockers": [
+    "No Twelve Data response bytes are present in the repository.",
+    "No Twelve Data credential or capture manifest is available in this environment.",
+    "SEC and moomoo fixtures are financial/corporate data, not independent daily price bars."
+  ],
+  "confidence_calibration": {
+    "status": "not_calibrated",
+    "rule": "Do not raise confidence from same-provider vintage agreement; require independent observations."
+  }
+}
