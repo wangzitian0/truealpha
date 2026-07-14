@@ -201,11 +201,11 @@
     "S5-issuer-price-sales-kernel": {
       "issue": 161,
       "owner_gate": 29,
-      "status": "queued",
+      "status": "prepared",
       "target_rung": "E0",
       "terminal_rung": "E0",
       "manifest": "governance/batches/S5-issuer-price-sales-kernel.v1.json",
-      "sha256": "49b6929a78bafa56070f810b4069ed1f51955cd3cf8535e6f42632238536b771"
+      "sha256": "8df71e96351af78fa1a20e2ef3f98b98ddb6685be38b6ec75cd268c39bf880b5"
     }
   },
   "artifact_edges": [

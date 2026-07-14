@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "artifact_type": "issuer_price_to_sales_tiny_corpus",
+  "claim_ceiling": "E1 isolated Local/CI issuer P/S evidence only; no approved product semantics, stable handoff, factor activation, tier, strategy, replay, or release claim",
+  "binding_ref": {
+    "path": "libs/contracts/tests/fixtures/issuer_price_to_sales.v1.json",
+    "sha256": "4a2ee3be69e3956ea5df753c840749cf41d9d309139933435dfcdb6be4de91b4",
+    "binding_key": "valid_binding",
+    "base_strategy_ref": {
+      "path": "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
+      "sha256": "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4",
+      "definition_key": "fixed_cohort"
+    }
+  },
+  "positive_cases": [
+    {
+      "case_id": "dual-class-four-quarter-fx",
+      "issuer_id": "issuer.alphabet",
+      "cutoff": "2026-04-01T20:00:00Z",
+      "reporting_currency": "USD",
+      "prices": [
+        {
+          "input_id": "input:price:alphabet-a:2026-03-31",
+          "listing_id": "listing.xnas.googl",
+          "value": "100",
+          "currency": "USD",
+          "unit": "currency_per_share",
+          "session_close_at": "2026-03-31T20:00:00Z",
+          "knowable_at": "2026-03-31T20:00:00Z",
+          "confidence": "0.99",
+          "availability": "available",
+          "price_basis": "unadjusted_close"
+        },
+        {
+          "input_id": "input:price:alphabet-c:2026-03-31",
+          "listing_id": "listing.xnas.goog",
+          "value": "50",
+          "currency": "EUR",
+          "unit": "currency_per_share",
+          "session_close_at": "2026-03-31T20:00:00Z",
+          "knowable_at": "2026-03-31T20:00:00Z",
+          "confidence": "0.98",
+          "availability": "available",
+          "price_basis": "unadjusted_close"
+        }
+      ],
+      "shares": [
+        {
+          "input_id": "input:shares:alphabet-a:2026-03-31",
+          "security_id": "security.alphabet.class-a",
+          "value": "10",
+          "unit": "shares",
+          "effective_on": "2026-03-31",
+          "knowable_at": "2026-03-30T12:00:00Z",
+          "confidence": "0.96",
+          "availability": "available",
+          "corporate_action_basis": "effective_shares"
+        },
+        {
+          "input_id": "input:shares:alphabet-c:2026-03-31",
+          "security_id": "security.alphabet.class-c",
+          "value": "20",
+          "unit": "shares",
+          "effective_on": "2026-03-31",
+          "knowable_at": "2026-03-30T12:00:00Z",
+          "confidence": "0.95",
+          "availability": "available",
+          "corporate_action_basis": "effective_shares"
+        }
+      ],
+      "revenues": [
+        {
+          "input_id": "input:revenue:alphabet:2025-q2",
+          "issuer_id": "issuer.alphabet",
+          "value": "100",
+          "currency": "USD",
+          "unit": "currency",
+          "period_kind": "fiscal_quarter",
+          "period_start": "2025-04-01",
+          "period_end": "2025-06-30",
+          "knowable_at": "2025-07-25T20:00:00Z",
+          "confidence": "0.94",
+          "availability": "available",
+          "complete": true
+        },
+        {
+          "input_id": "input:revenue:alphabet:2025-q3",
+          "issuer_id": "issuer.alphabet",
+          "value": "100",
+          "currency": "USD",
+          "unit": "currency",
+          "period_kind": "fiscal_quarter",
+          "period_start": "2025-07-01",
+          "period_end": "2025-09-30",
+          "knowable_at": "2025-10-25T20:00:00Z",
+          "confidence": "0.92",
+          "availability": "available",
+          "complete": true
+        },
+        {
+          "input_id": "input:revenue:alphabet:2025-q4",
+          "issuer_id": "issuer.alphabet",
+          "value": "100",
+          "currency": "USD",
+          "unit": "currency",
+          "period_kind": "fiscal_quarter",
+          "period_start": "2025-10-01",
+          "period_end": "2025-12-31",
+          "knowable_at": "2026-01-25T20:00:00Z",
+          "confidence": "0.90",
+          "availability": "available",
+          "complete": true
+        },
+        {
+          "input_id": "input:revenue:alphabet:2026-q1",
+          "issuer_id": "issuer.alphabet",
+          "value": "100",
+          "currency": "USD",
+          "unit": "currency",
+          "period_kind": "fiscal_quarter",
+          "period_start": "2026-01-01",
+          "period_end": "2026-03-31",
+          "knowable_at": "2026-04-01T12:00:00Z",
+          "confidence": "0.88",
+          "availability": "available",
+          "complete": true
+        }
+      ],
+      "fx_rates": [
+        {
+          "input_id": "input:fx:eur-usd:2026-03-31-close",
+          "from_currency": "EUR",
+          "to_currency": "USD",
+          "value": "1.2",
+          "unit": "quote_per_base",
+          "session_close_at": "2026-03-31T20:00:00Z",
+          "knowable_at": "2026-03-31T20:00:00Z",
+          "confidence": "0.82",
+          "availability": "available"
+        }
+      ],
+      "expected": {
+        "market_cap": "2200",
+        "revenue": "400",
+        "price_to_sales": "5.5",
+        "confidence": "0.82",
+        "revenue_basis": "latest_four_complete_quarters",
+        "component_count": 2,
+        "consumed_input_count": 9
+      }
+    },
+    {
+      "case_id": "single-class-fiscal-year-fallback",
+      "issuer_id": "issuer.nvidia",
+      "cutoff": "2026-04-01T20:00:00Z",
+      "reporting_currency": "USD",
+      "prices": [
+        {
+          "input_id": "input:price:nvidia:2026-03-31",
+          "listing_id": "listing.xnas.nvda",
+          "value": "20",
+          "currency": "USD",
+          "unit": "currency_per_share",
+          "session_close_at": "2026-03-31T20:00:00Z",
+          "knowable_at": "2026-03-31T20:00:00Z",
+          "confidence": "0.97",
+          "availability": "available",
+          "price_basis": "unadjusted_close"
+        }
+      ],
+      "shares": [
+        {
+          "input_id": "input:shares:nvidia:2026-03-31",
+          "security_id": "security.nvidia.common",
+          "value": "10",
+          "unit": "shares",
+          "effective_on": "2026-03-31",
+          "knowable_at": "2026-03-30T12:00:00Z",
+          "confidence": "0.96",
+          "availability": "available",
+          "corporate_action_basis": "effective_shares"
+        }
+      ],
+      "revenues": [
+        {
+          "input_id": "input:revenue:nvidia:2025-fy",
+          "issuer_id": "issuer.nvidia",
+          "value": "100",
+          "currency": "USD",
+          "unit": "currency",
+          "period_kind": "fiscal_year",
+          "period_start": "2025-01-01",
+          "period_end": "2025-12-31",
+          "knowable_at": "2026-02-20T20:00:00Z",
+          "confidence": "0.91",
+          "availability": "available",
+          "complete": true
+        }
+      ],
+      "fx_rates": [],
+      "expected": {
+        "market_cap": "200",
+        "revenue": "100",
+        "price_to_sales": "2",
+        "confidence": "0.91",
+        "revenue_basis": "latest_complete_fiscal_year",
+        "component_count": 1,
+        "consumed_input_count": 3
+      }
+    }
+  ],
+  "negative_cases": [
+    {
+      "case_id": "binding-id-mismatch",
+      "expected_reason": "binding_identity_mismatch"
+    },
+    {
+      "case_id": "candidate-universe-id-mismatch",
+      "expected_reason": "candidate_universe_identity_mismatch"
+    },
+    {
+      "case_id": "price-to-sales-policy-id-mismatch",
+      "expected_reason": "price_to_sales_policy_identity_mismatch"
+    },
+    {
+      "case_id": "missing-share-class-price",
+      "expected_reason": "missing_component_price"
+    },
+    {
+      "case_id": "duplicate-component-price",
+      "expected_reason": "duplicate_component_price"
+    },
+    {
+      "case_id": "future-price-knowledge",
+      "expected_reason": "future_known_price"
+    },
+    {
+      "case_id": "shares-effective-after-price-date",
+      "expected_reason": "missing_eligible_component_shares"
+    },
+    {
+      "case_id": "future-shares-knowledge",
+      "expected_reason": "future_known_shares"
+    },
+    {
+      "case_id": "wrong-price-listing",
+      "expected_reason": "unexpected_price_listing"
+    },
+    {
+      "case_id": "missing-fx",
+      "expected_reason": "missing_price_session_fx"
+    },
+    {
+      "case_id": "fx-session-mismatch",
+      "expected_reason": "missing_price_session_fx"
+    },
+    {
+      "case_id": "incomplete-quarter-window-without-fiscal-year",
+      "expected_reason": "missing_complete_revenue_window"
+    },
+    {
+      "case_id": "future-revenue-knowledge",
+      "expected_reason": "future_known_revenue"
+    },
+    {
+      "case_id": "nonpositive-revenue",
+      "expected_reason": "nonpositive_revenue"
+    },
+    {
+      "case_id": "unavailable-required-input",
+      "expected_reason": "unavailable_required_input"
+    },
+    {
+      "case_id": "vendor-precomputed-ratio",
+      "expected_reason": "request_schema_rejected"
+    }
+  ],
+  "canonical_reordering": [
+    "market_value_components",
+    "prices",
+    "shares",
+    "revenues",
+    "fx_rates"
+  ]
+}

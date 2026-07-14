@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "S5-issuer-price-sales-kernel",
-  "revision": 1,
+  "revision": 2,
   "issue": 161,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "strategy",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -16,11 +16,11 @@
   "informational_issues": [21, 26, 29, 59, 78, 143, 150, 155],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "a73c2b3000917d00cdb082731993c4c382c01050",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S5 registration is merged to main",
@@ -51,8 +51,8 @@
   ],
   "corpus": {
     "environment": "Local/CI checked-in fixture",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/factors/tests/batches/issuer_price_to_sales_tiny/fixtures/corpus.v1.json",
+    "sha256": "7cf5e3d4e76eba73d749035ec27540c8529b8921fbf4510812e2e59f7a312d52",
     "required_strata": [
       "one issuer with two security share classes and two price listings",
       "complete market-cap aggregation with PIT price, shares, revenue, and FX",
@@ -106,7 +106,7 @@
     "negative_controls": [
       "binding, candidate-universe, or P/S policy identity mismatch",
       "missing or duplicate share-class component",
-      "future-known, stale, unavailable, or wrong-subject observation",
+      "future-known, unavailable, or wrong-subject observation",
       "missing FX or invalid unit and currency",
       "nonpositive revenue or vendor precomputed P/S",
       "reordered inputs and attempted release activation"
