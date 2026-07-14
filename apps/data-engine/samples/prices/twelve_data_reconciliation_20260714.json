@@ -1,0 +1,145 @@
+{
+  "schema": "truealpha.price-source-reconciliation@v1",
+  "status": "observed",
+  "primary_source": "yahoo_chart",
+  "independent_source": "twelve_data",
+  "captured_at": "2026-07-14",
+  "observations": [
+    {
+      "symbol": "DDOG",
+      "common_dates": 29,
+      "date_start": "2026-05-29",
+      "date_end": "2026-07-10",
+      "twelve_data_response_sha256": "ced982eeddbd2ea9550f54cb6b823ce99262957d28ef0aab8cb108870e781a8f",
+      "field_stats": {
+        "open": {
+          "max_relative_delta": "1.898966440040846768125278614E-8",
+          "mean_relative_delta": "7.434770796855874446417582566E-9",
+          "within_tolerance": 29
+        },
+        "high": {
+          "max_relative_delta": "1.834747082408123893131486691E-8",
+          "mean_relative_delta": "8.916399455445873557616418934E-9",
+          "within_tolerance": 29
+        },
+        "low": {
+          "max_relative_delta": "2.033403739937828680651400888E-8",
+          "mean_relative_delta": "9.240134937327358750167082259E-9",
+          "within_tolerance": 29
+        },
+        "close": {
+          "max_relative_delta": "2.205724627411753093390932156E-8",
+          "mean_relative_delta": "1.165248427093203062078889416E-8",
+          "within_tolerance": 29
+        },
+        "volume": {
+          "max_relative_delta": "0.0004674990747414145742836550636",
+          "mean_relative_delta": "0.00001612065774970395083736741599",
+          "within_tolerance": 29
+        }
+      }
+    },
+    {
+      "symbol": "DUOL",
+      "common_dates": 29,
+      "date_start": "2026-05-29",
+      "date_end": "2026-07-10",
+      "twelve_data_response_sha256": "dfe059fbf57000df7f23e2201733eebf579306c69aaaf2d398de4b6428e0cd9e",
+      "field_stats": {
+        "open": {
+          "max_relative_delta": "3.249514054482977424395747951E-8",
+          "mean_relative_delta": "1.428556349492215804922148814E-8",
+          "within_tolerance": 29
+        },
+        "high": {
+          "max_relative_delta": "3.279696629980995266420240899E-8",
+          "mean_relative_delta": "1.491043785686813252267603963E-8",
+          "within_tolerance": 29
+        },
+        "low": {
+          "max_relative_delta": "2.832377400507111573092979064E-8",
+          "mean_relative_delta": "1.444881663811507166262244699E-8",
+          "within_tolerance": 29
+        },
+        "close": {
+          "max_relative_delta": "3.021168577023056424348367841E-8",
+          "mean_relative_delta": "1.309700086191864371427007166E-8",
+          "within_tolerance": 29
+        },
+        "volume": {
+          "max_relative_delta": "0.006661379857256145915939730373",
+          "mean_relative_delta": "0.0002297027536984877902048182887",
+          "within_tolerance": 29
+        }
+      }
+    },
+    {
+      "symbol": "NICE",
+      "common_dates": 29,
+      "date_start": "2026-05-29",
+      "date_end": "2026-07-10",
+      "twelve_data_response_sha256": "b499726835a0466c68ee1a6e6c1fc74d9faf65efee6b23ac133ccebdbef963d8",
+      "field_stats": {
+        "open": {
+          "max_relative_delta": "3.923408531904340971276155278E-8",
+          "mean_relative_delta": "1.589236989908948454241013725E-8",
+          "within_tolerance": 29
+        },
+        "high": {
+          "max_relative_delta": "4.291199363895493812651994739E-8",
+          "mean_relative_delta": "1.706492324616051857380322372E-8",
+          "within_tolerance": 29
+        },
+        "low": {
+          "max_relative_delta": "4.031384334491287702263031044E-8",
+          "mean_relative_delta": "1.941557629760575509253895705E-8",
+          "within_tolerance": 29
+        },
+        "close": {
+          "max_relative_delta": "4.189576966677850269958781468E-8",
+          "mean_relative_delta": "1.887016530817886991177777906E-8",
+          "within_tolerance": 29
+        },
+        "volume": {
+          "max_relative_delta": "0",
+          "mean_relative_delta": "0",
+          "within_tolerance": 29
+        }
+      }
+    },
+    {
+      "symbol": "SHOP",
+      "common_dates": 29,
+      "date_start": "2026-05-29",
+      "date_end": "2026-07-10",
+      "twelve_data_response_sha256": "475c08a71511ccb301439b1ace7d8c9f9acad1d4c35c8f5cca51eb0452197388",
+      "field_stats": {
+        "open": {
+          "max_relative_delta": "3.251516185455469826030981466E-8",
+          "mean_relative_delta": "1.183501950467700313059993526E-8",
+          "within_tolerance": 29
+        },
+        "high": {
+          "max_relative_delta": "3.339512363399055711930962924E-8",
+          "mean_relative_delta": "1.458077806810919273577750120E-8",
+          "within_tolerance": 29
+        },
+        "low": {
+          "max_relative_delta": "3.169696857162101593717467202E-8",
+          "mean_relative_delta": "1.505104001946911471734496601E-8",
+          "within_tolerance": 29
+        },
+        "close": {
+          "max_relative_delta": "3.108847467714442288891215736E-8",
+          "mean_relative_delta": "1.362062945925348788248380233E-8",
+          "within_tolerance": 29
+        },
+        "volume": {
+          "max_relative_delta": "0.001534695070705594328936310155",
+          "mean_relative_delta": "0.00005292051967950325272194172948",
+          "within_tolerance": 29
+        }
+      }
+    }
+  ]
+}
