@@ -12,6 +12,7 @@ from typing import cast
 import dagster as dg
 import psycopg
 import pytest
+from data_engine.batches.mvp_medium_validation import e3_slice
 from data_engine.batches.mvp_medium_validation.e3_slice import (
     D2_E2_RUNTIME_HANDOFF_ID,
     D2_E3_ASSET_NAME,
@@ -25,6 +26,7 @@ from data_engine.batches.mvp_medium_validation.e3_slice import (
     run_d2_e3,
 )
 from data_engine.config import settings
+from data_engine.mvp_medium_pipeline import LandedMediumCapture
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from pydantic import ValidationError
@@ -147,7 +149,7 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
 
     assert first_result.success and second_result.success
     assert first == second
-    assert first.evidence_id == "d2-e3-evidence:279d25044ac80799fae0362f0e59db39dacdfaa9d763372998204cd344dbbb37"
+    assert first.evidence_id == "d2-e3-evidence:e0268851482a397bd32fff242c81f968ae9a7d782f32b5b34980c992f5c3716e"
     assert first.accepted_e2_handoff_id == D2_E2_RUNTIME_HANDOFF_ID
     assert first.denominator.universe_id == "universe:topt-us-2026-03-31"
     assert first.denominator.accession == "000207169126012475"
@@ -168,7 +170,7 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
     assert len(first.universe_manifest.membership_ids) == 21
     assert len(first.snapshots) == 2
     assert {snapshot.request.registry_snapshot_id for snapshot in first.snapshots} == {
-        "registry-snapshot:e921cc34339f12b2f5811c203cf6ab6c50238514b35371c03299360aae442541"
+        "registry-snapshot:7cda61357952971bf892aa9871c61ae6d39c08989b75247e33e50e911c212ef5"
     }
     assert all(len(snapshot.universe_memberships) == 21 for snapshot in first.snapshots)
     assert all(len(snapshot.normalized_records) == 84 for snapshot in first.snapshots)
@@ -195,6 +197,41 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
         Counter(cell.demand.semantic_type_id for cell in row.cells) == expected_type_counts
         for row in first.row_manifests
     )
+    implementation_sha256 = hashlib.sha256(
+        (REPOSITORY_ROOT / "apps/data-engine/src/data_engine/batches/mvp_medium_validation/e3_slice.py").read_bytes()
+    ).hexdigest()
+    expected_topt_sources = {
+        "semantic.issuer-security-link": (
+            "source-registry-entry:86641ce50d78bfc87d03cc0a4ab17230d04b1c3a7db964d10f39555e89d569ba"
+        ),
+        "semantic.market-price": "source-registry-entry:bf81b8356f25d7cda19b9037ecfe8617056cf9c84ec594ca054b604636f7a391",
+        "semantic.security-listing-link": (
+            "source-registry-entry:9a811571884d5434a14ec9f5a5ea24050a6c140e106871ffd9c057bac37777b3"
+        ),
+        "semantic.universe-membership": (
+            "source-registry-entry:6d58ccbf2eec140b47126d11643bce8e8a8e4310ff26bc1bc2e6b858392f85d1"
+        ),
+    }
+    records_by_type = {
+        semantic_type_id: tuple(
+            record
+            for snapshot in first.snapshots
+            for record in snapshot.normalized_records
+            if record.draft.semantic_type_id == semantic_type_id
+        )
+        for semantic_type_id in expected_topt_sources
+    }
+    assert {
+        semantic_type_id: tuple(sorted({record.source_registry_entry_id for record in records}))
+        for semantic_type_id, records in records_by_type.items()
+    } == {
+        semantic_type_id: (source_registry_entry_id,)
+        for semantic_type_id, source_registry_entry_id in expected_topt_sources.items()
+    }
+    for records in records_by_type.values():
+        assert len(records) == 42
+        assert {record.draft.producer_implementation_sha256 for record in records} == {implementation_sha256}
+        assert {record.mapping_implementation_sha256 for record in records} == {implementation_sha256}
     persisted = connection.execute(
         """
         select semantic_type_id, count(*), count(raw_ref), count(confidence)
@@ -303,6 +340,49 @@ def test_e3_market_fixture_rejects_shrink_duplicate_float_and_successor_leak() -
     xom["issuer_cik_at_report_date"] = "0002115436"
     with pytest.raises(ValidationError, match="post-report XOM successor"):
         FrozenToptMarketFixture.model_validate(successor_leak)
+
+
+def test_e3_market_routes_reject_corrupted_landed_bytes_and_bind_implementations(connection) -> None:
+    store = MemoryRawObjectStore()
+    e2_handoff = e3_slice.run_d2_e2(REPOSITORY_ROOT, connection, store, environment="ci")
+    denominator = load_topt_denominator(REPOSITORY_ROOT)
+    fixture = load_topt_market_fixture(REPOSITORY_ROOT, denominator)
+    registry = e3_slice._e3_registry(e2_handoff.registry_snapshot)
+    catalog = e3_slice._e3_catalog(registry, denominator, fixture)
+    implementation_sha256 = hashlib.sha256(
+        (REPOSITORY_ROOT / "apps/data-engine/src/data_engine/batches/mvp_medium_validation/e3_slice.py").read_bytes()
+    ).hexdigest()
+    corrupt_body = b'{"schema_version": 1}'
+    routes = (
+        (e3_slice.TOPT_ISSUER_SOURCE_ID, "semantic.issuer-security-link"),
+        (e3_slice.TOPT_LISTING_SOURCE_ID, "semantic.security-listing-link"),
+        (e3_slice.TOPT_MEMBERSHIP_SOURCE_ID, "semantic.universe-membership"),
+        (e3_slice.TOPT_PRICE_SOURCE_ID, "semantic.market-price"),
+    )
+
+    for fetch_id, (source_id, semantic_type_id) in enumerate(routes, start=1):
+        source = catalog.source(source_id, "1.0.0")
+        assert source.adapter_implementation_sha256 == implementation_sha256
+        assert source.normalizer_implementation_sha256 == implementation_sha256
+        capture = LandedMediumCapture(
+            fetch_id=fetch_id,
+            raw_ref=f"raw.fetches:{fetch_id}",
+            raw_object_sha256=hashlib.sha256(corrupt_body).hexdigest(),
+            source_id=source.source_id,
+            source_version=source.version,
+            source_registry_entry_id=source.source_registry_entry_id,
+            source_registry_entry_sha256=source.content_sha256,
+            semantic_type_ids=(semantic_type_id,),
+            semantic_type_versions={semantic_type_id: "1.0.0"},
+            source_record_id=f"corrupt:{source_id}",
+            body=corrupt_body,
+            content_type="application/json",
+            source_published_at=fixture.price_source.retrieved_at,
+            fetched_at=fixture.price_source.retrieved_at,
+            recorded_at=fixture.price_source.retrieved_at,
+        )
+        with pytest.raises(ValueError, match="missing|Field required"):
+            catalog.normalize(capture, semantic_type_id)
 
 
 def test_e3_failure_rolls_back_and_retry_recovers_without_duplicates(connection) -> None:
