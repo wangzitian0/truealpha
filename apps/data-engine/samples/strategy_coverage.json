@@ -210,6 +210,17 @@
       "corroborated_knowable_at": "2026-02-18T23:59:59Z",
       "assertion_ids": ["factors.composite-pit-replay"],
       "notes": "The executable replay binds two real upstream artifacts to one cutoff, rejects a future-dated input, and preserves the minimum input confidence."
+    },
+    {
+      "evidence_id": "evidence.prices.twelve-data.20260714",
+      "requirement_id": "prices.source_reconciliation",
+      "kind": "real",
+      "artifact_paths": ["prices/twelve_data_reconciliation_20260714.json"],
+      "artifact_sha256": ["487a8d54efc8b8ef522852e5862e6f9a1fc09e162414a96017ea1b2473da1f86"],
+      "subject_entity_ids": ["company:ddog", "company:duol", "company:nice", "company:shop"],
+      "corroborated_knowable_at": "2026-07-14T00:00:00Z",
+      "assertion_ids": ["prices.twelve-data-bounded-reconciliation"],
+      "notes": "29-day Yahoo/Twelve Data OHLCV overlap; adjusted close and corporate actions intentionally out of scope."
     }
   ],
   "requirement_evidence": {
@@ -232,6 +243,6 @@
       "evidence.universe.adm.traditional.2025"
     ],
     "factors.point_in_time_outputs": ["evidence.factor.ddog.composite-pit-replay.2025"],
-    "prices.source_reconciliation": []
+    "prices.source_reconciliation": ["evidence.prices.twelve-data.20260714"]
   }
 }

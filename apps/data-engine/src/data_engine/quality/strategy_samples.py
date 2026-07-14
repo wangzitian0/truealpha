@@ -215,6 +215,22 @@ def _assert_meta_symbol_replay(sample_root: Path, evidence: EvidenceCase) -> boo
     )
 
 
+def _assert_twelve_data_reconciliation(sample_root: Path, evidence: EvidenceCase) -> bool:
+    report = _load_json(_artifact_with_name(sample_root, evidence, "twelve_data_reconciliation"))
+    observations = report.get("observations", [])
+    if report.get("status") != "observed" or len(observations) != 4:
+        return False
+    for observation in observations:
+        count = observation.get("common_dates", 0)
+        if not 1 <= count <= 31 or observation.get("date_start") != "2026-05-29" or observation.get("date_end") != "2026-07-10":
+            return False
+        for field, stats in observation.get("field_stats", {}).items():
+            tolerance = Decimal("0.01" if field == "volume" else "0.0005")
+            if stats.get("within_tolerance") != count or Decimal(stats["max_relative_delta"]) > tolerance:
+                return False
+    return "adjusted_close" not in observations[0].get("field_stats", {})
+
+
 def _assert_plug_restatement_replay(sample_root: Path, evidence: EvidenceCase) -> bool:
     facts = _load_json(_artifact_with_name(sample_root, evidence, "PLUG_CIK"))
     observations = facts["facts"]["us-gaap"]["FinanceLeaseRightOfUseAssetAccumulatedAmortization"]["units"]["USD"]
@@ -348,6 +364,7 @@ EVIDENCE_ASSERTIONS = {
     "graph.supply-chain-pit-replay": _assert_ddog_supply_chain_pit,
     "universe.membership-replay": _assert_qqq_membership_replay,
     "universe.symbol-change-or-delisting-replay": _assert_meta_symbol_replay,
+    "prices.twelve-data-bounded-reconciliation": _assert_twelve_data_reconciliation,
 }
 
 
@@ -635,9 +652,10 @@ def audit_strategy_samples(sample_root: Path) -> DataQualityReport:
     )
     add_all(
         "prices.source_reconciliation",
-        has_evidence("prices.source_reconciliation", "prices.independent-source-reconciliation"),
+        has_evidence("prices.source_reconciliation", "prices.independent-source-reconciliation")
+        or has_evidence("prices.source_reconciliation", "prices.twelve-data-bounded-reconciliation"),
         f"verified_cases={len(evidence.get('prices.source_reconciliation', ()))}",
-        "primary source reconciled against an independent fallback",
+        "bounded primary/independent reconciliation; full coverage and adjusted/actions remain separate gates",
     )
     add_all(
         "prices.same_source_vintage_stability",
