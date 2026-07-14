@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "S4-issuer-price-sales",
-  "revision": 1,
+  "revision": 2,
   "issue": 155,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "strategy",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -16,11 +16,11 @@
   "informational_issues": [25, 26, 57, 59, 78, 143, 150],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "ac8e275bf6d36cbb76b91ff330e3411544c63ee7",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S4 registration is merged to main",
@@ -52,8 +52,8 @@
     }
   ],
   "corpus": {
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/contracts/tests/fixtures/issuer_price_to_sales.v1.json",
+    "sha256": "4a2ee3be69e3956ea5df753c840749cf41d9d309139933435dfcdb6be4de91b4",
     "required_strata": [
       "one issuer with two security share classes and two price listings",
       "one issuer candidate with one immutable execution listing",
