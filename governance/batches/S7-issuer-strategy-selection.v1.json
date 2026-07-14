@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "batch_id": "S7-issuer-strategy-selection",
+  "revision": 1,
+  "issue": 181,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E1",
+  "objective": "Rank a complete candidate universe from exact provisional S6 issuer valuation results and select the configured top N without recomputing valuation gaps.",
+  "claim_ceiling": "registered E0 issuer-selection batch only; no frozen corpus, implementation evidence, approved product semantics, real TOPT mapping, stable handoff, factor activation, runner, replay, or release-readiness claim",
+  "capability_issues": [25],
+  "closes_issues": [],
+  "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 155, 169],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued S7 registration is merged to main",
+      "the implementation PR pins its exact current main base SHA",
+      "the twelve-candidate corpus path and SHA-256 are committed before execution",
+      "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers the package export path",
+      "issue #181 contains the exact manifest path and SHA-256"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "freeze",
+      "issue": 78,
+      "artifact": "accepted provisional ranking discovery evidence",
+      "evidence": {
+        "path": "governance/batches/S0-core-strategy-tiny.v1.json",
+        "sha256": "a8160911a676aeb1b321841f7b859240429f58b54de6fbaa0edda3cc0af26420"
+      },
+      "ref": "git:394053dd168cd0e15af1ae68f1012ee4e3ea86f2:libs/factors/src/factors/batches/core_strategy_tiny/e0_slice.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 143,
+      "artifact": "accepted executable Core Strategy definition contract",
+      "evidence": {
+        "path": "governance/batches/S2-core-strategy-contract.v1.json",
+        "sha256": "2908f2a33c358c3c349f4e3ec41b1c83e7d4f78345a4629d29ae53d1539fb127"
+      },
+      "ref": "git:f1daa6eb689bd16a0b455eb66ed103e33b83f8c6:libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 155,
+      "artifact": "accepted issuer P/S and strategy candidate identity contract",
+      "evidence": {
+        "path": "governance/batches/S4-issuer-price-sales.v1.json",
+        "sha256": "3a72c29f0c965e3aa8eaa4464726d183622aa930a7780f9a2d3b51b9e25afa16"
+      },
+      "ref": "git:7d705787342e5a0c119fdba2794b6376d9dc3852:libs/contracts/src/truealpha_contracts/research.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 169,
+      "artifact": "accepted provisional issuer tier and valuation-gap evidence",
+      "evidence": {
+        "path": "governance/batches/S6-issuer-tier-valuation.v1.json",
+        "sha256": "0b4962775b9c5b94f140b7173ab27bd411af6d6ed3245557ced6935436b25a19"
+      },
+      "ref": "git:ac026ce2e3453ddbfff4cfc4394cf6f6aaa83223:libs/factors/src/factors/batches/issuer_tier_valuation_tiny/kernel.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 59,
+      "artifact": "approved strategy eligibility, ranking, tie-break, and short-book semantics",
+      "state": "pending_external_approval"
+    }
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in fixture",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "twelve bound issuers with eleven eligible S6 results and one explicit ineligible result",
+      "descending valuation-gap ranking and configured top-ten selection",
+      "issuer-to-execution-listing mapping and selected confidence propagation",
+      "missing, duplicate, extra, unavailable, and below-minimum-confidence issuer results",
+      "insufficient eligible count and unapproved equal-gap tie failure",
+      "input reordering, ambient Decimal context, canonical partitions, and semantic identity"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/**",
+      "libs/factors/tests/batches/issuer_strategy_selection_tiny/**"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "libs/contracts/**",
+      "governance/batches/S0-core-strategy-tiny.v1.json",
+      "governance/batches/S2-core-strategy-contract.v1.json",
+      "governance/batches/S4-issuer-price-sales.v1.json",
+      "governance/batches/S6-issuer-tier-valuation.v1.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "governance/gate0/public-goldens/**",
+      "libs/factors/src/factors/batches/core_strategy_tiny/**",
+      "libs/factors/src/factors/batches/issuer_tier_valuation_tiny/**",
+      "libs/factors/tests/batches/issuer_tier_valuation_tiny/**"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "db/**",
+      "apps/data-engine/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/contracts/**",
+      "libs/factors/src/factors/registry.py",
+      "libs/factors/src/factors/base/**",
+      "libs/factors/src/factors/composite/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [
+      "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/__init__.py"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "S7 is isolated provisional selection evidence; #59/#21 approval, #24 GPPE, and #25 candidate acceptance remain mandatory"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/factors/tests/batches/issuer_strategy_selection_tiny -q",
+      "uv run ruff check libs/factors/src/factors/batches/issuer_strategy_selection_tiny libs/factors/tests/batches/issuer_strategy_selection_tiny",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "binding, candidate-universe, P/S policy, cutoff, issuer, or execution-listing identity mismatch",
+      "missing, duplicate, extra, unavailable, or below-minimum-confidence S6 result",
+      "fewer eligible issuers than the configured selection count",
+      "equal valuation gaps without an approved tie-break rule",
+      "stale S2, S4, S6, semantic-candidate, or public-golden identity",
+      "attempted supplied valuation inputs, provenance, registry, runner, or release activation"
+    ],
+    "output": {
+      "type": "IssuerStrategySelectionTinyEvidence",
+      "stable_handoff": false,
+      "state": "pending",
+      "allowed_evidence_readers": [
+        "issue #25 valuation candidate batch",
+        "issue #71 independent Core holdout preparation",
+        "issue #26 replay integration batch"
+      ]
+    }
+  },
+  "invalidation": [
+    "eligibility, ranking direction, tie behavior, selection count, corpus, or output identity change creates a new batch revision",
+    "shared-path need blocks the batch until an explicit integration lease exists",
+    "product approval, real TOPT mapping, GPPE implementation, or materialization does not raise this provisional evidence ceiling"
+  ],
+  "rollback": "Revert the isolated S7 batch paths and evidence together; no accepted factor registry, runner, or runtime release may reference this provisional selection result."
+}

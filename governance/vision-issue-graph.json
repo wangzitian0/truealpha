@@ -231,6 +231,15 @@
       "terminal_rung": "E1",
       "manifest": "governance/batches/S6-issuer-tier-valuation.v1.json",
       "sha256": "0b4962775b9c5b94f140b7173ab27bd411af6d6ed3245557ced6935436b25a19"
+    },
+    "S7-issuer-strategy-selection": {
+      "issue": 181,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E1",
+      "manifest": "governance/batches/S7-issuer-strategy-selection.v1.json",
+      "sha256": "8b7e34aee2ebd3214d7689e2327badf3601739ea1cbcca6650c0f851e85455ce"
     }
   },
   "artifact_edges": [
