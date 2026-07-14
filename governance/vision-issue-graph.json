@@ -160,6 +160,15 @@
       "manifest": "governance/batches/D2-mvp-medium-validation.v1.json",
       "sha256": "e8b8c7b28a35e82dfe576f53a88fddf2fe93735cdbcc7b5a3c80ac79fdf34dcf"
     },
+    "D3-staging-topt-capture": {
+      "issue": 171,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E4",
+      "manifest": "governance/batches/D3-staging-topt-capture.v1.json",
+      "sha256": "abd14b6a6079ffb7b684abac7955009c656f08e48970d2c765355639b0de65a6"
+    },
     "H0-core-headcount-extraction": {
       "issue": 104,
       "owner_gate": 29,

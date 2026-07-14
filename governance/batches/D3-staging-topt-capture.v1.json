@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "batch_id": "D3-staging-topt-capture",
+  "revision": 1,
+  "issue": 171,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E4",
+  "objective": "Activate the accepted D2 TOPT capture spine against bounded live public sources in isolated Staging without changing the 20-issuer, 21-instrument, 84-cell denominator.",
+  "claim_ceiling": "E4 bounded live-source TOPT capture in isolated Staging; no headcount, factor, strategy, mart, continuous-schedule, source-rights graduation, Production, or release-readiness claim",
+  "capability_issues": [27],
+  "closes_issues": [],
+  "informational_issues": [11, 23, 26, 29, 60, 61, 70, 121],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued D3 registration is merged to main",
+      "the implementation PR pins its exact current main base SHA",
+      "the frozen E0 corpus path and SHA-256 are committed before execution",
+      "an independent reviewer is assigned before each rung acceptance",
+      "issue #171 contains this exact manifest path and SHA-256",
+      "each implementation PR advances at most one evidence rung and merges before the next rung starts"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "freeze",
+      "issue": 23,
+      "artifact": "accepted D2 E3 TOPT data-plane evidence",
+      "evidence": {
+        "path": "governance/evidence/issue-23.v1.json",
+        "sha256": "9066cc06367a42ae92f4d69e008cc411ec008705edd52068861763056af98547"
+      },
+      "batch_manifest": {
+        "path": "governance/batches/D2-mvp-medium-validation.v1.json",
+        "sha256": "e8b8c7b28a35e82dfe576f53a88fddf2fe93735cdbcc7b5a3c80ac79fdf34dcf"
+      },
+      "rung_evidence": {
+        "path": "governance/evidence/D2-mvp-medium-validation-E3.v1.json",
+        "sha256": "bd8a828b17d4cd81c87d12aa06e474f1ee883a2215a2455493d131763e5c9d66"
+      },
+      "runtime_handoff_id": "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
+      "producer_commit": "81159c4c53febdf1d98cd3b1ad2d158bc0502af1",
+      "state": "accepted"
+    }
+  ],
+  "later_claim_dependencies": [
+    "#60 accepted source-readiness, rights, and budget evidence remains mandatory before any Production or graduated source-readiness claim",
+    "#61 accepted applicability and SLO policy remains mandatory before Core readiness acceptance",
+    "#70 supplies the filing-to-headcount handoff that this 84-cell capture-only batch does not implement",
+    "#24, #25, #71, and #26 must freeze and integrate the Core candidate before #27 can close",
+    "#27 owns two scheduled full Core Strategy runs; this batch supplies only its bounded live capture prerequisite"
+  ],
+  "corpus": {
+    "environment": "E0-E3 Local/CI frozen mocks and ephemeral stores; E4 isolated Staging public-source run",
+    "manifest_path": null,
+    "sha256": null,
+    "denominator": {
+      "universe_id": "universe:topt-us-2026-03-31",
+      "series": "S000088434",
+      "accession": "000207169126012475",
+      "report_date": "2026-03-31",
+      "issuer_count": 20,
+      "instrument_count": 21,
+      "required_cell_count": 84
+    },
+    "required_strata": [
+      "exact SEC N-PORT accession bytes and 21 selected U.S. equity instruments",
+      "20 distinct issuers with GOOG and GOOGL retained as sibling instruments",
+      "XOM predecessor identity at the fixed report date",
+      "issuer-security, security-listing, universe-membership, and market-price cells for every instrument",
+      "Decimal-safe Yahoo OHLCV parsing without float persistence",
+      "predeclared scope and source-call plan before any network request",
+      "raw-object landing before normalization",
+      "identical retry and changed-byte append-only vintage",
+      "missing identity, listing, membership, price, confidence, lineage, and raw-object failure controls",
+      "terminal isolated Staging run with exact commit, configuration, scope, manifest, evaluation, and run identities"
+    ]
+  },
+  "source_ceiling": {
+    "allowed": [
+      "SEC EDGAR N-PORT for the exact accepted accession",
+      "SEC identifier material required for the fixed denominator",
+      "OpenFIGI mapping for at most the 21 selected instruments",
+      "Yahoo chart responses for at most the 21 selected listings"
+    ],
+    "forbidden": [
+      "rolling or broader universe expansion",
+      "analyst, forecast, LLM, paid-vendor, or unrestricted Moomoo sweeps",
+      "Production credentials or Production database writes"
+    ],
+    "network_calls_must_be_predeclared": true,
+    "raw_bytes_must_land_before_normalization": true
+  },
+  "budget": {
+    "maximum_instruments_per_run": 21,
+    "maximum_issuers_per_run": 20,
+    "maximum_openfigi_mapping_jobs_per_run": 21,
+    "maximum_yahoo_symbols_per_run": 21,
+    "maximum_sec_accessions_per_run": 1,
+    "maximum_attempts_per_request": 3,
+    "concurrency_ceiling": 4,
+    "claim": "bounded engineering canary only; not the #60 full-catalog budget approval"
+  },
+  "paths": {
+    "writable": [
+      "governance/evidence/D3-staging-topt-capture-E0.v1.json",
+      "governance/evidence/D3-staging-topt-capture-E1.v1.json",
+      "governance/evidence/D3-staging-topt-capture-E2.v1.json",
+      "governance/evidence/D3-staging-topt-capture-E3.v1.json",
+      "governance/evidence/D3-staging-topt-capture-E4.v1.json",
+      "governance/handoffs/D3-staging-topt-capture.v1.json",
+      "governance/leases/D3-staging-topt-capture.v1.json",
+      "apps/data-engine/src/data_engine/batches/staging_topt_capture/**",
+      "apps/data-engine/tests/batches/staging_topt_capture/**",
+      "apps/data-engine/tests/fixtures/staging_topt_capture/**",
+      "apps/data-engine/scripts/run_staging_topt_capture.py"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "governance/batches/D2-mvp-medium-validation.v1.json",
+      "governance/evidence/D2-mvp-medium-validation-E3.v1.json",
+      "governance/evidence/issue-23.v1.json",
+      "governance/gate0/issue-60.source-readiness.candidate-v1.json",
+      "governance/gate0/issue-61.policy-bundle.candidate-v1.json",
+      "libs/contracts/**",
+      "apps/data-engine/src/data_engine/batches/mvp_medium_validation/**",
+      "apps/data-engine/src/data_engine/mvp_medium_models.py",
+      "apps/data-engine/src/data_engine/mvp_medium_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_medium_registry.py",
+      "apps/data-engine/src/data_engine/mvp_medium_repository.py",
+      "apps/data-engine/src/data_engine/mvp_medium_snapshot.py",
+      "apps/data-engine/src/data_engine/raw_store.py",
+      "apps/data-engine/src/data_engine/sources/**",
+      "apps/data-engine/scripts/setup_vps_ingest.sh",
+      "db/migrations/0021_mvp_medium_domains.sql"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "init.md",
+      "vision.md",
+      "libs/contracts/**",
+      "libs/factors/**",
+      "apps/data-engine/src/data_engine/__init__.py",
+      "apps/data-engine/src/data_engine/mvp_medium_models.py",
+      "apps/data-engine/src/data_engine/mvp_medium_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_medium_registry.py",
+      "apps/data-engine/src/data_engine/mvp_medium_repository.py",
+      "apps/data-engine/src/data_engine/mvp_medium_snapshot.py",
+      "apps/data-engine/src/data_engine/raw_store.py",
+      "apps/data-engine/src/data_engine/sources/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "db/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [],
+    "lease_owner": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "staging_mode": "explicit reviewed command only",
+    "reason": "D3 is a bounded capture prerequisite; default schedules, Core strategy release, and Production activation remain forbidden"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest apps/data-engine/tests/batches/staging_topt_capture -q",
+      "uv run ruff check apps/data-engine/src/data_engine/batches/staging_topt_capture apps/data-engine/tests/batches/staging_topt_capture",
+      "uv run mypy",
+      "make issue-graph-check"
+    ],
+    "negative_controls": [
+      "wrong D2 evidence, runtime handoff, TOPT accession, universe, issuer count, instrument count, or required-cell count",
+      "network request before scope and call-plan freeze",
+      "unlanded or checksum-mismatched raw response",
+      "float, null, malformed, wrong-date, wrong-symbol, or internally inconsistent OHLCV input",
+      "unresolved XOM predecessor or collapsed GOOG and GOOGL instruments",
+      "missing identity, listing, membership, price, confidence, lineage, policy, or freshness evidence",
+      "denominator shrink, post-run applicability change, or aggregate-ratio substitution",
+      "UPDATE or DELETE of raw or normalized vintages",
+      "default schedule, release registration, Production source call, or Production database write"
+    ],
+    "output": {
+      "type": "D3StagingToptCaptureEvidence",
+      "stable_handoff": false,
+      "state": "pending",
+      "terminal_environment": "staging",
+      "allowed_evidence_readers": [
+        "issue #70 filing and headcount capture preparation",
+        "issue #26 Local Core integration preparation",
+        "issue #27 bounded Staging Core canary"
+      ]
+    }
+  },
+  "invalidation": [
+    "D2 evidence/handoff, TOPT accession, denominator, registry contract, PIT rule, confidence rule, or required-cell set change creates a new D3 revision",
+    "source response schema or Decimal parsing change reruns the exact frozen corpus before any later rung",
+    "a need to edit a read-only integration path blocks the rung until a reviewed lease or separate repair batch merges",
+    "Staging evidence from a commit other than the reviewed exact main SHA is rejected",
+    "a broader source or universe request requires a separate batch and cannot raise this claim ceiling"
+  ],
+  "rollback": "Revert only the latest D3 rung and disable its explicit Staging command; immutable raw objects, normalized vintages, manifests, evaluations, and prior D2 evidence are never deleted or rewritten."
+}
