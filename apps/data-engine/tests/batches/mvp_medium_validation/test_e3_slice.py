@@ -858,7 +858,7 @@ def test_e3_terminal_governance_binds_the_complete_issue_23_matrix() -> None:
     assert manifest["status"] == "done"
     assert manifest["last_accepted_rung"] == manifest["target_rung"] == manifest["terminal_rung"] == "E3"
     assert manifest["capability_issues"] == manifest["closes_issues"] == [23]
-    assert manifest["activation"]["base_sha"] == "d7fc688dfd58c9c732272afe92c5bfebaa04796f"
+    assert manifest["activation"]["base_sha"] == "6ae46c2112c3d5c047391583a8d1277cec0b3353"
 
     assert output["type"] == "D2E3Evidence"
     assert output["stable_handoff"] is False
