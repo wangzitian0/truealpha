@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S5-issuer-price-sales-kernel",
-  "revision": 3,
+  "revision": 4,
   "issue": 161,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Compute one deterministic issuer-level point-in-time price-to-sales observation from the accepted S4 binding without activating a factor or strategy.",
-  "claim_ceiling": "accepted E0 isolated issuer P/S kernel pending E1 frozen-corpus evidence; no approved product semantics, stable handoff, factor activation, tier, strategy, replay, or release-readiness claim",
+  "claim_ceiling": "E1 frozen-corpus issuer P/S evidence only; no approved product semantics, stable handoff, factor activation, tier, strategy, replay, or release-readiness claim",
   "capability_issues": [25],
   "closes_issues": [],
   "informational_issues": [21, 26, 29, 59, 78, 143, 150, 155],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "d7fc688dfd58c9c732272afe92c5bfebaa04796f",
+    "base_sha": "6ae46c2f571fd97ddbed18f7d279d1f4653e5608",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S5 registration is merged to main",
@@ -122,7 +122,7 @@
     "output": {
       "type": "IssuerPriceToSalesTinyEvidence",
       "stable_handoff": false,
-      "state": "accepted_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "issue #25 valuation candidate batch",
         "issue #71 independent Core holdout preparation",
