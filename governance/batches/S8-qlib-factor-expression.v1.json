@@ -1,26 +1,26 @@
 {
   "schema_version": 1,
   "batch_id": "S8-qlib-factor-expression",
-  "revision": 1,
+  "revision": 2,
   "issue": 189,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "strategy",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E1",
   "objective": "Define a Qlib-independent typed factor-expression AST and operator registry, then prove the TrueAlpha compiler is the only path that can supply an expression to pinned Qlib 0.9.7.",
-  "claim_ceiling": "registered E0 safe Qlib-expression contract batch only; no frozen corpus, implementation evidence, approved product semantics, real factor, provider, registered factor, replay, or release-readiness claim",
+  "claim_ceiling": "preparation-only safe Qlib-expression corpus; this revision earns no rung and approves no implementation, product semantics, real factor, provider, registered factor, replay, persistence, or release-readiness claim",
   "capability_issues": [21, 26],
   "closes_issues": [],
   "informational_issues": [29, 59, 143, 181],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "d62131fc54742e17594cda71518c10568db903c4",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S8 registration is merged to main",
@@ -71,14 +71,14 @@
   ],
   "corpus": {
     "environment": "Local/CI checked-in synthetic dimensionless fixture",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/contracts/tests/fixtures/qlib_expression.v1.json",
+    "sha256": "dc1076517908739577bee2b1782e75c106200b0f8eb3594826135788bdebdace",
     "required_strata": [
       "canonical feature, finite numeric, and registered operator-call nodes",
-      "builtin-only arithmetic, reference, and rolling operators with exact arity and argument kinds",
+      "builtin-only arithmetic, reference, and rolling operators with exact arity, argument kinds, null behavior, and lookback rules",
       "deterministic AST, registry, expression, compiled-field, and combined execution identities",
       "independent typed-AST evaluator parity with pinned Qlib on a tiny dimensionless matrix",
-      "null propagation and declared maximum lookback behavior",
+      "arithmetic null propagation, Ref null preservation, Mean skip-null behavior, and derived maximum lookback",
       "raw string, callable, module path, kwargs, attribute, indexing, import, and punctuation injection rejection",
       "unknown feature/operator, duplicate ID/symbol, invalid arity/type, non-finite numeric, excessive depth/node/lookback rejection",
       "input reordering, ambient Decimal context, root-environment import, and root-lock isolation"
