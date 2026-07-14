@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "base_corpus": {
+    "path": "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
+    "sha256": "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4",
+    "definition_key": "fixed_cohort"
+  },
+  "valid_cases": [
+    {
+      "case_id": "versioned-financial-target-band",
+      "operation": "replace",
+      "path": "eligibility.financial_target_behavior",
+      "value": "require_versioned_financial_target_band"
+    },
+    {
+      "case_id": "financial-factor-available-strategy-ineligible",
+      "operation": "replace",
+      "path": "eligibility.financial_target_behavior",
+      "value": "ineligible_financial_valuation_not_comparable"
+    }
+  ],
+  "negative_cases": [
+    {
+      "case_id": "missing-financial-strategy-behavior",
+      "operation": "remove",
+      "path": "eligibility.financial_target_behavior"
+    },
+    {
+      "case_id": "unknown-financial-strategy-behavior",
+      "operation": "replace",
+      "path": "eligibility.financial_target_behavior",
+      "value": "use_sector_default"
+    },
+    {
+      "case_id": "free-text-financial-ineligibility-reason",
+      "operation": "replace",
+      "path": "eligibility.financial_target_behavior",
+      "value": "financial_valuation_not_comparable"
+    },
+    {
+      "case_id": "null-financial-strategy-behavior",
+      "operation": "replace",
+      "path": "eligibility.financial_target_behavior",
+      "value": null
+    },
+    {
+      "case_id": "financial-factor-blanket-exclusion",
+      "operation": "replace",
+      "path": "financial_issuers_use_financial_proxy",
+      "value": false
+    }
+  ],
+  "identity_assertions": [
+    "both valid policies survive canonical JSON round-trip",
+    "the two valid policies produce different strategy content hashes",
+    "financial strategy ineligibility never disables the financial factor branch"
+  ]
+}
