@@ -235,11 +235,11 @@
     "S7-issuer-strategy-selection": {
       "issue": 181,
       "owner_gate": 29,
-      "status": "queued",
+      "status": "prepared",
       "target_rung": "E0",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S7-issuer-strategy-selection.v1.json",
-      "sha256": "8b7e34aee2ebd3214d7689e2327badf3601739ea1cbcca6650c0f851e85455ce"
+      "sha256": "9c7ca01ba6ee4b91c910188f5366efc72d81670a3a26e91a25ec8b59250a7863"
     }
   },
   "artifact_edges": [
