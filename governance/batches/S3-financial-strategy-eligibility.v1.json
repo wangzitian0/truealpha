@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S3-financial-strategy-eligibility",
-  "revision": 3,
+  "revision": 4,
   "issue": 150,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Separate mandatory financial factor applicability from explicit large_model_value_v0 strategy eligibility without inventing a financial P/S target band.",
-  "claim_ceiling": "accepted E0 shared-contract repair pending E1 frozen-corpus evidence; no approved financial semantics, factor implementation, strategy activation, or release-readiness claim",
+  "claim_ceiling": "E1 frozen-corpus contract evidence only; no approved financial semantics, stable handoff, factor implementation, strategy activation, or release-readiness claim",
   "capability_issues": [21],
   "closes_issues": [],
   "informational_issues": [24, 25, 26, 59, 143],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "4fb7c4b7d96deb44b1277184e12933abeea4dcf3",
+    "base_sha": "cd1b3d68d4392c87d436d8d395ec1313222116c3",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S3 registration is merged to main",
@@ -117,7 +117,7 @@
     "output": {
       "type": "financial strategy eligibility contract repair",
       "stable_handoff": false,
-      "state": "accepted_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "issue #21 semantic freeze batch",
         "issue #24 and #25 candidate batches",
