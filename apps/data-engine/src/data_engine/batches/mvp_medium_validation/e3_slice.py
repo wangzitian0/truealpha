@@ -5,13 +5,14 @@ import json
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import dagster as dg
 from dagster import AssetExecutionContext
+from data_engine.batches.mvp_medium_validation.e0_slice import SEMANTIC_TYPE_ID as MARKET_PRICE_TYPE_ID
 from data_engine.batches.mvp_medium_validation.e1_slice import FrozenE1Corpus, load_e1_corpus
 from data_engine.batches.mvp_medium_validation.e2_slice import (
     D2_E2_SCHEMA_EPOCH,
@@ -25,6 +26,7 @@ from data_engine.batches.mvp_medium_validation.e2_slice import (
     run_d2_e2,
 )
 from data_engine.contract_repository import PostgresSnapshotRepository
+from data_engine.mvp_medium_models import MarketPricePayload
 from data_engine.mvp_medium_pipeline import (
     LandedMediumCapture,
     MediumAdapterRegistration,
@@ -52,15 +54,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from truealpha_contracts import (
     DataSource,
     IssuerSecurityLink,
+    ListingRole,
     RawObjectStore,
     SecurityKind,
+    SecurityListingLink,
     UniverseDefinitionKind,
     UniverseManifest,
     UniverseMembership,
 )
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.execution import NormalizedRecordRef, SnapshotDemandCell, SnapshotManifest, SnapshotRequest
-from truealpha_contracts.registries import RegistrySnapshot
+from truealpha_contracts.registries import RegistrySnapshot, SourceRegistryEntry
 from truealpha_contracts.release import ReleaseManifest
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 
@@ -79,8 +84,11 @@ TOPT_PRIMARY_DOCUMENT_SHA256 = "7e46eb6babead70230986162349bb33f27d7af2a51a095b5
 TOPT_REPORT_DATE = date(2026, 3, 31)
 TOPT_ISSUER_COUNT = 20
 TOPT_INSTRUMENT_COUNT = 21
-TOPT_REQUIRED_CELL_COUNT = 42
-TOPT_NORMALIZED_RECORD_COUNT = 84
+TOPT_REQUIRED_CELL_COUNT = 84
+TOPT_NORMALIZED_RECORD_COUNT = 168
+TOPT_MARKET_FIXTURE_PATH = Path("apps/data-engine/tests/fixtures/mvp_medium_validation/topt_market_2026-03-31.v1.json")
+TOPT_MARKET_FIXTURE_SHA256 = "7a160dbd1a5816d0c31e20bd1f0e1ab8d2738e1fc744fc7bf96fa2903d19e038"
+TOPT_PRICE_SOURCE_ID = "source.fixture-topt-yahoo-market"
 
 
 def _sha256(body: bytes) -> str:
@@ -126,6 +134,173 @@ class ToptInstrument(BaseModel):
     @property
     def membership_id(self) -> str:
         return f"membership:{TOPT_UNIVERSE_ID}:{self.security_id}"
+
+
+class ToptMarketScope(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    universe_id: Literal["universe:topt-us-2026-03-31"]
+    accession: Literal["000207169126012475"]
+    report_date: date
+    issuer_count: Literal[20]
+    instrument_count: Literal[21]
+
+    @model_validator(mode="after")
+    def validate_report_date(self) -> "ToptMarketScope":
+        if self.report_date != TOPT_REPORT_DATE:
+            raise ValueError("TOPT market fixture report date drifted")
+        return self
+
+
+class ToptListingSource(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["sec"]
+    url: Literal["https://www.sec.gov/files/company_tickers_exchange.json"]
+    retrieved_at: datetime
+    response_sha256: Literal["9e7294ccfe77ceeae03b3d59040fc8e24dbd78c9df286a36238b58ebbadf6106"]
+
+
+class ToptPriceSource(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["yahoo"]
+    client: Literal["yfinance"]
+    client_version: Literal["1.5.1"]
+    query_start: date
+    query_end_exclusive: date
+    retrieved_at: datetime
+    auto_adjust: Literal[False]
+    price_basis: Literal["unadjusted"]
+
+    @model_validator(mode="after")
+    def validate_query_window(self) -> "ToptPriceSource":
+        if self.query_start != TOPT_REPORT_DATE or self.query_end_exclusive != date(2026, 4, 2):
+            raise ValueError("TOPT price query window drifted")
+        return self
+
+
+class ToptXomReportDateIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    predecessor_cik: Literal["0000034088"]
+    successor_cik: Literal["0002115436"]
+    successor_effective_date: date
+    successor_trading_date: date
+    predecessor_filing: Literal["https://www.sec.gov/Archives/edgar/data/34088/000119312526291986/d70995d8k.htm"]
+    successor_filing: Literal["https://www.sec.gov/Archives/edgar/data/2115436/000119312526291990/d71068d8k12b.htm"]
+
+    @model_validator(mode="after")
+    def validate_transition(self) -> "ToptXomReportDateIdentity":
+        if (
+            self.successor_effective_date != date(2026, 7, 1)
+            or self.successor_trading_date != date(2026, 7, 2)
+            or self.successor_effective_date <= TOPT_REPORT_DATE
+        ):
+            raise ValueError("XOM report-date predecessor interval drifted")
+        return self
+
+
+class ToptMarketRow(BaseModel):
+    """One exact report-date listing and unadjusted daily price observation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    cusip: str = Field(pattern=r"^[0-9A-Z]{9}$")
+    issuer_lei: str = Field(pattern=r"^[0-9A-Z]{20}$")
+    issuer_cik_at_report_date: str = Field(pattern=r"^[0-9]{10}$")
+    ticker: str = Field(pattern=r"^[A-Z.]+$")
+    vendor_symbol: str = Field(pattern=r"^[A-Z.-]+$")
+    exchange: Literal["Nasdaq", "NYSE"]
+    exchange_mic: Literal["XNAS", "XNYS"]
+    listing_id: str = Field(pattern=r"^listing:(?:xnas|xnys):[a-z.]+$")
+    trading_date: date
+    session_close_at: datetime
+    open: Decimal = Field(gt=0)
+    high: Decimal = Field(gt=0)
+    low: Decimal = Field(gt=0)
+    close: Decimal = Field(gt=0)
+    volume: int = Field(ge=0)
+
+    @field_validator("open", "high", "low", "close", mode="before")
+    @classmethod
+    def reject_binary_float(cls, value: Any) -> Any:
+        if isinstance(value, (float, bool)):
+            raise ValueError("TOPT prices must be exact Decimal literals")
+        return value
+
+    @model_validator(mode="after")
+    def validate_listing_and_price(self) -> "ToptMarketRow":
+        expected_mic = {"Nasdaq": "XNAS", "NYSE": "XNYS"}[self.exchange]
+        if self.exchange_mic != expected_mic:
+            raise ValueError("TOPT exchange and MIC disagree")
+        if self.listing_id != f"listing:{self.exchange_mic.lower()}:{self.ticker.lower()}":
+            raise ValueError("TOPT listing identity drifted from MIC and ticker")
+        expected_vendor_symbol = "BRK-B" if self.ticker == "BRK.B" else self.ticker
+        if self.vendor_symbol != expected_vendor_symbol:
+            raise ValueError("TOPT Yahoo symbol mapping drifted")
+        if self.trading_date != TOPT_REPORT_DATE:
+            raise ValueError("TOPT market row is outside the frozen report date")
+        if self.session_close_at != datetime(2026, 3, 31, 20, tzinfo=UTC):
+            raise ValueError("TOPT market row is not bound to the U.S. session close")
+        if self.high < max(self.open, self.close, self.low) or self.low > min(
+            self.open,
+            self.close,
+            self.high,
+        ):
+            raise ValueError("TOPT OHLC ordering is invalid")
+        return self
+
+    @property
+    def security_id(self) -> str:
+        return f"security:cusip:{self.cusip}"
+
+    @property
+    def listing_document_id(self) -> str:
+        return f"identity-link:{self.security_id}:{self.listing_id}"
+
+    @property
+    def price_document_id(self) -> str:
+        return f"price:{self.listing_id}:{self.trading_date.isoformat()}"
+
+
+class FrozenToptMarketFixture(BaseModel):
+    """Content-addressed 21-listing/21-price packet for D2 Local/CI."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1]
+    fixture_id: Literal["d2-topt-market-2026-03-31-v1"]
+    scope: ToptMarketScope
+    listing_source: ToptListingSource
+    price_source: ToptPriceSource
+    xom_report_date_identity: ToptXomReportDateIdentity
+    rows: tuple[ToptMarketRow, ...] = Field(
+        min_length=TOPT_INSTRUMENT_COUNT,
+        max_length=TOPT_INSTRUMENT_COUNT,
+    )
+
+    @model_validator(mode="after")
+    def validate_exact_market_denominator(self) -> "FrozenToptMarketFixture":
+        for retrieved_at in (self.listing_source.retrieved_at, self.price_source.retrieved_at):
+            if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
+                raise ValueError("TOPT source retrieval times must be timezone-aware")
+        rows = tuple(sorted(self.rows, key=lambda item: item.cusip))
+        if (
+            len({row.cusip for row in rows}) != TOPT_INSTRUMENT_COUNT
+            or len({row.listing_id for row in rows}) != TOPT_INSTRUMENT_COUNT
+            or len({row.issuer_lei for row in rows}) != TOPT_ISSUER_COUNT
+        ):
+            raise ValueError("TOPT market fixture denominator is incomplete or duplicated")
+        xom = next((row for row in rows if row.ticker == "XOM"), None)
+        if (
+            xom is None
+            or xom.issuer_cik_at_report_date != self.xom_report_date_identity.predecessor_cik
+            or any(row.issuer_cik_at_report_date == self.xom_report_date_identity.successor_cik for row in rows)
+        ):
+            raise ValueError("TOPT market fixture leaked the post-report XOM successor")
+        object.__setattr__(self, "rows", rows)
+        return self
 
 
 class FrozenToptDenominator(BaseModel):
@@ -217,6 +392,8 @@ class D2E3RowCompleteManifest(BaseModel):
         counts = Counter(cell.demand.semantic_type_id for cell in cells)
         if counts != {
             ISSUER_SECURITY_TYPE_ID: TOPT_INSTRUMENT_COUNT,
+            MARKET_PRICE_TYPE_ID: TOPT_INSTRUMENT_COUNT,
+            SECURITY_LISTING_TYPE_ID: TOPT_INSTRUMENT_COUNT,
             UNIVERSE_MEMBERSHIP_TYPE_ID: TOPT_INSTRUMENT_COUNT,
         }:
             raise ValueError("D2 E3 row manifest domain counts drifted")
@@ -251,6 +428,8 @@ class D2E3Evidence(BaseModel):
     universe_manifest: UniverseManifest
     original_raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     changed_raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    market_original_raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    market_changed_raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     normalized_record_ids: tuple[str, ...] = Field(
         min_length=TOPT_NORMALIZED_RECORD_COUNT,
         max_length=TOPT_NORMALIZED_RECORD_COUNT,
@@ -283,6 +462,10 @@ class D2E3Evidence(BaseModel):
             raise ValueError("D2 E3 original raw bytes do not bind the frozen denominator")
         if self.original_raw_sha256 == self.changed_raw_sha256:
             raise ValueError("D2 E3 changed vintage must have distinct source bytes")
+        if self.market_original_raw_sha256 != TOPT_MARKET_FIXTURE_SHA256:
+            raise ValueError("D2 E3 market evidence does not bind the frozen fixture")
+        if self.market_original_raw_sha256 == self.market_changed_raw_sha256:
+            raise ValueError("D2 E3 changed market vintage must have distinct source bytes")
         if self.universe_manifest.ref.universe_id != TOPT_UNIVERSE_ID:
             raise ValueError("D2 E3 universe manifest drifted")
         if len(self.universe_manifest.membership_ids) != TOPT_INSTRUMENT_COUNT:
@@ -356,6 +539,50 @@ def load_topt_denominator(repository_root: Path, corpus: FrozenE1Corpus | None =
     )
 
 
+def load_topt_market_fixture(
+    repository_root: Path,
+    denominator: FrozenToptDenominator,
+) -> FrozenToptMarketFixture:
+    """Load the exact checked-in 21-listing/21-price E3 evidence packet."""
+
+    body = (repository_root / TOPT_MARKET_FIXTURE_PATH).read_bytes()
+    if _sha256(body) != TOPT_MARKET_FIXTURE_SHA256:
+        raise ValueError("D2 E3 TOPT market fixture bytes drifted")
+    fixture = FrozenToptMarketFixture.model_validate(json.loads(body, parse_float=Decimal))
+    denominator_coordinates = {(item.cusip, item.ticker, item.issuer_lei) for item in denominator.instruments}
+    fixture_coordinates = {(item.cusip, item.ticker, item.issuer_lei) for item in fixture.rows}
+    if fixture_coordinates != denominator_coordinates:
+        raise ValueError("TOPT market fixture does not match the frozen denominator")
+    return fixture
+
+
+def _e3_registry(parent: RegistrySnapshot) -> RegistrySnapshot:
+    """Add the TOPT fixture source without mutating the accepted E2 entries."""
+
+    implementation_sha256 = _sha256(Path(__file__).read_bytes())
+    source = SourceRegistryEntry(
+        source_id=TOPT_PRICE_SOURCE_ID,
+        version=MEDIUM_VERSION,
+        adapter_id="data_engine.d2_e3:topt_yahoo_market_adapter",
+        adapter_version=MEDIUM_VERSION,
+        normalizer_id="data_engine.d2_e3:topt_yahoo_market_normalizer",
+        normalizer_version=MEDIUM_VERSION,
+        supported_domains=(DataDomain.MARKET_PRICES,),
+        supported_type_ids=(MARKET_PRICE_TYPE_ID,),
+        configuration_schema_sha256=canonical_sha256(
+            {
+                "fixture_sha256": TOPT_MARKET_FIXTURE_SHA256,
+                "network": False,
+                "credentials": False,
+            }
+        ),
+        mapping_schema_sha256=canonical_sha256(MarketPricePayload.model_json_schema(mode="validation")),
+        adapter_implementation_sha256=implementation_sha256,
+        normalizer_implementation_sha256=implementation_sha256,
+    )
+    return parent.extend(sources=(source,))
+
+
 def _verify_e2_governance_handoff(repository_root: Path) -> None:
     body = (repository_root / D2_E2_GOVERNANCE_HANDOFF_PATH).read_bytes()
     if _sha256(body) != D2_E2_GOVERNANCE_HANDOFF_SHA256:
@@ -380,14 +607,24 @@ def _verify_e2_runtime_handoff(handoff: MvpMediumValidationHandoff) -> None:
 
 def _payloads(
     denominator: FrozenToptDenominator,
+    market_fixture: FrozenToptMarketFixture,
     *,
     knowable_at: datetime,
     recorded_at: datetime,
     raw_reference: str,
-) -> tuple[tuple[IssuerSecurityLink, ...], tuple[UniverseMembership, ...]]:
+) -> tuple[
+    tuple[IssuerSecurityLink, ...],
+    tuple[SecurityListingLink, ...],
+    tuple[UniverseMembership, ...],
+    tuple[MarketPricePayload, ...],
+]:
     links: list[IssuerSecurityLink] = []
+    listings: list[SecurityListingLink] = []
     memberships: list[UniverseMembership] = []
+    prices: list[MarketPricePayload] = []
+    market_by_cusip = {row.cusip: row for row in market_fixture.rows}
     for instrument in denominator.instruments:
+        market = market_by_cusip[instrument.cusip]
         links.append(
             IssuerSecurityLink(
                 input_id=instrument.identity_document_id,
@@ -397,6 +634,26 @@ def _payloads(
                 # The frozen candidate proves distinct CUSIPs, not legal class labels.
                 share_class="unresolved",
                 underlying_shares_per_security_unit=Decimal("1"),
+                valid_from=denominator.report_date,
+                valid_to=denominator.report_date,
+                knowable_at=knowable_at,
+                recorded_at=recorded_at,
+                confidence=Decimal("0.99"),
+                raw_ref=raw_reference,
+            )
+        )
+        listings.append(
+            SecurityListingLink(
+                input_id=market.listing_document_id,
+                security_id=instrument.security_id,
+                listing_id=market.listing_id,
+                exchange_mic=market.exchange_mic,
+                ticker=market.ticker,
+                listing_role=ListingRole.PRIMARY,
+                currency="USD",
+                timezone="America/New_York",
+                trading_calendar_id="calendar:us-equities",
+                trading_calendar_version="2026-03-31.fixture-v1",
                 valid_from=denominator.report_date,
                 valid_to=denominator.report_date,
                 knowable_at=knowable_at,
@@ -418,13 +675,48 @@ def _payloads(
                 raw_ref=raw_reference,
             )
         )
-    return tuple(links), tuple(memberships)
+        prices.append(
+            MarketPricePayload(
+                input_id=market.price_document_id,
+                issuer_id=instrument.issuer_id,
+                security_id=instrument.security_id,
+                listing_id=market.listing_id,
+                share_class="unresolved",
+                exchange_mic=market.exchange_mic,
+                ticker=market.ticker,
+                calendar_id="calendar:us-equities",
+                calendar_version="2026-03-31.fixture-v1",
+                trading_date=market.trading_date,
+                session_close_at=market.session_close_at,
+                open=market.open,
+                high=market.high,
+                low=market.low,
+                close=market.close,
+                volume=market.volume,
+                currency="USD",
+                knowable_at=knowable_at,
+                produced_at=knowable_at,
+                recorded_at=recorded_at,
+                confidence=Decimal("0.95"),
+                confidence_policy_id="confidence.d2-e3-checked-in-fixture-v1",
+                price_policy_id="price.d2-e3-unadjusted-v1",
+            )
+        )
+    return tuple(links), tuple(listings), tuple(memberships), tuple(prices)
 
 
-def _e3_catalog(registry: RegistrySnapshot, denominator: FrozenToptDenominator) -> MediumComponentCatalog:
+def _e3_catalog(
+    registry: RegistrySnapshot,
+    denominator: FrozenToptDenominator,
+    market_fixture: FrozenToptMarketFixture,
+) -> MediumComponentCatalog:
     sources = {(entry.source_id, entry.version): entry for entry in registry.sources}
     semantic_types = {(entry.semantic_type_id, entry.version): entry for entry in registry.semantic_types}
-
+    raw_sources = {
+        IDENTITY_SOURCE_ID: DataSource.SEC,
+        MEMBERSHIP_SOURCE_ID: DataSource.SEC,
+        TOPT_PRICE_SOURCE_ID: DataSource.YAHOO,
+    }
     adapters = tuple(
         MediumAdapterRegistration(
             source_id=source_id,
@@ -433,15 +725,16 @@ def _e3_catalog(registry: RegistrySnapshot, denominator: FrozenToptDenominator) 
             adapter_version=sources[(source_id, MEDIUM_VERSION)].adapter_version,
             adapter_implementation_sha256=sources[(source_id, MEDIUM_VERSION)].adapter_implementation_sha256,
             configuration_type=FrozenMediumCaptureConfiguration,
-            raw_source=DataSource.SEC,
+            raw_source=raw_source,
             capture=_capture,
         )
-        for source_id in (IDENTITY_SOURCE_ID, MEMBERSHIP_SOURCE_ID)
+        for source_id, raw_source in raw_sources.items()
     )
 
     def issuer_links(capture: LandedMediumCapture):
-        links, _memberships = _payloads(
+        links, _listings, _memberships, _prices = _payloads(
             denominator,
+            market_fixture,
             knowable_at=capture.fetched_at,
             recorded_at=capture.recorded_at,
             raw_reference=_raw_object_ref(capture),
@@ -462,12 +755,34 @@ def _e3_catalog(registry: RegistrySnapshot, denominator: FrozenToptDenominator) 
             for link in links
         )
 
-    def unsupported_listing(_capture: LandedMediumCapture):
-        raise ValueError("TOPT candidate context does not establish exchange listing semantics")
+    def listings(capture: LandedMediumCapture):
+        _links, values, _memberships, _prices = _payloads(
+            denominator,
+            market_fixture,
+            knowable_at=capture.fetched_at,
+            recorded_at=capture.recorded_at,
+            raw_reference=_raw_object_ref(capture),
+        )
+        return tuple(
+            _draft(
+                semantic_type_id=SECURITY_LISTING_TYPE_ID,
+                payload=listing,
+                subject=SubjectRef(kind=SubjectKind.SECURITY, id=listing.security_id),
+                valid_from=listing.valid_from,
+                valid_to=cast(date, listing.valid_to),
+                knowable_at=listing.knowable_at,
+                recorded_at=listing.recorded_at,
+                document_id=listing.input_id,
+                confidence=listing.confidence,
+                raw_reference=capture.raw_ref,
+            )
+            for listing in values
+        )
 
     def memberships(capture: LandedMediumCapture):
-        _links, values = _payloads(
+        _links, _listings, values, _prices = _payloads(
             denominator,
+            market_fixture,
             knowable_at=capture.fetched_at,
             recorded_at=capture.recorded_at,
             raw_reference=_raw_object_ref(capture),
@@ -488,10 +803,35 @@ def _e3_catalog(registry: RegistrySnapshot, denominator: FrozenToptDenominator) 
             for membership in values
         )
 
+    def prices(capture: LandedMediumCapture):
+        _links, _listings, _memberships, values = _payloads(
+            denominator,
+            market_fixture,
+            knowable_at=capture.fetched_at,
+            recorded_at=capture.recorded_at,
+            raw_reference=_raw_object_ref(capture),
+        )
+        return tuple(
+            _draft(
+                semantic_type_id=MARKET_PRICE_TYPE_ID,
+                payload=price,
+                subject=SubjectRef(kind=SubjectKind.LISTING, id=price.listing_id),
+                valid_from=price.trading_date,
+                valid_to=price.trading_date,
+                knowable_at=price.knowable_at,
+                recorded_at=price.recorded_at,
+                document_id=price.input_id,
+                confidence=price.confidence,
+                raw_reference=capture.raw_ref,
+            )
+            for price in values
+        )
+
     routes = {
         (IDENTITY_SOURCE_ID, ISSUER_SECURITY_TYPE_ID): issuer_links,
-        (IDENTITY_SOURCE_ID, SECURITY_LISTING_TYPE_ID): unsupported_listing,
+        (IDENTITY_SOURCE_ID, SECURITY_LISTING_TYPE_ID): listings,
         (MEMBERSHIP_SOURCE_ID, UNIVERSE_MEMBERSHIP_TYPE_ID): memberships,
+        (TOPT_PRICE_SOURCE_ID, MARKET_PRICE_TYPE_ID): prices,
     }
     normalizers = tuple(
         MediumNormalizerRegistration(
@@ -514,43 +854,83 @@ def _e3_repository_registrations(registry: RegistrySnapshot):
         link = cast(IssuerSecurityLink, payload)
         return partition_key == "all" or partition_key == f"security:{link.security_id}"
 
+    def select_listing(payload: BaseModel, partition_key: str) -> bool:
+        link = cast(SecurityListingLink, payload)
+        return partition_key == "all" or partition_key == f"listing:{link.listing_id}"
+
     def select_universe(payload: BaseModel, partition_key: str) -> bool:
         membership = cast(UniverseMembership, payload)
         return partition_key == "all" or partition_key == f"universe:{membership.universe_id}"
 
-    return tuple(
-        replace(registration, partition_filter=select_security)
-        if registration.semantic_type_id == ISSUER_SECURITY_TYPE_ID
-        else replace(registration, partition_filter=select_universe)
-        if registration.semantic_type_id == UNIVERSE_MEMBERSHIP_TYPE_ID
-        else registration
-        for registration in build_medium_repository_registrations(registry)
-    )
+    def rank_price_source(_payload: BaseModel, source_id: str) -> int | None:
+        return 0 if source_id == TOPT_PRICE_SOURCE_ID else 1
+
+    registrations = []
+    for registration in build_medium_repository_registrations(registry):
+        if registration.semantic_type_id == ISSUER_SECURITY_TYPE_ID:
+            registration = replace(registration, partition_filter=select_security)
+        elif registration.semantic_type_id == MARKET_PRICE_TYPE_ID:
+            source = next(
+                entry
+                for entry in registry.sources
+                if entry.source_id == TOPT_PRICE_SOURCE_ID and MARKET_PRICE_TYPE_ID in entry.supported_type_ids
+            )
+            registration = replace(
+                registration,
+                mapping_versions={
+                    **registration.mapping_versions,
+                    TOPT_PRICE_SOURCE_ID: f"{source.normalizer_id}:{source.normalizer_version}",
+                },
+                source_rank=rank_price_source,
+            )
+        elif registration.semantic_type_id == SECURITY_LISTING_TYPE_ID:
+            registration = replace(registration, partition_filter=select_listing)
+        elif registration.semantic_type_id == UNIVERSE_MEMBERSHIP_TYPE_ID:
+            registration = replace(registration, partition_filter=select_universe)
+        registrations.append(registration)
+    return tuple(registrations)
 
 
 def _work_items(
     *,
-    body: bytes,
+    denominator_body: bytes,
+    market_body: bytes,
     vintage: Literal["original", "changed"],
     knowable_at: datetime,
     recorded_at: datetime,
-) -> tuple[MediumCaptureWorkItem, MediumCaptureWorkItem]:
-    body_sha256 = _sha256(body)
+) -> tuple[
+    MediumCaptureWorkItem,
+    MediumCaptureWorkItem,
+    MediumCaptureWorkItem,
+    MediumCaptureWorkItem,
+]:
+    bodies = {
+        "denominator": denominator_body,
+        "market": market_body,
+    }
 
-    def configuration(source_id: str) -> FrozenMediumCaptureConfiguration:
+    def configuration(
+        source_id: str,
+        *,
+        artifact: Literal["denominator", "market"],
+        source: DataSource,
+        semantic_type_id: str,
+    ) -> FrozenMediumCaptureConfiguration:
+        body = bodies[artifact]
         return FrozenMediumCaptureConfiguration(
-            artifact_id=f"topt-candidate-denominator-{vintage}-{source_id}",
-            source=DataSource.SEC,
-            source_record_id=f"d2-e3:{TOPT_ACCESSION}:{vintage}:{source_id}",
+            artifact_id=f"topt-{artifact}-{vintage}-{semantic_type_id}",
+            source=source,
+            source_record_id=f"d2-e3:{TOPT_ACCESSION}:{vintage}:{source_id}:{semantic_type_id}",
             body=body,
             content_type="application/json",
             fetched_at=knowable_at,
             source_published_at=knowable_at,
             metadata={
                 "accession": TOPT_ACCESSION,
-                "artifact_sha256": body_sha256,
+                "artifact_sha256": _sha256(body),
+                "artifact_kind": artifact,
                 "candidate_state": "candidate_unapproved",
-                "identity_context_only": True,
+                "checked_in_fixture": True,
                 "universe_id": TOPT_UNIVERSE_ID,
                 "vintage": vintage,
             },
@@ -562,7 +942,25 @@ def _work_items(
             source_version=MEDIUM_VERSION,
             semantic_type_ids=(ISSUER_SECURITY_TYPE_ID,),
             semantic_type_version=MEDIUM_VERSION,
-            configuration=configuration(IDENTITY_SOURCE_ID),
+            configuration=configuration(
+                IDENTITY_SOURCE_ID,
+                artifact="denominator",
+                source=DataSource.SEC,
+                semantic_type_id=ISSUER_SECURITY_TYPE_ID,
+            ),
+            recorded_at=recorded_at,
+        ),
+        MediumCaptureWorkItem(
+            source_id=IDENTITY_SOURCE_ID,
+            source_version=MEDIUM_VERSION,
+            semantic_type_ids=(SECURITY_LISTING_TYPE_ID,),
+            semantic_type_version=MEDIUM_VERSION,
+            configuration=configuration(
+                IDENTITY_SOURCE_ID,
+                artifact="market",
+                source=DataSource.SEC,
+                semantic_type_id=SECURITY_LISTING_TYPE_ID,
+            ),
             recorded_at=recorded_at,
         ),
         MediumCaptureWorkItem(
@@ -570,7 +968,25 @@ def _work_items(
             source_version=MEDIUM_VERSION,
             semantic_type_ids=(UNIVERSE_MEMBERSHIP_TYPE_ID,),
             semantic_type_version=MEDIUM_VERSION,
-            configuration=configuration(MEMBERSHIP_SOURCE_ID),
+            configuration=configuration(
+                MEMBERSHIP_SOURCE_ID,
+                artifact="denominator",
+                source=DataSource.SEC,
+                semantic_type_id=UNIVERSE_MEMBERSHIP_TYPE_ID,
+            ),
+            recorded_at=recorded_at,
+        ),
+        MediumCaptureWorkItem(
+            source_id=TOPT_PRICE_SOURCE_ID,
+            source_version=MEDIUM_VERSION,
+            semantic_type_ids=(MARKET_PRICE_TYPE_ID,),
+            semantic_type_version=MEDIUM_VERSION,
+            configuration=configuration(
+                TOPT_PRICE_SOURCE_ID,
+                artifact="market",
+                source=DataSource.YAHOO,
+                semantic_type_id=MARKET_PRICE_TYPE_ID,
+            ),
             recorded_at=recorded_at,
         ),
     )
@@ -597,6 +1013,7 @@ def _universe_manifest(denominator: FrozenToptDenominator, *, effective_at: date
 def _snapshot_plan(
     *,
     denominator: FrozenToptDenominator,
+    market_fixture: FrozenToptMarketFixture,
     registry: RegistrySnapshot,
     records_by_document: dict[str, NormalizedRecordRef],
     universe_manifest: UniverseManifest,
@@ -610,9 +1027,13 @@ def _snapshot_plan(
     demands: list[SnapshotDemandCell] = []
     selected: dict[str, tuple[NormalizedRecordRef, ...]] = {}
     document_by_cell: dict[str, str] = {}
+    market_by_cusip = {row.cusip: row for row in market_fixture.rows}
     for instrument in denominator.instruments:
+        market = market_by_cusip[instrument.cusip]
         identity_record = records_by_document[instrument.identity_document_id]
+        listing_record = records_by_document[market.listing_document_id]
         membership_record = records_by_document[instrument.membership_id]
+        price_record = records_by_document[market.price_document_id]
         for record, partition, label in (
             (
                 identity_record,
@@ -620,9 +1041,19 @@ def _snapshot_plan(
                 f"topt:{instrument.cusip}:issuer-security",
             ),
             (
+                listing_record,
+                f"listing:{market.listing_id}",
+                f"topt:{instrument.cusip}:security-listing",
+            ),
+            (
                 membership_record,
                 f"universe:{denominator.universe_id}",
                 f"topt:{instrument.cusip}:membership",
+            ),
+            (
+                price_record,
+                f"date:{market.trading_date.isoformat()}",
+                f"topt:{instrument.cusip}:market-price",
             ),
         ):
             demand = _demand(
@@ -746,25 +1177,33 @@ def run_d2_e3(
         _verify_e2_runtime_handoff(e2_handoff)
         corpus = load_e1_corpus(repository_root)
         denominator = load_topt_denominator(repository_root, corpus)
+        market_fixture = load_topt_market_fixture(repository_root, denominator)
         artifact = corpus.artifacts["topt-candidate-denominator"]
         original_body = artifact.body
         changed_body = original_body + b"\n"
-        original_at = e2_handoff.created_at + timedelta(seconds=1)
+        market_original_body = (repository_root / TOPT_MARKET_FIXTURE_PATH).read_bytes()
+        market_changed_body = market_original_body + b"\n"
+        source_retrieved_at = max(
+            market_fixture.listing_source.retrieved_at,
+            market_fixture.price_source.retrieved_at,
+        )
+        original_at = max(e2_handoff.created_at + timedelta(seconds=1), source_retrieved_at)
         changed_at = original_at + timedelta(days=1)
-        registry = e2_handoff.registry_snapshot
+        registry = _e3_registry(e2_handoff.registry_snapshot)
         repository = PostgresMediumSemanticRepository(
             connection,
             registry=registry,
             registrations=_e3_repository_registrations(registry),
         )
-        catalog = _e3_catalog(registry, denominator)
+        catalog = _e3_catalog(registry, denominator, market_fixture)
 
         original_batch = land_medium_capture_plan(
             connection,
             object_store=raw_store,
             catalog=catalog,
             work_items=_work_items(
-                body=original_body,
+                denominator_body=original_body,
+                market_body=market_original_body,
                 vintage="original",
                 knowable_at=original_at,
                 recorded_at=original_at + timedelta(microseconds=1),
@@ -781,7 +1220,8 @@ def run_d2_e3(
             object_store=raw_store,
             catalog=catalog,
             work_items=_work_items(
-                body=changed_body,
+                denominator_body=changed_body,
+                market_body=market_changed_body,
                 vintage="changed",
                 knowable_at=changed_at,
                 recorded_at=changed_at + timedelta(microseconds=1),
@@ -800,6 +1240,7 @@ def run_d2_e3(
         )
         original_request, original_fixture, original_documents = _snapshot_plan(
             denominator=denominator,
+            market_fixture=market_fixture,
             registry=registry,
             records_by_document=original_by_document,
             universe_manifest=universe,
@@ -807,6 +1248,7 @@ def run_d2_e3(
         )
         pre_knowable_request, _pre_fixture, _pre_documents = _snapshot_plan(
             denominator=denominator,
+            market_fixture=market_fixture,
             registry=registry,
             records_by_document=original_by_document,
             universe_manifest=universe,
@@ -836,6 +1278,7 @@ def run_d2_e3(
 
         changed_request, changed_fixture, changed_documents = _snapshot_plan(
             denominator=denominator,
+            market_fixture=market_fixture,
             registry=registry,
             records_by_document=changed_by_document,
             universe_manifest=universe,
@@ -870,6 +1313,8 @@ def run_d2_e3(
             universe_manifest=universe,
             original_raw_sha256=_sha256(original_body),
             changed_raw_sha256=_sha256(changed_body),
+            market_original_raw_sha256=_sha256(market_original_body),
+            market_changed_raw_sha256=_sha256(market_changed_body),
             normalized_record_ids=tuple(
                 record.normalized_record_id for record in (*original.normalized_records, *changed.normalized_records)
             ),
@@ -980,9 +1425,11 @@ __all__ = [
     "D2E3Evidence",
     "D2E3RowCompleteManifest",
     "FrozenToptDenominator",
+    "FrozenToptMarketFixture",
     "ToptInstrument",
     "build_d2_e3_definitions",
     "load_topt_denominator",
+    "load_topt_market_fixture",
     "materialize_mvp_medium_validation_e3",
     "run_d2_e3",
 ]

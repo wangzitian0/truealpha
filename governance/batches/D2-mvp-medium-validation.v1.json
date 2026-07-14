@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "D2-mvp-medium-validation",
-  "revision": 10,
+  "revision": 11,
   "issue": 121,
   "owner_gate": 29,
   "status": "blocked",
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "4c83ac0d8b0aae0e8f4fd62d06d5d77c5297e09c",
+    "base_sha": "9f3e0e38d8df9d24d0b6015f6e5efe025f58a414",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "governance registration merged to main",
@@ -72,7 +72,8 @@
       "exact TOPT 20-issuer and 21-instrument empty-database run",
       "empty-database existing-type source extension through registry, raw vintages, PIT snapshot, and disabled-activation replay",
       "empty-database additive typed semantic record through registry, raw vintages, PIT repository, snapshot, and disabled-activation replay",
-      "disabled extension reproduces persisted usage audit and factor output without new capture"
+      "disabled extension reproduces persisted usage audit and factor output without new capture",
+      "each TOPT cutoff selects exactly 21 issuer-security, 21 security-listing, 21 universe-membership, and 21 market-price cells"
     ]
   },
   "source_ceiling": "Checked-in public fixtures only through E3. Live calls remain owned by #60 and #27.",
