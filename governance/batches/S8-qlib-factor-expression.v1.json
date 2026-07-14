@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "160668ef535e1022b542725e54edb56451139ee3",
+    "base_sha": "3b18ac4585c4f5183bac376b5a105f0760df06ba",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S8 registration is merged to main",

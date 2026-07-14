@@ -248,7 +248,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S8-qlib-factor-expression.v1.json",
-      "sha256": "14901f5d5bf3f4b714ada1eeb1499703150d0f00933e0e5a7cc663953bf58cf1"
+      "sha256": "c498e9ca037f810149054fd28867039d9d202f085612af522de8258c30139885"
     }
   },
   "artifact_edges": [
