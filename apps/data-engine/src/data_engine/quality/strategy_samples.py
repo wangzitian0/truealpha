@@ -226,7 +226,9 @@ def _assert_twelve_data_reconciliation(sample_root: Path, evidence: EvidenceCase
             return False
         for field, stats in observation.get("field_stats", {}).items():
             tolerance = Decimal("0.01" if field == "volume" else "0.0005")
-            if field != "volume" and (stats.get("within_tolerance") != count or Decimal(stats["max_relative_delta"]) > tolerance):
+            if field != "volume" and (
+                stats.get("within_tolerance") != count or Decimal(stats["max_relative_delta"]) > tolerance
+            ):
                 return False
             if field == "volume" and stats.get("within_tolerance", 0) > count:
                 return False
