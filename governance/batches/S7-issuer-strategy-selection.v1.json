@@ -1,31 +1,33 @@
 {
   "schema_version": 1,
   "batch_id": "S7-issuer-strategy-selection",
-  "revision": 1,
+  "revision": 2,
   "issue": 181,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "strategy",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E1",
-  "objective": "Rank a complete candidate universe from exact provisional S6 issuer valuation results and select the configured top N without recomputing valuation gaps.",
-  "claim_ceiling": "registered E0 issuer-selection batch only; no frozen corpus, implementation evidence, approved product semantics, real TOPT mapping, stable handoff, factor activation, runner, replay, or release-readiness claim",
-  "capability_issues": [25],
+  "objective": "Freeze an engine-independent Decimal oracle for transforming exact provisional S6 issuer valuation results into deterministic top-N decisions, then require the version-pinned TrueAlpha Qlib adapter owned by #26 to reproduce it.",
+  "claim_ceiling": "preparation-only Qlib selection-adapter oracle; this revision earns no rung and authorizes no dependency installation, runtime adapter, approved product semantics, real TOPT mapping, stable handoff, factor activation, replay, or release-readiness claim",
+  "capability_issues": [26],
   "closes_issues": [],
   "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 155, 169],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "083512c8a51dca5eb1d568c221a6400b1787e5d5",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S7 registration is merged to main",
       "the implementation PR pins its exact current main base SHA",
       "the twelve-candidate corpus path and SHA-256 are committed before execution",
+      "the Qlib architecture selection is merged before adapter implementation",
+      "a later manifest revision pins the dependency lock and authorizes the Qlib adapter paths",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the package export path",
       "issue #181 contains the exact manifest path and SHA-256"
@@ -81,19 +83,29 @@
       "issue": 59,
       "artifact": "approved strategy eligibility, ranking, tie-break, and short-book semantics",
       "state": "pending_external_approval"
+    },
+    {
+      "class": "freeze",
+      "issue": 26,
+      "artifact": "merged Qlib architecture selection and version-pinned adapter ownership",
+      "ref": "pr:182",
+      "state": "pending_merge"
     }
   ],
   "corpus": {
     "environment": "Local/CI checked-in fixture",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/factors/tests/batches/issuer_strategy_selection_tiny/fixtures/corpus.v1.json",
+    "sha256": "0f203af37fa10d63d34bf42a4d9eadb20bcb0e0d007bbc51190050e2a2a46d81",
     "required_strata": [
       "twelve bound issuers with eleven eligible S6 results and one explicit ineligible result",
       "descending valuation-gap ranking and configured top-ten selection",
       "issuer-to-execution-listing mapping and selected confidence propagation",
       "missing, duplicate, extra, unavailable, and below-minimum-confidence issuer results",
       "insufficient eligible count and unapproved equal-gap tie failure",
-      "input reordering, ambient Decimal context, canonical partitions, and semantic identity"
+      "input reordering, ambient Decimal context, canonical partitions, and semantic identity",
+      "independent Decimal oracle parity with the pinned Qlib adapter",
+      "Decimal-to-float ordering preservation and float-collision failure",
+      "rejection of Qlib TopkDropout turnover semantics as a substitute for full-rebalance top-N"
     ]
   },
   "paths": {
@@ -152,6 +164,9 @@
       "fewer eligible issuers than the configured selection count",
       "equal valuation gaps without an approved tie-break rule",
       "stale S2, S4, S6, semantic-candidate, or public-golden identity",
+      "Qlib distribution, adapter, operator-registry, strategy, or configuration identity drift",
+      "Decimal scores that collide or reverse order after the adapter's float transport conversion",
+      "Qlib turnover/dropout behavior substituted for the declared full-rebalance top-N rule",
       "attempted supplied valuation inputs, provenance, registry, runner, or release activation"
     ],
     "output": {
@@ -166,7 +181,8 @@
     }
   },
   "invalidation": [
-    "eligibility, ranking direction, tie behavior, selection count, corpus, or output identity change creates a new batch revision",
+    "eligibility, ranking direction, tie behavior, selection count, Qlib binding, corpus, or output identity change creates a new batch revision",
+    "dependency installation or adapter implementation requires a later revision with an exact lock and shared-path lease",
     "shared-path need blocks the batch until an explicit integration lease exists",
     "product approval, real TOPT mapping, GPPE implementation, or materialization does not raise this provisional evidence ceiling"
   ],

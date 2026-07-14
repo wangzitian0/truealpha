@@ -1,0 +1,454 @@
+{
+  "schema_version": 1,
+  "corpus_id": "s7-issuer-strategy-selection-corpus-v1",
+  "batch_id": "S7-issuer-strategy-selection",
+  "claim_ceiling": "preparation-only engine-independent oracle for a later pinned Qlib selection adapter; this corpus earns no rung and authorizes no dependency installation, runtime adapter, approved product semantics, real TOPT mapping, stable handoff, factor activation, replay, or release claim",
+  "contract_refs": {
+    "s2_terminal_manifest": {
+      "path": "governance/batches/S2-core-strategy-contract.v1.json",
+      "sha256": "2908f2a33c358c3c349f4e3ec41b1c83e7d4f78345a4629d29ae53d1539fb127",
+      "state": "accepted"
+    },
+    "s4_terminal_manifest": {
+      "path": "governance/batches/S4-issuer-price-sales.v1.json",
+      "sha256": "3a72c29f0c965e3aa8eaa4464726d183622aa930a7780f9a2d3b51b9e25afa16",
+      "state": "accepted"
+    },
+    "s6_terminal_manifest": {
+      "path": "governance/batches/S6-issuer-tier-valuation.v1.json",
+      "sha256": "0b4962775b9c5b94f140b7173ab27bd411af6d6ed3245557ced6935436b25a19",
+      "state": "accepted"
+    },
+    "strategy_corpus": {
+      "path": "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
+      "sha256": "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4",
+      "definition_key": "fixed_cohort"
+    },
+    "binding_corpus": {
+      "path": "libs/contracts/tests/fixtures/issuer_price_to_sales.v1.json",
+      "sha256": "4a2ee3be69e3956ea5df753c840749cf41d9d309139933435dfcdb6be4de91b4",
+      "binding_key": "valid_binding"
+    },
+    "semantic_candidate": {
+      "path": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "state": "candidate-only-not-approved"
+    },
+    "public_golden_manifest": {
+      "path": "governance/gate0/public-goldens/manifest.v1.json",
+      "sha256": "8a9e1d23ea633f772c16cfaff6706518acce6cbcba5d343eaa33a0acdb01a8bc"
+    },
+    "public_ranking_input": {
+      "path": "governance/gate0/public-goldens/strategy/twelve-candidate-top-10.input.json",
+      "sha256": "8a229fb88ec13704441c31616fca57f722413d8524b8dfdc8beb40b2d9b30129"
+    },
+    "public_ranking_expected": {
+      "path": "governance/gate0/public-goldens/strategy/twelve-candidate-top-10.expected.json",
+      "sha256": "62b6a86bd215a770cd7c792c95bea1530846803f4e87c7f93df9499703f09911"
+    }
+  },
+  "engine_binding": {
+    "distribution": "pyqlib",
+    "version": "0.9.7",
+    "release_commit": "da920b7f954f48ab1bb64117c976710de198373e",
+    "adapter_id": "truealpha.qlib-selection-adapter.v1",
+    "operator_registry_id": "truealpha.qlib-operators.v1",
+    "strategy_id": "large_model_value_full_rebalance_top_n.v1",
+    "strategy_semantics": "full_rebalance_top_n",
+    "builtin_topk_dropout_is_equivalent": false,
+    "score_transport": "decimal_string_to_float64_after_strict_order_validation",
+    "runtime_artifact_hash": "required-at-execution"
+  },
+  "selection_frame": {
+    "frame_kind": "synthetic-development-binding-not-real-topt-mapping",
+    "strategy_definition_key": "fixed_cohort",
+    "binding_base_key": "valid_binding",
+    "cutoff": "2026-03-31T20:00:00Z",
+    "reporting_currency": "USD",
+    "selection_count": 10,
+    "minimum_confidence": "0.80",
+    "ranking_direction": "descending_valuation_gap",
+    "selection_rule_id": "top_n_ranked_eligible",
+    "tie_behavior": "fail_closed_unapproved",
+    "short_book_behavior": "fail_closed_insufficient_eligible",
+    "candidates": [
+      {
+        "public_candidate_id": "candidate-01",
+        "issuer_id": "issuer.synthetic.candidate-01",
+        "security_id": "security.synthetic.candidate-01",
+        "execution_listing_id": "listing.synthetic.candidate-01"
+      },
+      {
+        "public_candidate_id": "candidate-02",
+        "issuer_id": "issuer.synthetic.candidate-02",
+        "security_id": "security.synthetic.candidate-02",
+        "execution_listing_id": "listing.synthetic.candidate-02"
+      },
+      {
+        "public_candidate_id": "candidate-03",
+        "issuer_id": "issuer.synthetic.candidate-03",
+        "security_id": "security.synthetic.candidate-03",
+        "execution_listing_id": "listing.synthetic.candidate-03"
+      },
+      {
+        "public_candidate_id": "candidate-04",
+        "issuer_id": "issuer.synthetic.candidate-04",
+        "security_id": "security.synthetic.candidate-04",
+        "execution_listing_id": "listing.synthetic.candidate-04"
+      },
+      {
+        "public_candidate_id": "candidate-05",
+        "issuer_id": "issuer.synthetic.candidate-05",
+        "security_id": "security.synthetic.candidate-05",
+        "execution_listing_id": "listing.synthetic.candidate-05"
+      },
+      {
+        "public_candidate_id": "candidate-06",
+        "issuer_id": "issuer.synthetic.candidate-06",
+        "security_id": "security.synthetic.candidate-06",
+        "execution_listing_id": "listing.synthetic.candidate-06"
+      },
+      {
+        "public_candidate_id": "candidate-07",
+        "issuer_id": "issuer.synthetic.candidate-07",
+        "security_id": "security.synthetic.candidate-07",
+        "execution_listing_id": "listing.synthetic.candidate-07"
+      },
+      {
+        "public_candidate_id": "candidate-08",
+        "issuer_id": "issuer.synthetic.candidate-08",
+        "security_id": "security.synthetic.candidate-08",
+        "execution_listing_id": "listing.synthetic.candidate-08"
+      },
+      {
+        "public_candidate_id": "candidate-09",
+        "issuer_id": "issuer.synthetic.candidate-09",
+        "security_id": "security.synthetic.candidate-09",
+        "execution_listing_id": "listing.synthetic.candidate-09"
+      },
+      {
+        "public_candidate_id": "candidate-10",
+        "issuer_id": "issuer.synthetic.candidate-10",
+        "security_id": "security.synthetic.candidate-10",
+        "execution_listing_id": "listing.synthetic.candidate-10"
+      },
+      {
+        "public_candidate_id": "candidate-11",
+        "issuer_id": "issuer.synthetic.candidate-11",
+        "security_id": "security.synthetic.candidate-11",
+        "execution_listing_id": "listing.synthetic.candidate-11"
+      },
+      {
+        "public_candidate_id": "candidate-12",
+        "issuer_id": "issuer.synthetic.candidate-12",
+        "security_id": "security.synthetic.candidate-12",
+        "execution_listing_id": "listing.synthetic.candidate-12"
+      }
+    ]
+  },
+  "positive_case": {
+    "case_id": "twelve-candidate-eleven-eligible-top-ten",
+    "valuation_results": [
+      {
+        "public_candidate_id": "candidate-01",
+        "availability": "available",
+        "tier": "large_model_native",
+        "target_ps_lower": "20",
+        "target_ps_upper": "30",
+        "target_ps_midpoint": "25",
+        "current_price_to_sales": "10",
+        "valuation_gap": "1.5",
+        "confidence": "0.99",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-02",
+        "availability": "available",
+        "tier": "large_model_native",
+        "target_ps_lower": "20",
+        "target_ps_upper": "30",
+        "target_ps_midpoint": "25",
+        "current_price_to_sales": "12.5",
+        "valuation_gap": "1",
+        "confidence": "0.98",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-03",
+        "availability": "available",
+        "tier": "tech",
+        "target_ps_lower": "8",
+        "target_ps_upper": "10",
+        "target_ps_midpoint": "9",
+        "current_price_to_sales": "5",
+        "valuation_gap": "0.8",
+        "confidence": "0.97",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-04",
+        "availability": "available",
+        "tier": "tech",
+        "target_ps_lower": "8",
+        "target_ps_upper": "10",
+        "target_ps_midpoint": "9",
+        "current_price_to_sales": "6",
+        "valuation_gap": "0.5",
+        "confidence": "0.96",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-05",
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "2.5",
+        "valuation_gap": "0.4",
+        "confidence": "0.95",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-06",
+        "availability": "available",
+        "tier": "large_model_native",
+        "target_ps_lower": "20",
+        "target_ps_upper": "30",
+        "target_ps_midpoint": "25",
+        "current_price_to_sales": "20",
+        "valuation_gap": "0.25",
+        "confidence": "0.94",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-07",
+        "availability": "available",
+        "tier": "tech",
+        "target_ps_lower": "8",
+        "target_ps_upper": "10",
+        "target_ps_midpoint": "9",
+        "current_price_to_sales": "8",
+        "valuation_gap": "0.125",
+        "confidence": "0.93",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-08",
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "3.2",
+        "valuation_gap": "0.09375",
+        "confidence": "0.92",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-09",
+        "availability": "available",
+        "tier": "large_model_native",
+        "target_ps_lower": "20",
+        "target_ps_upper": "30",
+        "target_ps_midpoint": "25",
+        "current_price_to_sales": "25",
+        "valuation_gap": "0",
+        "confidence": "0.91",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-10",
+        "availability": "available",
+        "tier": "tech",
+        "target_ps_lower": "8",
+        "target_ps_upper": "10",
+        "target_ps_midpoint": "9",
+        "current_price_to_sales": "10",
+        "valuation_gap": "-0.1",
+        "confidence": "0.90",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-11",
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "5",
+        "valuation_gap": "-0.3",
+        "confidence": "0.89",
+        "reason_codes": []
+      },
+      {
+        "public_candidate_id": "candidate-12",
+        "availability": "unavailable",
+        "tier": null,
+        "target_ps_lower": null,
+        "target_ps_upper": null,
+        "target_ps_midpoint": null,
+        "current_price_to_sales": null,
+        "valuation_gap": null,
+        "confidence": "0",
+        "reason_codes": ["unavailable_price_to_sales"]
+      }
+    ],
+    "expected": {
+      "availability": "available",
+      "eligible_public_candidate_ids": [
+        "candidate-01",
+        "candidate-02",
+        "candidate-03",
+        "candidate-04",
+        "candidate-05",
+        "candidate-06",
+        "candidate-07",
+        "candidate-08",
+        "candidate-09",
+        "candidate-10",
+        "candidate-11"
+      ],
+      "ineligible_candidates": [
+        {
+          "public_candidate_id": "candidate-12",
+          "reason": "unavailable_price_to_sales"
+        }
+      ],
+      "ranking": [
+        {"rank": 1, "public_candidate_id": "candidate-01", "valuation_gap": "1.5"},
+        {"rank": 2, "public_candidate_id": "candidate-02", "valuation_gap": "1"},
+        {"rank": 3, "public_candidate_id": "candidate-03", "valuation_gap": "0.8"},
+        {"rank": 4, "public_candidate_id": "candidate-04", "valuation_gap": "0.5"},
+        {"rank": 5, "public_candidate_id": "candidate-05", "valuation_gap": "0.4"},
+        {"rank": 6, "public_candidate_id": "candidate-06", "valuation_gap": "0.25"},
+        {"rank": 7, "public_candidate_id": "candidate-07", "valuation_gap": "0.125"},
+        {"rank": 8, "public_candidate_id": "candidate-08", "valuation_gap": "0.09375"},
+        {"rank": 9, "public_candidate_id": "candidate-09", "valuation_gap": "0"},
+        {"rank": 10, "public_candidate_id": "candidate-10", "valuation_gap": "-0.1"},
+        {"rank": 11, "public_candidate_id": "candidate-11", "valuation_gap": "-0.3"}
+      ],
+      "selected_public_candidate_ids": [
+        "candidate-01",
+        "candidate-02",
+        "candidate-03",
+        "candidate-04",
+        "candidate-05",
+        "candidate-06",
+        "candidate-07",
+        "candidate-08",
+        "candidate-09",
+        "candidate-10"
+      ],
+      "eligible_not_selected_public_candidate_ids": ["candidate-11"],
+      "confidence": "0.90"
+    }
+  },
+  "negative_controls": [
+    {
+      "control_id": "binding-identity-drift",
+      "mutation": "replace request strategy_binding_id",
+      "expected_availability": "unavailable",
+      "expected_reason": "binding_identity_mismatch"
+    },
+    {
+      "control_id": "candidate-universe-identity-drift",
+      "mutation": "replace one result candidate_universe_id",
+      "expected_availability": "unavailable",
+      "expected_reason": "candidate_universe_identity_mismatch"
+    },
+    {
+      "control_id": "price-to-sales-policy-identity-drift",
+      "mutation": "replace one result price_to_sales_policy_id",
+      "expected_availability": "unavailable",
+      "expected_reason": "price_to_sales_policy_identity_mismatch"
+    },
+    {
+      "control_id": "cutoff-identity-drift",
+      "mutation": "move one result as_of one microsecond earlier",
+      "expected_availability": "unavailable",
+      "expected_reason": "cutoff_identity_mismatch"
+    },
+    {
+      "control_id": "duplicate-bound-issuer-result",
+      "mutation": "append a second candidate-01 result",
+      "expected_availability": "unavailable",
+      "expected_reason": "duplicate_issuer_result"
+    },
+    {
+      "control_id": "extra-unbound-issuer-result",
+      "mutation": "append a valid result for issuer.synthetic.extra",
+      "expected_availability": "unavailable",
+      "expected_reason": "extra_issuer_result"
+    },
+    {
+      "control_id": "one-missing-bound-result",
+      "mutation": "remove candidate-11 result",
+      "expected_availability": "available",
+      "expected_ineligible_reason": "missing_required_result"
+    },
+    {
+      "control_id": "insufficient-eligible-results",
+      "mutation": "remove candidate-10 and candidate-11 results",
+      "expected_availability": "unavailable",
+      "expected_reason": "insufficient_eligible_candidates"
+    },
+    {
+      "control_id": "below-minimum-confidence",
+      "mutation": "set candidate-11 confidence to 0.79",
+      "expected_availability": "available",
+      "expected_ineligible_reason": "low_confidence"
+    },
+    {
+      "control_id": "equal-gap-tie",
+      "mutation": "replace candidate-02 with a valid S6 result whose gap equals candidate-01",
+      "expected_availability": "unavailable",
+      "expected_reason": "ranking_tie_break_unapproved"
+    },
+    {
+      "control_id": "float-transport-collision",
+      "mutation": "replace two distinct Decimal gaps with values that convert to the same float64 score",
+      "expected_availability": "unavailable",
+      "expected_reason": "qlib_score_order_not_preserved"
+    },
+    {
+      "control_id": "qlib-binding-identity-drift",
+      "mutation": "replace the distribution, version, runtime artifact, adapter, operator registry, strategy, or configuration identity",
+      "expected_availability": "unavailable",
+      "expected_reason": "qlib_execution_binding_mismatch"
+    },
+    {
+      "control_id": "topk-dropout-semantic-substitution",
+      "mutation": "replace full-rebalance top-N with stateful TopkDropout n_drop turnover behavior",
+      "expected_availability": "unavailable",
+      "expected_reason": "qlib_strategy_semantics_mismatch"
+    },
+    {
+      "control_id": "caller-supplied-valuation-input",
+      "mutation": "add target_ps or current_ps to the selection request",
+      "expected_schema_error": "extra_forbidden"
+    },
+    {
+      "control_id": "provenance-contamination",
+      "mutation": "add source_id to the selection request or result",
+      "expected_schema_error": "extra_forbidden"
+    },
+    {
+      "control_id": "artifact-identity-drift",
+      "mutation": "replace any activation artifact SHA-256",
+      "expected_schema_error": "activation_artifact_identity_drifted"
+    },
+    {
+      "control_id": "release-contamination",
+      "mutation": "enable live, staging, schedule, registry, or release state",
+      "expected_schema_error": "literal_error"
+    }
+  ],
+  "determinism_controls": [
+    "reverse every valuation result and candidate input",
+    "set ambient Decimal precision to 4 with ROUND_DOWN and then 64 with ROUND_UP",
+    "repeat the same selection twice",
+    "round-trip the result through canonical JSON"
+  ],
+  "revision_rule": "Any candidate frame, valuation row, ranking expectation, confidence rule, failure behavior, or artifact reference change creates a prospective corpus revision and reruns every S7 rung."
+}
