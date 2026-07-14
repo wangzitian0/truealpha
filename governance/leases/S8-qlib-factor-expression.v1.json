@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:5f55841ffa830241e36c8471c0396695ae213dded484097fd012511dc2853fac",
+  "batch_id": "S8-qlib-factor-expression",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/contracts/src/truealpha_contracts/qlib_expression.py"
+  ],
+  "base_sha": "b85c1fcd8619c9239a69faaadae89869fe2cf5f3",
+  "expires_at": "2026-07-21T00:00:00Z"
+}

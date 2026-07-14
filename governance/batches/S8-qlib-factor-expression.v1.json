@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "3b18ac4585c4f5183bac376b5a105f0760df06ba",
+    "base_sha": "b85c1fcd8619c9239a69faaadae89869fe2cf5f3",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S8 registration is merged to main",
@@ -28,7 +28,7 @@
       "the implementation PR pins its exact current main base SHA",
       "the implementation reuses the S7 workspace-excluded Qlib runtime and does not change the root lock",
       "an independent reviewer is assigned before E0 acceptance",
-      "the Gate 0-frozen shared contracts export remains unchanged; a later export requires a fresh integration lease and candidate rebind",
+      "an active integration lease covers the dedicated contract module while the Gate 0-frozen shared export remains unchanged",
       "issue #189 contains the exact manifest path and SHA-256"
     ]
   },
@@ -124,7 +124,10 @@
       "libs/contracts/src/truealpha_contracts/__init__.py"
     ],
     "lease_owner": "wangzitian0",
-    "lease_manifest": null
+    "lease_manifest": {
+      "path": "governance/leases/S8-qlib-factor-expression.v1.json",
+      "sha256": "a22061f142ddac42375cdebfd7632ea954b726674b2391cae0ace8fde0c13b63"
+    }
   },
   "release_activation": {
     "allowed": false,
