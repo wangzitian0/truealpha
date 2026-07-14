@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -29,6 +30,7 @@ from data_engine.mvp_medium_repository import (
 )
 from pydantic import ValidationError
 from truealpha_contracts import RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.release import ReleaseManifest
 
 REPOSITORY_ROOT = next(
@@ -104,6 +106,9 @@ def test_e2_dagster_handoff_is_complete_stable_and_idempotent(connection) -> Non
     assert first_result.success and second_result.success
     assert first == second
     assert first.handoff_id == f"mvp-medium-validation-handoff:{first.content_sha256}"
+    assert first.handoff_id == (
+        "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3"
+    )
     assert first.d1_governance_handoff_id == D1_GOVERNANCE_HANDOFF_ID
     assert first.d1_governance_handoff_sha256 == D1_GOVERNANCE_HANDOFF_SHA256
     assert first.d1_runtime_handoff_id == D1_RUNTIME_HANDOFF_ID
@@ -207,7 +212,58 @@ def test_e2_rejects_staging_release_wrong_parent_and_mutated_d1(connection, tmp_
         _verify_d1_governance_handoff(tmp_path)
 
 
-def test_e2_sql_contract_executes() -> None:
+def test_e2_acceptance_governance_binds_merged_runtime() -> None:
+    manifest_path = REPOSITORY_ROOT / "governance/batches/D2-mvp-medium-validation.v1.json"
+    evidence_path = REPOSITORY_ROOT / "governance/evidence/D2-mvp-medium-validation-E2.v1.json"
+    handoff_path = REPOSITORY_ROOT / "governance/handoffs/D2-mvp-medium-validation.v1.json"
+    manifest_bytes = manifest_path.read_bytes()
+    evidence_bytes = evidence_path.read_bytes()
+    handoff_bytes = handoff_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    evidence = json.loads(evidence_bytes)
+    handoff = json.loads(handoff_bytes)
+    graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
+    output = manifest["acceptance"]["output"]
+
+    assert manifest["revision"] == 6
+    assert manifest["status"] == "active"
+    assert manifest["last_accepted_rung"] == "E2"
+    assert manifest["target_rung"] == "E3"
+    assert output["handoff_id"] == (
+        "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3"
+    )
+    assert output["sha256"] == output["handoff_id"].rsplit(":", 1)[-1]
+    assert output["normalized_record_count"] == 213
+    assert output["snapshot_count"] == 5
+    assert output["rung_evidence"]["sha256"] == hashlib.sha256(evidence_bytes).hexdigest()
+    assert output["handoff_manifest"]["sha256"] == hashlib.sha256(handoff_bytes).hexdigest()
+
+    assert evidence["accepted_rung"] == "E2"
+    assert evidence["base_sha"] == "45ff014e6881198b6d078e33f080d2a09adb18e0"
+    assert evidence["producer_head_sha"] == "1f6c80588cf0e7f3921e0480672968fde16aad0b"
+    assert evidence["manifest_sha256"] == "d36894956df3bb5357aaf697bf8a42585a63008f095ee2ad81666da6c9418e81"
+    assert [report["command"] for report in evidence["commands"]] == manifest["acceptance"]["commands"]
+    evidence_content = {key: value for key, value in evidence.items() if key != "evidence_id"}
+    assert evidence["evidence_id"] == f"rung-evidence:D2-mvp-medium-validation:{canonical_sha256(evidence_content)}"
+
+    assert handoff["state"] == "accepted"
+    assert handoff["producer"]["head_sha"] == evidence["producer_head_sha"]
+    assert handoff["schema_epoch"] == output["schema_epoch"]
+    assert handoff["allowed_consumers"] == ["D2-mvp-medium-validation"]
+    assert handoff["allowed_environments"] == ["ci", "local"]
+    assert handoff["evidence"] == [output["rung_evidence"]]
+    assert handoff["verification"]["evidence_sha256"] == canonical_sha256(handoff["evidence"])
+    handoff_content = {key: value for key, value in handoff.items() if key != "handoff_id"}
+    assert handoff["handoff_id"] == f"handoff:d2-mvp-medium-validation:{canonical_sha256(handoff_content)}"
+
+    graph_entry = graph["batches"]["D2-mvp-medium-validation"]
+    assert graph_entry["status"] == "active"
+    assert graph_entry["target_rung"] == "E3"
+    assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+
+
+def test_e2_sql_contract_executes(connection) -> None:
+    assert not connection.closed
     completed = subprocess.run(
         [
             "psql",

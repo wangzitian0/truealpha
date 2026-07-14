@@ -1,0 +1,39 @@
+{
+  "handoff_id": "handoff:d2-mvp-medium-validation:46162a55a54ba053b3effef97a95e6662c5da4052ca3ef656fd9440cb58b73be",
+  "schema_version": 1,
+  "revision": 1,
+  "state": "accepted",
+  "producer": {
+    "batch_id": "D2-mvp-medium-validation",
+    "issue": 121,
+    "owner": "wangzitian0",
+    "head_sha": "1f6c80588cf0e7f3921e0480672968fde16aad0b"
+  },
+  "schema_epoch": "staging.mvp-medium-domains.v1+0019+0021",
+  "readiness_ceiling": "E2",
+  "evidence": [
+    {
+      "path": "governance/evidence/D2-mvp-medium-validation-E2.v1.json",
+      "sha256": "7540a5df13253a0766a1e6f1ebe013ea7c948498bb601857ad48fa70816b8cad"
+    }
+  ],
+  "allowed_consumers": [
+    "D2-mvp-medium-validation"
+  ],
+  "allowed_environments": [
+    "ci",
+    "local"
+  ],
+  "retention": "permanent until the D2 E3 terminal handoff supersedes or revokes it",
+  "verification": {
+    "reviewer": "github-actions[bot]",
+    "evidence_sha256": "0bfb9f876fbbc3920fecd71627e71b31074778c39556d980c3ebf1cecd71d07f",
+    "accepted_at": "2026-07-14T04:38:24Z",
+    "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29306385005"
+  },
+  "revocation": {
+    "reason": null,
+    "revoked_at": null,
+    "superseded_by": null
+  }
+}

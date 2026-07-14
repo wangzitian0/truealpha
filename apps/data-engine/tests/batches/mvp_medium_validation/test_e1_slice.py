@@ -224,20 +224,20 @@ def test_e1_manifest_corpus_and_graph_transition_are_exact() -> None:
     lease_bytes = lease_path.read_bytes()
     lease = json.loads(lease_bytes)
 
-    assert manifest["revision"] == 5
-    assert manifest["activation"]["base_sha"] == "45ff014e6881198b6d078e33f080d2a09adb18e0"
-    assert manifest["last_accepted_rung"] == "E1"
-    assert manifest["target_rung"] == "E2"
+    assert manifest["revision"] == 6
+    assert manifest["activation"]["base_sha"] == "c1f0d0855b80846d12c32d5740d0604585b01c3a"
+    assert manifest["last_accepted_rung"] == "E2"
+    assert manifest["target_rung"] == "E3"
     assert manifest["terminal_rung"] == "E3"
     assert manifest["corpus"]["sha256"] == hashlib.sha256(corpus_bytes).hexdigest()
     assert corpus["rung_scope"]["frozen_target_rung"] == "E1"
     assert corpus["e1_evidence"]["stable_handoff"] is False
-    assert graph_entry["status"] == "blocked"
-    assert graph_entry["target_rung"] == "E2"
+    assert graph_entry["status"] == "active"
+    assert graph_entry["target_rung"] == "E3"
     assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
     assert manifest["paths"]["lease_manifest"] == {
         "path": "governance/leases/D2-mvp-medium-validation.v1.json",
         "sha256": hashlib.sha256(lease_bytes).hexdigest(),
     }
     assert lease["lease_id"] == ("integration-lease:bc129504d02f61b4e48f23dc069742b42ec6831fc50eae494031a1e8bd86e4fb")
-    assert lease["base_sha"] == manifest["activation"]["base_sha"]
+    assert lease["base_sha"] == "45ff014e6881198b6d078e33f080d2a09adb18e0"
