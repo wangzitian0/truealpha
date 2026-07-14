@@ -84,7 +84,6 @@
   "paths": {
     "writable": [
       "libs/contracts/src/truealpha_contracts/research.py",
-      "libs/contracts/src/truealpha_contracts/__init__.py",
       "libs/contracts/tests/test_research.py",
       "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
       "governance/leases/S2-core-strategy-contract.v1.json"
@@ -107,13 +106,12 @@
       "Makefile"
     ],
     "integration_surface": [
-      "libs/contracts/src/truealpha_contracts/__init__.py",
       "libs/contracts/src/truealpha_contracts/research.py"
     ],
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/S2-core-strategy-contract.v1.json",
-      "sha256": "74d864265082122092bd071f0578b9822ee7431e5e255d879fd2fdbe35266836"
+      "sha256": "d59d01323c881cdaa97ce88cd4d68c87afc096fa25b24bcc87a490eec485f5be"
     }
   },
   "release_activation": {
@@ -124,7 +122,7 @@
   "acceptance": {
     "commands": [
       "uv run pytest libs/contracts/tests/test_research.py -q",
-      "uv run ruff check libs/contracts/src/truealpha_contracts/__init__.py libs/contracts/src/truealpha_contracts/research.py libs/contracts/tests/test_research.py",
+      "uv run ruff check libs/contracts/src/truealpha_contracts/research.py libs/contracts/tests/test_research.py",
       "uv run mypy"
     ],
     "negative_controls": [

@@ -889,8 +889,7 @@ class LargeModelValueV0Policy(_StrictFrozenModel):
                 raise ValueError("a fixed research cohort must prohibit strategy performance claims")
         elif (
             self.universe_claim_kind is not UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY
-            or self.performance_claim_policy
-            is not StrategyPerformanceClaimPolicy.RESEARCH_ONLY_SURVIVORSHIP_SAFE
+            or self.performance_claim_policy is not StrategyPerformanceClaimPolicy.RESEARCH_ONLY_SURVIVORSHIP_SAFE
         ):
             raise ValueError("a PIT strategy universe must use the survivorship-safe replay claim policy")
         _identify(self, id_field="strategy_policy_id", prefix="strategy-policy")
