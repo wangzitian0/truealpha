@@ -124,6 +124,7 @@ def _count(connection, table: str) -> int:
 
 
 def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None:
+    connection.execute("set local time zone 'Asia/Singapore'")
     assert _count(connection, "staging.normalized_records") == 0
     definitions = build_d2_e3_definitions(
         repository_root=REPOSITORY_ROOT,
@@ -140,7 +141,7 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
 
     assert first_result.success and second_result.success
     assert first == second
-    assert first.evidence_id == "d2-e3-evidence:c15eb5f4f4361e7e020b53e46298945d2a488f9554b2297613ac0f2b41c27b63"
+    assert first.evidence_id == "d2-e3-evidence:3764fed168f927795f573ec576709943bee287bfdfba9a7eee8504447536fa68"
     assert first.accepted_e2_handoff_id == D2_E2_RUNTIME_HANDOFF_ID
     assert first.denominator.universe_id == "universe:topt-us-2026-03-31"
     assert first.denominator.accession == "000207169126012475"
@@ -169,6 +170,7 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
     assert _count(connection, "staging.normalized_records") == 297
     assert _count(connection, "staging.mvp_issuer_security_links") == 43
     assert _count(connection, "staging.mvp_universe_memberships") == 245
+    assert connection.execute("show timezone").fetchone() == ("UTC",)
 
     row_payload = first.row_manifests[0].model_dump(mode="python")
     missing = deepcopy(row_payload)

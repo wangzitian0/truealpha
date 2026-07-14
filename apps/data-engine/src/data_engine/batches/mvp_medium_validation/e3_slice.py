@@ -738,6 +738,9 @@ def run_d2_e3(
     if environment not in {"local", "ci"}:
         raise ValueError("D2 E3 only permits Local/CI execution")
     with connection.transaction():
+        # PostgreSQL renders timestamptz values in the session timezone. Pin UTC so
+        # rehydrated records retain one content identity across Local and CI.
+        connection.execute("set local time zone 'UTC'")
         _verify_e2_governance_handoff(repository_root)
         e2_handoff = run_d2_e2(repository_root, connection, raw_store, environment=environment)
         _verify_e2_runtime_handoff(e2_handoff)
