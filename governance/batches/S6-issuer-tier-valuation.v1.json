@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S6-issuer-tier-valuation",
-  "revision": 2,
+  "revision": 3,
   "issue": 169,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "strategy",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
-  "terminal_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
+  "terminal_rung": "E1",
   "objective": "Compose one deterministic provisional issuer tier and valuation gap from a provenance-neutral GPPE observation and the accepted S5 computed P/S result.",
-  "claim_ceiling": "E0 isolated candidate tier and valuation-gap kernel only; no approved product semantics, GPPE computation, financial mapping, stable handoff, ranking, strategy, replay, or release-readiness claim",
+  "claim_ceiling": "accepted E0 isolated tier and valuation-gap kernel pending E1 frozen-corpus evidence; no approved product semantics, GPPE computation, financial mapping, stable handoff, ranking, strategy, replay, or release-readiness claim",
   "capability_issues": [25],
   "closes_issues": [],
   "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 150, 155, 161],
@@ -20,13 +20,14 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "d063bba4542478c672b6f01339d14c5714caf890",
+    "base_sha": "33659264038d75aa118d127d9cfa37c423503be2",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S6 registration is merged to main",
       "the implementation PR pins its exact current main base SHA",
       "the frozen corpus path and SHA-256 are committed before execution",
       "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers the package export path",
       "issue #169 contains the exact manifest path and SHA-256"
     ]
   },
@@ -87,7 +88,8 @@
   "paths": {
     "writable": [
       "libs/factors/src/factors/batches/issuer_tier_valuation_tiny/**",
-      "libs/factors/tests/batches/issuer_tier_valuation_tiny/**"
+      "libs/factors/tests/batches/issuer_tier_valuation_tiny/**",
+      "governance/leases/S6-issuer-tier-valuation.v1.json"
     ],
     "read_only": [
       "vision.md",
@@ -116,8 +118,14 @@
       "pyproject.toml",
       "Makefile"
     ],
-    "integration_surface": [],
-    "lease_owner": null
+    "integration_surface": [
+      "libs/factors/src/factors/batches/issuer_tier_valuation_tiny/__init__.py"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/S6-issuer-tier-valuation.v1.json",
+      "sha256": "6633477368ac921a77b028dc6314913744b6f79770ad59aed0c7f5bb119600b8"
+    }
   },
   "release_activation": {
     "allowed": false,
@@ -141,7 +149,7 @@
     "output": {
       "type": "IssuerTierValuationTinyEvidence",
       "stable_handoff": false,
-      "state": "pending",
+      "state": "accepted_e0",
       "allowed_evidence_readers": [
         "issue #25 valuation candidate batch",
         "issue #71 independent Core holdout preparation",
