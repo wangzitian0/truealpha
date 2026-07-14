@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D3-staging-topt-capture",
-  "revision": 3,
+  "revision": 4,
   "issue": 171,
   "owner_gate": 29,
   "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": "E0",
-  "target_rung": "E1",
+  "last_accepted_rung": "E1",
+  "target_rung": "E2",
   "terminal_rung": "E4",
   "objective": "Activate the accepted D2 TOPT capture spine against bounded live public sources in isolated Staging without changing the 20-issuer, 21-instrument, 84-cell denominator.",
-  "claim_ceiling": "accepted E0 isolated Yahoo configuration, frozen call plan, strict Decimal parser, and mocked single-call adapter pending E1 tiny interaction; no persisted capture, live-source readiness, Staging run, schedule, strategy, Production, or release-readiness claim",
+  "claim_ceiling": "accepted E1 batch-private Yahoo interaction over a frozen HTTP transport with predeclared scope and call plan, exact raw bytes retained before normalization, bounded retries, and observable source-call counts pending E2 ephemeral persistence; no durable capture, live-source readiness, Staging run, schedule, strategy, Production, or release-readiness claim",
   "capability_issues": [27],
   "closes_issues": [],
   "informational_issues": [11, 23, 26, 29, 60, 61, 70, 121],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "4fdc70fe5fb7a18da3c9a0f28c0b10ba49553990",
+    "base_sha": "d62131fc54742e17594cda71518c10568db903c4",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D3 registration is merged to main",
@@ -196,14 +196,18 @@
     "output": {
       "type": "D3StagingToptCaptureEvidence",
       "stable_handoff": false,
-      "state": "accepted_e0",
+      "state": "accepted_e1",
       "accepted_slice": {
         "source_id": "source.yahoo-chart-public",
         "source_version": "1.0.0",
         "adapter_id": "data_engine.d3.yahoo_chart_adapter",
         "adapter_version": "1.0.0",
         "mocked_symbol_count": 1,
-        "network_calls": 1,
+        "maximum_attempts_per_request": 3,
+        "successful_source_call_count": 1,
+        "retry_source_call_count": 2,
+        "raw_bytes_retained_before_normalization": true,
+        "source_call_counts_observable": true,
         "persisted_raw_rows": 0,
         "persisted_normalized_rows": 0
       },
