@@ -1144,6 +1144,7 @@ def validate_status_transition(
         ("active", "cancelled"),
         ("active", "done"),
         ("blocked", "active"),
+        ("blocked", "blocked"),
         ("blocked", "done"),
         ("blocked", "cancelled"),
         ("done", "done"),
@@ -1156,6 +1157,17 @@ def validate_status_transition(
                 f"{batch_id}: corrective terminal rerun cannot change {field}",
             )
         return manifest.get("last_accepted_rung") if manifest.get("last_accepted_rung") in RUNGS else None
+    if (before, after) == ("blocked", "blocked"):
+        for field in ("last_accepted_rung", "target_rung", "terminal_rung"):
+            validation.require(
+                manifest.get(field) == base_manifest.get(field),
+                f"{batch_id}: blocked hardening revision cannot change {field}",
+            )
+        validation.require(
+            manifest.get("acceptance", {}).get("output") == base_manifest.get("acceptance", {}).get("output"),
+            f"{batch_id}: blocked hardening revision cannot change the accepted output",
+        )
+        return None
     if (before, after) == ("queued", "prepared"):
         validation.require(
             manifest.get("last_accepted_rung") == base_manifest.get("last_accepted_rung")

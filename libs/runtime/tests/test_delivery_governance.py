@@ -1229,6 +1229,75 @@ def test_blocked_terminal_batch_can_accept_target_and_finish():
     assert accepted_rung == "E3"
 
 
+def test_blocked_batch_can_publish_nonaccepting_hardening_revision():
+    output = {"state": "accepted", "handoff_id": "handoff:e2"}
+    blocked = {
+        "status": "blocked",
+        "last_accepted_rung": "E2",
+        "target_rung": "E3",
+        "terminal_rung": "E3",
+        "acceptance": {"output": output},
+    }
+    hardened = {**blocked, "corpus": {"sha256": "a" * 64}}
+    validation = governance.Validation()
+
+    accepted_rung = governance.validate_status_transition(
+        validation,
+        batch_id="D0",
+        base_manifest=blocked,
+        manifest=hardened,
+    )
+
+    assert validation.errors == []
+    assert accepted_rung is None
+
+
+@pytest.mark.parametrize("field", ["last_accepted_rung", "target_rung", "terminal_rung"])
+def test_blocked_hardening_revision_cannot_change_rungs(field):
+    blocked = {
+        "status": "blocked",
+        "last_accepted_rung": "E2",
+        "target_rung": "E3",
+        "terminal_rung": "E3",
+        "acceptance": {"output": {"state": "accepted", "handoff_id": "handoff:e2"}},
+    }
+    changed = {**blocked, field: "E4"}
+    validation = governance.Validation()
+
+    governance.validate_status_transition(
+        validation,
+        batch_id="D0",
+        base_manifest=blocked,
+        manifest=changed,
+    )
+
+    assert f"D0: blocked hardening revision cannot change {field}" in validation.errors
+
+
+def test_blocked_hardening_revision_cannot_rewrite_accepted_output():
+    blocked = {
+        "status": "blocked",
+        "last_accepted_rung": "E2",
+        "target_rung": "E3",
+        "terminal_rung": "E3",
+        "acceptance": {"output": {"state": "accepted", "handoff_id": "handoff:e2"}},
+    }
+    changed = {
+        **blocked,
+        "acceptance": {"output": {"state": "produced", "handoff_id": "handoff:e3"}},
+    }
+    validation = governance.Validation()
+
+    governance.validate_status_transition(
+        validation,
+        batch_id="D0",
+        base_manifest=blocked,
+        manifest=changed,
+    )
+
+    assert "D0: blocked hardening revision cannot change the accepted output" in validation.errors
+
+
 def test_blocked_nonterminal_batch_cannot_skip_to_done():
     blocked = {
         "status": "blocked",

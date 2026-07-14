@@ -5,11 +5,11 @@
   "gate_issue": 56,
   "status": "candidate_blocked_external_attestation",
   "integration_branch": "batch/gate-0-v4-semantic-data-closure",
-  "integration_base_sha": "c45c34912895b4fe0b3f00ab96dcf526aae5cfcf",
+  "integration_base_sha": "3c9ebe40d338ee8a6343e2e8f247ac419e6b6b79",
   "included_issues": [57, 58, 59, 60, 61],
   "dependency_order": [57, 58, 59, 60, 61],
   "candidate_payload_sha256": "7c70d246232621353c769195248dcdc4e003b39ff301daa06b26b73b92428ee3",
-  "candidate_tree_sha256": "3fb7048150e56b3b0a5283d80170077d1b78933df9bb2ee87c54ae648ca92963",
+  "candidate_tree_sha256": "285c05c513150e2f77b5243c46fcccbb287f960a6896f539f6841b268d50adbc",
   "paths": [
     ".github/workflows/ci-governance.yml",
     "Makefile",
