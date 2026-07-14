@@ -1,5 +1,9 @@
+import copy
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -82,6 +86,15 @@ from truealpha_contracts.research import (
     SealedHoldout,
     SemanticCatalogBinding,
     ShortTreatment,
+    StrategyCutoffSchedule,
+    StrategyEligibilityPolicy,
+    StrategyExecutionPolicy,
+    StrategyFactorId,
+    StrategyFactorRequirement,
+    StrategyPerformanceClaimPolicy,
+    StrategySizingPolicy,
+    StrategyTotalReturnPolicy,
+    StrategyTransactionCostPolicy,
     StratumSampleCount,
     SupplyChainOutputClaim,
     SupplyChainResearchPolicy,
@@ -99,12 +112,20 @@ from truealpha_contracts.research import (
     ZeroGrowthBehavior,
     authorize_evaluation,
 )
-from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
+from truealpha_contracts.universe import (
+    SubjectKind,
+    SubjectRef,
+    UniverseClaimKind,
+    UniverseDefinitionKind,
+    UniverseRef,
+)
 
 NOW = datetime(2026, 7, 1, tzinfo=UTC)
 AUTHOR = "author:factor-engine"
 EVALUATOR = "reviewer:holdout-evaluator"
 CUSTODIAN = "custodian:sealed-labels"
+STRATEGY_CORPUS_PATH = Path(__file__).with_name("fixtures") / "large_model_value_v0.v1.json"
+STRATEGY_CORPUS_SHA256 = "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4"
 
 
 def _digest(seed: int) -> str:
@@ -437,14 +458,75 @@ def _policies(universe: UniverseRef):
         ),
     )
     strategy = LargeModelValueV0Policy(
+        strategy_id="large_model_value_v0",
         strategy_version="1.0.0",
+        universe=universe,
+        universe_definition_kind=UniverseDefinitionKind.FIXED_COHORT,
+        universe_claim_kind=UniverseClaimKind.FIXED_COHORT_DESCRIPTION,
+        performance_claim_policy=StrategyPerformanceClaimPolicy.PROHIBITED_FIXED_COHORT,
         gppe_policy_id=gppe.gppe_policy_id,
         gppe_policy_sha256=gppe.content_sha256,
         tier_policy_id=tier.tier_policy_id,
         tier_policy_sha256=tier.content_sha256,
+        required_factors=(
+            StrategyFactorRequirement(
+                factor_id=StrategyFactorId.GROSS_PROFIT_PER_EMPLOYEE,
+                factor_version="1.0.0",
+                implementation_sha256=_digest(47),
+            ),
+            StrategyFactorRequirement(
+                factor_id=StrategyFactorId.PRICE_TO_SALES,
+                factor_version="1.0.0",
+                implementation_sha256=_digest(48),
+            ),
+            StrategyFactorRequirement(
+                factor_id=StrategyFactorId.THREE_TIER_VALUATION,
+                factor_version="1.0.0",
+                implementation_sha256=_digest(49),
+            ),
+        ),
+        schedule=StrategyCutoffSchedule(
+            rule_id="fixed_interval_utc",
+            anchor_at=NOW,
+            interval_days=90,
+            cutoff_inclusive=True,
+        ),
+        valuation_metric="price_to_sales",
         target_ps_selection=TargetPsSelection.BAND_MIDPOINT,
+        valuation_gap_formula="target_ps/current_ps-1",
+        ranking_direction="descending_valuation_gap",
+        eligibility=StrategyEligibilityPolicy(
+            rule_id="all_required_factors_available",
+            minimum_confidence=Decimal("0.8"),
+            confidence_rule="minimum_consumed_confidence",
+            missing_input_behavior="ineligible_missing_required_input",
+            stale_input_behavior="ineligible_stale_required_input",
+            low_confidence_behavior="ineligible_low_confidence",
+            financial_target_behavior="require_versioned_financial_target_band",
+        ),
+        selection_rule_id="top_n_ranked_eligible",
         selection_count=10,
-        rebalance_frequency_days=90,
+        sizing=StrategySizingPolicy(
+            rule_id="equal_weight_selected",
+            empty_selection_behavior="retain_all_cash",
+        ),
+        execution=StrategyExecutionPolicy(
+            rule_id="next_eligible_market_session_open",
+            lag_sessions=1,
+            price_field="unadjusted_open",
+            unfilled_order_behavior="remain_cash",
+        ),
+        transaction_cost=StrategyTransactionCostPolicy(
+            rule_id="per_side_notional_basis_points",
+            basis_points=Decimal("5"),
+        ),
+        total_return=StrategyTotalReturnPolicy(
+            rule_id="unadjusted_bars_explicit_corporate_actions",
+            price_basis="unadjusted",
+            corporate_action_processing="explicit_event_lifecycle_once",
+            adjusted_prices_affect_returns=False,
+        ),
+        financial_issuers_use_financial_proxy=True,
     )
     return gppe, peg, analyst, etf, theme, supply, tier, strategy
 
@@ -491,6 +573,37 @@ def _semantics() -> ResearchSemanticsManifest:
         independent_approval=_independent_approval(46),
         frozen_at=NOW + timedelta(minutes=3),
     )
+
+
+def _strategy_corpus() -> dict[str, object]:
+    return json.loads(STRATEGY_CORPUS_PATH.read_text(encoding="utf-8"))
+
+
+def _apply_corpus_mutation(payload: dict[str, object], case: dict[str, object]) -> None:
+    parts = str(case["path"]).split(".")
+    target: object = payload
+    for part in parts[:-1]:
+        if isinstance(target, list):
+            target = target[int(part)]
+        elif isinstance(target, dict):
+            target = target[part]
+        else:  # pragma: no cover - the frozen corpus contains only object/list paths
+            raise AssertionError(f"mutation path does not resolve to a container: {case['path']}")
+    key = parts[-1]
+    operation = case["operation"]
+    if isinstance(target, list):
+        index = int(key)
+        if operation == "remove":
+            target.pop(index)
+        else:
+            target[index] = case["value"]
+    elif isinstance(target, dict):
+        if operation == "remove":
+            target.pop(key)
+        else:
+            target[key] = case["value"]
+    else:  # pragma: no cover - the frozen corpus contains only object/list paths
+        raise AssertionError(f"mutation path does not resolve to a container: {case['path']}")
 
 
 def _protocol(semantics: ResearchSemanticsManifest) -> EvaluationProtocol:
@@ -753,6 +866,102 @@ def test_semantics_are_content_addressed_and_bind_catalog_universe_and_strategy(
                 exclude={"peg_policy_id", "content_sha256", "conventions"},
             ),
             conventions=semantics.peg.conventions[:2] + (semantics.peg.conventions[0],),
+        )
+
+
+def test_frozen_large_model_strategy_corpus_accepts_complete_definitions_and_rejects_every_negative_case():
+    corpus_bytes = STRATEGY_CORPUS_PATH.read_bytes()
+    assert hashlib.sha256(corpus_bytes).hexdigest() == STRATEGY_CORPUS_SHA256
+    corpus = _strategy_corpus()
+    definitions = corpus["valid_definitions"]
+    assert isinstance(definitions, dict)
+
+    fixed = LargeModelValueV0Policy.model_validate_json(json.dumps(definitions["fixed_cohort"]))
+    pit = LargeModelValueV0Policy.model_validate_json(json.dumps(definitions["survivorship_safe_pit"]))
+
+    assert fixed.performance_claim_policy is StrategyPerformanceClaimPolicy.PROHIBITED_FIXED_COHORT
+    assert pit.universe_claim_kind is UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY
+    assert tuple(item.factor_id for item in fixed.required_factors) == tuple(StrategyFactorId)
+    assert fixed.execution.price_field == "unadjusted_open"
+    assert fixed.total_return.adjusted_prices_affect_returns is False
+    assert fixed.eligibility.financial_target_behavior == "require_versioned_financial_target_band"
+
+    negative_cases = corpus["negative_cases"]
+    assert isinstance(negative_cases, list)
+    assert len(negative_cases) == 11
+    for case in negative_cases:
+        assert isinstance(case, dict)
+        candidate = copy.deepcopy(definitions["fixed_cohort"])
+        assert isinstance(candidate, dict)
+        _apply_corpus_mutation(candidate, case)
+        with pytest.raises(ValidationError):
+            LargeModelValueV0Policy.model_validate_json(json.dumps(candidate))
+
+
+def test_large_model_strategy_factor_order_has_one_canonical_identity():
+    definitions = _strategy_corpus()["valid_definitions"]
+    assert isinstance(definitions, dict)
+    original = copy.deepcopy(definitions["fixed_cohort"])
+    reordered = copy.deepcopy(original)
+    assert isinstance(original, dict) and isinstance(reordered, dict)
+    factors = reordered["required_factors"]
+    assert isinstance(factors, list)
+    factors.reverse()
+
+    first = LargeModelValueV0Policy.model_validate_json(json.dumps(original))
+    second = LargeModelValueV0Policy.model_validate_json(json.dumps(reordered))
+
+    assert first.strategy_policy_id == second.strategy_policy_id
+    assert first.content_sha256 == second.content_sha256
+    assert first.model_dump_json() == second.model_dump_json()
+
+
+def test_large_model_strategy_rejects_supplied_factor_identity_drift():
+    definitions = _strategy_corpus()["valid_definitions"]
+    assert isinstance(definitions, dict)
+    candidate = copy.deepcopy(definitions["fixed_cohort"])
+    assert isinstance(candidate, dict)
+    factors = candidate["required_factors"]
+    assert isinstance(factors, list) and isinstance(factors[0], dict)
+    factors[0]["factor_requirement_id"] = f"factor-requirement:{'f' * 64}"
+
+    with pytest.raises(ValidationError, match="factor_requirement_id does not match canonical content"):
+        LargeModelValueV0Policy.model_validate_json(json.dumps(candidate))
+
+
+def test_research_semantics_rejects_strategy_bound_to_another_universe():
+    semantics = _semantics()
+    strategy_payload = semantics.large_model_value_v0.model_dump(
+        mode="python",
+        exclude={"strategy_policy_id", "content_sha256", "universe"},
+    )
+    wrong_strategy = LargeModelValueV0Policy(
+        **strategy_payload,
+        universe=UniverseRef(
+            universe_id="universe:other",
+            universe_version="1.0.0",
+            content_sha256=_digest(9999),
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="exact Research Catalog UniverseRef"):
+        ResearchSemanticsManifest(
+            semantics_version=semantics.semantics_version,
+            catalog=semantics.catalog,
+            universe=semantics.universe,
+            gppe=semantics.gppe,
+            peg=semantics.peg,
+            analyst=semantics.analyst,
+            etf=semantics.etf,
+            theme=semantics.theme,
+            supply_chain=semantics.supply_chain,
+            tier=semantics.tier,
+            large_model_value_v0=wrong_strategy,
+            catalog_bindings=semantics.catalog_bindings,
+            semantic_author_ids=semantics.semantic_author_ids,
+            product_owner_approval=semantics.product_owner_approval,
+            independent_approval=semantics.independent_approval,
+            frozen_at=semantics.frozen_at,
         )
 
 

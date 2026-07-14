@@ -203,7 +203,7 @@
     {
       "case_id": "duplicate-required-factor",
       "operation": "replace",
-      "path": "required_factors.2.factor_id",
+      "path": "required_factors.0.factor_id",
       "value": "price_to_sales"
     },
     {

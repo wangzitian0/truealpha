@@ -23,7 +23,13 @@ from truealpha_contracts.catalog import (
 )
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import _require_aware
-from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
+from truealpha_contracts.universe import (
+    SubjectKind,
+    SubjectRef,
+    UniverseClaimKind,
+    UniverseDefinitionKind,
+    UniverseRef,
+)
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _CONTENT_ID_PATTERN = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
@@ -757,23 +763,108 @@ class TargetPsSelection(StrEnum):
     BAND_UPPER_BOUND = "band_upper_bound"
 
 
+class StrategyFactorId(StrEnum):
+    GROSS_PROFIT_PER_EMPLOYEE = "gross_profit_per_employee"
+    PRICE_TO_SALES = "price_to_sales"
+    THREE_TIER_VALUATION = "three_tier_valuation"
+
+
+class StrategyFactorRequirement(_StrictFrozenModel):
+    factor_requirement_id: str = Field(default="", pattern=r"^(?:|factor-requirement:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    factor_id: StrategyFactorId
+    factor_version: str = Field(pattern=_VERSION_PATTERN)
+    implementation_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("factor_version")
+    @classmethod
+    def reject_mutable_version(cls, value: str) -> str:
+        return _reject_mutable_coordinate(value, "factor_version")
+
+    @model_validator(mode="after")
+    def identify(self) -> Self:
+        _identify(self, id_field="factor_requirement_id", prefix="factor-requirement")
+        return self
+
+
+class StrategyPerformanceClaimPolicy(StrEnum):
+    PROHIBITED_FIXED_COHORT = "prohibited_fixed_cohort"
+    RESEARCH_ONLY_SURVIVORSHIP_SAFE = "research_only_survivorship_safe"
+
+
+class StrategyCutoffSchedule(_StrictFrozenModel):
+    rule_id: Literal["fixed_interval_utc"]
+    anchor_at: datetime
+    interval_days: int = Field(ge=1, le=366)
+    cutoff_inclusive: Literal[True]
+
+    @field_validator("anchor_at")
+    @classmethod
+    def validate_anchor_at(cls, value: datetime) -> datetime:
+        return _require_aware(value, "anchor_at")
+
+
+class StrategyEligibilityPolicy(_StrictFrozenModel):
+    rule_id: Literal["all_required_factors_available"]
+    minimum_confidence: Decimal = Field(ge=0, le=1)
+    confidence_rule: Literal["minimum_consumed_confidence"]
+    missing_input_behavior: Literal["ineligible_missing_required_input"]
+    stale_input_behavior: Literal["ineligible_stale_required_input"]
+    low_confidence_behavior: Literal["ineligible_low_confidence"]
+    financial_target_behavior: Literal["require_versioned_financial_target_band"]
+
+
+class StrategySizingPolicy(_StrictFrozenModel):
+    rule_id: Literal["equal_weight_selected"]
+    empty_selection_behavior: Literal["retain_all_cash"]
+
+
+class StrategyExecutionPolicy(_StrictFrozenModel):
+    rule_id: Literal["next_eligible_market_session_open"]
+    lag_sessions: Literal[1]
+    price_field: Literal["unadjusted_open"]
+    unfilled_order_behavior: Literal["remain_cash"]
+
+
+class StrategyTransactionCostPolicy(_StrictFrozenModel):
+    rule_id: Literal["per_side_notional_basis_points"]
+    basis_points: Decimal = Field(ge=0, le=1000)
+
+
+class StrategyTotalReturnPolicy(_StrictFrozenModel):
+    rule_id: Literal["unadjusted_bars_explicit_corporate_actions"]
+    price_basis: Literal["unadjusted"]
+    corporate_action_processing: Literal["explicit_event_lifecycle_once"]
+    adjusted_prices_affect_returns: Literal[False]
+
+
 class LargeModelValueV0Policy(_StrictFrozenModel):
     strategy_policy_id: str = Field(default="", pattern=r"^(?:|strategy-policy:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    strategy_id: Literal["large_model_value_v0"] = "large_model_value_v0"
+    strategy_id: Literal["large_model_value_v0"]
     strategy_version: str = Field(pattern=_VERSION_PATTERN)
+    universe: UniverseRef
+    universe_definition_kind: UniverseDefinitionKind
+    universe_claim_kind: UniverseClaimKind
+    performance_claim_policy: StrategyPerformanceClaimPolicy
     gppe_policy_id: str = Field(pattern=r"^gppe-policy:[0-9a-f]{64}$")
     gppe_policy_sha256: str = Field(pattern=_SHA256_PATTERN)
     tier_policy_id: str = Field(pattern=r"^tier-policy:[0-9a-f]{64}$")
     tier_policy_sha256: str = Field(pattern=_SHA256_PATTERN)
-    valuation_metric: Literal["price_to_sales"] = "price_to_sales"
+    required_factors: tuple[StrategyFactorRequirement, ...] = Field(min_length=3, max_length=3)
+    schedule: StrategyCutoffSchedule
+    valuation_metric: Literal["price_to_sales"]
     target_ps_selection: TargetPsSelection
-    valuation_gap_formula: Literal["target_ps/current_ps-1"] = "target_ps/current_ps-1"
-    ranking_direction: Literal["descending_valuation_gap"] = "descending_valuation_gap"
+    valuation_gap_formula: Literal["target_ps/current_ps-1"]
+    ranking_direction: Literal["descending_valuation_gap"]
+    eligibility: StrategyEligibilityPolicy
+    selection_rule_id: Literal["top_n_ranked_eligible"]
     selection_count: int = Field(ge=1)
-    rebalance_frequency_days: int = Field(ge=1)
-    missing_required_input_behavior: Literal["ineligible"] = "ineligible"
-    financial_issuers_use_financial_proxy: Literal[True] = True
+    sizing: StrategySizingPolicy
+    execution: StrategyExecutionPolicy
+    transaction_cost: StrategyTransactionCostPolicy
+    total_return: StrategyTotalReturnPolicy
+    financial_issuers_use_financial_proxy: Literal[True]
 
     @field_validator("strategy_version")
     @classmethod
@@ -784,6 +875,24 @@ class LargeModelValueV0Policy(_StrictFrozenModel):
     def validate_and_identify(self) -> Self:
         _validate_ref_hash(self.gppe_policy_id, self.gppe_policy_sha256, "GPPE policy")
         _validate_ref_hash(self.tier_policy_id, self.tier_policy_sha256, "tier policy")
+        requirements = tuple(sorted(self.required_factors, key=lambda item: item.factor_id.value))
+        factor_ids = tuple(requirement.factor_id for requirement in requirements)
+        if len(factor_ids) != len(set(factor_ids)) or set(factor_ids) != set(StrategyFactorId):
+            raise ValueError("large_model_value_v0 requires exactly one version of every core strategy factor")
+        object.__setattr__(self, "required_factors", requirements)
+
+        if self.universe_definition_kind is UniverseDefinitionKind.FIXED_COHORT:
+            if (
+                self.universe_claim_kind is not UniverseClaimKind.FIXED_COHORT_DESCRIPTION
+                or self.performance_claim_policy is not StrategyPerformanceClaimPolicy.PROHIBITED_FIXED_COHORT
+            ):
+                raise ValueError("a fixed research cohort must prohibit strategy performance claims")
+        elif (
+            self.universe_claim_kind is not UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY
+            or self.performance_claim_policy
+            is not StrategyPerformanceClaimPolicy.RESEARCH_ONLY_SURVIVORSHIP_SAFE
+        ):
+            raise ValueError("a PIT strategy universe must use the survivorship-safe replay claim policy")
         _identify(self, id_field="strategy_policy_id", prefix="strategy-policy")
         return self
 
@@ -864,6 +973,8 @@ class ResearchSemanticsManifest(_StrictFrozenModel):
             or self.large_model_value_v0.tier_policy_id != self.tier.tier_policy_id
         ):
             raise ValueError("large_model_value_v0 must bind the exact GPPE and tier policies")
+        if self.large_model_value_v0.universe != self.universe:
+            raise ValueError("large_model_value_v0 must bind the exact Research Catalog UniverseRef")
 
         expected_policy_ids = {
             ResearchTarget.GPPE: self.gppe.gppe_policy_id,
