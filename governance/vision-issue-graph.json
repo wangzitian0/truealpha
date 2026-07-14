@@ -178,7 +178,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S2-core-strategy-contract.v1.json",
-      "sha256": "384170f58a75eae780ac70aaa029310d64ff0e741d39762f8af332ffe9766c7e"
+      "sha256": "e3f7194785636e741a53b447b5a0f70634c2ce287d1b1b8803b5e6d912663a0d"
     }
   },
   "artifact_edges": [
