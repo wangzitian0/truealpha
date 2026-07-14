@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "evidence_id": "capability-evidence:issue-23:v1",
+  "issue": 23,
+  "state": "accepted",
+  "accepted_rung": "E3",
+  "producer_commit": "68af3a6507bbb0a43905a1a1a63df3c41b6b996e",
+  "source_pr": 167,
+  "accepted_by": "wangzitian0",
+  "accepted_at": "2026-07-14T09:58:46Z",
+  "commands": [
+    "uv run pytest apps/data-engine/tests/batches/mvp_medium_validation -q",
+    "uv run ruff check apps/data-engine/src/data_engine/batches/mvp_medium_validation apps/data-engine/tests/batches/mvp_medium_validation",
+    "uv run mypy",
+    "make issue-graph-check"
+  ],
+  "git_objects": [
+    {
+      "path": "apps/data-engine/src/data_engine/batches/mvp_medium_validation/e2_slice.py",
+      "oid": "07b13d9d53a580eacdd6a75b420b098118c6d22d"
+    },
+    {
+      "path": "apps/data-engine/src/data_engine/batches/mvp_medium_validation/e3_slice.py",
+      "oid": "a8076bb83845449131ee14dbb711227a3e825ccb"
+    },
+    {
+      "path": "apps/data-engine/src/data_engine/mvp_medium_repository.py",
+      "oid": "7b6d169187a3e98269b53e63c90f91a1a4dd9146"
+    },
+    {
+      "path": "apps/data-engine/tests/batches/mvp_medium_validation",
+      "oid": "df30aa7738934c5cf4f154d6b59b7baaec3fafad"
+    },
+    {
+      "path": "db/migrations/0021_mvp_medium_domains.sql",
+      "oid": "ec8a2bcff11f86d19839c88ef9c063d7cf51493e"
+    },
+    {
+      "path": "governance/batches/D2-mvp-medium-validation.v1.json",
+      "oid": "f9f7a5f7bfebf6e2990a1013c912ebabd77c6ea4"
+    },
+    {
+      "path": "governance/evidence/D2-mvp-medium-validation-E3.v1.json",
+      "oid": "3237e813ad514391d562c53b4da22afa06cafed9"
+    },
+    {
+      "path": "governance/handoffs/D2-mvp-medium-validation.v1.json",
+      "oid": "8e684b0143758fc9513ad0e38e609aa83c06b015"
+    }
+  ],
+  "attestation_ref": "https://github.com/wangzitian0/truealpha/pull/167",
+  "claim_ceiling": "Empty-database Local/CI MVP data plane on the immutable TOPT 20-issuer and 21-instrument denominator; no live-source, Staging, factor, strategy, release, or Production claim",
+  "residual_risks": [
+    "Live source rights, budgets, and credentials remain owned by #60 and the bounded Staging run remains owned by #27",
+    "Research applicability and headcount interpretation remain owned by #61, #59, and #70",
+    "This evidence does not prove Production scale, full-market coverage, or release promotion"
+  ]
+}
