@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "S6-issuer-tier-valuation",
-  "revision": 1,
+  "revision": 2,
   "issue": 169,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "strategy",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -16,11 +16,11 @@
   "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 150, 155, 161],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "1d6d59bb7708c1de3913dd91b6949d6697d2452a",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S6 registration is merged to main",
@@ -73,8 +73,8 @@
   ],
   "corpus": {
     "environment": "Local/CI checked-in fixture",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/factors/tests/batches/issuer_tier_valuation_tiny/fixtures/corpus.v1.json",
+    "sha256": "351884e2fd60a2a118d727c3b46dc5d463d5235d651af099b111d3706fba4810",
     "required_strata": [
       "computed S5 issuer P/S composed with one non-financial GPPE observation",
       "traditional, tech, and large-model-native candidate bands at exact boundaries",

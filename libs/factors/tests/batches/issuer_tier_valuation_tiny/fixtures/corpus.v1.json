@@ -1,0 +1,483 @@
+{
+  "schema_version": 1,
+  "artifact_type": "issuer_tier_valuation_tiny_corpus",
+  "corpus_id": "s6-issuer-tier-valuation-tiny-v1",
+  "claim_ceiling": "E1 isolated Local/CI issuer tier and valuation-gap evidence only; no approved product semantics, GPPE computation, financial mapping, stable handoff, ranking, strategy, replay, or release claim",
+  "contract_refs": {
+    "binding": {
+      "path": "libs/contracts/tests/fixtures/issuer_price_to_sales.v1.json",
+      "sha256": "4a2ee3be69e3956ea5df753c840749cf41d9d309139933435dfcdb6be4de91b4",
+      "binding_key": "valid_binding",
+      "base_strategy_ref": {
+        "path": "libs/contracts/tests/fixtures/large_model_value_v0.v1.json",
+        "sha256": "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4",
+        "definition_key": "fixed_cohort"
+      }
+    },
+    "s5_terminal_manifest": {
+      "path": "governance/batches/S5-issuer-price-sales-kernel.v1.json",
+      "sha256": "0b15868afa439684c8c91bdaa14afbabb09eb8580e6bc158d4428a5e0e08b7de",
+      "state": "accepted"
+    },
+    "s5_corpus": {
+      "path": "libs/factors/tests/batches/issuer_price_to_sales_tiny/fixtures/corpus.v1.json",
+      "sha256": "7cf5e3d4e76eba73d749035ec27540c8529b8921fbf4510812e2e59f7a312d52"
+    },
+    "semantic_candidate": {
+      "path": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "state": "candidate-only-not-approved"
+    },
+    "public_goldens": {
+      "path": "governance/gate0/public-goldens/manifest.v1.json",
+      "sha256": "8a9e1d23ea633f772c16cfaff6706518acce6cbcba5d343eaa33a0acdb01a8bc",
+      "exact_boundaries_input": {
+        "path": "governance/gate0/public-goldens/tier/exact-boundaries.input.json",
+        "sha256": "2fdb58343ec6acb7740ee367a8df89ed4d96b15c01d1fb1e7924d4c3cd1d5e00"
+      },
+      "exact_boundaries_expected": {
+        "path": "governance/gate0/public-goldens/tier/exact-boundaries.expected.json",
+        "sha256": "61b36f915b98daeed46da4364d32aae19fb181bc98a56035461d792259240a9f"
+      }
+    }
+  },
+  "decimal_policy": {
+    "precision": 28,
+    "rounding": "ROUND_HALF_EVEN",
+    "valuation_gap_formula": "target_ps/current_ps-1",
+    "ambient_context_independent": true
+  },
+  "source_price_to_sales_results": [
+    {
+      "source_case_id": "dual-class-four-quarter-fx",
+      "issuer_price_to_sales_id": "issuer-price-to-sales:682d3d88a1dc8d4fc7b5ab478387f25175ea9fd24d40f94c99d40b190cd14524",
+      "content_sha256": "682d3d88a1dc8d4fc7b5ab478387f25175ea9fd24d40f94c99d40b190cd14524",
+      "issuer_id": "issuer.alphabet",
+      "as_of": "2026-04-01T20:00:00Z",
+      "reporting_currency": "USD",
+      "price_to_sales": "5.5",
+      "confidence": "0.82",
+      "revenue_basis": "latest_four_complete_quarters"
+    },
+    {
+      "source_case_id": "single-class-fiscal-year-fallback",
+      "issuer_price_to_sales_id": "issuer-price-to-sales:739f68ca3b8c138b2034f17e67e5c62eae038030283c01fa7a0c034708fd42a4",
+      "content_sha256": "739f68ca3b8c138b2034f17e67e5c62eae038030283c01fa7a0c034708fd42a4",
+      "issuer_id": "issuer.nvidia",
+      "as_of": "2026-04-01T20:00:00Z",
+      "reporting_currency": "USD",
+      "price_to_sales": "2",
+      "confidence": "0.91",
+      "revenue_basis": "latest_complete_fiscal_year"
+    }
+  ],
+  "positive_cases": [
+    {
+      "case_id": "alphabet-negative-traditional",
+      "source_price_to_sales_case_id": "dual-class-four-quarter-fx",
+      "gppe": {
+        "input_id": "input:gppe:alphabet:negative",
+        "entity_id": "issuer.alphabet",
+        "metric": "gppe_level",
+        "value": "-1",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.70",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "5.5",
+        "valuation_gap": "-0.3636363636363636363636363636",
+        "confidence": "0.70"
+      }
+    },
+    {
+      "case_id": "nvidia-negative-traditional",
+      "source_price_to_sales_case_id": "single-class-fiscal-year-fallback",
+      "gppe": {
+        "input_id": "input:gppe:nvidia:negative",
+        "entity_id": "issuer.nvidia",
+        "metric": "gppe_level",
+        "value": "-1",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.70",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "2",
+        "valuation_gap": "0.75",
+        "confidence": "0.70"
+      }
+    },
+    {
+      "case_id": "alphabet-zero-traditional",
+      "source_price_to_sales_case_id": "dual-class-four-quarter-fx",
+      "gppe": {
+        "input_id": "input:gppe:alphabet:zero",
+        "entity_id": "issuer.alphabet",
+        "metric": "gppe_level",
+        "value": "0",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.75",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "5.5",
+        "valuation_gap": "-0.3636363636363636363636363636",
+        "confidence": "0.75"
+      }
+    },
+    {
+      "case_id": "nvidia-zero-traditional",
+      "source_price_to_sales_case_id": "single-class-fiscal-year-fallback",
+      "gppe": {
+        "input_id": "input:gppe:nvidia:zero",
+        "entity_id": "issuer.nvidia",
+        "metric": "gppe_level",
+        "value": "0",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.75",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "2",
+        "valuation_gap": "0.75",
+        "confidence": "0.75"
+      }
+    },
+    {
+      "case_id": "alphabet-below-tech-boundary",
+      "source_price_to_sales_case_id": "dual-class-four-quarter-fx",
+      "gppe": {
+        "input_id": "input:gppe:alphabet:below-1000000",
+        "entity_id": "issuer.alphabet",
+        "metric": "gppe_level",
+        "value": "999999.999999",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.80",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "5.5",
+        "valuation_gap": "-0.3636363636363636363636363636",
+        "confidence": "0.80"
+      }
+    },
+    {
+      "case_id": "nvidia-below-tech-boundary",
+      "source_price_to_sales_case_id": "single-class-fiscal-year-fallback",
+      "gppe": {
+        "input_id": "input:gppe:nvidia:below-1000000",
+        "entity_id": "issuer.nvidia",
+        "metric": "gppe_level",
+        "value": "999999.999999",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.80",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "traditional",
+        "target_ps_lower": "3",
+        "target_ps_upper": "4",
+        "target_ps_midpoint": "3.5",
+        "current_price_to_sales": "2",
+        "valuation_gap": "0.75",
+        "confidence": "0.80"
+      }
+    },
+    {
+      "case_id": "alphabet-exact-tech-boundary",
+      "source_price_to_sales_case_id": "dual-class-four-quarter-fx",
+      "gppe": {
+        "input_id": "input:gppe:alphabet:1000000",
+        "entity_id": "issuer.alphabet",
+        "metric": "gppe_level",
+        "value": "1000000",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.85",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "tech",
+        "target_ps_lower": "8",
+        "target_ps_upper": "10",
+        "target_ps_midpoint": "9",
+        "current_price_to_sales": "5.5",
+        "valuation_gap": "0.636363636363636363636363636",
+        "confidence": "0.82"
+      }
+    },
+    {
+      "case_id": "nvidia-exact-tech-boundary",
+      "source_price_to_sales_case_id": "single-class-fiscal-year-fallback",
+      "gppe": {
+        "input_id": "input:gppe:nvidia:1000000",
+        "entity_id": "issuer.nvidia",
+        "metric": "gppe_level",
+        "value": "1000000",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.85",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "tech",
+        "target_ps_lower": "8",
+        "target_ps_upper": "10",
+        "target_ps_midpoint": "9",
+        "current_price_to_sales": "2",
+        "valuation_gap": "3.5",
+        "confidence": "0.85"
+      }
+    },
+    {
+      "case_id": "alphabet-below-native-boundary",
+      "source_price_to_sales_case_id": "dual-class-four-quarter-fx",
+      "gppe": {
+        "input_id": "input:gppe:alphabet:below-3000000",
+        "entity_id": "issuer.alphabet",
+        "metric": "gppe_level",
+        "value": "2999999.999999",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.90",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "tech",
+        "target_ps_lower": "8",
+        "target_ps_upper": "10",
+        "target_ps_midpoint": "9",
+        "current_price_to_sales": "5.5",
+        "valuation_gap": "0.636363636363636363636363636",
+        "confidence": "0.82"
+      }
+    },
+    {
+      "case_id": "nvidia-below-native-boundary",
+      "source_price_to_sales_case_id": "single-class-fiscal-year-fallback",
+      "gppe": {
+        "input_id": "input:gppe:nvidia:below-3000000",
+        "entity_id": "issuer.nvidia",
+        "metric": "gppe_level",
+        "value": "2999999.999999",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.90",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "tech",
+        "target_ps_lower": "8",
+        "target_ps_upper": "10",
+        "target_ps_midpoint": "9",
+        "current_price_to_sales": "2",
+        "valuation_gap": "3.5",
+        "confidence": "0.90"
+      }
+    },
+    {
+      "case_id": "alphabet-exact-native-boundary",
+      "source_price_to_sales_case_id": "dual-class-four-quarter-fx",
+      "gppe": {
+        "input_id": "input:gppe:alphabet:3000000",
+        "entity_id": "issuer.alphabet",
+        "metric": "gppe_level",
+        "value": "3000000",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.95",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "large_model_native",
+        "target_ps_lower": "20",
+        "target_ps_upper": "30",
+        "target_ps_midpoint": "25",
+        "current_price_to_sales": "5.5",
+        "valuation_gap": "3.545454545454545454545454545",
+        "confidence": "0.82"
+      }
+    },
+    {
+      "case_id": "nvidia-exact-native-boundary",
+      "source_price_to_sales_case_id": "single-class-fiscal-year-fallback",
+      "gppe": {
+        "input_id": "input:gppe:nvidia:3000000",
+        "entity_id": "issuer.nvidia",
+        "metric": "gppe_level",
+        "value": "3000000",
+        "unit": "USD_per_employee",
+        "currency": "USD",
+        "as_of": "2026-04-01T20:00:00Z",
+        "confidence": "0.95",
+        "availability": "available"
+      },
+      "expected": {
+        "availability": "available",
+        "tier": "large_model_native",
+        "target_ps_lower": "20",
+        "target_ps_upper": "30",
+        "target_ps_midpoint": "25",
+        "current_price_to_sales": "2",
+        "valuation_gap": "11.5",
+        "confidence": "0.91"
+      }
+    }
+  ],
+  "negative_cases": [
+    {
+      "case_id": "strategy-binding-id-mismatch",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace request strategy_binding_id",
+      "expected_reason": "binding_identity_mismatch"
+    },
+    {
+      "case_id": "candidate-universe-id-mismatch",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace request candidate_universe_id",
+      "expected_reason": "candidate_universe_identity_mismatch"
+    },
+    {
+      "case_id": "price-to-sales-policy-id-mismatch",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace request price_to_sales_policy_id",
+      "expected_reason": "price_to_sales_policy_identity_mismatch"
+    },
+    {
+      "case_id": "issuer-id-mismatch",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace GPPE entity_id with issuer.nvidia",
+      "expected_reason": "issuer_identity_mismatch"
+    },
+    {
+      "case_id": "older-gppe-cutoff",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "move GPPE as_of one microsecond before P/S as_of",
+      "expected_reason": "cutoff_identity_mismatch"
+    },
+    {
+      "case_id": "future-gppe-cutoff",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "move GPPE as_of one microsecond after P/S as_of",
+      "expected_reason": "future_gppe"
+    },
+    {
+      "case_id": "reporting-currency-mismatch",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace GPPE currency and unit with EUR",
+      "expected_reason": "reporting_currency_mismatch"
+    },
+    {
+      "case_id": "missing-gppe",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "remove the GPPE observation",
+      "expected_reason": "missing_gppe"
+    },
+    {
+      "case_id": "unavailable-gppe",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "set GPPE availability unavailable and value null",
+      "expected_reason": "unavailable_gppe"
+    },
+    {
+      "case_id": "financial-comparison-observation",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace GPPE metric with financial_efficiency",
+      "expected_reason": "financial_tier_mapping_unapproved"
+    },
+    {
+      "case_id": "unavailable-price-to-sales",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace S5 result with an unavailable result",
+      "expected_reason": "unavailable_price_to_sales"
+    },
+    {
+      "case_id": "nonpositive-price-to-sales",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace available S5 price_to_sales with zero",
+      "expected_reason": "nonpositive_price_to_sales"
+    },
+    {
+      "case_id": "semantic-artifact-drift",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "replace any pinned S5, semantic-candidate, public-golden, or corpus SHA-256",
+      "expected_reason": "activation_schema_rejected"
+    },
+    {
+      "case_id": "provenance-field",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "add source or raw_ref to the GPPE observation",
+      "expected_reason": "request_schema_rejected"
+    },
+    {
+      "case_id": "release-activation-field",
+      "base_case_id": "alphabet-exact-tech-boundary",
+      "mutation": "set release_allowed or staging_allowed true",
+      "expected_reason": "activation_schema_rejected"
+    }
+  ],
+  "determinism_controls": {
+    "request_field_reordering": "reverse equivalent mapping field insertion order before validation",
+    "equivalent_timezone_representation": "2026-04-02T04:00:00+08:00",
+    "ambient_decimal_contexts": [
+      {
+        "precision": 6,
+        "rounding": "ROUND_DOWN"
+      },
+      {
+        "precision": 50,
+        "rounding": "ROUND_UP"
+      }
+    ],
+    "required_outcome": "all semantic outputs and content identities remain byte-equivalent"
+  }
+}
