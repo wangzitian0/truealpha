@@ -225,7 +225,7 @@ def test_e2_acceptance_governance_binds_merged_runtime() -> None:
     graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
     output = manifest["acceptance"]["output"]
 
-    assert manifest["revision"] == 13
+    assert manifest["revision"] == 14
     assert manifest["status"] == "done"
     assert manifest["last_accepted_rung"] == "E3"
     assert manifest["target_rung"] == "E3"
