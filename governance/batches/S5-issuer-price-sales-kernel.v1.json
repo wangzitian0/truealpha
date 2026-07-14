@@ -27,6 +27,7 @@
       "the implementation PR pins its exact current main base SHA",
       "the frozen corpus path and SHA-256 are committed before execution",
       "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers the package export path",
       "issue #161 contains the exact manifest path and SHA-256"
     ]
   },
@@ -64,7 +65,8 @@
   "paths": {
     "writable": [
       "libs/factors/src/factors/batches/issuer_price_to_sales_tiny/**",
-      "libs/factors/tests/batches/issuer_price_to_sales_tiny/**"
+      "libs/factors/tests/batches/issuer_price_to_sales_tiny/**",
+      "governance/leases/S5-issuer-price-sales-kernel.v1.json"
     ],
     "read_only": [
       "vision.md",
@@ -89,8 +91,14 @@
       "pyproject.toml",
       "Makefile"
     ],
-    "integration_surface": [],
-    "lease_owner": null
+    "integration_surface": [
+      "libs/factors/src/factors/batches/issuer_price_to_sales_tiny/__init__.py"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/S5-issuer-price-sales-kernel.v1.json",
+      "sha256": "194a5cabea884214132e30dd67b1465af87108e9fbafefd1f45f3dfa63990a47"
+    }
   },
   "release_activation": {
     "allowed": false,

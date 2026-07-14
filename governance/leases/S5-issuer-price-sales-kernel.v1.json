@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:b7490561dd3908abe6ce72b6e4ed1ccdbd3ec42deb6e65b200488acc89a8159f",
+  "batch_id": "S5-issuer-price-sales-kernel",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/factors/src/factors/batches/issuer_price_to_sales_tiny/__init__.py"
+  ],
+  "base_sha": "6aa4944936b98b2f77bcb65b13a9e51e7e5761f4",
+  "expires_at": "2026-07-21T00:00:00Z"
+}
