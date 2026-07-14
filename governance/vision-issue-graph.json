@@ -167,7 +167,7 @@
       "target_rung": "E0",
       "terminal_rung": "E4",
       "manifest": "governance/batches/D3-staging-topt-capture.v1.json",
-      "sha256": "d499ebc9936d3d29746e73f836b876a67620e5fb555e19d51ba6e72cdbcfcb63"
+      "sha256": "a88c38b9be7288f75a81a3984d7ff0f2af18dada3f5a4d11d75cfbc9b3305e8b"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,

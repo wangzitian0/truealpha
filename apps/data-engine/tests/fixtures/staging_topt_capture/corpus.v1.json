@@ -36,9 +36,9 @@
     "maximum_attempts": 3
   },
   "raw_response": {
-    "path": "apps/data-engine/tests/fixtures/staging_topt_capture/yahoo_nvda_2026-03-31.json",
-    "sha256": "24aced840be4a6230b389559b447297d9372ff8235b66857a84cf1df0e268f41",
-    "content_type": "application/json"
+    "content_type": "application/json",
+    "sha256": "a6bf655955317bd4940ab646d9cc93fb23562c70ad469d62d97ebe01da0efbdc",
+    "body": "{\"chart\":{\"result\":[{\"meta\":{\"currency\":\"USD\",\"symbol\":\"NVDA\",\"exchangeName\":\"NMS\",\"fullExchangeName\":\"NasdaqGS\",\"instrumentType\":\"EQUITY\",\"exchangeTimezoneName\":\"America/New_York\",\"gmtoffset\":-14400},\"timestamp\":[1774987200],\"indicators\":{\"quote\":[{\"open\":[166.97000122070312],\"high\":[174.6199951171875],\"low\":[166.9600067138672],\"close\":[174.39999389648438],\"volume\":[226181300]}],\"adjclose\":[{\"adjclose\":[174.39999389648438]}]}}],\"error\":null}}"
   },
   "expected_bar": {
     "symbol": "NVDA",
