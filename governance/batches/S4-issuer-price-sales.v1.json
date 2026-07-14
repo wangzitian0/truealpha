@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "batch_id": "S4-issuer-price-sales",
+  "revision": 1,
+  "issue": 155,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Bind issuer-level price-to-sales construction, complete share-class market value, and one deterministic execution listing without approving product semantics.",
+  "claim_ceiling": "E0 shared-contract repair and negative validation only; no approved P/S semantics, TOPT execution mapping, factor implementation, strategy activation, or release-readiness claim",
+  "capability_issues": [21],
+  "closes_issues": [],
+  "informational_issues": [25, 26, 57, 59, 78, 143, 150],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued S4 registration is merged to main",
+      "the implementation PR pins its exact current main base SHA",
+      "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers the shared research contract path",
+      "issue #155 contains the exact manifest path and SHA-256"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 58,
+      "artifact": "execution-lineage contract pack",
+      "evidence": {
+        "path": "governance/evidence/issue-58.v2.json",
+        "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
+      },
+      "ref": "git:71df1a7214d28fd6e161da04769466abe5c13e82:libs/contracts",
+      "git_tree": "cc2a0ded19f3ceb28b0f5e39c83871055ca07346",
+      "legacy_accepted": true,
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 59,
+      "artifact": "approved issuer P/S and strategy candidate identity policy",
+      "state": "pending_external_approval"
+    }
+  ],
+  "corpus": {
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "one issuer with two security share classes and two price listings",
+      "one issuer candidate with one immutable execution listing",
+      "complete issuer market-cap aggregation and PIT P/S policy",
+      "duplicate issuer, wrong subject kind, duplicate component, and incomplete coverage rejection",
+      "canonical round-trip under reordered candidates and components"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/contracts/src/truealpha_contracts/research.py",
+      "libs/contracts/tests/test_research.py",
+      "libs/contracts/tests/fixtures/issuer_price_to_sales.v1.json",
+      "governance/leases/S4-issuer-price-sales.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "governance/batches/S2-core-strategy-contract.v1.json",
+      "governance/batches/S3-financial-strategy-eligibility.v1.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "libs/contracts/src/truealpha_contracts/universe.py",
+      "libs/contracts/tests/fixtures/large_model_value_v0.v1.json"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "db/**",
+      "apps/data-engine/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/factors/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [
+      "libs/contracts/src/truealpha_contracts/research.py"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/S4-issuer-price-sales.v1.json",
+      "sha256": null
+    }
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "S4 repairs a provisional contract only; #59/#21 approval and later candidate acceptance remain mandatory"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/contracts/tests/test_research.py -q",
+      "uv run ruff check libs/contracts/src/truealpha_contracts/research.py libs/contracts/tests/test_research.py",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "instrument-level strategy ranking",
+      "duplicate issuer candidate or market-value component",
+      "wrong issuer, security, or listing subject kind",
+      "incomplete share-class coverage declaration",
+      "unknown P/S rule or mutable coordinate",
+      "candidate-universe, P/S policy, or strategy hash mismatch"
+    ],
+    "output": {
+      "type": "issuer P/S and strategy candidate identity contract repair",
+      "stable_handoff": false,
+      "state": "pending",
+      "allowed_evidence_readers": [
+        "issue #21 semantic freeze batch",
+        "issue #25 valuation candidate batch",
+        "issue #26 replay batch"
+      ]
+    }
+  },
+  "invalidation": [
+    "P/S construction, candidate identity, or execution-listing vocabulary changes create a new batch revision",
+    "shared contract path lease expiry blocks the implementation PR",
+    "candidate semantic values or approvals do not raise this E0 evidence ceiling"
+  ],
+  "rollback": "Revert the S4 contract repair and tests together; no accepted release manifest or runtime registry may reference this provisional contract."
+}
