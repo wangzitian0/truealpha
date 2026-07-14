@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:05876f1112a09314c45ca8a1f6028681d5cf63f330a1cedc9065d6f9753ad446",
+  "batch_id": "S4-issuer-price-sales",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/contracts/src/truealpha_contracts/research.py"
+  ],
+  "base_sha": "ecc39b059f64529b9fdfc20c03beb426c052baab",
+  "expires_at": "2026-07-21T00:00:00Z"
+}

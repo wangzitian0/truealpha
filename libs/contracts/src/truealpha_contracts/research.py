@@ -907,6 +907,132 @@ class LargeModelValueV0Policy(_StrictFrozenModel):
         return self
 
 
+class IssuerPriceToSalesPolicy(_StrictFrozenModel):
+    """Exact issuer-level P/S inputs without source or implementation choices."""
+
+    price_to_sales_policy_id: str = Field(
+        default="",
+        pattern=r"^(?:|price-to-sales-policy:[0-9a-f]{64})$",
+    )
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    policy_version: str = Field(pattern=_VERSION_PATTERN)
+    ratio_subject_kind: Literal[SubjectKind.ISSUER]
+    market_cap_rule: Literal["sum_security_price_times_shares"]
+    price_rule: Literal["last_eligible_unadjusted_close_at_or_before_cutoff"]
+    shares_rule: Literal["latest_knowable_security_shares_on_or_before_price_date"]
+    revenue_rule: Literal["latest_four_complete_quarters_else_latest_complete_fiscal_year"]
+    currency_rule: Literal["convert_market_values_to_reporting_currency_at_price_session_close"]
+    corporate_action_rule: Literal["unadjusted_price_with_effective_shares_once"]
+    input_cutoff_rule: Literal["all_inputs_knowable_at_or_before_cutoff"]
+    precomputed_vendor_ratio_allowed: Literal[False]
+    missing_component_behavior: Literal["unavailable"]
+
+    @field_validator("policy_version")
+    @classmethod
+    def reject_mutable_version(cls, value: str) -> str:
+        return _reject_mutable_coordinate(value, "policy_version")
+
+    @model_validator(mode="after")
+    def identify(self) -> Self:
+        _identify(self, id_field="price_to_sales_policy_id", prefix="price-to-sales-policy")
+        return self
+
+
+class IssuerMarketValueComponent(_StrictFrozenModel):
+    """One security's shares and the listing whose PIT price values them."""
+
+    security: SubjectRef
+    price_listing: SubjectRef
+
+    @model_validator(mode="after")
+    def validate_subject_kinds(self) -> Self:
+        if self.security.kind is not SubjectKind.SECURITY:
+            raise ValueError("issuer market-value components require a security subject")
+        if self.price_listing.kind is not SubjectKind.LISTING:
+            raise ValueError("issuer market-value components require a price listing")
+        return self
+
+
+class IssuerStrategyCandidate(_StrictFrozenModel):
+    """One ranked issuer, one trade target, and all market-value components."""
+
+    issuer: SubjectRef
+    execution_listing: SubjectRef
+    market_value_components: tuple[IssuerMarketValueComponent, ...] = Field(min_length=1)
+    complete_share_class_coverage: Literal[True]
+
+    @model_validator(mode="after")
+    def validate_and_canonicalize(self) -> Self:
+        if self.issuer.kind is not SubjectKind.ISSUER:
+            raise ValueError("strategy candidates must rank issuer subjects")
+        if self.execution_listing.kind is not SubjectKind.LISTING:
+            raise ValueError("strategy execution targets must be listings")
+        components = tuple(
+            sorted(
+                self.market_value_components,
+                key=lambda item: (item.security.id, item.price_listing.id),
+            )
+        )
+        security_ids = tuple(item.security.id for item in components)
+        price_listing_ids = tuple(item.price_listing.id for item in components)
+        if len(security_ids) != len(set(security_ids)):
+            raise ValueError("issuer market-value securities must be unique")
+        if len(price_listing_ids) != len(set(price_listing_ids)):
+            raise ValueError("issuer market-value price listings must be unique")
+        if self.execution_listing.id not in set(price_listing_ids):
+            raise ValueError("the execution listing must be one of the issuer's market-value listings")
+        object.__setattr__(self, "market_value_components", components)
+        return self
+
+
+class StrategyCandidateUniverse(_StrictFrozenModel):
+    """Content-addressed issuer candidates inside one immutable universe."""
+
+    candidate_universe_id: str = Field(
+        default="",
+        pattern=r"^(?:|strategy-candidate-universe:[0-9a-f]{64})$",
+    )
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    universe: UniverseRef
+    ranking_subject_kind: Literal[SubjectKind.ISSUER]
+    candidate_key: Literal["issuer_id"]
+    one_candidate_per_issuer: Literal[True]
+    candidates: tuple[IssuerStrategyCandidate, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_and_identify(self) -> Self:
+        candidates = tuple(sorted(self.candidates, key=lambda item: item.issuer.id))
+        issuer_ids = tuple(item.issuer.id for item in candidates)
+        execution_listing_ids = tuple(item.execution_listing.id for item in candidates)
+        if len(issuer_ids) != len(set(issuer_ids)):
+            raise ValueError("strategy candidate issuers must be unique")
+        if len(execution_listing_ids) != len(set(execution_listing_ids)):
+            raise ValueError("strategy execution listings must be unique")
+        object.__setattr__(self, "candidates", candidates)
+        _identify(self, id_field="candidate_universe_id", prefix="strategy-candidate-universe")
+        return self
+
+
+class LargeModelValueV0Binding(_StrictFrozenModel):
+    """Versioned completion of the immutable S2 strategy shell."""
+
+    strategy_binding_id: str = Field(
+        default="",
+        pattern=r"^(?:|strategy-binding:[0-9a-f]{64})$",
+    )
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    strategy: LargeModelValueV0Policy
+    candidate_universe: StrategyCandidateUniverse
+    price_to_sales_policy: IssuerPriceToSalesPolicy
+
+    @model_validator(mode="after")
+    def validate_and_identify(self) -> Self:
+        if self.candidate_universe.universe != self.strategy.universe:
+            raise ValueError("strategy candidates must bind the exact strategy UniverseRef")
+        _identify(self, id_field="strategy_binding_id", prefix="strategy-binding")
+        return self
+
+
 class SemanticCatalogBinding(_StrictFrozenModel):
     target: ResearchTarget
     semantic_policy_id: str = Field(pattern=_CONTENT_ID_PATTERN)

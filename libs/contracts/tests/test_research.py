@@ -65,7 +65,10 @@ from truealpha_contracts.research import (
     ImmutableArtifactRef,
     IndependentApproval,
     InstrumentAggregationLevel,
+    IssuerPriceToSalesPolicy,
+    IssuerStrategyCandidate,
     KnownReferenceControl,
+    LargeModelValueV0Binding,
     LargeModelValueV0Policy,
     MetricDirection,
     MetricObservation,
@@ -87,6 +90,7 @@ from truealpha_contracts.research import (
     SealedHoldout,
     SemanticCatalogBinding,
     ShortTreatment,
+    StrategyCandidateUniverse,
     StrategyCutoffSchedule,
     StrategyEligibilityPolicy,
     StrategyExecutionPolicy,
@@ -129,6 +133,8 @@ STRATEGY_CORPUS_PATH = Path(__file__).with_name("fixtures") / "large_model_value
 STRATEGY_CORPUS_SHA256 = "dedd9e19f76a3c2438c8099821434e4408b86ae9f64ff19346a6dcf24b9fb9a4"
 FINANCIAL_STRATEGY_CORPUS_PATH = Path(__file__).with_name("fixtures") / "financial_strategy_eligibility.v1.json"
 FINANCIAL_STRATEGY_CORPUS_SHA256 = "2b16a9514af315412862a6a95f141ee138bdeb95b68b8afffde85487f76f4bbc"
+ISSUER_PRICE_TO_SALES_CORPUS_PATH = Path(__file__).with_name("fixtures") / "issuer_price_to_sales.v1.json"
+ISSUER_PRICE_TO_SALES_CORPUS_SHA256 = "4a2ee3be69e3956ea5df753c840749cf41d9d309139933435dfcdb6be4de91b4"
 
 
 def _digest(seed: int) -> str:
@@ -586,6 +592,10 @@ def _financial_strategy_corpus() -> dict[str, object]:
     return json.loads(FINANCIAL_STRATEGY_CORPUS_PATH.read_text(encoding="utf-8"))
 
 
+def _issuer_price_to_sales_corpus() -> dict[str, object]:
+    return json.loads(ISSUER_PRICE_TO_SALES_CORPUS_PATH.read_text(encoding="utf-8"))
+
+
 def _apply_corpus_mutation(payload: dict[str, object], case: dict[str, object]) -> None:
     parts = str(case["path"]).split(".")
     target: object = payload
@@ -611,6 +621,29 @@ def _apply_corpus_mutation(payload: dict[str, object], case: dict[str, object]) 
             target[key] = case["value"]
     else:  # pragma: no cover - the frozen corpus contains only object/list paths
         raise AssertionError(f"mutation path does not resolve to a container: {case['path']}")
+
+
+def _resolve_corpus_path(payload: dict[str, object], path: str) -> object:
+    target: object = payload
+    for part in path.split("."):
+        if isinstance(target, list):
+            target = target[int(part)]
+        elif isinstance(target, dict):
+            target = target[part]
+        else:  # pragma: no cover - the frozen corpus contains only object/list paths
+            raise AssertionError(f"corpus path does not resolve: {path}")
+    return target
+
+
+def _apply_issuer_price_to_sales_mutation(payload: dict[str, object], case: dict[str, object]) -> None:
+    target_name = str(case["target"])
+    target = payload if target_name == "binding" else payload[target_name]
+    assert isinstance(target, dict)
+    mutation = dict(case)
+    if mutation["operation"] == "copy":
+        mutation["operation"] = "replace"
+        mutation["value"] = copy.deepcopy(_resolve_corpus_path(target, str(case["from"])))
+    _apply_corpus_mutation(target, mutation)
 
 
 def _protocol(semantics: ResearchSemanticsManifest) -> EvaluationProtocol:
@@ -960,6 +993,76 @@ def test_financial_strategy_eligibility_corpus_separates_factor_applicability_fr
         _apply_corpus_mutation(candidate, case)
         with pytest.raises(ValidationError):
             LargeModelValueV0Policy.model_validate_json(json.dumps(candidate))
+
+
+def test_issuer_price_to_sales_corpus_binds_one_candidate_per_issuer_and_rejects_every_negative_case():
+    corpus_bytes = ISSUER_PRICE_TO_SALES_CORPUS_PATH.read_bytes()
+    assert hashlib.sha256(corpus_bytes).hexdigest() == ISSUER_PRICE_TO_SALES_CORPUS_SHA256
+    corpus = _issuer_price_to_sales_corpus()
+    base_ref = corpus["base_strategy"]
+    assert isinstance(base_ref, dict)
+    assert base_ref["path"] == "libs/contracts/tests/fixtures/large_model_value_v0.v1.json"
+    assert base_ref["sha256"] == STRATEGY_CORPUS_SHA256
+    assert hashlib.sha256(STRATEGY_CORPUS_PATH.read_bytes()).hexdigest() == base_ref["sha256"]
+
+    definitions = _strategy_corpus()["valid_definitions"]
+    valid_binding = corpus["valid_binding"]
+    expected = corpus["expected"]
+    assert isinstance(definitions, dict) and isinstance(valid_binding, dict) and isinstance(expected, dict)
+    strategy = definitions[base_ref["definition_key"]]
+    assert isinstance(strategy, dict)
+    payload = {"strategy": strategy, **copy.deepcopy(valid_binding)}
+
+    binding = LargeModelValueV0Binding.model_validate_json(json.dumps(payload))
+    restored = LargeModelValueV0Binding.model_validate_json(binding.model_dump_json())
+    assert restored.strategy_binding_id == binding.strategy_binding_id
+    assert restored.content_sha256 == binding.content_sha256
+    assert isinstance(binding.price_to_sales_policy, IssuerPriceToSalesPolicy)
+    assert binding.price_to_sales_policy.ratio_subject_kind is SubjectKind.ISSUER
+    assert isinstance(binding.candidate_universe, StrategyCandidateUniverse)
+    assert len(binding.candidate_universe.candidates) == expected["candidate_count"]
+    alphabet = next(
+        candidate for candidate in binding.candidate_universe.candidates if candidate.issuer.id == "issuer.alphabet"
+    )
+    assert isinstance(alphabet, IssuerStrategyCandidate)
+    assert len(alphabet.market_value_components) == expected["alphabet_market_value_component_count"]
+    assert alphabet.execution_listing.id in {item.price_listing.id for item in alphabet.market_value_components}
+
+    reordered = copy.deepcopy(payload)
+    candidate_payload = reordered["candidate_universe"]
+    assert isinstance(candidate_payload, dict)
+    candidates = candidate_payload["candidates"]
+    assert isinstance(candidates, list)
+    candidates.reverse()
+    alphabet_payload = next(item for item in candidates if item["issuer"]["id"] == "issuer.alphabet")
+    components = alphabet_payload["market_value_components"]
+    assert isinstance(components, list)
+    components.reverse()
+    reordered_binding = LargeModelValueV0Binding.model_validate_json(json.dumps(reordered))
+    assert reordered_binding.strategy_binding_id == binding.strategy_binding_id
+    assert reordered_binding.content_sha256 == binding.content_sha256
+    assert reordered_binding.model_dump_json() == binding.model_dump_json()
+
+    identity_drift_cases = (
+        ("strategy_binding_id", f"strategy-binding:{'f' * 64}"),
+        ("candidate_universe.candidate_universe_id", f"strategy-candidate-universe:{'f' * 64}"),
+        ("price_to_sales_policy.price_to_sales_policy_id", f"price-to-sales-policy:{'f' * 64}"),
+        ("price_to_sales_policy.policy_version", "0.1.1"),
+    )
+    for path, value in identity_drift_cases:
+        candidate = json.loads(binding.model_dump_json())
+        _apply_corpus_mutation(candidate, {"operation": "replace", "path": path, "value": value})
+        with pytest.raises(ValidationError):
+            LargeModelValueV0Binding.model_validate_json(json.dumps(candidate))
+
+    negative_cases = corpus["negative_cases"]
+    assert isinstance(negative_cases, list) and len(negative_cases) == 14
+    for case in negative_cases:
+        assert isinstance(case, dict)
+        candidate = copy.deepcopy(payload)
+        _apply_issuer_price_to_sales_mutation(candidate, case)
+        with pytest.raises(ValidationError):
+            LargeModelValueV0Binding.model_validate_json(json.dumps(candidate))
 
 
 def test_large_model_strategy_factor_order_has_one_canonical_identity():
