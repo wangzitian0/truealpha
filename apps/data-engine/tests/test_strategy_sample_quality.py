@@ -31,7 +31,7 @@ def test_twelve_data_reconciliation_is_accepted_only_as_bounded_evidence():
     report = audit_strategy_samples(SAMPLE_ROOT)
     check = next(item for item in report.checks if item.requirement_id == "prices.source_reconciliation")
     assert check.status.value == "pass"
-    assert "full coverage" in check.expected
+    assert "adjusted/actions" in check.expected
 
 
 def test_same_source_vintage_stability_is_reported_separately_from_independent_reconciliation():
