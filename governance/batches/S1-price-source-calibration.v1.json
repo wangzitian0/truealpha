@@ -17,7 +17,7 @@
   "dependencies": [],
   "corpus": {"manifest_path": "apps/data-engine/samples/prices/independent_reconciliation.v1.json", "sha256": "40727fb13c7dda863e49017c3ba841d509e401ae16d2904e72228433900fce62", "required_strata": ["four named symbols", "three-year daily comparison window", "OHLCV tolerances", "adjusted-close and corporate-action blockers"]},
   "source_ceiling": "No source capture or live call is activated.",
-  "paths": {"writable": ["governance/batches/S1-price-source-calibration.v1.json", "governance/vision-issue-graph.json"], "read_only": [], "forbidden": [".env/**", "credentials/**"], "integration_surface": []},
+  "paths": {"writable": ["governance/batches/S1-price-source-calibration.v1.json", "governance/vision-issue-graph.json", "apps/data-engine/samples/prices/independent_reconciliation.v1.json"], "read_only": [], "forbidden": [".env/**", "credentials/**"], "integration_surface": []},
   "release_activation": {"allowed": false, "registered": false, "reason": "prepared E0"},
   "invalidation": ["scope or corpus change creates a new revision"],
   "acceptance": {"commands": ["make issue-graph-check"], "negative_controls": ["no implementation or evidence activation"], "output": {"type": "PreparedBatchRegistration", "stable_handoff": false, "state": "planned", "retention": "governance history"}},
