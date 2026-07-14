@@ -103,6 +103,7 @@ def e3_database_url():
 @pytest.fixture
 def connection(e3_database_url):
     active = psycopg.connect(e3_database_url, connect_timeout=3, autocommit=False)
+    active.execute("begin")
     try:
         yield active
     finally:
