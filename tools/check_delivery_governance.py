@@ -37,6 +37,7 @@ GATE0_AUTHORIZATION_CONTROL_PATHS = frozenset(
         "tools/check_gate0_candidate.py",
     }
 )
+GATE0_REBIND_FIELDS = frozenset({"integration_base_sha", "candidate_tree_sha256"})
 RUNGS = ("E0", "E1", "E2", "E3", "E4", "E5")
 RUNG_LABELS = {
     "E0": "code",
@@ -1286,6 +1287,8 @@ def validate_gate0_pr_advance(
     validation.require(isinstance(manifest, dict), f"{label}: manifest must be an object")
     if not isinstance(manifest, dict):
         return None
+    base_manifest = git_json(base_sha, GATE0_MANIFEST_PATH)
+    validation.require(isinstance(base_manifest, dict), f"{label}: base manifest is unavailable")
     validation.require(
         manifest.get("integration_base_sha") == base_sha,
         f"{label}: integration_base_sha does not match the PR base",
@@ -1310,19 +1313,27 @@ def validate_gate0_pr_advance(
                 f"{label}: changed path is outside manifest authorization: {path!r}",
             )
     changed_controls = sorted(set(non_manifest_paths) & GATE0_AUTHORIZATION_CONTROL_PATHS)
-    if changed_controls and not allow_blocked_gate_candidate:
-        # The control plane must land through a separately reviewed governance PR.
-        # The Gate candidate then rebases and removes these paths before acceptance.
+    blocked_control_rebind = False
+    if changed_controls and isinstance(base_manifest, dict):
+        base_payload = {key: value for key, value in base_manifest.items() if key not in GATE0_REBIND_FIELDS}
+        candidate_payload = {key: value for key, value in manifest.items() if key not in GATE0_REBIND_FIELDS}
+        blocked_control_rebind = (
+            manifest.get("status") == "candidate_blocked_external_attestation"
+            and base_manifest.get("status") == "candidate_blocked_external_attestation"
+            and candidate_payload == base_payload
+        )
+    if changed_controls and not (allow_blocked_gate_candidate or blocked_control_rebind):
         validation.require(
             False,
             f"{label}: accepted candidate modifies authorization controls; "
-            f"land them separately, rebase, and remove them from this diff: {changed_controls}",
+            f"a blocked control migration may change only its base/tree binding: {changed_controls}",
         )
+    permit_blocked_candidate = allow_blocked_gate_candidate or blocked_control_rebind
     gate_result = validate_gate0_candidate(
         Path(GATE0_MANIFEST_PATH),
         root=ROOT,
-        check_live_comments=not allow_blocked_gate_candidate,
-        require_accepted=not allow_blocked_gate_candidate,
+        check_live_comments=not permit_blocked_candidate,
+        require_accepted=not permit_blocked_candidate,
     )
     for error in gate_result.errors:
         validation.require(False, f"{label}: {error}")

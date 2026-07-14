@@ -436,18 +436,27 @@ def _gate0_pr_context(
     manifest_path = tmp_path / "governance" / "gate0" / "manifest-v4.json"
     candidate_path = tmp_path / "governance" / "gate0" / "candidate.json"
     _write_json(candidate_path, {"candidate": True})
+    base_manifest = {
+        "manifest_id": manifest_id,
+        "manifest_version": manifest_version,
+        "status": "accepted" if accepted else "candidate_blocked_external_attestation",
+        "integration_base_sha": "c" * 40,
+        "candidate_tree_sha256": "d" * 64,
+        "paths": list(paths),
+        "blocking_reasons": [] if accepted else ["external attestation missing"],
+    }
     _write_json(
         manifest_path,
         {
-            "manifest_id": manifest_id,
-            "manifest_version": manifest_version,
+            **base_manifest,
             "integration_base_sha": integration_base_sha or base_sha,
-            "paths": list(paths),
+            "candidate_tree_sha256": "e" * 64,
         },
     )
     monkeypatch.setattr(governance, "ROOT", tmp_path)
     monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
     monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: base_sha)
+    monkeypatch.setattr(governance, "git_json", lambda _commit, _path: base_manifest)
     monkeypatch.setattr(
         governance,
         "git_changed_paths",
@@ -740,7 +749,59 @@ def test_gate0_v4_also_rejects_accepted_bootstrap_control_changes(tmp_path, monk
     )
 
     assert advance is None
-    assert any("land them separately, rebase, and remove them" in error for error in validation.errors)
+    assert any("accepted candidate modifies authorization controls" in error for error in validation.errors)
+
+
+def test_ready_blocked_gate0_candidate_may_rebind_reviewed_authorization_controls(tmp_path, monkeypatch):
+    checker = tmp_path / "tools" / "check_delivery_governance.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_text("# reviewed validator\n", encoding="utf-8")
+    calls: list[dict[str, bool]] = []
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        changed_paths=("governance/gate0/manifest-v4.json", "tools/check_delivery_governance.py"),
+        paths=("governance/gate0/**", "tools/check_delivery_governance.py"),
+        validation_calls=calls,
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert validation.errors == []
+    assert advance is not None and advance.kind == "gate_candidate"
+    assert calls == [{"check_live_comments": False, "require_accepted": False}]
+
+
+def test_ready_blocked_gate0_control_rebind_rejects_candidate_payload_drift(tmp_path, monkeypatch):
+    checker = tmp_path / "tools" / "check_delivery_governance.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_text("# reviewed validator\n", encoding="utf-8")
+    graph, base_sha, head_sha = _gate0_pr_context(
+        tmp_path,
+        monkeypatch,
+        changed_paths=("governance/gate0/manifest-v4.json", "tools/check_delivery_governance.py"),
+        paths=("governance/gate0/**", "tools/check_delivery_governance.py"),
+    )
+    manifest_path = tmp_path / "governance" / "gate0" / "manifest-v4.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["blocking_reasons"] = []
+    _write_json(manifest_path, manifest)
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert any("may change only its base/tree binding" in error for error in validation.errors)
 
 
 def test_draft_gate0_candidate_may_iterate_on_authorization_controls(tmp_path, monkeypatch):
