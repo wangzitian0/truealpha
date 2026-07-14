@@ -67,7 +67,7 @@ def _definition(case_id: str = "dimensionless-linear-blend") -> QlibFactorExpres
     return QlibFactorExpressionDefinition.model_validate(_definition_payload(case_id))
 
 
-def test_frozen_corpus_builds_canonical_qllib_independent_contracts() -> None:
+def test_frozen_corpus_builds_canonical_qlib_independent_contracts() -> None:
     assert importlib.util.find_spec("qlib") is None
     registry = _registry()
     assert tuple(operator.operator_id for operator in registry.operators) == tuple(
@@ -150,7 +150,7 @@ def test_expression_reordering_is_stable_and_stale_identity_fails() -> None:
         ("qlib_field_name", "quality[0]", "string_pattern_mismatch"),
     ],
 )
-def test_feature_binding_rejects_qllib_syntax_injection(field_name: str, value: str, error: str) -> None:
+def test_feature_binding_rejects_qlib_syntax_injection(field_name: str, value: str, error: str) -> None:
     with pytest.raises(ValidationError, match=error):
         QlibFeatureBinding.model_validate({"feature_binding_id": "feature.quality.v1", field_name: value})
 

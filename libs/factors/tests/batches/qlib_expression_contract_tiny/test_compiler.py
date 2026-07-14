@@ -92,7 +92,7 @@ def test_compile_frozen_expression(case_id: str) -> None:
     assert compiled.maximum_lookback_sessions == expected["maximum_lookback_sessions"]
 
 
-def test_compile_rejects_raw_strings_before_qllib_import() -> None:
+def test_compile_rejects_raw_strings_before_qlib_import() -> None:
     with pytest.raises(TypeError, match="definition_must_be_typed_expression"):
         compile_and_parse_qlib_expression("Add($quality,$growth)", _registry())  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="registry_must_be_typed_operator_registry"):
@@ -146,7 +146,7 @@ def test_execution_identity_changes_without_changing_expression_semantics() -> N
     assert definition.content_sha256 == _definition("dimensionless-linear-blend").content_sha256
 
 
-def test_tiny_evidence_binds_equal_oracle_and_qllib_outputs() -> None:
+def test_tiny_evidence_binds_equal_oracle_and_qlib_outputs() -> None:
     registry = _registry()
     compiled = tuple(
         compile_qlib_expression(_definition(case_id), registry)

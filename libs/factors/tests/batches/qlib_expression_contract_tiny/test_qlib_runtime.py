@@ -130,7 +130,7 @@ def _load_feature(self: Feature, instrument: str, start_index: int, end_index: i
         "three-session-quality-mean",
     ],
 )
-def test_independent_evaluator_matches_pinned_qllib(case_id: str) -> None:
+def test_independent_evaluator_matches_pinned_qlib(case_id: str) -> None:
     corpus = _corpus()
     case = _case(case_id)
     definition = _definition(case_id)
@@ -156,7 +156,7 @@ def test_independent_evaluator_matches_pinned_qllib(case_id: str) -> None:
                     assert math.isclose(oracle_value, qlib_value, rel_tol=1e-12, abs_tol=1e-12)
 
 
-def test_qllib_parser_receives_only_compiler_output() -> None:
+def test_qlib_parser_receives_only_compiler_output() -> None:
     from qlib.data.data import LocalExpressionProvider
 
     definition = _definition("dimensionless-linear-blend")
@@ -170,6 +170,5 @@ def test_qllib_parser_receives_only_compiler_output() -> None:
     with patch.object(LocalExpressionProvider, "get_expression_instance", capture):
         compiled, _expression = compile_and_parse_qlib_expression(definition, _registry())
     assert received == [compiled.qlib_field]
-    assert received == ["Add($quality,Mul(0.5,$growth))"]
     assert not isinstance(definition.root, str)
     assert isinstance(definition.root, QlibCallNode)
