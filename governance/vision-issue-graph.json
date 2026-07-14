@@ -226,11 +226,11 @@
     "S6-issuer-tier-valuation": {
       "issue": 169,
       "owner_gate": 29,
-      "status": "queued",
+      "status": "prepared",
       "target_rung": "E0",
       "terminal_rung": "E0",
       "manifest": "governance/batches/S6-issuer-tier-valuation.v1.json",
-      "sha256": "224c0eea91d9907787375c07a2ab913f9e67722dc1bdb499d0086aa243dc06da"
+      "sha256": "a7e3de12886dbac45aa259158afe71672a1832f3ca9279e8050a892ed8086bde"
     }
   },
   "artifact_edges": [

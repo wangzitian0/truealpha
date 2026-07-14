@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "S6-issuer-tier-valuation",
-  "revision": 1,
+  "revision": 2,
   "issue": 169,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "strategy",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -16,11 +16,11 @@
   "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 150, 155, 161],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "d063bba4542478c672b6f01339d14c5714caf890",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S6 registration is merged to main",
@@ -44,6 +44,17 @@
     },
     {
       "class": "freeze",
+      "issue": 155,
+      "artifact": "accepted issuer P/S and strategy candidate identity contract",
+      "evidence": {
+        "path": "governance/batches/S4-issuer-price-sales.v1.json",
+        "sha256": "3a72c29f0c965e3aa8eaa4464726d183622aa930a7780f9a2d3b51b9e25afa16"
+      },
+      "ref": "git:7d705787342e5a0c119fdba2794b6376d9dc3852:libs/contracts/src/truealpha_contracts/research.py",
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
       "issue": 161,
       "artifact": "accepted provisional issuer P/S kernel evidence",
       "evidence": {
@@ -62,11 +73,12 @@
   ],
   "corpus": {
     "environment": "Local/CI checked-in fixture",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/factors/tests/batches/issuer_tier_valuation_tiny/fixtures/corpus.v1.json",
+    "sha256": "8e0c10c1e0a1ceac78e17daa8e577bb85442f61b9f031f56de872313c8677476",
     "required_strata": [
       "computed S5 issuer P/S composed with one non-financial GPPE observation",
       "traditional, tech, and large-model-native candidate bands at exact boundaries",
+      "negative and zero GPPE remain valid traditional-tier observations",
       "target P/S midpoint and valuation-gap Decimal arithmetic",
       "financial branch, unavailable input, and identity/time/currency mismatch rejection",
       "ambient Decimal-context mutation and canonical semantic identity"
@@ -120,7 +132,7 @@
     ],
     "negative_controls": [
       "binding, candidate-universe, P/S policy, issuer, cutoff, or currency identity mismatch",
-      "missing, unavailable, nonpositive, future, or financial GPPE input",
+      "missing, unavailable, future, or financial GPPE input",
       "missing, unavailable, or nonpositive S5 P/S input",
       "stale semantic, S5 manifest, or public-golden identity",
       "ambient Decimal-context mutation",
