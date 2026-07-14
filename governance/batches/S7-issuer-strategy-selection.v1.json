@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S7-issuer-strategy-selection",
-  "revision": 3,
+  "revision": 4,
   "issue": 181,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Freeze an engine-independent Decimal oracle for transforming exact provisional S6 issuer valuation results into deterministic top-N decisions, then require the version-pinned TrueAlpha Qlib adapter owned by #26 to reproduce it.",
-  "claim_ceiling": "E0 isolated Qlib 0.9.7 selection-adapter code over the frozen corpus; no approved product semantics, real TOPT mapping, stable handoff, registered factor, persistent portfolio state, sizing, replay, or release-readiness claim",
+  "claim_ceiling": "E1 frozen-corpus Qlib selection-adapter evidence only; no approved product semantics, real TOPT mapping, stable handoff, registered factor, persistent portfolio state, sizing, replay, or release-readiness claim",
   "capability_issues": [26],
   "closes_issues": [],
   "informational_issues": [21, 24, 26, 29, 59, 71, 78, 143, 155, 169],
@@ -20,7 +20,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "b33446c01eefa6217c6d8fe797787af886e9ea6b",
+    "base_sha": "891ea6982283b940df3b0973bd1940b03c81888a",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S7 registration is merged to main",
@@ -178,7 +178,7 @@
     "output": {
       "type": "IssuerStrategySelectionTinyEvidence",
       "stable_handoff": false,
-      "state": "accepted_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "issue #25 valuation candidate batch",
         "issue #71 independent Core holdout preparation",

@@ -235,11 +235,11 @@
     "S7-issuer-strategy-selection": {
       "issue": 181,
       "owner_gate": 29,
-      "status": "active",
+      "status": "done",
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S7-issuer-strategy-selection.v1.json",
-      "sha256": "aef1512e23d4e5ab6337ca375a0a5e189ea1188841349a5eb536629094e8dd65"
+      "sha256": "730cf2419dc7795d920998c6d57846c6878bf44c650ec16dadf2e85dc3921bf1"
     }
   },
   "artifact_edges": [
