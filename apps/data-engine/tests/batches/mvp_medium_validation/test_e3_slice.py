@@ -4,6 +4,7 @@ import hashlib
 import os
 import subprocess
 import uuid
+from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 from typing import cast
@@ -17,8 +18,10 @@ from data_engine.batches.mvp_medium_validation.e3_slice import (
     D2E3Activation,
     D2E3RowCompleteManifest,
     FrozenToptDenominator,
+    FrozenToptMarketFixture,
     build_d2_e3_definitions,
     load_topt_denominator,
+    load_topt_market_fixture,
     run_d2_e3,
 )
 from data_engine.config import settings
@@ -116,6 +119,8 @@ def _count(connection, table: str) -> int:
         "raw.fetches",
         "staging.normalized_records",
         "staging.mvp_issuer_security_links",
+        "staging.mvp_market_prices",
+        "staging.mvp_security_listing_links",
         "staging.mvp_universe_memberships",
     }:
         raise ValueError(table)
@@ -142,7 +147,7 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
 
     assert first_result.success and second_result.success
     assert first == second
-    assert first.evidence_id == "d2-e3-evidence:3764fed168f927795f573ec576709943bee287bfdfba9a7eee8504447536fa68"
+    assert first.evidence_id == "d2-e3-evidence:279d25044ac80799fae0362f0e59db39dacdfaa9d763372998204cd344dbbb37"
     assert first.accepted_e2_handoff_id == D2_E2_RUNTIME_HANDOFF_ID
     assert first.denominator.universe_id == "universe:topt-us-2026-03-31"
     assert first.denominator.accession == "000207169126012475"
@@ -154,29 +159,80 @@ def test_e3_dagster_run_is_exact_row_complete_and_idempotent(connection) -> None
     assert first.pre_knowable_rejected
     assert first.fixture_postgres_parity
     assert not first.release_allowed
-    assert len(first.normalized_record_ids) == 84
+    assert first.market_original_raw_sha256 == ("7a160dbd1a5816d0c31e20bd1f0e1ab8d2738e1fc744fc7bf96fa2903d19e038")
+    assert first.market_changed_raw_sha256 != first.market_original_raw_sha256
+    assert len(first.normalized_record_ids) == 168
     assert first.universe_manifest.ref.content_sha256 == (
-        "ad110f24bd26e40fe4b355b951fe3545fd7505b587051a07b9874d9419d7f057"
+        "0320f5d4d6284eb6c72d476e47dca87911c61c79527d14824f839d94c621b129"
     )
     assert len(first.universe_manifest.membership_ids) == 21
     assert len(first.snapshots) == 2
+    assert {snapshot.request.registry_snapshot_id for snapshot in first.snapshots} == {
+        "registry-snapshot:e921cc34339f12b2f5811c203cf6ab6c50238514b35371c03299360aae442541"
+    }
     assert all(len(snapshot.universe_memberships) == 21 for snapshot in first.snapshots)
-    assert all(len(snapshot.normalized_records) == 42 for snapshot in first.snapshots)
-    assert all(len(snapshot.selections) == 42 for snapshot in first.snapshots)
-    assert all(len(row.cells) == 42 for row in first.row_manifests)
+    assert all(len(snapshot.normalized_records) == 84 for snapshot in first.snapshots)
+    assert all(len(snapshot.selections) == 84 for snapshot in first.snapshots)
+    assert all(len(row.cells) == 84 for row in first.row_manifests)
+    market_fixture = load_topt_market_fixture(REPOSITORY_ROOT, first.denominator)
+    source_retrieved_at = max(
+        market_fixture.listing_source.retrieved_at,
+        market_fixture.price_source.retrieved_at,
+    )
+    assert all(
+        record.draft.knowable_at >= source_retrieved_at
+        for snapshot in first.snapshots
+        for record in snapshot.normalized_records
+        if record.draft.semantic_type_id in {"semantic.market-price", "semantic.security-listing-link"}
+    )
+    expected_type_counts = {
+        "semantic.issuer-security-link": 21,
+        "semantic.market-price": 21,
+        "semantic.security-listing-link": 21,
+        "semantic.universe-membership": 21,
+    }
+    assert all(
+        Counter(cell.demand.semantic_type_id for cell in row.cells) == expected_type_counts
+        for row in first.row_manifests
+    )
+    persisted = connection.execute(
+        """
+        select semantic_type_id, count(*), count(raw_ref), count(confidence)
+        from staging.normalized_records
+        where normalized_record_id = any(%s)
+        group by semantic_type_id
+        order by semantic_type_id
+        """,
+        (list(first.normalized_record_ids),),
+    ).fetchall()
+    assert {
+        semantic_type_id: (row_count, raw_lineage_count, confidence_count)
+        for semantic_type_id, row_count, raw_lineage_count, confidence_count in persisted
+    } == {semantic_type_id: (42, 42, 42) for semantic_type_id in expected_type_counts}
+    assert connection.execute(
+        """
+        select count(distinct source_registry_entry_id)
+        from staging.normalized_records
+        where normalized_record_id = any(%s)
+          and semantic_type_id = 'semantic.market-price'
+        """,
+        (list(first.normalized_record_ids),),
+    ).fetchone() == (1,)
     assert first.row_manifests[0].expected_cell_ids == first.row_manifests[1].expected_cell_ids
     selected = [{cell.normalized_record_id for cell in row.cells} for row in first.row_manifests]
     assert selected[0].isdisjoint(selected[1])
 
-    assert _count(connection, "staging.normalized_records") == 297
+    assert _count(connection, "staging.normalized_records") == 381
     assert _count(connection, "staging.mvp_issuer_security_links") == 43
+    assert _count(connection, "staging.mvp_market_prices") == 44
+    assert _count(connection, "staging.mvp_security_listing_links") == 43
     assert _count(connection, "staging.mvp_universe_memberships") == 245
     assert connection.execute("show timezone").fetchone() == ("UTC",)
 
     row_payload = first.row_manifests[0].model_dump(mode="python")
     missing = deepcopy(row_payload)
     missing["cells"] = missing["cells"][:-1]
-    with pytest.raises(ValidationError, match="at least 42 items"):
+    with pytest.raises(ValidationError, match="at least 84 items"):
         D2E3RowCompleteManifest.model_validate(missing)
     duplicate = deepcopy(row_payload)
     duplicate["cells"] = list(duplicate["cells"])
@@ -219,6 +275,36 @@ def test_e3_denominator_rejects_shrink_duplicate_drift_and_float() -> None:
         FrozenToptDenominator.model_validate(schema_drift)
 
 
+def test_e3_market_fixture_rejects_shrink_duplicate_float_and_successor_leak() -> None:
+    denominator = load_topt_denominator(REPOSITORY_ROOT)
+    fixture = load_topt_market_fixture(REPOSITORY_ROOT, denominator)
+    payload = fixture.model_dump(mode="python")
+
+    shrink = deepcopy(payload)
+    shrink["rows"] = shrink["rows"][:-1]
+    with pytest.raises(ValidationError, match="at least 21 items"):
+        FrozenToptMarketFixture.model_validate(shrink)
+
+    duplicate = deepcopy(payload)
+    duplicate["rows"] = list(duplicate["rows"])
+    duplicate["rows"][-1] = duplicate["rows"][0]
+    with pytest.raises(ValidationError, match="incomplete or duplicated"):
+        FrozenToptMarketFixture.model_validate(duplicate)
+
+    binary_float = deepcopy(payload)
+    binary_float["rows"] = list(binary_float["rows"])
+    binary_float["rows"][0]["close"] = 1.5
+    with pytest.raises(ValidationError, match="exact Decimal literals"):
+        FrozenToptMarketFixture.model_validate(binary_float)
+
+    successor_leak = deepcopy(payload)
+    successor_leak["rows"] = list(successor_leak["rows"])
+    xom = next(row for row in successor_leak["rows"] if row["ticker"] == "XOM")
+    xom["issuer_cik_at_report_date"] = "0002115436"
+    with pytest.raises(ValidationError, match="post-report XOM successor"):
+        FrozenToptMarketFixture.model_validate(successor_leak)
+
+
 def test_e3_failure_rolls_back_and_retry_recovers_without_duplicates(connection) -> None:
     class InjectedFailure(RuntimeError):
         pass
@@ -241,7 +327,7 @@ def test_e3_failure_rolls_back_and_retry_recovers_without_duplicates(connection)
     recovered = run_d2_e3(REPOSITORY_ROOT, connection, store, environment="ci")
     repeated = run_d2_e3(REPOSITORY_ROOT, connection, store, environment="ci")
     assert recovered == repeated
-    assert _count(connection, "staging.normalized_records") == 297
+    assert _count(connection, "staging.normalized_records") == 381
 
 
 def test_e3_rows_remain_append_only(connection) -> None:
