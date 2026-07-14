@@ -151,7 +151,7 @@
       "target_rung": "E3",
       "terminal_rung": "E3",
       "manifest": "governance/batches/D2-mvp-medium-validation.v1.json",
-      "sha256": "77038c5167b6a38032a1f459e9c2cb2c8a6d4393284bc0114ee3f5e691f87437"
+      "sha256": "e8b8c7b28a35e82dfe576f53a88fddf2fe93735cdbcc7b5a3c80ac79fdf34dcf"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,
