@@ -24,7 +24,7 @@
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D4 registration and preparation are merged on main",
-      "the tiny interface corpus remains frozen at 3ee8a8de491da80b8b65f828cb81c233d0c819a4b7c1070f6128f92f80c35eb5",
+      "the tiny interface corpus remains frozen at defcec3f857f501dcb635df8d70c27cc64120d742852d6360fca45803b13a0d9",
       "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while the E1 PR rebases on current main",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
@@ -82,7 +82,7 @@
   "corpus": {
     "environment": "Local/CI checked-in typed interface fixtures only",
     "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
-    "sha256": "3ee8a8de491da80b8b65f828cb81c233d0c819a4b7c1070f6128f92f80c35eb5",
+    "sha256": "defcec3f857f501dcb635df8d70c27cc64120d742852d6360fca45803b13a0d9",
     "required_strata": [
       "one immutable list with success and terminal-failure obligations",
       "two overlapping immutable lists in separate compatible runs sharing one campaign-scoped provider work item",

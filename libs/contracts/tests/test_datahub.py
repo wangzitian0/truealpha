@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -779,6 +780,13 @@ def test_frozen_corpus_declares_every_required_e1_negative_control() -> None:
         "source_published_at",
         "raw_object_ref",
     ]
+    source_registry_entry_pattern = re.compile(r"source-registry-entry:[0-9a-f]{64}")
+    assert all(
+        source_registry_entry_pattern.fullmatch(request["source_registry_entry_id"])
+        for request in corpus["source_requests"]
+    )
+    source_vintage_refs = {vintage["source_vintage_ref"] for vintage in corpus["source_vintages"]}
+    assert {observation["source_vintage_ref"] for observation in corpus["observations"]} <= source_vintage_refs
     assert {case["case_id"] for case in corpus["negative_cases"]} == {
         "mutable-universe-alias",
         "duplicate-obligation",
