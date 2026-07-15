@@ -37,21 +37,28 @@ Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
 ## Deployment
 
-Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC
-(pinned here as the `repo/` submodule, same as finance_report). This repo owns the
-images — `release-images.yml` pushes `ghcr.io/wangzitian0/truealpha-app-web` and
-`truealpha-llm-service` on main/tags; infra2's `truealpha/truealpha/` service tree
-owns deployed Compose, Vault secrets, Traefik routes, persistent Postgres, and
-the environment-specific S3-compatible storage binding. Deploy (from `repo/`):
+Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC.
+TrueAlpha does not checkout or execute infra2 source. This repo owns the images;
+infra2 owns deployed Compose, Vault secrets, Traefik routes, persistent Postgres,
+the environment-specific S3-compatible storage binding, and every deployment side
+effect. The application pins only the versioned `infra2-sdk` request contract.
 
 Those two images are the current scaffold, not a complete Production release. Gate 4
 requires #11/#52 to add an immutable data-engine/Dagster artifact and bind every service,
 migration, catalog/SLO version, and configuration hash in one signed release manifest;
 manual host sweeps cannot satisfy scheduled or promotion evidence.
 
+The local tool below validates and renders a staging `DeployRequest v1` as canonical
+JSON. It does not send the request. The infra2 receiver is not enabled for TrueAlpha,
+and Production requests remain deny-all until infra2 verifies remote evidence.
+
 ```bash
-python -m tools.deploy_v2 --service truealpha/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
-python -m tools.deploy_v2 --service truealpha/app      --type staging --iac-ref vX.Y.Z --domain zitian.party
+uv run python tools/app_deploy_request.py \
+  --request-id truealpha-run-12345678 \
+  --version-ref v1.2.3 \
+  --source-sha 1234567890abcdef1234567890abcdef12345678 \
+  --source-run-url https://github.com/wangzitian0/truealpha/actions/runs/12345678 \
+  --source-run-id 12345678
 ```
 
 ## Status

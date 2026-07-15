@@ -27,6 +27,7 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
+    { name = "infra2-sdk", url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pandas-stubs", specifier = ">=2.2" },
 ]
@@ -579,6 +580,27 @@ sdist = { url = "https://files.pythonhosted.org/packages/cd/63/9496c57188a2ee585
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl", hash = "sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2", size = 65455, upload-time = "2026-06-02T14:34:06.319Z" },
 ]
+
+[[package]]
+name = "infra2-sdk"
+version = "0.1.0"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl" }
+dependencies = [
+    { name = "pyyaml" },
+]
+wheels = [
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl", hash = "sha256:94bfdc8b13c5bdcef9ee9150eda0ec794d3b3a0b4b11d529c29d6a2a1ba32a55" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2,<2" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<10" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<8" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "iniconfig"

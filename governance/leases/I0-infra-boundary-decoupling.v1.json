@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:682cf83ab7e27d683e9642f41bca9315a099ebd8c43da0d9c0f13aaab4d6a52f",
+  "batch_id": "I0-infra-boundary-decoupling",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "base_sha": "d23826fa4b5f041fb9f9ab8c6a7b156eff10605c",
+  "expires_at": "2026-07-22T00:00:00Z"
+}
