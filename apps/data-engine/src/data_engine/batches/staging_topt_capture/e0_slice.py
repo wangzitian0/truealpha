@@ -132,7 +132,7 @@ class YahooChartRequest(BaseModel):
     security_id: str = Field(pattern=r"^security:[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
     listing_id: str = Field(pattern=r"^listing:[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
     symbol: str = Field(pattern=r"^[A-Z][A-Z0-9.\-]{0,15}$")
-    exchange_mic: Literal["XNAS"]
+    exchange_mic: Literal["XNAS", "XNYS"]
     currency: Literal["USD"]
     query_start: date
     query_end_exclusive: date
@@ -197,7 +197,7 @@ class YahooDailyBar(ExpectedYahooBar):
     """Parsed source bar; adjusted close is retained only for reconciliation."""
 
     issuer_id: str
-    exchange_mic: Literal["XNAS"]
+    exchange_mic: Literal["XNAS", "XNYS"]
     raw_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     price_basis: Literal["unadjusted"] = "unadjusted"
     adjusted_close_use: Literal["reconciliation-only"] = "reconciliation-only"
@@ -348,12 +348,17 @@ def parse_yahoo_chart_response(body: bytes, request: YahooChartRequest) -> Yahoo
     meta = result.get("meta")
     if not isinstance(meta, dict):
         raise ValueError("Yahoo chart metadata is missing")
+    exchange_metadata = {
+        "XNAS": ("NMS", "NasdaqGS"),
+        "XNYS": ("NYQ", "NYSE"),
+    }
+    exchange_name, full_exchange_name = exchange_metadata[request.exchange_mic]
     expected_meta = {
         "symbol": request.symbol,
         "currency": request.currency,
         "instrumentType": "EQUITY",
-        "exchangeName": "NMS",
-        "fullExchangeName": "NasdaqGS",
+        "exchangeName": exchange_name,
+        "fullExchangeName": full_exchange_name,
         "exchangeTimezoneName": "America/New_York",
     }
     for key, expected in expected_meta.items():

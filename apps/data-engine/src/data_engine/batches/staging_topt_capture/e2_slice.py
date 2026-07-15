@@ -255,6 +255,8 @@ def _normalize_execution(
     predecessor: NormalizedRecordRef | None,
     fetched_at: datetime,
     recorded_at: datetime,
+    ticker: str | None = None,
+    calendar_id: str = "calendar.xnas",
 ) -> tuple[MarketPricePayload, NormalizedRecordRef]:
     result = execution.result
     bar = result.normalized_bar
@@ -273,8 +275,8 @@ def _normalize_execution(
         listing_id=bar.listing_id,
         share_class="common",
         exchange_mic=bar.exchange_mic,
-        ticker=bar.symbol,
-        calendar_id="calendar.xnas",
+        ticker=ticker or bar.symbol,
+        calendar_id=calendar_id,
         calendar_version=VERSION,
         trading_date=bar.trading_date,
         session_close_at=bar.session_close_at,
