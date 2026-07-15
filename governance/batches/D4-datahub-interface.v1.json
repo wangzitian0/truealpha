@@ -20,12 +20,12 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "7770219561bfbfa9172c0f69011efd109cf31d91",
+    "base_sha": "9f7acc9f72fb84a3aefc355875ac4524ef497d2c",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D4 registration and preparation are merged on main",
       "the tiny interface corpus remains frozen at 3ee8a8de491da80b8b65f828cb81c233d0c819a4b7c1070f6128f92f80c35eb5",
-      "the E1 implementation PR pins exact current main base 7770219561bfbfa9172c0f69011efd109cf31d91",
+      "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while the E1 PR rebases on current main",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
       "issue #210 contains this manifest path and exact SHA-256",
