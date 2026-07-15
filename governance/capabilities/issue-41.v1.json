@@ -3,5 +3,18 @@
   "issue": 41,
   "gate": 31,
   "terminal_evidence": "E2",
-  "artifact_edges": []
+  "artifact_edges": [
+    {
+      "from": 40,
+      "to": 41,
+      "class": "freeze",
+      "artifact": "accepted all-module replay candidate"
+    },
+    {
+      "from": 210,
+      "to": 41,
+      "class": "freeze",
+      "artifact": "accepted D4 E2 DataHub interface handoff"
+    }
+  ]
 }
