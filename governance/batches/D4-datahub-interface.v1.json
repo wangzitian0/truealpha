@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "D4-datahub-interface",
-  "revision": 5,
+  "revision": 6,
   "issue": 210,
   "owner_gate": 29,
   "status": "done",
