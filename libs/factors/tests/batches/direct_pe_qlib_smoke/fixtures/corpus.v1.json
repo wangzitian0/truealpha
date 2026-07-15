@@ -1,0 +1,289 @@
+{
+  "schema_version": 1,
+  "corpus_id": "s9-direct-pe-qlib-smoke-corpus-v1",
+  "batch_id": "S9-direct-pe-qlib-smoke",
+  "claim_ceiling": "Preparation-only fixed-cohort direct-vendor-P/E and unadjusted-price corpus; this earns no rung and proves no PIT vendor-history semantics, historical PEG, total return, survivorship safety, strategy validity, alpha, stable handoff, or release readiness.",
+  "contract_refs": {
+    "s7_terminal_manifest": {
+      "path": "governance/batches/S7-issuer-strategy-selection.v1.json",
+      "sha256": "730cf2419dc7795d920998c6d57846c6878bf44c650ec16dadf2e85dc3921bf1",
+      "state": "accepted_e1"
+    },
+    "s8_terminal_manifest": {
+      "path": "governance/batches/S8-qlib-factor-expression.v1.json",
+      "sha256": "4d2ff50a09e3e13a71c82392f450d4ad76774583e2c1e13c0acd0528d2b34007",
+      "state": "accepted_e1"
+    }
+  },
+  "engine_binding": {
+    "distribution": "pyqlib",
+    "version": "0.9.7",
+    "release_commit": "da920b7f954f48ab1bb64117c976710de198373e",
+    "runtime_project_path": "libs/factors/qlib-runtime/pyproject.toml",
+    "runtime_project_sha256": "2798224979aedffaacc5e31a6d5e571e0856b353debfa216ae8d32fdc0a0bf23",
+    "runtime_lock_path": "libs/factors/qlib-runtime/uv.lock",
+    "runtime_lock_sha256": "24068139dbc0e18e73e73f416d4a51695daf0fcffe067e69c3fddfcf7316c6d0",
+    "selection_adapter_path": "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/kernel.py",
+    "selection_adapter_sha256": "1c27d629231c6c4ae69d552c9158fe2a544b11f22437c69c4fe35274aeaed099",
+    "expression_compiler_path": "libs/factors/src/factors/batches/qlib_expression_contract_tiny/compiler.py",
+    "expression_compiler_sha256": "92cfc7ed5f85f7ac372d74e9809a13675c5cad3743bd9bd631ddbe178f384906",
+    "expression_fixture_path": "libs/contracts/tests/fixtures/qlib_expression.v1.json",
+    "expression_fixture_sha256": "dc1076517908739577bee2b1782e75c106200b0f8eb3594826135788bdebdace"
+  },
+  "source_artifacts": {
+    "DDOG": {
+      "direct_pe": {
+        "path": "apps/data-engine/samples/moomoo/DDOG.json",
+        "sha256": "925570ac2466f6f2f69aeb327f99ed62fc76795a321f2eaa1b8ae0e0c3900000"
+      },
+      "unadjusted_prices": {
+        "path": "apps/data-engine/samples/prices/DDOG_prices_3y_20260712.csv",
+        "sha256": "f491bec90e64488d6dc680d9c683d6d56baded6920aa9b19f389ab25606051c4"
+      }
+    },
+    "DUOL": {
+      "direct_pe": {
+        "path": "apps/data-engine/samples/moomoo/DUOL.json",
+        "sha256": "8450d29acb4737f7e091d539977a318ce6905dbfa69eb343c9aeb04d42824ebb"
+      },
+      "unadjusted_prices": {
+        "path": "apps/data-engine/samples/prices/DUOL_prices_3y_20260712.csv",
+        "sha256": "6aa2c102f2920e002dea1470ad8cd9d26541056c418d8ec2995466de8d894853"
+      }
+    },
+    "NICE": {
+      "direct_pe": {
+        "path": "apps/data-engine/samples/moomoo/NICE.json",
+        "sha256": "c6c86c621a1398eb305f5fee26f84e295f0377fce1ab4bcc0fe29e13d593b2dd"
+      },
+      "unadjusted_prices": {
+        "path": "apps/data-engine/samples/prices/NICE_prices_3y_20260712.csv",
+        "sha256": "67ca7acde41b6d9a855a6f2a242be6ab6297c01e25c53f255640e2be979f3391"
+      }
+    },
+    "SHOP": {
+      "direct_pe": {
+        "path": "apps/data-engine/samples/moomoo/SHOP.json",
+        "sha256": "0438047f45f5922cc1d2cc853ca18321141e79c4892b3d4567e7e2be92ff2577"
+      },
+      "unadjusted_prices": {
+        "path": "apps/data-engine/samples/prices/SHOP_prices_3y_20260712.csv",
+        "sha256": "a604b9e44dcf9a4d83fccda9c29741c267ee19178bc42214789460c4d33393d4"
+      }
+    }
+  },
+  "projection_contract": {
+    "factor_visible_fields": [
+      "instrument_id",
+      "observation_date",
+      "direct_pe",
+      "confidence",
+      "input_id"
+    ],
+    "runner_visible_price_fields": [
+      "instrument_id",
+      "session_date",
+      "unadjusted_open",
+      "unadjusted_close",
+      "input_id"
+    ],
+    "factor_forbidden_fields": [
+      "source",
+      "source_path",
+      "vendor",
+      "raw_ref",
+      "adjusted_close",
+      "current_ttm_growth_multiple"
+    ],
+    "confidence": "1",
+    "duplicate_coordinate_policy": "fail_closed",
+    "future_observation_policy": "fail_closed",
+    "nonpositive_pe_policy": "unavailable",
+    "nonpositive_price_policy": "fail_closed"
+  },
+  "expression": {
+    "factor_id": "factor.sample.earnings_yield",
+    "factor_version": "1.0.0",
+    "output_kind": "dimensionless_float64",
+    "null_policy": "operator_declared",
+    "feature_bindings": [
+      {
+        "feature_binding_id": "feature.direct_pe.v1",
+        "qlib_field_name": "pe"
+      }
+    ],
+    "root": {
+      "kind": "call",
+      "operator_id": "truealpha.qlib.div.v1",
+      "arguments": [
+        {
+          "kind": "numeric",
+          "value": "1"
+        },
+        {
+          "kind": "feature",
+          "feature_binding_id": "feature.direct_pe.v1"
+        }
+      ]
+    },
+    "expected_compiled_qlib_field": "Div(1,$pe)",
+    "maximum_lookback_sessions": 0,
+    "oracle": "finite positive direct P/E maps to Decimal(1) / P/E under a fixed 34-digit ROUND_HALF_EVEN context; missing, zero, and negative P/E map to unavailable"
+  },
+  "universe": {
+    "universe_id": "fixed-cohort:ddog-duol-nice-shop:v1",
+    "symbols": [
+      "DDOG",
+      "DUOL",
+      "NICE",
+      "SHOP"
+    ],
+    "survivorship_safe": false,
+    "denominator_may_shrink": false
+  },
+  "observed_profiles": {
+    "DDOG": {
+      "pe_points": 1709,
+      "pe_start": "2019-09-19",
+      "pe_end": "2026-07-09",
+      "price_sessions": 754,
+      "price_start": "2023-07-10",
+      "price_end": "2026-07-10"
+    },
+    "DUOL": {
+      "pe_points": 1242,
+      "pe_start": "2021-07-28",
+      "pe_end": "2026-07-09",
+      "price_sessions": 754,
+      "price_start": "2023-07-10",
+      "price_end": "2026-07-10"
+    },
+    "NICE": {
+      "pe_points": 2513,
+      "pe_start": "2016-07-11",
+      "pe_end": "2026-07-09",
+      "price_sessions": 754,
+      "price_start": "2023-07-10",
+      "price_end": "2026-07-10"
+    },
+    "SHOP": {
+      "pe_points": 2513,
+      "pe_start": "2016-07-11",
+      "pe_end": "2026-07-09",
+      "price_sessions": 754,
+      "price_start": "2023-07-10",
+      "price_end": "2026-07-10"
+    }
+  },
+  "replay_contract": {
+    "common_sessions": 754,
+    "common_start": "2023-07-10",
+    "common_end": "2026-07-10",
+    "decision_rule": "last common observed trading session of each completed calendar month",
+    "execution_rule": "next common observed trading session open",
+    "selection_rule": "one instrument with the highest positive earnings yield",
+    "sizing_rule": "full notional in the selected instrument, retaining only indivisible Decimal residual cash",
+    "valuation_rule": "unadjusted close on every common observed trading session",
+    "return_rule": "price return only; no split, dividend, or adjusted-close effect",
+    "transaction_cost": "0",
+    "minimum_executable_decisions": 30,
+    "expected_executable_decisions": 36
+  },
+  "expected_monthly_decisions": [
+    {"decision_date":"2023-07-31","execution_date":"2023-08-01","selected_symbol":"NICE","selected_pe_date":"2023-07-31","selected_pe":"50.899","positive_candidate_count":1},
+    {"decision_date":"2023-08-31","execution_date":"2023-09-01","selected_symbol":"NICE","selected_pe_date":"2023-08-31","selected_pe":"42.255","positive_candidate_count":1},
+    {"decision_date":"2023-09-29","execution_date":"2023-10-02","selected_symbol":"NICE","selected_pe_date":"2023-09-29","selected_pe":"36.876","positive_candidate_count":1},
+    {"decision_date":"2023-10-31","execution_date":"2023-11-01","selected_symbol":"NICE","selected_pe_date":"2023-10-31","selected_pe":"33.481","positive_candidate_count":1},
+    {"decision_date":"2023-11-30","execution_date":"2023-12-01","selected_symbol":"NICE","selected_pe_date":"2023-11-30","selected_pe":"38.488","positive_candidate_count":1},
+    {"decision_date":"2023-12-29","execution_date":"2024-01-02","selected_symbol":"NICE","selected_pe_date":"2023-12-29","selected_pe":"40.468","positive_candidate_count":1},
+    {"decision_date":"2024-01-31","execution_date":"2024-02-01","selected_symbol":"NICE","selected_pe_date":"2024-01-31","selected_pe":"42.21","positive_candidate_count":1},
+    {"decision_date":"2024-02-29","execution_date":"2024-03-01","selected_symbol":"NICE","selected_pe_date":"2024-02-29","selected_pe":"47.974","positive_candidate_count":4},
+    {"decision_date":"2024-03-28","execution_date":"2024-04-01","selected_symbol":"NICE","selected_pe_date":"2024-03-28","selected_pe":"51.001","positive_candidate_count":4},
+    {"decision_date":"2024-04-30","execution_date":"2024-05-01","selected_symbol":"NICE","selected_pe_date":"2024-04-30","selected_pe":"43.739","positive_candidate_count":4},
+    {"decision_date":"2024-05-31","execution_date":"2024-06-03","selected_symbol":"NICE","selected_pe_date":"2024-05-31","selected_pe":"33.016","positive_candidate_count":3},
+    {"decision_date":"2024-06-28","execution_date":"2024-07-01","selected_symbol":"NICE","selected_pe_date":"2024-06-28","selected_pe":"30.929","positive_candidate_count":3},
+    {"decision_date":"2024-07-31","execution_date":"2024-08-01","selected_symbol":"NICE","selected_pe_date":"2024-07-31","selected_pe":"32.552","positive_candidate_count":3},
+    {"decision_date":"2024-08-30","execution_date":"2024-09-03","selected_symbol":"NICE","selected_pe_date":"2024-08-30","selected_pe":"28.956","positive_candidate_count":4},
+    {"decision_date":"2024-09-30","execution_date":"2024-10-01","selected_symbol":"NICE","selected_pe_date":"2024-09-30","selected_pe":"28.945","positive_candidate_count":4},
+    {"decision_date":"2024-10-31","execution_date":"2024-11-01","selected_symbol":"NICE","selected_pe_date":"2024-10-31","selected_pe":"28.95","positive_candidate_count":4},
+    {"decision_date":"2024-11-29","execution_date":"2024-12-02","selected_symbol":"NICE","selected_pe_date":"2024-11-29","selected_pe":"28.197","positive_candidate_count":4},
+    {"decision_date":"2024-12-31","execution_date":"2025-01-02","selected_symbol":"NICE","selected_pe_date":"2024-12-31","selected_pe":"26.25","positive_candidate_count":4},
+    {"decision_date":"2025-01-31","execution_date":"2025-02-03","selected_symbol":"NICE","selected_pe_date":"2025-01-31","selected_pe":"25.678","positive_candidate_count":4},
+    {"decision_date":"2025-02-28","execution_date":"2025-03-03","selected_symbol":"NICE","selected_pe_date":"2025-02-28","selected_pe":"20.588","positive_candidate_count":4},
+    {"decision_date":"2025-03-31","execution_date":"2025-04-01","selected_symbol":"NICE","selected_pe_date":"2025-03-31","selected_pe":"22.806","positive_candidate_count":4},
+    {"decision_date":"2025-04-30","execution_date":"2025-05-01","selected_symbol":"NICE","selected_pe_date":"2025-04-30","selected_pe":"23.055","positive_candidate_count":4},
+    {"decision_date":"2025-05-30","execution_date":"2025-06-02","selected_symbol":"NICE","selected_pe_date":"2025-05-30","selected_pe":"23.142","positive_candidate_count":4},
+    {"decision_date":"2025-06-30","execution_date":"2025-07-01","selected_symbol":"NICE","selected_pe_date":"2025-06-30","selected_pe":"23.557","positive_candidate_count":4},
+    {"decision_date":"2025-07-31","execution_date":"2025-08-01","selected_symbol":"NICE","selected_pe_date":"2025-07-31","selected_pe":"21.764","positive_candidate_count":4},
+    {"decision_date":"2025-08-29","execution_date":"2025-09-02","selected_symbol":"NICE","selected_pe_date":"2025-08-29","selected_pe":"28.44","positive_candidate_count":4},
+    {"decision_date":"2025-09-30","execution_date":"2025-10-01","selected_symbol":"NICE","selected_pe_date":"2025-09-30","selected_pe":"17.297","positive_candidate_count":4},
+    {"decision_date":"2025-10-31","execution_date":"2025-11-03","selected_symbol":"NICE","selected_pe_date":"2025-10-31","selected_pe":"16.327","positive_candidate_count":4},
+    {"decision_date":"2025-11-28","execution_date":"2025-12-01","selected_symbol":"NICE","selected_pe_date":"2025-11-28","selected_pe":"12.053","positive_candidate_count":4},
+    {"decision_date":"2025-12-31","execution_date":"2026-01-02","selected_symbol":"NICE","selected_pe_date":"2025-12-31","selected_pe":"12.845","positive_candidate_count":4},
+    {"decision_date":"2026-01-30","execution_date":"2026-02-02","selected_symbol":"NICE","selected_pe_date":"2026-01-30","selected_pe":"12.092","positive_candidate_count":4},
+    {"decision_date":"2026-02-27","execution_date":"2026-03-02","selected_symbol":"DUOL","selected_pe_date":"2026-02-27","selected_pe":"11.785","positive_candidate_count":4},
+    {"decision_date":"2026-03-31","execution_date":"2026-04-01","selected_symbol":"NICE","selected_pe_date":"2026-03-31","selected_pe":"11.402","positive_candidate_count":4},
+    {"decision_date":"2026-04-30","execution_date":"2026-05-01","selected_symbol":"NICE","selected_pe_date":"2026-04-30","selected_pe":"10.55","positive_candidate_count":4},
+    {"decision_date":"2026-05-29","execution_date":"2026-06-01","selected_symbol":"NICE","selected_pe_date":"2026-05-29","selected_pe":"10.991","positive_candidate_count":4},
+    {"decision_date":"2026-06-30","execution_date":"2026-07-01","selected_symbol":"NICE","selected_pe_date":"2026-06-30","selected_pe":"10.776","positive_candidate_count":4}
+  ],
+  "current_peg_snapshot": {
+    "as_captured_only": true,
+    "historical_decision_input": false,
+    "formula": "direct current P/E / direct current financial_ttm_multiple",
+    "decimal_context": "precision=34, rounding=ROUND_HALF_EVEN",
+    "rows": [
+      {"symbol":"DDOG","current_pe":"689.743","current_ttm_growth_multiple":"65.828","expected_current_peg":"10.47795770796621498450507382876587"},
+      {"symbol":"DUOL","current_pe":"14.868","current_ttm_growth_multiple":"26.289","expected_current_peg":"0.5655597398151318041766518315645327"},
+      {"symbol":"NICE","current_pe":"11.608","current_ttm_growth_multiple":"2.613","expected_current_peg":"4.442403367776502104860313815537696"},
+      {"symbol":"SHOP","current_pe":"120.754","current_ttm_growth_multiple":"0.39","expected_current_peg":"309.6256410256410256410256410256410"}
+    ]
+  },
+  "report_contract": {
+    "canonical_json": "UTF-8, sorted object keys, compact separators, ASCII escaping, newline terminated",
+    "markdown": "deterministic rendering of canonical JSON only",
+    "required_sections": [
+      "evidence_ceiling",
+      "input_artifacts",
+      "runtime",
+      "expression",
+      "universe",
+      "schedule",
+      "current_peg_snapshot",
+      "decisions",
+      "exclusions",
+      "trades",
+      "daily_portfolio",
+      "coverage",
+      "turnover",
+      "price_return",
+      "drawdown",
+      "equal_weight_sanity_benchmark"
+    ],
+    "mandatory_caveats": [
+      "provisional E1",
+      "fixed cohort",
+      "vendor history may be backfilled or restated",
+      "unadjusted price return only",
+      "no corporate-action total return",
+      "not survivorship safe",
+      "no validated strategy",
+      "no alpha claim"
+    ]
+  },
+  "negative_cases": [
+    {"case_id":"future-pe","mutation":"move one selected P/E observation after its decision cutoff","expected_error":"future_feature"},
+    {"case_id":"duplicate-pe","mutation":"duplicate one instrument/date P/E coordinate","expected_error":"duplicate_feature_coordinate"},
+    {"case_id":"duplicate-price","mutation":"duplicate one instrument/date price coordinate","expected_error":"duplicate_price_coordinate"},
+    {"case_id":"zero-pe","mutation":"set P/E to zero and rank it","expected_error":"nonpositive_pe_ranked"},
+    {"case_id":"negative-pe","mutation":"set P/E negative and rank it","expected_error":"nonpositive_pe_ranked"},
+    {"case_id":"adjusted-close","mutation":"substitute adjusted close for unadjusted close","expected_error":"adjusted_price_forbidden"},
+    {"case_id":"invalid-open","mutation":"set next-session open to zero","expected_error":"nonpositive_execution_price"},
+    {"case_id":"missing-next-session","mutation":"remove the next execution session","expected_error":"missing_next_session"},
+    {"case_id":"growth-backfill","mutation":"attach current TTM growth to any historical decision row","expected_error":"historical_peg_lookahead"},
+    {"case_id":"expression-bypass","mutation":"supply a raw Qlib expression string","expected_error":"typed_expression_required"},
+    {"case_id":"runtime-drift","mutation":"change Qlib version, lock, wheel, adapter, compiler, or registry identity","expected_error":"qlib_execution_identity_drift"},
+    {"case_id":"denominator-shrink","mutation":"drop one fixed-cohort symbol","expected_error":"universe_denominator_mismatch"},
+    {"case_id":"misleading-claim","mutation":"label the report total return, survivorship safe, validated strategy, or alpha evidence","expected_error":"evidence_ceiling_violation"}
+  ]
+}
