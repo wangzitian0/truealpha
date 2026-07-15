@@ -262,11 +262,11 @@
     "I0-infra-boundary-decoupling": {
       "issue": 201,
       "owner_gate": 32,
-      "status": "queued",
+      "status": "prepared",
       "target_rung": "E0",
       "terminal_rung": "E1",
       "manifest": "governance/batches/I0-infra-boundary-decoupling.v1.json",
-      "sha256": "c5e7d20a8d5bdbe9f6c8f240b8eacdd443b9edcc46511d727aa0fbab4ee633e7"
+      "sha256": "a89886ea63e4f5e6e7d4f044933723fab6230833f8243175ec87655e7399c111"
     },
     "S10-factor-matrix-samples": {
       "issue": 208,
