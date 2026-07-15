@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "corpus_id": "i0-infra-boundary-corpus-v1",
+  "batch_id": "I0-infra-boundary-decoupling",
+  "claim_ceiling": "Preparation-only repository-boundary and DeployRequest fixtures; this earns no rung, authorizes no dispatch, activates no infra2 receiver, and proves no live-environment or Production readiness.",
+  "sdk_binding": {
+    "distribution": "infra2-sdk",
+    "version": "0.1.0",
+    "contract_version": 1,
+    "module": "infra2_sdk.deploy",
+    "request_type": "DeployRequest",
+    "release_url": "https://github.com/wangzitian0/infra2-sdk/releases/tag/v0.1.0",
+    "wheel_url": "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl",
+    "wheel_sha256": "94bfdc8b13c5bdcef9ee9150eda0ec794d3b3a0b4b11d529c29d6a2a1ba32a55"
+  },
+  "repository_boundary": {
+    "application_repository": "wangzitian0/truealpha",
+    "infrastructure_repository": "wangzitian0/infra2",
+    "source_dependency_allowed": false,
+    "dispatch_allowed": false,
+    "receiver_enabled": false,
+    "production_allowed": false,
+    "required_absent_paths": [
+      ".gitmodules",
+      "repo"
+    ],
+    "required_removed_references": [
+      ".dockerignore:repo",
+      "pyproject.toml:extend-exclude=repo",
+      "README.md:execute infra2 from repo/",
+      "CLAUDE.md:bump the repo submodule pointer"
+    ],
+    "allowed_authority": "Render and validate deterministic request JSON locally; infra2 alone owns remote validation and deployment side effects."
+  },
+  "renderer_contract": {
+    "operation": "deploy",
+    "service": "truealpha/app",
+    "deploy_type": "staging",
+    "source_repository": "wangzitian0/truealpha",
+    "allowed_version_ref_forms": [
+      "main",
+      "vX.Y.Z",
+      "7-to-40-character hexadecimal commit SHA"
+    ],
+    "canonical_json": "UTF-8, sorted object keys, compact separators, ASCII escaping, newline terminated",
+    "network_access": false,
+    "filesystem_mutation": false
+  },
+  "cases": [
+    {
+      "id": "valid-staging-tag",
+      "expected": "accepted",
+      "request": {
+        "contract_version": 1,
+        "request_id": "truealpha-run-12345678",
+        "operation": "deploy",
+        "service": "truealpha/app",
+        "deploy_type": "staging",
+        "version_ref": "v1.2.3",
+        "source_repository": "wangzitian0/truealpha",
+        "source_sha": "1234567890abcdef1234567890abcdef12345678",
+        "evidence": {
+          "source_run_url": "https://github.com/wangzitian0/truealpha/actions/runs/12345678",
+          "source_run_id": "12345678",
+          "staging_run_url": "",
+          "reviewed_change_url": ""
+        }
+      }
+    },
+    {
+      "id": "invalid-service",
+      "expected": "rejected",
+      "override": {
+        "service": "truealpha/postgres"
+      },
+      "error": "service must be truealpha/app"
+    },
+    {
+      "id": "invalid-source-repository",
+      "expected": "rejected",
+      "override": {
+        "source_repository": "wangzitian0/infra2"
+      },
+      "error": "source_repository must be wangzitian0/truealpha"
+    },
+    {
+      "id": "invalid-version-ref",
+      "expected": "rejected",
+      "override": {
+        "version_ref": "feature/unsafe"
+      },
+      "error": "unrecognized deploy ref"
+    },
+    {
+      "id": "invalid-source-sha",
+      "expected": "rejected",
+      "override": {
+        "source_sha": "ABCDEF0"
+      },
+      "error": "source_sha must be a lowercase 40-hex commit sha"
+    },
+    {
+      "id": "invalid-source-evidence-host",
+      "expected": "rejected",
+      "override": {
+        "evidence": {
+          "source_run_url": "https://example.com/actions/runs/12345678"
+        }
+      },
+      "error": "evidence.source_run_url must point to the TrueAlpha GitHub Actions run"
+    },
+    {
+      "id": "invalid-source-evidence-repository",
+      "expected": "rejected",
+      "override": {
+        "evidence": {
+          "source_run_url": "https://github.com/wangzitian0/infra2/actions/runs/12345678"
+        }
+      },
+      "error": "evidence.source_run_url must point to the TrueAlpha GitHub Actions run"
+    },
+    {
+      "id": "production-deny-all",
+      "expected": "rejected",
+      "override": {
+        "deploy_type": "prod",
+        "evidence": {
+          "source_run_url": "https://github.com/wangzitian0/truealpha/actions/runs/12345678",
+          "staging_run_url": "https://github.com/wangzitian0/truealpha/actions/runs/12345679",
+          "reviewed_change_url": "https://github.com/wangzitian0/truealpha/pull/200"
+        }
+      },
+      "error": "production requests are disabled until infra2 remotely verifies evidence and enables the receiver"
+    }
+  ]
+}

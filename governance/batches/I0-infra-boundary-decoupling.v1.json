@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "I0-infra-boundary-decoupling",
-  "revision": 1,
+  "revision": 2,
   "issue": 201,
   "owner_gate": 32,
-  "status": "queued",
+  "status": "prepared",
   "lane": "orchestration-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E1",
   "objective": "Remove TrueAlpha's reverse source dependency on infra2 and replace it with a versioned, side-effect-free deploy-request contract boundary.",
-  "claim_ceiling": "E0 repository-boundary code and deterministic DeployRequest rendering only; no dispatch sender, runtime activation, live-environment evidence, or Production-readiness claim",
+  "claim_ceiling": "Preparation-only repository-boundary and DeployRequest corpus; this revision earns no rung and approves no implementation, dispatch sender, runtime activation, live-environment evidence, or Production-readiness claim",
   "capability_issues": [
     11
   ],
@@ -20,11 +20,11 @@
   ],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "96cb91e409e113dd132633db9bab9808786b59c9",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued batch registration is merged to main before corpus preparation",
@@ -45,7 +45,7 @@
   "corpus": {
     "environment": "Local/CI checked-in repository-boundary fixture",
     "manifest_path": "libs/runtime/tests/fixtures/infra_boundary.v1.json",
-    "sha256": null,
+    "sha256": "77b85d568747ac99ad6846d0fcdbca1788a6101a8cbc5ad57dbd7a2d758cd1f6",
     "required_strata": [
       "SDK v0.1.0 immutable release pin and installed distribution identity",
       "valid TrueAlpha staging DeployRequest v1 round trip",
