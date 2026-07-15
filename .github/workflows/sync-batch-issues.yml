@@ -2,6 +2,8 @@ name: sync-batch-issues
 
 on:
   workflow_call:
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]
 
 permissions:
   contents: read
@@ -9,6 +11,7 @@ permissions:
 
 jobs:
   sync:
+    if: github.event_name != 'issues' || github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -28,10 +31,13 @@ jobs:
           import os
           import subprocess
 
-          from tools.check_delivery_governance import batch_status_labels, render_batch_issue_body
+          from tools.check_delivery_governance import (
+              batch_status_labels,
+              load_vision_graph,
+              render_batch_issue_body,
+          )
 
-          with open("governance/vision-issue-graph.json", encoding="utf-8") as stream:
-              graph = json.load(stream)
+          graph = load_vision_graph()
           repository = os.environ["GITHUB_REPOSITORY"]
           for batch_id, batch in graph["batches"].items():
               desired_status = batch_status_labels(batch)

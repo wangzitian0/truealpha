@@ -1,0 +1,53 @@
+name: sync-standalone-issue
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  close-work-issue:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Close the declared standalone work issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          metadata="$(python3 - <<'PY'
+          import os
+          import re
+
+          body = os.environ.get("PR_BODY", "")
+          fields = {}
+          for key in ("Work-Issue", "Work-Key", "Issue-Action"):
+              values = re.findall(rf"^{key}:[ \t]*([^\r\n]+?)[ \t]*$", body, re.MULTILINE)
+              if len(values) != 1:
+                  raise SystemExit(f"expected exactly one {key}")
+              fields[key] = values[0]
+          issue_match = re.fullmatch(r"#([1-9][0-9]*)", fields["Work-Issue"])
+          if issue_match is None:
+              raise SystemExit("invalid Work-Issue")
+          issue = issue_match.group(1)
+          if fields["Work-Key"] != f"standalone-{issue}":
+              raise SystemExit("invalid standalone Work-Key")
+          if fields["Issue-Action"] != "complete-on-merge":
+              raise SystemExit(0)
+          print(issue)
+          PY
+          )"
+          test -n "$metadata" || exit 0
+          issue_title="$(gh issue view "$metadata" --repo "$GITHUB_REPOSITORY" --json title --jq .title)"
+          test "${PR_TITLE%% *}" = "${issue_title%% *}"
+          gh issue close "$metadata" \
+            --repo "$GITHUB_REPOSITORY" \
+            --comment "Completed by merged PR #$PR_NUMBER at exact head $PR_HEAD_SHA."

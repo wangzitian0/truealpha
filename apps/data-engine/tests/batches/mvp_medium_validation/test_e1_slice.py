@@ -41,7 +41,6 @@ REPOSITORY_ROOT = next(
     for parent in Path(__file__).resolve().parents
     if (parent / "governance" / "vision-issue-graph.json").is_file()
 )
-GRAPH_PATH = Path("governance/vision-issue-graph.json")
 
 
 class MemoryRawObjectStore:
@@ -218,8 +217,7 @@ def test_e1_manifest_corpus_and_graph_transition_are_exact() -> None:
     manifest = json.loads(manifest_bytes)
     corpus_bytes = (REPOSITORY_ROOT / CORPUS_PATH).read_bytes()
     corpus = json.loads(corpus_bytes)
-    graph = json.loads((REPOSITORY_ROOT / GRAPH_PATH).read_bytes())
-    graph_entry = graph["batches"]["D2-mvp-medium-validation"]
+    static_graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
     lease_path = REPOSITORY_ROOT / "governance/leases/D2-mvp-medium-validation.v1.json"
     lease_bytes = lease_path.read_bytes()
     lease = json.loads(lease_bytes)
@@ -232,9 +230,7 @@ def test_e1_manifest_corpus_and_graph_transition_are_exact() -> None:
     assert manifest["corpus"]["sha256"] == hashlib.sha256(corpus_bytes).hexdigest()
     assert corpus["rung_scope"]["frozen_target_rung"] == "E1"
     assert corpus["e1_evidence"]["stable_handoff"] is False
-    assert graph_entry["status"] == "done"
-    assert graph_entry["target_rung"] == "E3"
-    assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+    assert static_graph["batches"] == {}
     assert manifest["paths"]["lease_manifest"] == {
         "path": "governance/leases/D2-mvp-medium-validation.v1.json",
         "sha256": hashlib.sha256(lease_bytes).hexdigest(),

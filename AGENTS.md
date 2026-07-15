@@ -72,6 +72,16 @@ from its own root directory. Recompute the prefix before creating or renaming wo
 6. **Collapse duplicates immediately.** If duplicate work is discovered, keep the
    complete, verified issue or pull request and close the duplicate with a cross-link
    and a concise reason before either line advances further.
+7. **Declare PR ownership structurally.** Every PR body contains exactly one
+   `Work-Issue: #<number>`, `Work-Key: <key>`, and `Issue-Action: <action>` field.
+   Batch PRs use `<batch-id>:<target-rung>` with `managed-by-batch`; standalone PRs
+   use `standalone-<issue>` with `complete-on-merge` or `keep-open`. Free-form issue
+   mentions and closing keywords are not lifecycle authority.
+8. **Run preflight before editing.** Run `make agent-preflight WORK_ISSUE=<number>`
+   before claiming work. It validates the checkout-derived prefix, clean worktree,
+   upstream state, issue ownership, duplicate open PRs, and delivery graph. A clean
+   branch whose upstream was deleted may be repaired automatically; dirty worktrees,
+   detached heads, prefix mismatches, and duplicate claims fail closed.
 
 ## Mergeability Definition
 
@@ -84,9 +94,11 @@ only when every condition below is true for its exact current head SHA:
    exactly one manifest target rung. Required start dependencies and consumed handoffs
    are accepted, and the diff stays within the declared writable paths and integration
    lease.
-2. **Current base.** The PR is rebased on current `main`, has no merge conflict, and any
-   base SHA, revision, manifest hash, corpus hash, issue link, or generated evidence
-   invalidated by the rebase has been refreshed.
+2. **Current base.** The PR is rebased on current `main` and has no merge conflict.
+   The batch activation base is a stable anchor fixed during preparation and is never
+   rewritten merely because `main` advanced. CI evidence records the exact current PR
+   base and head; any manifest hash, corpus hash, issue link, or evidence actually
+   invalidated by the rebase is refreshed.
 3. **Exact-head evidence.** Every required status check has completed successfully on
    that head SHA, including the declared acceptance and negative commands. Pending,
    skipped when required, stale, cancelled, or failing required evidence is not a pass.
@@ -159,7 +171,7 @@ Every implementation batch follows these rules:
 1. **Freeze a narrow manifest.** The canonical manifest is a checked-in, content-hashed
    artifact under `governance/batches/`; a mutable issue body is never the source of truth.
    Record the batch ID/revision, capability issue IDs, last-accepted/current-target/
-   terminal rung, objective, claim and readiness ceiling, base SHA, exact input handoff
+   terminal rung, objective, claim and readiness ceiling, stable activation base SHA, exact input handoff
    IDs/hashes, dependency class, corpus/denominator, expected outputs,
    acceptance and negative commands, owners/reviewers, non-goals, invalidation triggers,
    rollback, and writable, read-only, and forbidden path globs. Holdout manifests record
@@ -185,11 +197,13 @@ Every implementation batch follows these rules:
    outputs plus trace, usage, availability, catalog, universe, and release identities.
 5. **Merge small verified increments.** One PR accepts exactly the batch's current target
    rung and names its manifest hash and handoffs. It rebases on current `main`, passes rung-specific
-   checks, advances the target by at most one rung, and may merge independently.
+   checks on its exact base/head pair, advances the target by at most one rung, and may merge independently.
    Dependency-topological merge order and the integration lease serialize shared paths.
    A stage merge never promotes an environment
-   or claims gate completion. After rebase, update the manifest base/revision/hash and issue
-   link, then rerun all affected evidence; stale evidence cannot merge. `main` remains deployable:
+   or claims gate completion. Rebase does not change the stable activation base; rerun
+   affected evidence and record the exact CI base/head instead. Stale evidence cannot merge.
+   Batch nodes are assembled from independent files under `governance/batches/`; ordinary
+   batch PRs never edit the shared static Vision graph. `main` remains deployable:
    provisional code is absent from the accepted `ReleaseManifest` registry/configuration
    bindings and is not registered, scheduled, routed, or selected by default. Its
    migrations are additive and backward
@@ -220,9 +234,10 @@ Every implementation batch follows these rules:
    uses a fresh untouched holdout; a revealed holdout is never rerun as acceptance evidence.
    Denominator shrink is a product-scope change, not a repair.
 10. **Close gates only at fan-in.** Capability issues close only at their declared terminal
-    rung. Gate epics close in order only when their complete transitive acceptance bundle
-    passes on one exact release candidate. The checked-in Vision graph and live GitHub
-    parity check must contain every `scope:vision` issue, batch, gate owner, artifact edge,
+   rung. Gate epics close in order only when their complete transitive acceptance bundle
+   passes on one exact release candidate. The checked-in static Vision graph, independently
+   writable batch manifests, and live GitHub parity check must together contain every
+   `scope:vision` issue, batch, gate owner, artifact edge,
     terminal rung, and evidence ceiling with no cycle or orphan. Promotion, graduation,
     and rollback remain candidate-wide even though implementation increments merged earlier.
 

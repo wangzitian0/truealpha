@@ -222,7 +222,6 @@ def test_e2_acceptance_governance_binds_merged_runtime() -> None:
     manifest = json.loads(manifest_bytes)
     evidence = json.loads(evidence_bytes)
     handoff = json.loads(handoff_bytes)
-    graph = json.loads((REPOSITORY_ROOT / "governance/vision-issue-graph.json").read_bytes())
     output = manifest["acceptance"]["output"]
 
     assert manifest["revision"] == 14
@@ -253,11 +252,6 @@ def test_e2_acceptance_governance_binds_merged_runtime() -> None:
     assert handoff["verification"]["evidence_sha256"] == canonical_sha256(handoff["evidence"])
     handoff_content = {key: value for key, value in handoff.items() if key != "handoff_id"}
     assert handoff["handoff_id"] == f"handoff:d2-mvp-medium-validation:{canonical_sha256(handoff_content)}"
-
-    graph_entry = graph["batches"]["D2-mvp-medium-validation"]
-    assert graph_entry["status"] == "done"
-    assert graph_entry["target_rung"] == "E3"
-    assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
 
 
 def test_e2_sql_contract_executes(connection) -> None:
