@@ -296,18 +296,22 @@ def assemble_capability_graph(
                 raise ValueError(f"capability issue #{issue} has an invalid artifact edge")
             if edge.get("to") != issue:
                 raise ValueError(f"capability issue #{issue} has an edge owned by another target")
+            source_issue = edge.get("from")
             target = edge.get("to")
             edge_class = edge.get("class")
             artifact = edge.get("artifact")
             if (
-                not isinstance(target, int)
+                not isinstance(source_issue, int)
+                or isinstance(source_issue, bool)
+                or source_issue <= 0
+                or not isinstance(target, int)
                 or isinstance(target, bool)
-                or not isinstance(edge_class, str)
+                or edge_class not in EDGE_CLASSES
                 or not isinstance(artifact, str)
                 or not artifact
             ):
                 raise ValueError(f"capability issue #{issue} has an invalid artifact edge value")
-            edge_key = (issue, target, edge_class, artifact)
+            edge_key = (source_issue, target, edge_class, artifact)
             if edge_key in edge_keys:
                 raise ValueError(f"duplicate capability artifact edge {edge_key!r}")
             edge_keys.add(edge_key)

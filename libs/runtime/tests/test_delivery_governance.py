@@ -473,6 +473,37 @@ def test_vision_graph_rejects_duplicate_artifact_edge():
         )
 
 
+def test_vision_graph_allows_distinct_sources_for_the_same_artifact():
+    edges = (
+        {"from": 80, "to": 79, "class": "start", "artifact": "typed input"},
+        {"from": 81, "to": 79, "class": "start", "artifact": "typed input"},
+    )
+
+    graph = governance.assemble_vision_graph(
+        _fragmented_static_graph(),
+        [],
+        [("governance/capabilities/issue-79.v1.json", _capability_fragment(79, edges=edges))],
+    )
+
+    assert graph["artifact_edges"] == list(edges)
+
+
+def test_vision_graph_rejects_invalid_artifact_edge_source():
+    edge = {"from": "80", "to": 79, "class": "start", "artifact": "typed input"}
+
+    with pytest.raises(ValueError, match="invalid artifact edge value"):
+        governance.assemble_vision_graph(
+            _fragmented_static_graph(),
+            [],
+            [
+                (
+                    "governance/capabilities/issue-79.v1.json",
+                    _capability_fragment(79, edges=(edge,)),
+                )
+            ],
+        )
+
+
 def test_git_vision_graph_preserves_legacy_inline_capabilities(monkeypatch):
     legacy = {
         "schema_version": 1,
