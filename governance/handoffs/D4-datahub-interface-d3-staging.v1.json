@@ -1,0 +1,38 @@
+{
+  "handoff_id": "handoff:d4-datahub-interface-d3-staging:7de2528c2eb875293112d7e940478e4b7afc3c99f179043f4b88596058ea010b",
+  "schema_version": 1,
+  "revision": 1,
+  "state": "accepted",
+  "producer": {
+    "batch_id": "D4-datahub-interface",
+    "issue": 210,
+    "owner": "wangzitian0",
+    "head_sha": "03a95a3b76e189ac4518360a61510b8acc5027e2"
+  },
+  "schema_epoch": "truealpha-contracts.datahub.v2",
+  "readiness_ceiling": "E2",
+  "evidence": [
+    {
+      "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
+      "sha256": "ff8d8fe5eb0e59ed1fc31ba9b9496478041d87331661b8a86c2a863fbfa3136b"
+    }
+  ],
+  "allowed_consumers": [
+    "D3-staging-topt-capture"
+  ],
+  "allowed_environments": [
+    "staging"
+  ],
+  "retention": "permanent while D3 TOPT Staging depends on this handoff",
+  "verification": {
+    "reviewer": "github-actions[bot]",
+    "evidence_sha256": "d10faa1802e2f429aa327a0d5c060aab43edbad93d86f3658db4b8684183127b",
+    "accepted_at": "2026-07-15T19:31:40Z",
+    "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29444804558"
+  },
+  "revocation": {
+    "reason": null,
+    "revoked_at": null,
+    "superseded_by": null
+  }
+}

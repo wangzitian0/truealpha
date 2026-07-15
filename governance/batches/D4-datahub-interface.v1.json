@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D4-datahub-interface",
-  "revision": 5,
+  "revision": 6,
   "issue": 210,
   "owner_gate": 29,
-  "status": "blocked",
+  "status": "done",
   "lane": "capture-platform",
-  "last_accepted_rung": "E1",
+  "last_accepted_rung": "E2",
   "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
-  "claim_ceiling": "accepted E1 Local/CI interface evidence plus a frozen E2 acceptance candidate; no accepted E2 handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
+  "claim_ceiling": "accepted E2 DataHub interface handoffs for campaign-scoped shared work, typed source-request coverage, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance for named Local/CI consumers and D3 TOPT Staging integration only; no persistence schema, source call, schedule, query provider, Qlib data binding, Staging run, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 171, 205, 207],
@@ -108,6 +108,7 @@
       "governance/evidence/D4-datahub-interface-E1.v1.json",
       "governance/evidence/D4-datahub-interface-E2.v1.json",
       "governance/handoffs/D4-datahub-interface.v1.json",
+      "governance/handoffs/D4-datahub-interface-d3-staging.v1.json",
       "governance/leases/D4-datahub-interface.v1.json"
     ],
     "read_only": [
@@ -132,14 +133,9 @@
       "pyproject.toml",
       "Makefile"
     ],
-    "integration_surface": [
-      "libs/contracts/src/truealpha_contracts/__init__.py"
-    ],
-    "lease_owner": "wangzitian0",
-    "lease_manifest": {
-      "path": "governance/leases/D4-datahub-interface.v1.json",
-      "sha256": "ab7c73e56afcd87804407bf8148c003b5baa0d0734a4c754655a3a8f45fd5b50"
-    }
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
   },
   "release_activation": {
     "allowed": false,
@@ -172,11 +168,11 @@
     "output": {
       "type": "DataHubInterfaceHandoff",
       "stable_handoff": true,
-      "state": "planned",
+      "state": "accepted",
       "handoff_id": "datahub-interface-handoff:c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "schema_epoch": "truealpha-contracts.datahub.v2",
-      "planned_permission_scopes": [
+      "accepted_permission_scopes": [
         {
           "scope": "local-ci-consumers",
           "allowed_consumers": [
@@ -200,12 +196,28 @@
           ]
         }
       ],
+      "rung_evidence": {
+        "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
+        "sha256": "ff8d8fe5eb0e59ed1fc31ba9b9496478041d87331661b8a86c2a863fbfa3136b"
+      },
+      "handoff_manifests": [
+        {
+          "scope": "local-ci-consumers",
+          "path": "governance/handoffs/D4-datahub-interface.v1.json",
+          "sha256": "88d08625dd6fee64e1e260de0a081d8db72e7b9f7b6bcadcff8aa48adeb3e9b0"
+        },
+        {
+          "scope": "d3-staging-consumer",
+          "path": "governance/handoffs/D4-datahub-interface-d3-staging.v1.json",
+          "sha256": "1251eab17cdf8aca24912c2b59136aa357d1b52ba9c6d28b57af8f9b8c5700e7"
+        }
+      ],
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
         "issue #41 mart and Qlib provider preparation after E2 acceptance",
         "issue #206 QQQ capacity manifest preparation after E2 acceptance"
       ],
-      "retention": "the frozen E2 candidate is retained until independently accepted or revoked; failed rung evidence follows CI retention"
+      "retention": "accepted E2 handoffs are permanent while an allowed consumer depends on them; failed rung evidence follows CI retention"
     }
   },
   "invalidation": [
