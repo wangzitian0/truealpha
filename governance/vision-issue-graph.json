@@ -267,6 +267,15 @@
       "terminal_rung": "E1",
       "manifest": "governance/batches/S10-factor-matrix-samples.v1.json",
       "sha256": "b4bceb156009049be0b445764c7508106a6f8605cac414619d05872baf91e522"
+    },
+    "S9-direct-pe-qlib-smoke": {
+      "issue": 203,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E1",
+      "manifest": "governance/batches/S9-direct-pe-qlib-smoke.v1.json",
+      "sha256": "06abbe9db040f39cc5f9c9fe5f7e3a6ff83424af02e2ef283b6b2d7917f7d3c7"
     }
   },
   "artifact_edges": [

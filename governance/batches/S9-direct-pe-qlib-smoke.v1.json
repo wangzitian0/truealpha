@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "batch_id": "S9-direct-pe-qlib-smoke",
+  "revision": 1,
+  "issue": 203,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E1",
+  "objective": "Project checked-in direct vendor P/E observations into a provenance-neutral panel, execute one safe Qlib earnings-yield expression, and emit a deterministic fixed-cohort price-return smoke report.",
+  "claim_ceiling": "E1 Local/CI direct-P/E Qlib and price-return report smoke only; no accepted factor semantics, historical PEG, total return, TOPT, stable handoff, strategy validation, alpha, or release-readiness claim",
+  "capability_issues": [
+    26
+  ],
+  "closes_issues": [],
+  "informational_issues": [
+    21,
+    29,
+    59,
+    71,
+    181,
+    189
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued S9 registration is merged to main",
+      "the exact direct-P/E and price corpus paths and SHA-256 values are committed in a preparation PR",
+      "the implementation PR pins its exact current main base SHA",
+      "the implementation reuses the workspace-excluded Qlib 0.9.7 runtime and does not change either lock",
+      "an independent reviewer is assigned before E0 acceptance",
+      "issue #203 contains the exact manifest path and SHA-256"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "freeze",
+      "issue": 181,
+      "artifact": "accepted pinned Qlib runtime and selection-adapter boundary",
+      "evidence": {
+        "path": "governance/batches/S7-issuer-strategy-selection.v1.json",
+        "sha256": "730cf2419dc7795d920998c6d57846c6878bf44c650ec16dadf2e85dc3921bf1"
+      },
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 189,
+      "artifact": "accepted safe Qlib expression compiler boundary",
+      "evidence": {
+        "path": "governance/batches/S8-qlib-factor-expression.v1.json",
+        "sha256": "4d2ff50a09e3e13a71c82392f450d4ad76774583e2c1e13c0acd0528d2b34007"
+      },
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 59,
+      "artifact": "approved research semantics and product factor definitions",
+      "state": "pending_external_approval"
+    }
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in direct moomoo P/E observations plus immutable Yahoo unadjusted price samples",
+    "manifest_path": "libs/factors/tests/batches/direct_pe_qlib_smoke/fixtures/corpus.v1.json",
+    "sha256": null,
+    "required_strata": [
+      "four fixed-cohort issuers with direct historical vendor P/E observations",
+      "positive, zero, and negative P/E availability behavior",
+      "direct current P/E and current TTM profit-growth multiple for snapshot-only PEG",
+      "unadjusted open and close execution and valuation prices",
+      "monthly decision dates and next-session execution",
+      "missing next-session, future feature, duplicate row, and invalid price controls",
+      "deterministic JSON and Markdown report identities and explicit evidence ceiling"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/factors/src/factors/batches/direct_pe_qlib_smoke/**",
+      "libs/factors/tests/batches/direct_pe_qlib_smoke/**",
+      "apps/data-engine/scripts/run_direct_pe_qlib_smoke.py",
+      "apps/data-engine/tests/test_direct_pe_qlib_smoke.py"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "apps/data-engine/samples/moomoo/DDOG.json",
+      "apps/data-engine/samples/moomoo/NICE.json",
+      "apps/data-engine/samples/moomoo/SHOP.json",
+      "apps/data-engine/samples/moomoo/DUOL.json",
+      "apps/data-engine/samples/prices/DDOG_prices_3y_20260712.csv",
+      "apps/data-engine/samples/prices/NICE_prices_3y_20260712.csv",
+      "apps/data-engine/samples/prices/SHOP_prices_3y_20260712.csv",
+      "apps/data-engine/samples/prices/DUOL_prices_3y_20260712.csv",
+      "libs/contracts/src/truealpha_contracts/qlib_expression.py",
+      "libs/contracts/tests/fixtures/qlib_expression.v1.json",
+      "libs/factors/qlib-runtime/**",
+      "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/**",
+      "libs/factors/src/factors/batches/qlib_expression_contract_tiny/**"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "init.md",
+      "vision.md",
+      "db/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/contracts/**",
+      "libs/factors/src/factors/registry.py",
+      "libs/factors/src/factors/base/**",
+      "libs/factors/src/factors/composite/**",
+      "libs/factors/qlib-runtime/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "S9 is a provisional direct-vendor-factor engine smoke; #59-#61, #70, #24-#25, #71, and the full #26 replay remain mandatory"
+  },
+  "acceptance": {
+    "commands": [
+      "uv sync --project libs/factors/qlib-runtime --all-groups --frozen",
+      "uv run pytest apps/data-engine/tests/test_direct_pe_qlib_smoke.py -q",
+      "uv run --project libs/factors/qlib-runtime pytest libs/factors/tests/batches/direct_pe_qlib_smoke -q",
+      "uv run --project libs/factors/qlib-runtime python apps/data-engine/scripts/run_direct_pe_qlib_smoke.py --output-dir artifacts/direct-pe-qlib-smoke",
+      "uv run ruff check apps/data-engine/scripts/run_direct_pe_qlib_smoke.py apps/data-engine/tests/test_direct_pe_qlib_smoke.py libs/factors/src/factors/batches/direct_pe_qlib_smoke libs/factors/tests/batches/direct_pe_qlib_smoke",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "future-dated P/E observation visible before its decision cutoff",
+      "duplicate instrument and date feature or price row",
+      "zero or negative P/E treated as an attractive earnings yield",
+      "current TTM growth projected backward into historical PEG",
+      "adjusted-close value accepted as an execution or valuation price",
+      "zero or negative next-session execution price",
+      "decision without a next eligible execution session",
+      "fixed-cohort price return labeled total return, survivorship-safe, validated strategy, or alpha evidence"
+    ],
+    "output": {
+      "type": "DirectPeQlibSmokeReport",
+      "stable_handoff": false,
+      "state": "provisional_e1",
+      "allowed_evidence_readers": [
+        "issue #26 Qlib provider and replay integration batch"
+      ]
+    }
+  },
+  "invalidation": [
+    "sample bytes, direct-field interpretation, feature projection, expression, decision schedule, execution convention, portfolio arithmetic, report schema, or output change creates a new batch revision",
+    "a Qlib runtime or lock change requires a new execution binding and complete rerun",
+    "approval of #59 product semantics does not retroactively raise this smoke evidence ceiling",
+    "adding historical PEG, adjusted-return use, explicit corporate actions, mart persistence, Dagster, TOPT, or release activation requires a new bounded batch"
+  ],
+  "rollback": "Remove the isolated S9 projector, smoke adapter, tests, and generated untracked report artifacts together; no accepted registry, release manifest, mart binding, or scheduled asset may reference this batch."
+}
