@@ -166,6 +166,7 @@
       "freshness, availability, applicability, quality, and confidence collapse into one mutable status",
       "recapture execution differs from its frozen dry-run selection or broadens its predicate",
       "factor-visible source, raw pointer, provider policy, or provenance branch metadata",
+      "a consumer/environment Cartesian product grants Staging access to any consumer other than D3-staging-topt-capture",
       "database, source, schedule, query provider, Qlib data binding, or release activation"
     ],
     "output": {
@@ -175,6 +176,30 @@
       "handoff_id": "datahub-interface-handoff:c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "schema_epoch": "truealpha-contracts.datahub.v2",
+      "planned_permission_scopes": [
+        {
+          "scope": "local-ci-consumers",
+          "allowed_consumers": [
+            "C1-stable-mart-reads",
+            "D5-list-capture-control-plane",
+            "D6-confidence-provenance",
+            "D7-qqq-datahub-capacity"
+          ],
+          "allowed_environments": [
+            "ci",
+            "local"
+          ]
+        },
+        {
+          "scope": "d3-staging-consumer",
+          "allowed_consumers": [
+            "D3-staging-topt-capture"
+          ],
+          "allowed_environments": [
+            "staging"
+          ]
+        }
+      ],
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
         "issue #41 mart and Qlib provider preparation after E2 acceptance",
