@@ -29,7 +29,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "f22f30e55c59f997f3ff9b7c3f0b104a8abdaae0",
+    "base_sha": "6cdfd355889753aaf173e1dadc3655f65319dc16",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued S9 registration is merged to main",
