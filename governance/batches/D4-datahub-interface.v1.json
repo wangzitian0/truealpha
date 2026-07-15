@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D4-datahub-interface",
-  "revision": 4,
+  "revision": 5,
   "issue": 210,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "capture-platform",
-  "last_accepted_rung": "E1",
+  "last_accepted_rung": "E2",
   "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
-  "claim_ceiling": "E1 tiny Local/CI interface evidence for campaign-scoped shared work, typed source-request coverage, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance only; no stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
+  "claim_ceiling": "E2 stable Local/CI DataHub interface handoff for campaign-scoped shared work, typed source-request coverage, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance; no persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 171, 205, 207],
@@ -25,7 +25,7 @@
     "requirements": [
       "queued D4 registration and preparation are merged on main",
       "the tiny interface corpus remains frozen at c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
-      "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while every rung PR rebases on current main without rewriting that activation anchor",
+      "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while each rung PR audits target-branch drift and updates only when it intersects declared paths or invalidates evidence",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
       "issue #210 contains this manifest path and exact SHA-256",
@@ -169,14 +169,18 @@
       "database, source, schedule, query provider, Qlib data binding, or release activation"
     ],
     "output": {
-      "type": "DataHubInterfaceEvidence",
-      "stable_handoff": false,
-      "state": "provisional_e1",
+      "type": "DataHubInterfaceHandoff",
+      "stable_handoff": true,
+      "state": "produced",
+      "handoff_id": "datahub-interface-handoff:c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
+      "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
+      "schema_epoch": "truealpha-contracts.datahub.v2",
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
         "issue #41 mart and Qlib provider preparation after E2 acceptance",
         "issue #206 QQQ capacity manifest preparation after E2 acceptance"
-      ]
+      ],
+      "retention": "accepted E2 interface handoff is permanent while an allowed consumer depends on it; failed rung evidence follows CI retention"
     }
   },
   "invalidation": [
