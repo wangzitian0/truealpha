@@ -525,9 +525,7 @@ def test_closed_bundle_requires_at_least_one_attempt_outcome() -> None:
 
 
 def test_closed_bundle_rejects_a_dispatched_attempt_without_an_outcome() -> None:
-    bundle, values = _bundle(
-        attempt_specs=((1, FetchAttemptOutcome.RATE_LIMITED), (2, FetchAttemptOutcome.SUCCESS))
-    )
+    bundle, values = _bundle(attempt_specs=((1, FetchAttemptOutcome.RATE_LIMITED), (2, FetchAttemptOutcome.SUCCESS)))
     with pytest.raises(ValidationError, match="outcome for every dispatched"):
         DataHubInterfaceBundle(
             **{
