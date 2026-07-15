@@ -19,26 +19,26 @@
       "list_versions"
     ],
     "run": [
-      "campaign_id",
+      "campaign_ref",
       "run_sequence",
       "schedule_policy_id",
       "capture_scope_id"
     ],
     "list_obligation": [
-      "run_id",
+      "run_ref",
       "universe_ref",
       "subject_id",
       "capture_requirement",
       "partition"
     ],
     "work_item": [
-      "run_id",
+      "run_ref",
       "source_policy_id",
       "canonical_request_fingerprint",
       "partition"
     ],
     "fetch_attempt": [
-      "work_item_id",
+      "work_ref",
       "attempt_number"
     ],
     "raw_object": [
@@ -55,7 +55,7 @@
       "payload_identity"
     ],
     "confidence_assessment": [
-      "observation_id",
+      "observation_ref",
       "assessment_policy_id",
       "evidence_set_id"
     ],
@@ -68,7 +68,7 @@
     "recapture_plan": [
       "selection_cutoff",
       "predicate",
-      "selected_obligation_ids",
+      "selected_obligation_refs",
       "planner_version"
     ]
   },
