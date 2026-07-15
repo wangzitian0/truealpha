@@ -6,7 +6,7 @@
     {
       "command": "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_datahub.py -q",
       "exit_code": 0,
-      "output_sha256": "36e72bafab7ce1ac41056c396f8370399d851ea3a94b7145857bb6c6ba8e27d3"
+      "output_sha256": "668e0afb6959d096b55bace063a1993aa858844f6de881e69004ec01f4a01343"
     },
     {
       "command": "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
@@ -24,13 +24,13 @@
       "output_sha256": "3ce0a3f4b2b2d3fcc83181896297ac73b4b7b3034209f9e2b7514b3d55b0ebfa"
     }
   ],
-  "created_at": "2026-07-15T14:40:14.460489Z",
-  "evidence_id": "rung-evidence:D4-datahub-interface:9c5b561775fc397b82afa6bee6dbf5e35d995a796a470e33ed5562aba1bd8c03",
-  "manifest_sha256": "10e16051b9271423413f5df0cde5f663aa95a8722428eb274866c2df4dffb64f",
+  "created_at": "2026-07-15T14:43:22.546128Z",
+  "evidence_id": "rung-evidence:D4-datahub-interface:068d22243dcf4ec8752d44910fa5c521003dbe44e907988423723d0ccae197fc",
+  "manifest_sha256": "4f3414ab705c625033bc9d580844dfffb6fdec19e1e866c94d8d6f3b8dc434ee",
   "negative_controls": [
     "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
     "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
-    "a provenance graph omits the required run-to-obligation or obligation-to-work-item capture path",
+    "a provenance graph omits a required campaign-to-run, campaign-to-source-request, run-to-obligation, or obligation-to-work-item capture path",
     "a work binding whose request omits its obligation's subject, capture requirement, or partition",
     "run-scoped work loses provider sharing across overlapping compatible lists",
     "a completed bundle omits a dispatch outcome, or an unchanged response reuses a vintage from another pinned request",
@@ -42,7 +42,7 @@
     "factor-visible source, raw pointer, provider policy, or provenance branch metadata",
     "database, source, schedule, query provider, Qlib data binding, or release activation"
   ],
-  "producer_head_sha": "a464f1455ecbc7a96d2fbe0fd1122d65e542dc7f",
+  "producer_head_sha": "b2ae4b7e862a56d5e04cac494c613380733442d2",
   "schema_version": 1,
   "stable_handoff": false
 }
