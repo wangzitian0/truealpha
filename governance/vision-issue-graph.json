@@ -280,11 +280,11 @@
     "S9-direct-pe-qlib-smoke": {
       "issue": 203,
       "owner_gate": 29,
-      "status": "prepared",
-      "target_rung": "E0",
+      "status": "active",
+      "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S9-direct-pe-qlib-smoke.v1.json",
-      "sha256": "43bf58d45738d0c70ce2c8413dff9927166afd27b82c208b5adf7da2f8210cc4"
+      "sha256": "c5a5f44f58987005b5d98d3d68a253408f6cddd463cb44a8cc4e74ae4bf42318"
     }
   },
   "artifact_edges": [
