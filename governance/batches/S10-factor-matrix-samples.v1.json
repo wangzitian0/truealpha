@@ -29,10 +29,10 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "96cb91e409e113dd132633db9bab9808786b59c9",
+    "base_sha": "d23826fa4b5f041fb9f9ab8c6a7b156eff10605c",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "queued S10 registration is merged and the preparation revision is rebased on main at 96cb91e409e113dd132633db9bab9808786b59c9",
+      "queued S10 registration is merged and the preparation revision is rebased on main at d23826fa4b5f041fb9f9ab8c6a7b156eff10605c",
       "the nine-symbol provider plan and embedded parser fixture hashes are frozen at 481a66e9a42f5420e163436ac40ecf374341888872304c81ba9a17a8c68d92df",
       "the implementation PR pins its exact current main base SHA",
       "issue #208 contains the exact manifest path and SHA-256",
