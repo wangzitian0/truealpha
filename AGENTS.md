@@ -102,11 +102,13 @@ only when every condition below is true for its exact current head SHA:
    exactly one manifest target rung. Required start dependencies and consumed handoffs
    are accepted, and the diff stays within the declared writable paths and integration
    lease.
-2. **Current base.** The PR is rebased on current `main` and has no merge conflict.
-   The batch activation base is a stable anchor fixed during preparation and is never
-   rewritten merely because `main` advanced. CI evidence records the exact current PR
-   base and head; any manifest hash, corpus hash, issue link, or evidence actually
-   invalidated by the rebase is refreshed.
+2. **Compatible base.** The PR has no merge conflict and audits target-branch drift
+   from its recorded base before merge. Advancement of `main` alone does not require a
+   rebase. Update the branch and rerun affected evidence when that drift intersects the
+   declared writable or read-only paths, integration lease, consumed handoffs, generated
+   artifacts, frozen inputs, or otherwise invalidates the PR's evidence. Disjoint drift
+   neither blocks merge nor rewrites the stable batch activation base, manifest hash, or
+   exact-head evidence. CI records the exact base and head that it tested.
 3. **Exact-head evidence.** Every required status check has completed successfully on
    that head SHA, including the declared acceptance and negative commands. Pending,
    skipped when required, stale, cancelled, or failing required evidence is not a pass.
@@ -122,8 +124,9 @@ only when every condition below is true for its exact current head SHA:
    remain backward compatible, provisional code is disabled from accepted release
    bindings and default runtime selection, and rollback remains possible.
 7. **Repository enforcement.** The target-branch ruleset reports no remaining block:
-   the branch is current, required checks pass, required review resolution passes, and
-   the current user has no bypass that is being used to override these conditions.
+   the compatible-base audit passes, required checks pass, required review resolution
+   passes, and the current user has no bypass that is being used to override these
+   conditions. An informational stale-base or `BEHIND` state is not itself a block.
 
 An open parent capability, incomplete higher rung, pending closure dependency, or
 incomplete release gate does not by itself block a lower-rung PR whose manifest permits
@@ -204,12 +207,15 @@ Every implementation batch follows these rules:
    rows, vendor identity, rights, or source priority. Consumers receive only materialized
    outputs plus trace, usage, availability, catalog, universe, and release identities.
 5. **Merge small verified increments.** One PR accepts exactly the batch's current target
-   rung and names its manifest hash and handoffs. It rebases on current `main`, passes rung-specific
-   checks on its exact base/head pair, advances the target by at most one rung, and may merge independently.
+   rung and names its manifest hash and handoffs. It audits drift from its recorded base,
+   updates only when the compatibility rule above requires it, passes rung-specific checks
+   on its exact tested base/head pair, advances the target by at most one rung, and may
+   merge independently.
    Dependency-topological merge order and the integration lease serialize shared paths.
    A stage merge never promotes an environment
-   or claims gate completion. Rebase does not change the stable activation base; rerun
-   affected evidence and record the exact CI base/head instead. Stale evidence cannot merge.
+   or claims gate completion. A required branch update does not change the stable
+   activation base; rerun affected evidence and record the exact CI base/head instead.
+   Stale evidence cannot merge.
    Capability nodes and incoming edges are assembled from independent files under
    `governance/capabilities/`, and batch nodes are assembled from independent files under
    `governance/batches/`; ordinary capability and batch PRs never edit the shared static
