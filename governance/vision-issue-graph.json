@@ -266,7 +266,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/I0-infra-boundary-decoupling.v1.json",
-      "sha256": "9795a2312ac8168962fe384fb5a6c2f655dd96b7d876cfd71ced682d6b00f523"
+      "sha256": "fdb41795890f3a18bd78a4ac1357b6431dcd65f1c5a7b4a9743ee5850ba244a8"
     },
     "S10-factor-matrix-samples": {
       "issue": 208,
