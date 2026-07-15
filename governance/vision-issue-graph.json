@@ -164,10 +164,10 @@
       "issue": 171,
       "owner_gate": 29,
       "status": "active",
-      "target_rung": "E3",
+      "target_rung": "E4",
       "terminal_rung": "E4",
       "manifest": "governance/batches/D3-staging-topt-capture.v1.json",
-      "sha256": "1fc64298bb945bfc3591911db0b265d7f42131a90e63a328a10e92d2a9406fa2"
+      "sha256": "3b7671af97dab8d8bbe4d8681319a6ad21c8ffa6fc402db6e64299cff4669965"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,
