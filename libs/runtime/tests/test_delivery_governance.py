@@ -575,7 +575,7 @@ def test_pr_rejects_multiple_batch_manifests(monkeypatch):
     assert "PR must advance exactly one capability-batch manifest" in validation.errors
 
 
-def test_gate0_aggregate_rejects_blocked_candidate_by_default(tmp_path, monkeypatch):
+def test_gate0_aggregate_allows_structurally_valid_blocked_candidate(tmp_path, monkeypatch):
     calls: list[dict[str, bool]] = []
     graph, base_sha, head_sha = _gate0_pr_context(tmp_path, monkeypatch, validation_calls=calls)
     validation = governance.Validation()
@@ -587,12 +587,13 @@ def test_gate0_aggregate_rejects_blocked_candidate_by_default(tmp_path, monkeypa
         head_sha=head_sha,
     )
 
-    assert advance is None
-    assert any("Gate 0 candidate is valid but not accepted" in error for error in validation.errors)
-    assert calls == [{"check_live_comments": True, "require_accepted": True}]
+    assert validation.errors == []
+    assert advance is not None and advance.kind == "gate_candidate"
+    assert advance.accepted_rung is None
+    assert calls == [{"check_live_comments": False, "require_accepted": False}]
 
 
-def test_draft_gate0_aggregate_allows_valid_blocked_candidate(tmp_path, monkeypatch):
+def test_blocked_gate0_result_has_no_pull_request_metadata_input(tmp_path, monkeypatch):
     calls: list[dict[str, bool]] = []
     graph, base_sha, head_sha = _gate0_pr_context(tmp_path, monkeypatch, validation_calls=calls)
     validation = governance.Validation()
@@ -602,7 +603,6 @@ def test_draft_gate0_aggregate_allows_valid_blocked_candidate(tmp_path, monkeypa
         graph=graph,
         base_sha=base_sha,
         head_sha=head_sha,
-        allow_blocked_gate_candidate=True,
     )
 
     assert validation.errors == []
@@ -778,7 +778,7 @@ def test_ready_blocked_gate0_candidate_may_rebind_reviewed_authorization_control
     assert calls == [{"check_live_comments": False, "require_accepted": False}]
 
 
-def test_ready_blocked_gate0_control_rebind_rejects_candidate_payload_drift(tmp_path, monkeypatch):
+def test_blocked_gate0_control_change_may_revise_unaccepted_payload(tmp_path, monkeypatch):
     checker = tmp_path / "tools" / "check_delivery_governance.py"
     checker.parent.mkdir(parents=True)
     checker.write_text("# reviewed validator\n", encoding="utf-8")
@@ -794,17 +794,18 @@ def test_ready_blocked_gate0_control_rebind_rejects_candidate_payload_drift(tmp_
     _write_json(manifest_path, manifest)
     validation = governance.Validation()
 
-    governance.validate_pr_advance(
+    advance = governance.validate_pr_advance(
         validation,
         graph=graph,
         base_sha=base_sha,
         head_sha=head_sha,
     )
 
-    assert any("may change only its base/tree binding" in error for error in validation.errors)
+    assert validation.errors == []
+    assert advance is not None and advance.kind == "gate_candidate"
 
 
-def test_draft_gate0_candidate_may_iterate_on_authorization_controls(tmp_path, monkeypatch):
+def test_blocked_gate0_candidate_may_iterate_on_authorization_controls(tmp_path, monkeypatch):
     checker = tmp_path / "tools" / "check_gate0_candidate.py"
     checker.parent.mkdir(parents=True)
     checker.write_text("# draft validator\n", encoding="utf-8")
@@ -821,7 +822,6 @@ def test_draft_gate0_candidate_may_iterate_on_authorization_controls(tmp_path, m
         graph=graph,
         base_sha=base_sha,
         head_sha=head_sha,
-        allow_blocked_gate_candidate=True,
     )
 
     assert validation.errors == []
@@ -1135,7 +1135,7 @@ def test_gate0_acceptance_rejects_mismatched_worktree_head(tmp_path, monkeypatch
     assert not output_path.exists()
 
 
-def test_blocked_draft_gate0_candidate_does_not_run_terminal_acceptance(tmp_path, monkeypatch):
+def test_blocked_gate0_candidate_does_not_run_terminal_acceptance(tmp_path, monkeypatch):
     manifest_path = tmp_path / "governance" / "gate0" / "manifest-v4.json"
     _write_json(manifest_path, {})
     monkeypatch.setattr(governance, "ROOT", tmp_path)

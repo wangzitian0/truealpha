@@ -85,6 +85,7 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'pull_request' &&
+      github.event.pull_request.state == 'open' &&
       (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
     runs-on: ubuntu-latest
     services:
@@ -126,13 +127,13 @@ jobs:
       - name: Export live Vision issues
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 200
-          --label scope:vision --json number,state,body,labels,milestone
-          > "$RUNNER_TEMP/vision-issues.json"
+        run: |
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues?state=all&labels=scope%3Avision&per_page=100" \
+            | jq -s '[.[][] | select(has("pull_request") | not) | {number, state, body, labels, milestone}]' \
+            > "$RUNNER_TEMP/vision-issues.json"
       - name: Authorize pull-request diff
         env:
-          GATE0_CANDIDATE_FLAG: ${{ github.event.pull_request.draft && '--allow-blocked-gate-candidate' || '' }}
           GH_TOKEN: ${{ github.token }}
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
           TRUEALPHA_REQUIRE_RUNTIME: "1"
@@ -143,7 +144,6 @@ jobs:
           --pr-head-sha "${{ github.event.pull_request.head.sha }}"
           --execute-acceptance
           --evidence-output "$RUNNER_TEMP/rung-evidence.json"
-          $GATE0_CANDIDATE_FLAG
       - name: Retain rung evidence
         uses: actions/upload-artifact@v4
         with:
@@ -157,6 +157,7 @@ jobs:
     if: >-
       always() &&
       github.event_name != 'pull_request' &&
+      (github.event_name != 'issues' || github.actor != 'github-actions[bot]') &&
       (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
@@ -170,10 +171,11 @@ jobs:
       - name: Export live Vision issues
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 200
-          --label scope:vision --json number,state,body,labels,milestone
-          > "$RUNNER_TEMP/vision-issues.json"
+        run: |
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues?state=all&labels=scope%3Avision&per_page=100" \
+            | jq -s '[.[][] | select(has("pull_request") | not) | {number, state, body, labels, milestone}]' \
+            > "$RUNNER_TEMP/vision-issues.json"
       - name: Validate GitHub parity
         run: >-
           python3 tools/check_delivery_governance.py

@@ -159,7 +159,7 @@
       "additionalProperties": false,
       "required": [
         "target_branch",
-        "remaining_partial_merge_allowed",
+        "partial_gate_acceptance_allowed",
         "one_immutable_candidate_required",
         "candidate_change_invalidates_acceptance",
         "historical_foundation_already_merged",
@@ -167,7 +167,7 @@
       ],
       "properties": {
         "target_branch": {"const": "main"},
-        "remaining_partial_merge_allowed": {"const": false},
+        "partial_gate_acceptance_allowed": {"const": false},
         "one_immutable_candidate_required": {"const": true},
         "candidate_change_invalidates_acceptance": {"const": true},
         "historical_foundation_already_merged": {"const": [57, 58]},
