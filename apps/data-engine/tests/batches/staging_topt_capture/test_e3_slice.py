@@ -157,13 +157,16 @@ def test_e3_persists_two_full_denominator_vintages_idempotently(connection) -> N
     assert all(len(manifest.cells) == 84 for manifest in first.capture_manifests)
     assert all(evaluation.ready for evaluation in first.capture_evaluations)
     assert _d3_raw_count(connection) == 42
-    assert len(
-        {
-            item.normalized_record_id
-            for item in first.interactions
-            if item.result.normalized_bar.symbol in {"GOOG", "GOOGL"}
-        }
-    ) == 4
+    assert (
+        len(
+            {
+                item.normalized_record_id
+                for item in first.interactions
+                if item.result.normalized_bar.symbol in {"GOOG", "GOOGL"}
+            }
+        )
+        == 4
+    )
     assert connection.execute(
         "select count(*) from staging.normalized_records where normalized_record_id = any(%s)",
         ([item.normalized_record_id for item in first.interactions],),

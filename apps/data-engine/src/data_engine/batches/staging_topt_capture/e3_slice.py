@@ -562,8 +562,7 @@ def _verify_bar(row: ToptMarketRow, result: D3E1TinyResult) -> None:
         or bar.exchange_mic != row.exchange_mic
         or bar.trading_date != row.trading_date
         or bar.session_close_at != row.session_close_at
-        or (bar.open, bar.high, bar.low, bar.close, bar.volume)
-        != (row.open, row.high, row.low, row.close, row.volume)
+        or (bar.open, bar.high, bar.low, bar.close, bar.volume) != (row.open, row.high, row.low, row.close, row.volume)
     ):
         raise ValueError("D3 E3 Yahoo result drifted from the frozen TOPT coordinate")
 
@@ -622,9 +621,7 @@ def run_d3_e3(
             )
             _verify_bar(row, execution.result)
             predecessor = (
-                None
-                if planned.vintage == "original"
-                else persisted_by_vintage["original"][row.security_id][1]
+                None if planned.vintage == "original" else persisted_by_vintage["original"][row.security_id][1]
             )
             fetch_id, record = _persist_execution(
                 connection,
