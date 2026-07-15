@@ -1,0 +1,13 @@
+{
+  "credential_env": null,
+  "endpoint": "https://query1.finance.yahoo.com/v8/finance/chart/NVDA",
+  "parameters": {
+    "events": "div,splits",
+    "interval": "1d",
+    "period1": "1688947200",
+    "period2": "1783728000"
+  },
+  "provider": "yahoo",
+  "provider_symbol": "NVDA",
+  "schema": "truealpha.factor-matrix-sample-request@v1"
+}

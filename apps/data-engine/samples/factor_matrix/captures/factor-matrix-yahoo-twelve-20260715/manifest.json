@@ -1,0 +1,528 @@
+{
+  "artifacts": [
+    {
+      "byte_length": 33693,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/ADM.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "d620a1c87a4ef978ea7f8b1f07e46fd84e56e2a51a109884a25383b20f56279e",
+      "symbol": "ADM"
+    },
+    {
+      "byte_length": 37591,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/DDOG.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "5816e51bfa3cc2eca85b3257809a3215e77a74c730baef8a7532e509af86d923",
+      "symbol": "DDOG"
+    },
+    {
+      "byte_length": 38922,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/DUOL.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "359ef97dded719f00d29178f1204c17a6bf73706d5449d9734d5d2da581921fd",
+      "symbol": "DUOL"
+    },
+    {
+      "byte_length": 40435,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/JPM.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "4cf163b353349555cdd104da2535959d979ef536292375a79ff0554872196842",
+      "symbol": "JPM"
+    },
+    {
+      "byte_length": 42872,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/META.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "a2755ece47188d059f88942f6afa3dfdad2a4631e83ca3925f4dd7e7333dd556",
+      "symbol": "META"
+    },
+    {
+      "byte_length": 37671,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/NICE.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "53d0c64754275f2af92a96ff1381f0fd54eb838af193564b474382b0a2e06352",
+      "symbol": "NICE"
+    },
+    {
+      "byte_length": 41553,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/NVDA.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "41b4509aa8a5014a0fd494c487463fe5ee35bf51ec602230f0b1f78eeb5f78f0",
+      "symbol": "NVDA"
+    },
+    {
+      "byte_length": 31450,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/PLUG.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "bffd1e3660768c6546097bcf5002d1b6a5822718a32b22a94adfaf61878622e4",
+      "symbol": "PLUG"
+    },
+    {
+      "byte_length": 36036,
+      "date_end": "2026-07-09",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "twelve_data/normalized/SHOP.csv",
+      "provider": "twelve_data",
+      "row_count": 753,
+      "sha256": "7356b49b6739b0621868dc41d8ef20124ae9fed4c24fed998477ab1e20b0b876",
+      "symbol": "SHOP"
+    },
+    {
+      "byte_length": 87827,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/ADM.json",
+      "provider": "twelve_data",
+      "sha256": "213a16db1b218480f7719b0948a76f7150b1d43c24a06cc131d1313543465ee4",
+      "symbol": "ADM"
+    },
+    {
+      "byte_length": 89985,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/DDOG.json",
+      "provider": "twelve_data",
+      "sha256": "be790e154d829d26d536e41abbb5203d5d93bd64a6c9e3a0ca735c181851b824",
+      "symbol": "DDOG"
+    },
+    {
+      "byte_length": 89112,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/DUOL.json",
+      "provider": "twelve_data",
+      "sha256": "78bff4ff5bb1d39a8381893339caf38aa425afb0290cb4b790ca51a1ce29adce",
+      "symbol": "DUOL"
+    },
+    {
+      "byte_length": 90600,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/JPM.json",
+      "provider": "twelve_data",
+      "sha256": "2419a966c3f053637d49dc530e763e1dd3054b8ef221e53855685edbb3a4bbe2",
+      "symbol": "JPM"
+    },
+    {
+      "byte_length": 90533,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/META.json",
+      "provider": "twelve_data",
+      "sha256": "46f371517447a25fba5331723e6afebf6813bb9ff43c98373af47ffb962a7678",
+      "symbol": "META"
+    },
+    {
+      "byte_length": 89349,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/NICE.json",
+      "provider": "twelve_data",
+      "sha256": "e5e1e7375a1a827e915728f28a580c1e7fed746e279c6188a9335d64c98788d9",
+      "symbol": "NICE"
+    },
+    {
+      "byte_length": 92210,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/NVDA.json",
+      "provider": "twelve_data",
+      "sha256": "80699e4f30100096270c1103f79a226fafe60bf9a64e0e94e9aea980043d7101",
+      "symbol": "NVDA"
+    },
+    {
+      "byte_length": 86416,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/PLUG.json",
+      "provider": "twelve_data",
+      "sha256": "8fa76ed2ef18fc57d91e3ce90703cba20124334011e2f9eb5cb502a420ad2f58",
+      "symbol": "PLUG"
+    },
+    {
+      "byte_length": 89277,
+      "kind": "raw_response",
+      "path": "twelve_data/raw/SHOP.json",
+      "provider": "twelve_data",
+      "sha256": "42d9760c185b4dea16bb08bfeef4e81d38cbb003a3c43ddc8856961e14638623",
+      "symbol": "SHOP"
+    },
+    {
+      "byte_length": 409,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/ADM.json",
+      "provider": "twelve_data",
+      "sha256": "e4ac8f855ad34f75027eacce61f1c89b3c27c4b5ca8ab009738296adc63fcb64",
+      "symbol": "ADM"
+    },
+    {
+      "byte_length": 411,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/DDOG.json",
+      "provider": "twelve_data",
+      "sha256": "313c691c979788ea023ec19c989188d746f85c21f02af8fe1cb3ea87fc2cc05d",
+      "symbol": "DDOG"
+    },
+    {
+      "byte_length": 411,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/DUOL.json",
+      "provider": "twelve_data",
+      "sha256": "31aac61c64c7dd10cf124193ceb03d418cd9652cbe308c2850dff8e5bc6f49c6",
+      "symbol": "DUOL"
+    },
+    {
+      "byte_length": 409,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/JPM.json",
+      "provider": "twelve_data",
+      "sha256": "0d263ae09a16003110c9d3f021eec0ac63f75a61cb0b07ea908650f4724d0619",
+      "symbol": "JPM"
+    },
+    {
+      "byte_length": 411,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/META.json",
+      "provider": "twelve_data",
+      "sha256": "ae3428eeaf5f3324106d5a7bafc44a93ffa7dd0ccde77af5625899183e36b06d",
+      "symbol": "META"
+    },
+    {
+      "byte_length": 411,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/NICE.json",
+      "provider": "twelve_data",
+      "sha256": "e574cd74090b98b5a6bbf6c3f355b245a42775f59b8df6c0a110c3d9a508e399",
+      "symbol": "NICE"
+    },
+    {
+      "byte_length": 411,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/NVDA.json",
+      "provider": "twelve_data",
+      "sha256": "2d6300ec07f7d15813791938b42167d4e59eb3edeef20116c72091d37f1399f6",
+      "symbol": "NVDA"
+    },
+    {
+      "byte_length": 411,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/PLUG.json",
+      "provider": "twelve_data",
+      "sha256": "7ee16b8e764ba23d0291686c22927a18074849c3fcc757c74d2abfdd3ffb2633",
+      "symbol": "PLUG"
+    },
+    {
+      "byte_length": 411,
+      "kind": "request_metadata",
+      "path": "twelve_data/requests/SHOP.json",
+      "provider": "twelve_data",
+      "sha256": "b7bf835aee8ebfff6341a187686c51d1b412e501c1b65ab54aa580b737cefc14",
+      "symbol": "SHOP"
+    },
+    {
+      "byte_length": 80288,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/ADM.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "1ed18659a233198a4bfaa72bbcffc9722746af0693dae2885fb11c459c518d30",
+      "symbol": "ADM"
+    },
+    {
+      "byte_length": 80460,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/DDOG.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "81389adb45ad3b7c6f8e5fa2738961009ab08c66c0a4ce7cff2a25363bce6518",
+      "symbol": "DDOG"
+    },
+    {
+      "byte_length": 77752,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/DUOL.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "2ed15025d8fe9b570fb5fe2d2367e019549c2e4c22665a0ebb918a3d2ef9bcc5",
+      "symbol": "DUOL"
+    },
+    {
+      "byte_length": 80825,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/JPM.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "948f9a5767f71acc52697bc848bc95671dd332a3776d1babb48786af36cf8f92",
+      "symbol": "JPM"
+    },
+    {
+      "byte_length": 77763,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/META.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "930d7b03927dd1e85b6862f5bc13f962e5adf22ec8296328a843c5f6ae062da6",
+      "symbol": "META"
+    },
+    {
+      "byte_length": 79446,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/NICE.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "c2a177294a0801589b8bb315d9b82613b82ae1ebc93f01bea18cb673c84aecea",
+      "symbol": "NICE"
+    },
+    {
+      "byte_length": 83344,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/NVDA.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "57a489ecf09a40856bffc701ec78203990ffcf6ea53adc057958ffa5d8d30ea4",
+      "symbol": "NVDA"
+    },
+    {
+      "byte_length": 82465,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/PLUG.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "3cc221d8e3eda73678b094d5e2cd073cc91e6af8065bd17b00501f59d539c6b1",
+      "symbol": "PLUG"
+    },
+    {
+      "byte_length": 80199,
+      "date_end": "2026-07-10",
+      "date_start": "2023-07-10",
+      "kind": "normalized_csv",
+      "path": "yahoo/normalized/SHOP.csv",
+      "provider": "yahoo",
+      "row_count": 754,
+      "sha256": "9838091c7049f6083d3a369b7679699ce47bb7c1b241da7a1689d5d2133b7ce5",
+      "symbol": "SHOP"
+    },
+    {
+      "byte_length": 82060,
+      "kind": "raw_response",
+      "path": "yahoo/raw/ADM.json",
+      "provider": "yahoo",
+      "sha256": "40e96fa0bea1be885cb54efab192a8608cc725fd60a7cef50abe2cd2b47c42c1",
+      "symbol": "ADM"
+    },
+    {
+      "byte_length": 81795,
+      "kind": "raw_response",
+      "path": "yahoo/raw/DDOG.json",
+      "provider": "yahoo",
+      "sha256": "a7891131b931b782d81fd681cbccf1062c3e2cfddf1cf7fde4742034c79c4949",
+      "symbol": "DDOG"
+    },
+    {
+      "byte_length": 79296,
+      "kind": "raw_response",
+      "path": "yahoo/raw/DUOL.json",
+      "provider": "yahoo",
+      "sha256": "73b43eaaf0bce67d6989d87514ad07b0de4e1cb432ffa016096b351000006a49",
+      "symbol": "DUOL"
+    },
+    {
+      "byte_length": 82681,
+      "kind": "raw_response",
+      "path": "yahoo/raw/JPM.json",
+      "provider": "yahoo",
+      "sha256": "d77dab0006fe91927bb6acb9182b7879683e194bcb39526b1558aa323760ef72",
+      "symbol": "JPM"
+    },
+    {
+      "byte_length": 79654,
+      "kind": "raw_response",
+      "path": "yahoo/raw/META.json",
+      "provider": "yahoo",
+      "sha256": "ad8d0b074c6c4e6ae9a1fb8ff433f27c487c25daa327f4b5b28c748b51502478",
+      "symbol": "META"
+    },
+    {
+      "byte_length": 80809,
+      "kind": "raw_response",
+      "path": "yahoo/raw/NICE.json",
+      "provider": "yahoo",
+      "sha256": "d00b5bc9ca9a7342d7bb5730790c9598cae92606768e399c18dddfec8077713f",
+      "symbol": "NICE"
+    },
+    {
+      "byte_length": 85234,
+      "kind": "raw_response",
+      "path": "yahoo/raw/NVDA.json",
+      "provider": "yahoo",
+      "sha256": "0772a06ee07af7abcb2100740f638a76081d8e74d86b9ca3a177b39769d87986",
+      "symbol": "NVDA"
+    },
+    {
+      "byte_length": 83571,
+      "kind": "raw_response",
+      "path": "yahoo/raw/PLUG.json",
+      "provider": "yahoo",
+      "sha256": "fda6d210b0453a8f2e1495da870e1206ce324d9c8b8f2d934fc7b031370a09c9",
+      "symbol": "PLUG"
+    },
+    {
+      "byte_length": 81449,
+      "kind": "raw_response",
+      "path": "yahoo/raw/SHOP.json",
+      "provider": "yahoo",
+      "sha256": "5fac12132ee6ae9af15aefc2f101f8caf89e95c24db23ba4b8633e25eaae7232",
+      "symbol": "SHOP"
+    },
+    {
+      "byte_length": 338,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/ADM.json",
+      "provider": "yahoo",
+      "sha256": "bce20680a10b4574be1c7f7276720b7cad90fb5132cfd587cf964ea5315903dc",
+      "symbol": "ADM"
+    },
+    {
+      "byte_length": 340,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/DDOG.json",
+      "provider": "yahoo",
+      "sha256": "adf8fc7de57ed51f5a7832b233aeb25d4271d8988d6df7234bb499ed5743a772",
+      "symbol": "DDOG"
+    },
+    {
+      "byte_length": 340,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/DUOL.json",
+      "provider": "yahoo",
+      "sha256": "d633b6fe5769ec181a7dafc682bfc0067953b1a6b07388b6bfde7ee46edf8399",
+      "symbol": "DUOL"
+    },
+    {
+      "byte_length": 338,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/JPM.json",
+      "provider": "yahoo",
+      "sha256": "9d05b844b05666b91ae8a3d7ddc63583e1cfc1de5de0a02cd84392e186676b96",
+      "symbol": "JPM"
+    },
+    {
+      "byte_length": 340,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/META.json",
+      "provider": "yahoo",
+      "sha256": "2be2fa504f316e177f7abd8a7b84542e7b3dd637b8ef1ee65a2dd9654ec934c8",
+      "symbol": "META"
+    },
+    {
+      "byte_length": 340,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/NICE.json",
+      "provider": "yahoo",
+      "sha256": "89c5ce2b82dd13d07725c8a281a0beae45a2b31ea0e95a62488c0a2add19a913",
+      "symbol": "NICE"
+    },
+    {
+      "byte_length": 340,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/NVDA.json",
+      "provider": "yahoo",
+      "sha256": "00d0cd4a3fbd7ebdcf05200a9fc39ba03e031ab55739b023ce4c389355732504",
+      "symbol": "NVDA"
+    },
+    {
+      "byte_length": 340,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/PLUG.json",
+      "provider": "yahoo",
+      "sha256": "d3e8aae0f87744510a43dc6f4304528427583d03e71ef9367413492bc6e23f6f",
+      "symbol": "PLUG"
+    },
+    {
+      "byte_length": 340,
+      "kind": "request_metadata",
+      "path": "yahoo/requests/SHOP.json",
+      "provider": "yahoo",
+      "sha256": "8cf979ec05e7653ac346c7a1695057d3e94e94f953f43a00c31bb340becdce53",
+      "symbol": "SHOP"
+    }
+  ],
+  "capture_id": "factor-matrix-yahoo-twelve-20260715",
+  "completed_at": "2026-07-15T08:45:14.509441+00:00",
+  "evidence_ceiling": "E1 development samples only; no reconciliation, confidence promotion, TOPT, strategy, or release-readiness claim",
+  "plan_path": "apps/data-engine/samples/factor_matrix/capture_plan.v1.json",
+  "plan_sha256": "481a66e9a42f5420e163436ac40ecf374341888872304c81ba9a17a8c68d92df",
+  "provider_semantics": {
+    "twelve_data": {
+      "adjusted_close": "unavailable and emitted as an empty field",
+      "open_high_low_close": "unadjusted daily values requested with adjust=none",
+      "volume": "provider daily volume"
+    },
+    "yahoo": {
+      "adjusted_close": "provider adjusted close retained as a separate field",
+      "open_high_low_close": "provider unadjusted daily values",
+      "volume": "provider daily volume"
+    }
+  },
+  "providers": [
+    "twelve_data",
+    "yahoo"
+  ],
+  "schema": "truealpha.factor-matrix-sample-capture@v1",
+  "symbols": [
+    "ADM",
+    "DDOG",
+    "DUOL",
+    "JPM",
+    "META",
+    "NICE",
+    "NVDA",
+    "PLUG",
+    "SHOP"
+  ],
+  "window": {
+    "end": "2026-07-10",
+    "end_inclusive": true,
+    "start": "2023-07-10"
+  }
+}

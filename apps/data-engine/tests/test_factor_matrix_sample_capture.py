@@ -12,7 +12,8 @@ import pytest
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 SCRIPT_PATH = Path(__file__).parents[1] / "scripts/capture_factor_matrix_samples.py"
-PLAN_PATH = Path(__file__).parents[1] / "samples/factor_matrix/capture_plan.v1.json"
+PLAN_PATH = Path(__file__).parents[1] / "samples/factor_matrix/capture_plan.v2.json"
+LEGACY_PLAN_PATH = Path(__file__).parents[1] / "samples/factor_matrix/capture_plan.v1.json"
 CAPTURE = runpy.run_path(str(SCRIPT_PATH))
 CaptureError = CAPTURE["CaptureError"]
 EXPECTED_SYMBOLS = CAPTURE["EXPECTED_SYMBOLS"]
@@ -36,10 +37,18 @@ def _fixture_bytes(provider: str) -> bytes:
 
 
 class FixtureClient:
-    def __init__(self, *, fail_symbol: str | None = None, http_status: int = 200) -> None:
+    def __init__(
+        self,
+        *,
+        fail_symbol: str | None = None,
+        http_status: int = 200,
+        rate_limit_once_symbol: str | None = None,
+    ) -> None:
         self.calls: list[tuple[str, dict[str, str]]] = []
         self.fail_symbol = fail_symbol
         self.http_status = http_status
+        self.rate_limit_once_symbol = rate_limit_once_symbol
+        self.rate_limit_returned = False
 
     def get(self, url: str, *, params: dict[str, str]) -> httpx.Response:
         self.calls.append((url, params))
@@ -56,6 +65,9 @@ class FixtureClient:
             if symbol == self.fail_symbol:
                 payload["chart"]["result"][0]["indicators"]["quote"][0]["close"][0] = None
         request = httpx.Request("GET", url, params=params)
+        if symbol == self.rate_limit_once_symbol and not self.rate_limit_returned:
+            self.rate_limit_returned = True
+            return httpx.Response(429, headers={"Retry-After": "7"}, request=request)
         return httpx.Response(self.http_status, json=payload, request=request)
 
 
@@ -70,6 +82,11 @@ def test_plan_freezes_original_nine_symbols_and_provider_semantics():
     assert tuple(item["symbol"] for item in plan["symbols"]) == EXPECTED_SYMBOLS
     assert plan["window"] == {"start": "2023-07-10", "end": "2026-07-10", "end_inclusive": True}
     assert plan["providers"]["twelve_data"]["request"]["adjust"] == "none"
+    assert plan["providers"]["yahoo"]["request_contract"]["window_start"]["name"] == "period1"
+    assert plan["providers"]["twelve_data"]["request_contract"]["window_end"] == {
+        "name": "end_date",
+        "encoding": "exclusive ISO 8601 calendar date set to the day after the inclusive sample end",
+    }
     assert plan["providers"]["yahoo"]["adjustment_semantics"]["adjusted_close"].startswith("provider adjusted")
 
 
@@ -89,6 +106,20 @@ def test_plan_rejects_fixture_hash_drift():
 
     with pytest.raises(CaptureError, match="fixture hash mismatch"):
         validate_fixture_hashes(plan)
+
+
+def test_plan_rejects_request_contract_drift(tmp_path: Path):
+    plan = json.loads(PLAN_PATH.read_text())
+    plan["providers"]["twelve_data"]["request_contract"]["window_start"]["name"] = "from"
+    changed = tmp_path / "capture_plan.json"
+    changed.write_text(json.dumps(plan))
+
+    with pytest.raises(CaptureError, match="request_contract differs"):
+        load_plan(changed)
+
+
+def test_legacy_plan_remains_loadable_for_capture_validation():
+    assert load_plan(LEGACY_PLAN_PATH)["schema"] == "truealpha.factor-matrix-sample-plan@v1"
 
 
 def test_provider_fixtures_normalize_to_separate_adjustment_semantics():
@@ -166,6 +197,7 @@ def test_capture_is_full_denominator_secret_free_and_idempotent(tmp_path: Path):
     request = json.loads((capture_dir / "twelve_data/requests/DDOG.json").read_text())
     assert "apikey" not in request["parameters"]
     assert request["credential_env"] == "TWELVE_DATA_API_KEY"
+    assert request["parameters"]["end_date"] == "2026-07-11"
 
     same_manifest = capture_samples(
         capture_id="fixture-both-providers",
@@ -299,6 +331,25 @@ def test_http_failure_does_not_echo_credential_or_request_url(tmp_path: Path):
     assert str(error.value) == "twelve_data ADM: HTTP 401"
     assert secret not in str(error.value)
     assert "https://" not in str(error.value)
+
+
+def test_rate_limit_retries_once_without_partial_output(tmp_path: Path):
+    delays: list[float] = []
+    client = FixtureClient(rate_limit_once_symbol="ADM")
+
+    manifest_path = capture_samples(
+        capture_id="rate-limit-retry",
+        plan_path=PLAN_PATH,
+        output_root=tmp_path,
+        providers=("twelve_data",),
+        environ={"TWELVE_DATA_API_KEY": "runtime-only-secret"},
+        client=client,
+        sleeper=delays.append,
+    )
+
+    assert manifest_path.is_file()
+    assert delays == [7.0]
+    assert len(client.calls) == 10
 
 
 def test_incomplete_existing_directory_cannot_be_reused(tmp_path: Path):

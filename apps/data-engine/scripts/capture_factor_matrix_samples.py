@@ -10,21 +10,48 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from io import StringIO
 from pathlib import Path, PurePosixPath
+from time import sleep
 from typing import Any
 
 import httpx
 
 DATA_ENGINE_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PLAN = DATA_ENGINE_ROOT / "samples/factor_matrix/capture_plan.v1.json"
+DEFAULT_PLAN = DATA_ENGINE_ROOT / "samples/factor_matrix/capture_plan.v2.json"
 DEFAULT_OUTPUT_ROOT = DATA_ENGINE_ROOT / "samples/factor_matrix/captures"
 EXPECTED_SYMBOLS = ("ADM", "DDOG", "DUOL", "JPM", "META", "NICE", "NVDA", "PLUG", "SHOP")
 EXPECTED_PROVIDERS = ("twelve_data", "yahoo")
+EXPECTED_YAHOO_REQUEST_CONTRACT = {
+    "symbol": {"location": "endpoint_path", "name": "symbol"},
+    "window_start": {
+        "name": "period1",
+        "encoding": "inclusive start date at 00:00:00 UTC as Unix seconds",
+    },
+    "window_end": {
+        "name": "period2",
+        "encoding": "exclusive day after the inclusive end date at 00:00:00 UTC as Unix seconds",
+    },
+}
+EXPECTED_TWELVE_REQUEST_CONTRACTS = {
+    "truealpha.factor-matrix-sample-plan@v1": {
+        "symbol": {"location": "query", "name": "symbol"},
+        "window_start": {"name": "start_date", "encoding": "inclusive ISO 8601 calendar date"},
+        "window_end": {"name": "end_date", "encoding": "inclusive ISO 8601 calendar date"},
+    },
+    "truealpha.factor-matrix-sample-plan@v2": {
+        "symbol": {"location": "query", "name": "symbol"},
+        "window_start": {"name": "start_date", "encoding": "inclusive ISO 8601 calendar date"},
+        "window_end": {
+            "name": "end_date",
+            "encoding": "exclusive ISO 8601 calendar date set to the day after the inclusive sample end",
+        },
+    },
+}
 NORMALIZED_COLUMNS = ("date", "open", "high", "low", "close", "adjusted_close", "volume")
 ARTIFACT_LAYOUT = {
     "normalized_csv": ("normalized", "csv"),
@@ -104,7 +131,7 @@ def load_plan(path: Path = DEFAULT_PLAN) -> dict[str, Any]:
         plan = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise CaptureError(f"cannot load capture plan: {path}") from exc
-    if not isinstance(plan, dict) or plan.get("schema") != "truealpha.factor-matrix-sample-plan@v1":
+    if not isinstance(plan, dict) or plan.get("schema") not in EXPECTED_TWELVE_REQUEST_CONTRACTS:
         raise CaptureError("unsupported capture plan schema")
 
     window = _require_mapping(plan.get("window"), "window")
@@ -127,6 +154,13 @@ def load_plan(path: Path = DEFAULT_PLAN) -> dict[str, Any]:
         request = _require_mapping(config.get("request"), f"providers.{provider}.request")
         if any(key.lower() in {"apikey", "api_key", "authorization"} for key in request):
             raise CaptureError(f"providers.{provider}.request contains a credential field")
+        expected_contract = (
+            EXPECTED_YAHOO_REQUEST_CONTRACT
+            if provider == "yahoo"
+            else EXPECTED_TWELVE_REQUEST_CONTRACTS[str(plan["schema"])]
+        )
+        if config.get("request_contract") != expected_contract:
+            raise CaptureError(f"providers.{provider}.request_contract differs from the v1 contract")
         fixture = _require_mapping(config.get("fixture"), f"providers.{provider}.fixture")
         fixture_payload = fixture.get("payload")
         fixture_hash = fixture.get("sha256")
@@ -299,10 +333,11 @@ def _request_details(
         credential = environ.get(credential_env)
         if not credential:
             raise CaptureError(f"twelve_data requires runtime environment variable {credential_env}")
+        request_end = end + timedelta(days=1) if plan["schema"] == "truealpha.factor-matrix-sample-plan@v2" else end
         params = request | {
             "symbol": provider_symbol,
             "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
+            "end_date": request_end.isoformat(),
             "apikey": credential,
         }
     else:
@@ -327,12 +362,22 @@ def _fetch(
     start: date,
     end: date,
     environ: Mapping[str, str],
+    sleeper: Callable[[float], None],
 ) -> tuple[bytes, bytes, bytes]:
     endpoint, params, metadata, credential = _request_details(plan, provider, provider_symbol, start, end, environ)
-    try:
-        response = client.get(endpoint, params=params)
-    except httpx.HTTPError as exc:
-        raise CaptureError(f"{provider} {provider_symbol}: request failed ({type(exc).__name__})") from None
+    for attempt in range(2):
+        try:
+            response = client.get(endpoint, params=params)
+        except httpx.HTTPError as exc:
+            raise CaptureError(f"{provider} {provider_symbol}: request failed ({type(exc).__name__})") from None
+        if response.status_code != 429 or attempt == 1:
+            break
+        retry_after = response.headers.get("Retry-After", "60")
+        try:
+            delay = float(retry_after)
+        except ValueError:
+            delay = 60.0
+        sleeper(delay if 0 <= delay <= 300 else 60.0)
     if response.status_code < 200 or response.status_code >= 300:
         raise CaptureError(f"{provider} {provider_symbol}: HTTP {response.status_code}")
     raw = response.content
@@ -480,6 +525,7 @@ def capture_samples(
     providers: Sequence[str] = ("yahoo",),
     environ: Mapping[str, str] | None = None,
     client: httpx.Client | None = None,
+    sleeper: Callable[[float], None] = sleep,
 ) -> Path:
     if CAPTURE_ID_RE.fullmatch(capture_id) is None:
         raise CaptureError("capture ID must use 1-80 lowercase letters, digits, dots, dashes, or underscores")
@@ -524,7 +570,7 @@ def capture_samples(
                 canonical_symbol = str(symbol["symbol"])
                 provider_symbol = str(_require_mapping(symbol["provider_symbols"], "provider_symbols")[provider])
                 raw, normalized, request_metadata = _fetch(
-                    http, plan, provider, provider_symbol, start, end, environment
+                    http, plan, provider, provider_symbol, start, end, environment, sleeper
                 )
                 bodies = {
                     f"{provider}/raw/{canonical_symbol}.json": (raw, "raw_response"),

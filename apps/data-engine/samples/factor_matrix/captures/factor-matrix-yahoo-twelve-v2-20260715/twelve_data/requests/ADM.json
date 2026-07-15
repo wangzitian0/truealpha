@@ -1,0 +1,16 @@
+{
+  "credential_env": "TWELVE_DATA_API_KEY",
+  "endpoint": "https://api.twelvedata.com/time_series",
+  "parameters": {
+    "adjust": "none",
+    "end_date": "2026-07-11",
+    "format": "JSON",
+    "interval": "1day",
+    "order": "asc",
+    "start_date": "2023-07-10",
+    "symbol": "ADM"
+  },
+  "provider": "twelve_data",
+  "provider_symbol": "ADM",
+  "schema": "truealpha.factor-matrix-sample-request@v1"
+}
