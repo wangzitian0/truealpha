@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "batch_id": "S10-factor-matrix-samples",
-  "revision": 3,
+  "revision": 4,
   "issue": 208,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "capture/storage",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Freeze and implement replayable provider-specific daily-price sample capture for the existing nine-symbol development denominator.",
@@ -34,7 +34,7 @@
     "requirements": [
       "the prepared S10 revision is merged and the E0 implementation revision is based on main at 8efda7e6d7fe1fd1ef2d7f5bbcc5aa1af1d85f50",
       "the repaired nine-symbol provider plan and embedded parser fixture hashes are frozen at 7d6a1b76de5fa58d365ce1a5e90272b79dfc51e2c32dbc4ef54c4bc982553c04",
-      "the E0 implementation PR pins its exact current main base SHA",
+      "each rung PR audits target-branch drift and updates only when it intersects declared paths or invalidates evidence",
       "issue #208 contains the exact manifest path and SHA-256",
       "an independent reviewer is assigned before E0 acceptance",
       "Twelve Data credentials remain runtime-only and are required only for E1 live capture"
@@ -122,11 +122,20 @@
     "output": {
       "type": "FactorMatrixSampleCaptureEvidence",
       "stable_handoff": false,
-      "state": "accepted_e0",
+      "state": "accepted_e1",
       "accepted_slice": {
+        "capture_id": "factor-matrix-yahoo-twelve-v2-20260715",
+        "capture_manifest": {
+          "path": "apps/data-engine/samples/factor_matrix/captures/factor-matrix-yahoo-twelve-v2-20260715/manifest.json",
+          "sha256": "7e97444e61f8df2bff0e32964bf8d921678d592ec2c984081977879e6a4f14db"
+        },
         "capture_plan_version": 2,
         "provider_count": 2,
         "symbol_count": 9,
+        "artifact_count": 54,
+        "rows_per_provider_symbol": 754,
+        "window_start": "2023-07-10",
+        "window_end_inclusive": "2026-07-10",
         "normalized_numeric_parser": "Decimal",
         "raw_response_retained": true,
         "request_metadata_redacted": true,
