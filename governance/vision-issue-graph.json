@@ -171,7 +171,7 @@
     {"from": 43, "to": 235, "class": "freeze", "artifact": "traceable report artifact contract"},
     {"from": 44, "to": 235, "class": "freeze", "artifact": "approved deterministic card contract"},
     {"from": 229, "to": 236, "class": "start", "artifact": "accepted governed research access handoff"},
-    {"from": 41, "to": 236, "class": "start", "artifact": "stable materialized research read handoff"},
+    {"from": 41, "to": 236, "class": "start", "artifact": "stable research query contract"},
     {"from": 45, "to": 236, "class": "start", "artifact": "direct-mart dashboard handoff"},
     {"from": 46, "to": 236, "class": "start", "artifact": "private conversation outcome handoff"},
     {"from": 235, "to": 236, "class": "start", "artifact": "owner-scoped document lifecycle handoff"},
