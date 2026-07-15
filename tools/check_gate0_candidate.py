@@ -17,7 +17,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path("governance/gate0/manifest-v4.json")
 EXPECTED_MANIFEST_PATHS = (
-    ".github/workflows/ci-governance.yml",
+    ".github/**",
+    "AGENTS.md",
     "Makefile",
     "docs/architecture-contract-closure.md",
     "init.md",
@@ -1383,7 +1384,7 @@ def _validate_manifest_shape(validation: Validation, manifest: Any) -> None:
     merge_fields = frozenset(
         {
             "target_branch",
-            "remaining_partial_merge_allowed",
+            "partial_gate_acceptance_allowed",
             "one_immutable_candidate_required",
             "candidate_change_invalidates_acceptance",
             "historical_foundation_already_merged",
@@ -1394,8 +1395,8 @@ def _validate_manifest_shape(validation: Validation, manifest: Any) -> None:
         assert isinstance(merge_policy, dict)
         validation.require(merge_policy.get("target_branch") == "main", "Gate 0 merge policy: target must be main")
         validation.require(
-            merge_policy.get("remaining_partial_merge_allowed") is False,
-            "Gate 0 merge policy: partial merge cannot be allowed",
+            merge_policy.get("partial_gate_acceptance_allowed") is False,
+            "Gate 0 merge policy: partial Gate acceptance cannot be allowed",
         )
         validation.require(
             merge_policy.get("one_immutable_candidate_required") is True,

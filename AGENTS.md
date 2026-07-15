@@ -34,15 +34,25 @@ No moon — CI is GitHub Actions with path filtering (`.github/workflows/`).
 
 ## Workspace Work Prefix and Deduplication
 
-The canonical workspace name for this repository is `truealpha-data`, so its exact
-work prefix is `[truealpha-data]`. Auxiliary Git worktrees and branch-directory
-suffixes inherit this canonical prefix; names such as `truealpha-data-gate0` do not
-create a different owner identity.
+Derive the workspace identity from the actual repository-root directory for the
+current checkout. Never hard-code it or infer it from the remote repository name:
+
+```sh
+workspace_root="$(git rev-parse --show-toplevel)"
+workspace_name="$(basename "$workspace_root")"
+work_prefix="[$workspace_name]"
+```
+
+For example, this checkout is rooted at `truealpha`, so its exact work prefix is
+`[truealpha]`. A separately named worktree or checkout has its own prefix derived
+from its own root directory. Recompute the prefix before creating or renaming work.
 
 1. **Prefix owned work.** Agent task names and every GitHub issue or pull request
-   created or exclusively owned by this workspace must begin with
-   `[truealpha-data]`. For batch work, retain the work identity after the workspace
-   prefix, for example `[truealpha-data] [D3:E0] Freeze Yahoo parser corpus`.
+   created or exclusively owned by this workspace must use the exact title form
+   `<work_prefix> <plain English description>`, for example
+   `[truealpha] Freeze the Yahoo parser corpus`. Do not add batch, lane, rung, stage,
+   or task tokens such as `[S1]`, `[D1]`, `[S8:E1]`, or `[prep]` to titles. Record
+   those identities in the canonical manifest, labels, branch name, or issue/PR body.
 2. **Claim one work key.** The unique work key is the issue or batch ID plus its
    target rung, or an explicit standalone task ID when no batch applies. Only one
    active agent, issue, and pull request may own a work key at a time.
@@ -62,6 +72,45 @@ create a different owner identity.
 6. **Collapse duplicates immediately.** If duplicate work is discovered, keep the
    complete, verified issue or pull request and close the duplicate with a cross-link
    and a concise reason before either line advances further.
+
+## Mergeability Definition
+
+`mergeable` means **ready and authorized to merge into the target branch now**. It is
+not synonymous with GitHub's `mergeable: MERGEABLE`, which only establishes that Git
+can combine the branches without an unresolved content conflict. A PR is mergeable
+only when every condition below is true for its exact current head SHA:
+
+1. **Authorized scope.** The PR owns one non-duplicated work key and, when applicable,
+   exactly one manifest target rung. Required start dependencies and consumed handoffs
+   are accepted, and the diff stays within the declared writable paths and integration
+   lease.
+2. **Current base.** The PR is rebased on current `main`, has no merge conflict, and any
+   base SHA, revision, manifest hash, corpus hash, issue link, or generated evidence
+   invalidated by the rebase has been refreshed.
+3. **Exact-head evidence.** Every required status check has completed successfully on
+   that head SHA, including the declared acceptance and negative commands. Pending,
+   skipped when required, stale, cancelled, or failing required evidence is not a pass.
+4. **Review complete.** The PR is not a draft, required reviewers have reviewed the
+   exact material change, requested changes are addressed, and every review thread is
+   resolved. Author statements and bot summaries are not substitutes for required
+   evidence or authority.
+5. **Truthful claim and closure.** The PR description names the evidence ceiling and
+   leaves higher claims open. It has no accidental closing keyword. It closes an issue
+   only when that issue's terminal evidence and closure dependencies are accepted; an
+   intermediate rung PR links the issue without closing it.
+6. **Deployable result.** Merging preserves a deployable `main`: additive migrations
+   remain backward compatible, provisional code is disabled from accepted release
+   bindings and default runtime selection, and rollback remains possible.
+7. **Repository enforcement.** The target-branch ruleset reports no remaining block:
+   the branch is current, required checks pass, required review resolution passes, and
+   the current user has no bypass that is being used to override these conditions.
+
+An open parent capability, incomplete higher rung, pending closure dependency, or
+incomplete release gate does not by itself block a lower-rung PR whose manifest permits
+that work and whose claim stays below the corresponding ceiling. Conversely, a green
+CI badge, label, approval, conflict-free diff, or completed lower rung alone never makes
+a PR mergeable. A PR that changes frozen semantics or a frozen candidate must create the
+required new version/candidate and satisfy the invalidation rules before it can merge.
 
 ## Iterative Capability Delivery Protocol
 

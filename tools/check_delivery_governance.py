@@ -29,15 +29,13 @@ validate_gate0_candidate = gate0_validator.validate_gate0_candidate
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH_PATH = ROOT / "governance" / "vision-issue-graph.json"
 GATE0_MANIFEST_PATH = "governance/gate0/manifest-v4.json"
-GATE0_AUTHORIZATION_CONTROL_PATHS = frozenset(
-    {
-        ".github/workflows/ci-governance.yml",
-        "Makefile",
-        "tools/check_delivery_governance.py",
-        "tools/check_gate0_candidate.py",
-    }
+GATE0_AUTHORIZATION_CONTROL_PATHS = (
+    ".github/**",
+    "AGENTS.md",
+    "Makefile",
+    "tools/check_delivery_governance.py",
+    "tools/check_gate0_candidate.py",
 )
-GATE0_REBIND_FIELDS = frozenset({"integration_base_sha", "candidate_tree_sha256"})
 RUNGS = ("E0", "E1", "E2", "E3", "E4", "E5")
 RUNG_LABELS = {
     "E0": "code",
@@ -59,9 +57,11 @@ BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
 BATCH_MIRROR_END = "<!-- capability-batch-mirror:end -->"
 GOVERNANCE_CONTROL_PATHS = (
     "AGENTS.md",
-    ".github/workflows/ci-governance.yml",
+    ".github/**",
     "governance/**",
+    "libs/runtime/tests/test_gate0_candidate.py",
     "libs/runtime/tests/test_delivery_governance.py",
+    "tools/check_gate0_candidate.py",
     "tools/check_delivery_governance.py",
 )
 LEASE_REQUIRED_EXACT_PATHS = frozenset(
@@ -1286,7 +1286,6 @@ def validate_gate0_pr_advance(
     *,
     base_sha: str,
     changed_paths: tuple[str, ...],
-    allow_blocked_gate_candidate: bool,
 ) -> PullRequestAdvance | None:
     label = "Gate 0 v4 aggregate candidate"
     manifest_path = repo_path(GATE0_MANIFEST_PATH)
@@ -1325,28 +1324,20 @@ def validate_gate0_pr_advance(
                 matches_any(path, paths),
                 f"{label}: changed path is outside manifest authorization: {path!r}",
             )
-    changed_controls = sorted(set(non_manifest_paths) & GATE0_AUTHORIZATION_CONTROL_PATHS)
-    blocked_control_rebind = False
-    if changed_controls and isinstance(base_manifest, dict):
-        base_payload = {key: value for key, value in base_manifest.items() if key not in GATE0_REBIND_FIELDS}
-        candidate_payload = {key: value for key, value in manifest.items() if key not in GATE0_REBIND_FIELDS}
-        blocked_control_rebind = (
-            manifest.get("status") == "candidate_blocked_external_attestation"
-            and base_manifest.get("status") == "candidate_blocked_external_attestation"
-            and candidate_payload == base_payload
-        )
-    if changed_controls and not (allow_blocked_gate_candidate or blocked_control_rebind):
+    changed_controls = sorted(
+        path for path in non_manifest_paths if matches_any(path, GATE0_AUTHORIZATION_CONTROL_PATHS)
+    )
+    claims_acceptance = manifest.get("status") == "accepted"
+    if changed_controls and claims_acceptance:
         validation.require(
             False,
-            f"{label}: accepted candidate modifies authorization controls; "
-            f"a blocked control migration may change only its base/tree binding: {changed_controls}",
+            f"{label}: accepted candidate modifies authorization controls: {changed_controls}",
         )
-    permit_blocked_candidate = allow_blocked_gate_candidate or blocked_control_rebind
     gate_result = validate_gate0_candidate(
         Path(GATE0_MANIFEST_PATH),
         root=ROOT,
-        check_live_comments=not permit_blocked_candidate,
-        require_accepted=not permit_blocked_candidate,
+        check_live_comments=claims_acceptance,
+        require_accepted=claims_acceptance,
     )
     for error in gate_result.errors:
         validation.require(False, f"{label}: {error}")
@@ -1369,7 +1360,6 @@ def validate_pr_advance(
     graph: dict[str, Any],
     base_sha: str,
     head_sha: str,
-    allow_blocked_gate_candidate: bool = False,
 ) -> PullRequestAdvance | None:
     valid_coordinates = all(GIT_SHA_RE.fullmatch(value) is not None for value in (base_sha, head_sha))
     validation.require(valid_coordinates, "PR base/head must be full Git SHAs")
@@ -1400,7 +1390,6 @@ def validate_pr_advance(
             validation,
             base_sha=base_sha,
             changed_paths=changed_paths,
-            allow_blocked_gate_candidate=allow_blocked_gate_candidate,
         )
     if not changed_manifests:
         validation.require(
@@ -1753,7 +1742,6 @@ def validate(
     pr_head_sha: str | None = None,
     execute_acceptance: bool = False,
     evidence_output: Path | None = None,
-    allow_blocked_gate_candidate: bool = False,
 ) -> Validation:
     validation = Validation()
     graph = load_json(GRAPH_PATH)
@@ -1841,7 +1829,6 @@ def validate(
             graph=graph,
             base_sha=pr_base_sha,
             head_sha=pr_head_sha,
-            allow_blocked_gate_candidate=allow_blocked_gate_candidate,
         )
     if github_path is not None:
         github_graph = graph
@@ -1870,11 +1857,6 @@ def main() -> int:
     parser.add_argument("--pr-head-sha", help="Exact pull-request head commit")
     parser.add_argument("--execute-acceptance", action="store_true")
     parser.add_argument("--evidence-output", type=Path)
-    parser.add_argument(
-        "--allow-blocked-gate-candidate",
-        action="store_true",
-        help="Allow a structurally valid blocked Gate 0 candidate only for a draft PR",
-    )
     args = parser.parse_args()
     validation = validate(
         args.github_issues,
@@ -1882,7 +1864,6 @@ def main() -> int:
         pr_head_sha=args.pr_head_sha,
         execute_acceptance=args.execute_acceptance,
         evidence_output=args.evidence_output,
-        allow_blocked_gate_candidate=args.allow_blocked_gate_candidate,
     )
     if validation.errors:
         for error in validation.errors:
