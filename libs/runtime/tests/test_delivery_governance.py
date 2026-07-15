@@ -1191,6 +1191,14 @@ def test_agents_guide_is_a_governance_control_and_remains_lease_protected(monkey
     assert governance.requires_integration_lease("AGENTS.md")
 
 
+def test_agents_guide_does_not_require_current_main_for_disjoint_drift():
+    guide = (governance.ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "**Compatible base.**" in guide
+    assert "branch is current" not in guide
+    assert "rebased on current `main`" not in guide
+
+
 def test_corpus_hash_must_match_bytes(tmp_path, monkeypatch):
     graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch, corpus_sha="0" * 64)
     validation = governance.Validation()

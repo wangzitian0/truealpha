@@ -124,8 +124,9 @@ only when every condition below is true for its exact current head SHA:
    remain backward compatible, provisional code is disabled from accepted release
    bindings and default runtime selection, and rollback remains possible.
 7. **Repository enforcement.** The target-branch ruleset reports no remaining block:
-   the branch is current, required checks pass, required review resolution passes, and
-   the current user has no bypass that is being used to override these conditions.
+   the compatible-base audit passes, required checks pass, required review resolution
+   passes, and the current user has no bypass that is being used to override these
+   conditions. An informational stale-base or `BEHIND` state is not itself a block.
 
 An open parent capability, incomplete higher rung, pending closure dependency, or
 incomplete release gate does not by itself block a lower-rung PR whose manifest permits
