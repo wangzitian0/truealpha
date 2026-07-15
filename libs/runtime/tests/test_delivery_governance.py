@@ -2081,6 +2081,7 @@ def test_prepared_batch_status_mirrors_as_queued_until_merge():
 def test_workflow_authorizes_every_pull_request_against_exact_head():
     workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
     caller = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-required.yml").read_text(encoding="utf-8")
+    metadata = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-pr-metadata.yml").read_text(encoding="utf-8")
     sync = (MODULE_PATH.parents[1] / ".github" / "workflows" / "sync-batch-issues.yml").read_text(encoding="utf-8")
     standalone_sync = (MODULE_PATH.parents[1] / ".github" / "workflows" / "sync-standalone-issue.yml").read_text(
         encoding="utf-8"
@@ -2088,13 +2089,23 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
 
     assert "workflow_call:\n" in workflow
     assert "pull_request:\n" in caller
-    assert "types: [opened, synchronize, reopened, edited, ready_for_review]" in caller
+    assert "types: [opened, synchronize, reopened, ready_for_review]" in caller
+    assert "edited" not in caller.split("  pull_request:\n", 1)[1].split("  merge_group:\n", 1)[0]
     assert "merge_group:\n    types: [checks_requested]" in caller
     assert "uses: ./.github/workflows/ci-governance.yml" in caller
     assert "pr_base_sha: ${{ github.event.pull_request.base.sha }}" in caller
     assert "pr_head_sha: ${{ github.event.pull_request.head.sha }}" in caller
     assert "pr_number: ${{ github.event.pull_request.number }}" in caller
     assert "github.event_name == 'merge_group' && 'true' || steps.filter.outputs.python" in caller
+    assert "types: [opened, synchronize, reopened, edited, ready_for_review]" in metadata
+    assert "merge_group:\n    types: [checks_requested]" in metadata
+    assert "uses: ./.github/workflows/ci-governance.yml" in metadata
+    assert "mode: pull_request_metadata" in metadata
+    assert "pr_base_sha: ${{ github.event.pull_request.base.sha }}" in metadata
+    assert "pr_head_sha: ${{ github.event.pull_request.head.sha }}" in metadata
+    assert "pr_number: ${{ github.event.pull_request.number }}" in metadata
+    assert "group: pr-metadata-${{ github.event.pull_request.number || github.ref }}" in metadata
+    assert "  required:\n    name: pr-metadata\n    if: always()" in metadata
     assert "--pr-base-sha" in workflow
     assert "--pr-head-sha" in workflow
     assert "--github-pr" in workflow
@@ -2123,7 +2134,8 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
 def test_workflow_runs_acceptance_against_a_fresh_required_postgres_runtime():
     workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
 
-    pull_request_job = workflow.split("  validate:\n", 1)[1].split("  validate_non_pr:\n", 1)[0]
+    pull_request_job = workflow.split("  validate:\n", 1)[1].split("  validate_metadata:\n", 1)[0]
+    metadata_job = workflow.split("  validate_metadata:\n", 1)[1].split("  validate_non_pr:\n", 1)[0]
     non_pull_request_job = workflow.split("  validate_non_pr:\n", 1)[1]
     database_step = workflow.index("- name: Prepare pull-request acceptance database")
     authorization_step = workflow.index("- name: Authorize pull-request diff")
@@ -2136,7 +2148,14 @@ def test_workflow_runs_acceptance_against_a_fresh_required_postgres_runtime():
     assert "DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha" in workflow
     assert 'TRUEALPHA_REQUIRE_RUNTIME: "1"' in workflow
     assert database_step < authorization_step
-    assert "inputs.mode != 'pull_request'" in non_pull_request_job
+    assert "inputs.mode == 'pull_request_metadata'" in metadata_job
+    assert "ref: ${{ inputs.pr_head_sha }}" in metadata_job
+    assert "--github-pr" in metadata_job
+    assert "--github-work-issue" in metadata_job
+    assert "services:" not in metadata_job
+    assert "uv sync" not in metadata_job
+    assert "--execute-acceptance" not in metadata_job
+    assert "inputs.mode != 'pull_request' && inputs.mode != 'pull_request_metadata'" in non_pull_request_job
     assert "services:" not in non_pull_request_job
     assert "--execute-acceptance" not in non_pull_request_job
 
@@ -2159,30 +2178,71 @@ def test_required_ci_aggregates_every_reusable_check_and_is_always_terminal():
         "release-images.yml",
     ):
         assert f"uses: ./.github/workflows/{workflow}" in required
+    assert "images_check, images_release]" in required
     assert "Reject any failed, cancelled, or missing dependency" in required
     assert '.value.result != "success" and .value.result != "skipped"' in required
 
 
-def test_direct_security_scan_excludes_main_and_all_tag_pushes():
-    workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "security-gate.yml").read_text(encoding="utf-8")
+def test_security_scan_defers_open_pr_pushes_to_the_required_workflow():
+    workflows = MODULE_PATH.parents[1] / ".github" / "workflows"
+    workflow = (workflows / "security-gate.yml").read_text(encoding="utf-8")
+    required = (workflows / "ci-required.yml").read_text(encoding="utf-8")
+    security_call = required.split("  security:\n", 1)[1].split("  db:\n", 1)[0]
 
+    assert "workflow_call:" in workflow
+    assert "  push:" in workflow
     assert "branches-ignore: [main]" in workflow
     assert 'tags-ignore: ["**"]' in workflow
+    assert '"repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=100"' in workflow
+    assert 'select(.state == "open")' in workflow
+    assert 'echo "should_scan=false"' in workflow
+    assert 'echo "should_scan=true"' in workflow
+    assert "pull-requests: read" in security_call
+    for job in ("secret-scan", "no-trade-api"):
+        job_body = workflow.split(f"  {job}:\n", 1)[1]
+        assert "if: needs.scan_policy.outputs.should_scan == 'true'" in job_body
+        assert "needs: scan_policy" in job_body
 
 
 def test_image_publication_is_reusable_and_waits_for_build_and_required_checks():
     workflows = MODULE_PATH.parents[1] / ".github" / "workflows"
     required = (workflows / "ci-required.yml").read_text(encoding="utf-8")
     release = (workflows / "release-images.yml").read_text(encoding="utf-8")
-    image_call = required.split("  images:\n", 1)[1].split("  required:\n", 1)[0]
+    image_check = required.split("  images_check:\n", 1)[1].split("  images_release:\n", 1)[0]
+    image_release = required.split("  images_release:\n", 1)[1].split("  required:\n", 1)[0]
+    filters = required.split("          filters: |\n", 1)[1].split("\n\n  governance_pr:\n", 1)[0]
+    app_web_filter = filters.split("            image_app_web:\n", 1)[1].split("            image_llm_service:\n", 1)[0]
+    llm_filter = filters.split("            image_llm_service:\n", 1)[1].split("            image_data_engine:\n", 1)[0]
 
     assert "workflow_call:\n" in release
     assert "pull_request:\n" not in release
     assert "push:\n" not in release
+    assert "needs: changes" in image_check
+    assert "publish: false" in image_check
+    assert "governance_pr" not in image_check
     assert (
         "needs: [changes, governance_pr, sync_issues, governance_push, security, db, python, qlib, runtime, web]"
-        in image_call
+        in image_release
     )
-    assert "publish: ${{ github.event_name == 'push' }}" in image_call
-    assert "  publish:\n    if: inputs.publish\n    needs: build" in release
-    assert "packages: write" in release.split("  publish:\n", 1)[1]
+    assert "publish: true" in image_release
+    assert "packages: write" in image_release
+    assert "app_web: true" in image_release
+    assert "llm_service: true" in image_release
+    assert "data_engine: true" in image_release
+    assert "apps/app-web/**" in app_web_filter
+    assert "libs/contracts/**" not in app_web_filter
+    assert "libs/contracts/**" in llm_filter
+    assert "apps/data-engine/pyproject.toml" in llm_filter
+    for image_input in ("app_web", "llm_service", "data_engine"):
+        assert f"      {image_input}:\n" in release
+        assert f"${{{{ inputs.{image_input} }}}}" in release
+    assert "  plan:\n" in release
+    assert "-f apps/data-engine/Dockerfile" in release
+    assert "matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}" in release
+    assert "hashFiles" not in release
+    assert "  build:\n    if: needs.plan.outputs.has_images == 'true'\n    needs: plan" in release
+    assert (
+        "  publish:\n    if: inputs.publish && needs.plan.outputs.has_images == 'true'\n    needs: [plan, build]"
+        in release
+    )
+    assert "packages: write" not in release

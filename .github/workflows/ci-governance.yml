@@ -102,8 +102,44 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  validate_metadata:
+    if: inputs.mode == 'pull_request_metadata'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.pr_head_sha }}
+      - name: Export live pull-request metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues?state=all&labels=scope%3Avision&per_page=100" \
+            | jq -s '[.[][] | select(has("pull_request") | not) | {number, title, state, body, labels, milestone}]' \
+            > "$RUNNER_TEMP/vision-issues.json"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/pulls/${{ inputs.pr_number }}" \
+            --jq '{number, title, body}' \
+            > "$RUNNER_TEMP/pull-request.json"
+          work_issue="$(jq -r 'try (.body | capture("(?m)^Work-Issue:[[:space:]]*#(?<issue>[0-9]+)[[:space:]]*$").issue) catch ""' "$RUNNER_TEMP/pull-request.json")"
+          test -n "$work_issue"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/issues/$work_issue" \
+            --jq '{number, title, state, body, labels, milestone}' \
+            > "$RUNNER_TEMP/work-issue.json"
+      - name: Authorize pull-request metadata
+        run: >-
+          python3 tools/check_delivery_governance.py
+          --github-issues "$RUNNER_TEMP/vision-issues.json"
+          --github-pr "$RUNNER_TEMP/pull-request.json"
+          --github-work-issue "$RUNNER_TEMP/work-issue.json"
+          --pr-base-sha "${{ inputs.pr_base_sha }}"
+          --pr-head-sha "${{ inputs.pr_head_sha }}"
+
   validate_non_pr:
-    if: inputs.mode != 'pull_request'
+    if: inputs.mode != 'pull_request' && inputs.mode != 'pull_request_metadata'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

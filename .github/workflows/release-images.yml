@@ -7,36 +7,69 @@ on:
         description: Publish the exact caller SHA after every image builds.
         required: true
         type: boolean
+      app_web:
+        description: Build the app-web image when its inputs changed.
+        required: true
+        type: boolean
+      llm_service:
+        description: Build the llm-service image when its inputs changed.
+        required: true
+        type: boolean
+      data_engine:
+        description: Build the data-engine image when its inputs changed.
+        required: true
+        type: boolean
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_images: ${{ steps.matrix.outputs.has_images }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: matrix
+        name: Select available images
+        env:
+          APP_WEB: ${{ inputs.app_web }}
+          LLM_SERVICE: ${{ inputs.llm_service }}
+          DATA_ENGINE: ${{ inputs.data_engine }}
+        run: |
+          images='[]'
+          if [[ "$APP_WEB" == "true" ]]; then
+            images="$(jq -c '. + [{"image":"truealpha-app-web","dockerfile":"apps/app-web/Dockerfile","context":"apps/app-web"}]' <<< "$images")"
+          fi
+          if [[ "$LLM_SERVICE" == "true" ]]; then
+            images="$(jq -c '. + [{"image":"truealpha-llm-service","dockerfile":"apps/llm-service/Dockerfile","context":"."}]' <<< "$images")"
+          fi
+          if [[ "$DATA_ENGINE" == "true" && -f apps/data-engine/Dockerfile ]]; then
+            images="$(jq -c '. + [{"image":"truealpha-data-engine","dockerfile":"apps/data-engine/Dockerfile","context":"."}]' <<< "$images")"
+          fi
+
+          echo "matrix=$(jq -cn --argjson include "$images" '{include: $include}')" >> "$GITHUB_OUTPUT"
+          if [[ "$(jq 'length' <<< "$images")" -gt 0 ]]; then
+            echo "has_images=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_images=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    if: needs.plan.outputs.has_images == 'true'
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - image: truealpha-app-web
-            dockerfile: apps/app-web/Dockerfile
-            context: apps/app-web
-            optional: false
-          - image: truealpha-llm-service
-            dockerfile: apps/llm-service/Dockerfile
-            context: .
-            optional: false
-          # PR #196 adds this Dockerfile. The row becomes mandatory as soon as
-          # the file exists, without making the current main branch unbuildable.
-          - image: truealpha-data-engine
-            dockerfile: apps/data-engine/Dockerfile
-            context: .
-            optional: true
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Build ${{ matrix.image }}
-        if: ${{ !matrix.optional || hashFiles(matrix.dockerfile) != '' }}
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -46,41 +79,23 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
   publish:
-    if: inputs.publish
-    needs: build
+    if: inputs.publish && needs.plan.outputs.has_images == 'true'
+    needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - image: truealpha-app-web
-            dockerfile: apps/app-web/Dockerfile
-            context: apps/app-web
-            optional: false
-          - image: truealpha-llm-service
-            dockerfile: apps/llm-service/Dockerfile
-            context: .
-            optional: false
-          - image: truealpha-data-engine
-            dockerfile: apps/data-engine/Dockerfile
-            context: .
-            optional: true
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
-        if: ${{ !matrix.optional || hashFiles(matrix.dockerfile) != '' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        if: ${{ !matrix.optional || hashFiles(matrix.dockerfile) != '' }}
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
@@ -89,7 +104,6 @@ jobs:
             type=sha,format=short
             type=semver,pattern=v{{version}}
       - name: Publish ${{ matrix.image }}
-        if: ${{ !matrix.optional || hashFiles(matrix.dockerfile) != '' }}
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
