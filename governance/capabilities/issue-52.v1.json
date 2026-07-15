@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 52,
+  "gate": 32,
+  "terminal_evidence": "E5",
+  "artifact_edges": [
+    {
+      "from": 51,
+      "to": 52,
+      "class": "closure",
+      "artifact": "exact Staging candidate for recovery drill"
+    }
+  ]
+}

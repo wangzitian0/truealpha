@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 46,
+  "gate": 31,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 42,
+      "to": 46,
+      "class": "start",
+      "artifact": "typed MCP tools"
+    }
+  ]
+}

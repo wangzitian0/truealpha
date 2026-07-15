@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 70,
+  "gate": 29,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 23,
+      "to": 70,
+      "class": "freeze",
+      "artifact": "normalized filing and snapshot path"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 24,
+  "gate": 29,
+  "terminal_evidence": "E4",
+  "artifact_edges": [
+    {
+      "from": 70,
+      "to": 24,
+      "class": "freeze",
+      "artifact": "accepted headcount factor input handoff"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "issue": 42,
+  "gate": 31,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 41,
+      "to": 42,
+      "class": "start",
+      "artifact": "stable research query contract"
+    },
+    {
+      "from": 229,
+      "to": 42,
+      "class": "start",
+      "artifact": "accepted governed research access handoff"
+    }
+  ]
+}

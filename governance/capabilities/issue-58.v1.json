@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "issue": 58,
+  "gate": 56,
+  "terminal_evidence": "E2",
+  "accepted_evidence": {
+    "path": "governance/evidence/issue-58.v2.json",
+    "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
+  },
+  "artifact_edges": []
+}

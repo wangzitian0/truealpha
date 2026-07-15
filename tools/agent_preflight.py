@@ -39,11 +39,6 @@ def upstream_is_gone(track: str) -> bool:
     return track.strip() == "[gone]"
 
 
-def issue_has_prefix(issue: dict[str, Any], prefix: str) -> bool:
-    title = issue.get("title")
-    return isinstance(title, str) and title.startswith(f"{prefix} ")
-
-
 def expected_work_key(root: Path, issue_number: int) -> str:
     for path in sorted((root / "governance" / "batches").glob("*.json")):
         try:
@@ -103,7 +98,7 @@ def clean_gone_upstream(root: Path, branch: str, repair: bool) -> str:
 
 def preflight(issue_number: int, repair_clean_gone: bool) -> tuple[str, str, str]:
     root = repository_root()
-    workspace_name, prefix = workspace_identity(root)
+    workspace_name, _ = workspace_identity(root)
     run("git", "fetch", "origin", "--prune", cwd=root)
     status = run("git", "status", "--porcelain=v1", cwd=root).stdout
     if status.strip():
@@ -126,8 +121,6 @@ def preflight(issue_number: int, repair_clean_gone: bool) -> tuple[str, str, str
     )
     if issue.get("state") != "OPEN":
         raise PreflightError(f"issue #{issue_number} is not open")
-    if not issue_has_prefix(issue, prefix):
-        raise PreflightError(f"issue #{issue_number} does not use workspace prefix {prefix}")
     work_key = expected_work_key(root, issue_number)
 
     pull_requests = json.loads(

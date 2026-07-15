@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "issue": 65,
+  "gate": 30,
+  "terminal_evidence": "E4",
+  "artifact_edges": [
+    {
+      "from": 33,
+      "to": 65,
+      "class": "freeze",
+      "artifact": "frozen historical PEG candidate"
+    },
+    {
+      "from": 34,
+      "to": 65,
+      "class": "freeze",
+      "artifact": "frozen forecast PEG candidate"
+    },
+    {
+      "from": 35,
+      "to": 65,
+      "class": "freeze",
+      "artifact": "frozen analyst candidate"
+    },
+    {
+      "from": 36,
+      "to": 65,
+      "class": "freeze",
+      "artifact": "frozen ETF candidate"
+    },
+    {
+      "from": 38,
+      "to": 65,
+      "class": "freeze",
+      "artifact": "frozen supply-chain candidate"
+    },
+    {
+      "from": 39,
+      "to": 65,
+      "class": "freeze",
+      "artifact": "frozen pure-blood candidate"
+    }
+  ]
+}

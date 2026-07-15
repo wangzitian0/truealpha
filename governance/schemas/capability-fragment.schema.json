@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truealpha.local/schemas/capability-fragment.schema.json",
+  "title": "Vision Capability Fragment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "issue",
+    "gate",
+    "terminal_evidence",
+    "artifact_edges"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "issue": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "gate": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "terminal_evidence": {
+      "enum": ["E2", "E3", "E4", "E5", "GRADUATION"]
+    },
+    "accepted_evidence": {
+      "type": "object"
+    },
+    "artifact_edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "class", "artifact"],
+        "properties": {
+          "from": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "to": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "class": {
+            "enum": ["start", "freeze", "closure", "informational"]
+          },
+          "artifact": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -70,14 +70,23 @@ PR_BODY_METADATA_RE = re.compile(
 WORK_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 ISSUE_ACTIONS = frozenset(("managed-by-batch", "complete-on-merge", "keep-open"))
 MANIFEST_PREFIX = "governance/batches/"
+CAPABILITY_PREFIX = "governance/capabilities/"
+CAPABILITY_SOURCE = f"{CAPABILITY_PREFIX}issue-*.v1.json"
+CAPABILITY_REQUIRED_FIELDS = frozenset(
+    {"schema_version", "issue", "gate", "terminal_evidence", "artifact_edges"}
+)
+CAPABILITY_ALLOWED_FIELDS = CAPABILITY_REQUIRED_FIELDS | {"accepted_evidence"}
+CAPABILITY_EDGE_FIELDS = frozenset({"from", "to", "class", "artifact"})
 BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
 BATCH_MIRROR_END = "<!-- capability-batch-mirror:end -->"
 GOVERNANCE_CONTROL_PATHS = (
     "AGENTS.md",
     ".github/**",
+    "docs/iterative-delivery.md",
     "governance/**",
     "libs/runtime/tests/test_gate0_candidate.py",
     "libs/runtime/tests/test_delivery_governance.py",
+    "tools/agent_preflight.py",
     "tools/check_gate0_candidate.py",
     "tools/check_delivery_governance.py",
 )
@@ -219,11 +228,113 @@ def batch_graph_entry(manifest: dict[str, Any], relative_path: str, digest: str)
     }
 
 
+def assemble_capability_graph(
+    graph: dict[str, Any],
+    capability_records: list[tuple[str, bytes]],
+) -> None:
+    source = graph.get("capability_source")
+    if source is None:
+        if capability_records:
+            raise ValueError("capability fragments require a capability_source declaration")
+        return
+    if source != CAPABILITY_SOURCE:
+        raise ValueError(f"unsupported capability_source {source!r}")
+    if graph.get("issues") is not None and not isinstance(graph.get("issues"), dict):
+        raise ValueError("fragmented capability graph legacy issues snapshot must be an object")
+    if graph.get("artifact_edges") not in (None, []):
+        raise ValueError("fragmented capability graph cannot retain inline artifact edges")
+
+    gates = graph.get("gates")
+    if not isinstance(gates, dict):
+        raise ValueError("fragmented capability graph requires a Gate map")
+    if any(isinstance(gate, dict) and "acceptance_issues" in gate for gate in gates.values()):
+        raise ValueError("fragmented capability graph derives Gate acceptance_issues")
+    if not capability_records:
+        raise ValueError("fragmented capability graph has no capability fragments")
+
+    capabilities: dict[int, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+    edge_keys: set[tuple[int, int, str, str]] = set()
+    for relative_path, payload in sorted(capability_records):
+        try:
+            fragment = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid capability fragment {relative_path!r}: {exc}") from exc
+        if not isinstance(fragment, dict):
+            raise ValueError(f"capability fragment {relative_path!r} must be an object")
+        fields = set(fragment)
+        if not CAPABILITY_REQUIRED_FIELDS <= fields <= CAPABILITY_ALLOWED_FIELDS:
+            raise ValueError(f"capability fragment {relative_path!r} has invalid fields")
+        if fragment.get("schema_version") != 1:
+            raise ValueError(f"capability fragment {relative_path!r} has an unsupported schema")
+
+        issue = fragment.get("issue")
+        gate = fragment.get("gate")
+        if not isinstance(issue, int) or isinstance(issue, bool) or issue <= 0:
+            raise ValueError(f"capability fragment {relative_path!r} has an invalid issue")
+        expected_path = f"{CAPABILITY_PREFIX}issue-{issue}.v1.json"
+        if relative_path != expected_path:
+            raise ValueError(f"capability issue #{issue} must be stored at {expected_path!r}")
+        if issue in capabilities:
+            raise ValueError(f"duplicate capability fragment for issue #{issue}")
+        if not isinstance(gate, int) or isinstance(gate, bool) or str(gate) not in gates:
+            raise ValueError(f"capability issue #{issue} references an unknown Gate")
+
+        entry = {
+            "gate": gate,
+            "terminal_evidence": fragment.get("terminal_evidence"),
+        }
+        if "accepted_evidence" in fragment:
+            entry["accepted_evidence"] = fragment["accepted_evidence"]
+        capabilities[issue] = entry
+
+        fragment_edges = fragment.get("artifact_edges")
+        if not isinstance(fragment_edges, list):
+            raise ValueError(f"capability issue #{issue} artifact_edges must be a list")
+        for edge in fragment_edges:
+            if not isinstance(edge, dict) or set(edge) != CAPABILITY_EDGE_FIELDS:
+                raise ValueError(f"capability issue #{issue} has an invalid artifact edge")
+            if edge.get("to") != issue:
+                raise ValueError(f"capability issue #{issue} has an edge owned by another target")
+            source_issue = edge.get("from")
+            target = edge.get("to")
+            edge_class = edge.get("class")
+            artifact = edge.get("artifact")
+            if (
+                not isinstance(source_issue, int)
+                or isinstance(source_issue, bool)
+                or source_issue <= 0
+                or not isinstance(target, int)
+                or isinstance(target, bool)
+                or edge_class not in EDGE_CLASSES
+                or not isinstance(artifact, str)
+                or not artifact
+            ):
+                raise ValueError(f"capability issue #{issue} has an invalid artifact edge value")
+            edge_key = (source_issue, target, edge_class, artifact)
+            if edge_key in edge_keys:
+                raise ValueError(f"duplicate capability artifact edge {edge_key!r}")
+            edge_keys.add(edge_key)
+            edges.append(edge)
+
+    graph["issues"] = {str(issue): capabilities[issue] for issue in sorted(capabilities)}
+    graph["artifact_edges"] = sorted(
+        edges,
+        key=lambda edge: (edge["from"], edge["to"], edge["class"], edge["artifact"]),
+    )
+    for gate_number, gate in gates.items():
+        gate["acceptance_issues"] = sorted(
+            issue for issue, capability in capabilities.items() if capability["gate"] == int(gate_number)
+        )
+
+
 def assemble_vision_graph(
     static_graph: dict[str, Any],
     manifest_records: list[tuple[str, bytes]],
+    capability_records: list[tuple[str, bytes]] | None = None,
 ) -> dict[str, Any]:
     graph = json.loads(json.dumps(static_graph))
+    assemble_capability_graph(graph, capability_records or [])
     batches: dict[str, dict[str, Any]] = {}
     for relative_path, payload in sorted(manifest_records):
         try:
@@ -242,12 +353,32 @@ def assemble_vision_graph(
 
 def load_vision_graph() -> dict[str, Any]:
     static_graph = load_json(GRAPH_PATH)
-    records = [
+    manifest_records = [
         (path.relative_to(ROOT).as_posix(), path.read_bytes())
         for path in sorted((ROOT / MANIFEST_PREFIX).glob("*.json"))
         if path.is_file() and not path.is_symlink()
     ]
-    return assemble_vision_graph(static_graph, records)
+    capability_records = [
+        (path.relative_to(ROOT).as_posix(), path.read_bytes())
+        for path in sorted((ROOT / CAPABILITY_PREFIX).glob("*.json"))
+        if path.is_file() and not path.is_symlink()
+    ]
+    return assemble_vision_graph(static_graph, manifest_records, capability_records)
+
+
+def git_json_records(commit: str, prefix: str) -> list[tuple[str, bytes]] | None:
+    listing = run_git("ls-tree", "-r", "--name-only", commit, "--", prefix.rstrip("/"))
+    if listing.returncode != 0:
+        return None
+    records: list[tuple[str, bytes]] = []
+    for relative_path in sorted(listing.stdout.splitlines()):
+        if not relative_path.startswith(prefix) or not relative_path.endswith(".json"):
+            continue
+        payload = run_git("show", f"{commit}:{relative_path}")
+        if payload.returncode != 0:
+            return None
+        records.append((relative_path, payload.stdout.encode()))
+    return records
 
 
 def git_vision_graph(commit: str) -> dict[str, Any] | None:
@@ -258,18 +389,16 @@ def git_vision_graph(commit: str) -> dict[str, Any] | None:
     # in-flight migration PR to compare its head with the pre-migration base.
     if static_graph.get("batches"):
         return static_graph
-    listing = run_git("ls-tree", "-r", "--name-only", commit, "--", MANIFEST_PREFIX.rstrip("/"))
-    if listing.returncode != 0:
+    manifest_records = git_json_records(commit, MANIFEST_PREFIX)
+    if manifest_records is None:
         return None
-    records: list[tuple[str, bytes]] = []
-    for relative_path in sorted(listing.stdout.splitlines()):
-        if not relative_path.startswith(MANIFEST_PREFIX) or not relative_path.endswith(".json"):
-            continue
-        payload = run_git("show", f"{commit}:{relative_path}")
-        if payload.returncode != 0:
+    capability_records: list[tuple[str, bytes]] = []
+    if static_graph.get("capability_source") is not None:
+        loaded_capabilities = git_json_records(commit, CAPABILITY_PREFIX)
+        if loaded_capabilities is None:
             return None
-        records.append((relative_path, payload.stdout.encode()))
-    return assemble_vision_graph(static_graph, records)
+        capability_records = loaded_capabilities
+    return assemble_vision_graph(static_graph, manifest_records, capability_records)
 
 
 def git_commit_exists(commit: str) -> bool:
@@ -532,12 +661,6 @@ def validate_pull_request_metadata(
             "pull-request Work-Issue disagrees with the exported issue",
         )
         validation.require(github_work_issue.get("state") == "open", f"pull-request Work-Issue #{work_issue_number} is not open")
-        issue_prefix = work_prefix(github_work_issue.get("title"))
-        validation.require(issue_prefix is not None, f"pull-request Work-Issue #{work_issue_number} has an invalid prefix")
-        validation.require(
-            prefix is not None and prefix == issue_prefix,
-            f"pull-request workspace prefix {prefix!r} disagrees with Work-Issue #{work_issue_number} prefix {issue_prefix!r}",
-        )
 
     if advance is not None and advance.kind == "capability_batch":
         owned_issue = advance.manifest.get("issue")

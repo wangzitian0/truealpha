@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "issue": 51,
+  "gate": 32,
+  "terminal_evidence": "E5",
+  "artifact_edges": [
+    {
+      "from": 11,
+      "to": 51,
+      "class": "freeze",
+      "artifact": "isolated Staging environment"
+    },
+    {
+      "from": 40,
+      "to": 51,
+      "class": "freeze",
+      "artifact": "accepted all-module replay candidate"
+    },
+    {
+      "from": 61,
+      "to": 51,
+      "class": "freeze",
+      "artifact": "natural-refresh and staging SLO policy"
+    }
+  ]
+}

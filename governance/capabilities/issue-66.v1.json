@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "issue": 66,
+  "gate": 32,
+  "terminal_evidence": "E5",
+  "artifact_edges": [
+    {
+      "from": 48,
+      "to": 66,
+      "class": "freeze",
+      "artifact": "accepted consumer conformance"
+    },
+    {
+      "from": 53,
+      "to": 66,
+      "class": "start",
+      "artifact": "isolated Production shadow"
+    }
+  ]
+}

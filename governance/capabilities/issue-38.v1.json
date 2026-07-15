@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 38,
+  "gate": 30,
+  "terminal_evidence": "E4",
+  "artifact_edges": [
+    {
+      "from": 37,
+      "to": 38,
+      "class": "freeze",
+      "artifact": "supply-chain candidate and development corpus"
+    }
+  ]
+}

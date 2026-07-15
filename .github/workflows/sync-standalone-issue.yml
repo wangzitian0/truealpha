@@ -21,7 +21,6 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           metadata="$(python3 - <<'PY'
           import os
@@ -46,11 +45,6 @@ jobs:
           PY
           )"
           test -n "$metadata" || exit 0
-          issue_title="$(gh issue view "$metadata" --repo "$GITHUB_REPOSITORY" --json title --jq .title)"
-          if test "${PR_TITLE%% *}" != "${issue_title%% *}"; then
-            echo "::error::PR and Work-Issue workspace prefixes do not match"
-            exit 1
-          fi
           gh issue close "$metadata" \
             --repo "$GITHUB_REPOSITORY" \
             --comment "Completed by merged PR #$PR_NUMBER at exact head $PR_HEAD_SHA."

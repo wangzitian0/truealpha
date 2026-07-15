@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 60,
+  "gate": 56,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 59,
+      "to": 60,
+      "class": "freeze",
+      "artifact": "Research Catalog input requirements"
+    }
+  ]
+}
