@@ -169,6 +169,15 @@
       "manifest": "governance/batches/D3-staging-topt-capture.v1.json",
       "sha256": "3b7671af97dab8d8bbe4d8681319a6ad21c8ffa6fc402db6e64299cff4669965"
     },
+    "D4-datahub-interface": {
+      "issue": 210,
+      "owner_gate": 29,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E2",
+      "manifest": "governance/batches/D4-datahub-interface.v1.json",
+      "sha256": "9954cc08074c5c9c405cb0557658fc7de76800cf906de057597161c50ee35c8f"
+    },
     "H0-core-headcount-extraction": {
       "issue": 104,
       "owner_gate": 29,
