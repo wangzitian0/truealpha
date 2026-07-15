@@ -15,8 +15,6 @@ on:
       pr_number:
         required: false
         type: number
-  issues:
-    types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]
   workflow_dispatch:
 
 permissions:
@@ -105,9 +103,7 @@ jobs:
           retention-days: 90
 
   validate_non_pr:
-    if: >-
-      inputs.mode != 'pull_request' &&
-      (github.event_name != 'issues' || github.actor != 'github-actions[bot]')
+    if: inputs.mode != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -22,7 +22,7 @@ jobs:
         run: make issue-graph-check
       - name: Validate Gate 0 candidate chain
         run: make gate0-candidate-check
-      - name: Mirror merged batch status to GitHub
+      - name: Reconcile merged Vision issue state to GitHub
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -39,29 +39,77 @@ jobs:
 
           graph = load_vision_graph()
           repository = os.environ["GITHUB_REPOSITORY"]
-          for batch_id, batch in graph["batches"].items():
-              desired_status = batch_status_labels(batch)
-              endpoint = f"repos/{repository}/issues/{batch['issue']}"
-              response = subprocess.run(
-                  ["gh", "api", endpoint],
-                  check=True,
-                  capture_output=True,
-                  text=True,
-              )
-              issue = json.loads(response.stdout)
-              preserved = {
-                  label["name"]
-                  for label in issue["labels"]
-                  if not label["name"].startswith(("batch:", "rung:", "readiness:"))
-              }
-              desired = sorted(preserved | desired_status)
-              desired_body = render_batch_issue_body(issue.get("body") or "", batch_id, batch)
-              current = sorted(label["name"] for label in issue["labels"])
-              if current != desired or issue.get("body") != desired_body:
+          response = subprocess.run(
+              [
+                  "gh",
+                  "api",
+                  "--paginate",
+                  "--slurp",
+                  f"repos/{repository}/issues?state=all&per_page=100",
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          pages = json.loads(response.stdout)
+          issues = {
+              issue["number"]: issue
+              for page in pages
+              for issue in page
+              if "pull_request" not in issue
+          }
+          batches_by_issue = {
+              batch["issue"]: (batch_id, batch)
+              for batch_id, batch in graph["batches"].items()
+          }
+          expected = {
+              graph["root_issue"],
+              *(int(number) for number in graph["gates"]),
+              *(int(number) for number in graph["issues"]),
+              *batches_by_issue,
+          }
+          missing = sorted(expected - issues.keys())
+          if missing:
+              raise SystemExit(f"managed Vision issues are missing from GitHub: {missing}")
+
+          for issue_number, issue in issues.items():
+              current_labels = {label["name"] for label in issue["labels"]}
+              desired_labels = set(current_labels)
+              if issue_number in expected:
+                  desired_labels.add("scope:vision")
+              else:
+                  desired_labels.discard("scope:vision")
+
+              desired_body = issue.get("body") or ""
+              if issue_number in batches_by_issue:
+                  batch_id, batch = batches_by_issue[issue_number]
+                  desired_labels = {
+                      label
+                      for label in desired_labels
+                      if not label.startswith(("batch:", "rung:", "readiness:"))
+                  }
+                  desired_labels.update(batch_status_labels(batch))
+                  desired_body = render_batch_issue_body(desired_body, batch_id, batch)
+
+              if current_labels != desired_labels or issue.get("body") != desired_body:
+                  endpoint = f"repos/{repository}/issues/{issue_number}"
                   subprocess.run(
                       ["gh", "api", "--method", "PATCH", endpoint, "--input", "-"],
-                      input=json.dumps({"body": desired_body, "labels": desired}),
+                      input=json.dumps({"body": desired_body, "labels": sorted(desired_labels)}),
                       check=True,
+                      capture_output=True,
                       text=True,
                   )
           PY
+      - name: Export reconciled Vision issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues?state=all&labels=scope%3Avision&per_page=100" \
+            | jq -s '[.[][] | select(has("pull_request") | not) | {number, title, state, body, labels, milestone}]' \
+            > "$RUNNER_TEMP/vision-issues.json"
+      - name: Validate reconciled GitHub parity
+        run: >-
+          python3 tools/check_delivery_governance.py
+          --github-issues "$RUNNER_TEMP/vision-issues.json"

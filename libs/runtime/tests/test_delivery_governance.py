@@ -3,6 +3,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -766,7 +767,7 @@ def test_gate0_aggregate_rejects_path_outside_manifest_authorization(tmp_path, m
     )
 
     assert advance is None
-    assert any("outside manifest authorization" in error for error in validation.errors)
+    assert any("outside candidate or blocked-control authorization" in error for error in validation.errors)
 
 
 def test_gate0_aggregate_cannot_mix_capability_batch_manifest(tmp_path, monkeypatch):
@@ -852,7 +853,7 @@ def test_ready_blocked_gate0_candidate_may_rebind_reviewed_authorization_control
         tmp_path,
         monkeypatch,
         changed_paths=("governance/gate0/manifest-v4.json", "tools/check_delivery_governance.py"),
-        paths=("governance/gate0/**", "tools/check_delivery_governance.py"),
+        paths=("governance/gate0/**",),
         validation_calls=calls,
     )
     validation = governance.Validation()
@@ -877,7 +878,7 @@ def test_blocked_gate0_control_change_may_revise_unaccepted_payload(tmp_path, mo
         tmp_path,
         monkeypatch,
         changed_paths=("governance/gate0/manifest-v4.json", "tools/check_delivery_governance.py"),
-        paths=("governance/gate0/**", "tools/check_delivery_governance.py"),
+        paths=("governance/gate0/**",),
     )
     manifest_path = tmp_path / "governance" / "gate0" / "manifest-v4.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1747,6 +1748,12 @@ def test_pull_request_live_scope_contains_only_owned_authorization_chain():
     assert governance.pull_request_issue_scope(None) == set()
 
 
+def test_new_batch_registration_does_not_require_premerge_scope_labels():
+    registration = replace(_pull_request_advance(), base_manifest={}, accepted_rung=None)
+
+    assert governance.pull_request_issue_scope(registration) == {29}
+
+
 def test_only_accepted_gate_candidate_requires_full_live_fan_in():
     blocked = governance.PullRequestAdvance(
         batch_id="gate-0-v4",
@@ -1952,7 +1959,11 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     assert "--execute-acceptance" in workflow
     assert "render_batch_issue_body" in sync
     assert "issues:\n" in sync
-    assert 'json.dumps({"body": desired_body, "labels": desired})' in sync
+    assert 'desired_labels.add("scope:vision")' in sync
+    assert 'desired_labels.discard("scope:vision")' in sync
+    assert 'json.dumps({"body": desired_body, "labels": sorted(desired_labels)})' in sync
+    assert "Validate reconciled GitHub parity" in sync
+    assert "types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]" not in workflow
     assert "github.event.pull_request.merged == true" in standalone_sync
     assert 'fields["Issue-Action"] != "complete-on-merge"' in standalone_sync
     assert "gh issue close" in standalone_sync

@@ -33,6 +33,7 @@ GATE0_AUTHORIZATION_CONTROL_PATHS = (
     ".github/**",
     "AGENTS.md",
     "Makefile",
+    "libs/runtime/tests/test_delivery_governance.py",
     "tools/check_delivery_governance.py",
     "tools/check_gate0_candidate.py",
 )
@@ -480,6 +481,10 @@ def pull_request_issue_scope(advance: PullRequestAdvance | None) -> set[int] | N
         return None if advance.manifest.get("status") == "accepted" else set()
 
     manifest = advance.manifest
+    if not advance.base_manifest and advance.accepted_rung is None:
+        owner_gate = manifest.get("owner_gate")
+        return {owner_gate} if isinstance(owner_gate, int) and not isinstance(owner_gate, bool) else set()
+
     candidates: list[Any] = [manifest.get("issue"), manifest.get("owner_gate")]
     candidates.extend(manifest.get("capability_issues", []))
     candidates.extend(manifest.get("closes_issues", []))
@@ -1516,16 +1521,17 @@ def validate_gate0_pr_advance(
         validate_gate0_candidate_paths(validation, paths)
     non_manifest_paths = tuple(path for path in changed_paths if path != GATE0_MANIFEST_PATH)
     validation.require(bool(non_manifest_paths), f"{label}: aggregate PR changes only its manifest")
+    claims_acceptance = manifest.get("status") == "accepted"
     if isinstance(paths, list):
         for path in non_manifest_paths:
             validation.require(
-                matches_any(path, paths),
-                f"{label}: changed path is outside manifest authorization: {path!r}",
+                matches_any(path, paths)
+                or (not claims_acceptance and matches_any(path, GATE0_AUTHORIZATION_CONTROL_PATHS)),
+                f"{label}: changed path is outside candidate or blocked-control authorization: {path!r}",
             )
     changed_controls = sorted(
         path for path in non_manifest_paths if matches_any(path, GATE0_AUTHORIZATION_CONTROL_PATHS)
     )
-    claims_acceptance = manifest.get("status") == "accepted"
     if changed_controls and claims_acceptance:
         validation.require(
             False,

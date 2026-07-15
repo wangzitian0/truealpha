@@ -17,27 +17,18 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path("governance/gate0/manifest-v4.json")
 EXPECTED_MANIFEST_PATHS = (
-    ".github/**",
-    "AGENTS.md",
-    "Makefile",
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e1_slice.py",
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e2_slice.py",
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e3_slice.py",
     "docs/architecture-contract-closure.md",
     "init.md",
-    "governance/README.md",
-    "governance/vision-issue-graph.json",
     "governance/gate0/**",
     "governance/schemas/gate0-candidate-manifest.schema.json",
     "libs/contracts/src/truealpha_contracts/__init__.py",
     "libs/contracts/src/truealpha_contracts/policy_bundle.py",
     "libs/contracts/tests/test_policy_bundle.py",
     "libs/runtime/tests/test_gate0_candidate.py",
-    "libs/runtime/tests/test_delivery_governance.py",
-    "libs/runtime/tests/test_agent_preflight.py",
-    "tools/agent_preflight.py",
     "tools/check_gate0_candidate.py",
-    "tools/check_delivery_governance.py",
 )
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
