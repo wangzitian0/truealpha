@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "corpus_id": "d4-datahub-interface-tiny-v2",
+  "corpus_id": "d4-datahub-interface-tiny-v3",
   "batch_id": "D4-datahub-interface",
   "claim_ceiling": "E1 Local/CI tiny interface evidence only; no stable handoff, persistence schema, source call, schedule activation, query binding, Qlib provider, Staging readiness, or data-readiness claim.",
   "canonicalization": {
@@ -363,6 +363,8 @@
       "normalized observation -> source vintage -> source request and pinned source registry entry"
     ],
     "required_edges": [
+      "run requires list_obligation",
+      "list_obligation satisfied_by work_item",
       "source_request dispatches work_item",
       "work_item attempted_by fetch_attempt",
       "fetch_attempt completes fetch_attempt_result",
@@ -398,7 +400,7 @@
       "obligation:overlap:BBB:bars:2025-01-03",
       "obligation:overlap:CCC:bars:2025-01-03"
     ],
-    "unaffected_obligation_refs": ["obligation:alpha:AAA:bars:2025-01-03"],
+    "unaffected_obligation_refs": ["obligation:alpha:BBB:bars:2025-01-06"],
     "execution_rule": "execution must use the exact content-hashed dry-run selection and cannot broaden it"
   },
   "determinism_assertions": [
@@ -425,6 +427,8 @@
     {"case_id": "unexplained-confidence", "expected_error": "confidence_evidence_missing"},
     {"case_id": "collapsed-readiness", "expected_error": "assessment_dimensions_required"},
     {"case_id": "future-knowledge", "expected_error": "pit_exclusion_required"},
+    {"case_id": "missing-run-obligation-edge", "expected_error": "provenance_path_required"},
+    {"case_id": "missing-obligation-work-edge", "expected_error": "provenance_path_required"},
     {"case_id": "recapture-overreach", "expected_error": "recapture_plan_drift"},
     {"case_id": "factor-provenance-branch", "expected_error": "provenance_neutral_factor_required"}
   ]

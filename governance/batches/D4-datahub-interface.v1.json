@@ -24,7 +24,7 @@
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D4 registration and preparation are merged on main",
-      "the tiny interface corpus remains frozen at defcec3f857f501dcb635df8d70c27cc64120d742852d6360fca45803b13a0d9",
+      "the tiny interface corpus remains frozen at 69a54bd5f6b58e006f4ba383b59a553ebd1474ac39cf93903ab8d859bf828ed4",
       "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while every rung PR rebases on current main without rewriting that activation anchor",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
@@ -82,7 +82,7 @@
   "corpus": {
     "environment": "Local/CI checked-in typed interface fixtures only",
     "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
-    "sha256": "defcec3f857f501dcb635df8d70c27cc64120d742852d6360fca45803b13a0d9",
+    "sha256": "69a54bd5f6b58e006f4ba383b59a553ebd1474ac39cf93903ab8d859bf828ed4",
     "required_strata": [
       "one immutable list with success and terminal-failure obligations",
       "two overlapping immutable lists in separate compatible runs sharing one campaign-scoped provider work item",
@@ -155,6 +155,7 @@
     "negative_controls": [
       "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
       "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
+      "a provenance graph omits the required run-to-obligation or obligation-to-work-item capture path",
       "a work binding whose request omits its obligation's subject, capture requirement, or partition",
       "run-scoped work loses provider sharing across overlapping compatible lists",
       "a completed bundle omits a dispatch outcome, or an unchanged response reuses a vintage from another pinned request",

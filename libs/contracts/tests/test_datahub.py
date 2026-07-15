@@ -752,6 +752,38 @@ def test_provenance_supports_forward_and_reverse_source_paths() -> None:
     assert {obligation.obligation_id for obligation in values["obligations"]} <= set(reverse)
 
 
+@pytest.mark.parametrize(
+    "edge_type",
+    (ProvenanceEdgeKind.REQUIRES, ProvenanceEdgeKind.SATISFIED_BY),
+)
+def test_provenance_rejects_missing_obligation_capture_edges(edge_type: ProvenanceEdgeKind) -> None:
+    bundle, _ = _bundle()
+    replaced = False
+    edges: list[ProvenanceEdge] = []
+    for edge in bundle.provenance.edges:
+        if not replaced and edge.edge_type is edge_type:
+            edges.append(
+                ProvenanceEdge(
+                    from_node_id=edge.from_node_id,
+                    edge_type=ProvenanceEdgeKind.CONTAINS,
+                    to_node_id=edge.to_node_id,
+                    edge_ordinal=edge.edge_ordinal,
+                )
+            )
+            replaced = True
+        else:
+            edges.append(edge)
+    assert replaced
+    provenance = ProvenanceGraph(
+        schema_version=bundle.provenance.schema_version,
+        nodes=bundle.provenance.nodes,
+        edges=tuple(edges),
+    )
+
+    with pytest.raises(ValidationError, match=f"missing required {edge_type.value} edge"):
+        DataHubInterfaceBundle(**{**bundle.model_dump(mode="python"), "provenance": provenance})
+
+
 def test_factor_boundary_exposes_no_source_or_provenance_branch_metadata() -> None:
     forbidden = {
         "source",
@@ -798,6 +830,11 @@ def test_frozen_corpus_declares_every_required_e1_negative_control() -> None:
     )
     source_vintage_refs = {vintage["source_vintage_ref"] for vintage in corpus["source_vintages"]}
     assert {observation["source_vintage_ref"] for observation in corpus["observations"]} <= source_vintage_refs
+    obligation_refs = {obligation["obligation_ref"] for obligation in corpus["obligations"]}
+    selected_obligation_refs = set(corpus["recapture"]["selected_obligation_refs"])
+    unaffected_obligation_refs = set(corpus["recapture"]["unaffected_obligation_refs"])
+    assert selected_obligation_refs | unaffected_obligation_refs <= obligation_refs
+    assert selected_obligation_refs.isdisjoint(unaffected_obligation_refs)
     assert {case["case_id"] for case in corpus["negative_cases"]} == {
         "mutable-universe-alias",
         "duplicate-obligation",
@@ -814,6 +851,8 @@ def test_frozen_corpus_declares_every_required_e1_negative_control() -> None:
         "unexplained-confidence",
         "collapsed-readiness",
         "future-knowledge",
+        "missing-obligation-work-edge",
+        "missing-run-obligation-edge",
         "recapture-overreach",
         "factor-provenance-branch",
     }

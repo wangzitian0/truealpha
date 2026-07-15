@@ -1203,6 +1203,20 @@ class DataHubInterfaceBundle(BaseModel):
         if disconnected:
             raise ValueError(f"provenance graph has unlinked core nodes: {sorted(disconnected)}")
         edges = {(edge.from_node_id, edge.edge_type, edge.to_node_id) for edge in self.provenance.edges}
+        for obligation in self.obligations:
+            self._require_edge(
+                edges,
+                obligation.run_id,
+                ProvenanceEdgeKind.REQUIRES,
+                obligation.obligation_id,
+            )
+        for obligation_id, work_item_id in bound_work_by_obligation.items():
+            self._require_edge(
+                edges,
+                obligation_id,
+                ProvenanceEdgeKind.SATISFIED_BY,
+                work_item_id,
+            )
         for work_item in self.work_items:
             self._require_edge(
                 edges, work_item.source_request_id, ProvenanceEdgeKind.DISPATCHES, work_item.work_item_id
