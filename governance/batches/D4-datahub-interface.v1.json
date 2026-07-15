@@ -181,7 +181,7 @@
       },
       "handoff_manifest": {
         "path": "governance/handoffs/D4-datahub-interface.v1.json",
-        "sha256": "5bf4a30ac507a0e214e58358c9476bf4ff02703079b891a1fae093320097bf98"
+        "sha256": "2922da2902230081399dec3589b2bd48f08b14b997a66ffa809259eb22bb5d10"
       },
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
