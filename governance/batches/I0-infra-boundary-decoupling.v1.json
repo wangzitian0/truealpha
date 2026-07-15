@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "batch_id": "I0-infra-boundary-decoupling",
+  "revision": 1,
+  "issue": 201,
+  "owner_gate": 32,
+  "status": "queued",
+  "lane": "orchestration-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E1",
+  "objective": "Remove TrueAlpha's reverse source dependency on infra2 and replace it with a versioned, side-effect-free deploy-request contract boundary.",
+  "claim_ceiling": "E0 repository-boundary code and deterministic DeployRequest rendering only; no dispatch sender, runtime activation, live-environment evidence, or Production-readiness claim",
+  "capability_issues": [
+    11
+  ],
+  "closes_issues": [],
+  "informational_issues": [
+    32
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued batch registration is merged to main before corpus preparation",
+      "the preparation PR freezes the exact repository-boundary corpus bytes",
+      "the implementation PR pins its exact current main base SHA",
+      "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers pyproject.toml and uv.lock",
+      "issue #201 contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [],
+  "later_claim_dependencies": [
+    "infra2 must explicitly enable and verify TrueAlpha requests before any repository_dispatch sender is activated",
+    "issue #11 still owns isolated Staging runtime and operator evidence",
+    "issues #52, #67, and #68 still own recovery, Production shadow, and independent capture evidence"
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in repository-boundary fixture",
+    "manifest_path": "libs/runtime/tests/fixtures/infra_boundary.v1.json",
+    "sha256": null,
+    "required_strata": [
+      "SDK v0.1.0 immutable release pin and installed distribution identity",
+      "valid TrueAlpha staging DeployRequest v1 round trip",
+      "invalid service, repository, ref, SHA, and evidence rejection",
+      "production request rejection before remote evidence verification and receiver enablement",
+      "absence of the repo gitlink, .gitmodules entry, and source-execution documentation"
+    ]
+  },
+  "source_ceiling": "Checked-in contract fixtures and local Git metadata only; no repository dispatch, image publication, infrastructure mutation, or live environment access.",
+  "paths": {
+    "writable": [
+      ".dockerignore",
+      ".gitmodules",
+      "CLAUDE.md",
+      "README.md",
+      "pyproject.toml",
+      "uv.lock",
+      "repo",
+      "tools/app_deploy_request.py",
+      "libs/runtime/tests/fixtures/infra_boundary.v1.json",
+      "libs/runtime/tests/test_app_deploy_request.py",
+      "governance/leases/I0-infra-boundary-decoupling.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "docs/iterative-delivery.md"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      ".github/**",
+      "apps/**",
+      "db/**",
+      "libs/contracts/**",
+      "libs/factors/**",
+      "libs/runtime/src/**",
+      "docker-compose.yml"
+    ],
+    "integration_surface": [
+      "pyproject.toml",
+      "uv.lock"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "This batch changes repository and contract tooling only; no accepted release binding, sender workflow, runtime service, schedule, or environment activation may reference it."
+  },
+  "acceptance": {
+    "commands": [
+      "uv sync --all-packages --frozen",
+      "uv run pytest libs/runtime/tests/test_app_deploy_request.py -q",
+      "uv run ruff check tools/app_deploy_request.py libs/runtime/tests/test_app_deploy_request.py",
+      "python3 tools/check_delivery_governance.py"
+    ],
+    "negative_controls": [
+      "repo remains a gitlink or .gitmodules still names infra2",
+      "infra2 source is imported, checked out, or executed by TrueAlpha tooling",
+      "SDK dependency is mutable or lacks a lockfile hash",
+      "malformed service, source repository, ref, SHA, or evidence is serialized",
+      "production or live dispatch can be enabled by a CLI argument",
+      "deployment, image publication, runtime activation, or readiness promotion occurs"
+    ],
+    "output": {
+      "type": "RepositoryBoundaryTinyEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "issue #11 environment implementation batches",
+        "infra2 workspace-submodule integration"
+      ]
+    }
+  },
+  "invalidation": [
+    "infra2-sdk version, hash, DeployRequest schema, source repository, or service identity change creates a new batch revision",
+    "receiver authority or production evidence policy change reruns the exact negative controls",
+    "any runtime, image, workflow, environment, or release activation expands scope and requires a separately authorized batch"
+  ],
+  "rollback": "Revert the repository-boundary implementation and restore the prior gitlink only if remote infra invocation cannot be maintained; no runtime data, image, or infrastructure state is mutated by this batch."
+}
