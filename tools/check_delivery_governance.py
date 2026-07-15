@@ -206,6 +206,13 @@ def git_changed_paths(base: str, head: str) -> tuple[str, ...] | None:
     return tuple(sorted(path for path in result.stdout.splitlines() if path))
 
 
+def git_target_drift_paths(base: str, target: str) -> tuple[str, ...] | None:
+    result = run_git("diff", "--name-only", "--diff-filter=ACMRD", f"{base}..{target}")
+    if result.returncode != 0:
+        return None
+    return tuple(sorted(path for path in result.stdout.splitlines() if path))
+
+
 def git_json(commit: str, relative_path: str) -> Any | None:
     result = run_git("show", f"{commit}:{relative_path}")
     if result.returncode != 0:
@@ -1612,6 +1619,7 @@ def validate_gate0_pr_advance(
     *,
     base_sha: str,
     changed_paths: tuple[str, ...],
+    target_drift_paths: tuple[str, ...],
 ) -> PullRequestAdvance | None:
     label = "Gate 0 v4 aggregate candidate"
     manifest_path = repo_path(GATE0_MANIFEST_PATH)
@@ -1643,6 +1651,15 @@ def validate_gate0_pr_advance(
     if valid_paths:
         assert isinstance(paths, list)
         validate_gate0_candidate_paths(validation, paths)
+        drift_dependencies = sorted(
+            path
+            for path in target_drift_paths
+            if matches_any(path, paths) or matches_any(path, GATE0_AUTHORIZATION_CONTROL_PATHS)
+        )
+        validation.require(
+            not drift_dependencies,
+            f"{label}: target-branch drift intersects candidate paths: {drift_dependencies}",
+        )
     non_manifest_paths = tuple(path for path in changed_paths if path != GATE0_MANIFEST_PATH)
     validation.require(bool(non_manifest_paths), f"{label}: aggregate PR changes only its manifest")
     claims_acceptance = manifest.get("status") == "accepted"
@@ -1696,13 +1713,27 @@ def validate_pr_advance(
     validation.require(git_commit_exists(base_sha), "PR base commit is missing from Git history")
     validation.require(git_commit_exists(head_sha), "PR head commit is missing from Git history")
     merge_base = git_merge_base(base_sha, head_sha)
-    validation.require(merge_base == base_sha, "PR is stale: merge-base does not equal the declared current base")
-    changed_paths = git_changed_paths(base_sha, head_sha)
+    validation.require(merge_base is not None, "PR base and head do not share a merge base")
+    if merge_base is None:
+        return None
+    target_drift_paths = ()
+    if merge_base != base_sha:
+        drift = git_target_drift_paths(merge_base, base_sha)
+        validation.require(drift is not None, "PR target-branch drift is unavailable")
+        if drift is None:
+            return None
+        target_drift_paths = drift
+    changed_paths = git_changed_paths(merge_base, head_sha)
     validation.require(
         changed_paths is not None and bool(changed_paths), "PR changed-path diff is empty or unavailable"
     )
     if changed_paths is None:
         return None
+    overlapping_drift = sorted(set(changed_paths) & set(target_drift_paths))
+    validation.require(
+        not overlapping_drift,
+        f"PR target-branch drift overlaps changed paths: {overlapping_drift}",
+    )
     changed_manifests = tuple(
         path for path in changed_paths if path.startswith(MANIFEST_PREFIX) and path.endswith(".json")
     )
@@ -1716,8 +1747,9 @@ def validate_pr_advance(
     if gate0_manifest_changed:
         return validate_gate0_pr_advance(
             validation,
-            base_sha=base_sha,
+            base_sha=merge_base,
             changed_paths=changed_paths,
+            target_drift_paths=target_drift_paths,
         )
     if not changed_manifests:
         validation.require(
@@ -1744,7 +1776,18 @@ def validate_pr_advance(
     if candidate_manifest_path is None or not candidate_manifest_path.is_file():
         return None
     manifest = load_json(candidate_manifest_path)
-    base_graph = git_vision_graph(base_sha)
+    paths = manifest.get("paths", {}) if isinstance(manifest, dict) else {}
+    drift_patterns = (
+        paths.get("writable", []) + paths.get("read_only", []) + paths.get("integration_surface", [])
+        if isinstance(paths, dict)
+        else []
+    )
+    drift_dependencies = sorted(path for path in target_drift_paths if matches_any(path, drift_patterns))
+    validation.require(
+        not drift_dependencies,
+        f"{batch_id}: target-branch drift intersects declared paths: {drift_dependencies}",
+    )
+    base_graph = git_vision_graph(merge_base)
     validation.require(isinstance(base_graph, dict), f"{batch_id}: base Vision graph is unavailable")
     if not isinstance(base_graph, dict):
         return None
@@ -1768,7 +1811,7 @@ def validate_pr_advance(
             changed_paths=changed_paths,
         )
     base_manifest_path = base_batch.get("manifest")
-    base_manifest = git_json(base_sha, base_manifest_path) if isinstance(base_manifest_path, str) else None
+    base_manifest = git_json(merge_base, base_manifest_path) if isinstance(base_manifest_path, str) else None
     validation.require(isinstance(base_manifest, dict), f"{batch_id}: base manifest is unavailable")
     if not isinstance(base_manifest, dict):
         return None
@@ -1788,7 +1831,7 @@ def validate_pr_advance(
     base_activation = base_manifest.get("activation", {})
     if base_manifest.get("status") == "queued" and manifest.get("status") == "prepared":
         validation.require(
-            isinstance(activation, dict) and activation.get("base_sha") == base_sha,
+            isinstance(activation, dict) and activation.get("base_sha") == merge_base,
             f"{batch_id}: preparation must pin its exact activation base SHA",
         )
     else:
@@ -1820,7 +1863,7 @@ def validate_pr_advance(
         manifest_path=manifest_path,
         manifest=manifest,
         changed_paths=changed_paths,
-        base_sha=base_sha,
+        base_sha=merge_base,
     )
     return PullRequestAdvance(
         batch_id=batch_id,

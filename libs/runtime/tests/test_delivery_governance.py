@@ -635,6 +635,7 @@ def _pr_context(
     monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
     monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: base_sha)
     monkeypatch.setattr(governance, "git_changed_paths", lambda _base, _head: changed_paths or default_paths)
+    monkeypatch.setattr(governance, "git_target_drift_paths", lambda _base, _target: ())
     monkeypatch.setattr(
         governance,
         "git_json",
@@ -681,6 +682,7 @@ def _gate0_pr_context(
     monkeypatch.setattr(governance, "ROOT", tmp_path)
     monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
     monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: base_sha)
+    monkeypatch.setattr(governance, "git_target_drift_paths", lambda _base, _target: ())
     monkeypatch.setattr(governance, "git_json", lambda _commit, _path: base_manifest)
     monkeypatch.setattr(
         governance,
@@ -773,14 +775,60 @@ def test_active_pr_cannot_rewrite_stable_activation_base(tmp_path, monkeypatch):
     assert "D0: activation base SHA is immutable after preparation" in validation.errors
 
 
-def test_pr_rejects_stale_merge_base(tmp_path, monkeypatch):
-    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch)
+def test_pr_accepts_disjoint_target_branch_drift(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch, before="prepared", after="active")
     monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: "c" * 40)
+    monkeypatch.setattr(
+        governance,
+        "git_target_drift_paths",
+        lambda _base, _target: (".github/workflows/ci-required.yml",),
+    )
     validation = governance.Validation()
 
     governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
 
-    assert "PR is stale: merge-base does not equal the declared current base" in validation.errors
+    assert validation.errors == []
+
+
+def test_pr_rejects_target_branch_drift_overlapping_changed_paths(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch, before="prepared", after="active")
+    monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: "c" * 40)
+    monkeypatch.setattr(
+        governance,
+        "git_target_drift_paths",
+        lambda _base, _target: ("src/feature.py",),
+    )
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
+
+    assert "PR target-branch drift overlaps changed paths: ['src/feature.py']" in validation.errors
+
+
+def test_pr_rejects_target_branch_drift_in_declared_read_only_paths(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch, before="prepared", after="active")
+    monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: "c" * 40)
+    monkeypatch.setattr(
+        governance,
+        "git_target_drift_paths",
+        lambda _base, _target: ("reference/schema.json",),
+    )
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
+
+    assert "D0: target-branch drift intersects declared paths: ['reference/schema.json']" in validation.errors
+
+
+def test_pr_rejects_unrelated_git_histories(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(tmp_path, monkeypatch)
+    monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: None)
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
+
+    assert advance is None
+    assert "PR base and head do not share a merge base" in validation.errors
 
 
 def test_pr_rejects_fabricated_coordinates():
@@ -834,6 +882,26 @@ def test_gate0_aggregate_allows_structurally_valid_blocked_candidate(tmp_path, m
     assert advance is not None and advance.kind == "gate_candidate"
     assert advance.accepted_rung is None
     assert calls == [{"check_live_comments": False, "require_accepted": False}]
+
+
+def test_gate0_aggregate_rejects_target_drift_in_candidate_paths(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _gate0_pr_context(tmp_path, monkeypatch)
+    monkeypatch.setattr(governance, "git_merge_base", lambda _base, _head: "c" * 40)
+    monkeypatch.setattr(
+        governance,
+        "git_target_drift_paths",
+        lambda _base, _target: ("governance/gate0/reference.json",),
+    )
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert any("target-branch drift intersects candidate paths" in error for error in validation.errors)
 
 
 def test_blocked_gate0_result_has_no_pull_request_metadata_input(tmp_path, monkeypatch):
