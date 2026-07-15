@@ -271,11 +271,11 @@
     "S10-factor-matrix-samples": {
       "issue": 208,
       "owner_gate": 29,
-      "status": "prepared",
-      "target_rung": "E0",
+      "status": "active",
+      "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S10-factor-matrix-samples.v1.json",
-      "sha256": "69da82cb10c32f1d7607ffb149b729a63a127b5df8d6a36c1047d719fb95501c"
+      "sha256": "2f05df0bdb34d7d69b236c4d65f0ef4c290688451cd61f8bc834f823e6d8c7d3"
     },
     "S9-direct-pe-qlib-smoke": {
       "issue": 203,
