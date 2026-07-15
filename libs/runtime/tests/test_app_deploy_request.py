@@ -92,6 +92,20 @@ def test_run_id_must_match_truealpha_actions_url(corpus: dict) -> None:
         renderer.request_from_mapping(raw)
 
 
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"evidence": None}, "evidence must be an object"),
+        ({"evidence": {"source_run_url": ""}}, "source_run_url is required"),
+        ({"evidence": {"source_run_id": ""}}, "source_run_id is required"),
+    ],
+)
+def test_required_evidence_fields_fail_closed(corpus: dict, override: dict, message: str) -> None:
+    valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")
+    with pytest.raises(ValueError, match=message):
+        renderer.request_from_mapping(_merged(valid["request"], override))
+
+
 def test_cli_exposes_no_authority_or_dispatch_switches(corpus: dict) -> None:
     valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")["request"]
     result = subprocess.run(

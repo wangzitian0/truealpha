@@ -89,10 +89,10 @@ def _validate_authority(raw: Mapping[str, Any]) -> None:
 
     evidence = raw.get("evidence")
     if not isinstance(evidence, Mapping):
-        return
+        raise ValueError("evidence must be an object")
     source_run_url = evidence.get("source_run_url")
-    if not isinstance(source_run_url, str):
-        return
+    if not isinstance(source_run_url, str) or not source_run_url:
+        raise ValueError("evidence.source_run_url is required")
     parsed = urlparse(source_run_url)
     path_match = _SOURCE_RUN_PATH_RE.fullmatch(parsed.path)
     if (
@@ -105,7 +105,9 @@ def _validate_authority(raw: Mapping[str, Any]) -> None:
     ):
         raise ValueError("evidence.source_run_url must point to the TrueAlpha GitHub Actions run")
     source_run_id = evidence.get("source_run_id")
-    if source_run_id and source_run_id != path_match.group(1):
+    if not isinstance(source_run_id, str) or not source_run_id:
+        raise ValueError("evidence.source_run_id is required")
+    if source_run_id != path_match.group(1):
         raise ValueError("evidence.source_run_id must match source_run_url")
 
 
