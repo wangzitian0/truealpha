@@ -2183,13 +2183,21 @@ def test_required_ci_aggregates_every_reusable_check_and_is_always_terminal():
     assert '.value.result != "success" and .value.result != "skipped"' in required
 
 
-def test_security_scan_only_runs_through_the_required_workflow():
+def test_security_scan_defers_open_pr_pushes_to_the_required_workflow():
     workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "security-gate.yml").read_text(encoding="utf-8")
 
     assert "workflow_call:" in workflow
-    assert "  push:" not in workflow
-    assert "branches-ignore:" not in workflow
-    assert "tags-ignore:" not in workflow
+    assert "  push:" in workflow
+    assert "branches-ignore: [main]" in workflow
+    assert 'tags-ignore: ["**"]' in workflow
+    assert '"repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls?per_page=100"' in workflow
+    assert 'select(.state == "open")' in workflow
+    assert 'echo "should_scan=false"' in workflow
+    assert 'echo "should_scan=true"' in workflow
+    for job in ("secret-scan", "no-trade-api"):
+        job_body = workflow.split(f"  {job}:\n", 1)[1]
+        assert "if: needs.scan_policy.outputs.should_scan == 'true'" in job_body
+        assert "needs: scan_policy" in job_body
 
 
 def test_image_publication_is_reusable_and_waits_for_build_and_required_checks():
@@ -2220,6 +2228,7 @@ def test_image_publication_is_reusable_and_waits_for_build_and_required_checks()
     assert "apps/app-web/**" in app_web_filter
     assert "libs/contracts/**" not in app_web_filter
     assert "libs/contracts/**" in llm_filter
+    assert "apps/data-engine/pyproject.toml" in llm_filter
     for image_input in ("app_web", "llm_service", "data_engine"):
         assert f"      {image_input}:\n" in release
         assert f"${{{{ inputs.{image_input} }}}}" in release

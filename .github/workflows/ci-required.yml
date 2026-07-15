@@ -86,6 +86,7 @@ jobs:
               - '.github/workflows/ci-required.yml'
             image_llm_service:
               - 'apps/llm-service/**'
+              - 'apps/data-engine/pyproject.toml'
               - 'libs/contracts/**'
               - 'libs/factors/**'
               - 'libs/runtime/**'
