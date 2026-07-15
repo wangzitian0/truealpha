@@ -1577,11 +1577,17 @@ def test_prepared_batch_status_mirrors_as_queued_until_merge():
 
 def test_workflow_authorizes_every_pull_request_against_exact_head():
     workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
+    caller = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-required.yml").read_text(encoding="utf-8")
 
-    assert "pull_request:\n" in workflow
+    assert "workflow_call:\n" in workflow
+    assert "pull_request:\n" in caller
+    assert "uses: ./.github/workflows/ci-governance.yml" in caller
+    assert "pr_base_sha: ${{ github.event.pull_request.base.sha }}" in caller
+    assert "pr_head_sha: ${{ github.event.pull_request.head.sha }}" in caller
     assert "--pr-base-sha" in workflow
     assert "--pr-head-sha" in workflow
-    assert "github.event.pull_request.head.sha" in workflow
+    assert "ref: ${{ inputs.pr_head_sha }}" in workflow
+    assert "allow-blocked-gate-candidate" not in workflow
     assert "uses: astral-sh/setup-uv@v5" in workflow
     assert "uv sync --all-packages --frozen" in workflow
     assert "--execute-acceptance" in workflow
@@ -1597,7 +1603,7 @@ def test_workflow_runs_acceptance_against_a_fresh_required_postgres_runtime():
     database_step = workflow.index("- name: Prepare pull-request acceptance database")
     authorization_step = workflow.index("- name: Authorize pull-request diff")
 
-    assert "github.event_name == 'pull_request'" in pull_request_job
+    assert "inputs.mode == 'pull_request'" in pull_request_job
     assert "image: postgres:16-alpine" in pull_request_job
     assert '--health-cmd "pg_isready -U postgres"' in pull_request_job
     assert "for f in db/migrations/*.sql db/roles.sql" in workflow
@@ -1605,6 +1611,42 @@ def test_workflow_runs_acceptance_against_a_fresh_required_postgres_runtime():
     assert "DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha" in workflow
     assert 'TRUEALPHA_REQUIRE_RUNTIME: "1"' in workflow
     assert database_step < authorization_step
-    assert "github.event_name != 'pull_request'" in non_pull_request_job
+    assert "inputs.mode != 'pull_request'" in non_pull_request_job
     assert "services:" not in non_pull_request_job
     assert "--execute-acceptance" not in non_pull_request_job
+
+
+def test_required_ci_aggregates_every_reusable_check_and_is_always_terminal():
+    workflows = MODULE_PATH.parents[1] / ".github" / "workflows"
+    required = (workflows / "ci-required.yml").read_text(encoding="utf-8")
+
+    assert "name: ci-required" in required
+    assert "  required:\n    name: ci-required\n    if: always()" in required
+    for workflow in (
+        "ci-db.yml",
+        "ci-python.yml",
+        "ci-qlib.yml",
+        "ci-runtime.yml",
+        "ci-web.yml",
+        "ci-governance.yml",
+        "security-gate.yml",
+        "release-images.yml",
+    ):
+        assert f"uses: ./.github/workflows/{workflow}" in required
+    assert "Reject any failed, cancelled, or missing dependency" in required
+    assert '.value.result != "success" and .value.result != "skipped"' in required
+
+
+def test_image_publication_is_reusable_and_waits_for_build_and_required_checks():
+    workflows = MODULE_PATH.parents[1] / ".github" / "workflows"
+    required = (workflows / "ci-required.yml").read_text(encoding="utf-8")
+    release = (workflows / "release-images.yml").read_text(encoding="utf-8")
+    image_call = required.split("  images:\n", 1)[1].split("  required:\n", 1)[0]
+
+    assert "workflow_call:\n" in release
+    assert "pull_request:\n" not in release
+    assert "push:\n" not in release
+    assert "needs: [changes, governance_pr, governance_push, security, db, python, qlib, runtime, web]" in image_call
+    assert "publish: ${{ github.event_name == 'push' }}" in image_call
+    assert "  publish:\n    if: inputs.publish\n    needs: build" in release
+    assert "packages: write" in release.split("  publish:\n", 1)[1]

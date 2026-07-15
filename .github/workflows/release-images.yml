@@ -1,50 +1,86 @@
 name: release-images
 
-# Builds the two deployable images. On PRs the build is validation-only; pushes
-# to main (and vX.Y.Z tags) publish to GHCR, which infra2's truealpha/app
-# compose pulls (IMAGE_TAG defaults to latest — see infra2 truealpha/10.app).
 on:
-  push:
-    branches: [main]
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
-    paths-ignore:
-      - "**.md"
-  pull_request:
-    paths:
-      - "apps/app-web/**"
-      - "apps/llm-service/**"
-      - "libs/factors/**"
-      - "libs/contracts/**"
-      - "libs/runtime/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/release-images.yml"
+  workflow_call:
+    inputs:
+      publish:
+        description: Publish the exact caller SHA after every image builds.
+        required: true
+        type: boolean
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
     strategy:
+      fail-fast: false
       matrix:
         include:
           - image: truealpha-app-web
             dockerfile: apps/app-web/Dockerfile
             context: apps/app-web
+            optional: false
           - image: truealpha-llm-service
             dockerfile: apps/llm-service/Dockerfile
             context: .
+            optional: false
+          # PR #196 adds this Dockerfile. The row becomes mandatory as soon as
+          # the file exists, without making the current main branch unbuildable.
+          - image: truealpha-data-engine
+            dockerfile: apps/data-engine/Dockerfile
+            context: .
+            optional: true
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        if: github.event_name == 'push'
+      - name: Build ${{ matrix.image }}
+        if: ${{ !matrix.optional || hashFiles(matrix.dockerfile) != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  publish:
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: truealpha-app-web
+            dockerfile: apps/app-web/Dockerfile
+            context: apps/app-web
+            optional: false
+          - image: truealpha-llm-service
+            dockerfile: apps/llm-service/Dockerfile
+            context: .
+            optional: false
+          - image: truealpha-data-engine
+            dockerfile: apps/data-engine/Dockerfile
+            context: .
+            optional: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: ${{ !matrix.optional || hashFiles(matrix.dockerfile) != '' }}
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
+        if: ${{ !matrix.optional || hashFiles(matrix.dockerfile) != '' }}
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
@@ -52,12 +88,15 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
             type=semver,pattern=v{{version}}
-      - uses: docker/build-push-action@v6
+      - name: Publish ${{ matrix.image }}
+        if: ${{ !matrix.optional || hashFiles(matrix.dockerfile) != '' }}
+        uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          push: ${{ github.event_name == 'push' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: mode=max
+          sbom: true

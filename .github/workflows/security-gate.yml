@@ -1,13 +1,13 @@
 name: security-gate
 
-# This is a public repo touching financial-account data (moomoo). Runs on every
-# push/PR, repo-wide, deliberately with no path filter — a leaked credential or
-# a trading-API call could land in any file. See CLAUDE.md's hard constraints.
+# This is a public repo touching financial-account data (moomoo). ci-required
+# calls it for PRs and main; feature-branch pushes call it directly so a leaked
+# credential or trading API is scanned as soon as the public branch is pushed.
 
 on:
-  push: # no branches filter, deliberately — a push to any branch is already
-    # public on this repo, don't wait for a PR to scan it
-  pull_request:
+  workflow_call:
+  push:
+    branches-ignore: [main]
 
 permissions:
   contents: read
@@ -15,6 +15,7 @@ permissions:
 jobs:
   secret-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,6 +26,7 @@ jobs:
 
   no-trade-api:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Forbid moomoo trading APIs (quote/read-only data only)

@@ -1,31 +1,12 @@
 name: ci-python
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/data-engine/**"
-      - "apps/llm-service/**"
-      - "libs/factors/**"
-      - "libs/contracts/**"
-      - "libs/runtime/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/ci-python.yml"
-  pull_request:
-    paths:
-      - "apps/data-engine/**"
-      - "apps/llm-service/**"
-      - "libs/factors/**"
-      - "libs/contracts/**"
-      - "libs/runtime/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/ci-python.yml"
+  workflow_call:
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # Real Postgres + MinIO so the KG / raw-store / ledger integration tests run
     # in CI instead of skipping (they skip gracefully where unreachable).
     services:
@@ -47,7 +28,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --frozen
       - run: uv run ruff check apps libs
       - run: uv run ruff format --check apps libs
       - run: uv run mypy
@@ -60,8 +41,9 @@ jobs:
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio_local_secret \
             minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
-          for i in $(seq 1 30); do
+          for attempt in $(seq 1 30); do
             curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            echo "Waiting for MinIO ($attempt/30)"
             sleep 1
           done
           echo "MinIO did not become healthy" >&2

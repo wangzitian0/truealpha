@@ -1,23 +1,19 @@
 name: Delivery Governance
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft]
+  workflow_call:
+    inputs:
+      mode:
+        required: true
+        type: string
+      pr_base_sha:
+        required: false
+        type: string
+      pr_head_sha:
+        required: false
+        type: string
   issues:
     types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]
-  push:
-    branches: [main]
-    paths:
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/workflows/ci-governance.yml"
-      - "governance/**"
-      - "tools/check_delivery_governance.py"
-      - "tools/check_gate0_candidate.py"
-      - "AGENTS.md"
-      - "init.md"
-      - "docs/iterative-delivery.md"
-      - "docs/architecture-contract-closure.md"
-      - "Makefile"
   workflow_dispatch:
 
 permissions:
@@ -26,8 +22,9 @@ permissions:
 
 jobs:
   sync_batch_labels:
-    if: github.event_name == 'push'
+    if: inputs.mode == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       issues: write
@@ -84,10 +81,10 @@ jobs:
     needs: sync_batch_labels
     if: >-
       always() &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.state == 'open' &&
+      inputs.mode == 'pull_request' &&
       (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16-alpine
@@ -106,7 +103,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.pr_head_sha }}
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -140,14 +137,14 @@ jobs:
         run: >-
           python3 tools/check_delivery_governance.py
           --github-issues "$RUNNER_TEMP/vision-issues.json"
-          --pr-base-sha "${{ github.event.pull_request.base.sha }}"
-          --pr-head-sha "${{ github.event.pull_request.head.sha }}"
+          --pr-base-sha "${{ inputs.pr_base_sha }}"
+          --pr-head-sha "${{ inputs.pr_head_sha }}"
           --execute-acceptance
           --evidence-output "$RUNNER_TEMP/rung-evidence.json"
       - name: Retain rung evidence
         uses: actions/upload-artifact@v4
         with:
-          name: rung-evidence-${{ github.event.pull_request.number }}
+          name: rung-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/rung-evidence.json
           if-no-files-found: ignore
           retention-days: 90
@@ -156,10 +153,11 @@ jobs:
     needs: sync_batch_labels
     if: >-
       always() &&
-      github.event_name != 'pull_request' &&
+      inputs.mode != 'pull_request' &&
       (github.event_name != 'issues' || github.actor != 'github-actions[bot]') &&
       (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:

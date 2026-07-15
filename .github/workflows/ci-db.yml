@@ -1,21 +1,14 @@
 name: ci-db
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "db/**"
-      - ".github/workflows/ci-db.yml"
-  pull_request:
-    paths:
-      - "db/**"
-      - ".github/workflows/ci-db.yml"
+  workflow_call:
 
 jobs:
   # Apply every migration + roles.sql against a throwaway Postgres — the DDL must
   # always be runnable from scratch, matching what docker-compose does locally.
   migrate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine

@@ -1,0 +1,181 @@
+name: ci-required
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-required-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      db: ${{ steps.filter.outputs.db }}
+      python: ${{ steps.filter.outputs.python }}
+      qlib: ${{ steps.filter.outputs.qlib }}
+      runtime: ${{ steps.filter.outputs.runtime }}
+      web: ${{ steps.filter.outputs.web }}
+      images: ${{ steps.filter.outputs.images }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        if: github.ref_type != 'tag'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            db:
+              - 'db/**'
+              - '.github/workflows/ci-db.yml'
+              - '.github/workflows/ci-required.yml'
+            python:
+              - 'apps/data-engine/**'
+              - 'apps/llm-service/**'
+              - 'libs/contracts/**'
+              - 'libs/factors/**'
+              - 'libs/runtime/**'
+              - 'db/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.python-version'
+              - '.github/workflows/ci-python.yml'
+              - '.github/workflows/ci-required.yml'
+            qlib:
+              - 'libs/factors/qlib-runtime/**'
+              - 'libs/factors/src/factors/batches/issuer_strategy_selection_tiny/**'
+              - 'libs/factors/src/factors/batches/qlib_expression_contract_tiny/**'
+              - 'libs/factors/tests/batches/issuer_strategy_selection_tiny/**'
+              - 'libs/factors/tests/batches/qlib_expression_contract_tiny/**'
+              - '.github/workflows/ci-qlib.yml'
+              - '.github/workflows/ci-required.yml'
+            runtime:
+              - 'docker-compose.yml'
+              - '.env.example'
+              - 'db/**'
+              - 'libs/contracts/**'
+              - 'libs/runtime/**'
+              - 'Makefile'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/ci-runtime.yml'
+              - '.github/workflows/ci-required.yml'
+            web:
+              - 'apps/app-web/**'
+              - 'libs/contracts/conformance/**'
+              - '.github/workflows/ci-web.yml'
+              - '.github/workflows/ci-required.yml'
+            images:
+              - 'apps/app-web/**'
+              - 'apps/data-engine/**'
+              - 'apps/llm-service/**'
+              - 'libs/contracts/**'
+              - 'libs/factors/**'
+              - 'libs/runtime/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/release-images.yml'
+              - '.github/workflows/ci-required.yml'
+
+  governance_pr:
+    if: github.event_name == 'pull_request' && github.event.pull_request.state == 'open'
+    needs: changes
+    permissions:
+      contents: read
+      issues: read
+    uses: ./.github/workflows/ci-governance.yml
+    with:
+      mode: pull_request
+      pr_base_sha: ${{ github.event.pull_request.base.sha }}
+      pr_head_sha: ${{ github.event.pull_request.head.sha }}
+
+  governance_push:
+    if: github.event_name != 'pull_request'
+    needs: changes
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/ci-governance.yml
+    with:
+      mode: ${{ github.ref_type == 'tag' && 'tag' || 'push' }}
+
+  security:
+    needs: changes
+    permissions:
+      contents: read
+    uses: ./.github/workflows/security-gate.yml
+
+  db:
+    if: needs.changes.outputs.db == 'true' || github.ref_type == 'tag'
+    needs: changes
+    uses: ./.github/workflows/ci-db.yml
+
+  python:
+    if: needs.changes.outputs.python == 'true' || github.ref_type == 'tag'
+    needs: changes
+    uses: ./.github/workflows/ci-python.yml
+
+  qlib:
+    if: needs.changes.outputs.qlib == 'true' || github.ref_type == 'tag'
+    needs: changes
+    uses: ./.github/workflows/ci-qlib.yml
+
+  runtime:
+    if: needs.changes.outputs.runtime == 'true' || github.ref_type == 'tag'
+    needs: changes
+    uses: ./.github/workflows/ci-runtime.yml
+
+  web:
+    if: needs.changes.outputs.web == 'true' || github.ref_type == 'tag'
+    needs: changes
+    uses: ./.github/workflows/ci-web.yml
+
+  images:
+    if: >-
+      always() &&
+      (needs.changes.outputs.images == 'true' || github.ref_type == 'tag') &&
+      (needs.governance_pr.result == 'success' || needs.governance_pr.result == 'skipped') &&
+      (needs.governance_push.result == 'success' || needs.governance_push.result == 'skipped') &&
+      (needs.security.result == 'success' || needs.security.result == 'skipped') &&
+      (needs.db.result == 'success' || needs.db.result == 'skipped') &&
+      (needs.python.result == 'success' || needs.python.result == 'skipped') &&
+      (needs.qlib.result == 'success' || needs.qlib.result == 'skipped') &&
+      (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') &&
+      (needs.web.result == 'success' || needs.web.result == 'skipped')
+    needs: [changes, governance_pr, governance_push, security, db, python, qlib, runtime, web]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-images.yml
+    with:
+      publish: ${{ github.event_name == 'push' }}
+
+  required:
+    name: ci-required
+    if: always()
+    needs: [changes, governance_pr, governance_push, security, db, python, qlib, runtime, web, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reject any failed, cancelled, or missing dependency
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failures="$(jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key)=\(.value.result)"' <<<"$RESULTS")"
+          if [ -n "$failures" ]; then
+            echo "Required CI dependencies did not pass:" >&2
+            echo "$failures" >&2
+            exit 1
+          fi
+          echo "All affected CI dependencies passed or were explicitly skipped."
