@@ -358,6 +358,14 @@ def test_vision_graph_derives_batch_nodes_from_independent_manifests():
     }
 
 
+def test_vision_graph_fails_closed_on_malformed_batch_manifest():
+    with pytest.raises(ValueError, match="governance/batches/broken.json"):
+        governance.assemble_vision_graph(
+            {"schema_version": 1, "batches": {}},
+            [("governance/batches/broken.json", b"{")],
+        )
+
+
 @pytest.mark.parametrize(
     ("batch_id", "manifest_path", "writable_path", "changed_path"),
     (

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-ALLOWED_WORKSPACES = frozenset(("truealpha-factors", "truealpha-bt", "truealpha-datahub"))
+WORKSPACE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 WORK_ISSUE_RE = re.compile(r"^Work-Issue:[ \t]*#(?P<issue>[1-9][0-9]*)[ \t]*$", re.MULTILINE)
 WORK_KEY_RE = re.compile(r"^Work-Key:[ \t]*(?P<key>[A-Za-z0-9][A-Za-z0-9._:-]*)[ \t]*$", re.MULTILINE)
 
@@ -30,8 +30,8 @@ def run(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProces
 
 def workspace_identity(root: Path) -> tuple[str, str]:
     name = root.name
-    if name not in ALLOWED_WORKSPACES:
-        raise PreflightError(f"unsupported checkout {name!r}; expected one of {', '.join(sorted(ALLOWED_WORKSPACES))}")
+    if WORKSPACE_RE.fullmatch(name) is None:
+        raise PreflightError(f"checkout directory {name!r} cannot form a valid workspace prefix")
     return name, f"[{name}]"
 
 
@@ -46,7 +46,10 @@ def issue_has_prefix(issue: dict[str, Any], prefix: str) -> bool:
 
 def expected_work_key(root: Path, issue_number: int) -> str:
     for path in sorted((root / "governance" / "batches").glob("*.json")):
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PreflightError(f"cannot read batch manifest {path.relative_to(root)}: {exc}") from exc
         if manifest.get("issue") == issue_number:
             return f"{manifest['batch_id']}:{manifest['target_rung']}"
     return f"standalone-{issue_number}"
@@ -79,7 +82,7 @@ def repository_root() -> Path:
     return Path(result.stdout.strip()).resolve()
 
 
-def clean_gone_upstream(root: Path, branch: str, repair: bool) -> None:
+def clean_gone_upstream(root: Path, branch: str, repair: bool) -> str:
     track = run(
         "git",
         "for-each-ref",
@@ -88,13 +91,14 @@ def clean_gone_upstream(root: Path, branch: str, repair: bool) -> None:
         cwd=root,
     ).stdout
     if not upstream_is_gone(track):
-        return
+        return branch
     if not repair:
         raise PreflightError(
             f"branch {branch!r} tracks a deleted upstream; rerun with --repair-clean-gone or switch explicitly"
         )
     run("git", "switch", "main", cwd=root)
     run("git", "merge", "--ff-only", "origin/main", cwd=root)
+    return "main"
 
 
 def preflight(issue_number: int, repair_clean_gone: bool) -> tuple[str, str, str]:
@@ -107,7 +111,7 @@ def preflight(issue_number: int, repair_clean_gone: bool) -> tuple[str, str, str
     branch = run("git", "branch", "--show-current", cwd=root).stdout.strip()
     if not branch:
         raise PreflightError("detached HEAD cannot claim agent work")
-    clean_gone_upstream(root, branch, repair_clean_gone)
+    branch = clean_gone_upstream(root, branch, repair_clean_gone)
 
     issue = json.loads(
         run(

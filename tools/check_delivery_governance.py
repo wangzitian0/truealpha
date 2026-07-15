@@ -227,8 +227,8 @@ def assemble_vision_graph(
     for relative_path, payload in sorted(manifest_records):
         try:
             manifest = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid batch manifest {relative_path!r}: {exc}") from exc
         if not isinstance(manifest, dict) or not isinstance(manifest.get("batch_id"), str):
             continue
         batch_id = manifest["batch_id"]

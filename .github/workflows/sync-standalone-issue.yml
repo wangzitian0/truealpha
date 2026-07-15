@@ -47,7 +47,10 @@ jobs:
           )"
           test -n "$metadata" || exit 0
           issue_title="$(gh issue view "$metadata" --repo "$GITHUB_REPOSITORY" --json title --jq .title)"
-          test "${PR_TITLE%% *}" = "${issue_title%% *}"
+          if test "${PR_TITLE%% *}" != "${issue_title%% *}"; then
+            echo "::error::PR and Work-Issue workspace prefixes do not match"
+            exit 1
+          fi
           gh issue close "$metadata" \
             --repo "$GITHUB_REPOSITORY" \
             --comment "Completed by merged PR #$PR_NUMBER at exact head $PR_HEAD_SHA."
