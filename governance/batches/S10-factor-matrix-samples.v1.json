@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "S10-factor-matrix-samples",
-  "revision": 1,
+  "revision": 2,
   "issue": 208,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture/storage",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -25,15 +25,15 @@
   ],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "d23826fa4b5f041fb9f9ab8c6a7b156eff10605c",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "queued S10 registration is merged to main",
-      "the nine-symbol provider plan and parser fixture hashes are committed in a preparation PR",
+      "queued S10 registration is merged and the preparation revision is rebased on main at d23826fa4b5f041fb9f9ab8c6a7b156eff10605c",
+      "the nine-symbol provider plan and embedded parser fixture hashes are frozen at 481a66e9a42f5420e163436ac40ecf374341888872304c81ba9a17a8c68d92df",
       "the implementation PR pins its exact current main base SHA",
       "issue #208 contains the exact manifest path and SHA-256",
       "an independent reviewer is assigned before E0 acceptance",
@@ -55,7 +55,7 @@
   "corpus": {
     "environment": "Local/CI parser fixtures at E0; live public Yahoo and credentialed Twelve Data capture at E1",
     "manifest_path": "apps/data-engine/samples/factor_matrix/capture_plan.v1.json",
-    "sha256": null,
+    "sha256": "481a66e9a42f5420e163436ac40ecf374341888872304c81ba9a17a8c68d92df",
     "required_strata": [
       "ADM, DDOG, DUOL, JPM, META, NICE, NVDA, PLUG, and SHOP exactly once",
       "one explicit fixed start and end date shared by the denominator",

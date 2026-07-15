@@ -1,0 +1,98 @@
+{
+  "schema": "truealpha.factor-matrix-sample-plan@v1",
+  "purpose": "Replayable provider-specific development inputs for matrix-compatible factor exploration",
+  "evidence_ceiling": "E1 development samples only; no reconciliation, confidence promotion, TOPT, strategy, or release-readiness claim",
+  "window": {
+    "start": "2023-07-10",
+    "end": "2026-07-10",
+    "end_inclusive": true
+  },
+  "normalized_columns": [
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "adjusted_close",
+    "volume"
+  ],
+  "providers": {
+    "yahoo": {
+      "endpoint": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+      "request": {
+        "interval": "1d",
+        "events": "div,splits"
+      },
+      "request_contract": {
+        "symbol": {
+          "location": "endpoint_path",
+          "name": "symbol"
+        },
+        "window_start": {
+          "name": "period1",
+          "encoding": "inclusive start date at 00:00:00 UTC as Unix seconds"
+        },
+        "window_end": {
+          "name": "period2",
+          "encoding": "exclusive day after the inclusive end date at 00:00:00 UTC as Unix seconds"
+        }
+      },
+      "adjustment_semantics": {
+        "open_high_low_close": "provider unadjusted daily values",
+        "adjusted_close": "provider adjusted close retained as a separate field",
+        "volume": "provider daily volume"
+      },
+      "credential_env": null,
+      "fixture": {
+        "encoding": "utf-8",
+        "payload": "{\"chart\":{\"error\":null,\"result\":[{\"meta\":{\"currency\":\"USD\",\"exchangeName\":\"NMS\",\"symbol\":\"DDOG\",\"timezone\":\"EDT\"},\"timestamp\":[1688995800,1689082200],\"indicators\":{\"adjclose\":[{\"adjclose\":[101.25,103.5]}],\"quote\":[{\"open\":[100.25,102.0],\"high\":[102.0,104.25],\"low\":[99.75,101.5],\"close\":[101.25,103.5],\"volume\":[3210000,2985000]}]}}]}}\n",
+        "sha256": "4dcb20e142da6f318aa721c7af64a144d24a537c12ed4d7c7da73d0def13f3c7"
+      }
+    },
+    "twelve_data": {
+      "endpoint": "https://api.twelvedata.com/time_series",
+      "request": {
+        "interval": "1day",
+        "adjust": "none",
+        "order": "asc",
+        "format": "JSON"
+      },
+      "request_contract": {
+        "symbol": {
+          "location": "query",
+          "name": "symbol"
+        },
+        "window_start": {
+          "name": "start_date",
+          "encoding": "inclusive ISO 8601 calendar date"
+        },
+        "window_end": {
+          "name": "end_date",
+          "encoding": "inclusive ISO 8601 calendar date"
+        }
+      },
+      "adjustment_semantics": {
+        "open_high_low_close": "unadjusted daily values requested with adjust=none",
+        "adjusted_close": "unavailable and emitted as an empty field",
+        "volume": "provider daily volume"
+      },
+      "credential_env": "TWELVE_DATA_API_KEY",
+      "fixture": {
+        "encoding": "utf-8",
+        "payload": "{\"meta\":{\"currency\":\"USD\",\"exchange\":\"NASDAQ\",\"exchange_timezone\":\"America/New_York\",\"interval\":\"1day\",\"symbol\":\"DDOG\",\"type\":\"Common Stock\"},\"status\":\"ok\",\"values\":[{\"close\":\"101.25000\",\"datetime\":\"2023-07-10\",\"high\":\"102.00000\",\"low\":\"99.75000\",\"open\":\"100.25000\",\"volume\":\"3210000\"},{\"close\":\"103.50000\",\"datetime\":\"2023-07-11\",\"high\":\"104.25000\",\"low\":\"101.50000\",\"open\":\"102.00000\",\"volume\":\"2985000\"}]}\n",
+        "sha256": "2bab0e16fecbd5b8c8878ee863ce1c6c1108d79fbb117de47c54af664a973fc6"
+      }
+    }
+  },
+  "symbols": [
+    {"symbol": "ADM", "provider_symbols": {"yahoo": "ADM", "twelve_data": "ADM"}},
+    {"symbol": "DDOG", "provider_symbols": {"yahoo": "DDOG", "twelve_data": "DDOG"}},
+    {"symbol": "DUOL", "provider_symbols": {"yahoo": "DUOL", "twelve_data": "DUOL"}},
+    {"symbol": "JPM", "provider_symbols": {"yahoo": "JPM", "twelve_data": "JPM"}},
+    {"symbol": "META", "provider_symbols": {"yahoo": "META", "twelve_data": "META"}},
+    {"symbol": "NICE", "provider_symbols": {"yahoo": "NICE", "twelve_data": "NICE"}},
+    {"symbol": "NVDA", "provider_symbols": {"yahoo": "NVDA", "twelve_data": "NVDA"}},
+    {"symbol": "PLUG", "provider_symbols": {"yahoo": "PLUG", "twelve_data": "PLUG"}},
+    {"symbol": "SHOP", "provider_symbols": {"yahoo": "SHOP", "twelve_data": "SHOP"}}
+  ]
+}
