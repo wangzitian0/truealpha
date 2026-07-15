@@ -20,10 +20,10 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "d23826fa4b5f041fb9f9ab8c6a7b156eff10605c",
+    "base_sha": "62a7d78abb36abb9638d4d7da967e03b5a9cd449",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "queued D4 registration is merged and this preparation is rebased on main at d23826fa4b5f041fb9f9ab8c6a7b156eff10605c",
+      "queued D4 registration is merged and this preparation is rebased on main at 62a7d78abb36abb9638d4d7da967e03b5a9cd449",
       "the preparation PR freezes the tiny interface corpus at 140aa571b268ddb0720ecd7d6ac347893c25b667786ca4aba67fdc6ab57704f2",
       "the E0 implementation PR pins its exact current main base SHA",
       "an independent reviewer is assigned before E0 acceptance",
