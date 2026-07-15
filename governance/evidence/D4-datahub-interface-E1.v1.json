@@ -6,7 +6,7 @@
     {
       "command": "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_datahub.py -q",
       "exit_code": 0,
-      "output_sha256": "709c0e05fbecac0889d40609cd7ff81f233986a63a0e4f2ff31b61a8744fd5bf"
+      "output_sha256": "9e61ba973a14de494af282aeca99189a9ade2a0e629f198154a77948d46f0971"
     },
     {
       "command": "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
@@ -24,12 +24,13 @@
       "output_sha256": "3ce0a3f4b2b2d3fcc83181896297ac73b4b7b3034209f9e2b7514b3d55b0ebfa"
     }
   ],
-  "created_at": "2026-07-15T14:29:25.696403Z",
-  "evidence_id": "rung-evidence:D4-datahub-interface:65ac7081e3d3aa25c5d913c72ce4f44f96d69f556d8b519abc735af3d8ee292b",
-  "manifest_sha256": "d74a598496508db64a06207e0dd552c14f42e29742f8e127e882f8bd6cf847cc",
+  "created_at": "2026-07-15T14:35:01.502333Z",
+  "evidence_id": "rung-evidence:D4-datahub-interface:4a40056ce37af8e332dbbd813c35ad5a16bbd0ac641c66398a7fbe9c9a177e3c",
+  "manifest_sha256": "084f55969271eb1dea5ad7e14b32a7ad9e23c95e3182de8b0c354c117e761d64",
   "negative_controls": [
     "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
     "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
+    "a provenance graph omits the required run-to-obligation or obligation-to-work-item capture path",
     "a work binding whose request omits its obligation's subject, capture requirement, or partition",
     "run-scoped work loses provider sharing across overlapping compatible lists",
     "a completed bundle omits a dispatch outcome, or an unchanged response reuses a vintage from another pinned request",
@@ -41,7 +42,7 @@
     "factor-visible source, raw pointer, provider policy, or provenance branch metadata",
     "database, source, schedule, query provider, Qlib data binding, or release activation"
   ],
-  "producer_head_sha": "c48ddbf9bab90b15420ba4b1fa8695be871134c8",
+  "producer_head_sha": "c2ac61c588e7ea8e93e27e31a458c5ec94319371",
   "schema_version": 1,
   "stable_handoff": false
 }
