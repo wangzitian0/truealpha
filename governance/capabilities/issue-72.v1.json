@@ -3,5 +3,12 @@
   "issue": 72,
   "gate": 31,
   "terminal_evidence": "E4",
-  "artifact_edges": []
+  "artifact_edges": [
+    {
+      "from": 48,
+      "to": 72,
+      "class": "start",
+      "artifact": "accepted consumer conformance handoff"
+    }
+  ]
 }
