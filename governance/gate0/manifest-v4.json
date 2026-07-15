@@ -5,7 +5,7 @@
   "gate_issue": 56,
   "status": "candidate_blocked_external_attestation",
   "integration_branch": "batch/gate-0-v4-semantic-data-closure",
-  "integration_base_sha": "870548f06a19e7a26a17a56fefb779ddb6bc4d3f",
+  "integration_base_sha": "3711b7558809c382aed7ba0fcfd4d02de42ade6c",
   "included_issues": [57, 58, 59, 60, 61],
   "dependency_order": [57, 58, 59, 60, 61],
   "candidate_payload_sha256": "7c70d246232621353c769195248dcdc4e003b39ff301daa06b26b73b92428ee3",
