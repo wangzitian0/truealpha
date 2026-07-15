@@ -99,6 +99,7 @@ jobs:
       mode: pull_request
       pr_base_sha: ${{ github.event.pull_request.base.sha }}
       pr_head_sha: ${{ github.event.pull_request.head.sha }}
+      pr_number: ${{ github.event.pull_request.number }}
 
   sync_issues:
     if: github.event_name == 'push' && github.ref_type != 'tag'

@@ -12,6 +12,9 @@ on:
       pr_head_sha:
         required: false
         type: string
+      pr_number:
+        required: false
+        type: number
   issues:
     types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]
   workflow_dispatch:
@@ -67,8 +70,12 @@ jobs:
         run: |
           gh api --paginate \
             "repos/$GITHUB_REPOSITORY/issues?state=all&labels=scope%3Avision&per_page=100" \
-            | jq -s '[.[][] | select(has("pull_request") | not) | {number, state, body, labels, milestone}]' \
+            | jq -s '[.[][] | select(has("pull_request") | not) | {number, title, state, body, labels, milestone}]' \
             > "$RUNNER_TEMP/vision-issues.json"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/pulls/${{ inputs.pr_number }}" \
+            --jq '{number, title, body}' \
+            > "$RUNNER_TEMP/pull-request.json"
       - name: Authorize pull-request diff
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,6 +84,7 @@ jobs:
         run: >-
           python3 tools/check_delivery_governance.py
           --github-issues "$RUNNER_TEMP/vision-issues.json"
+          --github-pr "$RUNNER_TEMP/pull-request.json"
           --pr-base-sha "${{ inputs.pr_base_sha }}"
           --pr-head-sha "${{ inputs.pr_head_sha }}"
           --execute-acceptance
@@ -109,7 +117,7 @@ jobs:
         run: |
           gh api --paginate \
             "repos/$GITHUB_REPOSITORY/issues?state=all&labels=scope%3Avision&per_page=100" \
-            | jq -s '[.[][] | select(has("pull_request") | not) | {number, state, body, labels, milestone}]' \
+            | jq -s '[.[][] | select(has("pull_request") | not) | {number, title, state, body, labels, milestone}]' \
             > "$RUNNER_TEMP/vision-issues.json"
       - name: Validate GitHub parity
         run: >-
