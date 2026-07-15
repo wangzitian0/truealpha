@@ -706,11 +706,7 @@ class ProvenanceGraph(BaseModel):
             raise ValueError("trace start node is missing")
         adjacency: dict[str, set[str]] = defaultdict(set)
         for edge in self.edges:
-            source, target = (
-                (edge.to_node_id, edge.from_node_id)
-                if reverse
-                else (edge.from_node_id, edge.to_node_id)
-            )
+            source, target = (edge.to_node_id, edge.from_node_id) if reverse else (edge.from_node_id, edge.to_node_id)
             adjacency[source].add(target)
         reached: set[str] = set()
         queue = deque([start_node_id])
@@ -1014,9 +1010,7 @@ class DataHubInterfaceBundle(BaseModel):
             raise ValueError(f"provenance graph has incorrectly typed core nodes: {sorted(mismatched)}")
         incoming_node_ids = {edge.to_node_id for edge in self.provenance.edges}
         non_root_ids = {
-            node_id
-            for node_id, kind in required_provenance_nodes.items()
-            if kind is not ProvenanceNodeKind.CAMPAIGN
+            node_id for node_id, kind in required_provenance_nodes.items() if kind is not ProvenanceNodeKind.CAMPAIGN
         }
         disconnected = non_root_ids - incoming_node_ids
         if disconnected:

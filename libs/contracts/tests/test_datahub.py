@@ -10,12 +10,19 @@ import pytest
 import truealpha_contracts
 from pydantic import ValidationError
 from truealpha_contracts import (
+    CaptureEnvironment,
+    ProvenanceNeutralInput,
+    SubjectKind,
+    SubjectRef,
+    UniverseRef,
+    canonical_sha256,
+)
+from truealpha_contracts.datahub import (
     AssessmentApplicability,
     AssessmentAvailability,
     AssessmentFreshness,
     AssessmentQuality,
     CaptureCampaign,
-    CaptureEnvironment,
     CaptureRun,
     CaptureSchedulePolicy,
     CaptureWorkItem,
@@ -33,17 +40,12 @@ from truealpha_contracts import (
     ProvenanceEdge,
     ProvenanceEdgeKind,
     ProvenanceGraph,
-    ProvenanceNeutralInput,
     ProvenanceNode,
     ProvenanceNodeKind,
     RawObjectIdentity,
     RecapturePlan,
     RecapturePredicate,
     RetryPolicy,
-    SubjectKind,
-    SubjectRef,
-    UniverseRef,
-    canonical_sha256,
 )
 
 SHA_A = "a" * 64
@@ -94,18 +96,12 @@ def _graph(
             ProvenanceNode(node_id=campaign_id, kind=ProvenanceNodeKind.CAMPAIGN),
             ProvenanceNode(node_id=run_id, kind=ProvenanceNodeKind.RUN),
         ]
-        + [
-            ProvenanceNode(node_id=value, kind=ProvenanceNodeKind.LIST_OBLIGATION)
-            for value in obligation_ids
-        ]
+        + [ProvenanceNode(node_id=value, kind=ProvenanceNodeKind.LIST_OBLIGATION) for value in obligation_ids]
         + [
             ProvenanceNode(node_id=work_item_id, kind=ProvenanceNodeKind.WORK_ITEM),
             ProvenanceNode(node_id=raw_object_id, kind=ProvenanceNodeKind.RAW_OBJECT),
         ]
-        + [
-            ProvenanceNode(node_id=value, kind=ProvenanceNodeKind.FETCH_ATTEMPT)
-            for value in attempt_ids
-        ]
+        + [ProvenanceNode(node_id=value, kind=ProvenanceNodeKind.FETCH_ATTEMPT) for value in attempt_ids]
         + [
             ProvenanceNode(node_id=value.observation_id, kind=ProvenanceNodeKind.NORMALIZED_OBSERVATION)
             for value in observations
@@ -324,7 +320,7 @@ def _confidence_components() -> tuple[ConfidenceComponent, ...]:
     )
 
 
-def test_public_exports_define_the_iterative_datahub_interface() -> None:
+def test_experimental_module_is_iterable_without_changing_frozen_root_exports() -> None:
     expected = {
         "CaptureCampaign",
         "CaptureRun",
@@ -337,8 +333,9 @@ def test_public_exports_define_the_iterative_datahub_interface() -> None:
         "ProvenanceEdge",
         "RecapturePlan",
     }
-    assert expected <= set(truealpha_contracts.__all__)
-    assert all(hasattr(truealpha_contracts, name) for name in expected)
+    assert expected.isdisjoint(truealpha_contracts.__all__)
+    module = __import__("truealpha_contracts.datahub", fromlist=sorted(expected))
+    assert all(hasattr(module, name) for name in expected)
 
 
 def test_identity_is_deterministic_but_content_conflicts_remain_visible() -> None:
