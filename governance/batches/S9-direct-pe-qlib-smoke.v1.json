@@ -71,7 +71,7 @@
   "corpus": {
     "environment": "Local/CI checked-in direct moomoo P/E observations plus immutable Yahoo unadjusted price samples",
     "manifest_path": "libs/factors/tests/batches/direct_pe_qlib_smoke/fixtures/corpus.v1.json",
-    "sha256": "59b7b73e233a6764f215e5950cf0d8f0711638dc216ce116da53418e1e110aa9",
+    "sha256": "9aa64d2d5c4e72b4087b8a501fdd2fc1cbc37b332a3a3278a2ac8d4f123f53b7",
     "required_strata": [
       "four fixed-cohort issuers with direct historical vendor P/E observations",
       "positive, zero, and negative P/E availability behavior",

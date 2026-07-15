@@ -93,7 +93,7 @@
       "vendor",
       "raw_ref",
       "adjusted_close",
-      "current_ttm_growth_multiple"
+      "financial_ttm_multiple"
     ],
     "confidence": "1",
     "duplicate_coordinate_policy": "fail_closed",
@@ -233,10 +233,10 @@
     "formula": "direct current P/E / direct current financial_ttm_multiple",
     "decimal_context": "precision=34, rounding=ROUND_HALF_EVEN",
     "rows": [
-      {"symbol":"DDOG","current_pe":"689.743","current_ttm_growth_multiple":"65.828","expected_current_peg":"10.47795770796621498450507382876587"},
-      {"symbol":"DUOL","current_pe":"14.868","current_ttm_growth_multiple":"26.289","expected_current_peg":"0.5655597398151318041766518315645327"},
-      {"symbol":"NICE","current_pe":"11.608","current_ttm_growth_multiple":"2.613","expected_current_peg":"4.442403367776502104860313815537696"},
-      {"symbol":"SHOP","current_pe":"120.754","current_ttm_growth_multiple":"0.39","expected_current_peg":"309.6256410256410256410256410256410"}
+      {"symbol":"DDOG","current_pe":"689.743","financial_ttm_multiple":"65.828","expected_current_peg":"10.47795770796621498450507382876587"},
+      {"symbol":"DUOL","current_pe":"14.868","financial_ttm_multiple":"26.289","expected_current_peg":"0.5655597398151318041766518315645327"},
+      {"symbol":"NICE","current_pe":"11.608","financial_ttm_multiple":"2.613","expected_current_peg":"4.442403367776502104860313815537696"},
+      {"symbol":"SHOP","current_pe":"120.754","financial_ttm_multiple":"0.39","expected_current_peg":"309.6256410256410256410256410256410"}
     ]
   },
   "report_contract": {
