@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D4-datahub-interface",
-  "revision": 3,
+  "revision": 4,
   "issue": 210,
   "owner_gate": 29,
   "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": "E0",
-  "target_rung": "E1",
+  "last_accepted_rung": "E1",
+  "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
-  "claim_ceiling": "E0 experimental typed DataHub interface only; no tiny-corpus evidence, stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
+  "claim_ceiling": "E1 tiny Local/CI interface evidence for campaign-scoped shared work, typed source-request coverage, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance only; no stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 171, 205, 207],
@@ -24,8 +24,8 @@
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D4 registration and preparation are merged on main",
-      "the tiny interface corpus remains frozen at a0899bf292e5b8fbc00a685dcb5a14e37c42235f2891fc019c98e0e1377a489f",
-      "the E0 implementation PR pins exact current main base 9f7acc9f72fb84a3aefc355875ac4524ef497d2c",
+      "the tiny interface corpus remains frozen at c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
+      "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while every rung PR rebases on current main without rewriting that activation anchor",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
       "issue #210 contains this manifest path and exact SHA-256",
@@ -81,13 +81,15 @@
   ],
   "corpus": {
     "environment": "Local/CI checked-in typed interface fixtures only",
-    "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
-    "sha256": "a0899bf292e5b8fbc00a685dcb5a14e37c42235f2891fc019c98e0e1377a489f",
+    "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v2.json",
+    "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
     "required_strata": [
       "one immutable list with success and terminal-failure obligations",
-      "two overlapping immutable lists sharing one canonical source request",
-      "unchanged raw bytes observed by a later distinct fetch attempt",
-      "bounded retry and rate-limit attempt sequence",
+      "two overlapping immutable lists in separate compatible runs sharing one campaign-scoped provider work item",
+      "a typed source-request subject, requirement, and partition scope that covers every bound obligation",
+      "a persisted dispatch intent and one append-only outcome for every completed attempt",
+      "unchanged raw bytes observed by a later distinct attempt that reuses only the same pinned source vintage",
+      "bounded retry, interruption, and rate-limit attempt sequence",
       "restatement and source-disagreement observations",
       "stale, unavailable, abstained, and PIT-excluded assessments",
       "predicate-bounded recapture dry run and overreach rejection",
@@ -101,6 +103,7 @@
       "libs/contracts/src/truealpha_contracts/__init__.py",
       "libs/contracts/tests/test_datahub.py",
       "libs/contracts/tests/fixtures/datahub_interface.v1.json",
+      "libs/contracts/tests/fixtures/datahub_interface.v2.json",
       "governance/evidence/D4-datahub-interface-E0.v1.json",
       "governance/evidence/D4-datahub-interface-E1.v1.json",
       "governance/evidence/D4-datahub-interface-E2.v1.json",
@@ -145,14 +148,18 @@
   },
   "acceptance": {
     "commands": [
-      "uv run pytest libs/contracts/tests/test_datahub.py -q",
-      "uv run ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
-      "uv run mypy",
-      "python3 tools/check_delivery_governance.py"
+      "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_datahub.py -q",
+      "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
+      "uv run --package truealpha-contracts python -m mypy",
+      "uv run --package truealpha-contracts python tools/check_delivery_governance.py"
     ],
     "negative_controls": [
       "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
-      "campaign, run, obligation, work-item, attempt, raw-object, observation, assessment, or edge identity drift",
+      "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
+      "a provenance graph omits a required campaign-to-run, campaign-to-source-request, run-to-obligation, or obligation-to-work-item capture path",
+      "a work binding whose request omits its obligation's subject, capture requirement, or partition",
+      "run-scoped work loses provider sharing across overlapping compatible lists",
+      "a completed bundle omits a dispatch outcome, or an unchanged response reuses a vintage from another pinned request",
       "identical raw bytes erase a later attempt or a separate list obligation",
       "duplicate obligation, non-contiguous attempt, retry after terminal outcome, or unbounded retry",
       "binary-float, non-finite, unexplained, or out-of-range confidence component",
@@ -164,7 +171,7 @@
     "output": {
       "type": "DataHubInterfaceEvidence",
       "stable_handoff": false,
-      "state": "provisional_e0",
+      "state": "provisional_e1",
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
         "issue #41 mart and Qlib provider preparation after E2 acceptance",
@@ -173,7 +180,7 @@
     }
   },
   "invalidation": [
-    "identity grain, cadence semantics, terminal states, recapture predicate vocabulary, confidence components, provenance node/edge vocabulary, or corpus change creates a new D4 revision",
+    "identity grain, campaign-sharing semantics, dispatch/outcome lifecycle, source-request or source-vintage semantics, cadence semantics, terminal states, recapture predicate vocabulary, confidence components, provenance node/edge vocabulary, or corpus change creates a new D4 revision",
     "a shared export change requires an exact active integration lease before implementation",
     "a persistence or query requirement discovered at E1 is classified at E2 and cannot be patched into accepted tiny evidence",
     "any source call, migration, schedule, consumer binding, or release activation exceeds this batch and requires separate authorization"
