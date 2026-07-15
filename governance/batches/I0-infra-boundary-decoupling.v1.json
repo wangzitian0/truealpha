@@ -24,7 +24,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "62a7d78abb36abb9638d4d7da967e03b5a9cd449",
+    "base_sha": "8efda7e6d7fe1fd1ef2d7f5bbcc5aa1af1d85f50",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued batch registration is merged to main before corpus preparation",
@@ -91,7 +91,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/I0-infra-boundary-decoupling.v1.json",
-      "sha256": "86835c0bab7be29e6e23afe7645aef114b9ff732f2850772179358ec541c2e3d"
+      "sha256": "07243aba7f95c22b48c26af3c616572750b8389019d402d46e4c4e9411f489b5"
     }
   },
   "release_activation": {
