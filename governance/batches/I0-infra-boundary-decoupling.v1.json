@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "I0-infra-boundary-decoupling",
-  "revision": 2,
+  "revision": 3,
   "issue": 201,
   "owner_gate": 32,
-  "status": "prepared",
+  "status": "active",
   "lane": "orchestration-platform",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Remove TrueAlpha's reverse source dependency on infra2 and replace it with a versioned, side-effect-free deploy-request contract boundary.",
-  "claim_ceiling": "Preparation-only repository-boundary and DeployRequest corpus; this revision earns no rung and approves no implementation, dispatch sender, runtime activation, live-environment evidence, or Production-readiness claim",
+  "claim_ceiling": "E0 repository-boundary code and deterministic staging DeployRequest rendering only; no dispatch sender, receiver activation, deployment side effect, live-environment evidence, or Production-readiness claim",
   "capability_issues": [
     11
   ],
@@ -24,7 +24,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "96cb91e409e113dd132633db9bab9808786b59c9",
+    "base_sha": "f1b6d93051dbe553058d3c9f60bf3922165cbc54",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued batch registration is merged to main before corpus preparation",
@@ -89,7 +89,10 @@
       "uv.lock"
     ],
     "lease_owner": "wangzitian0",
-    "lease_manifest": null
+    "lease_manifest": {
+      "path": "governance/leases/I0-infra-boundary-decoupling.v1.json",
+      "sha256": "c895b3dc631a63d291f159ca9506b81ec889718bfb9066a94c26396a4aba2ab2"
+    }
   },
   "release_activation": {
     "allowed": false,
@@ -114,7 +117,7 @@
     "output": {
       "type": "RepositoryBoundaryTinyEvidence",
       "stable_handoff": false,
-      "state": "queued",
+      "state": "provisional_e0",
       "allowed_evidence_readers": [
         "issue #11 environment implementation batches",
         "infra2 workspace-submodule integration"
