@@ -10,7 +10,7 @@
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Project checked-in direct vendor P/E observations into a provenance-neutral panel, execute one safe Qlib earnings-yield expression, and emit a deterministic fixed-cohort price-return smoke report.",
-  "claim_ceiling": "E0 typed fixed-cohort direct-P/E projection, safe Qlib earnings-yield execution, current-only PEG snapshot, monthly next-session-open replay, deterministic price-return report, and fail-closed controls only; no Tiny evidence, PIT vendor-history semantics, historical PEG, total return, stable handoff, strategy validation, alpha, or release-readiness claim",
+  "claim_ceiling": "E0 typed fixed-cohort direct-P/E projection, safe Qlib earnings-yield execution, current-only PEG snapshot, monthly next-session-open replay, deterministic price-return report, and fail-closed controls only; the emitted provisional-E1 report is an unaccepted candidate for the next rung, and this revision accepts no Tiny evidence, PIT vendor-history semantics, historical PEG, total return, stable handoff, strategy validation, alpha, or release-readiness claim",
   "capability_issues": [
     26
   ],

@@ -284,7 +284,7 @@
       "target_rung": "E1",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S9-direct-pe-qlib-smoke.v1.json",
-      "sha256": "23fbac6e670c7cd5407f00def33bf292feab9d58cbf081e15df621c24a89e8a6"
+      "sha256": "c5a5f44f58987005b5d98d3d68a253408f6cddd463cb44a8cc4e74ae4bf42318"
     }
   },
   "artifact_edges": [
