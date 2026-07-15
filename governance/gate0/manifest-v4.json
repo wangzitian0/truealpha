@@ -5,11 +5,11 @@
   "gate_issue": 56,
   "status": "candidate_blocked_external_attestation",
   "integration_branch": "batch/gate-0-v4-semantic-data-closure",
-  "integration_base_sha": "7770219561bfbfa9172c0f69011efd109cf31d91",
+  "integration_base_sha": "352c5583a785bbaaf9ab5ec1bb48ca8410d72bf5",
   "included_issues": [57, 58, 59, 60, 61],
   "dependency_order": [57, 58, 59, 60, 61],
   "candidate_payload_sha256": "7c70d246232621353c769195248dcdc4e003b39ff301daa06b26b73b92428ee3",
-  "candidate_tree_sha256": "4c7ad80a429686d1499929560b5af78272b89f89b52801228515e74952c126f8",
+  "candidate_tree_sha256": "8162865faf527319e1c8c1e48c3e7b5d32a5d59af572693f489c6912c4f588bd",
   "paths": [
     ".github/**",
     "AGENTS.md",
