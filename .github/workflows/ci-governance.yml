@@ -1,23 +1,19 @@
 name: Delivery Governance
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, edited, ready_for_review, converted_to_draft]
+  workflow_call:
+    inputs:
+      mode:
+        required: true
+        type: string
+      pr_base_sha:
+        required: false
+        type: string
+      pr_head_sha:
+        required: false
+        type: string
   issues:
     types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]
-  push:
-    branches: [main]
-    paths:
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/workflows/ci-governance.yml"
-      - "governance/**"
-      - "tools/check_delivery_governance.py"
-      - "tools/check_gate0_candidate.py"
-      - "AGENTS.md"
-      - "init.md"
-      - "docs/iterative-delivery.md"
-      - "docs/architecture-contract-closure.md"
-      - "Makefile"
   workflow_dispatch:
 
 permissions:
@@ -25,69 +21,10 @@ permissions:
   issues: read
 
 jobs:
-  sync_batch_labels:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Validate checked-in graph and manifests
-        run: make issue-graph-check
-      - name: Validate Gate 0 candidate chain
-        run: make gate0-candidate-check
-      - name: Mirror merged batch status to GitHub
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-
-          from tools.check_delivery_governance import batch_status_labels, render_batch_issue_body
-
-          with open("governance/vision-issue-graph.json", encoding="utf-8") as stream:
-              graph = json.load(stream)
-          repository = os.environ["GITHUB_REPOSITORY"]
-          for batch_id, batch in graph["batches"].items():
-              desired_status = batch_status_labels(batch)
-              endpoint = f"repos/{repository}/issues/{batch['issue']}"
-              response = subprocess.run(
-                  ["gh", "api", endpoint],
-                  check=True,
-                  capture_output=True,
-                  text=True,
-              )
-              issue = json.loads(response.stdout)
-              preserved = {
-                  label["name"]
-                  for label in issue["labels"]
-                  if not label["name"].startswith(("batch:", "rung:", "readiness:"))
-              }
-              desired = sorted(preserved | desired_status)
-              desired_body = render_batch_issue_body(issue.get("body") or "", batch_id, batch)
-              current = sorted(label["name"] for label in issue["labels"])
-              if current != desired or issue.get("body") != desired_body:
-                  subprocess.run(
-                      ["gh", "api", "--method", "PATCH", endpoint, "--input", "-"],
-                      input=json.dumps({"body": desired_body, "labels": desired}),
-                      check=True,
-                      text=True,
-                  )
-          PY
-
   validate:
-    needs: sync_batch_labels
-    if: >-
-      always() &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.state == 'open' &&
-      (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
+    if: inputs.mode == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16-alpine
@@ -106,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.pr_head_sha }}
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -140,26 +77,24 @@ jobs:
         run: >-
           python3 tools/check_delivery_governance.py
           --github-issues "$RUNNER_TEMP/vision-issues.json"
-          --pr-base-sha "${{ github.event.pull_request.base.sha }}"
-          --pr-head-sha "${{ github.event.pull_request.head.sha }}"
+          --pr-base-sha "${{ inputs.pr_base_sha }}"
+          --pr-head-sha "${{ inputs.pr_head_sha }}"
           --execute-acceptance
           --evidence-output "$RUNNER_TEMP/rung-evidence.json"
       - name: Retain rung evidence
         uses: actions/upload-artifact@v4
         with:
-          name: rung-evidence-${{ github.event.pull_request.number }}
+          name: rung-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/rung-evidence.json
           if-no-files-found: ignore
           retention-days: 90
 
   validate_non_pr:
-    needs: sync_batch_labels
     if: >-
-      always() &&
-      github.event_name != 'pull_request' &&
-      (github.event_name != 'issues' || github.actor != 'github-actions[bot]') &&
-      (needs.sync_batch_labels.result == 'success' || needs.sync_batch_labels.result == 'skipped')
+      inputs.mode != 'pull_request' &&
+      (github.event_name != 'issues' || github.actor != 'github-actions[bot]')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:

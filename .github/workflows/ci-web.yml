@@ -1,21 +1,12 @@
 name: ci-web
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "apps/app-web/**"
-      - "libs/contracts/conformance/**"
-      - ".github/workflows/ci-web.yml"
-  pull_request:
-    paths:
-      - "apps/app-web/**"
-      - "libs/contracts/conformance/**"
-      - ".github/workflows/ci-web.yml"
+  workflow_call:
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/app-web

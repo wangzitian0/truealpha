@@ -1,0 +1,7 @@
+# CI and governance changes need explicit owner routing. A required independent
+# approval can be enabled after the repository has a second write collaborator.
+/.github/ @wangzitian0
+/AGENTS.md @wangzitian0
+/governance/ @wangzitian0
+/tools/check_delivery_governance.py @wangzitian0
+/tools/check_gate0_candidate.py @wangzitian0

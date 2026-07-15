@@ -1,33 +1,12 @@
 name: ci-runtime
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docker-compose.yml"
-      - ".env.example"
-      - "db/**"
-      - "libs/contracts/**"
-      - "libs/runtime/**"
-      - "Makefile"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/ci-runtime.yml"
-  pull_request:
-    paths:
-      - "docker-compose.yml"
-      - ".env.example"
-      - "db/**"
-      - "libs/contracts/**"
-      - "libs/runtime/**"
-      - "Makefile"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/ci-runtime.yml"
+  workflow_call:
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       APP_ENV: ci
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
