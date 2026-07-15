@@ -522,6 +522,7 @@ class NormalizedObservation(BaseModel):
                 "valid_to",
                 "knowable_at",
                 "source_vintage",
+                "parser_version",
                 "mapping_version",
                 "payload_identity",
             ),

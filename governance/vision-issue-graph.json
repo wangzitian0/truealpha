@@ -176,7 +176,7 @@
       "target_rung": "E1",
       "terminal_rung": "E2",
       "manifest": "governance/batches/D4-datahub-interface.v1.json",
-      "sha256": "5208d12a5216eea66e9deca4c12a8f503a92cbc3ff68aa909447b2511e62ea57"
+      "sha256": "a075887e8e42e9837a66237c6a9c928d7d909db572600bd63e116f236acaee45"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,

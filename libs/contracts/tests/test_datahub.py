@@ -291,6 +291,7 @@ def _observation(
     *,
     knowable_at: datetime = AT,
     payload_identity: str = "raw-object:primary:close:v1",
+    parser_version: str = "bars-parser:v1",
     supersedes: NormalizedObservation | None = None,
 ) -> NormalizedObservation:
     return NormalizedObservation(
@@ -300,7 +301,7 @@ def _observation(
         valid_from=datetime(2025, 1, 3, 21, tzinfo=UTC),
         knowable_at=knowable_at,
         source_vintage=f"primary:{knowable_at.date().isoformat()}:v1",
-        parser_version="bars-parser:v1",
+        parser_version=parser_version,
         mapping_version="instrument-map:v1",
         payload_identity=payload_identity,
         is_restatement=supersedes is not None,
@@ -507,6 +508,8 @@ def test_confidence_dimensions_remain_independent_and_reassessment_appends() -> 
 
 def test_restatement_is_append_only_and_future_knowledge_is_excluded() -> None:
     original = _observation()
+    reparsed = _observation(parser_version="bars-parser:v2")
+    assert reparsed.observation_id != original.observation_id
     restatement = _observation(
         knowable_at=AT + timedelta(days=4),
         payload_identity="raw-object:restatement:close:v2",

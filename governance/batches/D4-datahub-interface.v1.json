@@ -24,7 +24,7 @@
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D4 registration and preparation are merged on main",
-      "the tiny interface corpus remains frozen at f0699a47cb621ff71dab1bbc193c5951eacf10999888e32f71d1ed1bfa4a60cf",
+      "the tiny interface corpus remains frozen at a0899bf292e5b8fbc00a685dcb5a14e37c42235f2891fc019c98e0e1377a489f",
       "the E0 implementation PR pins exact current main base f1b6d93051dbe553058d3c9f60bf3922165cbc54",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
@@ -82,7 +82,7 @@
   "corpus": {
     "environment": "Local/CI checked-in typed interface fixtures only",
     "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
-    "sha256": "f0699a47cb621ff71dab1bbc193c5951eacf10999888e32f71d1ed1bfa4a60cf",
+    "sha256": "a0899bf292e5b8fbc00a685dcb5a14e37c42235f2891fc019c98e0e1377a489f",
     "required_strata": [
       "one immutable list with success and terminal-failure obligations",
       "two overlapping immutable lists sharing one canonical source request",
