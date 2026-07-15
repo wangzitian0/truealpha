@@ -23,6 +23,20 @@
         "interval": "1d",
         "events": "div,splits"
       },
+      "request_contract": {
+        "symbol": {
+          "location": "endpoint_path",
+          "name": "symbol"
+        },
+        "window_start": {
+          "name": "period1",
+          "encoding": "inclusive start date at 00:00:00 UTC as Unix seconds"
+        },
+        "window_end": {
+          "name": "period2",
+          "encoding": "exclusive day after the inclusive end date at 00:00:00 UTC as Unix seconds"
+        }
+      },
       "adjustment_semantics": {
         "open_high_low_close": "provider unadjusted daily values",
         "adjusted_close": "provider adjusted close retained as a separate field",
@@ -42,6 +56,20 @@
         "adjust": "none",
         "order": "asc",
         "format": "JSON"
+      },
+      "request_contract": {
+        "symbol": {
+          "location": "query",
+          "name": "symbol"
+        },
+        "window_start": {
+          "name": "start_date",
+          "encoding": "inclusive ISO 8601 calendar date"
+        },
+        "window_end": {
+          "name": "end_date",
+          "encoding": "inclusive ISO 8601 calendar date"
+        }
       },
       "adjustment_semantics": {
         "open_high_low_close": "unadjusted daily values requested with adjust=none",
