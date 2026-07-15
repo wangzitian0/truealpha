@@ -100,12 +100,23 @@ jobs:
       pr_base_sha: ${{ github.event.pull_request.base.sha }}
       pr_head_sha: ${{ github.event.pull_request.head.sha }}
 
-  governance_push:
-    if: github.event_name != 'pull_request'
+  sync_issues:
+    if: github.event_name == 'push' && github.ref_type != 'tag'
     needs: changes
     permissions:
       contents: read
       issues: write
+    uses: ./.github/workflows/sync-batch-issues.yml
+
+  governance_push:
+    if: >-
+      always() &&
+      github.event_name != 'pull_request' &&
+      (needs.sync_issues.result == 'success' || needs.sync_issues.result == 'skipped')
+    needs: [changes, sync_issues]
+    permissions:
+      contents: read
+      issues: read
     uses: ./.github/workflows/ci-governance.yml
     with:
       mode: ${{ github.ref_type == 'tag' && 'tag' || 'push' }}
@@ -146,6 +157,7 @@ jobs:
       always() &&
       (needs.changes.outputs.images == 'true' || github.ref_type == 'tag') &&
       (needs.governance_pr.result == 'success' || needs.governance_pr.result == 'skipped') &&
+      (needs.sync_issues.result == 'success' || needs.sync_issues.result == 'skipped') &&
       (needs.governance_push.result == 'success' || needs.governance_push.result == 'skipped') &&
       (needs.security.result == 'success' || needs.security.result == 'skipped') &&
       (needs.db.result == 'success' || needs.db.result == 'skipped') &&
@@ -153,7 +165,7 @@ jobs:
       (needs.qlib.result == 'success' || needs.qlib.result == 'skipped') &&
       (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') &&
       (needs.web.result == 'success' || needs.web.result == 'skipped')
-    needs: [changes, governance_pr, governance_push, security, db, python, qlib, runtime, web]
+    needs: [changes, governance_pr, sync_issues, governance_push, security, db, python, qlib, runtime, web]
     permissions:
       contents: read
       packages: write
@@ -164,7 +176,7 @@ jobs:
   required:
     name: ci-required
     if: always()
-    needs: [changes, governance_pr, governance_push, security, db, python, qlib, runtime, web, images]
+    needs: [changes, governance_pr, sync_issues, governance_push, security, db, python, qlib, runtime, web, images]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

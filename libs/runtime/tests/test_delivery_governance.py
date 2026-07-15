@@ -1578,6 +1578,7 @@ def test_prepared_batch_status_mirrors_as_queued_until_merge():
 def test_workflow_authorizes_every_pull_request_against_exact_head():
     workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
     caller = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-required.yml").read_text(encoding="utf-8")
+    sync = (MODULE_PATH.parents[1] / ".github" / "workflows" / "sync-batch-issues.yml").read_text(encoding="utf-8")
 
     assert "workflow_call:\n" in workflow
     assert "pull_request:\n" in caller
@@ -1591,8 +1592,8 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     assert "uses: astral-sh/setup-uv@v5" in workflow
     assert "uv sync --all-packages --frozen" in workflow
     assert "--execute-acceptance" in workflow
-    assert "render_batch_issue_body" in workflow
-    assert 'json.dumps({"body": desired_body, "labels": desired})' in workflow
+    assert "render_batch_issue_body" in sync
+    assert 'json.dumps({"body": desired_body, "labels": desired})' in sync
 
 
 def test_workflow_runs_acceptance_against_a_fresh_required_postgres_runtime():
@@ -1629,6 +1630,7 @@ def test_required_ci_aggregates_every_reusable_check_and_is_always_terminal():
         "ci-runtime.yml",
         "ci-web.yml",
         "ci-governance.yml",
+        "sync-batch-issues.yml",
         "security-gate.yml",
         "release-images.yml",
     ):
@@ -1646,7 +1648,10 @@ def test_image_publication_is_reusable_and_waits_for_build_and_required_checks()
     assert "workflow_call:\n" in release
     assert "pull_request:\n" not in release
     assert "push:\n" not in release
-    assert "needs: [changes, governance_pr, governance_push, security, db, python, qlib, runtime, web]" in image_call
+    assert (
+        "needs: [changes, governance_pr, sync_issues, governance_push, security, db, python, qlib, runtime, web]"
+        in image_call
+    )
     assert "publish: ${{ github.event_name == 'push' }}" in image_call
     assert "  publish:\n    if: inputs.publish\n    needs: build" in release
     assert "packages: write" in release.split("  publish:\n", 1)[1]
