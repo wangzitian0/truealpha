@@ -95,6 +95,44 @@ def test_current_peg_is_snapshot_only_and_matches_frozen_decimal_oracle(corpus, 
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("financial_ttm_multiple", None, "missing_input"),
+        ("financial_ttm_multiple", Decimal("0"), "nonpositive_growth"),
+        ("financial_ttm_multiple", Decimal("-1"), "nonpositive_growth"),
+        ("current_pe", Decimal("0"), "nonpositive_pe"),
+    ],
+)
+def test_current_peg_fails_unavailable_for_missing_or_nonpositive_inputs(
+    smoke_request, field: str, value: Decimal | None, reason: str
+) -> None:
+    target = next(row for row in smoke_request.current_peg_inputs if row.instrument_id == "DDOG")
+    mutated = target.model_copy(update={field: value})
+    inputs = tuple(mutated if row is target else row for row in smoke_request.current_peg_inputs)
+
+    result = run_direct_pe_qlib_smoke(smoke_request.model_copy(update={"current_peg_inputs": inputs}))
+    peg = next(row for row in result.current_peg_snapshot if row.instrument_id == "DDOG")
+
+    assert peg.available is False
+    assert peg.peg is None
+    assert peg.reason == reason
+    assert peg.historical_decision_input is False
+
+
+def test_report_lineage_is_canonical_and_limited_to_consumed_inputs(smoke_request, report) -> None:
+    consumed = set(report.consumed_input_ids)
+    all_feature_ids = {row.input_id for row in smoke_request.pe_features}
+
+    assert report.consumed_input_ids == tuple(sorted(consumed))
+    assert all(
+        score.input_id in consumed for decision in report.decisions for score in decision.scores if score.input_id
+    )
+    assert all(trade.price_input_id in consumed for trade in report.trades)
+    assert all(set(row.input_ids) <= consumed for row in report.current_peg_snapshot)
+    assert consumed & all_feature_ids < all_feature_ids
+
+
 def test_price_return_report_is_deterministic_and_keeps_the_evidence_ceiling(corpus, report) -> None:
     serialized = canonical_report_json(report)
     markdown = render_markdown(report)
