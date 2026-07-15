@@ -20,13 +20,13 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "8bfcd328258e79e14977c60525769ce3302f2ea4",
+    "base_sha": "976394ab998c2f209e0707566da88dcd2fcbd7bc",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "the #229 capability registration and queued A0 batch registration are merged to main",
       "#81 has accepted the actual-diff, merge-base, corpus-byte, integration-lease, command-evidence, and handoff enforcement required to activate queued batches",
       "this preparation freezes the access corpus path and SHA-256 without changing implementation paths",
-      "the stable activation base remains 8bfcd328258e79e14977c60525769ce3302f2ea4 while implementation evidence records its exact current PR base and head",
+      "the stable activation base remains 976394ab998c2f209e0707566da88dcd2fcbd7bc while implementation evidence records its exact current PR base and head",
       "the independent reviewer remains assigned through E0 acceptance",
       "one active integration lease covers init.md, the contract export, the additive migration, db/roles.sql, and the SQL contract test",
       "issue #230 contains this manifest path and exact SHA-256",
