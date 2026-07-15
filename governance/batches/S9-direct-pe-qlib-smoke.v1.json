@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S9-direct-pe-qlib-smoke",
-  "revision": 2,
+  "revision": 3,
   "issue": 203,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "strategy",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Project checked-in direct vendor P/E observations into a provenance-neutral panel, execute one safe Qlib earnings-yield expression, and emit a deterministic fixed-cohort price-return smoke report.",
-  "claim_ceiling": "Preparation-only fixed-cohort direct-P/E, unadjusted-price, current-PEG, monthly-decision, and negative-control corpus; this revision earns no rung and approves no implementation, PIT vendor-history semantics, historical PEG, total return, stable handoff, strategy validation, alpha, or release-readiness claim",
+  "claim_ceiling": "E0 typed fixed-cohort direct-P/E projection, safe Qlib earnings-yield execution, current-only PEG snapshot, monthly next-session-open replay, deterministic price-return report, and fail-closed controls only; no Tiny evidence, PIT vendor-history semantics, historical PEG, total return, stable handoff, strategy validation, alpha, or release-readiness claim",
   "capability_issues": [
     26
   ],
@@ -29,10 +29,10 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "6cdfd355889753aaf173e1dadc3655f65319dc16",
+    "base_sha": "830d3d0e2f2bc9d96a519dd81209d0b971c07ccf",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "queued S9 registration is merged to main",
+      "the prepared S9 revision is merged and the E0 implementation revision is based on main at 830d3d0e2f2bc9d96a519dd81209d0b971c07ccf",
       "the exact direct-P/E and price corpus paths and SHA-256 values are committed in a preparation PR",
       "the implementation PR pins its exact current main base SHA",
       "the implementation reuses the workspace-excluded Qlib 0.9.7 runtime and does not change either lock",
@@ -154,6 +154,16 @@
       "type": "DirectPeQlibSmokeReport",
       "stable_handoff": false,
       "state": "provisional_e1",
+      "accepted_slice": {
+        "expression": "Div(1,$pe)",
+        "universe_size": 4,
+        "decision_frequency": "monthly",
+        "execution_convention": "next eligible session unadjusted open",
+        "return_type": "unadjusted price return",
+        "historical_peg_allowed": false,
+        "deterministic_json_markdown": true,
+        "release_registered": false
+      },
       "allowed_evidence_readers": [
         "issue #26 Qlib provider and replay integration batch"
       ]
