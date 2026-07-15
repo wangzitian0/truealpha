@@ -6,7 +6,7 @@
     {
       "command": "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_datahub.py -q",
       "exit_code": 0,
-      "output_sha256": "9e61ba973a14de494af282aeca99189a9ade2a0e629f198154a77948d46f0971"
+      "output_sha256": "33212a55d1b2b71ae0388f0b4e9fedcad7db708acd599aef214927f80bc3092a"
     },
     {
       "command": "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
@@ -24,9 +24,9 @@
       "output_sha256": "3ce0a3f4b2b2d3fcc83181896297ac73b4b7b3034209f9e2b7514b3d55b0ebfa"
     }
   ],
-  "created_at": "2026-07-15T14:35:01.502333Z",
-  "evidence_id": "rung-evidence:D4-datahub-interface:4a40056ce37af8e332dbbd813c35ad5a16bbd0ac641c66398a7fbe9c9a177e3c",
-  "manifest_sha256": "084f55969271eb1dea5ad7e14b32a7ad9e23c95e3182de8b0c354c117e761d64",
+  "created_at": "2026-07-15T14:38:45.633665Z",
+  "evidence_id": "rung-evidence:D4-datahub-interface:5178c5baff733efc8fdeb88b64154768c14783dbbb11c989b7608f172585a489",
+  "manifest_sha256": "10e16051b9271423413f5df0cde5f663aa95a8722428eb274866c2df4dffb64f",
   "negative_controls": [
     "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
     "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
@@ -42,7 +42,7 @@
     "factor-visible source, raw pointer, provider policy, or provenance branch metadata",
     "database, source, schedule, query provider, Qlib data binding, or release activation"
   ],
-  "producer_head_sha": "c2ac61c588e7ea8e93e27e31a458c5ec94319371",
+  "producer_head_sha": "cc2ff59a6c2625a22fd80fb943761786aa9ec0d2",
   "schema_version": 1,
   "stable_handoff": false
 }
