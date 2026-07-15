@@ -114,12 +114,29 @@ def test_plan_rejects_request_contract_drift(tmp_path: Path):
     changed = tmp_path / "capture_plan.json"
     changed.write_text(json.dumps(plan))
 
-    with pytest.raises(CaptureError, match="request_contract differs"):
+    with pytest.raises(CaptureError, match="frozen schema contract"):
         load_plan(changed)
 
 
 def test_legacy_plan_remains_loadable_for_capture_validation():
     assert load_plan(LEGACY_PLAN_PATH)["schema"] == "truealpha.factor-matrix-sample-plan@v1"
+
+
+def test_capture_rejects_plan_symlink_before_reading(tmp_path: Path):
+    outside = tmp_path / "outside.json"
+    outside.write_text("not valid JSON")
+    linked = tmp_path / "capture-plan.json"
+    linked.symlink_to(outside)
+
+    with pytest.raises(CaptureError, match="capture plan must be a regular file"):
+        capture_samples(
+            capture_id="symlink-plan",
+            plan_path=linked,
+            output_root=tmp_path / "captures",
+            providers=("yahoo",),
+            environ={},
+            client=ExplodingClient(),
+        )
 
 
 def test_provider_fixtures_normalize_to_separate_adjustment_semantics():
@@ -256,6 +273,31 @@ def test_validator_rejects_unmanifested_files(tmp_path: Path):
     with pytest.raises(CaptureError, match="unmanifested or missing files"):
         capture_samples(
             capture_id="unmanifested-file",
+            plan_path=PLAN_PATH,
+            output_root=tmp_path,
+            providers=("yahoo",),
+            environ={},
+            client=ExplodingClient(),
+        )
+
+
+def test_validator_rejects_symlink_artifact_directory(tmp_path: Path):
+    manifest_path = capture_samples(
+        capture_id="symlink-directory",
+        plan_path=PLAN_PATH,
+        output_root=tmp_path,
+        providers=("yahoo",),
+        environ={},
+        client=FixtureClient(),
+    )
+    provider_dir = manifest_path.parent / "yahoo"
+    outside = tmp_path / "outside-yahoo"
+    provider_dir.rename(outside)
+    provider_dir.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(CaptureError, match="symlink directory|escapes the capture directory"):
+        capture_samples(
+            capture_id="symlink-directory",
             plan_path=PLAN_PATH,
             output_root=tmp_path,
             providers=("yahoo",),

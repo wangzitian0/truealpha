@@ -160,7 +160,7 @@ def load_plan(path: Path = DEFAULT_PLAN) -> dict[str, Any]:
             else EXPECTED_TWELVE_REQUEST_CONTRACTS[str(plan["schema"])]
         )
         if config.get("request_contract") != expected_contract:
-            raise CaptureError(f"providers.{provider}.request_contract differs from the v1 contract")
+            raise CaptureError(f"providers.{provider}.request_contract differs from the frozen schema contract")
         fixture = _require_mapping(config.get("fixture"), f"providers.{provider}.fixture")
         fixture_payload = fixture.get("payload")
         fixture_hash = fixture.get("sha256")
@@ -452,7 +452,12 @@ def validate_capture(
     *,
     plan_sha256: str,
 ) -> Path:
+    if capture_dir.is_symlink() or not capture_dir.is_dir():
+        raise CaptureError(f"existing capture is not a regular directory: {capture_dir}")
+    capture_root = capture_dir.resolve()
     manifest_path = capture_dir / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise CaptureError(f"existing capture is incomplete: {capture_dir}")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -486,7 +491,14 @@ def validate_capture(
         artifact_path = capture_dir.joinpath(*relative.parts)
         if artifact_path.is_symlink() or not artifact_path.is_file():
             raise CaptureError(f"capture artifact is missing: {relative}")
-        body = artifact_path.read_bytes()
+        try:
+            resolved_artifact = artifact_path.resolve(strict=True)
+            resolved_artifact.relative_to(capture_root)
+        except (OSError, ValueError) as exc:
+            raise CaptureError(f"capture artifact escapes the capture directory: {relative}") from exc
+        if any(capture_dir.joinpath(*relative.parts[:index]).is_symlink() for index in range(1, len(relative.parts))):
+            raise CaptureError(f"capture artifact has a symlink directory: {relative}")
+        body = resolved_artifact.read_bytes()
         if len(body) != item.get("byte_length") or _sha256(body) != item.get("sha256"):
             raise CaptureError(f"capture artifact hash mismatch: {relative}")
         key = (item.get("provider"), item.get("symbol"), item.get("kind"))
@@ -537,15 +549,15 @@ def capture_samples(
     ):
         raise CaptureError(f"providers must be a unique subset of {list(EXPECTED_PROVIDERS)}")
     selected = tuple(sorted(selected))
-    plan = load_plan(plan_path)
     repository_root = DATA_ENGINE_ROOT.parents[1]
+    if plan_path.is_symlink() or not plan_path.is_file():
+        raise CaptureError("capture plan must be a regular file")
     try:
         plan_relative = plan_path.resolve().relative_to(repository_root.resolve()).as_posix()
     except ValueError as exc:
         raise CaptureError("capture plan must be a checked-in repository path") from exc
-    if plan_path.is_symlink() or not plan_path.is_file():
-        raise CaptureError("capture plan must be a regular file")
     plan_hash = _file_sha256(plan_path)
+    plan = load_plan(plan_path)
     _validate_fixture_hashes(plan)
     environment = os.environ if environ is None else environ
     window = _require_mapping(plan["window"], "window")
