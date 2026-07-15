@@ -53,35 +53,43 @@ from its own root directory. Recompute the prefix before creating or renaming wo
    `[truealpha] Freeze the Yahoo parser corpus`. Do not add batch, lane, rung, stage,
    or task tokens such as `[S1]`, `[D1]`, `[S8:E1]`, or `[prep]` to titles. Record
    those identities in the canonical manifest, labels, branch name, or issue/PR body.
-2. **Claim one work key.** The unique work key is the issue or batch ID plus its
+2. **Respect PR workspace ownership.** Agents may inspect and work on issues with
+   any title prefix. By default, an agent may create, push to, edit, review, resolve
+   threads on, or merge only a pull request whose bracketed title prefix exactly
+   matches the checkout-derived `<work_prefix>`. Read-only inspection of other PRs
+   is allowed when needed for coordination. Acting on a cross-prefix PR requires an
+   explicit user instruction that names that PR; a general request to help the
+   repository is not an exception. This is an agent operating rule, not a repository
+   automation requirement.
+3. **Claim one work key.** The unique work key is the issue or batch ID plus its
    target rung, or an explicit standalone task ID when no batch applies. Only one
    active agent, issue, and pull request may own a work key at a time.
-3. **Search before creating.** Before opening an issue, branch, or pull request,
+4. **Search before creating.** Before opening an issue, branch, or pull request,
    search open and recently closed issues and pull requests, remote branches, and
    canonical batch manifests for the same work key. Continue the existing work
    instead of creating a parallel copy.
-4. **Keep parallel work disjoint.** A shared prefix does not make work independent.
+5. **Keep parallel work disjoint.** A shared prefix does not make work independent.
    Agents in this workspace may run concurrently only when both their work keys and
    writable paths are disjoint. Changes to shared graphs, migrations, registries,
    exports, lockfiles, or authoritative docs remain serialized through the existing
    integration-lease rules.
-5. **Do not claim shared parents.** Root capability and gate issues remain unprefixed
+6. **Do not claim shared parents.** Root capability and gate issues remain unprefixed
    unless ownership is explicitly assigned to this workspace. Prefixed batch issues
    and pull requests should reference those shared parents without relabeling them as
    exclusively owned work.
-6. **Collapse duplicates immediately.** If duplicate work is discovered, keep the
+7. **Collapse duplicates immediately.** If duplicate work is discovered, keep the
    complete, verified issue or pull request and close the duplicate with a cross-link
    and a concise reason before either line advances further.
-7. **Declare PR ownership structurally.** Every PR body contains exactly one
+8. **Declare PR ownership structurally.** Every PR body contains exactly one
    `Work-Issue: #<number>`, `Work-Key: <key>`, and `Issue-Action: <action>` field.
    Batch PRs use `<batch-id>:<target-rung>` with `managed-by-batch`; standalone PRs
    use `standalone-<issue>` with `complete-on-merge` or `keep-open`. Free-form issue
    mentions and closing keywords are not lifecycle authority.
-8. **Run preflight before editing.** Run `make agent-preflight WORK_ISSUE=<number>`
+9. **Run preflight before editing.** Run `make agent-preflight WORK_ISSUE=<number>`
    before claiming work. It validates the checkout-derived prefix, clean worktree,
-   upstream state, issue ownership, duplicate open PRs, and delivery graph. A clean
+   upstream state, open issue state, duplicate open PRs, and delivery graph. A clean
    branch whose upstream was deleted may be repaired automatically; dirty worktrees,
-   detached heads, prefix mismatches, and duplicate claims fail closed.
+   detached heads, and duplicate claims fail closed.
 
 ## Mergeability Definition
 
@@ -202,8 +210,10 @@ Every implementation batch follows these rules:
    A stage merge never promotes an environment
    or claims gate completion. Rebase does not change the stable activation base; rerun
    affected evidence and record the exact CI base/head instead. Stale evidence cannot merge.
-   Batch nodes are assembled from independent files under `governance/batches/`; ordinary
-   batch PRs never edit the shared static Vision graph. `main` remains deployable:
+   Capability nodes and incoming edges are assembled from independent files under
+   `governance/capabilities/`, and batch nodes are assembled from independent files under
+   `governance/batches/`; ordinary capability and batch PRs never edit the shared static
+   root/Gate graph. `main` remains deployable:
    provisional code is absent from the accepted `ReleaseManifest` registry/configuration
    bindings and is not registered, scheduled, routed, or selected by default. Its
    migrations are additive and backward
@@ -235,10 +245,10 @@ Every implementation batch follows these rules:
    Denominator shrink is a product-scope change, not a repair.
 10. **Close gates only at fan-in.** Capability issues close only at their declared terminal
    rung. Gate epics close in order only when their complete transitive acceptance bundle
-   passes on one exact release candidate. The checked-in static Vision graph, independently
-   writable batch manifests, and live GitHub parity check must together contain every
-   `scope:vision` issue, batch, gate owner, artifact edge,
-    terminal rung, and evidence ceiling with no cycle or orphan. Promotion, graduation,
+   passes on one exact release candidate. The checked-in static root/Gate graph,
+   independently writable capability fragments and batch manifests, and live GitHub parity
+   check must together contain every `scope:vision` issue, batch, Gate owner, artifact edge,
+   terminal rung, and evidence ceiling with no cycle or orphan. Promotion, graduation,
     and rollback remain candidate-wide even though implementation increments merged earlier.
 
 Agents continue across packets in an approved manifest without waiting for a prompt at

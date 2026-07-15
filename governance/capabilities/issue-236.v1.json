@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "issue": 236,
+  "gate": 31,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 41,
+      "to": 236,
+      "class": "start",
+      "artifact": "stable research query contract"
+    },
+    {
+      "from": 45,
+      "to": 236,
+      "class": "start",
+      "artifact": "direct-mart dashboard handoff"
+    },
+    {
+      "from": 46,
+      "to": 236,
+      "class": "start",
+      "artifact": "private conversation outcome handoff"
+    },
+    {
+      "from": 229,
+      "to": 236,
+      "class": "start",
+      "artifact": "accepted governed research access handoff"
+    },
+    {
+      "from": 235,
+      "to": 236,
+      "class": "start",
+      "artifact": "owner-scoped document lifecycle handoff"
+    }
+  ]
+}

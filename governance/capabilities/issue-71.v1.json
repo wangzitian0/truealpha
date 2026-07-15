@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "issue": 71,
+  "gate": 29,
+  "terminal_evidence": "E4",
+  "artifact_edges": [
+    {
+      "from": 24,
+      "to": 71,
+      "class": "freeze",
+      "artifact": "frozen GPPE candidate"
+    },
+    {
+      "from": 25,
+      "to": 71,
+      "class": "freeze",
+      "artifact": "frozen tier and strategy candidate"
+    }
+  ]
+}

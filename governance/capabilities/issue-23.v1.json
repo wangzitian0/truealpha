@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "issue": 23,
+  "gate": 29,
+  "terminal_evidence": "E3",
+  "accepted_evidence": {
+    "path": "governance/evidence/issue-23.v1.json",
+    "sha256": "9066cc06367a42ae92f4d69e008cc411ec008705edd52068861763056af98547"
+  },
+  "artifact_edges": [
+    {
+      "from": 22,
+      "to": 23,
+      "class": "start",
+      "artifact": "Dagster and PIT execution contract"
+    }
+  ]
+}

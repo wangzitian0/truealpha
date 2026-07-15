@@ -367,6 +367,126 @@ def test_vision_graph_fails_closed_on_malformed_batch_manifest():
         )
 
 
+def _capability_fragment(issue, *, gate=29, edges=()):
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "issue": issue,
+            "gate": gate,
+            "terminal_evidence": "E3",
+            "artifact_edges": list(edges),
+        }
+    ).encode()
+
+
+def _fragmented_static_graph():
+    return {
+        "schema_version": 1,
+        "capability_source": governance.CAPABILITY_SOURCE,
+        "gates": {"29": {"name": "Core"}},
+        "batches": {},
+    }
+
+
+def test_vision_graph_derives_capabilities_gate_membership_and_edges():
+    edge = {"from": 79, "to": 80, "class": "start", "artifact": "typed input"}
+
+    graph = governance.assemble_vision_graph(
+        _fragmented_static_graph(),
+        [],
+        [
+            ("governance/capabilities/issue-80.v1.json", _capability_fragment(80, edges=(edge,))),
+            ("governance/capabilities/issue-79.v1.json", _capability_fragment(79)),
+        ],
+    )
+
+    assert list(graph["issues"]) == ["79", "80"]
+    assert graph["gates"]["29"]["acceptance_issues"] == [79, 80]
+    assert graph["artifact_edges"] == [edge]
+
+
+def test_vision_graph_ignores_read_only_legacy_issue_snapshot():
+    static_graph = _fragmented_static_graph()
+    static_graph["issues"] = {"999": {"gate": 29, "terminal_evidence": "E3"}}
+
+    graph = governance.assemble_vision_graph(
+        static_graph,
+        [],
+        [("governance/capabilities/issue-79.v1.json", _capability_fragment(79))],
+    )
+
+    assert graph["issues"] == {"79": {"gate": 29, "terminal_evidence": "E3"}}
+
+
+def test_vision_graph_rejects_malformed_capability_fragment():
+    with pytest.raises(ValueError, match="invalid capability fragment"):
+        governance.assemble_vision_graph(
+            _fragmented_static_graph(),
+            [],
+            [("governance/capabilities/issue-79.v1.json", b"{")],
+        )
+
+
+def test_vision_graph_rejects_duplicate_capability_issue():
+    fragment = _capability_fragment(79)
+
+    with pytest.raises(ValueError, match="duplicate capability fragment"):
+        governance.assemble_vision_graph(
+            _fragmented_static_graph(),
+            [],
+            [
+                ("governance/capabilities/issue-79.v1.json", fragment),
+                ("governance/capabilities/issue-79.v1.json", fragment),
+            ],
+        )
+
+
+def test_vision_graph_rejects_edge_owned_by_another_capability():
+    edge = {"from": 79, "to": 80, "class": "start", "artifact": "typed input"}
+
+    with pytest.raises(ValueError, match="edge owned by another target"):
+        governance.assemble_vision_graph(
+            _fragmented_static_graph(),
+            [],
+            [
+                (
+                    "governance/capabilities/issue-79.v1.json",
+                    _capability_fragment(79, edges=(edge,)),
+                )
+            ],
+        )
+
+
+def test_vision_graph_rejects_duplicate_artifact_edge():
+    edge = {"from": 80, "to": 79, "class": "start", "artifact": "typed input"}
+
+    with pytest.raises(ValueError, match="duplicate capability artifact edge"):
+        governance.assemble_vision_graph(
+            _fragmented_static_graph(),
+            [],
+            [
+                (
+                    "governance/capabilities/issue-79.v1.json",
+                    _capability_fragment(79, edges=(edge, edge)),
+                )
+            ],
+        )
+
+
+def test_git_vision_graph_preserves_legacy_inline_capabilities(monkeypatch):
+    legacy = {
+        "schema_version": 1,
+        "gates": {"29": {"acceptance_issues": [79]}},
+        "issues": {"79": {"gate": 29, "terminal_evidence": "E3"}},
+        "artifact_edges": [],
+        "batches": {},
+    }
+    monkeypatch.setattr(governance, "git_json", lambda _commit, _path: legacy)
+    monkeypatch.setattr(governance, "git_json_records", lambda _commit, _prefix: [])
+
+    assert governance.git_vision_graph("a" * 40) == legacy
+
+
 @pytest.mark.parametrize(
     ("batch_id", "manifest_path", "writable_path", "changed_path"),
     (
@@ -1841,7 +1961,7 @@ def test_pull_request_metadata_allows_declared_terminal_closure():
     assert validation.errors == []
 
 
-def test_pull_request_metadata_requires_owned_issue_prefix_match():
+def test_pull_request_metadata_allows_work_issue_from_another_workspace():
     validation = governance.Validation()
     issue = {"number": 79, "title": "[truealpha-datahub] Replay the factor panel", "state": "open"}
 
@@ -1856,7 +1976,7 @@ def test_pull_request_metadata_requires_owned_issue_prefix_match():
         issue,
     )
 
-    assert any("disagrees with Work-Issue #79 prefix" in error for error in validation.errors)
+    assert validation.errors == []
 
 
 def test_pull_request_metadata_accepts_standalone_issue_lifecycle():

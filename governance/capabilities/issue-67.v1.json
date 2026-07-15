@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "issue": 67,
+  "gate": 32,
+  "terminal_evidence": "E5",
+  "artifact_edges": [
+    {
+      "from": 49,
+      "to": 67,
+      "class": "closure",
+      "artifact": "evaluation data and independent reconciliation"
+    },
+    {
+      "from": 50,
+      "to": 67,
+      "class": "closure",
+      "artifact": "frozen evaluation protocol and direction check"
+    },
+    {
+      "from": 51,
+      "to": 67,
+      "class": "closure",
+      "artifact": "natural-refresh Staging evidence"
+    },
+    {
+      "from": 52,
+      "to": 67,
+      "class": "closure",
+      "artifact": "recovery and exact-promotion evidence"
+    },
+    {
+      "from": 53,
+      "to": 67,
+      "class": "closure",
+      "artifact": "Production shadow bootstrap"
+    },
+    {
+      "from": 66,
+      "to": 67,
+      "class": "closure",
+      "artifact": "deployed consumer evidence"
+    },
+    {
+      "from": 72,
+      "to": 67,
+      "class": "closure",
+      "artifact": "additive onboarding evidence"
+    }
+  ]
+}

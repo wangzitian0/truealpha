@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "issue": 59,
+  "gate": 56,
+  "terminal_evidence": "E4",
+  "artifact_edges": [
+    {
+      "from": 57,
+      "to": 59,
+      "class": "start",
+      "artifact": "identity and time semantics"
+    },
+    {
+      "from": 58,
+      "to": 59,
+      "class": "start",
+      "artifact": "execution and lineage contracts"
+    }
+  ]
+}

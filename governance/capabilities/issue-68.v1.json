@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 68,
+  "gate": 32,
+  "terminal_evidence": "E5",
+  "artifact_edges": [
+    {
+      "from": 67,
+      "to": 68,
+      "class": "start",
+      "artifact": "exact graduated shadow candidate scope"
+    }
+  ]
+}

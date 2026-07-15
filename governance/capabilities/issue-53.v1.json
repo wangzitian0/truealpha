@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 53,
+  "gate": 32,
+  "terminal_evidence": "E5",
+  "artifact_edges": [
+    {
+      "from": 52,
+      "to": 53,
+      "class": "start",
+      "artifact": "recoverable exact release"
+    }
+  ]
+}

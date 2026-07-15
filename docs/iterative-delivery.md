@@ -131,10 +131,12 @@ or revoked. It binds producer head, schema epoch, evidence hashes, approver, all
 consumers/environments, retention, readiness ceiling, and revocation. CI rejects a consumer
 whose exact accepted handoff is missing, altered, revoked, or outside its permission set.
 
-The checked-in Vision graph assigns every `scope:vision` issue to exactly one gate, links
-each batch to its owner gate, and records typed artifact edges. Offline validation proves
-uniqueness and acyclicity; CI compares it with live GitHub labels, milestones, batch status,
-and manifest hashes. A gate cannot close while graph parity fails.
+The checked-in static Vision graph defines root and Gate topology. Independently writable
+capability fragments assign every capability issue to exactly one Gate and own their typed
+incoming artifact edges; batch manifests link each batch to its owner Gate. Offline
+validation assembles these sources and proves uniqueness and acyclicity; CI compares the
+result with live GitHub labels, milestones, batch status, and manifest hashes. A Gate cannot
+close while graph parity fails.
 
 The current checker intentionally does not authorize #78/#79: #81 must add merge-base,
 corpus-byte, changed-path/glob, shared-lease, command-evidence, and accepted-handoff checks

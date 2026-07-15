@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "issue": 235,
+  "gate": 31,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 41,
+      "to": 235,
+      "class": "freeze",
+      "artifact": "stable research query contract"
+    },
+    {
+      "from": 43,
+      "to": 235,
+      "class": "freeze",
+      "artifact": "traceable report artifact contract"
+    },
+    {
+      "from": 44,
+      "to": 235,
+      "class": "freeze",
+      "artifact": "approved deterministic card contract"
+    },
+    {
+      "from": 229,
+      "to": 235,
+      "class": "start",
+      "artifact": "accepted governed research access handoff"
+    }
+  ]
+}

@@ -1,8 +1,20 @@
 # Delivery Governance
 
-`vision-issue-graph.json` is the machine-readable ownership and dependency view for every
-GitHub issue labeled `scope:vision`. It separates ordered Gate fan-in from typed artifact
-dependencies so a later Gate never becomes a global implementation lock.
+`vision-issue-graph.json` is the static root and Gate topology for every GitHub issue
+labeled `scope:vision`. It separates ordered Gate fan-in from implementation work so a
+later Gate never becomes a global lock.
+
+`capabilities/issue-<number>.v1.json` is the canonical source for one capability's Gate,
+terminal evidence, accepted evidence, and incoming artifact edges. Validation assembles
+the capability map, Gate acceptance membership, and canonical edge list from these
+fragments in numeric issue order. A capability registration or dependency change edits
+only its target issue fragment; the static graph and unrelated capability fragments are
+not writable registration surfaces.
+
+The static graph temporarily retains the pre-fragment `issues` map as a read-only migration
+snapshot for candidate-bound tests that read the JSON file directly. Graph assembly ignores
+that snapshot and replaces it with capability fragments. New registrations, dependency
+changes, and evidence updates must never modify the snapshot.
 
 `batches/*.json` is the canonical source for capability-batch authorization. A GitHub issue
 links the path and exact SHA-256, but its mutable body is not authoritative. A queued batch

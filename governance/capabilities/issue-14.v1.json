@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "issue": 14,
+  "gate": 29,
+  "terminal_evidence": "E2",
+  "accepted_evidence": {
+    "path": "governance/evidence/issue-14.v1.json",
+    "sha256": "6a824fabd79752c873b4ca7be03180b57409351de1dd9e8b1e0100bf5f4714cf"
+  },
+  "artifact_edges": [
+    {
+      "from": 22,
+      "to": 14,
+      "class": "start",
+      "artifact": "PIT corpus audit contract"
+    }
+  ]
+}

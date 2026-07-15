@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "issue": 26,
+  "gate": 29,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 14,
+      "to": 26,
+      "class": "start",
+      "artifact": "accepted local replay corpus"
+    },
+    {
+      "from": 21,
+      "to": 26,
+      "class": "freeze",
+      "artifact": "frozen strategy definition"
+    },
+    {
+      "from": 25,
+      "to": 26,
+      "class": "freeze",
+      "artifact": "frozen strategy candidate"
+    },
+    {
+      "from": 61,
+      "to": 26,
+      "class": "freeze",
+      "artifact": "applicability and SLO policy"
+    },
+    {
+      "from": 71,
+      "to": 26,
+      "class": "closure",
+      "artifact": "independent Core holdout"
+    }
+  ]
+}

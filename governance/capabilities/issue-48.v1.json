@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "issue": 48,
+  "gate": 31,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 42,
+      "to": 48,
+      "class": "closure",
+      "artifact": "MCP conformance"
+    },
+    {
+      "from": 43,
+      "to": 48,
+      "class": "closure",
+      "artifact": "report conformance"
+    },
+    {
+      "from": 44,
+      "to": 48,
+      "class": "closure",
+      "artifact": "card conformance"
+    },
+    {
+      "from": 45,
+      "to": 48,
+      "class": "closure",
+      "artifact": "App conformance"
+    },
+    {
+      "from": 46,
+      "to": 48,
+      "class": "closure",
+      "artifact": "chat conformance"
+    },
+    {
+      "from": 236,
+      "to": 48,
+      "class": "closure",
+      "artifact": "role-aware workspace conformance"
+    }
+  ]
+}

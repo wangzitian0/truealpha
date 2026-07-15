@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 34,
+  "gate": 30,
+  "terminal_evidence": "E4",
+  "artifact_edges": [
+    {
+      "from": 62,
+      "to": 34,
+      "class": "start",
+      "artifact": "forecast and guidance data plane"
+    }
+  ]
+}

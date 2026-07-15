@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 40,
+  "gate": 30,
+  "terminal_evidence": "E4",
+  "artifact_edges": [
+    {
+      "from": 65,
+      "to": 40,
+      "class": "closure",
+      "artifact": "accepted module holdouts"
+    }
+  ]
+}

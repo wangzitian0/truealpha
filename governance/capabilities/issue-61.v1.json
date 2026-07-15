@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "issue": 61,
+  "gate": 56,
+  "terminal_evidence": "E4",
+  "artifact_edges": [
+    {
+      "from": 59,
+      "to": 61,
+      "class": "freeze",
+      "artifact": "Research Catalog and canonical questions"
+    },
+    {
+      "from": 60,
+      "to": 61,
+      "class": "freeze",
+      "artifact": "accepted source and rights matrix"
+    }
+  ]
+}

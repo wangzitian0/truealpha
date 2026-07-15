@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "issue": 44,
+  "gate": 31,
+  "terminal_evidence": "E3",
+  "artifact_edges": [
+    {
+      "from": 43,
+      "to": 44,
+      "class": "start",
+      "artifact": "traceable report artifact"
+    }
+  ]
+}
