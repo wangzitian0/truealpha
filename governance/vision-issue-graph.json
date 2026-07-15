@@ -31,7 +31,7 @@
       "milestone": "Research Consumption",
       "status": "queued",
       "accepted_evidence": null,
-      "acceptance_issues": [41, 42, 43, 44, 45, 46, 48, 72]
+      "acceptance_issues": [41, 42, 43, 44, 45, 46, 48, 72, 229]
     },
     "32": {
       "name": "Production Strategy Validation",
@@ -121,7 +121,8 @@
     "68": {"gate": 32, "terminal_evidence": "E5"},
     "70": {"gate": 29, "terminal_evidence": "E3"},
     "71": {"gate": 29, "terminal_evidence": "E4"},
-    "72": {"gate": 31, "terminal_evidence": "E4"}
+    "72": {"gate": 31, "terminal_evidence": "E4"},
+    "229": {"gate": 31, "terminal_evidence": "E2"}
   },
   "batches": {},
   "artifact_edges": [
@@ -160,6 +161,9 @@
     {"from": 41, "to": 42, "class": "start", "artifact": "stable research query contract"},
     {"from": 41, "to": 43, "class": "start", "artifact": "stable research query contract"},
     {"from": 41, "to": 45, "class": "start", "artifact": "stable research query contract"},
+    {"from": 229, "to": 42, "class": "start", "artifact": "accepted governed research access handoff"},
+    {"from": 229, "to": 43, "class": "start", "artifact": "accepted governed research access handoff"},
+    {"from": 229, "to": 45, "class": "start", "artifact": "accepted governed research access handoff"},
     {"from": 43, "to": 44, "class": "start", "artifact": "traceable report artifact"},
     {"from": 42, "to": 46, "class": "start", "artifact": "typed MCP tools"},
     {"from": 42, "to": 48, "class": "closure", "artifact": "MCP conformance"},
