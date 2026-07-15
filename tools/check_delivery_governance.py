@@ -82,6 +82,7 @@ BATCH_MIRROR_END = "<!-- capability-batch-mirror:end -->"
 GOVERNANCE_CONTROL_PATHS = (
     "AGENTS.md",
     ".github/**",
+    "docs/iterative-delivery.md",
     "governance/**",
     "libs/runtime/tests/test_gate0_candidate.py",
     "libs/runtime/tests/test_delivery_governance.py",
