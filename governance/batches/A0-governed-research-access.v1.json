@@ -23,7 +23,7 @@
     "base_sha": "a6a04bade9f9fd141d75462edca71ae7110a3b68",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "the #229 capability registration and queued A0 batch registration are merged to main",
+      "the #229 capability registration and A0 batch registration are merged to main before this prepared revision is accepted",
       "#81 has accepted the actual-diff, merge-base, corpus-byte, integration-lease, command-evidence, and handoff enforcement required to activate queued batches",
       "this preparation freezes the access corpus path and SHA-256 without changing implementation paths",
       "the stable activation base remains a6a04bade9f9fd141d75462edca71ae7110a3b68 while implementation evidence records its exact current PR base and head",
