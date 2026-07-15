@@ -328,6 +328,79 @@ def test_repository_paths_fail_closed_on_escape(tmp_path, monkeypatch):
     assert not governance.path_matches_pattern("../outside.json", "../**")
 
 
+def test_vision_graph_derives_batch_nodes_from_independent_manifests():
+    payload = json.dumps(
+        {
+            "batch_id": "D0",
+            "issue": 79,
+            "owner_gate": 29,
+            "status": "active",
+            "target_rung": "E1",
+            "terminal_rung": "E2",
+        }
+    ).encode()
+
+    graph = governance.assemble_vision_graph(
+        {"schema_version": 1, "batches": {}},
+        [("governance/batches/D0.json", payload)],
+    )
+
+    assert graph["batches"] == {
+        "D0": {
+            "issue": 79,
+            "owner_gate": 29,
+            "status": "active",
+            "target_rung": "E1",
+            "terminal_rung": "E2",
+            "manifest": "governance/batches/D0.json",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    }
+
+
+def test_vision_graph_fails_closed_on_malformed_batch_manifest():
+    with pytest.raises(ValueError, match="governance/batches/broken.json"):
+        governance.assemble_vision_graph(
+            {"schema_version": 1, "batches": {}},
+            [("governance/batches/broken.json", b"{")],
+        )
+
+
+@pytest.mark.parametrize(
+    ("batch_id", "manifest_path", "writable_path", "changed_path"),
+    (
+        ("S11-factors", "governance/batches/S11.json", "libs/factors/**", "libs/factors/src/factors/s11.py"),
+        ("B1-backtest", "governance/batches/B1.json", "libs/backtest/**", "libs/backtest/src/strategy.py"),
+        ("D5-datahub", "governance/batches/D5.json", "apps/data-engine/**", "apps/data-engine/src/data_engine/d5.py"),
+    ),
+)
+def test_parallel_lanes_authorize_only_their_manifest_and_writable_path(
+    batch_id,
+    manifest_path,
+    writable_path,
+    changed_path,
+):
+    validation = governance.Validation()
+
+    governance.validate_pr_paths(
+        validation,
+        batch_id=batch_id,
+        manifest_path=manifest_path,
+        manifest={
+            "paths": {
+                "writable": [writable_path],
+                "read_only": [],
+                "forbidden": ["governance/vision-issue-graph.json"],
+                "integration_surface": [],
+            }
+        },
+        changed_paths=(manifest_path, changed_path),
+        base_sha="a" * 40,
+    )
+
+    assert validation.errors == []
+
+
 def _pr_context(
     tmp_path,
     monkeypatch,
@@ -339,6 +412,7 @@ def _pr_context(
 ):
     base_sha = "a" * 40
     head_sha = "b" * 40
+    activation_base = base_sha if before == "queued" else "c" * 40
     graph_path = tmp_path / "governance" / "vision-issue-graph.json"
     manifest_path = tmp_path / "governance" / "batches" / "D0.json"
     corpus_path = tmp_path / "fixtures" / "corpus.json"
@@ -349,6 +423,7 @@ def _pr_context(
         "last_accepted_rung": None,
         "target_rung": "E0",
         "terminal_rung": "E1",
+        "activation": {"base_sha": activation_base if before != "queued" else None},
     }
     is_acceptance = before == "prepared" and after == "active"
     manifest = {
@@ -357,7 +432,7 @@ def _pr_context(
         "last_accepted_rung": "E0" if is_acceptance else None,
         "target_rung": "E1" if is_acceptance else "E0",
         "terminal_rung": "E1",
-        "activation": {"base_sha": base_sha},
+        "activation": {"base_sha": activation_base},
         "corpus": {
             "manifest_path": "fixtures/corpus.json",
             "sha256": corpus_sha or hashlib.sha256(corpus_path.read_bytes()).hexdigest(),
@@ -397,12 +472,10 @@ def _pr_context(
     default_paths = (
         "fixtures/corpus.json",
         "governance/batches/D0.json",
-        "governance/vision-issue-graph.json",
     )
     if is_acceptance:
         default_paths = (
             "governance/batches/D0.json",
-            "governance/vision-issue-graph.json",
             "src/feature.py",
         )
     monkeypatch.setattr(governance, "ROOT", tmp_path)
@@ -528,6 +601,24 @@ def test_active_pr_accepts_exactly_one_rung(tmp_path, monkeypatch):
 
     assert validation.errors == []
     assert advance is not None and advance.accepted_rung == "E0"
+
+
+def test_active_pr_cannot_rewrite_stable_activation_base(tmp_path, monkeypatch):
+    graph, base_sha, head_sha = _pr_context(
+        tmp_path,
+        monkeypatch,
+        before="prepared",
+        after="active",
+    )
+    manifest_path = tmp_path / "governance" / "batches" / "D0.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["activation"]["base_sha"] = base_sha
+    _write_json(manifest_path, manifest)
+    validation = governance.Validation()
+
+    governance.validate_pr_advance(validation, graph=graph, base_sha=base_sha, head_sha=head_sha)
+
+    assert "D0: activation base SHA is immutable after preparation" in validation.errors
 
 
 def test_pr_rejects_stale_merge_base(tmp_path, monkeypatch):
@@ -1382,7 +1473,7 @@ def test_new_batch_registration_is_queued_and_administrative_only():
         base_graph=base_graph,
         manifest_path="governance/batches/D1.json",
         manifest=manifest,
-        changed_paths=("governance/batches/D1.json", "governance/vision-issue-graph.json"),
+        changed_paths=("governance/batches/D1.json",),
     )
 
     assert validation.errors == []
@@ -1644,6 +1735,7 @@ def _pull_request_advance(*, accepted_rung=None, terminal_rung="E2", closes_issu
             "dependencies": [{"class": "start", "issue": 58}],
             "closes_issues": list(closes_issues),
             "terminal_rung": terminal_rung,
+            "target_rung": "E1",
         },
         accepted_rung=accepted_rung,
         changed_paths=("governance/batches/D0.json",),
@@ -1690,24 +1782,35 @@ def test_only_accepted_gate_candidate_requires_full_live_fan_in():
 )
 def test_pull_request_metadata_rejects_invalid_workspace_titles(title):
     validation = governance.Validation()
+    issue = {"number": 79, "title": "[truealpha-datahub] Replay the factor panel", "state": "open"}
 
-    governance.validate_pull_request_metadata(validation, {"title": title, "body": "Refs #79."}, [], None)
+    governance.validate_pull_request_metadata(
+        validation,
+        {
+            "title": title,
+            "body": "Work-Issue: #79\nWork-Key: standalone-79\nIssue-Action: keep-open",
+        },
+        [],
+        None,
+        issue,
+    )
 
     assert any("title must start with one workspace prefix" in error for error in validation.errors)
 
 
 def test_pull_request_metadata_rejects_negated_closing_keyword():
     validation = governance.Validation()
-    issues = [{"number": 79, "title": "[truealpha-datahub] Replay the factor panel"}]
+    issue = {"number": 79, "title": "[truealpha-datahub] Replay the factor panel", "state": "open"}
 
     governance.validate_pull_request_metadata(
         validation,
         {
             "title": "[truealpha-datahub] Replay the factor panel",
-            "body": "This does not close #79.",
+            "body": ("Work-Issue: #79\nWork-Key: D0:E1\nIssue-Action: managed-by-batch\n\nThis does not close #79."),
         },
-        issues,
+        [issue],
         _pull_request_advance(),
+        issue,
     )
 
     assert "pull-request body has an unauthorized GitHub closing keyword for #79" in validation.errors
@@ -1715,13 +1818,17 @@ def test_pull_request_metadata_rejects_negated_closing_keyword():
 
 def test_pull_request_metadata_allows_declared_terminal_closure():
     validation = governance.Validation()
-    issues = [{"number": 79, "title": "[truealpha-datahub] Replay the factor panel"}]
+    issue = {"number": 79, "title": "[truealpha-datahub] Replay the factor panel", "state": "open"}
 
     governance.validate_pull_request_metadata(
         validation,
-        {"title": "[truealpha-datahub] Replay the factor panel", "body": "Closes #79."},
-        issues,
+        {
+            "title": "[truealpha-datahub] Replay the factor panel",
+            "body": "Work-Issue: #79\nWork-Key: D0:E2\nIssue-Action: managed-by-batch\n\nCloses #79.",
+        },
+        [issue],
         _pull_request_advance(accepted_rung="E2", closes_issues=(79,)),
+        issue,
     )
 
     assert validation.errors == []
@@ -1729,16 +1836,56 @@ def test_pull_request_metadata_allows_declared_terminal_closure():
 
 def test_pull_request_metadata_requires_owned_issue_prefix_match():
     validation = governance.Validation()
-    issues = [{"number": 79, "title": "[truealpha-datahub] Replay the factor panel"}]
+    issue = {"number": 79, "title": "[truealpha-datahub] Replay the factor panel", "state": "open"}
 
     governance.validate_pull_request_metadata(
         validation,
-        {"title": "[truealpha-factors] Replay the factor panel", "body": "Refs #79."},
-        issues,
+        {
+            "title": "[truealpha-factors] Replay the factor panel",
+            "body": "Work-Issue: #79\nWork-Key: D0:E1\nIssue-Action: managed-by-batch",
+        },
+        [issue],
         _pull_request_advance(),
+        issue,
     )
 
-    assert any("disagrees with owned issue #79 prefix" in error for error in validation.errors)
+    assert any("disagrees with Work-Issue #79 prefix" in error for error in validation.errors)
+
+
+def test_pull_request_metadata_accepts_standalone_issue_lifecycle():
+    validation = governance.Validation()
+    issue = {"number": 228, "title": "[truealpha-factors] Remove shared bottlenecks", "state": "open"}
+
+    governance.validate_pull_request_metadata(
+        validation,
+        {
+            "title": "[truealpha-factors] Remove shared bottlenecks",
+            "body": "Work-Issue: #228\nWork-Key: standalone-228\nIssue-Action: complete-on-merge",
+        },
+        [],
+        None,
+        issue,
+    )
+
+    assert validation.errors == []
+
+
+def test_pull_request_metadata_rejects_duplicate_structured_fields():
+    validation = governance.Validation()
+    issue = {"number": 228, "title": "[truealpha-factors] Remove shared bottlenecks", "state": "open"}
+
+    governance.validate_pull_request_metadata(
+        validation,
+        {
+            "title": "[truealpha-factors] Remove shared bottlenecks",
+            "body": ("Work-Issue: #228\nWork-Issue: #227\nWork-Key: standalone-228\nIssue-Action: keep-open"),
+        },
+        [],
+        None,
+        issue,
+    )
+
+    assert "pull-request body must contain exactly one Work-Issue field" in validation.errors
 
 
 def test_batch_mirror_atomically_tracks_manifest_status_and_hash():
@@ -1777,26 +1924,38 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-governance.yml").read_text(encoding="utf-8")
     caller = (MODULE_PATH.parents[1] / ".github" / "workflows" / "ci-required.yml").read_text(encoding="utf-8")
     sync = (MODULE_PATH.parents[1] / ".github" / "workflows" / "sync-batch-issues.yml").read_text(encoding="utf-8")
+    standalone_sync = (MODULE_PATH.parents[1] / ".github" / "workflows" / "sync-standalone-issue.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert "workflow_call:\n" in workflow
     assert "pull_request:\n" in caller
+    assert "types: [opened, synchronize, reopened, edited, ready_for_review]" in caller
+    assert "merge_group:\n    types: [checks_requested]" in caller
     assert "uses: ./.github/workflows/ci-governance.yml" in caller
     assert "pr_base_sha: ${{ github.event.pull_request.base.sha }}" in caller
     assert "pr_head_sha: ${{ github.event.pull_request.head.sha }}" in caller
     assert "pr_number: ${{ github.event.pull_request.number }}" in caller
+    assert "github.event_name == 'merge_group' && 'true' || steps.filter.outputs.python" in caller
     assert "--pr-base-sha" in workflow
     assert "--pr-head-sha" in workflow
     assert "--github-pr" in workflow
+    assert "--github-work-issue" in workflow
     assert "pull-request.json" in workflow
     assert "{number, title, body}" in workflow
     assert '"repos/$GITHUB_REPOSITORY/pulls/${{ inputs.pr_number }}"' in workflow
+    assert '"repos/$GITHUB_REPOSITORY/issues/$work_issue"' in workflow
     assert "ref: ${{ inputs.pr_head_sha }}" in workflow
     assert "allow-blocked-gate-candidate" not in workflow
     assert "uses: astral-sh/setup-uv@v5" in workflow
     assert "uv sync --all-packages --frozen" in workflow
     assert "--execute-acceptance" in workflow
     assert "render_batch_issue_body" in sync
+    assert "issues:\n" in sync
     assert 'json.dumps({"body": desired_body, "labels": desired})' in sync
+    assert "github.event.pull_request.merged == true" in standalone_sync
+    assert 'fields["Issue-Action"] != "complete-on-merge"' in standalone_sync
+    assert "gh issue close" in standalone_sync
 
 
 def test_workflow_runs_acceptance_against_a_fresh_required_postgres_runtime():

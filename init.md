@@ -418,6 +418,17 @@ ownership, merge ordering, rung acceptance, invalidation, and rollback mechanics
 E5 large/shadow evidence is not graduation: the independent capture audit, final Vision
 audit, and recorded human approval form a separate candidate-wide fan-in.
 
+Delivery control is partitioned by ownership. The static Vision graph owns gates,
+capabilities, and artifact edges; batch nodes are assembled from content-hashed files under
+`governance/batches/`, so disjoint factor, backtest, and datahub PRs do not rewrite one
+global registry. A batch activation base is fixed at preparation as a historical anchor;
+rebases record the exact PR base/head in CI evidence rather than mutating that anchor.
+Every PR declares one structured Work-Issue, Work-Key, and Issue-Action. Batch issue state
+is a repairable manifest mirror, while a standalone issue closes only after its declared
+`complete-on-merge` PR has actually merged. Agents run repository preflight before editing
+to reject wrong checkout prefixes, dirty or detached worktrees, deleted upstreams, duplicate
+claims, and overlapping active ownership before those errors enter a PR.
+
 ---
 
 ## 9. Known Risks / Pitfalls

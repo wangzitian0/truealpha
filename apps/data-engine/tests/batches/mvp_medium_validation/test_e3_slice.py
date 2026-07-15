@@ -919,10 +919,7 @@ def test_e3_terminal_governance_binds_the_complete_issue_23_matrix() -> None:
     evidence_content = {key: value for key, value in evidence.items() if key != "evidence_id"}
     assert evidence["evidence_id"] == (f"rung-evidence:D2-mvp-medium-validation:{canonical_sha256(evidence_content)}")
 
-    graph_entry = graph["batches"]["D2-mvp-medium-validation"]
-    assert graph_entry["status"] == "done"
-    assert graph_entry["target_rung"] == "E3"
-    assert graph_entry["sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+    assert graph["batches"] == {}
     assert graph["issues"]["23"]["accepted_evidence"] == {
         "path": "governance/evidence/issue-23.v1.json",
         "sha256": hashlib.sha256(issue_evidence_bytes).hexdigest(),

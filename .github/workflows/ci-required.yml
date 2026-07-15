@@ -2,7 +2,9 @@ name: ci-required
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -21,18 +23,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      db: ${{ steps.filter.outputs.db }}
-      python: ${{ steps.filter.outputs.python }}
-      qlib: ${{ steps.filter.outputs.qlib }}
-      runtime: ${{ steps.filter.outputs.runtime }}
-      web: ${{ steps.filter.outputs.web }}
-      images: ${{ steps.filter.outputs.images }}
+      db: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.db }}
+      python: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.python }}
+      qlib: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.qlib }}
+      runtime: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.runtime }}
+      web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.web }}
+      images: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.images }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - id: filter
-        if: github.ref_type != 'tag'
+        if: github.ref_type != 'tag' && github.event_name != 'merge_group'
         uses: dorny/paths-filter@v3
         with:
           filters: |
@@ -120,7 +122,7 @@ jobs:
       issues: read
     uses: ./.github/workflows/ci-governance.yml
     with:
-      mode: ${{ github.ref_type == 'tag' && 'tag' || 'push' }}
+      mode: ${{ github.ref_type == 'tag' && 'tag' || github.event_name }}
 
   security:
     needs: changes

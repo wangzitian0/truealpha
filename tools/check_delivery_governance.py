@@ -62,6 +62,12 @@ CLOSING_KEYWORD_RE = re.compile(
     r"(?:#|https://github\.com/[^/\s]+/[^/\s]+/issues/)([1-9][0-9]*)",
     re.IGNORECASE,
 )
+PR_BODY_METADATA_RE = re.compile(
+    r"^(?P<key>Work-Issue|Work-Key|Issue-Action):[ \t]*(?P<value>[^\r\n]+?)[ \t]*$",
+    re.MULTILINE,
+)
+WORK_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+ISSUE_ACTIONS = frozenset(("managed-by-batch", "complete-on-merge", "keep-open"))
 MANIFEST_PREFIX = "governance/batches/"
 BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
 BATCH_MIRROR_END = "<!-- capability-batch-mirror:end -->"
@@ -198,6 +204,71 @@ def git_json(commit: str, relative_path: str) -> Any | None:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
         return None
+
+
+def batch_graph_entry(manifest: dict[str, Any], relative_path: str, digest: str) -> dict[str, Any]:
+    return {
+        "issue": manifest.get("issue"),
+        "owner_gate": manifest.get("owner_gate"),
+        "status": manifest.get("status"),
+        "target_rung": manifest.get("target_rung"),
+        "terminal_rung": manifest.get("terminal_rung"),
+        "manifest": relative_path,
+        "sha256": digest,
+    }
+
+
+def assemble_vision_graph(
+    static_graph: dict[str, Any],
+    manifest_records: list[tuple[str, bytes]],
+) -> dict[str, Any]:
+    graph = json.loads(json.dumps(static_graph))
+    batches: dict[str, dict[str, Any]] = {}
+    for relative_path, payload in sorted(manifest_records):
+        try:
+            manifest = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid batch manifest {relative_path!r}: {exc}") from exc
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("batch_id"), str):
+            continue
+        batch_id = manifest["batch_id"]
+        if batch_id in batches:
+            raise ValueError(f"duplicate batch manifest for {batch_id!r}")
+        batches[batch_id] = batch_graph_entry(manifest, relative_path, hashlib.sha256(payload).hexdigest())
+    graph["batches"] = batches
+    return graph
+
+
+def load_vision_graph() -> dict[str, Any]:
+    static_graph = load_json(GRAPH_PATH)
+    records = [
+        (path.relative_to(ROOT).as_posix(), path.read_bytes())
+        for path in sorted((ROOT / MANIFEST_PREFIX).glob("*.json"))
+        if path.is_file() and not path.is_symlink()
+    ]
+    return assemble_vision_graph(static_graph, records)
+
+
+def git_vision_graph(commit: str) -> dict[str, Any] | None:
+    static_graph = git_json(commit, str(GRAPH_PATH.relative_to(ROOT)))
+    if not isinstance(static_graph, dict):
+        return None
+    # Older commits stored batch nodes directly. Keeping this read path allows an
+    # in-flight migration PR to compare its head with the pre-migration base.
+    if static_graph.get("batches"):
+        return static_graph
+    listing = run_git("ls-tree", "-r", "--name-only", commit, "--", MANIFEST_PREFIX.rstrip("/"))
+    if listing.returncode != 0:
+        return None
+    records: list[tuple[str, bytes]] = []
+    for relative_path in sorted(listing.stdout.splitlines()):
+        if not relative_path.startswith(MANIFEST_PREFIX) or not relative_path.endswith(".json"):
+            continue
+        payload = run_git("show", f"{commit}:{relative_path}")
+        if payload.returncode != 0:
+            return None
+        records.append((relative_path, payload.stdout.encode()))
+    return assemble_vision_graph(static_graph, records)
 
 
 def git_commit_exists(commit: str) -> bool:
@@ -388,6 +459,19 @@ def work_prefix(title: Any) -> str | None:
     return f"[{match.group('workspace')}]"
 
 
+def pull_request_body_metadata(validation: Validation, body: str) -> dict[str, str]:
+    values: dict[str, list[str]] = defaultdict(list)
+    for match in PR_BODY_METADATA_RE.finditer(body):
+        values[match.group("key")].append(match.group("value"))
+    metadata: dict[str, str] = {}
+    for key in ("Work-Issue", "Work-Key", "Issue-Action"):
+        matches = values[key]
+        validation.require(len(matches) == 1, f"pull-request body must contain exactly one {key} field")
+        if len(matches) == 1:
+            metadata[key] = matches[0]
+    return metadata
+
+
 def pull_request_issue_scope(advance: PullRequestAdvance | None) -> set[int] | None:
     """Return live issues whose mutable state can authorize this exact PR."""
     if advance is None:
@@ -410,6 +494,7 @@ def validate_pull_request_metadata(
     pull_request: Any,
     github_issues: list[dict[str, Any]],
     advance: PullRequestAdvance | None,
+    github_work_issue: Any = None,
 ) -> None:
     validation.require(isinstance(pull_request, dict), "pull-request metadata must be a JSON object")
     if not isinstance(pull_request, dict):
@@ -422,26 +507,48 @@ def validate_pull_request_metadata(
         "pull-request title must start with one workspace prefix and contain no batch, lane, rung, stage, or task token",
     )
 
-    if advance is not None and advance.kind == "capability_batch":
-        owned_issue = advance.manifest.get("issue")
-        live_by_number = {issue.get("number"): issue for issue in github_issues}
-        issue = live_by_number.get(owned_issue)
-        validation.require(issue is not None, f"pull-request owned issue #{owned_issue} is missing from GitHub export")
-        if issue is not None:
-            issue_prefix = work_prefix(issue.get("title"))
-            validation.require(
-                issue_prefix is not None,
-                f"pull-request owned issue #{owned_issue} has an invalid workspace prefix",
-            )
-            validation.require(
-                prefix is not None and prefix == issue_prefix,
-                f"pull-request workspace prefix {prefix!r} disagrees with owned issue #{owned_issue} prefix {issue_prefix!r}",
-            )
-
     body = pull_request.get("body") or ""
     validation.require(isinstance(body, str), "pull-request body must be a string")
     if not isinstance(body, str):
         return
+    metadata = pull_request_body_metadata(validation, body)
+    work_issue_value = metadata.get("Work-Issue", "")
+    work_issue_number = int(work_issue_value[1:]) if re.fullmatch(r"#[1-9][0-9]*", work_issue_value) else None
+    validation.require(work_issue_number is not None, "pull-request Work-Issue must be an issue number such as #228")
+    work_key = metadata.get("Work-Key", "")
+    validation.require(bool(WORK_KEY_RE.fullmatch(work_key)), "pull-request Work-Key has invalid syntax")
+    issue_action = metadata.get("Issue-Action", "")
+    validation.require(issue_action in ISSUE_ACTIONS, "pull-request Issue-Action is invalid")
+
+    validation.require(isinstance(github_work_issue, dict), "pull-request Work-Issue metadata is unavailable")
+    if isinstance(github_work_issue, dict) and work_issue_number is not None:
+        validation.require(
+            github_work_issue.get("number") == work_issue_number,
+            "pull-request Work-Issue disagrees with the exported issue",
+        )
+        validation.require(github_work_issue.get("state") == "open", f"pull-request Work-Issue #{work_issue_number} is not open")
+        issue_prefix = work_prefix(github_work_issue.get("title"))
+        validation.require(issue_prefix is not None, f"pull-request Work-Issue #{work_issue_number} has an invalid prefix")
+        validation.require(
+            prefix is not None and prefix == issue_prefix,
+            f"pull-request workspace prefix {prefix!r} disagrees with Work-Issue #{work_issue_number} prefix {issue_prefix!r}",
+        )
+
+    if advance is not None and advance.kind == "capability_batch":
+        owned_issue = advance.manifest.get("issue")
+        work_rung = advance.accepted_rung or advance.manifest.get("target_rung")
+        expected_key = f"{advance.batch_id}:{work_rung}"
+        validation.require(work_issue_number == owned_issue, f"batch pull request must use Work-Issue #{owned_issue}")
+        validation.require(work_key == expected_key, f"batch pull request must use Work-Key {expected_key!r}")
+        validation.require(issue_action == "managed-by-batch", "batch pull request must use managed-by-batch")
+    else:
+        expected_key = f"standalone-{work_issue_number}" if work_issue_number is not None else ""
+        validation.require(work_key == expected_key, f"standalone pull request must use Work-Key {expected_key!r}")
+        validation.require(
+            issue_action in {"complete-on-merge", "keep-open"},
+            "standalone pull request must declare complete-on-merge or keep-open",
+        )
+
     closing_issues = {int(number) for number in CLOSING_KEYWORD_RE.findall(body)}
     terminal_acceptance = (
         advance is not None
@@ -1307,7 +1414,7 @@ def validate_pr_paths(
     read_only = paths.get("read_only", []) if isinstance(paths, dict) else []
     forbidden = paths.get("forbidden", []) if isinstance(paths, dict) else []
     integration = paths.get("integration_surface", []) if isinstance(paths, dict) else []
-    administrative = {manifest_path, str(GRAPH_PATH.relative_to(ROOT))}
+    administrative = {manifest_path}
     changed_integration: list[str] = []
     for path in changed_paths:
         if path in administrative:
@@ -1365,10 +1472,10 @@ def validate_new_batch_registration(
         base_without_batch == candidate_without_batch,
         f"{batch_id}: registration changed unrelated Vision graph content",
     )
-    allowed_paths = {manifest_path, str(GRAPH_PATH.relative_to(ROOT))}
+    allowed_paths = {manifest_path}
     validation.require(
         set(changed_paths) == allowed_paths,
-        f"{batch_id}: registration may only add its manifest and Vision graph entry",
+        f"{batch_id}: registration may only add its batch manifest",
     )
 
 
@@ -1507,7 +1614,7 @@ def validate_pr_advance(
     if candidate_manifest_path is None or not candidate_manifest_path.is_file():
         return None
     manifest = load_json(candidate_manifest_path)
-    base_graph = git_json(base_sha, str(GRAPH_PATH.relative_to(ROOT)))
+    base_graph = git_vision_graph(base_sha)
     validation.require(isinstance(base_graph, dict), f"{batch_id}: base Vision graph is unavailable")
     if not isinstance(base_graph, dict):
         return None
@@ -1548,10 +1655,19 @@ def validate_pr_advance(
         f"{batch_id}: PR changed unrelated Vision graph content",
     )
     activation = manifest.get("activation", {})
-    validation.require(
-        isinstance(activation, dict) and activation.get("base_sha") == base_sha,
-        f"{batch_id}: manifest base SHA does not match the PR base",
-    )
+    base_activation = base_manifest.get("activation", {})
+    if base_manifest.get("status") == "queued" and manifest.get("status") == "prepared":
+        validation.require(
+            isinstance(activation, dict) and activation.get("base_sha") == base_sha,
+            f"{batch_id}: preparation must pin its exact activation base SHA",
+        )
+    else:
+        validation.require(
+            isinstance(activation, dict)
+            and isinstance(base_activation, dict)
+            and activation.get("base_sha") == base_activation.get("base_sha"),
+            f"{batch_id}: activation base SHA is immutable after preparation",
+        )
     validate_corpus(validation, batch_id, manifest)
     accepted_rung = validate_status_transition(
         validation,
@@ -1562,7 +1678,6 @@ def validate_pr_advance(
     if base_manifest.get("status") == "queued" and manifest.get("status") == "prepared":
         preparation_paths = {
             manifest_path,
-            str(GRAPH_PATH.relative_to(ROOT)),
             manifest.get("corpus", {}).get("manifest_path"),
         }
         validation.require(
@@ -1844,13 +1959,14 @@ def validate(
     github_path: Path | None,
     *,
     github_pr_path: Path | None = None,
+    github_work_issue_path: Path | None = None,
     pr_base_sha: str | None = None,
     pr_head_sha: str | None = None,
     execute_acceptance: bool = False,
     evidence_output: Path | None = None,
 ) -> Validation:
     validation = Validation()
-    graph = load_json(GRAPH_PATH)
+    graph = load_vision_graph()
     validation.require(graph.get("schema_version") == 1, "unsupported Vision graph schema")
     gates = {int(number): gate for number, gate in graph.get("gates", {}).items()}
     gate_order = validate_gate_order(validation, gates, graph.get("gate_order"))
@@ -1940,7 +2056,7 @@ def validate(
         github_issues = load_json(github_path)
         github_graph = graph
         if pr_base_sha is not None and (advance is None or advance.base_manifest):
-            base_graph = git_json(pr_base_sha, str(GRAPH_PATH.relative_to(ROOT)))
+            base_graph = git_vision_graph(pr_base_sha)
             validation.require(isinstance(base_graph, dict), "base Vision graph is unavailable for live parity")
             if isinstance(base_graph, dict):
                 github_graph = base_graph
@@ -1953,7 +2069,14 @@ def validate(
         if pr_base_sha is not None:
             validation.require(github_pr_path is not None, "PR validation requires --github-pr")
             if github_pr_path is not None:
-                validate_pull_request_metadata(validation, load_json(github_pr_path), github_issues, advance)
+                github_work_issue = load_json(github_work_issue_path) if github_work_issue_path is not None else None
+                validate_pull_request_metadata(
+                    validation,
+                    load_json(github_pr_path),
+                    github_issues,
+                    advance,
+                    github_work_issue,
+                )
     if execute_acceptance:
         validation.require(evidence_output is not None, "--execute-acceptance requires --evidence-output")
         if advance is not None and evidence_output is not None and not validation.errors:
@@ -1970,6 +2093,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--github-issues", type=Path, help="JSON exported by gh issue list")
     parser.add_argument("--github-pr", type=Path, help="JSON exported by gh api for the current pull request")
+    parser.add_argument("--github-work-issue", type=Path, help="JSON exported for the PR's declared Work-Issue")
     parser.add_argument("--pr-base-sha", help="Exact current pull-request base commit")
     parser.add_argument("--pr-head-sha", help="Exact pull-request head commit")
     parser.add_argument("--execute-acceptance", action="store_true")
@@ -1978,6 +2102,7 @@ def main() -> int:
     validation = validate(
         args.github_issues,
         github_pr_path=args.github_pr,
+        github_work_issue_path=args.github_work_issue,
         pr_base_sha=args.pr_base_sha,
         pr_head_sha=args.pr_head_sha,
         execute_acceptance=args.execute_acceptance,
