@@ -33,6 +33,12 @@
       "to": 236,
       "class": "start",
       "artifact": "owner-scoped document lifecycle handoff"
+    },
+    {
+      "from": 251,
+      "to": 236,
+      "class": "freeze",
+      "artifact": "administrator registered replay service handoff"
     }
   ]
 }

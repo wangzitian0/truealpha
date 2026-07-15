@@ -39,6 +39,12 @@
       "to": 48,
       "class": "closure",
       "artifact": "role-aware workspace conformance"
+    },
+    {
+      "from": 251,
+      "to": 48,
+      "class": "closure",
+      "artifact": "registered replay command conformance"
     }
   ]
 }
