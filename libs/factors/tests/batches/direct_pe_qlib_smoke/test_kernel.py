@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import subprocess
 import sys
 from datetime import date, timedelta
 from decimal import Decimal
@@ -112,6 +113,27 @@ def test_price_return_report_is_deterministic_and_keeps_the_evidence_ceiling(cor
     assert report.stable_handoff is False
     assert report.release_allowed is False
     assert "no alpha claim" in report.caveats
+
+
+def test_cli_replay_is_byte_identical_across_clean_processes(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    command = [
+        sys.executable,
+        str(SCRIPT_PATH),
+        "--environment",
+        "ci",
+        "--output-dir",
+    ]
+
+    first_run = subprocess.run([*command, str(first)], cwd=REPOSITORY_ROOT, check=True, capture_output=True, text=True)
+    second_run = subprocess.run(
+        [*command, str(second)], cwd=REPOSITORY_ROOT, check=True, capture_output=True, text=True
+    )
+
+    assert first_run.stdout == second_run.stdout
+    assert (first / RUNNER.OUTPUT_JSON).read_bytes() == (second / RUNNER.OUTPUT_JSON).read_bytes()
+    assert (first / RUNNER.OUTPUT_MARKDOWN).read_bytes() == (second / RUNNER.OUTPUT_MARKDOWN).read_bytes()
 
 
 def test_future_feature_fails_closed(smoke_request) -> None:
