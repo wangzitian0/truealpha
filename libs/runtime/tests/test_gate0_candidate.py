@@ -237,6 +237,19 @@ def test_manifest_bytes_are_excluded_from_candidate_tree(candidate_root):
     assert after == before
 
 
+def test_mutable_delivery_graph_is_excluded_from_candidate_tree(candidate_root):
+    _refresh_chain(candidate_root)
+    manifest = _load(candidate_root / MANIFEST_PATH)
+    before = gate0.candidate_tree_sha256(candidate_root, manifest["paths"])
+    graph = candidate_root / "governance/vision-issue-graph.json"
+    graph.write_text('{"schema_version": 1}\n', encoding="utf-8")
+
+    graph.write_text('{"schema_version": 1, "issues": {"229": {}}}\n', encoding="utf-8")
+    after = gate0.candidate_tree_sha256(candidate_root, manifest["paths"])
+
+    assert after == before
+
+
 def test_authorized_path_set_cannot_be_broadened(candidate_root):
     _refresh_chain(candidate_root)
     path = candidate_root / MANIFEST_PATH
