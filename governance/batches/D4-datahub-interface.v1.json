@@ -24,7 +24,7 @@
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D4 registration and preparation are merged on main",
-      "the tiny interface corpus remains frozen at 3c01b07c6aaae5c869bd3eace9fb1a1c34d9b4754a841f52b82b2477a393d292",
+      "the tiny interface corpus remains frozen at c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while every rung PR rebases on current main without rewriting that activation anchor",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
@@ -82,7 +82,7 @@
   "corpus": {
     "environment": "Local/CI checked-in typed interface fixtures only",
     "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
-    "sha256": "3c01b07c6aaae5c869bd3eace9fb1a1c34d9b4754a841f52b82b2477a393d292",
+    "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
     "required_strata": [
       "one immutable list with success and terminal-failure obligations",
       "two overlapping immutable lists in separate compatible runs sharing one campaign-scoped provider work item",
@@ -155,7 +155,7 @@
     "negative_controls": [
       "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
       "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
-      "a provenance graph omits the required run-to-obligation or obligation-to-work-item capture path",
+      "a provenance graph omits a required campaign-to-run, campaign-to-source-request, run-to-obligation, or obligation-to-work-item capture path",
       "a work binding whose request omits its obligation's subject, capture requirement, or partition",
       "run-scoped work loses provider sharing across overlapping compatible lists",
       "a completed bundle omits a dispatch outcome, or an unchanged response reuses a vintage from another pinned request",

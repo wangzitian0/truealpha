@@ -363,6 +363,8 @@
       "normalized observation -> source vintage -> source request and pinned source registry entry"
     ],
     "required_edges": [
+      "campaign contains run",
+      "campaign contains source_request",
       "run requires list_obligation",
       "list_obligation satisfied_by work_item",
       "source_request dispatches work_item",
@@ -427,6 +429,8 @@
     {"case_id": "unexplained-confidence", "expected_error": "confidence_evidence_missing"},
     {"case_id": "collapsed-readiness", "expected_error": "assessment_dimensions_required"},
     {"case_id": "future-knowledge", "expected_error": "pit_exclusion_required"},
+    {"case_id": "missing-campaign-run-edge", "expected_error": "provenance_path_required"},
+    {"case_id": "missing-campaign-request-edge", "expected_error": "provenance_path_required"},
     {"case_id": "missing-run-obligation-edge", "expected_error": "provenance_path_required"},
     {"case_id": "missing-obligation-work-edge", "expected_error": "provenance_path_required"},
     {"case_id": "recapture-overreach", "expected_error": "recapture_plan_drift"},

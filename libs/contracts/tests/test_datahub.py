@@ -755,19 +755,50 @@ def test_provenance_supports_forward_and_reverse_source_paths() -> None:
 
 
 @pytest.mark.parametrize(
-    "edge_type",
-    (ProvenanceEdgeKind.REQUIRES, ProvenanceEdgeKind.SATISFIED_BY),
+    "relationship",
+    (
+        "campaign-run",
+        "campaign-source-request",
+        "run-obligation",
+        "obligation-work-item",
+    ),
 )
-def test_provenance_rejects_missing_obligation_capture_edges(edge_type: ProvenanceEdgeKind) -> None:
-    bundle, _ = _bundle()
+def test_provenance_rejects_missing_capture_hierarchy_edges(relationship: str) -> None:
+    bundle, values = _bundle()
+    required_edge = {
+        "campaign-run": (
+            values["campaign"].campaign_id,
+            ProvenanceEdgeKind.CONTAINS,
+            values["runs"][0].run_id,
+        ),
+        "campaign-source-request": (
+            values["campaign"].campaign_id,
+            ProvenanceEdgeKind.CONTAINS,
+            values["source_request"].source_request_id,
+        ),
+        "run-obligation": (
+            values["obligations"][0].run_id,
+            ProvenanceEdgeKind.REQUIRES,
+            values["obligations"][0].obligation_id,
+        ),
+        "obligation-work-item": (
+            values["obligations"][0].obligation_id,
+            ProvenanceEdgeKind.SATISFIED_BY,
+            values["work_item"].work_item_id,
+        ),
+    }[relationship]
     replaced = False
     edges: list[ProvenanceEdge] = []
     for edge in bundle.provenance.edges:
-        if not replaced and edge.edge_type is edge_type:
+        if not replaced and (edge.from_node_id, edge.edge_type, edge.to_node_id) == required_edge:
             edges.append(
                 ProvenanceEdge(
                     from_node_id=edge.from_node_id,
-                    edge_type=ProvenanceEdgeKind.CONTAINS,
+                    edge_type=(
+                        ProvenanceEdgeKind.OBSERVED
+                        if edge.edge_type is ProvenanceEdgeKind.CONTAINS
+                        else ProvenanceEdgeKind.CONTAINS
+                    ),
                     to_node_id=edge.to_node_id,
                     edge_ordinal=edge.edge_ordinal,
                 )
@@ -782,7 +813,7 @@ def test_provenance_rejects_missing_obligation_capture_edges(edge_type: Provenan
         edges=tuple(edges),
     )
 
-    with pytest.raises(ValidationError, match=f"missing required {edge_type.value} edge"):
+    with pytest.raises(ValidationError, match=f"missing required {required_edge[1].value} edge"):
         DataHubInterfaceBundle(**{**bundle.model_dump(mode="python"), "provenance": provenance})
 
 
@@ -857,6 +888,8 @@ def test_frozen_corpus_declares_every_required_e1_negative_control() -> None:
         "unexplained-confidence",
         "collapsed-readiness",
         "future-knowledge",
+        "missing-campaign-request-edge",
+        "missing-campaign-run-edge",
         "missing-obligation-work-edge",
         "missing-run-obligation-edge",
         "recapture-overreach",
