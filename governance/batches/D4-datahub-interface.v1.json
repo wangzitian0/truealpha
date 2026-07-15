@@ -10,7 +10,7 @@
   "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
-  "claim_ceiling": "E1 tiny Local/CI interface evidence for campaign-scoped shared work, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance only; no stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
+  "claim_ceiling": "E1 tiny Local/CI interface evidence for campaign-scoped shared work, typed source-request coverage, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance only; no stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 171, 205, 207],
@@ -24,7 +24,7 @@
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D4 registration and preparation are merged on main",
-      "the tiny interface corpus remains frozen at 450c5502f63d0363b358d43405f77bc20a78902a41cb003f35ef1d627da40f9f",
+      "the tiny interface corpus remains frozen at 3ee8a8de491da80b8b65f828cb81c233d0c819a4b7c1070f6128f92f80c35eb5",
       "the E1 implementation PR pins exact current main base 7770219561bfbfa9172c0f69011efd109cf31d91",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
@@ -82,10 +82,11 @@
   "corpus": {
     "environment": "Local/CI checked-in typed interface fixtures only",
     "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
-    "sha256": "450c5502f63d0363b358d43405f77bc20a78902a41cb003f35ef1d627da40f9f",
+    "sha256": "3ee8a8de491da80b8b65f828cb81c233d0c819a4b7c1070f6128f92f80c35eb5",
     "required_strata": [
       "one immutable list with success and terminal-failure obligations",
       "two overlapping immutable lists in separate compatible runs sharing one campaign-scoped provider work item",
+      "a typed source-request subject, requirement, and partition scope that covers every bound obligation",
       "a persisted dispatch intent and one append-only outcome for every completed attempt",
       "unchanged raw bytes observed by a later distinct attempt that reuses only the same pinned source vintage",
       "bounded retry, interruption, and rate-limit attempt sequence",
@@ -154,6 +155,7 @@
     "negative_controls": [
       "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
       "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
+      "a work binding whose request omits its obligation's subject, capture requirement, or partition",
       "run-scoped work loses provider sharing across overlapping compatible lists",
       "a completed bundle omits a dispatch outcome, or an unchanged response reuses a vintage from another pinned request",
       "identical raw bytes erase a later attempt or a separate list obligation",

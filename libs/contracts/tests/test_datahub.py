@@ -62,6 +62,10 @@ def _universe(name: str, digest: str) -> UniverseRef:
     return UniverseRef(universe_id=name, universe_version="v1", content_sha256=digest)
 
 
+def _subject(identifier: str = "instrument:BBB") -> SubjectRef:
+    return SubjectRef(kind=SubjectKind.LISTING, id=identifier)
+
+
 def _schedule() -> CaptureSchedulePolicy:
     return CaptureSchedulePolicy(
         policy_version="market-daily:v1",
@@ -86,13 +90,21 @@ def _schedule() -> CaptureSchedulePolicy:
     )
 
 
-def _source_request(*, source_policy_id: str = "source-policy:public-bars:v1") -> SourceRequest:
+def _source_request(
+    *,
+    source_policy_id: str = "source-policy:public-bars:v1",
+    subject_refs: tuple[SubjectRef, ...] = (_subject(),),
+    capture_requirement_ids: tuple[str, ...] = ("daily-bar:v1",),
+    partition: str = "2025-01-03",
+) -> SourceRequest:
     return SourceRequest(
         source_registry_entry_id=f"source-registry-entry:{SHA_A}",
         source_policy_id=source_policy_id,
         request_fingerprint_version="request-fingerprint:v1",
         canonical_request_sha256=canonical_sha256("GET /bars/BBB?date=2025-01-03"),
-        partition="2025-01-03",
+        subject_refs=subject_refs,
+        capture_requirement_ids=capture_requirement_ids,
+        partition=partition,
     )
 
 
@@ -252,6 +264,9 @@ def _bundle(
     attempt_specs: tuple[tuple[int, FetchAttemptOutcome], ...] = ((1, FetchAttemptOutcome.SUCCESS),),
     observations: tuple[NormalizedObservation, ...] = (),
     assessments: tuple[ConfidenceAssessment, ...] = (),
+    source_subject_refs: tuple[SubjectRef, ...] = (_subject(),),
+    source_requirement_ids: tuple[str, ...] = ("daily-bar:v1",),
+    source_partition: str = "2025-01-03",
 ) -> tuple[DataHubInterfaceBundle, dict[str, Any]]:
     schedule = _schedule()
     alpha = _universe("tiny-alpha", SHA_A)
@@ -271,7 +286,7 @@ def _bundle(
         )
         for index, digest in enumerate((SHA_C, SHA_D), start=1)
     )
-    subject = SubjectRef(kind=SubjectKind.LISTING, id="instrument:BBB")
+    subject = _subject()
     obligations = tuple(
         ListObligation(
             run_id=run.run_id,
@@ -282,7 +297,11 @@ def _bundle(
         )
         for run, universe in zip(runs, (alpha, overlap), strict=True)
     )
-    source_request = _source_request()
+    source_request = _source_request(
+        subject_refs=source_subject_refs,
+        capture_requirement_ids=source_requirement_ids,
+        partition=source_partition,
+    )
     work_item = CaptureWorkItem(
         campaign_id=campaign.campaign_id,
         source_request_id=source_request.source_request_id,
@@ -452,6 +471,19 @@ def test_cross_run_overlapping_lists_share_campaign_work_without_losing_obligati
     assert bundle.work_items[0].campaign_id == values["campaign"].campaign_id
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "case"),
+    [
+        ({"source_subject_refs": (_subject("instrument:CCC"),)}, "subject"),
+        ({"source_requirement_ids": ("income-statement:v1",)}, "requirement"),
+        ({"source_partition": "2025-01-04"}, "partition"),
+    ],
+)
+def test_binding_requires_typed_source_request_coverage(kwargs: dict[str, Any], case: str) -> None:
+    with pytest.raises(ValidationError, match="request that covers its obligation"):
+        _bundle(**kwargs)
+
+
 def test_two_phase_attempt_identity_keeps_content_conflicts_visible() -> None:
     bundle, values = _bundle()
     original = values["attempts"][0]
@@ -526,6 +558,8 @@ def test_mutable_coordinates_and_request_identity_drift_are_rejected() -> None:
             source_policy_id="source-policy:latest",
             request_fingerprint_version="request-fingerprint:v1",
             canonical_request_sha256=SHA_B,
+            subject_refs=(_subject(),),
+            capture_requirement_ids=("daily-bar:v1",),
             partition="2025-01-03",
         )
     original = _source_request()
@@ -536,6 +570,8 @@ def test_mutable_coordinates_and_request_identity_drift_are_rejected() -> None:
             source_policy_id=original.source_policy_id,
             request_fingerprint_version=original.request_fingerprint_version,
             canonical_request_sha256=SHA_C,
+            subject_refs=original.subject_refs,
+            capture_requirement_ids=original.capture_requirement_ids,
             partition=original.partition,
         )
     with pytest.raises(ValidationError, match="immutable version"):
@@ -728,6 +764,15 @@ def test_frozen_corpus_declares_every_required_e1_negative_control() -> None:
         "schedule_policy_id",
     ]
     assert corpus["identity_grains"]["fetch_attempt_result"] == ["attempt_ref"]
+    assert corpus["identity_grains"]["source_request"] == [
+        "source_registry_entry_id",
+        "source_policy_id",
+        "request_fingerprint_version",
+        "canonical_request_fingerprint",
+        "subject_refs",
+        "capture_requirement_ids",
+        "partition",
+    ]
     assert corpus["identity_grains"]["source_vintage"] == [
         "source_request_ref",
         "source_record_id",
@@ -739,6 +784,7 @@ def test_frozen_corpus_declares_every_required_e1_negative_control() -> None:
         "duplicate-obligation",
         "work-request-drift",
         "cross-run-work-loss",
+        "request-obligation-coverage-mismatch",
         "attempt-gap",
         "retry-after-terminal",
         "retry-over-budget",

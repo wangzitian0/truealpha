@@ -334,7 +334,7 @@ class ListObligation(BaseModel):
 
 
 class SourceRequest(BaseModel):
-    """Pinned source request coordinates reusable across capture campaigns."""
+    """Pinned source request coordinates and its explicit obligation coverage."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -344,6 +344,8 @@ class SourceRequest(BaseModel):
     source_policy_id: str = Field(pattern=_STABLE_COORDINATE)
     request_fingerprint_version: str = Field(pattern=_STABLE_COORDINATE)
     canonical_request_sha256: str = Field(pattern=_SHA256)
+    subject_refs: tuple[SubjectRef, ...] = Field(min_length=1)
+    capture_requirement_ids: tuple[str, ...] = Field(min_length=1)
     partition: str = Field(pattern=_STABLE_COORDINATE)
 
     @field_validator("source_policy_id", "request_fingerprint_version")
@@ -351,8 +353,17 @@ class SourceRequest(BaseModel):
     def validate_immutable_coordinates(cls, value: str, info: Any) -> str:
         return _reject_mutable_coordinate(value, info.field_name)
 
+    @field_validator("capture_requirement_ids")
+    @classmethod
+    def validate_requirements(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _sorted_unique_strings(values, "capture_requirement_ids", allow_empty=False, immutable=True)
+
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
+        subjects = tuple(sorted(self.subject_refs, key=lambda subject: (subject.kind.value, subject.id)))
+        if len(subjects) != len(set(subjects)):
+            raise ValueError("subject_refs must not contain duplicates")
+        object.__setattr__(self, "subject_refs", subjects)
         _freeze_identity(
             self,
             id_field="source_request_id",
@@ -362,6 +373,8 @@ class SourceRequest(BaseModel):
                 "source_policy_id",
                 "request_fingerprint_version",
                 "canonical_request_sha256",
+                "subject_refs",
+                "capture_requirement_ids",
                 "partition",
             ),
         )
@@ -1041,6 +1054,13 @@ class DataHubInterfaceBundle(BaseModel):
                 or obligation_run.schedule_policy_id != bound_work_item.schedule_policy_id
             ):
                 raise ValueError("binding must use work from the obligation's campaign and schedule policy")
+            source_request = source_requests[bound_work_item.source_request_id]
+            if (
+                bound_obligation.subject not in source_request.subject_refs
+                or bound_obligation.capture_requirement_id not in source_request.capture_requirement_ids
+                or bound_obligation.partition != source_request.partition
+            ):
+                raise ValueError("binding must use a request that covers its obligation")
             if binding.obligation_id in bound_work_by_obligation:
                 raise ValueError("each obligation must bind exactly one work item")
             bound_work_by_obligation[binding.obligation_id] = binding.work_item_id

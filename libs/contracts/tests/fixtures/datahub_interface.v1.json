@@ -20,6 +20,8 @@
       "source_policy_id",
       "request_fingerprint_version",
       "canonical_request_fingerprint",
+      "subject_refs",
+      "capture_requirement_ids",
       "partition"
     ],
     "work_item": ["campaign_ref", "source_request_ref", "schedule_policy_id"],
@@ -115,6 +117,8 @@
       "source_policy_id": "source-policy:public-bars:v1",
       "request_fingerprint_version": "request-fingerprint:v1",
       "canonical_request_fingerprint": "GET /bars/BBB?date=2025-01-03",
+      "subject_refs": ["listing:instrument:BBB"],
+      "capture_requirement_ids": ["daily_bar:2025-01-03"],
       "partition": "2025-01-03"
     },
     {
@@ -123,6 +127,8 @@
       "source_policy_id": "source-policy:independent-bars:v1",
       "request_fingerprint_version": "request-fingerprint:v1",
       "canonical_request_fingerprint": "GET /independent-bars/BBB?date=2025-01-03",
+      "subject_refs": ["listing:instrument:BBB"],
+      "capture_requirement_ids": ["daily_bar:2025-01-03"],
       "partition": "2025-01-03"
     },
     {
@@ -131,6 +137,8 @@
       "source_policy_id": "source-policy:public-bars:v1",
       "request_fingerprint_version": "request-fingerprint:v1",
       "canonical_request_fingerprint": "GET /bars/CCC?date=2025-01-03",
+      "subject_refs": ["listing:instrument:CCC"],
+      "capture_requirement_ids": ["daily_bar:2025-01-03"],
       "partition": "2025-01-03"
     }
   ],
@@ -406,6 +414,7 @@
     {"case_id": "duplicate-obligation", "expected_error": "duplicate_obligation"},
     {"case_id": "work-request-drift", "expected_error": "identity_drift"},
     {"case_id": "cross-run-work-loss", "expected_error": "campaign_work_sharing_required"},
+    {"case_id": "request-obligation-coverage-mismatch", "expected_error": "request_scope_mismatch"},
     {"case_id": "attempt-gap", "expected_error": "non_contiguous_attempt"},
     {"case_id": "retry-after-terminal", "expected_error": "attempt_after_terminal"},
     {"case_id": "retry-over-budget", "expected_error": "retry_budget_exceeded"},
