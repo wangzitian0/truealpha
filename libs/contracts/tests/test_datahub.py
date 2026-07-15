@@ -831,7 +831,7 @@ def test_factor_boundary_exposes_no_source_or_provenance_branch_metadata() -> No
 
 
 def test_frozen_corpus_declares_every_required_e1_negative_control() -> None:
-    fixture = Path(__file__).parent / "fixtures" / "datahub_interface.v1.json"
+    fixture = Path(__file__).parent / "fixtures" / "datahub_interface.v2.json"
     corpus = json.loads(fixture.read_text())
     assert corpus["batch_id"] == "D4-datahub-interface"
     assert corpus["schema_version"] == 2

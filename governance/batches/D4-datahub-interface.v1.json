@@ -81,7 +81,7 @@
   ],
   "corpus": {
     "environment": "Local/CI checked-in typed interface fixtures only",
-    "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
+    "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v2.json",
     "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
     "required_strata": [
       "one immutable list with success and terminal-failure obligations",
@@ -103,6 +103,7 @@
       "libs/contracts/src/truealpha_contracts/__init__.py",
       "libs/contracts/tests/test_datahub.py",
       "libs/contracts/tests/fixtures/datahub_interface.v1.json",
+      "libs/contracts/tests/fixtures/datahub_interface.v2.json",
       "governance/evidence/D4-datahub-interface-E0.v1.json",
       "governance/evidence/D4-datahub-interface-E1.v1.json",
       "governance/evidence/D4-datahub-interface-E2.v1.json",
