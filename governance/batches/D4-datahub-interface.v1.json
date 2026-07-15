@@ -20,12 +20,12 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "f1b6d93051dbe553058d3c9f60bf3922165cbc54",
+    "base_sha": "830d3d0e2f2bc9d96a519dd81209d0b971c07ccf",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D4 registration and preparation are merged on main",
       "the tiny interface corpus remains frozen at a0899bf292e5b8fbc00a685dcb5a14e37c42235f2891fc019c98e0e1377a489f",
-      "the E0 implementation PR pins exact current main base f1b6d93051dbe553058d3c9f60bf3922165cbc54",
+      "the E0 implementation PR pins exact current main base 830d3d0e2f2bc9d96a519dd81209d0b971c07ccf",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
       "issue #210 contains this manifest path and exact SHA-256",
@@ -135,7 +135,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/D4-datahub-interface.v1.json",
-      "sha256": "499412b37d34933494ddeb116308fe3639a85c84d4221f2a6447622adb615f02"
+      "sha256": "574e84b7e23e1bfb20630824c145d89129cb2965737533ae24ccd9cd3ad8fe7d"
     }
   },
   "release_activation": {
