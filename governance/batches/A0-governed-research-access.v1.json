@@ -43,9 +43,9 @@
   "corpus": {
     "environment": "Local/CI checked-in synthetic authorization fixtures only",
     "manifest_path": "libs/contracts/tests/fixtures/governed_research_access.v1.json",
-    "sha256": "32cb57cc7003bc12aa248f6f547f62446d073aa8a33497bd353f61b50ba4d841",
+    "sha256": "ac3186bcc8cf14c0b9d7c909ca0f3148618eade175c2b469022364d3fae2498b",
     "required_strata": [
-      "two isolated tenants with owner-only conversation and document records",
+      "two isolated tenants with positive owner reads and owner-only conversation and document records",
       "one permitted and one denied immutable publication class for materialized research",
       "administrator access to permitted strategy/backtest results and non-content audit metadata only",
       "administrator denial for private conversation/document content",

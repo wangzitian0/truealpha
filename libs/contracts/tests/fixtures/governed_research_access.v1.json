@@ -17,6 +17,7 @@
     "audit_policy_id": "audit-policy:research-access:v1",
     "authentication_policy_id": "authentication-policy:research:v1"
   },
+  "decision_time": "2026-07-15T00:05:00Z",
   "tenants": [
     {
       "tenant_id": "tenant:alpha",
@@ -67,8 +68,9 @@
     {
       "publication_class_id": "publication-class:restricted:v1",
       "immutable": true,
-      "minimum_tier": "professional",
-      "permitted": false
+      "minimum_tier": "standard",
+      "permitted": false,
+      "denial_reason": "publication_class_not_permitted"
     }
   ],
   "resources": [
@@ -135,6 +137,15 @@
       "method": "browser_session",
       "principal_id": "principal:alpha:alice",
       "tenant_id": "tenant:alpha",
+      "issued_at": "2026-07-15T00:00:00Z",
+      "expires_at": "2026-07-15T01:00:00Z",
+      "state": "valid"
+    },
+    {
+      "context_id": "auth:browser:beta:valid",
+      "method": "browser_session",
+      "principal_id": "principal:beta:bob",
+      "tenant_id": "tenant:beta",
       "issued_at": "2026-07-15T00:00:00Z",
       "expires_at": "2026-07-15T01:00:00Z",
       "state": "valid"
@@ -223,6 +234,15 @@
       "context_id": "auth:mcp:alpha:delegated-valid",
       "action": "read_content",
       "resource_id": "document:alpha:private-001",
+      "expected_decision": "allow",
+      "expected_query_count": 1,
+      "expected_audit_event": "access_allowed"
+    },
+    {
+      "case_id": "beta-owner-browser-reads-private-document",
+      "context_id": "auth:browser:beta:valid",
+      "action": "read_content",
+      "resource_id": "document:beta:private-001",
       "expected_decision": "allow",
       "expected_query_count": 1,
       "expected_audit_event": "access_allowed"
@@ -437,6 +457,7 @@
     }
   ],
   "invariants": [
+    "every authentication and authorization case is evaluated at the frozen corpus decision_time rather than the ambient clock",
     "authentication and authorization complete before any mart SQL, private-row lookup, or artifact retrieval",
     "every denied case has expected_query_count zero",
     "private conversation and document content is visible only to its owner through a valid browser session or valid owner delegation",
