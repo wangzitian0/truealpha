@@ -124,8 +124,6 @@
       "apps/**",
       "libs/factors/**",
       "libs/runtime/**",
-      "libs/contracts/src/truealpha_contracts/capture_contracts.py",
-      "libs/contracts/src/truealpha_contracts/execution.py",
       "libs/contracts/src/truealpha_contracts/qlib_expression.py",
       "uv.lock",
       "pyproject.toml",
