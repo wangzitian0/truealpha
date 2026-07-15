@@ -1639,6 +1639,15 @@ def test_required_ci_aggregates_every_reusable_check_and_is_always_terminal():
     assert '.value.result != "success" and .value.result != "skipped"' in required
 
 
+def test_direct_security_scan_excludes_main_and_all_tag_pushes():
+    workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "security-gate.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "branches-ignore: [main]" in workflow
+    assert 'tags-ignore: ["**"]' in workflow
+
+
 def test_image_publication_is_reusable_and_waits_for_build_and_required_checks():
     workflows = MODULE_PATH.parents[1] / ".github" / "workflows"
     required = (workflows / "ci-required.yml").read_text(encoding="utf-8")
