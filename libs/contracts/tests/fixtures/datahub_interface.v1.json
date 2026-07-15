@@ -1,0 +1,795 @@
+{
+  "schema_version": 1,
+  "corpus_id": "d4-datahub-interface-tiny-v1",
+  "batch_id": "D4-datahub-interface",
+  "claim_ceiling": "Preparation-only Local/CI interface corpus; no accepted contract, persistence schema, source call, schedule activation, query binding, Qlib provider, Staging readiness, or stable handoff.",
+  "canonicalization": {
+    "encoding": "UTF-8",
+    "object_keys": "sorted",
+    "separators": "compact",
+    "time": "UTC RFC3339 with Z",
+    "decimal": "canonical base-10 string; binary float forbidden",
+    "identity": "sha256 of a domain-separated canonical JSON coordinate object"
+  },
+  "identity_grains": {
+    "campaign": [
+      "campaign_policy_id",
+      "environment",
+      "cutoff",
+      "list_versions"
+    ],
+    "run": [
+      "campaign_ref",
+      "run_sequence",
+      "schedule_policy_id",
+      "capture_scope_id"
+    ],
+    "list_obligation": [
+      "run_ref",
+      "universe_ref",
+      "subject_id",
+      "capture_requirement",
+      "partition"
+    ],
+    "work_item": [
+      "run_ref",
+      "source_policy_id",
+      "canonical_request_fingerprint",
+      "partition"
+    ],
+    "fetch_attempt": [
+      "work_ref",
+      "attempt_number"
+    ],
+    "raw_object": [
+      "payload_sha256"
+    ],
+    "normalized_observation": [
+      "semantic_type",
+      "semantic_version",
+      "subject_id",
+      "valid_time",
+      "knowable_at",
+      "source_vintage",
+      "mapping_version",
+      "payload_identity"
+    ],
+    "confidence_assessment": [
+      "observation_ref",
+      "assessment_policy_id",
+      "evidence_set_id"
+    ],
+    "provenance_edge": [
+      "from_node",
+      "edge_type",
+      "to_node",
+      "edge_ordinal"
+    ],
+    "recapture_plan": [
+      "selection_cutoff",
+      "predicate",
+      "selected_obligation_refs",
+      "planner_version"
+    ]
+  },
+  "versioned_coordinates": {
+    "campaign_policy_id": "campaign-policy:tiny:v1",
+    "schedule_policy_id": "schedule-policy:market-daily:v1",
+    "source_policy_id": "source-policy:public-bars:v1",
+    "independent_source_policy_id": "source-policy:independent-bars:v1",
+    "parser_version": "bars-parser:v1",
+    "mapping_version": "instrument-map:v1",
+    "assessment_policy_id": "confidence-policy:tiny:v1",
+    "provenance_schema_version": "provenance-schema:v1",
+    "planner_version": "recapture-planner:v1"
+  },
+  "schedule_policy": {
+    "demanded_cadence": "P1D",
+    "provider_availability_cadence": "trading-session-close",
+    "freshness_max_age": "P2D",
+    "observed_runtime_cadence": "recorded-per-run-not-policy",
+    "retry": {
+      "max_attempts": 2,
+      "retryable_outcomes": [
+        "rate_limited",
+        "transport_error",
+        "server_error"
+      ],
+      "terminal_outcomes": [
+        "success",
+        "unchanged",
+        "unavailable",
+        "failed"
+      ]
+    }
+  },
+  "universes": [
+    {
+      "universe_ref": "universe:tiny-alpha:v1",
+      "members": [
+        "instrument:AAA",
+        "instrument:BBB"
+      ]
+    },
+    {
+      "universe_ref": "universe:tiny-overlap:v1",
+      "members": [
+        "instrument:BBB",
+        "instrument:CCC"
+      ]
+    }
+  ],
+  "campaigns": [
+    {
+      "campaign_ref": "campaign:tiny:2025-01-03",
+      "campaign_policy_id": "campaign-policy:tiny:v1",
+      "environment": "ci",
+      "cutoff": "2025-01-03T22:00:00Z",
+      "list_versions": [
+        "universe:tiny-alpha:v1",
+        "universe:tiny-overlap:v1"
+      ]
+    },
+    {
+      "campaign_ref": "campaign:tiny:2025-01-06",
+      "campaign_policy_id": "campaign-policy:tiny:v1",
+      "environment": "ci",
+      "cutoff": "2025-01-06T22:00:00Z",
+      "list_versions": [
+        "universe:tiny-alpha:v1"
+      ]
+    },
+    {
+      "campaign_ref": "campaign:tiny:2025-01-07",
+      "campaign_policy_id": "campaign-policy:tiny:v1",
+      "environment": "ci",
+      "cutoff": "2025-01-07T12:00:00Z",
+      "list_versions": [
+        "universe:tiny-alpha:v1"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "run_ref": "run:tiny:2025-01-03:1",
+      "campaign_ref": "campaign:tiny:2025-01-03",
+      "run_sequence": 1,
+      "schedule_policy_id": "schedule-policy:market-daily:v1",
+      "capture_scope_id": "capture-scope:tiny:2025-01-03"
+    },
+    {
+      "run_ref": "run:tiny:2025-01-06:1",
+      "campaign_ref": "campaign:tiny:2025-01-06",
+      "run_sequence": 1,
+      "schedule_policy_id": "schedule-policy:market-daily:v1",
+      "capture_scope_id": "capture-scope:tiny:2025-01-06"
+    },
+    {
+      "run_ref": "run:tiny:2025-01-07:1",
+      "campaign_ref": "campaign:tiny:2025-01-07",
+      "run_sequence": 1,
+      "schedule_policy_id": "schedule-policy:market-daily:v1",
+      "capture_scope_id": "capture-scope:tiny:2025-01-07"
+    }
+  ],
+  "obligations": [
+    {
+      "obligation_ref": "obligation:alpha:AAA:bars:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "universe_ref": "universe:tiny-alpha:v1",
+      "subject_id": "instrument:AAA",
+      "capture_requirement": "daily_bar:2025-01-03",
+      "partition": "2025-01-03",
+      "expected_terminal_state": "success",
+      "work_ref": "work:AAA:bars:2025-01-03"
+    },
+    {
+      "obligation_ref": "obligation:alpha:BBB:bars:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "universe_ref": "universe:tiny-alpha:v1",
+      "subject_id": "instrument:BBB",
+      "capture_requirement": "daily_bar:2025-01-03",
+      "partition": "2025-01-03",
+      "expected_terminal_state": "success",
+      "work_ref": "work:BBB:bars:2025-01-03"
+    },
+    {
+      "obligation_ref": "obligation:overlap:BBB:bars:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "universe_ref": "universe:tiny-overlap:v1",
+      "subject_id": "instrument:BBB",
+      "capture_requirement": "daily_bar:2025-01-03",
+      "partition": "2025-01-03",
+      "expected_terminal_state": "success",
+      "work_ref": "work:BBB:bars:2025-01-03"
+    },
+    {
+      "obligation_ref": "obligation:alpha:BBB:reconciliation:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "universe_ref": "universe:tiny-alpha:v1",
+      "subject_id": "instrument:BBB",
+      "capture_requirement": "daily_bar_reconciliation:2025-01-03",
+      "partition": "2025-01-03",
+      "expected_terminal_state": "success",
+      "work_ref": "work:BBB:independent:2025-01-03"
+    },
+    {
+      "obligation_ref": "obligation:overlap:CCC:bars:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "universe_ref": "universe:tiny-overlap:v1",
+      "subject_id": "instrument:CCC",
+      "capture_requirement": "daily_bar:2025-01-03",
+      "partition": "2025-01-03",
+      "expected_terminal_state": "failed",
+      "work_ref": "work:CCC:bars:2025-01-03"
+    },
+    {
+      "obligation_ref": "obligation:alpha:BBB:bars:2025-01-06",
+      "run_ref": "run:tiny:2025-01-06:1",
+      "universe_ref": "universe:tiny-alpha:v1",
+      "subject_id": "instrument:BBB",
+      "capture_requirement": "daily_bar:2025-01-03",
+      "partition": "2025-01-03",
+      "expected_terminal_state": "unchanged",
+      "work_ref": "work:BBB:bars:2025-01-06"
+    },
+    {
+      "obligation_ref": "obligation:alpha:BBB:restatement:2025-01-07",
+      "run_ref": "run:tiny:2025-01-07:1",
+      "universe_ref": "universe:tiny-alpha:v1",
+      "subject_id": "instrument:BBB",
+      "capture_requirement": "daily_bar:2025-01-03",
+      "partition": "2025-01-03",
+      "expected_terminal_state": "success",
+      "work_ref": "work:BBB:restatement:2025-01-07"
+    }
+  ],
+  "work_items": [
+    {
+      "work_ref": "work:AAA:bars:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "source_policy_id": "source-policy:public-bars:v1",
+      "canonical_request_fingerprint": "GET /bars/AAA?date=2025-01-03",
+      "partition": "2025-01-03",
+      "satisfies": [
+        "obligation:alpha:AAA:bars:2025-01-03"
+      ]
+    },
+    {
+      "work_ref": "work:BBB:bars:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "source_policy_id": "source-policy:public-bars:v1",
+      "canonical_request_fingerprint": "GET /bars/BBB?date=2025-01-03",
+      "partition": "2025-01-03",
+      "satisfies": [
+        "obligation:alpha:BBB:bars:2025-01-03",
+        "obligation:overlap:BBB:bars:2025-01-03"
+      ]
+    },
+    {
+      "work_ref": "work:BBB:independent:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "source_policy_id": "source-policy:independent-bars:v1",
+      "canonical_request_fingerprint": "GET /independent-bars/BBB?date=2025-01-03",
+      "partition": "2025-01-03",
+      "satisfies": [
+        "obligation:alpha:BBB:reconciliation:2025-01-03"
+      ]
+    },
+    {
+      "work_ref": "work:CCC:bars:2025-01-03",
+      "run_ref": "run:tiny:2025-01-03:1",
+      "source_policy_id": "source-policy:public-bars:v1",
+      "canonical_request_fingerprint": "GET /bars/CCC?date=2025-01-03",
+      "partition": "2025-01-03",
+      "satisfies": [
+        "obligation:overlap:CCC:bars:2025-01-03"
+      ]
+    },
+    {
+      "work_ref": "work:BBB:bars:2025-01-06",
+      "run_ref": "run:tiny:2025-01-06:1",
+      "source_policy_id": "source-policy:public-bars:v1",
+      "canonical_request_fingerprint": "GET /bars/BBB?date=2025-01-03",
+      "partition": "2025-01-03",
+      "satisfies": [
+        "obligation:alpha:BBB:bars:2025-01-06"
+      ]
+    },
+    {
+      "work_ref": "work:BBB:restatement:2025-01-07",
+      "run_ref": "run:tiny:2025-01-07:1",
+      "source_policy_id": "source-policy:public-bars:v1",
+      "canonical_request_fingerprint": "GET /bars/BBB?date=2025-01-03&conditional=v1",
+      "partition": "2025-01-03",
+      "satisfies": [
+        "obligation:alpha:BBB:restatement:2025-01-07"
+      ]
+    }
+  ],
+  "attempts": [
+    {
+      "attempt_ref": "attempt:AAA:1",
+      "work_ref": "work:AAA:bars:2025-01-03",
+      "attempt_number": 1,
+      "observed_at": "2025-01-03T22:00:01Z",
+      "outcome": "rate_limited",
+      "terminal": false,
+      "raw_object_ref": null
+    },
+    {
+      "attempt_ref": "attempt:AAA:2",
+      "work_ref": "work:AAA:bars:2025-01-03",
+      "attempt_number": 2,
+      "observed_at": "2025-01-03T22:00:03Z",
+      "outcome": "success",
+      "terminal": true,
+      "raw_object_ref": "raw:aaa:v1"
+    },
+    {
+      "attempt_ref": "attempt:BBB:first:1",
+      "work_ref": "work:BBB:bars:2025-01-03",
+      "attempt_number": 1,
+      "observed_at": "2025-01-03T22:00:02Z",
+      "outcome": "success",
+      "terminal": true,
+      "raw_object_ref": "raw:bbb:v1"
+    },
+    {
+      "attempt_ref": "attempt:BBB:independent:1",
+      "work_ref": "work:BBB:independent:2025-01-03",
+      "attempt_number": 1,
+      "observed_at": "2025-01-03T22:05:00Z",
+      "outcome": "success",
+      "terminal": true,
+      "raw_object_ref": "raw:bbb:independent"
+    },
+    {
+      "attempt_ref": "attempt:CCC:1",
+      "work_ref": "work:CCC:bars:2025-01-03",
+      "attempt_number": 1,
+      "observed_at": "2025-01-03T22:00:02Z",
+      "outcome": "server_error",
+      "terminal": false,
+      "raw_object_ref": null
+    },
+    {
+      "attempt_ref": "attempt:CCC:2",
+      "work_ref": "work:CCC:bars:2025-01-03",
+      "attempt_number": 2,
+      "observed_at": "2025-01-03T22:00:04Z",
+      "outcome": "failed",
+      "terminal": true,
+      "raw_object_ref": null
+    },
+    {
+      "attempt_ref": "attempt:BBB:refresh:1",
+      "work_ref": "work:BBB:bars:2025-01-06",
+      "attempt_number": 1,
+      "observed_at": "2025-01-06T22:00:01Z",
+      "outcome": "unchanged",
+      "terminal": true,
+      "raw_object_ref": "raw:bbb:v1"
+    },
+    {
+      "attempt_ref": "attempt:BBB:restatement:1",
+      "work_ref": "work:BBB:restatement:2025-01-07",
+      "attempt_number": 1,
+      "observed_at": "2025-01-07T12:00:00Z",
+      "outcome": "success",
+      "terminal": true,
+      "raw_object_ref": "raw:bbb:restatement"
+    }
+  ],
+  "raw_objects": [
+    {
+      "raw_object_ref": "raw:aaa:v1",
+      "payload_sha256": "43d165c5f3d2748f7ae03bbd536050ea094ca752f863f85d56fc9e13880d54a7"
+    },
+    {
+      "raw_object_ref": "raw:bbb:v1",
+      "payload_sha256": "1cad84cfe6829d40e1c0164e35c821283c43b22a140eb43810c2eabe9e06566b"
+    },
+    {
+      "raw_object_ref": "raw:bbb:restatement",
+      "payload_sha256": "826f33bbd948f9365fe79d7832a8665f54ef9fce4904cdd5c0c8f31c8a68faaa"
+    },
+    {
+      "raw_object_ref": "raw:bbb:independent",
+      "payload_sha256": "d0ae1e8f64f15f483a42c274c51f8f23f789b75e2f8f2f3fcb42917f17ac11a4"
+    }
+  ],
+  "observations": [
+    {
+      "observation_ref": "observation:AAA:primary:v1",
+      "semantic_type": "daily_close",
+      "semantic_version": "v1",
+      "subject_id": "instrument:AAA",
+      "valid_time": "2025-01-03T21:00:00Z",
+      "knowable_at": "2025-01-03T22:00:03Z",
+      "source_vintage": "primary:2025-01-03T22:00:03Z",
+      "mapping_version": "instrument-map:v1",
+      "payload_identity": "raw:aaa:v1#close",
+      "value": "101.25",
+      "is_restatement": false,
+      "supersedes": null
+    },
+    {
+      "observation_ref": "observation:BBB:primary:v1",
+      "semantic_type": "daily_close",
+      "semantic_version": "v1",
+      "subject_id": "instrument:BBB",
+      "valid_time": "2025-01-03T21:00:00Z",
+      "knowable_at": "2025-01-03T22:00:02Z",
+      "source_vintage": "primary:2025-01-03T22:00:02Z",
+      "mapping_version": "instrument-map:v1",
+      "payload_identity": "raw:bbb:v1#close",
+      "value": "50.00",
+      "is_restatement": false,
+      "supersedes": null
+    },
+    {
+      "observation_ref": "observation:BBB:primary:v2",
+      "semantic_type": "daily_close",
+      "semantic_version": "v1",
+      "subject_id": "instrument:BBB",
+      "valid_time": "2025-01-03T21:00:00Z",
+      "knowable_at": "2025-01-07T12:00:00Z",
+      "source_vintage": "primary:2025-01-07T12:00:00Z",
+      "mapping_version": "instrument-map:v1",
+      "payload_identity": "raw:bbb:restatement#close",
+      "value": "50.10",
+      "is_restatement": true,
+      "supersedes": "observation:BBB:primary:v1"
+    },
+    {
+      "observation_ref": "observation:BBB:independent:v1",
+      "semantic_type": "daily_close",
+      "semantic_version": "v1",
+      "subject_id": "instrument:BBB",
+      "valid_time": "2025-01-03T21:00:00Z",
+      "knowable_at": "2025-01-03T22:05:00Z",
+      "source_vintage": "independent:2025-01-03T22:05:00Z",
+      "mapping_version": "instrument-map:v1",
+      "payload_identity": "raw:bbb:independent#close",
+      "value": "49.80",
+      "is_restatement": false,
+      "supersedes": null
+    }
+  ],
+  "confidence_components": [
+    "source_authority",
+    "parser_schema_validity",
+    "semantic_completeness",
+    "identity_resolution",
+    "pit_knowability",
+    "independent_reconciliation",
+    "conflict_state"
+  ],
+  "assessments": [
+    {
+      "assessment_ref": "assessment:AAA:trusted:v1",
+      "observation_ref": "observation:AAA:primary:v1",
+      "assessment_policy_id": "confidence-policy:tiny:v1",
+      "evidence_set_id": "evidence:AAA:primary:v1",
+      "components": {
+        "source_authority": "0.80",
+        "parser_schema_validity": "1.00",
+        "semantic_completeness": "1.00",
+        "identity_resolution": "1.00",
+        "pit_knowability": "1.00",
+        "independent_reconciliation": "0.50",
+        "conflict_state": "1.00"
+      },
+      "confidence": "0.82",
+      "availability": "available",
+      "freshness": "fresh",
+      "applicability": "applicable",
+      "quality": "valid",
+      "reason_codes": [
+        "single_source"
+      ]
+    },
+    {
+      "assessment_ref": "assessment:BBB:stale:v1",
+      "observation_ref": "observation:BBB:primary:v1",
+      "assessment_policy_id": "confidence-policy:tiny:v1",
+      "evidence_set_id": "evidence:BBB:primary:v1",
+      "components": {
+        "source_authority": "0.80",
+        "parser_schema_validity": "1.00",
+        "semantic_completeness": "1.00",
+        "identity_resolution": "1.00",
+        "pit_knowability": "1.00",
+        "independent_reconciliation": "0.25",
+        "conflict_state": "0.50"
+      },
+      "confidence": "0.70",
+      "availability": "available",
+      "freshness": "stale",
+      "applicability": "applicable",
+      "quality": "conflicted",
+      "reason_codes": [
+        "source_disagreement",
+        "freshness_exceeded"
+      ]
+    },
+    {
+      "assessment_ref": "assessment:CCC:unavailable:v1",
+      "observation_ref": null,
+      "assessment_policy_id": "confidence-policy:tiny:v1",
+      "evidence_set_id": "evidence:CCC:attempts:v1",
+      "components": {},
+      "confidence": null,
+      "availability": "unavailable",
+      "freshness": "unknown",
+      "applicability": "applicable",
+      "quality": "not_assessed",
+      "reason_codes": [
+        "terminal_fetch_failure"
+      ]
+    },
+    {
+      "assessment_ref": "assessment:BBB:abstained:v2",
+      "observation_ref": "observation:BBB:primary:v2",
+      "assessment_policy_id": "confidence-policy:tiny:v1",
+      "evidence_set_id": "evidence:BBB:conflict:v2",
+      "components": {
+        "source_authority": "0.80",
+        "parser_schema_validity": "1.00",
+        "semantic_completeness": "1.00",
+        "identity_resolution": "1.00",
+        "pit_knowability": "1.00",
+        "independent_reconciliation": "0.00",
+        "conflict_state": "0.00"
+      },
+      "confidence": null,
+      "availability": "available",
+      "freshness": "fresh",
+      "applicability": "applicable",
+      "quality": "conflicted",
+      "reason_codes": [
+        "policy_abstention",
+        "unresolved_restatement_conflict"
+      ]
+    },
+    {
+      "assessment_ref": "assessment:BBB:pit-excluded:v2",
+      "observation_ref": "observation:BBB:primary:v2",
+      "assessment_policy_id": "confidence-policy:tiny:v1",
+      "evidence_set_id": "evidence:BBB:cutoff:v2",
+      "components": {
+        "pit_knowability": "0.00"
+      },
+      "confidence": null,
+      "availability": "available",
+      "freshness": "fresh",
+      "applicability": "not_yet_knowable",
+      "quality": "valid",
+      "reason_codes": [
+        "knowable_after_cutoff"
+      ],
+      "evaluation_cutoff": "2025-01-06T22:00:00Z"
+    }
+  ],
+  "provenance": {
+    "nodes": [
+      "campaign:tiny:2025-01-03",
+      "campaign:tiny:2025-01-06",
+      "campaign:tiny:2025-01-07",
+      "run:tiny:2025-01-03:1",
+      "run:tiny:2025-01-06:1",
+      "run:tiny:2025-01-07:1",
+      "obligation:alpha:BBB:bars:2025-01-03",
+      "obligation:overlap:BBB:bars:2025-01-03",
+      "obligation:alpha:BBB:reconciliation:2025-01-03",
+      "obligation:alpha:BBB:bars:2025-01-06",
+      "obligation:alpha:BBB:restatement:2025-01-07",
+      "work:BBB:bars:2025-01-03",
+      "work:BBB:independent:2025-01-03",
+      "work:BBB:bars:2025-01-06",
+      "work:BBB:restatement:2025-01-07",
+      "attempt:BBB:first:1",
+      "attempt:BBB:independent:1",
+      "attempt:BBB:refresh:1",
+      "attempt:BBB:restatement:1",
+      "raw:bbb:v1",
+      "raw:bbb:independent",
+      "raw:bbb:restatement",
+      "observation:BBB:primary:v1",
+      "observation:BBB:independent:v1",
+      "observation:BBB:primary:v2",
+      "assessment:BBB:stale:v1",
+      "assessment:BBB:abstained:v2",
+      "snapshot:tiny:2025-01-06",
+      "factor-input:BBB:close:2025-01-03",
+      "mart-output:tiny:BBB:2025-01-06"
+    ],
+    "edges": [
+      ["campaign:tiny:2025-01-03", "contains", "run:tiny:2025-01-03:1", 0],
+      ["campaign:tiny:2025-01-06", "contains", "run:tiny:2025-01-06:1", 0],
+      ["campaign:tiny:2025-01-07", "contains", "run:tiny:2025-01-07:1", 0],
+      ["run:tiny:2025-01-03:1", "requires", "obligation:alpha:BBB:bars:2025-01-03", 0],
+      ["run:tiny:2025-01-03:1", "requires", "obligation:overlap:BBB:bars:2025-01-03", 1],
+      ["run:tiny:2025-01-03:1", "requires", "obligation:alpha:BBB:reconciliation:2025-01-03", 2],
+      ["run:tiny:2025-01-06:1", "requires", "obligation:alpha:BBB:bars:2025-01-06", 0],
+      ["run:tiny:2025-01-07:1", "requires", "obligation:alpha:BBB:restatement:2025-01-07", 0],
+      ["obligation:alpha:BBB:bars:2025-01-03", "satisfied_by", "work:BBB:bars:2025-01-03", 0],
+      ["obligation:overlap:BBB:bars:2025-01-03", "satisfied_by", "work:BBB:bars:2025-01-03", 0],
+      ["obligation:alpha:BBB:reconciliation:2025-01-03", "satisfied_by", "work:BBB:independent:2025-01-03", 0],
+      ["obligation:alpha:BBB:bars:2025-01-06", "satisfied_by", "work:BBB:bars:2025-01-06", 0],
+      ["obligation:alpha:BBB:restatement:2025-01-07", "satisfied_by", "work:BBB:restatement:2025-01-07", 0],
+      ["work:BBB:bars:2025-01-03", "attempted_by", "attempt:BBB:first:1", 0],
+      ["work:BBB:independent:2025-01-03", "attempted_by", "attempt:BBB:independent:1", 0],
+      ["work:BBB:bars:2025-01-06", "attempted_by", "attempt:BBB:refresh:1", 0],
+      ["work:BBB:restatement:2025-01-07", "attempted_by", "attempt:BBB:restatement:1", 0],
+      ["attempt:BBB:first:1", "observed", "raw:bbb:v1", 0],
+      ["attempt:BBB:independent:1", "observed", "raw:bbb:independent", 0],
+      ["attempt:BBB:refresh:1", "observed", "raw:bbb:v1", 0],
+      ["attempt:BBB:restatement:1", "observed", "raw:bbb:restatement", 0],
+      ["raw:bbb:v1", "normalized_as", "observation:BBB:primary:v1", 0],
+      ["raw:bbb:independent", "normalized_as", "observation:BBB:independent:v1", 0],
+      ["raw:bbb:restatement", "normalized_as", "observation:BBB:primary:v2", 0],
+      ["observation:BBB:independent:v1", "reconciles_with", "observation:BBB:primary:v1", 0],
+      ["observation:BBB:primary:v2", "supersedes", "observation:BBB:primary:v1", 0],
+      ["observation:BBB:primary:v1", "assessed_by", "assessment:BBB:stale:v1", 0],
+      ["observation:BBB:primary:v2", "assessed_by", "assessment:BBB:abstained:v2", 0],
+      ["assessment:BBB:stale:v1", "selected_into", "snapshot:tiny:2025-01-06", 0],
+      ["snapshot:tiny:2025-01-06", "projects", "factor-input:BBB:close:2025-01-03", 0],
+      ["factor-input:BBB:close:2025-01-03", "materializes", "mart-output:tiny:BBB:2025-01-06", 0]
+    ],
+    "required_forward_query": {
+      "start": "obligation:alpha:BBB:bars:2025-01-03",
+      "end": "mart-output:tiny:BBB:2025-01-06"
+    },
+    "required_reverse_query": {
+      "start": "raw:bbb:v1",
+      "expected_lists": [
+        "universe:tiny-alpha:v1",
+        "universe:tiny-overlap:v1"
+      ],
+      "expected_attempts": [
+        "attempt:BBB:first:1",
+        "attempt:BBB:refresh:1"
+      ],
+      "expected_observations": [
+        "observation:BBB:primary:v1"
+      ]
+    },
+    "required_source_trace_queries": [
+      {
+        "start": "observation:BBB:primary:v2",
+        "end": "attempt:BBB:restatement:1"
+      },
+      {
+        "start": "observation:BBB:independent:v1",
+        "end": "attempt:BBB:independent:1"
+      }
+    ]
+  },
+  "factor_projection": {
+    "allowed_fields": [
+      "input_id",
+      "entity_id",
+      "value",
+      "confidence",
+      "as_of"
+    ],
+    "forbidden_fields": [
+      "source",
+      "source_policy_id",
+      "attempt_id",
+      "raw_object_id",
+      "provider",
+      "provenance_edges",
+      "confidence_reason_codes"
+    ]
+  },
+  "recapture": {
+    "selection_cutoff": "2025-01-06T22:00:00Z",
+    "planner_version": "recapture-planner:v1",
+    "predicate": {
+      "universe_refs": [
+        "universe:tiny-alpha:v1",
+        "universe:tiny-overlap:v1"
+      ],
+      "terminal_states": [
+        "failed"
+      ],
+      "freshness_states": [
+        "stale"
+      ],
+      "partitions": [
+        "2025-01-03"
+      ],
+      "assessment_policy_ids": [
+        "confidence-policy:tiny:v1"
+      ]
+    },
+    "selected_obligation_refs": [
+      "obligation:alpha:BBB:bars:2025-01-03",
+      "obligation:overlap:BBB:bars:2025-01-03",
+      "obligation:overlap:CCC:bars:2025-01-03"
+    ],
+    "unaffected_obligation_refs": [
+      "obligation:alpha:AAA:bars:2025-01-03"
+    ],
+    "execution_rule": "execution must use the exact content-hashed dry-run selection and cannot broaden it"
+  },
+  "determinism_assertions": [
+    "reordered JSON object keys produce identical identities",
+    "reordered list membership produces a different universe version unless canonical member ordering is declared",
+    "the two BBB obligations remain distinct while sharing one work item",
+    "the two BBB work items remain distinct across scheduled runs",
+    "the later BBB attempt remains distinct while reusing the same raw object identity",
+    "the BBB restatement remains distinct and supersedes rather than overwrites the prior observation",
+    "reassessment under a new policy appends a new assessment identity"
+  ],
+  "negative_cases": [
+    {
+      "case_id": "mutable-universe-alias",
+      "mutation": "replace an immutable universe_ref with latest",
+      "expected_error": "immutable_coordinate_required"
+    },
+    {
+      "case_id": "duplicate-obligation",
+      "mutation": "repeat one list obligation coordinate in the same run",
+      "expected_error": "duplicate_obligation"
+    },
+    {
+      "case_id": "work-request-drift",
+      "mutation": "change a canonical request after work identity is assigned",
+      "expected_error": "identity_drift"
+    },
+    {
+      "case_id": "attempt-gap",
+      "mutation": "append attempt 3 without attempt 2",
+      "expected_error": "non_contiguous_attempt"
+    },
+    {
+      "case_id": "retry-after-terminal",
+      "mutation": "append an attempt after success",
+      "expected_error": "attempt_after_terminal"
+    },
+    {
+      "case_id": "retry-over-budget",
+      "mutation": "append more than schedule_policy.retry.max_attempts",
+      "expected_error": "retry_budget_exceeded"
+    },
+    {
+      "case_id": "raw-dedup-erases-attempt",
+      "mutation": "collapse the refresh attempt because its raw SHA already exists",
+      "expected_error": "attempt_evidence_missing"
+    },
+    {
+      "case_id": "binary-float-confidence",
+      "mutation": "replace a decimal confidence string with a JSON number",
+      "expected_error": "decimal_string_required"
+    },
+    {
+      "case_id": "unexplained-confidence",
+      "mutation": "set confidence without components and reason codes",
+      "expected_error": "confidence_evidence_missing"
+    },
+    {
+      "case_id": "collapsed-readiness",
+      "mutation": "replace freshness, availability, applicability, quality, and confidence with one ready flag",
+      "expected_error": "assessment_dimensions_required"
+    },
+    {
+      "case_id": "future-knowledge",
+      "mutation": "select the BBB restatement before its knowable_at",
+      "expected_error": "pit_exclusion_required"
+    },
+    {
+      "case_id": "recapture-overreach",
+      "mutation": "add the unaffected AAA obligation after the dry-run plan is hashed",
+      "expected_error": "recapture_plan_drift"
+    },
+    {
+      "case_id": "factor-provenance-branch",
+      "mutation": "project source or raw identity into a factor input",
+      "expected_error": "provenance_neutral_factor_required"
+    }
+  ]
+}
