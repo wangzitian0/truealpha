@@ -10,7 +10,7 @@
   "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
-  "claim_ceiling": "E2 stable Local/CI DataHub interface handoff for campaign-scoped shared work, typed source-request coverage, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance; no persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
+  "claim_ceiling": "accepted E2 DataHub interface handoffs for campaign-scoped shared work, typed source-request coverage, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance for named Local/CI consumers and D3 TOPT Staging integration only; no persistence schema, source call, schedule, query provider, Qlib data binding, Staging run, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 171, 205, 207],
@@ -108,6 +108,7 @@
       "governance/evidence/D4-datahub-interface-E1.v1.json",
       "governance/evidence/D4-datahub-interface-E2.v1.json",
       "governance/handoffs/D4-datahub-interface.v1.json",
+      "governance/handoffs/D4-datahub-interface-d3-staging.v1.json",
       "governance/leases/D4-datahub-interface.v1.json"
     ],
     "read_only": [
@@ -171,20 +172,52 @@
       "handoff_id": "datahub-interface-handoff:c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "schema_epoch": "truealpha-contracts.datahub.v2",
+      "accepted_permission_scopes": [
+        {
+          "scope": "local-ci-consumers",
+          "allowed_consumers": [
+            "C1-stable-mart-reads",
+            "D5-list-capture-control-plane",
+            "D6-confidence-provenance",
+            "D7-qqq-datahub-capacity"
+          ],
+          "allowed_environments": [
+            "ci",
+            "local"
+          ]
+        },
+        {
+          "scope": "d3-staging-consumer",
+          "allowed_consumers": [
+            "D3-staging-topt-capture"
+          ],
+          "allowed_environments": [
+            "staging"
+          ]
+        }
+      ],
       "rung_evidence": {
         "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
-        "sha256": "01192a297edad575fe7276d53f28278bd9197920354df91d2bf737294c22cd39"
+        "sha256": "ff8d8fe5eb0e59ed1fc31ba9b9496478041d87331661b8a86c2a863fbfa3136b"
       },
-      "handoff_manifest": {
-        "path": "governance/handoffs/D4-datahub-interface.v1.json",
-        "sha256": "017c0a20df2cdfadac62f6d1d0ee368f351175bb4365342da697ec2f08d7816e"
-      },
+      "handoff_manifests": [
+        {
+          "scope": "local-ci-consumers",
+          "path": "governance/handoffs/D4-datahub-interface.v1.json",
+          "sha256": "88d08625dd6fee64e1e260de0a081d8db72e7b9f7b6bcadcff8aa48adeb3e9b0"
+        },
+        {
+          "scope": "d3-staging-consumer",
+          "path": "governance/handoffs/D4-datahub-interface-d3-staging.v1.json",
+          "sha256": "1251eab17cdf8aca24912c2b59136aa357d1b52ba9c6d28b57af8f9b8c5700e7"
+        }
+      ],
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
         "issue #41 mart and Qlib provider preparation after E2 acceptance",
         "issue #206 QQQ capacity manifest preparation after E2 acceptance"
       ],
-      "retention": "accepted E2 interface handoff is permanent while an allowed consumer depends on it; failed rung evidence follows CI retention"
+      "retention": "accepted E2 handoffs are permanent while an allowed consumer depends on them; failed rung evidence follows CI retention"
     }
   },
   "invalidation": [

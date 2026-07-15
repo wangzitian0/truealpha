@@ -6,7 +6,7 @@
     {
       "command": "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_datahub.py -q",
       "exit_code": 0,
-      "output_sha256": "d5b475db6f4a37195747f9d6fc00ef04d22945ae32cc6cbdb8408a06398d456f"
+      "output_sha256": "ee2f80e0e223e2d3e4f6e98fcafb9591e32e8cc34bb6434aa2a16ab015f9862d"
     },
     {
       "command": "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
@@ -24,9 +24,9 @@
       "output_sha256": "3ce0a3f4b2b2d3fcc83181896297ac73b4b7b3034209f9e2b7514b3d55b0ebfa"
     }
   ],
-  "created_at": "2026-07-15T18:28:41.162324Z",
-  "evidence_id": "rung-evidence:D4-datahub-interface:9cb7b1fbfb9f614797882207470b3ee2129d6fa752635c04234d41d8bb413352",
-  "manifest_sha256": "6939441f8d2ec3b6572b02c14618355f78a786b74586c673c39be5174a962710",
+  "created_at": "2026-07-15T19:33:14.547020Z",
+  "evidence_id": "rung-evidence:D4-datahub-interface:39eb479ffa73504db4a7cc9cc5430677387c9eb319c5367ec9650220f9d5371b",
+  "manifest_sha256": "aa5a9769cff556ff5478a491f390524c898ec1d2771910440a282e4e257bebae",
   "negative_controls": [
     "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
     "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
@@ -40,9 +40,10 @@
     "freshness, availability, applicability, quality, and confidence collapse into one mutable status",
     "recapture execution differs from its frozen dry-run selection or broadens its predicate",
     "factor-visible source, raw pointer, provider policy, or provenance branch metadata",
+    "a consumer/environment Cartesian product grants Staging access to any consumer other than D3-staging-topt-capture",
     "database, source, schedule, query provider, Qlib data binding, or release activation"
   ],
-  "producer_head_sha": "e0ddc11408a9b5611da3f6d093b39878243cf262",
+  "producer_head_sha": "03a95a3b76e189ac4518360a61510b8acc5027e2",
   "schema_version": 1,
   "stable_handoff": false
 }
