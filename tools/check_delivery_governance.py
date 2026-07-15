@@ -52,6 +52,16 @@ GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GIT_REF_RE = re.compile(r"^git:([0-9a-f]{40}):(.+)$")
 EVIDENCE_ID_RE = re.compile(r"^capability-evidence:issue-[0-9]+:v[0-9]+$")
 PATH_PATTERN_RE = re.compile(r"^[^*?\[\]]+(?:/\*\*)?$")
+WORK_PREFIX_RE = re.compile(r"^\[(?P<workspace>[a-z0-9]+(?:-[a-z0-9]+)*)\] (?P<description>.+)$")
+DISALLOWED_TITLE_TOKEN_RE = re.compile(
+    r"\[(?:[SDEGHI]\d+(?::[A-Z]\d+)?|prep|batch|lane|rung|stage|task)\]",
+    re.IGNORECASE,
+)
+CLOSING_KEYWORD_RE = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*"
+    r"(?:#|https://github\.com/[^/\s]+/[^/\s]+/issues/)([1-9][0-9]*)",
+    re.IGNORECASE,
+)
 MANIFEST_PREFIX = "governance/batches/"
 BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
 BATCH_MIRROR_END = "<!-- capability-batch-mirror:end -->"
@@ -363,6 +373,83 @@ class PullRequestAdvance:
     accepted_rung: str | None
     changed_paths: tuple[str, ...]
     kind: str = "capability_batch"
+
+
+def work_prefix(title: Any) -> str | None:
+    if not isinstance(title, str):
+        return None
+    match = WORK_PREFIX_RE.fullmatch(title)
+    if match is None or DISALLOWED_TITLE_TOKEN_RE.search(match.group("description")):
+        return None
+    return f"[{match.group('workspace')}]"
+
+
+def pull_request_issue_scope(advance: PullRequestAdvance | None) -> set[int] | None:
+    """Return live issues whose mutable state can authorize this exact PR."""
+    if advance is None:
+        return set()
+    if advance.kind == "gate_candidate":
+        return None if advance.manifest.get("status") == "accepted" else set()
+
+    manifest = advance.manifest
+    candidates: list[Any] = [manifest.get("issue"), manifest.get("owner_gate")]
+    candidates.extend(manifest.get("capability_issues", []))
+    candidates.extend(manifest.get("closes_issues", []))
+    candidates.extend(
+        dependency.get("issue") for dependency in manifest.get("dependencies", []) if isinstance(dependency, dict)
+    )
+    return {value for value in candidates if isinstance(value, int) and not isinstance(value, bool)}
+
+
+def validate_pull_request_metadata(
+    validation: Validation,
+    pull_request: Any,
+    github_issues: list[dict[str, Any]],
+    advance: PullRequestAdvance | None,
+) -> None:
+    validation.require(isinstance(pull_request, dict), "pull-request metadata must be a JSON object")
+    if not isinstance(pull_request, dict):
+        return
+
+    title = pull_request.get("title")
+    prefix = work_prefix(title)
+    validation.require(
+        prefix is not None,
+        "pull-request title must start with one workspace prefix and contain no batch, lane, rung, stage, or task token",
+    )
+
+    if advance is not None and advance.kind == "capability_batch":
+        owned_issue = advance.manifest.get("issue")
+        live_by_number = {issue.get("number"): issue for issue in github_issues}
+        issue = live_by_number.get(owned_issue)
+        validation.require(issue is not None, f"pull-request owned issue #{owned_issue} is missing from GitHub export")
+        if issue is not None:
+            issue_prefix = work_prefix(issue.get("title"))
+            validation.require(
+                issue_prefix is not None,
+                f"pull-request owned issue #{owned_issue} has an invalid workspace prefix",
+            )
+            validation.require(
+                prefix is not None and prefix == issue_prefix,
+                f"pull-request workspace prefix {prefix!r} disagrees with owned issue #{owned_issue} prefix {issue_prefix!r}",
+            )
+
+    body = pull_request.get("body") or ""
+    validation.require(isinstance(body, str), "pull-request body must be a string")
+    if not isinstance(body, str):
+        return
+    closing_issues = {int(number) for number in CLOSING_KEYWORD_RE.findall(body)}
+    terminal_acceptance = (
+        advance is not None
+        and advance.kind == "capability_batch"
+        and advance.accepted_rung == advance.manifest.get("terminal_rung")
+    )
+    allowed_closures = set(advance.manifest.get("closes_issues", [])) if terminal_acceptance else set()
+    for issue_number in sorted(closing_issues):
+        validation.require(
+            issue_number in allowed_closures,
+            f"pull-request body has an unauthorized GitHub closing keyword for #{issue_number}",
+        )
 
 
 def validate_gate_order(
@@ -1601,6 +1688,8 @@ def validate_github(
     validation: Validation,
     graph: dict[str, Any],
     github_issues: list[dict[str, Any]],
+    *,
+    issue_scope: set[int] | None = None,
 ) -> None:
     gates = {int(number): gate for number, gate in graph["gates"].items()}
     capability_issues = {int(number): issue for number, issue in graph["issues"].items()}
@@ -1612,12 +1701,24 @@ def validate_github(
     for edge in graph.get("artifact_edges", []):
         if edge.get("class") != "informational":
             incoming_edges[edge.get("to")].append(edge)
-    validation.require(
-        set(live) == expected,
-        f"GitHub scope:vision parity mismatch; missing={sorted(expected - set(live))}, extra={sorted(set(live) - expected)}",
-    )
+    if issue_scope is None:
+        validation.require(
+            set(live) == expected,
+            f"GitHub scope:vision parity mismatch; missing={sorted(expected - set(live))}, extra={sorted(set(live) - expected)}",
+        )
+        issues_to_validate = expected & set(live)
+    else:
+        validation.require(
+            issue_scope <= expected,
+            f"pull-request live issue scope contains unmanaged issues: {sorted(issue_scope - expected)}",
+        )
+        validation.require(
+            issue_scope <= set(live),
+            f"pull-request live issue scope is missing managed issues: {sorted(issue_scope - set(live))}",
+        )
+        issues_to_validate = issue_scope & expected & set(live)
 
-    for issue_number in sorted(expected & set(live)):
+    for issue_number in sorted(issues_to_validate):
         issue = live[issue_number]
         issue_labels = labels(issue)
         issue_state = str(issue.get("state", "")).upper()
@@ -1738,6 +1839,7 @@ def validate_github(
 def validate(
     github_path: Path | None,
     *,
+    github_pr_path: Path | None = None,
     pr_base_sha: str | None = None,
     pr_head_sha: str | None = None,
     execute_acceptance: bool = False,
@@ -1831,13 +1933,23 @@ def validate(
             head_sha=pr_head_sha,
         )
     if github_path is not None:
+        github_issues = load_json(github_path)
         github_graph = graph
         if pr_base_sha is not None and (advance is None or advance.base_manifest):
             base_graph = git_json(pr_base_sha, str(GRAPH_PATH.relative_to(ROOT)))
             validation.require(isinstance(base_graph, dict), "base Vision graph is unavailable for live parity")
             if isinstance(base_graph, dict):
                 github_graph = base_graph
-        validate_github(validation, github_graph, load_json(github_path))
+        validate_github(
+            validation,
+            github_graph,
+            github_issues,
+            issue_scope=pull_request_issue_scope(advance) if pr_base_sha is not None else None,
+        )
+        if pr_base_sha is not None:
+            validation.require(github_pr_path is not None, "PR validation requires --github-pr")
+            if github_pr_path is not None:
+                validate_pull_request_metadata(validation, load_json(github_pr_path), github_issues, advance)
     if execute_acceptance:
         validation.require(evidence_output is not None, "--execute-acceptance requires --evidence-output")
         if advance is not None and evidence_output is not None and not validation.errors:
@@ -1853,6 +1965,7 @@ def validate(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--github-issues", type=Path, help="JSON exported by gh issue list")
+    parser.add_argument("--github-pr", type=Path, help="JSON exported by gh api for the current pull request")
     parser.add_argument("--pr-base-sha", help="Exact current pull-request base commit")
     parser.add_argument("--pr-head-sha", help="Exact pull-request head commit")
     parser.add_argument("--execute-acceptance", action="store_true")
@@ -1860,6 +1973,7 @@ def main() -> int:
     args = parser.parse_args()
     validation = validate(
         args.github_issues,
+        github_pr_path=args.github_pr,
         pr_base_sha=args.pr_base_sha,
         pr_head_sha=args.pr_head_sha,
         execute_acceptance=args.execute_acceptance,

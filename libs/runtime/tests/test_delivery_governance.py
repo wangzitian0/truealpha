@@ -1543,6 +1543,203 @@ def test_prepared_batch_uses_queued_mirror_and_rejects_contradictory_labels():
     assert "#79: batch must carry exactly one batch status" in validation.errors
 
 
+def _github_parity_fixture():
+    graph = {
+        "root_issue": 68,
+        "root_accepted_evidence": None,
+        "gates": {
+            "29": {
+                "status": "active",
+                "milestone": "Gate 1",
+                "acceptance_issues": [],
+            }
+        },
+        "issues": {},
+        "artifact_edges": [],
+        "batches": {
+            "D0": {
+                "issue": 79,
+                "owner_gate": 29,
+                "status": "active",
+                "target_rung": "E1",
+                "manifest": "governance/batches/D0.json",
+                "sha256": "a" * 64,
+            },
+            "S0": {
+                "issue": 80,
+                "owner_gate": 29,
+                "status": "active",
+                "target_rung": "E1",
+                "manifest": "governance/batches/S0.json",
+                "sha256": "b" * 64,
+            },
+        },
+    }
+
+    def issue(number, *, body="", extra_labels=(), milestone=None):
+        return {
+            "number": number,
+            "title": f"[truealpha-datahub] Issue {number}",
+            "state": "OPEN",
+            "body": body,
+            "labels": [{"name": "scope:vision"}, *({"name": label} for label in extra_labels)],
+            "milestone": {"title": milestone} if milestone else None,
+        }
+
+    live = [
+        issue(68),
+        issue(29, extra_labels=("gate:active",), milestone="Gate 1"),
+        issue(
+            79,
+            body="governance/batches/D0.json sha256:" + "a" * 64,
+            extra_labels=("batch:active", "rung:tiny", "readiness:provisional"),
+            milestone="Gate 1",
+        ),
+        issue(
+            80,
+            body="prospective unmerged mirror",
+            extra_labels=("batch:queued", "rung:code", "readiness:provisional"),
+            milestone="Gate 1",
+        ),
+    ]
+    return graph, live
+
+
+def test_pr_scoped_github_parity_ignores_unrelated_live_issue_drift():
+    graph, live = _github_parity_fixture()
+    validation = governance.Validation()
+
+    governance.validate_github(validation, graph, live, issue_scope={79})
+
+    assert validation.errors == []
+
+
+def test_full_github_parity_still_rejects_unrelated_live_issue_drift():
+    graph, live = _github_parity_fixture()
+    validation = governance.Validation()
+
+    governance.validate_github(validation, graph, live)
+
+    assert any(error.startswith("#80:") for error in validation.errors)
+
+
+def test_pr_scoped_github_parity_requires_the_owned_issue():
+    graph, live = _github_parity_fixture()
+    validation = governance.Validation()
+
+    governance.validate_github(validation, graph, [issue for issue in live if issue["number"] != 79], issue_scope={79})
+
+    assert "pull-request live issue scope is missing managed issues: [79]" in validation.errors
+
+
+def _pull_request_advance(*, accepted_rung=None, terminal_rung="E2", closes_issues=()):
+    return governance.PullRequestAdvance(
+        batch_id="D0",
+        manifest_path="governance/batches/D0.json",
+        base_manifest={"status": "active"},
+        manifest={
+            "issue": 79,
+            "owner_gate": 29,
+            "capability_issues": [57],
+            "dependencies": [{"class": "start", "issue": 58}],
+            "closes_issues": list(closes_issues),
+            "terminal_rung": terminal_rung,
+        },
+        accepted_rung=accepted_rung,
+        changed_paths=("governance/batches/D0.json",),
+    )
+
+
+def test_pull_request_live_scope_contains_only_owned_authorization_chain():
+    assert governance.pull_request_issue_scope(_pull_request_advance()) == {29, 57, 58, 79}
+    assert governance.pull_request_issue_scope(None) == set()
+
+
+def test_only_accepted_gate_candidate_requires_full_live_fan_in():
+    blocked = governance.PullRequestAdvance(
+        batch_id="gate-0-v4",
+        manifest_path="governance/gate0/manifest-v4.json",
+        base_manifest={},
+        manifest={"status": "candidate_blocked_external_attestation"},
+        accepted_rung=None,
+        changed_paths=("governance/gate0/manifest-v4.json",),
+        kind="gate_candidate",
+    )
+    accepted = governance.PullRequestAdvance(
+        batch_id="gate-0-v4",
+        manifest_path="governance/gate0/manifest-v4.json",
+        base_manifest={},
+        manifest={"status": "accepted"},
+        accepted_rung=None,
+        changed_paths=("governance/gate0/manifest-v4.json",),
+        kind="gate_candidate",
+    )
+
+    assert governance.pull_request_issue_scope(blocked) == set()
+    assert governance.pull_request_issue_scope(accepted) is None
+
+
+@pytest.mark.parametrize(
+    "title",
+    (
+        "Replay the factor panel",
+        "[S1] Replay the factor panel",
+        "[truealpha-datahub] [D1] Replay the factor panel",
+    ),
+)
+def test_pull_request_metadata_rejects_invalid_workspace_titles(title):
+    validation = governance.Validation()
+
+    governance.validate_pull_request_metadata(validation, {"title": title, "body": "Refs #79."}, [], None)
+
+    assert any("title must start with one workspace prefix" in error for error in validation.errors)
+
+
+def test_pull_request_metadata_rejects_negated_closing_keyword():
+    validation = governance.Validation()
+    issues = [{"number": 79, "title": "[truealpha-datahub] Replay the factor panel"}]
+
+    governance.validate_pull_request_metadata(
+        validation,
+        {
+            "title": "[truealpha-datahub] Replay the factor panel",
+            "body": "This does not close #79.",
+        },
+        issues,
+        _pull_request_advance(),
+    )
+
+    assert "pull-request body has an unauthorized GitHub closing keyword for #79" in validation.errors
+
+
+def test_pull_request_metadata_allows_declared_terminal_closure():
+    validation = governance.Validation()
+    issues = [{"number": 79, "title": "[truealpha-datahub] Replay the factor panel"}]
+
+    governance.validate_pull_request_metadata(
+        validation,
+        {"title": "[truealpha-datahub] Replay the factor panel", "body": "Closes #79."},
+        issues,
+        _pull_request_advance(accepted_rung="E2", closes_issues=(79,)),
+    )
+
+    assert validation.errors == []
+
+
+def test_pull_request_metadata_requires_owned_issue_prefix_match():
+    validation = governance.Validation()
+    issues = [{"number": 79, "title": "[truealpha-datahub] Replay the factor panel"}]
+
+    governance.validate_pull_request_metadata(
+        validation,
+        {"title": "[truealpha-factors] Replay the factor panel", "body": "Refs #79."},
+        issues,
+        _pull_request_advance(),
+    )
+
+    assert any("disagrees with owned issue #79 prefix" in error for error in validation.errors)
+
+
 def test_batch_mirror_atomically_tracks_manifest_status_and_hash():
     batch = {
         "manifest": "governance/batches/D0.json",
@@ -1587,6 +1784,9 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     assert "pr_head_sha: ${{ github.event.pull_request.head.sha }}" in caller
     assert "--pr-base-sha" in workflow
     assert "--pr-head-sha" in workflow
+    assert "--github-pr" in workflow
+    assert "pull-request.json" in workflow
+    assert "{number, title, body}" in workflow
     assert "ref: ${{ inputs.pr_head_sha }}" in workflow
     assert "allow-blocked-gate-candidate" not in workflow
     assert "uses: astral-sh/setup-uv@v5" in workflow
