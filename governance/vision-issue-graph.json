@@ -249,6 +249,15 @@
       "terminal_rung": "E1",
       "manifest": "governance/batches/S8-qlib-factor-expression.v1.json",
       "sha256": "4d2ff50a09e3e13a71c82392f450d4ad76774583e2c1e13c0acd0528d2b34007"
+    },
+    "I0-infra-boundary-decoupling": {
+      "issue": 201,
+      "owner_gate": 32,
+      "status": "queued",
+      "target_rung": "E0",
+      "terminal_rung": "E1",
+      "manifest": "governance/batches/I0-infra-boundary-decoupling.v1.json",
+      "sha256": "09f864717ddb01736bb75bd7a83f308763808e3eb5cde8d754c649483afc04e6"
     }
   },
   "artifact_edges": [
