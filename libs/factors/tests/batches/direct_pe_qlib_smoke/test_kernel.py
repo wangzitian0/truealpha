@@ -167,14 +167,14 @@ def test_historical_growth_and_raw_expression_bypasses_are_rejected(smoke_reques
 
     request_payload = smoke_request.model_dump(mode="json")
     request_payload["expression_definition"] = "Div(1,$pe)"
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="typed_expression_required"):
         DirectPeSmokeRequest.model_validate(request_payload)
 
 
 def test_runtime_identity_drift_and_universe_shrink_fail_closed(smoke_request) -> None:
     activation = smoke_request.activation.model_dump(mode="json")
     activation["qlib_lock_sha256"] = "0" * 64
-    with pytest.raises(ValidationError, match="activation artifact identity drifted"):
+    with pytest.raises(ValidationError, match="qlib_execution_identity_drift"):
         DirectPeSmokeActivation.model_validate(activation)
 
     prices = tuple(row for row in smoke_request.price_bars if row.instrument_id != "SHOP")
@@ -186,7 +186,7 @@ def test_runtime_identity_drift_and_universe_shrink_fail_closed(smoke_request) -
 
 def test_missing_common_session_and_misleading_claim_fail_closed(smoke_request, report) -> None:
     prices = tuple(row for row in smoke_request.price_bars if row.session_date != date(2023, 8, 1))
-    with pytest.raises(ValueError, match="price_session_denominator_mismatch"):
+    with pytest.raises(ValueError, match="missing_next_session"):
         run_direct_pe_qlib_smoke(smoke_request.model_copy(update={"price_bars": prices}))
 
     payload = report.model_dump(mode="json")

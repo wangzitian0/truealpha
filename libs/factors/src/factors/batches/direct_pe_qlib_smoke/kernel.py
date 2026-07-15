@@ -43,6 +43,7 @@ S8_MANIFEST_SHA256 = "4d2ff50a09e3e13a71c82392f450d4ad76774583e2c1e13c0acd0528d2
 EXPECTED_UNIVERSE = ("DDOG", "DUOL", "NICE", "SHOP")
 EXPECTED_PRICE_SESSIONS = 754
 EXPECTED_DECISIONS = 36
+EXPECTED_SCHEDULE_SHA256 = "aedef130449d86e0e8a1a1f4b7ef85ae0fce80ae0a56c91477e24baff22120c6"
 MINIMUM_DECISIONS = 30
 INITIAL_CASH = Decimal("100000")
 QLIB_ADAPTER_ID = "truealpha.direct_pe_smoke_adapter.v1"
@@ -102,34 +103,40 @@ class DirectPeSmokeActivation(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def bind_frozen_evidence(self) -> Self:
-        actual = (
+        scope_actual = (
             self.corpus_sha256,
             self.prepared_manifest_sha256,
             self.s7_manifest_sha256,
             self.s8_manifest_sha256,
-            self.qlib_distribution,
-            self.qlib_version,
-            self.qlib_release_commit,
-            self.qlib_lock_sha256,
             self.universe,
             self.expected_price_sessions,
             self.expected_decisions,
         )
-        expected = (
+        scope_expected = (
             CORPUS_SHA256,
             PREPARED_MANIFEST_SHA256,
             S7_MANIFEST_SHA256,
             S8_MANIFEST_SHA256,
-            QLIB_DISTRIBUTION,
-            QLIB_VERSION,
-            QLIB_RELEASE_COMMIT,
-            QLIB_LOCK_SHA256,
             EXPECTED_UNIVERSE,
             EXPECTED_PRICE_SESSIONS,
             EXPECTED_DECISIONS,
         )
-        if actual != expected:
+        if scope_actual != scope_expected:
             raise ValueError("S9 activation artifact identity drifted")
+        qlib_actual = (
+            self.qlib_distribution,
+            self.qlib_version,
+            self.qlib_release_commit,
+            self.qlib_lock_sha256,
+        )
+        qlib_expected = (
+            QLIB_DISTRIBUTION,
+            QLIB_VERSION,
+            QLIB_RELEASE_COMMIT,
+            QLIB_LOCK_SHA256,
+        )
+        if qlib_actual != qlib_expected:
+            raise ValueError("qlib_execution_identity_drift")
         return self
 
 
@@ -213,6 +220,13 @@ class DirectPeSmokeRequest(_StrictFrozenModel):
     price_bars: tuple[PriceBar, ...] = Field(min_length=1)
     current_peg_inputs: tuple[CurrentPegInput, ...] = Field(min_length=len(EXPECTED_UNIVERSE))
     initial_cash: _DECIMAL_INPUT = Field(default=INITIAL_CASH, gt=Decimal("0"))
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_typed_expression(cls, value: object) -> object:
+        if isinstance(value, dict) and isinstance(value.get("expression_definition"), str):
+            raise ValueError("typed_expression_required")
+        return value
 
     @field_validator("initial_cash", mode="before")
     @classmethod
@@ -458,6 +472,12 @@ def _common_price_panel(
     if any(sessions != common for sessions in session_sets):
         raise ValueError("price_session_denominator_mismatch")
     sessions = tuple(sorted(common))
+    schedule_payload = [
+        {"decision_date": decision.isoformat(), "execution_date": execution.isoformat()}
+        for decision, execution in _month_end_schedule(sessions)
+    ]
+    if canonical_sha256(schedule_payload) != EXPECTED_SCHEDULE_SHA256:
+        raise ValueError("missing_next_session")
     if len(sessions) != request.activation.expected_price_sessions:
         raise ValueError("price_session_denominator_mismatch")
     return sessions, by_instrument
