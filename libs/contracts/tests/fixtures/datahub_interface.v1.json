@@ -358,7 +358,7 @@
   ],
   "provenance": {
     "required_paths": [
-      "list obligation -> campaign work -> dispatch -> attempt result -> source vintage -> raw object -> normalized observation -> confidence assessment",
+      "list obligation -> campaign work -> dispatch -> attempt result -> source vintage -> normalized observation -> confidence assessment, with source vintage -> raw object archival",
       "raw object -> source vintage -> all affected attempts and immutable list obligations",
       "normalized observation -> source vintage -> source request and pinned source registry entry"
     ],

@@ -447,10 +447,12 @@ def test_experimental_module_is_iterable_without_changing_frozen_root_exports() 
     expected = {
         "CaptureCampaign",
         "CaptureRun",
+        "ListObligation",
         "SourceRequest",
         "CaptureWorkItem",
         "FetchAttempt",
         "FetchAttemptResult",
+        "RawObjectIdentity",
         "SourceVintage",
         "NormalizedObservation",
         "ConfidenceAssessment",
@@ -830,6 +832,10 @@ def test_frozen_corpus_declares_every_required_e1_negative_control() -> None:
     )
     source_vintage_refs = {vintage["source_vintage_ref"] for vintage in corpus["source_vintages"]}
     assert {observation["source_vintage_ref"] for observation in corpus["observations"]} <= source_vintage_refs
+    assert corpus["provenance"]["required_paths"][0] == (
+        "list obligation -> campaign work -> dispatch -> attempt result -> source vintage -> "
+        "normalized observation -> confidence assessment, with source vintage -> raw object archival"
+    )
     obligation_refs = {obligation["obligation_ref"] for obligation in corpus["obligations"]}
     selected_obligation_refs = set(corpus["recapture"]["selected_obligation_refs"])
     unaffected_obligation_refs = set(corpus["recapture"]["unaffected_obligation_refs"])
