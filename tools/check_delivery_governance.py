@@ -86,6 +86,7 @@ GOVERNANCE_CONTROL_PATHS = (
     "governance/**",
     "libs/runtime/tests/test_gate0_candidate.py",
     "libs/runtime/tests/test_delivery_governance.py",
+    "tools/agent_preflight.py",
     "tools/check_gate0_candidate.py",
     "tools/check_delivery_governance.py",
 )
