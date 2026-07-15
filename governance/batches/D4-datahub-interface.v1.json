@@ -149,7 +149,7 @@
       "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_datahub.py -q",
       "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
       "uv run --package truealpha-contracts python -m mypy",
-      "python3 tools/check_delivery_governance.py"
+      "uv run --package truealpha-contracts python tools/check_delivery_governance.py"
     ],
     "negative_controls": [
       "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
