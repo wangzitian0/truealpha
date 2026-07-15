@@ -1,14 +1,11 @@
 name: security-gate
 
 # This is a public repo touching financial-account data (moomoo). ci-required
-# calls it for PRs and main; feature-branch pushes call it directly so a leaked
-# credential or trading API is scanned as soon as the public branch is pushed.
+# calls it for PRs, merge groups, main, and tags. Local pre-commit hooks are the
+# immediate control; this required workflow is the non-duplicated CI backstop.
 
 on:
   workflow_call:
-  push:
-    branches-ignore: [main]
-    tags-ignore: ["**"]
 
 permissions:
   contents: read

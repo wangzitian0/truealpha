@@ -2,7 +2,7 @@ name: ci-required
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     types: [checks_requested]
   push:
@@ -28,7 +28,9 @@ jobs:
       qlib: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.qlib }}
       runtime: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.runtime }}
       web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.web }}
-      images: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.images }}
+      image_app_web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_app_web }}
+      image_llm_service: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_llm_service }}
+      image_data_engine: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_data_engine }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,10 +80,21 @@ jobs:
               - 'libs/contracts/conformance/**'
               - '.github/workflows/ci-web.yml'
               - '.github/workflows/ci-required.yml'
-            images:
+            image_app_web:
               - 'apps/app-web/**'
-              - 'apps/data-engine/**'
+              - '.github/workflows/release-images.yml'
+              - '.github/workflows/ci-required.yml'
+            image_llm_service:
               - 'apps/llm-service/**'
+              - 'libs/contracts/**'
+              - 'libs/factors/**'
+              - 'libs/runtime/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/release-images.yml'
+              - '.github/workflows/ci-required.yml'
+            image_data_engine:
+              - 'apps/data-engine/**'
               - 'libs/contracts/**'
               - 'libs/factors/**'
               - 'libs/runtime/**'
@@ -155,10 +168,31 @@ jobs:
     needs: changes
     uses: ./.github/workflows/ci-web.yml
 
-  images:
+  images_check:
     if: >-
       always() &&
-      (needs.changes.outputs.images == 'true' || github.ref_type == 'tag') &&
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+      (needs.changes.outputs.image_app_web == 'true' ||
+       needs.changes.outputs.image_llm_service == 'true' ||
+       needs.changes.outputs.image_data_engine == 'true')
+    needs: changes
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-images.yml
+    with:
+      publish: false
+      app_web: ${{ github.event_name == 'merge_group' || needs.changes.outputs.image_app_web == 'true' }}
+      llm_service: ${{ github.event_name == 'merge_group' || needs.changes.outputs.image_llm_service == 'true' }}
+      data_engine: ${{ github.event_name == 'merge_group' || needs.changes.outputs.image_data_engine == 'true' }}
+
+  images_release:
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      (needs.changes.outputs.image_app_web == 'true' ||
+       needs.changes.outputs.image_llm_service == 'true' ||
+       needs.changes.outputs.image_data_engine == 'true' ||
+       github.ref_type == 'tag') &&
       (needs.governance_pr.result == 'success' || needs.governance_pr.result == 'skipped') &&
       (needs.sync_issues.result == 'success' || needs.sync_issues.result == 'skipped') &&
       (needs.governance_push.result == 'success' || needs.governance_push.result == 'skipped') &&
@@ -174,12 +208,15 @@ jobs:
       packages: write
     uses: ./.github/workflows/release-images.yml
     with:
-      publish: ${{ github.event_name == 'push' }}
+      publish: true
+      app_web: true
+      llm_service: true
+      data_engine: true
 
   required:
     name: ci-required
     if: always()
-    needs: [changes, governance_pr, sync_issues, governance_push, security, db, python, qlib, runtime, web, images]
+    needs: [changes, governance_pr, sync_issues, governance_push, security, db, python, qlib, runtime, web, images_check, images_release]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
