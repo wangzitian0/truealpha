@@ -518,10 +518,23 @@ def test_attempt_sequences_fail_closed(
         _bundle(attempt_specs=attempt_specs)
 
 
-def test_closed_bundle_rejects_a_dispatched_attempt_without_an_outcome() -> None:
+def test_closed_bundle_requires_at_least_one_attempt_outcome() -> None:
     bundle, _ = _bundle()
-    with pytest.raises(ValidationError, match="outcome for every dispatched"):
+    with pytest.raises(ValidationError, match="at least 1 item"):
         DataHubInterfaceBundle(**{**bundle.model_dump(mode="python"), "attempt_results": ()})
+
+
+def test_closed_bundle_rejects_a_dispatched_attempt_without_an_outcome() -> None:
+    bundle, values = _bundle(
+        attempt_specs=((1, FetchAttemptOutcome.RATE_LIMITED), (2, FetchAttemptOutcome.SUCCESS))
+    )
+    with pytest.raises(ValidationError, match="outcome for every dispatched"):
+        DataHubInterfaceBundle(
+            **{
+                **bundle.model_dump(mode="python"),
+                "attempt_results": values["attempt_results"][:-1],
+            }
+        )
 
 
 def test_unchanged_response_can_only_reuse_the_same_pinned_source_request() -> None:

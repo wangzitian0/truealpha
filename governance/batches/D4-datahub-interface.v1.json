@@ -25,7 +25,7 @@
     "requirements": [
       "queued D4 registration and preparation are merged on main",
       "the tiny interface corpus remains frozen at defcec3f857f501dcb635df8d70c27cc64120d742852d6360fca45803b13a0d9",
-      "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while the E1 PR rebases on current main",
+      "the prepared D4 activation base remains immutable at 9f7acc9f72fb84a3aefc355875ac4524ef497d2c while every rung PR rebases on current main without rewriting that activation anchor",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
       "issue #210 contains this manifest path and exact SHA-256",

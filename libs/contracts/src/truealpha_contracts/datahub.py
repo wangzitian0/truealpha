@@ -982,7 +982,7 @@ class DataHubInterfaceBundle(BaseModel):
     work_items: tuple[CaptureWorkItem, ...] = Field(min_length=1)
     bindings: tuple[ObligationWorkBinding, ...] = Field(min_length=1)
     attempts: tuple[FetchAttempt, ...] = Field(min_length=1)
-    attempt_results: tuple[FetchAttemptResult, ...] = ()
+    attempt_results: tuple[FetchAttemptResult, ...] = Field(min_length=1)
     raw_objects: tuple[RawObjectIdentity, ...] = ()
     source_vintages: tuple[SourceVintage, ...] = ()
     results: tuple[ListObligationResult, ...] = Field(min_length=1)
