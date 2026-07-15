@@ -1,0 +1,41 @@
+{
+  "handoff_id": "handoff:d4-datahub-interface:c6c951d708ee1961c2350aa784a4be87dfab5e8c5c75ec61407dac0a8167e01a",
+  "schema_version": 1,
+  "revision": 1,
+  "state": "accepted",
+  "producer": {
+    "batch_id": "D4-datahub-interface",
+    "issue": 210,
+    "owner": "wangzitian0",
+    "head_sha": "64d41e45547d8e609ceced19dc1e49a3faea6655"
+  },
+  "schema_epoch": "truealpha-contracts.datahub.v2",
+  "readiness_ceiling": "E2 stable Local/CI interface only; no persistence, source call, schedule, query provider, Qlib binding, Staging activation, or data-readiness claim",
+  "evidence": [
+    {
+      "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
+      "sha256": "2a7f8a89d3947d603912aae24bdd471ff814e97c090207c3877eae9fd7efb9c5"
+    }
+  ],
+  "allowed_consumers": [
+    "C1-stable-mart-reads",
+    "D3-staging-topt-capture",
+    "D5-qqq-datahub-capacity"
+  ],
+  "allowed_environments": [
+    "ci",
+    "local"
+  ],
+  "retention": "permanent while an allowed consumer depends on this handoff",
+  "verification": {
+    "reviewer": "github-actions[bot]",
+    "evidence_sha256": "56524d1fa80aef9aabb9b0d24dd2fbbea99ff89a9a821f3daf9f151050edfc81",
+    "accepted_at": "2026-07-15T18:11:31Z",
+    "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29439459839"
+  },
+  "revocation": {
+    "reason": null,
+    "revoked_at": null,
+    "superseded_by": null
+  }
+}

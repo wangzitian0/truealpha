@@ -1,0 +1,48 @@
+{
+  "accepted_rung": "E2",
+  "base_sha": "9f7acc9f72fb84a3aefc355875ac4524ef497d2c",
+  "batch_id": "D4-datahub-interface",
+  "commands": [
+    {
+      "command": "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_datahub.py -q",
+      "exit_code": 0,
+      "output_sha256": "73c46bc02bdeb2fb738997d969c3a788ad4e4c59c3bede6dd68ad85ab8c6ae87"
+    },
+    {
+      "command": "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
+      "exit_code": 0,
+      "output_sha256": "c822b811c2e0019bee1324669633ca6aa6ae681c738309b0a31c13bbeebac766"
+    },
+    {
+      "command": "uv run --package truealpha-contracts python -m mypy",
+      "exit_code": 0,
+      "output_sha256": "078ad557b0e49d76ac85a1c664751c812f27b0ae9d86c432126d163fed5c21cc"
+    },
+    {
+      "command": "uv run --package truealpha-contracts python tools/check_delivery_governance.py",
+      "exit_code": 0,
+      "output_sha256": "3ce0a3f4b2b2d3fcc83181896297ac73b4b7b3034209f9e2b7514b3d55b0ebfa"
+    }
+  ],
+  "created_at": "2026-07-15T18:09:57.097804Z",
+  "evidence_id": "rung-evidence:D4-datahub-interface:0b23a032a1e928fe1e3284ea2a5d4749e9bd4664ab30577c59f75f221e1def26",
+  "manifest_sha256": "6939441f8d2ec3b6572b02c14618355f78a786b74586c673c39be5174a962710",
+  "negative_controls": [
+    "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
+    "campaign, run, obligation, source-request, work-item, dispatch, attempt-outcome, source-vintage, raw-object, observation, assessment, or edge identity drift",
+    "a provenance graph omits a required campaign-to-run, campaign-to-source-request, run-to-obligation, or obligation-to-work-item capture path",
+    "a work binding whose request omits its obligation's subject, capture requirement, or partition",
+    "run-scoped work loses provider sharing across overlapping compatible lists",
+    "a completed bundle omits a dispatch outcome, or an unchanged response reuses a vintage from another pinned request",
+    "identical raw bytes erase a later attempt or a separate list obligation",
+    "duplicate obligation, non-contiguous attempt, retry after terminal outcome, or unbounded retry",
+    "binary-float, non-finite, unexplained, or out-of-range confidence component",
+    "freshness, availability, applicability, quality, and confidence collapse into one mutable status",
+    "recapture execution differs from its frozen dry-run selection or broadens its predicate",
+    "factor-visible source, raw pointer, provider policy, or provenance branch metadata",
+    "database, source, schedule, query provider, Qlib data binding, or release activation"
+  ],
+  "producer_head_sha": "64d41e45547d8e609ceced19dc1e49a3faea6655",
+  "schema_version": 1,
+  "stable_handoff": false
+}

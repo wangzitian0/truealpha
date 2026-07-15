@@ -171,10 +171,18 @@
     "output": {
       "type": "DataHubInterfaceHandoff",
       "stable_handoff": true,
-      "state": "produced",
+      "state": "accepted",
       "handoff_id": "datahub-interface-handoff:c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "schema_epoch": "truealpha-contracts.datahub.v2",
+      "rung_evidence": {
+        "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
+        "sha256": "2a7f8a89d3947d603912aae24bdd471ff814e97c090207c3877eae9fd7efb9c5"
+      },
+      "handoff_manifest": {
+        "path": "governance/handoffs/D4-datahub-interface.v1.json",
+        "sha256": "5bf4a30ac507a0e214e58358c9476bf4ff02703079b891a1fae093320097bf98"
+      },
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
         "issue #41 mart and Qlib provider preparation after E2 acceptance",
