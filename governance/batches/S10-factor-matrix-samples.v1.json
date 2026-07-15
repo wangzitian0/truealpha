@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "batch_id": "S10-factor-matrix-samples",
+  "revision": 1,
+  "issue": 208,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "capture/storage",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E1",
+  "objective": "Freeze and implement replayable provider-specific daily-price sample capture for the existing nine-symbol development denominator.",
+  "claim_ceiling": "E1 immutable nine-symbol Yahoo and Twelve Data development sample evidence only; no reconciliation, adjusted-return, corporate-action, confidence, TOPT, factor, strategy, stable-handoff, or release-readiness claim",
+  "capability_issues": [
+    26
+  ],
+  "closes_issues": [],
+  "informational_issues": [
+    21,
+    29,
+    59,
+    71,
+    129,
+    203
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued S10 registration is merged to main",
+      "the nine-symbol provider plan and parser fixture hashes are committed in a preparation PR",
+      "the implementation PR pins its exact current main base SHA",
+      "issue #208 contains the exact manifest path and SHA-256",
+      "an independent reviewer is assigned before E0 acceptance",
+      "Twelve Data credentials remain runtime-only and are required only for E1 live capture"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "freeze",
+      "issue": 129,
+      "artifact": "accepted bounded Yahoo and Twelve Data reconciliation semantics",
+      "evidence": {
+        "path": "governance/batches/S1-price-source-calibration.v1.json",
+        "sha256": "377c4af2db584d691c82f9af1ccf9604256250ccf55fa295cd8d12f50f6f64bc"
+      },
+      "state": "accepted"
+    }
+  ],
+  "corpus": {
+    "environment": "Local/CI parser fixtures at E0; live public Yahoo and credentialed Twelve Data capture at E1",
+    "manifest_path": "apps/data-engine/samples/factor_matrix/capture_plan.v1.json",
+    "sha256": null,
+    "required_strata": [
+      "ADM, DDOG, DUOL, JPM, META, NICE, NVDA, PLUG, and SHOP exactly once",
+      "one explicit fixed start and end date shared by the denominator",
+      "Yahoo raw chart response and provider-specific normalized daily rows",
+      "Twelve Data raw time-series response with adjust=none and provider-specific normalized daily rows",
+      "unadjusted OHLCV separated from adjusted-close semantics",
+      "content-addressed request metadata, raw bytes, normalized bytes, and capture manifest",
+      "malformed schema, missing symbol, duplicate date, null field, secret leakage, and overwrite negative controls"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "apps/data-engine/samples/factor_matrix/**",
+      "apps/data-engine/scripts/capture_factor_matrix_samples.py",
+      "apps/data-engine/tests/test_factor_matrix_sample_capture.py"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "apps/data-engine/samples/prices/**",
+      "apps/data-engine/scripts/capture_strategy_evidence.py",
+      "apps/data-engine/src/data_engine/sources/yahoo.py",
+      "governance/batches/S1-price-source-calibration.v1.json",
+      "governance/batches/S8-qlib-factor-expression.v1.json"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "init.md",
+      "vision.md",
+      ".env/**",
+      "credentials/**",
+      "db/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "S10 captures development samples only; accepted source registration, PIT persistence, TOPT scope, factor semantics, replay, and release evidence remain separate"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest apps/data-engine/tests/test_factor_matrix_sample_capture.py -q",
+      "uv run ruff check apps/data-engine/scripts/capture_factor_matrix_samples.py apps/data-engine/tests/test_factor_matrix_sample_capture.py"
+    ],
+    "negative_controls": [
+      "API key or authorization value present in logs, metadata, raw path, normalized path, or manifest",
+      "date-relative or implicit provider window",
+      "missing or duplicate symbol in the frozen denominator",
+      "malformed provider response, duplicate coordinate, null required OHLCV field, or out-of-window date",
+      "provider-specific adjusted and unadjusted values collapsed into one semantic field",
+      "different bytes overwrite an existing capture ID",
+      "missing Twelve Data credential represented as successful E1 evidence",
+      "capture output labeled reconciled, confidence-promoted, TOPT-ready, strategy-ready, or production-ready"
+    ],
+    "output": {
+      "type": "FactorMatrixSampleCaptureEvidence",
+      "stable_handoff": false,
+      "state": "provisional_e1",
+      "allowed_evidence_readers": [
+        "issue #21 factor semantics batches",
+        "issue #26 Qlib provider and replay batches",
+        "issue #71 independent factor verification batches"
+      ]
+    }
+  },
+  "invalidation": [
+    "denominator, provider, provider symbol, date window, request parameters, adjustment policy, parser schema, normalized columns, or manifest schema change creates a new revision",
+    "provider revisions never overwrite evidence; they create a new capture ID",
+    "a parser repair reruns E0 and requires re-normalization from retained raw bytes",
+    "TOPT expansion, source activation, confidence promotion, reconciliation, factor computation, or release use requires a separate bounded batch"
+  ],
+  "rollback": "Remove the isolated S10 plan, capture command, fixtures, tests, and development capture directory together; no accepted registry, runtime, release manifest, or scheduled asset may reference them."
+}
