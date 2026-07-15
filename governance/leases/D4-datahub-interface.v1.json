@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:3a1a85cee501631d0f81587a2c27740315b124e1516eb6280d78c4427da4dc8d",
+  "batch_id": "D4-datahub-interface",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/contracts/src/truealpha_contracts/__init__.py"
+  ],
+  "base_sha": "8efda7e6d7fe1fd1ef2d7f5bbcc5aa1af1d85f50",
+  "expires_at": "2026-07-29T00:00:00Z"
+}

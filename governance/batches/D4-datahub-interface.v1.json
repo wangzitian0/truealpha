@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D4-datahub-interface",
-  "revision": 2,
+  "revision": 3,
   "issue": 210,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E2",
   "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
-  "claim_ceiling": "Preparation-only frozen tiny interface corpus; this revision earns no rung and approves no accepted interface, stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or readiness claim",
+  "claim_ceiling": "E0 experimental typed DataHub interface only; no tiny-corpus evidence, stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 171, 205, 207],
@@ -20,12 +20,12 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "62a7d78abb36abb9638d4d7da967e03b5a9cd449",
+    "base_sha": "8efda7e6d7fe1fd1ef2d7f5bbcc5aa1af1d85f50",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "queued D4 registration is merged and this preparation is rebased on main at 62a7d78abb36abb9638d4d7da967e03b5a9cd449",
-      "the preparation PR freezes the tiny interface corpus at f0699a47cb621ff71dab1bbc193c5951eacf10999888e32f71d1ed1bfa4a60cf",
-      "the E0 implementation PR pins its exact current main base SHA",
+      "queued D4 registration and preparation are merged on main",
+      "the tiny interface corpus remains frozen at f0699a47cb621ff71dab1bbc193c5951eacf10999888e32f71d1ed1bfa4a60cf",
+      "the E0 implementation PR pins exact current main base 8efda7e6d7fe1fd1ef2d7f5bbcc5aa1af1d85f50",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
       "issue #210 contains this manifest path and exact SHA-256",
@@ -133,7 +133,10 @@
       "libs/contracts/src/truealpha_contracts/__init__.py"
     ],
     "lease_owner": "wangzitian0",
-    "lease_manifest": null
+    "lease_manifest": {
+      "path": "governance/leases/D4-datahub-interface.v1.json",
+      "sha256": "ab66cbc15e429d19cb1e35e9c27dc73a23332e53d6e2871fd3066aaa4170b603"
+    }
   },
   "release_activation": {
     "allowed": false,
@@ -161,7 +164,7 @@
     "output": {
       "type": "DataHubInterfaceEvidence",
       "stable_handoff": false,
-      "state": "queued",
+      "state": "provisional_e0",
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
         "issue #41 mart and Qlib provider preparation after E2 acceptance",
