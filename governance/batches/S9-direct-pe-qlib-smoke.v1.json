@@ -87,7 +87,8 @@
       "libs/factors/src/factors/batches/direct_pe_qlib_smoke/**",
       "libs/factors/tests/batches/direct_pe_qlib_smoke/**",
       "apps/data-engine/scripts/run_direct_pe_qlib_smoke.py",
-      "apps/data-engine/tests/test_direct_pe_qlib_smoke.py"
+      "apps/data-engine/tests/test_direct_pe_qlib_smoke.py",
+      "governance/leases/S9-direct-pe-qlib-smoke.v1.json"
     ],
     "read_only": [
       "vision.md",
@@ -122,9 +123,14 @@
       "pyproject.toml",
       "Makefile"
     ],
-    "integration_surface": [],
-    "lease_owner": null,
-    "lease_manifest": null
+    "integration_surface": [
+      "libs/factors/src/factors/batches/direct_pe_qlib_smoke/__init__.py"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/S9-direct-pe-qlib-smoke.v1.json",
+      "sha256": "2a2ec7ac07430b28642a7b286b409c01c2f174a420c282d939e372fa848cf924"
+    }
   },
   "release_activation": {
     "allowed": false,

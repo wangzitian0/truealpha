@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:3f0e56a27b88646f467cc6015ecbbe909650d7734d1c1ffa854e154a40081cc2",
+  "batch_id": "S9-direct-pe-qlib-smoke",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "libs/factors/src/factors/batches/direct_pe_qlib_smoke/__init__.py"
+  ],
+  "base_sha": "830d3d0e2f2bc9d96a519dd81209d0b971c07ccf",
+  "expires_at": "2026-07-22T00:00:00Z"
+}
