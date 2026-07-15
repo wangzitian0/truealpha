@@ -379,7 +379,11 @@ def work_prefix(title: Any) -> str | None:
     if not isinstance(title, str):
         return None
     match = WORK_PREFIX_RE.fullmatch(title)
-    if match is None or DISALLOWED_TITLE_TOKEN_RE.search(match.group("description")):
+    if (
+        match is None
+        or match.group("description").startswith("[")
+        or DISALLOWED_TITLE_TOKEN_RE.search(match.group("description"))
+    ):
         return None
     return f"[{match.group('workspace')}]"
 

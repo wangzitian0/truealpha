@@ -1685,6 +1685,7 @@ def test_only_accepted_gate_candidate_requires_full_live_fan_in():
         "Replay the factor panel",
         "[S1] Replay the factor panel",
         "[truealpha-datahub] [D1] Replay the factor panel",
+        "[truealpha-datahub] [truealpha-factors] Replay the factor panel",
     ),
 )
 def test_pull_request_metadata_rejects_invalid_workspace_titles(title):
@@ -1782,11 +1783,13 @@ def test_workflow_authorizes_every_pull_request_against_exact_head():
     assert "uses: ./.github/workflows/ci-governance.yml" in caller
     assert "pr_base_sha: ${{ github.event.pull_request.base.sha }}" in caller
     assert "pr_head_sha: ${{ github.event.pull_request.head.sha }}" in caller
+    assert "pr_number: ${{ github.event.pull_request.number }}" in caller
     assert "--pr-base-sha" in workflow
     assert "--pr-head-sha" in workflow
     assert "--github-pr" in workflow
     assert "pull-request.json" in workflow
     assert "{number, title, body}" in workflow
+    assert '"repos/$GITHUB_REPOSITORY/pulls/${{ inputs.pr_number }}"' in workflow
     assert "ref: ${{ inputs.pr_head_sha }}" in workflow
     assert "allow-blocked-gate-candidate" not in workflow
     assert "uses: astral-sh/setup-uv@v5" in workflow

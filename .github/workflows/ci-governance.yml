@@ -12,6 +12,9 @@ on:
       pr_head_sha:
         required: false
         type: string
+      pr_number:
+        required: false
+        type: number
   issues:
     types: [opened, edited, closed, reopened, labeled, unlabeled, milestoned, demilestoned]
   workflow_dispatch:
@@ -70,7 +73,7 @@ jobs:
             | jq -s '[.[][] | select(has("pull_request") | not) | {number, title, state, body, labels, milestone}]' \
             > "$RUNNER_TEMP/vision-issues.json"
           gh api \
-            "repos/$GITHUB_REPOSITORY/pulls/${{ github.event.pull_request.number }}" \
+            "repos/$GITHUB_REPOSITORY/pulls/${{ inputs.pr_number }}" \
             --jq '{number, title, body}' \
             > "$RUNNER_TEMP/pull-request.json"
       - name: Authorize pull-request diff

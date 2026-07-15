@@ -9,7 +9,7 @@
   "included_issues": [57, 58, 59, 60, 61],
   "dependency_order": [57, 58, 59, 60, 61],
   "candidate_payload_sha256": "7c70d246232621353c769195248dcdc4e003b39ff301daa06b26b73b92428ee3",
-  "candidate_tree_sha256": "fac98e17855d7580c45d768c035026a8dc6e37943c41411d28e8206345f1fc04",
+  "candidate_tree_sha256": "a6c588d158a50e14f3a56bb2d57f056c40ec002ee413ffa8f294cfd332ae8734",
   "paths": [
     ".github/**",
     "AGENTS.md",
