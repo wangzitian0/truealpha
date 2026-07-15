@@ -2213,6 +2213,7 @@ def test_image_publication_is_reusable_and_waits_for_build_and_required_checks()
         in image_release
     )
     assert "publish: true" in image_release
+    assert "packages: write" in image_release
     assert "app_web: true" in image_release
     assert "llm_service: true" in image_release
     assert "data_engine: true" in image_release
@@ -2231,4 +2232,4 @@ def test_image_publication_is_reusable_and_waits_for_build_and_required_checks()
         "  publish:\n    if: inputs.publish && needs.plan.outputs.has_images == 'true'\n    needs: [plan, build]"
         in release
     )
-    assert "packages: write" in release.split("  publish:\n", 1)[1]
+    assert "packages: write" not in release
