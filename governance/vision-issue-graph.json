@@ -262,11 +262,11 @@
     "S10-factor-matrix-samples": {
       "issue": 208,
       "owner_gate": 29,
-      "status": "queued",
+      "status": "prepared",
       "target_rung": "E0",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S10-factor-matrix-samples.v1.json",
-      "sha256": "b4bceb156009049be0b445764c7508106a6f8605cac414619d05872baf91e522"
+      "sha256": "f227aafdd2025f199e6ef3035bfb113d2100cf8ee2d21798546bb1a83fea0b9f"
     }
   },
   "artifact_edges": [
