@@ -16,6 +16,7 @@ SERVICE = "truealpha/app"
 SOURCE_REPOSITORY = "wangzitian0/truealpha"
 CONTRACT_VERSION = 1
 _SOURCE_RUN_PATH_RE = re.compile(r"\A/wangzitian0/truealpha/actions/runs/([1-9][0-9]*)\Z")
+_SOURCE_SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 
 
 def request_from_mapping(raw: Mapping[str, Any]) -> DeployRequest:
@@ -88,8 +89,13 @@ def _validate_authority(raw: Mapping[str, Any]) -> None:
         raise ValueError("deploy_type must be staging")
 
     version_ref = raw.get("version_ref")
-    if isinstance(version_ref, str):
-        classify_ref(version_ref)
+    if not isinstance(version_ref, str):
+        raise ValueError("version_ref must be a string")
+    classify_ref(version_ref)
+
+    source_sha = raw.get("source_sha")
+    if not isinstance(source_sha, str) or _SOURCE_SHA_RE.fullmatch(source_sha) is None:
+        raise ValueError("source_sha must be a lowercase 40-hex commit sha")
 
     evidence = raw.get("evidence")
     if not isinstance(evidence, Mapping):

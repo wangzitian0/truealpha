@@ -93,6 +93,20 @@ def test_frozen_negative_cases_fail_closed(corpus: dict, case_id: str) -> None:
         renderer.request_from_mapping(_merged(valid["request"], case["override"]))
 
 
+@pytest.mark.parametrize("version_ref", [None, True, 1])
+def test_version_ref_requires_a_string(corpus: dict, version_ref: object) -> None:
+    valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")
+    with pytest.raises(ValueError, match="version_ref must be a string"):
+        renderer.request_from_mapping(_merged(valid["request"], {"version_ref": version_ref}))
+
+
+@pytest.mark.parametrize("source_sha", [None, True, "A" * 40, "a" * 39, "a" * 41])
+def test_source_sha_requires_lowercase_commit_identity(corpus: dict, source_sha: object) -> None:
+    valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")
+    with pytest.raises(ValueError, match="source_sha must be a lowercase 40-hex commit sha"):
+        renderer.request_from_mapping(_merged(valid["request"], {"source_sha": source_sha}))
+
+
 def test_run_id_must_match_truealpha_actions_url(corpus: dict) -> None:
     valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")
     raw = _merged(valid["request"], {"evidence": {"source_run_id": "87654321"}})
