@@ -13,8 +13,8 @@
     {
       "from": 210,
       "to": 41,
-      "class": "informational",
-      "artifact": "D4 lineage; the #41 batch must pin the exact accepted E2 handoff"
+      "class": "freeze",
+      "artifact": "accepted D4 E2 DataHub interface handoff"
     }
   ]
 }
