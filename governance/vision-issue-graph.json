@@ -31,7 +31,7 @@
       "milestone": "Research Consumption",
       "status": "queued",
       "accepted_evidence": null,
-      "acceptance_issues": [41, 42, 43, 44, 45, 46, 48, 72, 229, 235]
+      "acceptance_issues": [41, 42, 43, 44, 45, 46, 48, 72, 229, 235, 236]
     },
     "32": {
       "name": "Production Strategy Validation",
@@ -123,7 +123,8 @@
     "71": {"gate": 29, "terminal_evidence": "E4"},
     "72": {"gate": 31, "terminal_evidence": "E4"},
     "229": {"gate": 31, "terminal_evidence": "E2"},
-    "235": {"gate": 31, "terminal_evidence": "E3"}
+    "235": {"gate": 31, "terminal_evidence": "E3"},
+    "236": {"gate": 31, "terminal_evidence": "E3"}
   },
   "batches": {},
   "artifact_edges": [
@@ -169,6 +170,11 @@
     {"from": 41, "to": 235, "class": "freeze", "artifact": "stable research query contract"},
     {"from": 43, "to": 235, "class": "freeze", "artifact": "traceable report artifact contract"},
     {"from": 44, "to": 235, "class": "freeze", "artifact": "approved deterministic card contract"},
+    {"from": 229, "to": 236, "class": "start", "artifact": "accepted governed research access handoff"},
+    {"from": 41, "to": 236, "class": "start", "artifact": "stable research query contract"},
+    {"from": 45, "to": 236, "class": "start", "artifact": "direct-mart dashboard handoff"},
+    {"from": 46, "to": 236, "class": "start", "artifact": "private conversation outcome handoff"},
+    {"from": 235, "to": 236, "class": "start", "artifact": "owner-scoped document lifecycle handoff"},
     {"from": 43, "to": 44, "class": "start", "artifact": "traceable report artifact"},
     {"from": 42, "to": 46, "class": "start", "artifact": "typed MCP tools"},
     {"from": 42, "to": 48, "class": "closure", "artifact": "MCP conformance"},
@@ -176,6 +182,7 @@
     {"from": 44, "to": 48, "class": "closure", "artifact": "card conformance"},
     {"from": 45, "to": 48, "class": "closure", "artifact": "App conformance"},
     {"from": 46, "to": 48, "class": "closure", "artifact": "chat conformance"},
+    {"from": 236, "to": 48, "class": "closure", "artifact": "role-aware workspace conformance"},
     {"from": 11, "to": 51, "class": "freeze", "artifact": "isolated Staging environment"},
     {"from": 40, "to": 51, "class": "freeze", "artifact": "accepted all-module replay candidate"},
     {"from": 61, "to": 51, "class": "freeze", "artifact": "natural-refresh and staging SLO policy"},
