@@ -166,7 +166,7 @@
     {"from": 229, "to": 43, "class": "start", "artifact": "accepted governed research access handoff"},
     {"from": 229, "to": 45, "class": "start", "artifact": "accepted governed research access handoff"},
     {"from": 229, "to": 235, "class": "start", "artifact": "accepted governed research access handoff"},
-    {"from": 41, "to": 235, "class": "freeze", "artifact": "stable materialized research read handoff"},
+    {"from": 41, "to": 235, "class": "freeze", "artifact": "stable research query contract"},
     {"from": 43, "to": 235, "class": "freeze", "artifact": "traceable report artifact contract"},
     {"from": 44, "to": 235, "class": "freeze", "artifact": "approved deterministic card contract"},
     {"from": 43, "to": 44, "class": "start", "artifact": "traceable report artifact"},
