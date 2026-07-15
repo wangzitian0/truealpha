@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "S9-direct-pe-qlib-smoke",
-  "revision": 3,
+  "revision": 4,
   "issue": 203,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "strategy",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Project checked-in direct vendor P/E observations into a provenance-neutral panel, execute one safe Qlib earnings-yield expression, and emit a deterministic fixed-cohort price-return smoke report.",
-  "claim_ceiling": "E0 typed fixed-cohort direct-P/E projection, safe Qlib earnings-yield execution, current-only PEG snapshot, monthly next-session-open replay, deterministic price-return report, and fail-closed controls only; the emitted provisional-E1 report is an unaccepted candidate for the next rung, and this revision accepts no Tiny evidence, PIT vendor-history semantics, historical PEG, total return, stable handoff, strategy validation, alpha, or release-readiness claim",
+  "claim_ceiling": "E1 fixed-cohort direct-P/E, safe Qlib earnings-yield, current-only PEG snapshot, monthly next-session-open replay, deterministic unadjusted price-return report, and fail-closed Tiny evidence only; no PIT vendor-history semantics, historical PEG, total return, stable handoff, strategy validation, alpha, or release-readiness claim",
   "capability_issues": [
     26
   ],
@@ -29,10 +29,10 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "830d3d0e2f2bc9d96a519dd81209d0b971c07ccf",
+    "base_sha": "870548f06a19e7a26a17a56fefb779ddb6bc4d3f",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "the prepared S9 revision is merged and the E0 implementation revision is based on main at 830d3d0e2f2bc9d96a519dd81209d0b971c07ccf",
+      "the accepted E0 S9 revision is merged and the E1 evidence revision is based on main at 870548f06a19e7a26a17a56fefb779ddb6bc4d3f",
       "the exact direct-P/E and price corpus paths and SHA-256 values are committed in a preparation PR",
       "the implementation PR pins its exact current main base SHA",
       "the implementation reuses the workspace-excluded Qlib 0.9.7 runtime and does not change either lock",
@@ -159,7 +159,7 @@
     "output": {
       "type": "DirectPeQlibSmokeReport",
       "stable_handoff": false,
-      "state": "provisional_e1",
+      "state": "accepted_e1",
       "accepted_slice": {
         "expression": "Div(1,$pe)",
         "universe_size": 4,
