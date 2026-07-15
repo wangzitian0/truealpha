@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "batch_id": "A0-governed-research-access",
+  "revision": 1,
+  "issue": 230,
+  "owner_gate": 31,
+  "status": "queued",
+  "lane": "consumption",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E2",
+  "objective": "Establish a governed multi-user research access boundary before MCP, reports, cards, the Web App, or chat expose personal research state.",
+  "claim_ceiling": "Queued authorization-contract design only; no code, schema, authentication route, identity-provider binding, browser/MCP access, report/card mutation, replay submission, factor execution, Qlib invocation, source call, or release activation is accepted.",
+  "capability_issues": [229],
+  "closes_issues": [229],
+  "informational_issues": [31, 41, 42, 43, 45, 46, 66, 224, 225, 226, 227],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "the #229 capability registration and this queued batch registration are merged to main",
+      "#81 has accepted the actual-diff, merge-base, corpus-byte, integration-lease, command-evidence, and handoff enforcement required to activate queued batches",
+      "the preparation PR freezes the access corpus path and SHA-256 without changing implementation paths",
+      "the implementation PR pins the exact current main base SHA and an independent reviewer",
+      "one active integration lease covers init.md, the contract export, the additive migration, db/roles.sql, and the SQL contract test",
+      "issue #230 contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [],
+  "later_claim_dependencies": [
+    "#41 must publish an accepted E2 stable typed mart-read handoff before #42, #43, or #45 implement against this access handoff",
+    "#225, #226, and #227 must each publish their resolved implementation design before their conversation, document, or Web work is scheduled",
+    "#66 owns deployed authentication, entitlement, privacy, and consumer validation; this batch makes no Production claim",
+    "a named product/legal owner must approve retention, deletion, export, and break-glass policy before any user-content retention or exception is activated"
+  ],
+  "corpus": {
+    "environment": "not frozen until the preparation PR",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "two isolated tenants with owner-only conversation and document records",
+      "one permitted and one denied immutable publication class for materialized research",
+      "administrator access to permitted strategy/backtest results and non-content audit metadata only",
+      "administrator denial for private conversation/document content",
+      "expired session, append-only grant revocation, cross-tenant object-ID guess, and client-supplied role/tier rejection",
+      "absent, invalid, delegated-MCP, browser-session, and service-identity authentication contexts",
+      "authorization denial before mart SQL or artifact retrieval and append-only audit coverage for each outcome"
+    ]
+  },
+  "source_ceiling": "Checked-in typed and SQL fixtures only through E2; no network identity-provider call, credential, live source, data refresh, or external MCP client is used.",
+  "paths": {
+    "writable": [
+      "init.md",
+      "docs/architecture-decisions/A0-governed-research-access.md",
+      "libs/contracts/src/truealpha_contracts/access.py",
+      "libs/contracts/src/truealpha_contracts/__init__.py",
+      "libs/contracts/tests/test_access.py",
+      "libs/contracts/tests/fixtures/governed_research_access.v1.json",
+      "db/migrations/0022_app_identity.sql",
+      "db/roles.sql",
+      "db/tests/governed_research_access_contract.sql",
+      "governance/leases/A0-governed-research-access.v1.json",
+      "governance/evidence/A0-governed-research-access-E0.v1.json",
+      "governance/evidence/A0-governed-research-access-E1.v1.json",
+      "governance/evidence/A0-governed-research-access-E2.v1.json",
+      "governance/handoffs/A0-governed-research-access.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "docs/iterative-delivery.md",
+      "libs/contracts/src/truealpha_contracts/common.py",
+      "libs/contracts/src/truealpha_contracts/models.py",
+      "libs/contracts/src/truealpha_contracts/ports.py",
+      "libs/contracts/src/truealpha_contracts/execution.py",
+      "db/migrations/0001_schemas.sql"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "apps/**",
+      "libs/factors/**",
+      "libs/runtime/**",
+      "db/migrations/0002_staging_core.sql",
+      "db/migrations/0003_ops.sql",
+      "db/migrations/0004_runtime_contracts.sql",
+      "db/migrations/0005_fund_holding_dual_lines.sql",
+      "db/migrations/0006_bitemporal_lineage.sql",
+      "db/migrations/0017_contract_objects.sql",
+      "db/migrations/0018_usage_review_contracts.sql",
+      "db/migrations/0019_mvp_filing_document.sql",
+      "db/migrations/0020_headcount_extraction.sql",
+      "db/migrations/0021_mvp_medium_domains.sql",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [
+      "init.md",
+      "docs/architecture-decisions/A0-governed-research-access.md",
+      "libs/contracts/src/truealpha_contracts/__init__.py",
+      "db/migrations/0022_app_identity.sql",
+      "db/roles.sql",
+      "db/tests/governed_research_access_contract.sql"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/A0-governed-research-access.v1.json",
+      "sha256": null
+    }
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "This batch creates only an authorization contract and private-state storage boundary. No ReleaseManifest, default route, schedule, consumer binding, or production identity provider may select it."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/contracts/tests/test_access.py -q",
+      "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/tests/test_access.py",
+      "uv run mypy",
+      "psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
+      "python3 tools/check_delivery_governance.py"
+    ],
+    "negative_controls": [
+      "missing, expired, revoked, cross-tenant, or client-supplied access identity reaches a mart query, artifact retrieval, or mutation",
+      "administrator reads private conversation or document content without separately approved break-glass evidence",
+      "grant, revocation, publication policy, or access audit row is updated or deleted instead of appended",
+      "private app rows bypass RLS or return after cross-tenant object-ID guessing",
+      "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
+      "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
+      "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated"
+    ],
+    "output": {
+      "type": "GovernedResearchAccessHandoff",
+      "stable_handoff": true,
+      "state": "planned_e2",
+      "allowed_evidence_readers": [
+        "the future #42 MCP implementation batch",
+        "the future #43 report/document implementation batch",
+        "the future #45 Web implementation batch",
+        "the future #46 chat implementation batch",
+        "the future #66 deployed-consumer validation batch"
+      ],
+      "retention": "E0/E1 evidence follows CI retention; the accepted E2 contract, handoff, policy identities, and audit schema are retained permanently."
+    }
+  },
+  "invalidation": [
+    "AccessContext identity grain, authentication method, action/resource vocabulary, publication-policy identity, RLS context protocol, append-only event semantics, retention policy, or corpus change creates a new batch revision and reruns affected rungs",
+    "a change to App-direct-mart, LLM/MCP typed-read, factor/backtest isolation, or source-budget constraints requires an init.md amendment before implementation",
+    "a release, route, identity-provider, credential, sharing, export, break-glass, or replay-execution requirement expands scope and requires a separate authorized batch",
+    "a revoked grant or policy preserves historical audit/evidence but blocks new authorization decisions under that grant or policy"
+  ],
+  "rollback": "Revert the active batch revision and revoke any produced handoff before consumer activation. The additive app schema remains backward compatible; authorization, grant, revocation, publication-policy, and audit records are never mutated or deleted."
+}
