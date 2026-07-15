@@ -1640,9 +1640,7 @@ def test_required_ci_aggregates_every_reusable_check_and_is_always_terminal():
 
 
 def test_direct_security_scan_excludes_main_and_all_tag_pushes():
-    workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "security-gate.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "security-gate.yml").read_text(encoding="utf-8")
 
     assert "branches-ignore: [main]" in workflow
     assert 'tags-ignore: ["**"]' in workflow
