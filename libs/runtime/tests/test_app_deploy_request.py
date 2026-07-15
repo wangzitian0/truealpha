@@ -66,6 +66,14 @@ def test_valid_staging_request_round_trips_and_is_canonical(corpus: dict) -> Non
     )
 
 
+@pytest.mark.parametrize("contract_version", [2, True])
+def test_contract_version_must_be_v1(corpus: dict, contract_version: object) -> None:
+    valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")
+    raw = _merged(valid["request"], {"contract_version": contract_version})
+    with pytest.raises(ValueError, match="contract_version must be 1"):
+        renderer.request_from_mapping(raw)
+
+
 @pytest.mark.parametrize(
     "case_id",
     [

@@ -14,6 +14,7 @@ from infra2_sdk.refs import classify_ref
 
 SERVICE = "truealpha/app"
 SOURCE_REPOSITORY = "wangzitian0/truealpha"
+CONTRACT_VERSION = 1
 _SOURCE_RUN_PATH_RE = re.compile(r"\A/wangzitian0/truealpha/actions/runs/([1-9][0-9]*)\Z")
 
 
@@ -36,7 +37,7 @@ def render_request(
     """Build the only request shape this repository is currently allowed to emit."""
     return request_from_mapping(
         {
-            "contract_version": 1,
+            "contract_version": CONTRACT_VERSION,
             "request_id": request_id,
             "operation": DeployOperation.DEPLOY.value,
             "service": SERVICE,
@@ -68,6 +69,9 @@ def canonical_json(request: DeployRequest) -> str:
 
 
 def _validate_authority(raw: Mapping[str, Any]) -> None:
+    contract_version = raw.get("contract_version")
+    if isinstance(contract_version, bool) or contract_version != CONTRACT_VERSION:
+        raise ValueError(f"contract_version must be {CONTRACT_VERSION}")
     if raw.get("service") != SERVICE:
         raise ValueError(f"service must be {SERVICE}")
     if raw.get("source_repository") != SOURCE_REPOSITORY:

@@ -38,7 +38,7 @@ Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 ## Deployment
 
 Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC.
-TrueAlpha does not checkout or execute infra2 source. This repo owns the images;
+TrueAlpha does not check out or execute infra2 source. This repo owns the images;
 infra2 owns deployed Compose, Vault secrets, Traefik routes, persistent Postgres,
 the environment-specific S3-compatible storage binding, and every deployment side
 effect. The application pins only the versioned `infra2-sdk` request contract.
