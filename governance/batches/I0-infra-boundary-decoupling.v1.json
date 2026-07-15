@@ -10,7 +10,7 @@
   "target_rung": "E0",
   "terminal_rung": "E1",
   "objective": "Remove TrueAlpha's reverse source dependency on infra2 and replace it with a versioned, side-effect-free deploy-request contract boundary.",
-  "claim_ceiling": "Queued repository-boundary work only; no code, deployment request, Staging evidence, runtime activation, or Production-readiness claim",
+  "claim_ceiling": "E0 repository-boundary code and deterministic DeployRequest rendering only; no dispatch sender, runtime activation, live-environment evidence, or Production-readiness claim",
   "capability_issues": [
     11
   ],
