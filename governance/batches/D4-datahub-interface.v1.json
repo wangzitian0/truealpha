@@ -1,30 +1,30 @@
 {
   "schema_version": 1,
   "batch_id": "D4-datahub-interface",
-  "revision": 1,
+  "revision": 2,
   "issue": 210,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E2",
   "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
-  "claim_ceiling": "queued E0 contract work only; no accepted interface, stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or readiness claim",
+  "claim_ceiling": "Preparation-only frozen tiny interface corpus; this revision earns no rung and approves no accepted interface, stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 171, 205, 207],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "6cdfd355889753aaf173e1dadc3655f65319dc16",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "queued batch registration is merged to main before corpus preparation",
-      "the preparation PR freezes the exact tiny interface corpus bytes",
+      "queued D4 registration is merged to main at 6cdfd355889753aaf173e1dadc3655f65319dc16",
+      "the preparation PR freezes the tiny interface corpus at 140aa571b268ddb0720ecd7d6ac347893c25b667786ca4aba67fdc6ab57704f2",
       "the E0 implementation PR pins its exact current main base SHA",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the shared contracts export",
@@ -82,7 +82,7 @@
   "corpus": {
     "environment": "Local/CI checked-in typed interface fixtures only",
     "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
-    "sha256": null,
+    "sha256": "140aa571b268ddb0720ecd7d6ac347893c25b667786ca4aba67fdc6ab57704f2",
     "required_strata": [
       "one immutable list with success and terminal-failure obligations",
       "two overlapping immutable lists sharing one canonical source request",

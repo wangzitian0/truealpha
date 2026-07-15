@@ -172,11 +172,11 @@
     "D4-datahub-interface": {
       "issue": 210,
       "owner_gate": 29,
-      "status": "queued",
+      "status": "prepared",
       "target_rung": "E0",
       "terminal_rung": "E2",
       "manifest": "governance/batches/D4-datahub-interface.v1.json",
-      "sha256": "9954cc08074c5c9c405cb0557658fc7de76800cf906de057597161c50ee35c8f"
+      "sha256": "992846450f2e5ff81dda4e76cd33e8be748601f8974fafd504f23c2f9270a7d2"
     },
     "H0-core-headcount-extraction": {
       "issue": 104,
