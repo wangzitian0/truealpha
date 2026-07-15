@@ -2184,7 +2184,10 @@ def test_required_ci_aggregates_every_reusable_check_and_is_always_terminal():
 
 
 def test_security_scan_defers_open_pr_pushes_to_the_required_workflow():
-    workflow = (MODULE_PATH.parents[1] / ".github" / "workflows" / "security-gate.yml").read_text(encoding="utf-8")
+    workflows = MODULE_PATH.parents[1] / ".github" / "workflows"
+    workflow = (workflows / "security-gate.yml").read_text(encoding="utf-8")
+    required = (workflows / "ci-required.yml").read_text(encoding="utf-8")
+    security_call = required.split("  security:\n", 1)[1].split("  db:\n", 1)[0]
 
     assert "workflow_call:" in workflow
     assert "  push:" in workflow
@@ -2194,6 +2197,7 @@ def test_security_scan_defers_open_pr_pushes_to_the_required_workflow():
     assert 'select(.state == "open")' in workflow
     assert 'echo "should_scan=false"' in workflow
     assert 'echo "should_scan=true"' in workflow
+    assert "pull-requests: read" in security_call
     for job in ("secret-scan", "no-trade-api"):
         job_body = workflow.split(f"  {job}:\n", 1)[1]
         assert "if: needs.scan_policy.outputs.should_scan == 'true'" in job_body
