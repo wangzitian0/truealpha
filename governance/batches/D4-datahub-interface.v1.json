@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "batch_id": "D4-datahub-interface",
+  "revision": 1,
+  "issue": 210,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E2",
+  "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
+  "claim_ceiling": "queued E0 contract work only; no accepted interface, stable handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or readiness claim",
+  "capability_issues": [],
+  "closes_issues": [],
+  "informational_issues": [41, 60, 61, 171, 205, 207],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued batch registration is merged to main before corpus preparation",
+      "the preparation PR freezes the exact tiny interface corpus bytes",
+      "the E0 implementation PR pins its exact current main base SHA",
+      "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers the shared contracts export",
+      "issue #210 contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 57,
+      "artifact": "identity-market-time-universe contracts",
+      "evidence": {
+        "path": "governance/evidence/issue-57.v1.json",
+        "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640"
+      },
+      "git_objects": [
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/universe.py",
+          "oid": "292b73b7fd2f44a440fb581c8a9d9a9f199c2730"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/market.py",
+          "oid": "8e6e232037a05b8fa5a812076dda4b3fd447afd8"
+        },
+        {
+          "ref": "git:a467c8dd55011ca3c0bfe50d4bea80bd0e33113f:libs/contracts/src/truealpha_contracts/registries.py",
+          "oid": "d2c86876086e7f6ffccbc938bd733093906f6939"
+        }
+      ],
+      "legacy_accepted": true,
+      "state": "accepted"
+    },
+    {
+      "class": "start",
+      "issue": 58,
+      "artifact": "capture-snapshot-runner-lineage contracts",
+      "evidence": {
+        "path": "governance/evidence/issue-58.v2.json",
+        "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99"
+      },
+      "ref": "git:71df1a7214d28fd6e161da04769466abe5c13e82:libs/contracts",
+      "git_tree": "cc2a0ded19f3ceb28b0f5e39c83871055ca07346",
+      "legacy_accepted": true,
+      "state": "accepted"
+    }
+  ],
+  "later_claim_dependencies": [
+    "#60 accepted source policy, rights, cadence, and budget before any live-source readiness claim",
+    "#61 accepted applicability, freshness, and SLO policy before any readiness threshold is stable",
+    "#171 consumes only an accepted D4 E2 handoff before claiming the strengthened TOPT E4 outcomes",
+    "#41 consumes only an accepted D4 E2 handoff before freezing mart and Qlib provider bindings",
+    "a separately authorized persistence batch owns additive database migrations and runtime repositories"
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in typed interface fixtures only",
+    "manifest_path": "libs/contracts/tests/fixtures/datahub_interface.v1.json",
+    "sha256": null,
+    "required_strata": [
+      "one immutable list with success and terminal-failure obligations",
+      "two overlapping immutable lists sharing one canonical source request",
+      "unchanged raw bytes observed by a later distinct fetch attempt",
+      "bounded retry and rate-limit attempt sequence",
+      "restatement and source-disagreement observations",
+      "stale, unavailable, abstained, and PIT-excluded assessments",
+      "predicate-bounded recapture dry run and overreach rejection",
+      "forward and reverse provenance edges without factor-visible source metadata"
+    ]
+  },
+  "source_ceiling": "Checked-in contract fixtures only through E2; no network calls, credentials, provider rights claim, or live source activation.",
+  "paths": {
+    "writable": [
+      "libs/contracts/src/truealpha_contracts/datahub.py",
+      "libs/contracts/src/truealpha_contracts/__init__.py",
+      "libs/contracts/tests/test_datahub.py",
+      "libs/contracts/tests/fixtures/datahub_interface.v1.json",
+      "governance/evidence/D4-datahub-interface-E0.v1.json",
+      "governance/evidence/D4-datahub-interface-E1.v1.json",
+      "governance/evidence/D4-datahub-interface-E2.v1.json",
+      "governance/handoffs/D4-datahub-interface.v1.json",
+      "governance/leases/D4-datahub-interface.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "docs/iterative-delivery.md",
+      "libs/contracts/src/truealpha_contracts/common.py",
+      "libs/contracts/src/truealpha_contracts/universe.py",
+      "libs/contracts/src/truealpha_contracts/capture_contracts.py",
+      "libs/contracts/src/truealpha_contracts/execution.py",
+      "governance/evidence/issue-57.v1.json",
+      "governance/evidence/issue-58.v2.json"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "db/**",
+      "apps/**",
+      "libs/factors/**",
+      "libs/runtime/**",
+      "libs/contracts/src/truealpha_contracts/capture_contracts.py",
+      "libs/contracts/src/truealpha_contracts/execution.py",
+      "libs/contracts/src/truealpha_contracts/qlib_expression.py",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [
+      "libs/contracts/src/truealpha_contracts/__init__.py"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "D4 freezes contracts and tiny evidence only; no accepted release registry, default schedule, source route, persistence binding, consumer query, or runtime selection may reference it."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/contracts/tests/test_datahub.py -q",
+      "uv run ruff check libs/contracts/src/truealpha_contracts/datahub.py libs/contracts/tests/test_datahub.py",
+      "uv run mypy",
+      "python3 tools/check_delivery_governance.py"
+    ],
+    "negative_controls": [
+      "mutable latest/current universe, source, schedule, parser, mapping, or confidence policy coordinate",
+      "campaign, run, obligation, work-item, attempt, raw-object, observation, assessment, or edge identity drift",
+      "identical raw bytes erase a later attempt or a separate list obligation",
+      "duplicate obligation, non-contiguous attempt, retry after terminal outcome, or unbounded retry",
+      "binary-float, non-finite, unexplained, or out-of-range confidence component",
+      "freshness, availability, applicability, quality, and confidence collapse into one mutable status",
+      "recapture execution differs from its frozen dry-run selection or broadens its predicate",
+      "factor-visible source, raw pointer, provider policy, or provenance branch metadata",
+      "database, source, schedule, query provider, Qlib data binding, or release activation"
+    ],
+    "output": {
+      "type": "DataHubInterfaceEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "issue #171 TOPT Staging preparation after E2 acceptance",
+        "issue #41 mart and Qlib provider preparation after E2 acceptance",
+        "issue #206 QQQ capacity manifest preparation after E2 acceptance"
+      ]
+    }
+  },
+  "invalidation": [
+    "identity grain, cadence semantics, terminal states, recapture predicate vocabulary, confidence components, provenance node/edge vocabulary, or corpus change creates a new D4 revision",
+    "a shared export change requires an exact active integration lease before implementation",
+    "a persistence or query requirement discovered at E1 is classified at E2 and cannot be patched into accepted tiny evidence",
+    "any source call, migration, schedule, consumer binding, or release activation exceeds this batch and requires separate authorization"
+  ],
+  "rollback": "Revert the isolated D4 contract, fixture, tests, evidence, handoff, and lease together; no accepted release, source route, schedule, persistence schema, factor, mart view, or Qlib provider may depend on a non-accepted D4 version."
+}
