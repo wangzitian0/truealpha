@@ -275,7 +275,7 @@
       "target_rung": "E0",
       "terminal_rung": "E1",
       "manifest": "governance/batches/S10-factor-matrix-samples.v1.json",
-      "sha256": "d282d9304ec041eed4ce32a3c1b288fab31b819cf59b68f5e982c07ebef617f2"
+      "sha256": "acee4872951098da9cd5a3887a3a089c7de9376c712055cb8b3ae048923df4d5"
     },
     "S9-direct-pe-qlib-smoke": {
       "issue": 203,
