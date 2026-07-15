@@ -1,0 +1,451 @@
+{
+  "schema_version": 1,
+  "corpus_id": "a0-governed-research-access-v1",
+  "batch_id": "A0-governed-research-access",
+  "claim_ceiling": "Preparation-only Local/CI authorization corpus; no accepted contract, schema, authentication route, identity-provider binding, browser or MCP access, mutation, query, factor or backtest execution, release binding, or stable handoff.",
+  "canonicalization": {
+    "encoding": "UTF-8",
+    "object_keys": "sorted for identity derivation",
+    "separators": "compact for identity derivation",
+    "time": "UTC RFC3339 with Z",
+    "identity": "sha256 of a domain-separated canonical JSON coordinate object",
+    "events": "append-only; replacement, update, and deletion forbidden"
+  },
+  "policy_coordinates": {
+    "access_policy_id": "access-policy:research:v1",
+    "publication_policy_id": "publication-policy:research:v1",
+    "audit_policy_id": "audit-policy:research-access:v1",
+    "authentication_policy_id": "authentication-policy:research:v1"
+  },
+  "tenants": [
+    {
+      "tenant_id": "tenant:alpha",
+      "owners": [
+        "principal:alpha:alice"
+      ]
+    },
+    {
+      "tenant_id": "tenant:beta",
+      "owners": [
+        "principal:beta:bob"
+      ]
+    }
+  ],
+  "principals": [
+    {
+      "principal_id": "principal:alpha:alice",
+      "tenant_id": "tenant:alpha",
+      "role": "member",
+      "tier": "standard"
+    },
+    {
+      "principal_id": "principal:beta:bob",
+      "tenant_id": "tenant:beta",
+      "role": "member",
+      "tier": "standard"
+    },
+    {
+      "principal_id": "principal:platform:admin",
+      "tenant_id": "tenant:platform",
+      "role": "administrator",
+      "tier": "internal"
+    },
+    {
+      "principal_id": "service:research-mcp",
+      "tenant_id": "tenant:platform",
+      "role": "service",
+      "tier": "internal"
+    }
+  ],
+  "publication_classes": [
+    {
+      "publication_class_id": "publication-class:standard:v1",
+      "immutable": true,
+      "minimum_tier": "standard",
+      "permitted": true
+    },
+    {
+      "publication_class_id": "publication-class:restricted:v1",
+      "immutable": true,
+      "minimum_tier": "professional",
+      "permitted": false
+    }
+  ],
+  "resources": [
+    {
+      "resource_id": "conversation:alpha:private-001",
+      "resource_type": "private_conversation",
+      "tenant_id": "tenant:alpha",
+      "owner_principal_id": "principal:alpha:alice",
+      "content_private": true
+    },
+    {
+      "resource_id": "document:alpha:private-001",
+      "resource_type": "private_document",
+      "tenant_id": "tenant:alpha",
+      "owner_principal_id": "principal:alpha:alice",
+      "content_private": true
+    },
+    {
+      "resource_id": "conversation:beta:private-001",
+      "resource_type": "private_conversation",
+      "tenant_id": "tenant:beta",
+      "owner_principal_id": "principal:beta:bob",
+      "content_private": true
+    },
+    {
+      "resource_id": "document:beta:private-001",
+      "resource_type": "private_document",
+      "tenant_id": "tenant:beta",
+      "owner_principal_id": "principal:beta:bob",
+      "content_private": true
+    },
+    {
+      "resource_id": "strategy-result:alpha:standard-001",
+      "resource_type": "materialized_strategy_result",
+      "tenant_id": "tenant:alpha",
+      "publication_class_id": "publication-class:standard:v1",
+      "content_private": false
+    },
+    {
+      "resource_id": "backtest-result:alpha:standard-001",
+      "resource_type": "materialized_backtest_result",
+      "tenant_id": "tenant:alpha",
+      "publication_class_id": "publication-class:standard:v1",
+      "content_private": false
+    },
+    {
+      "resource_id": "strategy-result:alpha:restricted-001",
+      "resource_type": "materialized_strategy_result",
+      "tenant_id": "tenant:alpha",
+      "publication_class_id": "publication-class:restricted:v1",
+      "content_private": false
+    },
+    {
+      "resource_id": "audit:alpha:access-001",
+      "resource_type": "access_audit_metadata",
+      "tenant_id": "tenant:alpha",
+      "content_private": false,
+      "content_fields_present": false
+    }
+  ],
+  "authentication_contexts": [
+    {
+      "context_id": "auth:browser:alpha:valid",
+      "method": "browser_session",
+      "principal_id": "principal:alpha:alice",
+      "tenant_id": "tenant:alpha",
+      "issued_at": "2026-07-15T00:00:00Z",
+      "expires_at": "2026-07-15T01:00:00Z",
+      "state": "valid"
+    },
+    {
+      "context_id": "auth:mcp:alpha:delegated-valid",
+      "method": "delegated_mcp",
+      "principal_id": "principal:alpha:alice",
+      "tenant_id": "tenant:alpha",
+      "service_principal_id": "service:research-mcp",
+      "delegation_id": "delegation:alpha:alice:mcp-001",
+      "issued_at": "2026-07-15T00:00:00Z",
+      "expires_at": "2026-07-15T00:30:00Z",
+      "state": "valid"
+    },
+    {
+      "context_id": "auth:service:mcp:valid",
+      "method": "service_identity",
+      "principal_id": "service:research-mcp",
+      "tenant_id": "tenant:platform",
+      "issued_at": "2026-07-15T00:00:00Z",
+      "expires_at": "2026-07-15T00:15:00Z",
+      "state": "valid"
+    },
+    {
+      "context_id": "auth:admin:valid",
+      "method": "browser_session",
+      "principal_id": "principal:platform:admin",
+      "tenant_id": "tenant:platform",
+      "issued_at": "2026-07-15T00:00:00Z",
+      "expires_at": "2026-07-15T01:00:00Z",
+      "state": "valid"
+    },
+    {
+      "context_id": "auth:missing",
+      "method": "missing",
+      "state": "missing"
+    },
+    {
+      "context_id": "auth:invalid-signature",
+      "method": "browser_session",
+      "principal_id": "principal:alpha:alice",
+      "tenant_id": "tenant:alpha",
+      "state": "invalid"
+    },
+    {
+      "context_id": "auth:expired",
+      "method": "browser_session",
+      "principal_id": "principal:alpha:alice",
+      "tenant_id": "tenant:alpha",
+      "issued_at": "2026-07-14T00:00:00Z",
+      "expires_at": "2026-07-14T01:00:00Z",
+      "state": "expired"
+    },
+    {
+      "context_id": "auth:revoked",
+      "method": "delegated_mcp",
+      "principal_id": "principal:alpha:alice",
+      "tenant_id": "tenant:alpha",
+      "service_principal_id": "service:research-mcp",
+      "delegation_id": "delegation:alpha:alice:mcp-revoked",
+      "state": "revoked"
+    },
+    {
+      "context_id": "auth:forged-role-tier",
+      "method": "browser_session",
+      "principal_id": "principal:alpha:alice",
+      "tenant_id": "tenant:alpha",
+      "client_claimed_role": "administrator",
+      "client_claimed_tier": "internal",
+      "state": "forged"
+    }
+  ],
+  "authorization_cases": [
+    {
+      "case_id": "owner-browser-reads-private-conversation",
+      "context_id": "auth:browser:alpha:valid",
+      "action": "read_content",
+      "resource_id": "conversation:alpha:private-001",
+      "expected_decision": "allow",
+      "expected_query_count": 1,
+      "expected_audit_event": "access_allowed"
+    },
+    {
+      "case_id": "owner-delegated-mcp-reads-private-document",
+      "context_id": "auth:mcp:alpha:delegated-valid",
+      "action": "read_content",
+      "resource_id": "document:alpha:private-001",
+      "expected_decision": "allow",
+      "expected_query_count": 1,
+      "expected_audit_event": "access_allowed"
+    },
+    {
+      "case_id": "service-identity-cannot-read-private-content-without-delegation",
+      "context_id": "auth:service:mcp:valid",
+      "action": "read_content",
+      "resource_id": "document:alpha:private-001",
+      "expected_decision": "deny",
+      "expected_reason": "owner_delegation_required",
+      "expected_query_count": 0,
+      "expected_audit_event": "access_denied"
+    },
+    {
+      "case_id": "cross-tenant-guessed-conversation-id",
+      "context_id": "auth:browser:alpha:valid",
+      "action": "read_content",
+      "resource_id": "conversation:beta:private-001",
+      "lookup_mode": "guessed_object_id",
+      "expected_decision": "deny",
+      "expected_reason": "tenant_mismatch",
+      "expected_query_count": 0,
+      "expected_audit_event": "access_denied"
+    },
+    {
+      "case_id": "cross-tenant-guessed-document-id",
+      "context_id": "auth:browser:alpha:valid",
+      "action": "read_content",
+      "resource_id": "document:beta:private-001",
+      "lookup_mode": "guessed_object_id",
+      "expected_decision": "deny",
+      "expected_reason": "tenant_mismatch",
+      "expected_query_count": 0,
+      "expected_audit_event": "access_denied"
+    },
+    {
+      "case_id": "standard-publication-class-permitted",
+      "context_id": "auth:browser:alpha:valid",
+      "action": "read_materialized_result",
+      "resource_id": "strategy-result:alpha:standard-001",
+      "expected_decision": "allow",
+      "expected_query_count": 1,
+      "expected_audit_event": "access_allowed"
+    },
+    {
+      "case_id": "restricted-publication-class-denied",
+      "context_id": "auth:browser:alpha:valid",
+      "action": "read_materialized_result",
+      "resource_id": "strategy-result:alpha:restricted-001",
+      "expected_decision": "deny",
+      "expected_reason": "publication_class_not_permitted",
+      "expected_query_count": 0,
+      "expected_audit_event": "access_denied"
+    },
+    {
+      "case_id": "admin-reads-permitted-strategy-result",
+      "context_id": "auth:admin:valid",
+      "action": "read_materialized_result",
+      "resource_id": "strategy-result:alpha:standard-001",
+      "expected_decision": "allow",
+      "expected_query_count": 1,
+      "expected_audit_event": "access_allowed"
+    },
+    {
+      "case_id": "admin-reads-permitted-backtest-result",
+      "context_id": "auth:admin:valid",
+      "action": "read_materialized_result",
+      "resource_id": "backtest-result:alpha:standard-001",
+      "expected_decision": "allow",
+      "expected_query_count": 1,
+      "expected_audit_event": "access_allowed"
+    },
+    {
+      "case_id": "admin-reads-non-content-audit-metadata",
+      "context_id": "auth:admin:valid",
+      "action": "read_audit_metadata",
+      "resource_id": "audit:alpha:access-001",
+      "expected_decision": "allow",
+      "expected_query_count": 1,
+      "expected_content_fields": [],
+      "expected_audit_event": "access_allowed"
+    },
+    {
+      "case_id": "admin-denied-private-conversation-content",
+      "context_id": "auth:admin:valid",
+      "action": "read_content",
+      "resource_id": "conversation:alpha:private-001",
+      "expected_decision": "deny",
+      "expected_reason": "private_content_owner_only",
+      "expected_query_count": 0,
+      "expected_audit_event": "access_denied"
+    },
+    {
+      "case_id": "admin-denied-private-document-content",
+      "context_id": "auth:admin:valid",
+      "action": "read_content",
+      "resource_id": "document:alpha:private-001",
+      "expected_decision": "deny",
+      "expected_reason": "private_content_owner_only",
+      "expected_query_count": 0,
+      "expected_audit_event": "access_denied"
+    },
+    {
+      "case_id": "missing-context-denied-before-query",
+      "context_id": "auth:missing",
+      "action": "read_content",
+      "resource_id": "document:alpha:private-001",
+      "expected_decision": "deny",
+      "expected_reason": "authentication_missing",
+      "expected_query_count": 0,
+      "expected_audit_event": "authentication_denied"
+    },
+    {
+      "case_id": "invalid-context-denied-before-query",
+      "context_id": "auth:invalid-signature",
+      "action": "read_materialized_result",
+      "resource_id": "strategy-result:alpha:standard-001",
+      "expected_decision": "deny",
+      "expected_reason": "authentication_invalid",
+      "expected_query_count": 0,
+      "expected_audit_event": "authentication_denied"
+    },
+    {
+      "case_id": "expired-context-denied-before-query",
+      "context_id": "auth:expired",
+      "action": "read_content",
+      "resource_id": "conversation:alpha:private-001",
+      "expected_decision": "deny",
+      "expected_reason": "authentication_expired",
+      "expected_query_count": 0,
+      "expected_audit_event": "authentication_denied"
+    },
+    {
+      "case_id": "revoked-delegation-denied-before-query",
+      "context_id": "auth:revoked",
+      "action": "read_content",
+      "resource_id": "document:alpha:private-001",
+      "expected_decision": "deny",
+      "expected_reason": "delegation_revoked",
+      "expected_query_count": 0,
+      "expected_audit_event": "authentication_denied"
+    },
+    {
+      "case_id": "forged-role-tier-denied-before-query",
+      "context_id": "auth:forged-role-tier",
+      "action": "read_materialized_result",
+      "resource_id": "strategy-result:alpha:restricted-001",
+      "expected_decision": "deny",
+      "expected_reason": "client_authority_claim_rejected",
+      "expected_query_count": 0,
+      "expected_audit_event": "authentication_denied"
+    }
+  ],
+  "append_only_event_cases": [
+    {
+      "case_id": "grant-then-revoke",
+      "events": [
+        {
+          "event_id": "grant-event:alpha:alice:001",
+          "event_type": "grant_recorded",
+          "recorded_at": "2026-07-15T00:00:00Z",
+          "grant_id": "grant:alpha:alice:001"
+        },
+        {
+          "event_id": "revocation-event:alpha:alice:001",
+          "event_type": "grant_revoked",
+          "recorded_at": "2026-07-15T00:10:00Z",
+          "grant_id": "grant:alpha:alice:001"
+        }
+      ],
+      "expected_original_grant_preserved": true,
+      "expected_new_decision": "deny"
+    },
+    {
+      "case_id": "publication-policy-supersession",
+      "events": [
+        {
+          "event_id": "publication-policy-event:001",
+          "event_type": "publication_policy_recorded",
+          "recorded_at": "2026-07-15T00:00:00Z",
+          "publication_policy_id": "publication-policy:research:v1"
+        },
+        {
+          "event_id": "publication-policy-event:002",
+          "event_type": "publication_policy_superseded",
+          "recorded_at": "2026-07-15T00:20:00Z",
+          "publication_policy_id": "publication-policy:research:v1",
+          "successor_policy_id": "publication-policy:research:v2"
+        }
+      ],
+      "expected_original_policy_preserved": true
+    },
+    {
+      "case_id": "allowed-and-denied-audit-history",
+      "events": [
+        {
+          "event_id": "audit-event:alpha:001",
+          "event_type": "access_allowed",
+          "recorded_at": "2026-07-15T00:05:00Z",
+          "decision_id": "decision:owner-browser-reads-private-conversation"
+        },
+        {
+          "event_id": "audit-event:alpha:002",
+          "event_type": "access_denied",
+          "recorded_at": "2026-07-15T00:06:00Z",
+          "decision_id": "decision:cross-tenant-guessed-conversation-id"
+        }
+      ],
+      "expected_all_events_preserved": true,
+      "expected_content_fields_persisted": false
+    }
+  ],
+  "invariants": [
+    "authentication and authorization complete before any mart SQL, private-row lookup, or artifact retrieval",
+    "every denied case has expected_query_count zero",
+    "private conversation and document content is visible only to its owner through a valid browser session or valid owner delegation",
+    "administrator access is limited to permitted materialized strategy and backtest results plus non-content audit metadata",
+    "service identity alone never inherits an end-user tenant, role, tier, or private-content grant",
+    "tenant, principal, role, tier, delegation, and publication authority are server-derived; client claims are rejected",
+    "publication-class and policy identities are immutable and versioned",
+    "grant, revocation, publication-policy, authorization-decision, and audit records are append-only",
+    "authorization audit metadata never stores private conversation or document content",
+    "AccessContext and authorization metadata never enter factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types"
+  ]
+}

@@ -1,32 +1,33 @@
 {
   "schema_version": 1,
   "batch_id": "A0-governed-research-access",
-  "revision": 1,
+  "revision": 2,
   "issue": 230,
   "owner_gate": 31,
-  "status": "queued",
+  "status": "prepared",
   "lane": "consumption",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E2",
   "objective": "Establish a governed multi-user research access boundary before MCP, reports, cards, the Web App, or chat expose personal research state.",
-  "claim_ceiling": "Queued authorization-contract design only; no code, schema, authentication route, identity-provider binding, browser/MCP access, report/card mutation, replay submission, factor execution, Qlib invocation, source call, or release activation is accepted.",
+  "claim_ceiling": "Prepared authorization-contract corpus only; no code, schema, authentication route, identity-provider binding, browser or MCP access, report or card mutation, replay submission, factor execution, Qlib invocation, source call, stable handoff, or release activation is accepted.",
   "capability_issues": [229],
   "closes_issues": [229],
   "informational_issues": [31, 41, 42, 43, 45, 46, 66, 224, 225, 226, 227],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "8bfcd328258e79e14977c60525769ce3302f2ea4",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "the #229 capability registration and this queued batch registration are merged to main",
+      "the #229 capability registration and queued A0 batch registration are merged to main",
       "#81 has accepted the actual-diff, merge-base, corpus-byte, integration-lease, command-evidence, and handoff enforcement required to activate queued batches",
-      "the preparation PR freezes the access corpus path and SHA-256 without changing implementation paths",
-      "the implementation PR pins the exact current main base SHA and an independent reviewer",
+      "this preparation freezes the access corpus path and SHA-256 without changing implementation paths",
+      "the stable activation base remains 8bfcd328258e79e14977c60525769ce3302f2ea4 while implementation evidence records its exact current PR base and head",
+      "the independent reviewer remains assigned through E0 acceptance",
       "one active integration lease covers init.md, the contract export, the additive migration, db/roles.sql, and the SQL contract test",
       "issue #230 contains this manifest path and exact SHA-256",
       "Delivery Governance CI passes offline validation and live GitHub parity"
@@ -40,17 +41,18 @@
     "a named product/legal owner must approve retention, deletion, export, and break-glass policy before any user-content retention or exception is activated"
   ],
   "corpus": {
-    "environment": "not frozen until the preparation PR",
-    "manifest_path": null,
-    "sha256": null,
+    "environment": "Local/CI checked-in synthetic authorization fixtures only",
+    "manifest_path": "libs/contracts/tests/fixtures/governed_research_access.v1.json",
+    "sha256": "32cb57cc7003bc12aa248f6f547f62446d073aa8a33497bd353f61b50ba4d841",
     "required_strata": [
       "two isolated tenants with owner-only conversation and document records",
       "one permitted and one denied immutable publication class for materialized research",
       "administrator access to permitted strategy/backtest results and non-content audit metadata only",
       "administrator denial for private conversation/document content",
-      "expired session, append-only grant revocation, cross-tenant object-ID guess, and client-supplied role/tier rejection",
-      "absent, invalid, delegated-MCP, browser-session, and service-identity authentication contexts",
-      "authorization denial before mart SQL or artifact retrieval and append-only audit coverage for each outcome"
+      "missing, invalid, expired, revoked, and forged role/tier authentication contexts",
+      "valid browser-session, delegated-MCP, administrator, and service-identity authentication contexts",
+      "cross-tenant guessed conversation and document object IDs with denial before any mart SQL, private-row lookup, or artifact retrieval",
+      "append-only grant, revocation, publication-policy, allowed-access, denied-access, and non-content audit event histories"
     ]
   },
   "source_ceiling": "Checked-in typed and SQL fixtures only through E2; no network identity-provider call, credential, live source, data refresh, or external MCP client is used.",
