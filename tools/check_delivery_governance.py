@@ -1504,10 +1504,11 @@ def validate_gate0_pr_advance(
         return None
     base_manifest = git_json(base_sha, GATE0_MANIFEST_PATH)
     validation.require(isinstance(base_manifest, dict), f"{label}: base manifest is unavailable")
-    validation.require(
-        manifest.get("integration_base_sha") == base_sha,
-        f"{label}: integration_base_sha does not match the PR base",
-    )
+    if isinstance(base_manifest, dict):
+        validation.require(
+            manifest.get("integration_base_sha") == base_manifest.get("integration_base_sha"),
+            f"{label}: integration_base_sha changed from the stable candidate anchor",
+        )
     paths = manifest.get("paths")
     valid_paths = (
         isinstance(paths, list)

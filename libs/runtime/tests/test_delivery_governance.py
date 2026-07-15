@@ -523,7 +523,7 @@ def _gate0_pr_context(
         manifest_path,
         {
             **base_manifest,
-            "integration_base_sha": integration_base_sha or base_sha,
+            "integration_base_sha": integration_base_sha or base_manifest["integration_base_sha"],
             "candidate_tree_sha256": "e" * 64,
         },
     )
@@ -726,12 +726,12 @@ def test_gate0_aggregate_accepts_complete_candidate_without_draft_escape(tmp_pat
     assert calls == [{"check_live_comments": True, "require_accepted": True}]
 
 
-def test_gate0_aggregate_rejects_stale_integration_base(tmp_path, monkeypatch):
+def test_gate0_aggregate_rejects_changed_integration_anchor(tmp_path, monkeypatch):
     graph, base_sha, head_sha = _gate0_pr_context(
         tmp_path,
         monkeypatch,
         accepted=True,
-        integration_base_sha="c" * 40,
+        integration_base_sha="d" * 40,
     )
     validation = governance.Validation()
 
@@ -743,7 +743,7 @@ def test_gate0_aggregate_rejects_stale_integration_base(tmp_path, monkeypatch):
     )
 
     assert advance is None
-    assert any("integration_base_sha does not match the PR base" in error for error in validation.errors)
+    assert any("integration_base_sha changed from the stable candidate anchor" in error for error in validation.errors)
 
 
 def test_gate0_aggregate_rejects_path_outside_manifest_authorization(tmp_path, monkeypatch):
