@@ -177,11 +177,11 @@
       "schema_epoch": "truealpha-contracts.datahub.v2",
       "rung_evidence": {
         "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
-        "sha256": "2a7f8a89d3947d603912aae24bdd471ff814e97c090207c3877eae9fd7efb9c5"
+        "sha256": "01192a297edad575fe7276d53f28278bd9197920354df91d2bf737294c22cd39"
       },
       "handoff_manifest": {
         "path": "governance/handoffs/D4-datahub-interface.v1.json",
-        "sha256": "2922da2902230081399dec3589b2bd48f08b14b997a66ffa809259eb22bb5d10"
+        "sha256": "65944584b4cd0c6ab49e17b6cc5cddf6cf6bd14871b41352bc31b9cd3ca9ec1d"
       },
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",

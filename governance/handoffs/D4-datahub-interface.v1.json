@@ -1,5 +1,5 @@
 {
-  "handoff_id": "handoff:d4-datahub-interface:189698154ebbd7b6cd4a845667f7d49156e3442857fca9342fd2b92521311676",
+  "handoff_id": "handoff:d4-datahub-interface:26ec4662106dc5cee861bf5920d38de00c3563a998e3a11055aac4c5f0e71564",
   "schema_version": 1,
   "revision": 1,
   "state": "accepted",
@@ -7,14 +7,14 @@
     "batch_id": "D4-datahub-interface",
     "issue": 210,
     "owner": "wangzitian0",
-    "head_sha": "64d41e45547d8e609ceced19dc1e49a3faea6655"
+    "head_sha": "e0ddc11408a9b5611da3f6d093b39878243cf262"
   },
   "schema_epoch": "truealpha-contracts.datahub.v2",
   "readiness_ceiling": "E2",
   "evidence": [
     {
       "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
-      "sha256": "2a7f8a89d3947d603912aae24bdd471ff814e97c090207c3877eae9fd7efb9c5"
+      "sha256": "01192a297edad575fe7276d53f28278bd9197920354df91d2bf737294c22cd39"
     }
   ],
   "allowed_consumers": [
@@ -30,9 +30,9 @@
   "retention": "permanent while an allowed consumer depends on this handoff",
   "verification": {
     "reviewer": "github-actions[bot]",
-    "evidence_sha256": "56524d1fa80aef9aabb9b0d24dd2fbbea99ff89a9a821f3daf9f151050edfc81",
-    "accepted_at": "2026-07-15T18:11:31Z",
-    "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29439459839"
+    "evidence_sha256": "dac05e4bc4bcb2d36844f096dd35c6586f4f593ed985dcc9242a4e8a366d8696",
+    "accepted_at": "2026-07-15T18:28:03Z",
+    "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29440574636"
   },
   "revocation": {
     "reason": null,
