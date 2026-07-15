@@ -571,10 +571,10 @@ class ConfidenceAssessment(BaseModel):
     evaluation_cutoff: datetime
     assessed_at: datetime
 
-    @field_validator("assessment_policy_id")
+    @field_validator("assessment_policy_id", "evidence_set_id")
     @classmethod
-    def validate_policy(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "assessment_policy_id")
+    def validate_assessment_coordinates(cls, value: str, info: Any) -> str:
+        return _reject_mutable_coordinate(value, info.field_name)
 
     @field_validator("confidence", mode="before")
     @classmethod

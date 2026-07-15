@@ -418,6 +418,21 @@ def test_mutable_coordinates_and_identity_drift_are_rejected() -> None:
         )
     with pytest.raises(ValidationError, match="immutable version"):
         RecapturePredicate(source_policy_ids=("source-policy:latest",))
+    observation = _observation()
+    with pytest.raises(ValidationError, match="immutable version"):
+        ConfidenceAssessment(
+            observation_id=observation.observation_id,
+            assessment_policy_id="confidence-policy:tiny:v1",
+            evidence_set_id="evidence-set:current",
+            confidence=None,
+            availability=AssessmentAvailability.AVAILABLE,
+            freshness=AssessmentFreshness.FRESH,
+            applicability=AssessmentApplicability.APPLICABLE,
+            quality=AssessmentQuality.NOT_ASSESSED,
+            reason_codes=("pending-evidence",),
+            evaluation_cutoff=AT,
+            assessed_at=AT,
+        )
 
     original = CaptureWorkItem(
         run_id=f"capture-run:{SHA_A}",
