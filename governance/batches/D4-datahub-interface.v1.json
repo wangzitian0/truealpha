@@ -4,13 +4,13 @@
   "revision": 5,
   "issue": 210,
   "owner_gate": 29,
-  "status": "blocked",
+  "status": "done",
   "lane": "capture-platform",
-  "last_accepted_rung": "E1",
+  "last_accepted_rung": "E2",
   "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Freeze one iterative interface for list-oriented capture control, bounded recapture, explainable confidence, and indexed provenance before TOPT Staging and mart/Qlib consumers integrate it.",
-  "claim_ceiling": "accepted E1 Local/CI interface evidence plus a frozen E2 acceptance candidate; no accepted E2 handoff, persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
+  "claim_ceiling": "E2 stable Local/CI DataHub interface handoff for campaign-scoped shared work, typed source-request coverage, two-phase attempts, source-vintage lineage, bounded recapture, and explainable confidence/provenance; no persistence schema, source call, schedule, query provider, Qlib data binding, Staging activation, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 171, 205, 207],
@@ -132,14 +132,9 @@
       "pyproject.toml",
       "Makefile"
     ],
-    "integration_surface": [
-      "libs/contracts/src/truealpha_contracts/__init__.py"
-    ],
-    "lease_owner": "wangzitian0",
-    "lease_manifest": {
-      "path": "governance/leases/D4-datahub-interface.v1.json",
-      "sha256": "ab7c73e56afcd87804407bf8148c003b5baa0d0734a4c754655a3a8f45fd5b50"
-    }
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
   },
   "release_activation": {
     "allowed": false,
@@ -172,40 +167,24 @@
     "output": {
       "type": "DataHubInterfaceHandoff",
       "stable_handoff": true,
-      "state": "planned",
+      "state": "accepted",
       "handoff_id": "datahub-interface-handoff:c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "sha256": "c4d0153c5df84dc6a3ad4aeea4fa51bc63d60ad6f76387e47d30c64ce8be00c1",
       "schema_epoch": "truealpha-contracts.datahub.v2",
-      "planned_permission_scopes": [
-        {
-          "scope": "local-ci-consumers",
-          "allowed_consumers": [
-            "C1-stable-mart-reads",
-            "D5-list-capture-control-plane",
-            "D6-confidence-provenance",
-            "D7-qqq-datahub-capacity"
-          ],
-          "allowed_environments": [
-            "ci",
-            "local"
-          ]
-        },
-        {
-          "scope": "d3-staging-consumer",
-          "allowed_consumers": [
-            "D3-staging-topt-capture"
-          ],
-          "allowed_environments": [
-            "staging"
-          ]
-        }
-      ],
+      "rung_evidence": {
+        "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
+        "sha256": "01192a297edad575fe7276d53f28278bd9197920354df91d2bf737294c22cd39"
+      },
+      "handoff_manifest": {
+        "path": "governance/handoffs/D4-datahub-interface.v1.json",
+        "sha256": "017c0a20df2cdfadac62f6d1d0ee368f351175bb4365342da697ec2f08d7816e"
+      },
       "allowed_evidence_readers": [
         "issue #171 TOPT Staging preparation after E2 acceptance",
         "issue #41 mart and Qlib provider preparation after E2 acceptance",
         "issue #206 QQQ capacity manifest preparation after E2 acceptance"
       ],
-      "retention": "the frozen E2 candidate is retained until independently accepted or revoked; failed rung evidence follows CI retention"
+      "retention": "accepted E2 interface handoff is permanent while an allowed consumer depends on it; failed rung evidence follows CI retention"
     }
   },
   "invalidation": [

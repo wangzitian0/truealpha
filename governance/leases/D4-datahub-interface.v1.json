@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:206c0be774aa365ff4ca01ce6726870d932a2cde2334611c91932274f1c863d6",
+  "lease_id": "integration-lease:014dfa2369e20be45cb57f7251bfbba6cfbbf85474e8dffd877536aabfc8b311",
   "batch_id": "D4-datahub-interface",
   "owner": "wangzitian0",
-  "state": "active",
+  "state": "revoked",
   "paths": [
     "libs/contracts/src/truealpha_contracts/__init__.py"
   ],

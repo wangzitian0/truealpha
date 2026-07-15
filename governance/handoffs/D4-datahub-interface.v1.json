@@ -1,0 +1,43 @@
+{
+  "handoff_id": "handoff:d4-datahub-interface:8728f73d2b9823ed604066b54c77a41bc32f195664bba004f45c2311b874c77c",
+  "schema_version": 1,
+  "revision": 1,
+  "state": "accepted",
+  "producer": {
+    "batch_id": "D4-datahub-interface",
+    "issue": 210,
+    "owner": "wangzitian0",
+    "head_sha": "e0ddc11408a9b5611da3f6d093b39878243cf262"
+  },
+  "schema_epoch": "truealpha-contracts.datahub.v2",
+  "readiness_ceiling": "E2",
+  "evidence": [
+    {
+      "path": "governance/evidence/D4-datahub-interface-E2.v1.json",
+      "sha256": "01192a297edad575fe7276d53f28278bd9197920354df91d2bf737294c22cd39"
+    }
+  ],
+  "allowed_consumers": [
+    "C1-stable-mart-reads",
+    "D3-staging-topt-capture",
+    "D5-list-capture-control-plane",
+    "D6-confidence-provenance",
+    "D7-qqq-datahub-capacity"
+  ],
+  "allowed_environments": [
+    "ci",
+    "local"
+  ],
+  "retention": "permanent while an allowed consumer depends on this handoff",
+  "verification": {
+    "reviewer": "github-actions[bot]",
+    "evidence_sha256": "dac05e4bc4bcb2d36844f096dd35c6586f4f593ed985dcc9242a4e8a366d8696",
+    "accepted_at": "2026-07-15T18:28:03Z",
+    "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29440574636"
+  },
+  "revocation": {
+    "reason": null,
+    "revoked_at": null,
+    "superseded_by": null
+  }
+}
