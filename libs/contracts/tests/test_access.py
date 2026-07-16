@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ from truealpha_contracts.access import (
     AccessResource,
     AuthenticationMethod,
     AuthorizationDecision,
+    AuthorizationService,
     PrincipalKind,
     PublicationPolicy,
     authorize_access,
@@ -26,6 +29,7 @@ from truealpha_contracts.ports import BacktestDataGateway
 from truealpha_contracts.release import ReleaseManifest
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "governed_research_access.v1.json"
+FIXTURE_SHA256 = "ac3186bcc8cf14c0b9d7c909ca0f3148618eade175c2b469022364d3fae2498b"
 
 
 def _fixture() -> dict[str, Any]:
@@ -78,12 +82,8 @@ def _authentication_failure(context_id: str) -> AccessDenialReason | None:
     }.get(context_id)
 
 
-@pytest.mark.parametrize("case_index", range(18))
-def test_frozen_authorization_corpus(case_index: int) -> None:
-    corpus = _fixture()
-    case = corpus["authorization_cases"][case_index]
-    observed_at = datetime.fromisoformat(corpus["decision_time"].replace("Z", "+00:00"))
-    decision = authorize_access(
+def _decision_for_case(corpus: dict[str, Any], case: dict[str, Any]) -> AuthorizationDecision:
+    return authorize_access(
         context=_contexts(corpus)[case["context_id"]],
         action=AccessAction(case["action"]),
         resource=_resources(corpus)[case["resource_id"]],
@@ -91,9 +91,16 @@ def test_frozen_authorization_corpus(case_index: int) -> None:
             policy_id=corpus["policy_coordinates"]["publication_policy_id"],
             permitted_publication_class_ids=("publication-class:standard:v1",),
         ),
-        observed_at=observed_at,
+        observed_at=datetime.fromisoformat(corpus["decision_time"].replace("Z", "+00:00")),
         authentication_failure=_authentication_failure(case["context_id"]),
     )
+
+
+@pytest.mark.parametrize("case_index", range(18))
+def test_frozen_authorization_corpus(case_index: int) -> None:
+    corpus = _fixture()
+    case = corpus["authorization_cases"][case_index]
+    decision = _decision_for_case(corpus, case)
 
     assert decision.decision is AccessDecisionKind(case["expected_decision"])
     assert decision.query_permitted is bool(case["expected_query_count"])
@@ -101,6 +108,63 @@ def test_frozen_authorization_corpus(case_index: int) -> None:
     assert (decision.reason.value if decision.reason else None) == case.get("expected_reason")
     if decision.decision is AccessDecisionKind.DENY:
         assert case["expected_query_count"] == 0
+
+
+def test_frozen_tiny_corpus_identity_and_strata() -> None:
+    corpus = _fixture()
+    assert sha256(FIXTURE_PATH.read_bytes()).hexdigest() == FIXTURE_SHA256
+    assert len(corpus["tenants"]) == 2
+    assert len(corpus["authentication_contexts"]) == 10
+    assert len(corpus["resources"]) == 8
+    assert len(corpus["authorization_cases"]) == 18
+    assert len(corpus["append_only_event_cases"]) == 3
+    assert {row["state"] for row in corpus["authentication_contexts"]} >= {
+        "valid",
+        "missing",
+        "invalid",
+        "expired",
+        "revoked",
+        "forged",
+    }
+    case_ids = [row["case_id"] for row in corpus["authorization_cases"]]
+    assert len(case_ids) == len(set(case_ids))
+
+
+def test_frozen_decisions_replay_deterministically() -> None:
+    corpus = _fixture()
+    first = [_decision_for_case(corpus, case) for case in corpus["authorization_cases"]]
+    replay = [_decision_for_case(corpus, case) for case in corpus["authorization_cases"]]
+    assert replay == first
+    assert len({decision.decision_id for decision in first}) == len(first)
+
+
+def test_denials_are_fail_closed_before_retrieval() -> None:
+    corpus = _fixture()
+    retrieval_count = 0
+    for case in corpus["authorization_cases"]:
+        decision = _decision_for_case(corpus, case)
+        if decision.query_permitted:
+            retrieval_count += 1
+        assert int(decision.query_permitted) == case["expected_query_count"]
+    assert retrieval_count == sum(case["expected_query_count"] for case in corpus["authorization_cases"])
+
+
+def test_frozen_append_only_histories_preserve_every_event() -> None:
+    histories = _fixture()["append_only_event_cases"]
+    event_ids: list[str] = []
+    for history in histories:
+        recorded_at = [datetime.fromisoformat(row["recorded_at"].replace("Z", "+00:00")) for row in history["events"]]
+        assert recorded_at == sorted(recorded_at)
+        event_ids.extend(row["event_id"] for row in history["events"])
+    assert len(event_ids) == len(set(event_ids))
+
+    audit_history = next(row for row in histories if row["case_id"] == "allowed-and-denied-audit-history")
+    assert {event["event_type"] for event in audit_history["events"]} == {"access_allowed", "access_denied"}
+    assert all(
+        forbidden not in event
+        for event in audit_history["events"]
+        for forbidden in ("content", "body", "payload", "document_text", "conversation_text")
+    )
 
 
 def test_context_rejects_naive_time_and_client_authority_claims() -> None:
@@ -120,6 +184,37 @@ def test_context_rejects_naive_time_and_client_authority_claims() -> None:
         AccessContext.model_validate({**valid, "client_claimed_role": "administrator"})
     with pytest.raises(ValidationError, match="client_claimed_tier"):
         AccessContext.model_validate({**valid, "client_claimed_tier": "internal"})
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        {
+            "resource_id": "strategy-result:alpha:restricted-001",
+            "resource_type": "materialized_strategy_result",
+            "tenant_id": "tenant:alpha",
+            "owner_principal_id": "principal:alpha:alice",
+            "publication_class_id": "publication-class:restricted:v1",
+            "content_private": True,
+        },
+        {
+            "resource_id": "document:alpha:public-001",
+            "resource_type": "private_document",
+            "tenant_id": "tenant:alpha",
+            "content_private": False,
+        },
+        {
+            "resource_id": "audit:alpha:private-001",
+            "resource_type": "access_audit_metadata",
+            "tenant_id": "tenant:alpha",
+            "owner_principal_id": "principal:alpha:alice",
+            "content_private": True,
+        },
+    ],
+)
+def test_resource_type_rejects_contradictory_privacy_shape(resource: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="private resource types require"):
+        AccessResource.model_validate(resource)
 
 
 def test_policy_and_decision_identities_are_immutable() -> None:
@@ -201,6 +296,19 @@ def test_context_cannot_authorize_before_issuance() -> None:
     assert decision.decision is AccessDecisionKind.DENY
     assert decision.reason is AccessDenialReason.AUTHENTICATION_NOT_YET_VALID
     assert decision.audit_event is AccessAuditEventKind.AUTHENTICATION_DENIED
+
+
+def test_authorization_service_signature_exposes_all_decision_inputs() -> None:
+    assert set(inspect.signature(AuthorizationService.authorize).parameters) == {
+        "self",
+        "context",
+        "action",
+        "resource",
+        "policy",
+        "observed_at",
+        "authentication_failure",
+        "revoked_delegation_ids",
+    }
 
 
 def test_access_metadata_never_enters_computation_contracts() -> None:

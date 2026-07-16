@@ -1,0 +1,12 @@
+title = "TrueAlpha gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+id = "canonical-rung-evidence-identities"
+description = "Canonical rung evidence hashes are public content identities, not API keys."
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+paths = ['''^governance/evidence/.*\.json$''']
+regexes = ['''^rung-evidence:[A-Za-z0-9._-]+:[0-9a-f]{64}$''']
