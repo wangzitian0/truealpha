@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "A0-governed-research-access",
-  "revision": 5,
+  "revision": 6,
   "issue": 230,
   "owner_gate": 31,
   "status": "blocked",
@@ -10,7 +10,7 @@
   "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Establish a governed multi-user research access boundary before MCP, reports, cards, the Web App, or chat expose personal research state.",
-  "claim_ceiling": "E1 content-hashed Local/CI authorization evidence for the corrected experimental contract, frozen two-tenant corpus, deterministic decision replay, fail-closed denial, owner RLS, tenant-bound administrator-only audit metadata, and append-only identity, grant, revocation, policy, decision, and audit histories only; no authoritative init.md amendment, stable package-root export, E2 contract repair, authentication route, identity-provider binding, browser or MCP access, content retention, report or card mutation, replay submission, factor execution, Qlib invocation, source call, stable handoff, or release activation is accepted.",
+  "claim_ceiling": "E1 remains the accepted ceiling while the implemented E2 governed-research-access contract awaits independent verification. The candidate implementation contains authoritative architecture, stable package-root exports, frozen two-tenant typed/SQL command evidence, and a valid blocked Gate 0 v5 successor that binds immutable v4 bytes and current integration controls. It does not yet grant a stable handoff and makes no Gate 0 acceptance, authentication route, identity-provider binding, browser or MCP deployment, content retention, sharing, break-glass, report or card mutation, replay submission, factor execution, Qlib invocation, live source, Staging/Production readiness, or release activation claim.",
   "capability_issues": [229],
   "closes_issues": [229],
   "informational_issues": [31, 41, 42, 43, 45, 46, 66, 224, 225, 226, 227],
@@ -75,10 +75,16 @@
       "governance/evidence/A0-governed-research-access-E0.v1.json",
       "governance/evidence/A0-governed-research-access-E1.v1.json",
       "governance/evidence/A0-governed-research-access-E2.v1.json",
+      "governance/evidence/A0-governed-research-access-E2.v2.json",
+      "governance/evidence/issue-229.v1.json",
       "governance/handoffs/A0-governed-research-access.v1.json",
-      "governance/gate0/README.md",
-      "governance/gate0/manifest-v5.json",
-      "governance/schemas/gate0-candidate-manifest.schema.json",
+      "governance/capabilities/issue-229.v1.json",
+    "governance/gate0/README.md",
+    "governance/gate0/manifest-v5.json",
+    "governance/gate0/v4-frozen-tree-proof.v1.json",
+    "governance/schemas/gate0-candidate-manifest.schema.json",
+    "governance/schemas/handoff-manifest.schema.json",
+    "governance/schemas/rung-evidence.schema.json",
       "libs/runtime/tests/test_gate0_candidate.py",
       "libs/runtime/tests/test_delivery_governance.py",
       "tools/check_gate0_candidate.py",
@@ -119,9 +125,12 @@
       "db/migrations/0022_app_identity.sql",
       "db/roles.sql",
       "db/tests/governed_research_access_contract.sql",
-      "governance/gate0/README.md",
-      "governance/gate0/manifest-v5.json",
-      "governance/schemas/gate0-candidate-manifest.schema.json",
+    "governance/gate0/README.md",
+    "governance/gate0/manifest-v5.json",
+    "governance/gate0/v4-frozen-tree-proof.v1.json",
+    "governance/schemas/gate0-candidate-manifest.schema.json",
+    "governance/schemas/handoff-manifest.schema.json",
+    "governance/schemas/rung-evidence.schema.json",
       "libs/runtime/tests/test_gate0_candidate.py",
       "libs/runtime/tests/test_delivery_governance.py",
       "tools/check_gate0_candidate.py",
@@ -130,7 +139,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/A0-governed-research-access.v1.json",
-      "sha256": "88eaa841fe6f8b4a188e368cd35fba1883d10fec9ee407cdbfa685f3cb171e51"
+      "sha256": "4014ab65d9f7e2fee29ca53565cfb8467832e36ec5e8f9ccec2ceaf31e17053c"
     }
   },
   "release_activation": {
@@ -146,7 +155,7 @@
       "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
       "uv run pytest libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py -q",
       "uv run ruff check tools/check_gate0_candidate.py tools/check_delivery_governance.py libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py",
-      "uv run python tools/check_gate0_candidate.py governance/gate0/manifest-v5.json",
+      "uv run python tools/check_gate0_candidate.py --manifest governance/gate0/manifest-v5.json",
       "uv run python tools/check_delivery_governance.py"
     ],
     "negative_controls": [
@@ -161,7 +170,7 @@
       "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
       "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
       "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated",
-      "the experimental access DTOs are exported from the stable truealpha_contracts package root before E2 freeze",
+      "the stable package root omits the exact governed-access symbols or ReleaseManifest gains an access binding",
       "the frozen governance/gate0/manifest-v4.json bytes or its historical acceptance boundary are changed",
       "the Gate 0 v5 successor drops, weakens, or marks accepted any external blocker inherited from v4"
     ],

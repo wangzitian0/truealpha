@@ -339,6 +339,19 @@ graph; `mart.strategy_data_quality_review` starts from every expected requiremen
 and left-joins the actual evidence. Neither projection may infer non-applicability from
 zero use, and neither becomes a second computation path for factors.
 
+**Governed research access.** Trusted browser, delegated-MCP OAuth, administrator,
+and service middleware construct a server-derived `AccessContext`; clients never
+supply tenant, principal, role, entitlement, or publication-policy authority. Every
+private-content or materialized-result request is authorized before mart SQL, private
+row lookup, or artifact retrieval. Private conversations and documents are tenant- and
+owner-bound, administrators receive non-content audit metadata by default, and
+materialized strategy/backtest results require an immutable permitted publication
+class. Missing, invalid, not-yet-valid, expired, revoked, forged, or cross-tenant
+authority fails closed and emits an append-only decision/audit event. Identity and
+access metadata never enters factor inputs, `BacktestDataGateway`, `DecisionSnapshot`,
+`ReplayEventStream`, or Qlib types. This contract does not activate authentication,
+routes, identity-provider bindings, retention policy, replay execution, or sharing.
+
 ---
 
 ## 7. The Seven Analytics Modules

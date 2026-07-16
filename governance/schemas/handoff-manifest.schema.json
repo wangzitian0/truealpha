@@ -21,7 +21,10 @@
   ],
   "properties": {
     "schema_version": {"const": 1},
-    "handoff_id": {"type": "string", "pattern": "^handoff:[a-z0-9-]+:[0-9a-f]{64}$"},
+    "handoff_id": {
+      "type": "string",
+      "pattern": "^handoff:[a-z0-9-]+:(?:[0-9a-f]{64}|[0-9a-f]{8}(?::[0-9a-f]{8}){7})$"
+    },
     "revision": {"type": "integer", "minimum": 1},
     "state": {"enum": ["produced", "verified", "accepted", "revoked"]},
     "producer": {

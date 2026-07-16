@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:c221a9d068de934cb246a408e595013b61baf69a8bfbf5034dfb63cedd834f32",
+  "lease_id": "integration-lease:7a155276448f35200aa9e57f8c6bb916ad78a3a737e1b918344a59cf2871e1ce",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
   "state": "active",
@@ -9,12 +9,15 @@
     "libs/contracts/src/truealpha_contracts/__init__.py",
     "governance/gate0/README.md",
     "governance/gate0/manifest-v5.json",
+    "governance/gate0/v4-frozen-tree-proof.v1.json",
     "governance/schemas/gate0-candidate-manifest.schema.json",
+    "governance/schemas/handoff-manifest.schema.json",
+    "governance/schemas/rung-evidence.schema.json",
     "libs/runtime/tests/test_gate0_candidate.py",
     "libs/runtime/tests/test_delivery_governance.py",
     "tools/check_gate0_candidate.py",
     "tools/check_delivery_governance.py"
   ],
-  "base_sha": "5e1be12550ed8e7f8528f8017adffaa009a0ef40",
+  "base_sha": "6b0226cd920cdd906820ce328b504b5e08aa4ada",
   "expires_at": "2026-07-30T00:00:00Z"
 }

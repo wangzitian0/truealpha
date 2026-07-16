@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "proof_id": "gate-0-v4-frozen-tree-proof-v1",
+  "candidate_commit_sha": "8bfcd328258e79e14977c60525769ce3302f2ea4",
+  "manifest": {
+    "path": "governance/gate0/manifest-v4.json",
+    "sha256": "5a9714cc892e9070616f5f6a874a06a206211497005e57f74a6587d331d6bad6"
+  },
+  "candidate_tree_sha256": "c1463ee2e735ee9895b9f6d6b746d90cda7fb34a3812d064724c907bdcbe0c8b",
+  "paths": [
+    "apps/data-engine/tests/batches/mvp_medium_validation/test_e1_slice.py",
+    "apps/data-engine/tests/batches/mvp_medium_validation/test_e2_slice.py",
+    "apps/data-engine/tests/batches/mvp_medium_validation/test_e3_slice.py",
+    "docs/architecture-contract-closure.md",
+    "init.md",
+    "governance/gate0/**",
+    "governance/schemas/gate0-candidate-manifest.schema.json",
+    "libs/contracts/src/truealpha_contracts/__init__.py",
+    "libs/contracts/src/truealpha_contracts/policy_bundle.py",
+    "libs/contracts/tests/test_policy_bundle.py",
+    "libs/runtime/tests/test_gate0_candidate.py",
+    "tools/check_gate0_candidate.py"
+  ]
+}

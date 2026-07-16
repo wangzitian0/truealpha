@@ -337,7 +337,8 @@ def test_access_metadata_never_enters_computation_contracts() -> None:
     assert all(name not in str(BacktestDataGateway.load.__annotations__) for name in forbidden)
 
 
-def test_experimental_access_contract_has_no_stable_or_release_binding() -> None:
-    assert not hasattr(truealpha_contracts, "AccessContext")
-    assert not hasattr(truealpha_contracts, "authorize_access")
+def test_e2_access_contract_has_stable_exports_without_release_binding() -> None:
+    assert truealpha_contracts.AccessContext is AccessContext
+    assert truealpha_contracts.AuthorizationService is AuthorizationService
+    assert truealpha_contracts.authorize_access is authorize_access
     assert all("access" not in field_name for field_name in ReleaseManifest.model_fields)

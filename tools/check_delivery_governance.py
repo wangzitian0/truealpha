@@ -29,6 +29,7 @@ validate_gate0_candidate = gate0_validator.validate_gate0_candidate
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH_PATH = ROOT / "governance" / "vision-issue-graph.json"
 GATE0_MANIFEST_PATH = "governance/gate0/manifest-v4.json"
+GATE0_MANIFEST_RE = re.compile(r"^governance/gate0/manifest-v(?P<version>[0-9]+)\.json$")
 GATE0_AUTHORIZATION_CONTROL_PATHS = (
     ".github/**",
     "AGENTS.md",
@@ -49,6 +50,11 @@ RUNG_LABELS = {
 TERMINAL_EVIDENCE = frozenset((*RUNGS[2:], "GRADUATION"))
 EDGE_CLASSES = frozenset(("start", "freeze", "closure", "informational"))
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+PRESENTED_DIGEST_RE = re.compile(r"^(?:[0-9a-f]{64}|[0-9a-f]{8}(?::[0-9a-f]{8}){7})$")
+HANDOFF_ID_RE = re.compile(r"^handoff:[a-z0-9-]+:(?P<digest>(?:[0-9a-f]{64}|[0-9a-f]{8}(?::[0-9a-f]{8}){7}))$")
+RUNG_EVIDENCE_ID_RE = re.compile(
+    r"^rung-evidence:[a-zA-Z0-9._-]+:(?P<digest>(?:[0-9a-f]{64}|[0-9a-f]{8}(?::[0-9a-f]{8}){7}))$"
+)
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GIT_REF_RE = re.compile(r"^git:([0-9a-f]{40}):(.+)$")
 EVIDENCE_ID_RE = re.compile(r"^capability-evidence:issue-[0-9]+:v[0-9]+$")
@@ -72,9 +78,7 @@ ISSUE_ACTIONS = frozenset(("managed-by-batch", "complete-on-merge", "keep-open")
 MANIFEST_PREFIX = "governance/batches/"
 CAPABILITY_PREFIX = "governance/capabilities/"
 CAPABILITY_SOURCE = f"{CAPABILITY_PREFIX}issue-*.v1.json"
-CAPABILITY_REQUIRED_FIELDS = frozenset(
-    {"schema_version", "issue", "gate", "terminal_evidence", "artifact_edges"}
-)
+CAPABILITY_REQUIRED_FIELDS = frozenset({"schema_version", "issue", "gate", "terminal_evidence", "artifact_edges"})
 CAPABILITY_ALLOWED_FIELDS = CAPABILITY_REQUIRED_FIELDS | {"accepted_evidence"}
 CAPABILITY_EDGE_FIELDS = frozenset({"from", "to", "class", "artifact"})
 BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
@@ -417,6 +421,20 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def present_digest(digest: str) -> str:
+    """Split a digest for identifier presentation without changing its identity."""
+    if SHA256_RE.fullmatch(digest) is None:
+        raise ValueError("digest must be a lowercase SHA-256")
+    return ":".join(digest[index : index + 8] for index in range(0, len(digest), 8))
+
+
+def digest_id_matches(value: Any, *, pattern: re.Pattern[str], digest: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    match = pattern.fullmatch(value)
+    return match is not None and match.group("digest").replace(":", "") == digest
+
+
 def repo_path(relative_path: str) -> Path | None:
     pure_path = PurePosixPath(relative_path)
     if (
@@ -667,7 +685,9 @@ def validate_pull_request_metadata(
             github_work_issue.get("number") == work_issue_number,
             "pull-request Work-Issue disagrees with the exported issue",
         )
-        validation.require(github_work_issue.get("state") == "open", f"pull-request Work-Issue #{work_issue_number} is not open")
+        validation.require(
+            github_work_issue.get("state") == "open", f"pull-request Work-Issue #{work_issue_number} is not open"
+        )
 
     if advance is not None and advance.kind == "capability_batch":
         owned_issue = advance.manifest.get("issue")
@@ -1245,9 +1265,11 @@ def validate_handoff_dependency(
     content = {key: value for key, value in handoff.items() if key != "handoff_id"}
     handoff_id = handoff.get("handoff_id")
     validation.require(
-        isinstance(handoff_id, str)
-        and re.fullmatch(r"handoff:[a-z0-9-]+:[0-9a-f]{64}", handoff_id) is not None
-        and handoff_id.rsplit(":", maxsplit=1)[-1] == canonical_sha256(content),
+        digest_id_matches(
+            handoff_id,
+            pattern=HANDOFF_ID_RE,
+            digest=canonical_sha256(content),
+        ),
         f"{batch_id}: HandoffManifest ID mismatch",
     )
     validation.require(handoff.get("state") == "accepted", f"{batch_id}: HandoffManifest is not accepted")
@@ -1335,9 +1357,11 @@ def validate_rung_evidence(
     content = {key: value for key, value in evidence.items() if key != "evidence_id"}
     evidence_id = evidence.get("evidence_id")
     validation.require(
-        isinstance(evidence_id, str)
-        and re.fullmatch(r"rung-evidence:[a-zA-Z0-9._-]+:[0-9a-f]{64}", evidence_id) is not None
-        and evidence_id.rsplit(":", maxsplit=1)[-1] == canonical_sha256(content),
+        digest_id_matches(
+            evidence_id,
+            pattern=RUNG_EVIDENCE_ID_RE,
+            digest=canonical_sha256(content),
+        ),
         f"{owner}: RungEvidence ID mismatch",
     )
     validation.require(evidence.get("batch_id") == producer_batch, f"{owner}: producer batch mismatch")
@@ -1432,7 +1456,11 @@ def validate_integration_lease(
     )
     validation.require(lease.get("lease_id") == expected_id, f"{batch_id}: integration lease ID mismatch")
     validation.require(lease.get("batch_id") == batch_id, f"{batch_id}: integration lease names another batch")
-    validation.require(lease.get("state") == "active", f"{batch_id}: integration lease is not active")
+    terminal_release = manifest.get("status") == "done" and lease.get("state") == "revoked"
+    validation.require(
+        lease.get("state") == "active" or terminal_release,
+        f"{batch_id}: integration lease is neither active nor terminally released",
+    )
     validation.require(lease.get("owner") == paths.get("lease_owner"), f"{batch_id}: integration lease owner mismatch")
     validation.require(lease.get("base_sha") == base_sha, f"{batch_id}: integration lease base SHA is stale")
     lease_paths = lease.get("paths", [])
@@ -1614,15 +1642,34 @@ def validate_new_batch_registration(
     )
 
 
+def graph_without_owned_batch_updates(
+    graph: dict[str, Any],
+    *,
+    batch_id: str,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    comparable = json.loads(json.dumps(graph))
+    comparable["batches"].pop(batch_id, None)
+    if manifest.get("status") == "done":
+        for issue_number in manifest.get("closes_issues", []):
+            issue = comparable.get("issues", {}).get(str(issue_number))
+            if isinstance(issue, dict):
+                issue.pop("accepted_evidence", None)
+    return comparable
+
+
 def validate_gate0_pr_advance(
     validation: Validation,
     *,
+    gate0_manifest_path: str,
     base_sha: str,
     changed_paths: tuple[str, ...],
     target_drift_paths: tuple[str, ...],
 ) -> PullRequestAdvance | None:
-    label = "Gate 0 v4 aggregate candidate"
-    manifest_path = repo_path(GATE0_MANIFEST_PATH)
+    match = GATE0_MANIFEST_RE.fullmatch(gate0_manifest_path)
+    version = int(match.group("version")) if match is not None else None
+    label = f"Gate 0 v{version} aggregate candidate"
+    manifest_path = repo_path(gate0_manifest_path)
     validation.require(
         manifest_path is not None and manifest_path.is_file() and not manifest_path.is_symlink(),
         f"{label}: manifest is missing from the PR head",
@@ -1633,8 +1680,7 @@ def validate_gate0_pr_advance(
     validation.require(isinstance(manifest, dict), f"{label}: manifest must be an object")
     if not isinstance(manifest, dict):
         return None
-    base_manifest = git_json(base_sha, GATE0_MANIFEST_PATH)
-    validation.require(isinstance(base_manifest, dict), f"{label}: base manifest is unavailable")
+    base_manifest = git_json(base_sha, gate0_manifest_path)
     if isinstance(base_manifest, dict):
         validation.require(
             manifest.get("integration_base_sha") == base_manifest.get("integration_base_sha"),
@@ -1660,7 +1706,7 @@ def validate_gate0_pr_advance(
             not drift_dependencies,
             f"{label}: target-branch drift intersects candidate paths: {drift_dependencies}",
         )
-    non_manifest_paths = tuple(path for path in changed_paths if path != GATE0_MANIFEST_PATH)
+    non_manifest_paths = tuple(path for path in changed_paths if path != gate0_manifest_path)
     validation.require(bool(non_manifest_paths), f"{label}: aggregate PR changes only its manifest")
     claims_acceptance = manifest.get("status") == "accepted"
     if isinstance(paths, list):
@@ -1679,7 +1725,7 @@ def validate_gate0_pr_advance(
             f"{label}: accepted candidate modifies authorization controls: {changed_controls}",
         )
     gate_result = validate_gate0_candidate(
-        Path(GATE0_MANIFEST_PATH),
+        Path(gate0_manifest_path),
         root=ROOT,
         check_live_comments=claims_acceptance,
         require_accepted=claims_acceptance,
@@ -1689,8 +1735,8 @@ def validate_gate0_pr_advance(
     if validation.errors:
         return None
     return PullRequestAdvance(
-        batch_id="gate-0-v4",
-        manifest_path=GATE0_MANIFEST_PATH,
+        batch_id=f"gate-0-v{version}",
+        manifest_path=gate0_manifest_path,
         base_manifest={},
         manifest=manifest,
         accepted_rung=None,
@@ -1737,16 +1783,24 @@ def validate_pr_advance(
     changed_manifests = tuple(
         path for path in changed_paths if path.startswith(MANIFEST_PREFIX) and path.endswith(".json")
     )
-    gate0_manifest_changed = GATE0_MANIFEST_PATH in changed_paths
+    changed_gate0_manifests = tuple(path for path in changed_paths if GATE0_MANIFEST_RE.fullmatch(path) is not None)
+    gate0_manifest_changed = GATE0_MANIFEST_PATH in changed_gate0_manifests
     validation.require(
         not (gate0_manifest_changed and changed_manifests),
-        "PR cannot mix the Gate 0 aggregate manifest with capability-batch manifests",
+        "PR cannot modify frozen Gate 0 v4 while advancing a capability-batch manifest",
     )
     if gate0_manifest_changed and changed_manifests:
         return None
-    if gate0_manifest_changed:
+    if changed_gate0_manifests and not changed_manifests:
+        validation.require(
+            len(changed_gate0_manifests) == 1,
+            "standalone Gate 0 PR must advance exactly one versioned manifest",
+        )
+        if len(changed_gate0_manifests) != 1:
+            return None
         return validate_gate0_pr_advance(
             validation,
+            gate0_manifest_path=changed_gate0_manifests[0],
             base_sha=merge_base,
             changed_paths=changed_paths,
             target_drift_paths=target_drift_paths,
@@ -1819,10 +1873,16 @@ def validate_pr_advance(
         manifest.get("revision") == base_manifest.get("revision", 0) + 1,
         f"{batch_id}: manifest revision must increase by exactly one",
     )
-    base_graph_without_batch = json.loads(json.dumps(base_graph))
-    graph_without_batch = json.loads(json.dumps(graph))
-    base_graph_without_batch["batches"].pop(batch_id, None)
-    graph_without_batch["batches"].pop(batch_id, None)
+    base_graph_without_batch = graph_without_owned_batch_updates(
+        base_graph,
+        batch_id=batch_id,
+        manifest=manifest,
+    )
+    graph_without_batch = graph_without_owned_batch_updates(
+        graph,
+        batch_id=batch_id,
+        manifest=manifest,
+    )
     validation.require(
         base_graph_without_batch == graph_without_batch,
         f"{batch_id}: PR changed unrelated Vision graph content",
@@ -1865,6 +1925,13 @@ def validate_pr_advance(
         changed_paths=changed_paths,
         base_sha=merge_base,
     )
+    for successor_path in changed_gate0_manifests:
+        match = GATE0_MANIFEST_RE.fullmatch(successor_path)
+        if match is None or int(match.group("version")) < 5:
+            continue
+        gate_result = validate_gate0_candidate(Path(successor_path), root=ROOT)
+        for error in gate_result.errors:
+            validation.require(False, f"Gate 0 batch successor: {error}")
     return PullRequestAdvance(
         batch_id=batch_id,
         manifest_path=manifest_path,
@@ -1947,7 +2014,7 @@ def execute_acceptance_commands(
         "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
     evidence_kind = "gate-evidence" if gate_acceptance else "rung-evidence"
-    evidence_id = f"{evidence_kind}:{advance.batch_id}:{canonical_sha256(evidence)}"
+    evidence_id = f"{evidence_kind}:{advance.batch_id}:{present_digest(canonical_sha256(evidence))}"
     output = {"evidence_id": evidence_id, **evidence}
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")

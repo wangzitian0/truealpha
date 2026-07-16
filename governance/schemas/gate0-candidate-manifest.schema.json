@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://truealpha.local/schemas/gate0-candidate-manifest.schema.json",
-  "title": "TrueAlpha Gate 0 Candidate Manifest v4",
+  "title": "TrueAlpha Versioned Gate 0 Candidate Manifest",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -25,11 +25,11 @@
   ],
   "properties": {
     "schema_version": {"const": 1},
-    "manifest_id": {"const": "gate-0-batch-v4"},
-    "manifest_version": {"const": 4},
+    "manifest_id": {"type": "string", "pattern": "^gate-0-batch-v(?:[4-9]|[1-9][0-9]+)$"},
+    "manifest_version": {"type": "integer", "minimum": 4},
     "gate_issue": {"const": 56},
     "status": {"enum": ["candidate_blocked_external_attestation", "accepted"]},
-    "integration_branch": {"const": "batch/gate-0-v4-semantic-data-closure"},
+    "integration_branch": {"type": "string", "pattern": "^batch/gate-0-v(?:[4-9]|[1-9][0-9]+)-[a-z0-9-]+$"},
     "integration_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "included_issues": {"const": [57, 58, 59, 60, 61]},
     "dependency_order": {"const": [57, 58, 59, 60, 61]},
@@ -184,9 +184,78 @@
         "acceptance_claim": {"type": "string", "minLength": 1}
       }
     },
-    "blocking_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}}
+    "blocking_reasons": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "predecessor_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_id",
+        "manifest_version",
+        "path",
+        "sha256",
+        "candidate_commit_sha",
+        "candidate_tree_proof"
+      ],
+      "properties": {
+        "manifest_id": {"type": "string", "pattern": "^gate-0-batch-v(?:[4-9]|[1-9][0-9]+)$"},
+        "manifest_version": {"type": "integer", "minimum": 4},
+        "path": {"type": "string", "pattern": "^governance/gate0/manifest-v(?:[4-9]|[1-9][0-9]+)\\.json$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "candidate_commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "candidate_tree_proof": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": {"type": "string", "pattern": "^governance/gate0/"},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
+      }
+    },
+    "integration_bindings": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "path", "sha256"],
+        "properties": {
+          "role": {
+            "enum": [
+              "authoritative_architecture",
+              "stable_contract_export",
+              "candidate_validator",
+              "delivery_validator"
+            ]
+          },
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
   },
   "allOf": [
+    {
+      "if": {"properties": {"manifest_version": {"const": 4}}},
+      "then": {
+        "properties": {
+          "manifest_id": {"const": "gate-0-batch-v4"},
+          "integration_branch": {"const": "batch/gate-0-v4-semantic-data-closure"}
+        },
+        "not": {
+          "anyOf": [
+            {"required": ["predecessor_manifest"]},
+            {"required": ["integration_bindings"]}
+          ]
+        }
+      },
+      "else": {
+        "required": ["predecessor_manifest", "integration_bindings"]
+      }
+    },
     {
       "if": {"properties": {"status": {"const": "accepted"}}},
       "then": {

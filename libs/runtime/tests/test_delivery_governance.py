@@ -198,7 +198,9 @@ def _reference(root: Path, path: Path) -> dict[str, str]:
     }
 
 
-def _rung_evidence(*, batch_id: str = "producer-batch", head_sha: str = "2" * 40) -> dict:
+def _rung_evidence(
+    *, batch_id: str = "producer-batch", head_sha: str = "2" * 40, chunked_id: bool = False
+) -> dict:
     content = {
         "schema_version": 1,
         "batch_id": batch_id,
@@ -217,16 +219,18 @@ def _rung_evidence(*, batch_id: str = "producer-batch", head_sha: str = "2" * 40
         "stable_handoff": False,
         "created_at": "2026-07-13T00:00:00Z",
     }
+    digest = governance.canonical_sha256(content)
+    presentation = governance.present_digest(digest) if chunked_id else digest
     return {
-        "evidence_id": f"rung-evidence:{batch_id}:{governance.canonical_sha256(content)}",
+        "evidence_id": f"rung-evidence:{batch_id}:{presentation}",
         **content,
     }
 
 
-def _validate_handoff(tmp_path, monkeypatch, mutation=None):
+def _validate_handoff(tmp_path, monkeypatch, mutation=None, *, chunked_ids: bool = False):
     producer_head = "2" * 40
     evidence_path = tmp_path / "governance" / "evidence" / "producer-e2.json"
-    _write_json(evidence_path, _rung_evidence(head_sha=producer_head))
+    _write_json(evidence_path, _rung_evidence(head_sha=producer_head, chunked_id=chunked_ids))
     evidence = [_reference(tmp_path, evidence_path)]
     content = {
         "schema_version": 1,
@@ -254,8 +258,10 @@ def _validate_handoff(tmp_path, monkeypatch, mutation=None):
     }
     if mutation is not None:
         mutation(content)
+    digest = governance.canonical_sha256(content)
+    presentation = governance.present_digest(digest) if chunked_ids else digest
     handoff = {
-        "handoff_id": f"handoff:producer:{governance.canonical_sha256(content)}",
+        "handoff_id": f"handoff:producer:{presentation}",
         **content,
     }
     handoff_path = tmp_path / "governance" / "handoffs" / "producer.json"
@@ -276,6 +282,23 @@ def test_handoff_accepts_bound_rung_evidence(tmp_path, monkeypatch):
     validation = _validate_handoff(tmp_path, monkeypatch)
 
     assert validation.errors == []
+
+
+def test_handoff_accepts_chunked_digest_ids(tmp_path, monkeypatch):
+    validation = _validate_handoff(tmp_path, monkeypatch, chunked_ids=True)
+
+    assert validation.errors == []
+
+
+@pytest.mark.parametrize(
+    ("value", "pattern"),
+    [
+        ("handoff:producer:abcdef0123:" + "0" * 54, governance.HANDOFF_ID_RE),
+        ("rung-evidence:producer:abcdef0:" + "0" * 57, governance.RUNG_EVIDENCE_ID_RE),
+    ],
+)
+def test_digest_id_rejects_noncanonical_chunk_lengths(value, pattern):
+    assert not governance.digest_id_matches(value, pattern=pattern, digest="0" * 64)
 
 
 @pytest.mark.parametrize(
@@ -866,6 +889,41 @@ def test_pr_rejects_multiple_batch_manifests(monkeypatch):
     assert "PR must advance exactly one capability-batch manifest" in validation.errors
 
 
+def test_terminal_batch_comparison_ignores_only_owned_capability_evidence():
+    graph = {
+        "batches": {"A0": {"status": "done"}},
+        "issues": {
+            "229": {"terminal_evidence": "E2", "accepted_evidence": {"path": "owned.json"}},
+            "230": {"terminal_evidence": "E2", "accepted_evidence": {"path": "unrelated.json"}},
+        },
+    }
+
+    comparable = governance.graph_without_owned_batch_updates(
+        graph,
+        batch_id="A0",
+        manifest={"status": "done", "closes_issues": [229]},
+    )
+
+    assert "A0" not in comparable["batches"]
+    assert "accepted_evidence" not in comparable["issues"]["229"]
+    assert comparable["issues"]["230"]["accepted_evidence"] == {"path": "unrelated.json"}
+
+
+def test_nonterminal_batch_comparison_keeps_capability_evidence():
+    graph = {
+        "batches": {"A0": {"status": "active"}},
+        "issues": {"229": {"accepted_evidence": {"path": "not-yet-owned.json"}}},
+    }
+
+    comparable = governance.graph_without_owned_batch_updates(
+        graph,
+        batch_id="A0",
+        manifest={"status": "active", "closes_issues": [229]},
+    )
+
+    assert comparable["issues"]["229"]["accepted_evidence"] == {"path": "not-yet-owned.json"}
+
+
 def test_gate0_aggregate_allows_structurally_valid_blocked_candidate(tmp_path, monkeypatch):
     calls: list[dict[str, bool]] = []
     graph, base_sha, head_sha = _gate0_pr_context(tmp_path, monkeypatch, validation_calls=calls)
@@ -1010,7 +1068,46 @@ def test_gate0_aggregate_cannot_mix_capability_batch_manifest(tmp_path, monkeypa
     )
 
     assert advance is None
-    assert "PR cannot mix the Gate 0 aggregate manifest with capability-batch manifests" in validation.errors
+    assert "PR cannot modify frozen Gate 0 v4 while advancing a capability-batch manifest" in validation.errors
+
+
+def test_versioned_gate0_successor_may_be_produced_by_authorized_batch(tmp_path, monkeypatch):
+    changed_paths = (
+        "governance/batches/D0.json",
+        "governance/gate0/manifest-v5.json",
+    )
+    graph, base_sha, head_sha = _pr_context(
+        tmp_path,
+        monkeypatch,
+        before="prepared",
+        after="active",
+        changed_paths=changed_paths,
+    )
+    batch_manifest_path = tmp_path / "governance/batches/D0.json"
+    batch_manifest = json.loads(batch_manifest_path.read_text(encoding="utf-8"))
+    batch_manifest["paths"]["writable"].append("governance/gate0/manifest-v5.json")
+    _write_json(batch_manifest_path, batch_manifest)
+    _write_json(tmp_path / "governance/gate0/manifest-v5.json", {"manifest_version": 5})
+    calls: list[str] = []
+
+    def validate_candidate(path, *, root):
+        calls.append(path.as_posix())
+        assert root == tmp_path
+        return type("GateResult", (), {"errors": ()})()
+
+    monkeypatch.setattr(governance, "validate_gate0_candidate", validate_candidate)
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert validation.errors == []
+    assert advance is not None and advance.batch_id == "D0"
+    assert calls == ["governance/gate0/manifest-v5.json"]
 
 
 def test_accepted_gate0_candidate_rejects_future_authorization_control_changes(tmp_path, monkeypatch):
@@ -1261,7 +1358,7 @@ def test_global_shared_surface_requires_declared_lease():
     assert "D0: integration lease: file reference must be an object" in validation.errors
 
 
-def _validate_lease(tmp_path, monkeypatch, mutation=None):
+def _validate_lease(tmp_path, monkeypatch, mutation=None, *, manifest_status=None):
     base_sha = "a" * 40
     content = {
         "schema_version": 1,
@@ -1286,10 +1383,11 @@ def _validate_lease(tmp_path, monkeypatch, mutation=None):
         validation,
         batch_id="D0",
         manifest={
+            "status": manifest_status,
             "paths": {
                 "lease_owner": "integrator",
                 "lease_manifest": _reference(tmp_path, lease_path),
-            }
+            },
         },
         changed_integration_paths=("shared/export.py",),
         base_sha=base_sha,
@@ -1299,6 +1397,17 @@ def _validate_lease(tmp_path, monkeypatch, mutation=None):
 
 def test_live_integration_lease_authorizes_shared_path(tmp_path, monkeypatch):
     validation = _validate_lease(tmp_path, monkeypatch)
+
+    assert validation.errors == []
+
+
+def test_done_batch_may_release_lease_in_terminal_pr(tmp_path, monkeypatch):
+    validation = _validate_lease(
+        tmp_path,
+        monkeypatch,
+        lambda lease: lease.update(state="revoked"),
+        manifest_status="done",
+    )
 
     assert validation.errors == []
 
