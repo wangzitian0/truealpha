@@ -190,9 +190,9 @@ evidence caps the claim; it does not justify taking another agent's work.
   The ledger is throttle and audit infrastructure, not a fictional monthly-call quota.
   The relevant quote/fundamental endpoints use burst rate limits; do not confuse a
   subscription tier ceiling with a call budget. See `init.md` Section 5.
-- Moomoo access is Quote API read-only. Never import or call trade contexts, `place_order`,
-  `modify_order`, `cancel_order`, or `unlock_trade`. The public repository's security CI
-  must reject trading APIs rather than relying on review alone.
+- Moomoo access is Quote API read-only. Every trading context and every order placement,
+  modification, cancellation, or trade-unlock operation is forbidden. The public
+  repository's security CI must reject trading APIs rather than relying on review alone.
 - Data-engine may hand strategy only ready capture evaluation, exact snapshots, and typed
   inputs. Consumers receive materialized outputs plus trace, usage, availability, catalog,
   universe, and release identities. Consumers pin accepted handoff IDs, never `latest`.
