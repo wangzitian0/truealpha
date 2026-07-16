@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:1a0f9d20273ce16fcce71b9184a3323798c7b548d701ea16e581893c80a23431",
+  "batch_id": "D11-closed-terminal-pr-metadata",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "governance/gate0/manifest-v7.json",
+    "governance/gate0/v6-frozen-tree-proof.v1.json",
+    "libs/runtime/tests/test_delivery_governance.py",
+    "tools/check_delivery_governance.py"
+  ],
+  "base_sha": "674c7e9a7adb93fb344305927bc97c7320f6e9a4",
+  "expires_at": "2026-07-30T00:00:00Z"
+}

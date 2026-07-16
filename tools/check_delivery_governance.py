@@ -648,6 +648,30 @@ def pull_request_issue_scope(advance: PullRequestAdvance | None) -> set[int] | N
     return {value for value in candidates if isinstance(value, int) and not isinstance(value, bool)}
 
 
+def closed_terminal_corrective_work_issue_allowed(
+    advance: PullRequestAdvance | None,
+    work_issue_number: int,
+) -> bool:
+    if advance is None or advance.kind != "capability_batch" or not advance.base_manifest:
+        return False
+    base = advance.base_manifest
+    candidate = advance.manifest
+    terminal_rung = base.get("terminal_rung")
+    return (
+        base.get("status") == "done"
+        and candidate.get("status") == "done"
+        and base.get("issue") == work_issue_number
+        and candidate.get("issue") == work_issue_number
+        and terminal_rung in RUNGS
+        and base.get("last_accepted_rung") == terminal_rung
+        and base.get("target_rung") == terminal_rung
+        and candidate.get("last_accepted_rung") == terminal_rung
+        and candidate.get("target_rung") == terminal_rung
+        and candidate.get("terminal_rung") == terminal_rung
+        and advance.accepted_rung == terminal_rung
+    )
+
+
 def validate_pull_request_metadata(
     validation: Validation,
     pull_request: Any,
@@ -685,8 +709,14 @@ def validate_pull_request_metadata(
             github_work_issue.get("number") == work_issue_number,
             "pull-request Work-Issue disagrees with the exported issue",
         )
+        work_issue_state = github_work_issue.get("state")
         validation.require(
-            github_work_issue.get("state") == "open", f"pull-request Work-Issue #{work_issue_number} is not open"
+            work_issue_state == "open"
+            or (
+                work_issue_state == "closed"
+                and closed_terminal_corrective_work_issue_allowed(advance, work_issue_number)
+            ),
+            f"pull-request Work-Issue #{work_issue_number} is not open",
         )
 
     if advance is not None and advance.kind == "capability_batch":
