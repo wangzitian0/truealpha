@@ -13,7 +13,7 @@ create table if not exists raw.capture_obligations (
     obligation_id          text primary key check (obligation_id ~ '^list-obligation:[0-9a-f]{64}$'),
     campaign_id            text not null references raw.capture_campaigns(campaign_id),
     run_id                 text not null check (run_id ~ '^capture-run:[0-9a-f]{64}$'),
-    list_version_id        text not null,
+    list_version_id        text not null check (list_version_id ~ '^list-version:[0-9a-f]{64}$'),
     subject_kind           text not null,
     subject_id             text not null,
     capture_requirement_id text not null,

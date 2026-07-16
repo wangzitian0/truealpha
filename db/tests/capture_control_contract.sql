@@ -17,16 +17,35 @@ insert into raw.capture_obligations (
     'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'list-version:d5-primary-v1', 'listing', 'listing:xnas:goog',
+    'list-version:63dea0ed14b68cbc0ffa9a83512197b3bc73bae964d99340109ffe02eeb19f4d', 'listing', 'listing:xnas:goog',
     'market-price:v1', '2026-03-31', repeat('b', 64)
 ),
 (
     'list-obligation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
     'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'list-version:d5-primary-v1', 'listing', 'listing:xnas:googl',
+    'list-version:63dea0ed14b68cbc0ffa9a83512197b3bc73bae964d99340109ffe02eeb19f4d', 'listing', 'listing:xnas:googl',
     'market-price:v1', '2026-03-31', repeat('c', 64)
 );
+
+do $$
+begin
+    begin
+        insert into raw.capture_obligations (
+            obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
+            capture_requirement_id, partition_key, content_sha256
+        ) values (
+            'list-obligation:7777777777777777777777777777777777777777777777777777777777777777',
+            'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'list-version:not-canonical', 'listing', 'listing:xnas:invalid',
+            'market-price:v1', '2026-03-31', repeat('7', 64)
+        );
+        raise exception 'non-canonical list version unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end;
+$$;
 
 do $$
 begin
@@ -38,7 +57,7 @@ begin
             'list-obligation:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
             'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            'list-version:d5-primary-v1', 'listing', 'listing:xnas:goog',
+            'list-version:63dea0ed14b68cbc0ffa9a83512197b3bc73bae964d99340109ffe02eeb19f4d', 'listing', 'listing:xnas:goog',
             'market-price:v1', '2026-03-31', repeat('d', 64)
         );
         raise exception 'duplicate logical obligation unexpectedly succeeded';
@@ -123,7 +142,7 @@ begin
             '2026-04-01T00:00:01Z', 'failed', array['missing'], repeat('2', 64)
         );
         raise exception 'result without dispatch unexpectedly succeeded';
-    exception when raise_exception then
+    exception when raise_exception or foreign_key_violation then
         if sqlerrm = 'result without dispatch unexpectedly succeeded' then raise; end if;
     end;
 end;
