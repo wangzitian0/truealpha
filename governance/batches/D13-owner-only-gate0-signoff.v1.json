@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "batch_id": "D13-owner-only-gate0-signoff",
+  "revision": 1,
+  "issue": 305,
+  "owner_gate": 32,
+  "status": "queued",
+  "lane": "orchestration-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Remove the multi-party Gate 0 attestation role constraints so every remaining external attestation is owner-signable, without weakening hash binding, live comment immutability, or artifact-completeness blockers.",
+  "claim_ceiling": "Accepted E0 offline Gate 0 attestation-policy correction only: the four independence-role attestations (issue59_independent_review, issue59_holdout_custody, issue59_known_reference, issue61_independent_slo_review) and live role-separation validation are removed by explicit owner decision recorded in #305, leaving five owner-signable attestations. A contiguous blocked Gate 0 v8 successor preserves frozen v7 and every accepted artifact and readiness state. This does not accept any candidate, post or bind any attestation, change #59/#60/#61 semantic content, or permit source, scheduler, runtime, release, database, consumer, or Production data work.",
+  "capability_issues": [],
+  "closes_issues": [],
+  "informational_issues": [
+    56,
+    59,
+    61,
+    294
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "the queued registration is merged on main before the preparation revision pins the activation base, reviewer, and frozen Local/CI corpus",
+      "the E0 implementation installs a content-addressed integration lease before changing the shared Gate 0 validator, its tests, candidate files, or successor files",
+      "the implementation removes only the four independence-role attestations and live role-separation checks; target-sha256 binding, byte-exact live comment verification, product-owner authorship, human-author, and no-ref-reuse rules remain mandatory",
+      "issue-59 and issue-61 candidate files drop only the deleted attestation entries and their role-flavored blocking reasons; every artifact-completeness blocker is preserved or reworded without a role requirement",
+      "Gate 0 v7 remains byte-for-byte frozen and a contiguous blocked v8 successor preserves every accepted artifact and readiness state with updated candidate hashes and attestation set",
+      "no candidate is accepted and no attestation status changes from missing"
+    ]
+  },
+  "dependencies": [],
+  "later_claim_dependencies": [
+    "Owner sign-off of #59/#60/#61 still requires the Track A artifacts (golden program, source matrix, rights/budget/probe artifacts, TOPT baseline, policy bundle) plus live owner comments binding the final candidate hashes; D13 only makes those comments owner-authorable.",
+    "#294 remains a separate batch for descoping the frozen tree; D13 does not change SUCCESSOR_MANIFEST_PATHS."
+  ],
+  "corpus": {
+    "environment": "Local/CI Gate 0 candidate fixtures only",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "a chain whose five remaining attestations are all authored by the product owner passes live validation with no role-separation error",
+      "each removed independence-role key is rejected as an unknown external attestation key",
+      "a live approval comment missing the target SHA-256, edited after binding, authored by a bot, posted on the wrong issue, or reusing another role's comment ref is rejected",
+      "product-owner attestations still require the product-owner login",
+      "issue-59 and issue-61 candidates with the trimmed internal attestation sets validate; a candidate retaining a deleted internal attestation key fails closed",
+      "Gate 0 v7 byte mutation or a non-contiguous successor is rejected"
+    ]
+  },
+  "source_ceiling": "No network source, credential, Vault, database, object-store, scheduler, runtime, release, consumer, or Production data operation is authorized.",
+  "paths": {
+    "writable": [
+      "tools/check_gate0_candidate.py",
+      "libs/runtime/tests/test_gate0_candidate.py",
+      "libs/runtime/tests/fixtures/gate0_owner_only_attestations.v1.json",
+      "governance/evidence/D13-owner-only-gate0-signoff-E0.v1.json",
+      "governance/gate0/manifest-v8.json",
+      "governance/gate0/v7-frozen-tree-proof.v1.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "governance/gate0/issue-61.policy-bundle.candidate-v1.json",
+      "governance/leases/D13-owner-only-gate0-signoff.v1.json"
+    ],
+    "read_only": [
+      "AGENTS.md",
+      "docs/iterative-delivery.md",
+      "governance/gate0/README.md",
+      "governance/gate0/manifest-v7.json",
+      "governance/gate0/v6-frozen-tree-proof.v1.json",
+      "governance/gate0/issue-60.source-readiness.candidate-v1.json"
+    ],
+    "forbidden": [
+      "init.md",
+      "vision.md",
+      "apps/**",
+      "db/**",
+      "libs/contracts/**",
+      "libs/factors/**",
+      "libs/runtime/src/**",
+      "Makefile",
+      "tools/agent_preflight.py",
+      "tools/check_delivery_governance.py",
+      "libs/runtime/tests/test_delivery_governance.py",
+      "uv.lock",
+      "pyproject.toml"
+    ],
+    "integration_surface": [
+      "tools/check_gate0_candidate.py",
+      "libs/runtime/tests/test_gate0_candidate.py",
+      "governance/gate0/manifest-v8.json",
+      "governance/gate0/v7-frozen-tree-proof.v1.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "governance/gate0/issue-61.policy-bundle.candidate-v1.json"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "D13 changes only offline Gate 0 attestation authorization policy and cannot activate a source, runtime, schedule, consumer, release, or data flow."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/runtime/tests/test_gate0_candidate.py -q",
+      "uv run python tools/check_gate0_candidate.py --manifest governance/gate0/manifest-v8.json",
+      "make gate0-candidate-check",
+      "uv run python tools/check_delivery_governance.py",
+      "git diff --check"
+    ],
+    "negative_controls": [
+      "any removed independence-role attestation key accepted anywhere in the manifest chain",
+      "a live approval accepted without the target SHA-256 in its exact bytes, with edited bytes, from a bot author, from a non-product-owner login on a product-owner key, or reusing another role's comment ref",
+      "a candidate file retaining a deleted internal attestation key or dropping an artifact-completeness blocker",
+      "accepting any candidate or flipping any attestation status while every Track A artifact blocker remains",
+      "mutating Gate 0 v7 bytes, accepted artifacts, or readiness while rebinding the Gate 0 validator",
+      "combining this policy correction with #294 frozen-tree descoping, candidate semantic changes, or any source, scheduler, runtime, release, database, consumer, or data-path work"
+    ],
+    "output": {
+      "type": "OwnerOnlyGate0AttestationEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "Gate 0 sign-off preparation for #59/#60/#61 and the #294 successor descope batch; no candidate acceptance, source, runtime, release, or Production authorization"
+      ]
+    }
+  },
+  "invalidation": [
+    "Changing the retained attestation key set, live comment verification rules, candidate hash bindings, Gate 0 successor binding, path authorization, or corpus requires a new prepared revision before implementation.",
+    "Any attempt to combine this policy correction with candidate acceptance, attestation posting, #294 descoping, or semantic changes to #59/#60/#61 requires separate authorization."
+  ],
+  "rollback": "Revert only the D13 attestation-policy change, tests, corpus fixture, Gate 0 v8 successor, v7 frozen-tree proof, lease, and E0 evidence; do not mutate v7 or earlier manifests, accepted artifacts, issue lifecycle state, or historical governance evidence."
+}
