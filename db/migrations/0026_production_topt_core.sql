@@ -446,5 +446,3 @@ left join lateral (
     order by candidate.recorded_at desc, candidate.observation_id desc
     limit 1
 ) observation on true;
-
-grant select on mart.topt_core_result_read, mart.topt_core_meta_info to mart_readonly;
