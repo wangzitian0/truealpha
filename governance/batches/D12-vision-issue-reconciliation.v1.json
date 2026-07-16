@@ -45,13 +45,13 @@
   "corpus": {
     "environment": "Local/CI deterministic GitHub event and lifecycle fixtures only; no live issue mutation is authorized during preparation.",
     "manifest_path": "libs/runtime/tests/fixtures/issue_reconciliation.v1.json",
-    "sha256": "60a411775f7edd2de68db8c3a1ec6a2ff6218a41d2ab14cad0e052d313c2bcde",
+    "sha256": "e9364d3682d1646215c511600698725d161d17c2fc2307fd93534f8e777b6411",
     "required_strata": [
       "merged managed-by-batch PR closure skips standalone issue completion without error",
       "merged complete-on-merge standalone PR closes exactly its declared issue and malformed metadata fails closed",
       "newly scoped issues are visible to post-write parity without label-search indexing",
       "done and cancelled batches close with deterministic reasons while queued, prepared, and active batches remain open",
-      "concurrent edits, pagination, retries, rate limits, partial failures, and idempotent reruns"
+      "human edits before the direct refetch are included in patch computation while edits after the refetch remain an explicit unclaimed residual race; pagination, retries, rate limits, partial failures, and idempotent reruns remain fail-visible"
     ]
   },
   "source_ceiling": "GitHub issue and pull-request metadata only; no credential beyond the workflow token and no application, database, object-store, source, scheduler, release, consumer, or Production data operation is authorized.",

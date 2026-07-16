@@ -118,11 +118,19 @@ def test_parity_export_uses_authoritative_labels_not_search_results() -> None:
         assert included is expected
 
 
-def test_concurrent_edit_never_allows_a_stale_patch() -> None:
-    cases = _fixture()["concurrency"]
+def test_direct_refetch_bounds_but_does_not_eliminate_the_human_edit_race() -> None:
+    concurrency = _fixture()["concurrency"]
 
-    for case in cases:
-        result = "retry-or-fail-visible" if case["etag_changed_before_patch"] else "patch"
+    assert concurrency["write_mode"] == "plain-patch"
+    for case in concurrency["cases"]:
+        timeline = case["timeline"]
+        assert timeline.index("direct-refetch") < timeline.index("compute-patch")
+        assert timeline.index("compute-patch") < timeline.index("plain-patch")
+
+        if timeline.index("human-edit") < timeline.index("direct-refetch"):
+            result = "compute-from-refetched-human-state"
+        else:
+            result = "residual-race-outside-claim"
         assert result == case["expected"]
 
 
