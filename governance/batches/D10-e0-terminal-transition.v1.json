@@ -57,8 +57,7 @@
       "tools/check_delivery_governance.py",
       "libs/runtime/tests/test_delivery_governance.py",
       "libs/runtime/tests/fixtures/delivery_governance_e0_transition.v1.json",
-      "governance/evidence/D10-e0-terminal-transition-E0.v1.json",
-      "governance/handoffs/D10-e0-terminal-transition.v1.json"
+      "governance/evidence/D10-e0-terminal-transition-E0.v1.json"
     ],
     "read_only": [
       "AGENTS.md",
@@ -93,6 +92,7 @@
   },
   "acceptance": {
     "commands": [
+      "uv run pytest libs/runtime/tests/test_delivery_governance.py -q",
       "uv run python tools/check_delivery_governance.py",
       "git diff --check"
     ],
