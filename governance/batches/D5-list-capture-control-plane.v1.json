@@ -4,13 +4,13 @@
   "revision": 8,
   "issue": 205,
   "owner_gate": 29,
-  "status": "done",
+  "status": "blocked",
   "lane": "capture-platform",
-  "last_accepted_rung": "E4",
+  "last_accepted_rung": "E3",
   "target_rung": "E4",
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
-  "claim_ceiling": "E4 terminal Local/CI TOPT control-plane hardening for the exact 20-issuer, 21-instrument, 84-obligation denominator, bounded retry/failure/resume/recapture controls, and explicitly scoped resource baselines; the accepted E2 handoff remains available only to its pinned consumer, while E4 downstream consumption waits for a corrective evidence-and-attestation handoff; no live source activation, default schedule, Staging operation, Production route, physical capacity, or data-readiness claim",
+  "claim_ceiling": "Blocked E4 Local/CI hardening candidate over the accepted E3 TOPT identity, with bounded retry/failure/resume/recapture controls and explicitly scoped resource baselines; E4 acceptance, issue closure, and downstream handoff remain blocked on a pre-registered blind holdout under an independent custodian; the accepted E2 handoff remains available only to its pinned consumer; no live source activation, default schedule, Staging operation, Production route, physical capacity, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
@@ -72,6 +72,7 @@
     "#60 accepted source policy, rights, cadence, and budget before any live-source or default-schedule claim",
     "#61 accepted applicability, freshness, denominator, and SLO policy before thresholds or readiness freeze",
     "D6-confidence-provenance consumes a stable D5 attempt and observation handoff before trusted confidence or indexed provenance claims",
+    "E4 closure requires a pre-registered blind holdout corpus and result under an independent custodian who did not implement or calibrate this candidate",
     "#171 consumes the accepted D5 E4 handoff before strengthened TOPT Staging capture claims",
     "#206 consumes the accepted D5 E4 handoff before QQQ capacity evidence",
     "#67 and #68 remain blocked until bounded scope, capacity, rights, and independent audit dependencies are accepted"
@@ -160,7 +161,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/D5-list-capture-control-plane.v1.json",
-      "sha256": "73269c4e904c9156e70e5d826c116a43fdf5b3b95fb6739e1ab3e5fcc560a09f"
+      "sha256": "fac13c90b6aaa855053f4225adc834267832d399e7cec7a9193af890efc8dadb"
     }
   },
   "release_activation": {
@@ -194,7 +195,7 @@
     ],
     "output": {
       "type": "ListCaptureControlPlaneEvidence",
-      "state": "accepted_terminal_hardening_e4",
+      "state": "blocked_e4_holdout_candidate",
       "stable_handoff": false,
       "hardening_identity_sha256": "13913c8de21b93b0f524ba1201ef0d93cdb69a47b841891185873fb834868d01",
       "medium_report_sha256": "8c27357139c9b7fb6c6c6575b56b4eed3673bbb089b9659bb981de3f45c1fb9a",
@@ -211,6 +212,7 @@
       "resume_checkpoint_count": 4,
       "recapture_selection_count": 1,
       "source_calls": 0,
+      "holdout_blocker": "no independent custodian or pre-registered blind holdout is attached; checked-in E3/E4 calibration corpus results cannot accept E4",
       "resource_ceilings": {
         "wall_time_ms": 10000,
         "cpu_time_ms": 10000,
@@ -234,10 +236,10 @@
       },
       "allowed_evidence_readers": [
         "D6-confidence-provenance remains limited to the accepted E2 handoff until the corrective E4 handoff is accepted",
-        "issue #171 TOPT Staging preparation only after the corrective E4 evidence-and-attestation handoff is accepted",
-        "issue #206 QQQ capacity preparation only after the corrective E4 evidence-and-attestation handoff is accepted"
+        "issue #171 TOPT Staging preparation only after an independent E4 blind-holdout evidence-and-attestation handoff is accepted",
+        "issue #206 QQQ capacity preparation only after an independent E4 blind-holdout evidence-and-attestation handoff is accepted"
       ],
-      "retention": "the accepted E2 handoff is permanent while an allowed Local/CI consumer depends on it; the E4 CI artifact must be pinned by the corrective handoff before ordinary CI retention expires"
+      "retention": "the accepted E2 handoff is permanent while an allowed Local/CI consumer depends on it; blocked E4 candidate evidence follows ordinary CI retention and grants no handoff authority"
     }
   },
   "invalidation": [
