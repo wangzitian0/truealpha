@@ -1296,7 +1296,9 @@ def test_agents_guide_is_a_governance_control_and_remains_lease_protected(monkey
 def test_agents_guide_does_not_require_current_main_for_disjoint_drift():
     guide = (governance.ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
-    assert "**Compatible base.**" in guide
+    assert "Compatible target-branch drift." in guide
+    assert "a disjoint `BEHIND` state alone is" in guide
+    assert "not a blocker." in guide
     assert "branch is current" not in guide
     assert "rebased on current `main`" not in guide
 
