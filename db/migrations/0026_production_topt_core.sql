@@ -291,14 +291,77 @@ create or replace function mart.validate_topt_core_result()
 returns trigger language plpgsql as $$
 declare
     invocation mart.topt_core_invocations%rowtype;
+    snapshot staging.topt_core_snapshots%rowtype;
+    member staging.topt_core_snapshot_members%rowtype;
 begin
     select * into invocation from mart.topt_core_invocations where invocation_id = new.invocation_id;
+    select * into snapshot from staging.topt_core_snapshots where snapshot_id = new.snapshot_id;
+    select * into member
+      from staging.topt_core_snapshot_members
+     where snapshot_id = new.snapshot_id and issuer_id = new.issuer_id;
     if invocation.invocation_id is null
+       or snapshot.snapshot_id is null
+       or member.snapshot_id is null
        or invocation.snapshot_id <> new.snapshot_id
        or invocation.gppe_definition_id <> new.gppe_definition_id
        or invocation.gppe_definition_sha256 <> new.gppe_definition_sha256
        or invocation.tier_definition_id <> new.tier_definition_id
        or invocation.tier_definition_sha256 <> new.tier_definition_sha256
+       or snapshot.run_id <> new.run_id
+       or snapshot.release_manifest_id <> new.release_manifest_id
+       or snapshot.universe_id <> new.universe_id
+       or snapshot.universe_version <> new.universe_version
+       or snapshot.universe_sha256 <> new.universe_sha256
+       or snapshot.cutoff <> new.cutoff
+       or member.instrument_id <> new.instrument_id
+       or member.listing_id <> new.listing_id
+       or member.observation_ids <> new.input_observation_ids
+       or (select count(*) from jsonb_object_keys(new.payload)) <> 31
+       or not (new.payload ?& array[
+           'invocation_id', 'snapshot_id', 'run_id', 'release_manifest_id',
+           'universe_id', 'universe_version', 'universe_sha256', 'cutoff',
+           'issuer_id', 'instrument_id', 'listing_id', 'operating_branch',
+           'operating_metric', 'availability', 'operating_efficiency',
+           'capital_adjusted_gross_profit', 'gppe', 'tier', 'target_ps_lower',
+           'target_ps_upper', 'target_ps_midpoint', 'current_ps', 'valuation_gap',
+           'confidence', 'freshness', 'reason_codes', 'input_observation_ids',
+           'gppe_definition_id', 'gppe_definition_sha256',
+           'tier_definition_id', 'tier_definition_sha256'
+       ])
+       or new.payload->>'invocation_id' is distinct from new.invocation_id
+       or new.payload->>'snapshot_id' is distinct from new.snapshot_id
+       or new.payload->>'run_id' is distinct from new.run_id
+       or new.payload->>'release_manifest_id' is distinct from new.release_manifest_id
+       or new.payload->>'universe_id' is distinct from new.universe_id
+       or new.payload->>'universe_version' is distinct from new.universe_version
+       or new.payload->>'universe_sha256' is distinct from new.universe_sha256
+       or (new.payload->>'cutoff')::timestamptz is distinct from new.cutoff
+       or new.payload->>'issuer_id' is distinct from new.issuer_id
+       or new.payload->>'instrument_id' is distinct from new.instrument_id
+       or new.payload->>'listing_id' is distinct from new.listing_id
+       or new.payload->>'operating_branch' is distinct from new.operating_branch
+       or new.payload->>'operating_metric' is distinct from new.operating_metric
+       or new.payload->>'availability' is distinct from new.availability
+       or (new.payload->>'operating_efficiency')::numeric is distinct from new.operating_efficiency
+       or (new.payload->>'capital_adjusted_gross_profit')::numeric
+            is distinct from new.capital_adjusted_gross_profit
+       or (new.payload->>'gppe')::numeric is distinct from new.gppe
+       or new.payload->>'tier' is distinct from new.tier
+       or (new.payload->>'target_ps_lower')::numeric is distinct from new.target_ps_lower
+       or (new.payload->>'target_ps_upper')::numeric is distinct from new.target_ps_upper
+       or (new.payload->>'target_ps_midpoint')::numeric is distinct from new.target_ps_midpoint
+       or (new.payload->>'current_ps')::numeric is distinct from new.current_ps
+       or (new.payload->>'valuation_gap')::numeric is distinct from new.valuation_gap
+       or (new.payload->>'confidence')::numeric is distinct from new.confidence
+       or new.payload->>'freshness' is distinct from new.freshness
+       or array(select jsonb_array_elements_text(new.payload->'reason_codes'))
+            is distinct from new.reason_codes
+       or array(select jsonb_array_elements_text(new.payload->'input_observation_ids'))
+            is distinct from new.input_observation_ids
+       or new.payload->>'gppe_definition_id' is distinct from new.gppe_definition_id
+       or new.payload->>'gppe_definition_sha256' is distinct from new.gppe_definition_sha256
+       or new.payload->>'tier_definition_id' is distinct from new.tier_definition_id
+       or new.payload->>'tier_definition_sha256' is distinct from new.tier_definition_sha256
        or raw.canonical_sha256(new.payload) <> new.content_sha256 then
         raise check_violation using message = 'TOPT core result does not match its invocation or content';
     end if;

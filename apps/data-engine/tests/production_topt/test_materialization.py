@@ -214,7 +214,8 @@ def _seed_complete_production_run(connection):
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
-            valid_from=CUTOFF - timedelta(days=1),
+            valid_from=CUTOFF - timedelta(days=2),
+            valid_to=CUTOFF - timedelta(days=2),
             knowable_at=CUTOFF - timedelta(minutes=58),
             source_vintage_id=vintage.source_vintage_id,
             parser_version="production-topt-integration-parser:v1",
@@ -239,6 +240,26 @@ def _seed_complete_production_run(connection):
         )
         repository.put_observation_payload(observation, normalized_payload)
         repository.put_obligation_result(obligation.obligation_id, terminal)
+
+        if ordinal == 0:
+            future_valid = NormalizedObservation(
+                semantic_type=semantic_type,
+                semantic_version=obligation.capture_requirement_id,
+                subject=obligation.subject,
+                valid_from=CUTOFF + timedelta(days=1),
+                knowable_at=CUTOFF - timedelta(minutes=30),
+                source_vintage_id=vintage.source_vintage_id,
+                parser_version="production-topt-integration-parser:v1",
+                mapping_version="production-topt-integration-map:v1",
+                normalized_payload_sha256=canonical_sha256(normalized_payload),
+            )
+            repository.put_observation(
+                obligation.obligation_id,
+                future_valid,
+                confidence=Decimal("1"),
+                freshness_state="fresh",
+            )
+            repository.put_observation_payload(future_valid, normalized_payload)
 
     connection.execute(
         """
@@ -300,8 +321,38 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert len(different) == 20
     assert different[0].invocation_id != identity.invocation_id
     assert repository.results(identity) == reads
-    assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (84,)
+    assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (85,)
     assert connection.execute("select count(*) from staging.topt_core_snapshot_members").fetchone() == (20,)
+
+    with pytest.raises(psycopg.errors.CheckViolation, match="does not match its invocation"), connection.transaction():
+        connection.execute(
+            """
+            insert into mart.topt_core_results (
+                result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, payload
+            )
+            select
+                result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                0, freshness, reason_codes, input_observation_ids,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, payload
+            from mart.topt_core_results where result_id = %s
+            on conflict (result_id) do nothing
+            """,
+            (results[0].result_id,),
+        )
 
     with pytest.raises(psycopg.errors.RaiseException, match="append-only"), connection.transaction():
         connection.execute(

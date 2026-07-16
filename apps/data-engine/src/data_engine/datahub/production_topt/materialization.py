@@ -421,7 +421,14 @@ class PostgresToptCoreRepository:
                   on usage.capture_obligation_id = obligation.obligation_id
                 join staging.capture_normalized_observations observation using (observation_id)
                 join staging.capture_observation_payloads payload using (observation_id)
-                where obligation.run_id = %s and observation.knowable_at <= %s
+                where obligation.run_id = %s
+                  and obligation.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                  and (observation.valid_from at time zone 'UTC')::date <= obligation.partition_key::date
+                  and (
+                      observation.valid_to is null
+                      or (observation.valid_to at time zone 'UTC')::date >= obligation.partition_key::date
+                  )
+                  and observation.knowable_at <= %s
             )
             select obligation_id, subject_id,
                    regexp_replace(capture_requirement_id, ':v1$', ''),
