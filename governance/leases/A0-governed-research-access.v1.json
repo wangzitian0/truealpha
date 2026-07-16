@@ -1,15 +1,20 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:64843b97cbe131f3aa32b470077ee7d407781bdcdb84637fb671fe4066813101",
+  "lease_id": "integration-lease:c221a9d068de934cb246a408e595013b61baf69a8bfbf5034dfb63cedd834f32",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
   "state": "active",
   "paths": [
-    "docs/architecture-decisions/A0-governed-research-access.md",
-    "db/migrations/0022_app_identity.sql",
-    "db/roles.sql",
-    "db/tests/governed_research_access_contract.sql"
+    "init.md",
+    "libs/contracts/src/truealpha_contracts/__init__.py",
+    "governance/gate0/README.md",
+    "governance/gate0/manifest-v5.json",
+    "governance/schemas/gate0-candidate-manifest.schema.json",
+    "libs/runtime/tests/test_gate0_candidate.py",
+    "libs/runtime/tests/test_delivery_governance.py",
+    "tools/check_gate0_candidate.py",
+    "tools/check_delivery_governance.py"
   ],
-  "base_sha": "ce15dedab1e5596a09112bdbd1911f7e7bfe3e6d",
+  "base_sha": "5e1be12550ed8e7f8528f8017adffaa009a0ef40",
   "expires_at": "2026-07-30T00:00:00Z"
 }
