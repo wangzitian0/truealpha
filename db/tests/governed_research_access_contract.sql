@@ -103,6 +103,70 @@ values
         '2026-07-15T00:00:00Z'
     );
 
+insert into app.authorization_decisions (
+    decision_id,
+    tenant_id,
+    principal_id,
+    action,
+    resource_id,
+    publication_policy_id,
+    decision,
+    decided_at,
+    recorded_at
+)
+values
+    (
+        'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'tenant:alpha',
+        'principal:alpha:alice',
+        'read_content',
+        'document:alpha:private-001',
+        'publication-policy:research:v1',
+        'allow',
+        '2026-07-15T00:01:00Z',
+        '2026-07-15T00:01:00Z'
+    ),
+    (
+        'access-decision:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        'tenant:beta',
+        'principal:beta:bob',
+        'read_content',
+        'document:beta:private-001',
+        'publication-policy:research:v1',
+        'allow',
+        '2026-07-15T00:01:00Z',
+        '2026-07-15T00:01:00Z'
+    );
+
+insert into app.access_audit_events (
+    audit_event_id,
+    decision_id,
+    tenant_id,
+    principal_id,
+    event_kind,
+    occurred_at,
+    recorded_at
+)
+values
+    (
+        'audit-event:alpha:001',
+        'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'tenant:alpha',
+        'principal:alpha:alice',
+        'access_allowed',
+        '2026-07-15T00:01:00Z',
+        '2026-07-15T00:01:00Z'
+    ),
+    (
+        'audit-event:beta:001',
+        'access-decision:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        'tenant:beta',
+        'principal:beta:bob',
+        'access_allowed',
+        '2026-07-15T00:01:00Z',
+        '2026-07-15T00:01:00Z'
+    );
+
 do $$
 begin
     begin
@@ -127,6 +191,8 @@ do $$
 declare
     own_count integer;
     cross_tenant_count integer;
+    own_audit_count integer;
+    cross_tenant_audit_count integer;
 begin
     select count(*) into own_count
     from app.private_research_objects
@@ -134,11 +200,27 @@ begin
     select count(*) into cross_tenant_count
     from app.private_research_objects
     where resource_id = 'document:beta:private-001';
+    select count(*) into own_audit_count
+    from app.access_audit_metadata
+    where audit_event_id = 'audit-event:alpha:001';
+    select count(*) into cross_tenant_audit_count
+    from app.access_audit_metadata
+    where audit_event_id = 'audit-event:beta:001';
     if own_count <> 1 then
         raise exception 'owner must see the private object through RLS';
     end if;
     if cross_tenant_count <> 0 then
         raise exception 'cross-tenant object-ID guessing bypassed RLS';
+    end if;
+    if own_audit_count <> 1 then
+        raise exception 'authorized tenant audit metadata is unreadable';
+    end if;
+    if cross_tenant_audit_count <> 0 then
+        raise exception 'cross-tenant audit metadata is readable';
+    end if;
+    if has_table_privilege('app_runtime', 'app.authorization_decisions', 'select')
+       or has_table_privilege('app_runtime', 'app.access_audit_events', 'select') then
+        raise exception 'runtime audit reads must use the restricted metadata view';
     end if;
 end;
 $$;

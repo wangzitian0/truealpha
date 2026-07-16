@@ -16,6 +16,7 @@ from truealpha_contracts.access import (
     AccessDenialReason,
     AccessResource,
     AuthenticationMethod,
+    AuthorizationDecision,
     PrincipalKind,
     PublicationPolicy,
     authorize_access,
@@ -145,6 +146,61 @@ def test_policy_and_decision_identities_are_immutable() -> None:
     )
     with pytest.raises(ValidationError, match="frozen"):
         decision.decision = AccessDecisionKind.ALLOW
+
+    with pytest.raises(ValidationError, match="audit event must match"):
+        AuthorizationDecision.model_validate(
+            {
+                **decision.model_dump(),
+                "decision": AccessDecisionKind.DENY,
+                "reason": AccessDenialReason.ACTION_NOT_PERMITTED,
+                "query_permitted": False,
+                "audit_event": AccessAuditEventKind.ACCESS_ALLOWED,
+            }
+        )
+
+
+def test_private_resources_fail_closed_for_unsupported_actions() -> None:
+    corpus = _fixture()
+    context = _contexts(corpus)["auth:browser:alpha:valid"]
+    assert context is not None
+    resource = _resources(corpus)["document:alpha:private-001"]
+    policy = PublicationPolicy(
+        policy_id=corpus["policy_coordinates"]["publication_policy_id"],
+        permitted_publication_class_ids=("publication-class:standard:v1",),
+    )
+    observed_at = datetime.fromisoformat(corpus["decision_time"].replace("Z", "+00:00"))
+
+    for action in set(AccessAction) - {AccessAction.READ_CONTENT}:
+        decision = authorize_access(
+            context=context,
+            action=action,
+            resource=resource,
+            policy=policy,
+            observed_at=observed_at,
+        )
+        assert decision.decision is AccessDecisionKind.DENY
+        assert decision.reason is AccessDenialReason.ACTION_NOT_PERMITTED
+        assert not decision.query_permitted
+
+
+def test_context_cannot_authorize_before_issuance() -> None:
+    corpus = _fixture()
+    context = _contexts(corpus)["auth:browser:alpha:valid"]
+    assert context is not None
+    decision = authorize_access(
+        context=context,
+        action=AccessAction.READ_CONTENT,
+        resource=_resources(corpus)["document:alpha:private-001"],
+        policy=PublicationPolicy(
+            policy_id=corpus["policy_coordinates"]["publication_policy_id"],
+            permitted_publication_class_ids=("publication-class:standard:v1",),
+        ),
+        observed_at=context.issued_at.replace(year=context.issued_at.year - 1),
+    )
+
+    assert decision.decision is AccessDecisionKind.DENY
+    assert decision.reason is AccessDenialReason.AUTHENTICATION_NOT_YET_VALID
+    assert decision.audit_event is AccessAuditEventKind.AUTHENTICATION_DENIED
 
 
 def test_access_metadata_never_enters_computation_contracts() -> None:

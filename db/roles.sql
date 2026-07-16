@@ -26,4 +26,5 @@ alter role app_runtime set statement_timeout = '5s';
 grant usage on schema app to app_runtime;
 grant select on app.publication_policies to app_runtime;
 grant select on app.private_research_objects to app_runtime;
+grant select on app.access_audit_metadata to app_runtime;
 grant insert on app.authorization_decisions, app.access_audit_events to app_runtime;

@@ -116,6 +116,26 @@ create table if not exists app.access_audit_events (
     check (recorded_at >= occurred_at)
 );
 
+create or replace view app.access_audit_metadata
+with (security_barrier = true)
+as
+select
+    event.audit_event_id,
+    event.decision_id,
+    event.tenant_id,
+    event.principal_id,
+    decision.action,
+    decision.resource_id,
+    decision.publication_policy_id,
+    decision.decision,
+    decision.reason_code,
+    event.event_kind,
+    event.occurred_at,
+    event.recorded_at
+from app.access_audit_events as event
+join app.authorization_decisions as decision using (decision_id)
+where event.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '');
+
 do $$
 declare
     table_name text;

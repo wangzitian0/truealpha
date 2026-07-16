@@ -79,6 +79,7 @@ class AccessAuditEventKind(StrEnum):
 class AccessDenialReason(StrEnum):
     AUTHENTICATION_MISSING = "authentication_missing"
     AUTHENTICATION_INVALID = "authentication_invalid"
+    AUTHENTICATION_NOT_YET_VALID = "authentication_not_yet_valid"
     AUTHENTICATION_EXPIRED = "authentication_expired"
     DELEGATION_REVOKED = "delegation_revoked"
     CLIENT_AUTHORITY_CLAIM_REJECTED = "client_authority_claim_rejected"
@@ -197,9 +198,9 @@ class AuthorizationDecision(StrictFrozenModel):
             raise ValueError("query_permitted must match the authorization decision")
         if allowed != (self.reason is None):
             raise ValueError("allowed decisions have no denial reason; denied decisions require one")
-        expected_audit = AccessAuditEventKind.ACCESS_ALLOWED if allowed else self.audit_event
-        if allowed and self.audit_event is not expected_audit:
-            raise ValueError("allowed decisions require an access_allowed audit event")
+        audit_allowed = self.audit_event is AccessAuditEventKind.ACCESS_ALLOWED
+        if allowed != audit_allowed:
+            raise ValueError("audit event must match the authorization decision")
         return self
 
 
@@ -280,6 +281,16 @@ def authorize_access(
             reason=AccessDenialReason.AUTHENTICATION_MISSING,
             authentication_denial=True,
         )
+    if observed_at < context.issued_at:
+        return _decision(
+            context=context,
+            action=action,
+            resource=resource,
+            policy=policy,
+            observed_at=observed_at,
+            reason=AccessDenialReason.AUTHENTICATION_NOT_YET_VALID,
+            authentication_denial=True,
+        )
     if observed_at >= context.expires_at:
         return _decision(
             context=context,
@@ -303,7 +314,9 @@ def authorize_access(
 
     reason: AccessDenialReason | None = None
     if resource.content_private:
-        if context.principal_kind is PrincipalKind.ADMINISTRATOR:
+        if action is not AccessAction.READ_CONTENT:
+            reason = AccessDenialReason.ACTION_NOT_PERMITTED
+        elif context.principal_kind is PrincipalKind.ADMINISTRATOR:
             reason = AccessDenialReason.PRIVATE_CONTENT_OWNER_ONLY
         elif context.principal_kind is PrincipalKind.SERVICE:
             reason = AccessDenialReason.OWNER_DELEGATION_REQUIRED
