@@ -2,7 +2,7 @@
   "schema_version": 1,
   "batch_id": "D5-list-capture-control-plane",
   "revision": 1,
-  "issue": 205,
+  "issue": 261,
   "owner_gate": 29,
   "status": "queued",
   "lane": "capture-platform",
@@ -11,7 +11,7 @@
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
   "claim_ceiling": "queued E0 Local/CI implementation only; no accepted runtime handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
-  "capability_issues": [],
+  "capability_issues": [205],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
   "owners": {
@@ -30,7 +30,7 @@
       "the accepted D2 E3 data-plane evidence remains unchanged",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the additive migration before it changes",
-      "issue #205 contains this manifest path and exact SHA-256",
+      "issue #261 contains this manifest path and exact SHA-256",
       "Delivery Governance CI passes offline validation and live GitHub parity"
     ]
   },
@@ -95,16 +95,8 @@
       "libs/contracts/src/truealpha_contracts/capture_control.py",
       "libs/contracts/tests/test_capture_control.py",
       "libs/contracts/tests/fixtures/capture_control.v1.json",
-      "apps/data-engine/src/data_engine/capture_control_models.py",
-      "apps/data-engine/src/data_engine/capture_control_planner.py",
-      "apps/data-engine/src/data_engine/capture_control_repository.py",
-      "apps/data-engine/src/data_engine/capture_control_pipeline.py",
-      "apps/data-engine/src/data_engine/capture_control_assets.py",
-      "apps/data-engine/tests/test_capture_control_models.py",
-      "apps/data-engine/tests/test_capture_control_planner.py",
-      "apps/data-engine/tests/test_capture_control_repository.py",
-      "apps/data-engine/tests/test_capture_control_pipeline.py",
-      "apps/data-engine/tests/test_capture_control_assets.py",
+      "apps/data-engine/src/data_engine/datahub/**",
+      "apps/data-engine/tests/datahub/**",
       "apps/data-engine/tests/fixtures/capture_control/**",
       "apps/data-engine/scripts/run_capture_control.py",
       "db/migrations/0023_capture_control.sql",
@@ -159,6 +151,7 @@
       "Makefile"
     ],
     "integration_surface": [
+      "apps/data-engine/src/data_engine/datahub/__init__.py",
       "db/migrations/0023_capture_control.sql",
       "db/tests/capture_control_contract.sql"
     ],
@@ -173,9 +166,9 @@
   "acceptance": {
     "commands": [
       "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_capture_control.py -q",
-      "uv run --package truealpha-data-engine python -m pytest apps/data-engine/tests/test_capture_control_models.py apps/data-engine/tests/test_capture_control_planner.py apps/data-engine/tests/test_capture_control_repository.py apps/data-engine/tests/test_capture_control_pipeline.py apps/data-engine/tests/test_capture_control_assets.py -q",
+      "uv run --package truealpha-data-engine python -m pytest apps/data-engine/tests/datahub -q",
       "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/capture_control.py libs/contracts/tests/test_capture_control.py",
-      "uv run --package truealpha-data-engine python -m ruff check apps/data-engine/src/data_engine/capture_control_models.py apps/data-engine/src/data_engine/capture_control_planner.py apps/data-engine/src/data_engine/capture_control_repository.py apps/data-engine/src/data_engine/capture_control_pipeline.py apps/data-engine/src/data_engine/capture_control_assets.py apps/data-engine/tests/test_capture_control_models.py apps/data-engine/tests/test_capture_control_planner.py apps/data-engine/tests/test_capture_control_repository.py apps/data-engine/tests/test_capture_control_pipeline.py apps/data-engine/tests/test_capture_control_assets.py",
+      "uv run --package truealpha-data-engine python -m ruff check apps/data-engine/src/data_engine/datahub apps/data-engine/tests/datahub",
       "uv run --package truealpha-contracts python -m mypy",
       "uv run --package truealpha-data-engine python -m mypy",
       "uv run python tools/check_delivery_governance.py"
