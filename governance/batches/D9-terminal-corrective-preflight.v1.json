@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "batch_id": "D9-terminal-corrective-preflight",
+  "revision": 1,
+  "issue": 274,
+  "owner_gate": 32,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Repair agent preflight so an explicitly requested corrective rerun can claim an already accepted terminal batch without weakening the default closed-issue or delivery-governance gates.",
+  "claim_ceiling": "Registration only: no code, batch transition, issue reopening, source call, credential access, runtime activation, scheduler, release binding, or Production data claim.",
+  "capability_issues": [],
+  "closes_issues": [],
+  "informational_issues": [
+    210,
+    271
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued registration is merged on main before a preparation revision pins the activation base and reviewer",
+      "the implementation accepts only an explicit opt-in for the same closed issue whose canonical batch is terminal done with one valid matching accepted, target, and terminal rung",
+      "the implementation preserves clean-worktree, upstream, duplicate-claim, exact-work-key, and delivery-governance checks",
+      "focused tests prove default rejection and every closed-batch rejection case before E0 acceptance"
+    ]
+  },
+  "dependencies": [],
+  "later_claim_dependencies": [
+    "D4 may use a future accepted D9 E0 result only to claim its existing checker-authorized done-to-done corrective terminal rerun; D9 does not authorize a D4 handoff or any D8 implementation.",
+    "D8 remains queued until all of its own accepted interface, persistence, provenance, Staging, stable-read, release/recovery, source-rights, and SLO prerequisites are satisfied."
+  ],
+  "corpus": {
+    "environment": "Local/CI preflight fixtures and a closed terminal D4 manifest only",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "an open standalone issue remains claimable under the default path",
+      "a closed issue is rejected by default",
+      "an explicit opt-in accepts only a closed terminal done batch with matching valid rungs",
+      "closed standalone, non-terminal, malformed, or mismatched-rung batches are rejected",
+      "duplicate work claims and dirty worktrees remain rejected"
+    ]
+  },
+  "source_ceiling": "No network source, credential, Vault, database, object-store, scheduler, runtime, release, or Production data operation is authorized.",
+  "paths": {
+    "writable": [
+      "Makefile",
+      "tools/agent_preflight.py",
+      "libs/runtime/tests/test_agent_preflight.py",
+      "libs/runtime/tests/fixtures/agent_preflight_terminal_rerun.v1.json",
+      "governance/evidence/D9-terminal-corrective-preflight-E0.v1.json",
+      "governance/handoffs/D9-terminal-corrective-preflight.v1.json"
+    ],
+    "read_only": [
+      "AGENTS.md",
+      "docs/iterative-delivery.md",
+      "governance/batches/D4-datahub-interface.v1.json",
+      "tools/check_delivery_governance.py"
+    ],
+    "forbidden": [
+      "init.md",
+      "vision.md",
+      "apps/**",
+      "db/**",
+      "libs/contracts/**",
+      "libs/factors/**",
+      "libs/runtime/src/**",
+      "governance/handoffs/D4-datahub-interface.v1.json",
+      "governance/handoffs/D4-datahub-interface-d3-staging.v1.json",
+      "uv.lock",
+      "pyproject.toml"
+    ],
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "D9 only hardens local agent claim validation and cannot activate a runtime, source, schedule, consumer, release, or data flow."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run python tools/check_delivery_governance.py",
+      "git diff --check"
+    ],
+    "negative_controls": [
+      "any closed issue claim without the explicit terminal-corrective option",
+      "a closed standalone issue, a missing/malformed batch manifest, a non-terminal batch, or mismatched/invalid rungs",
+      "bypassing clean-worktree, upstream, duplicate-claim, exact-work-key, or governance validation",
+      "reopening D4, changing D4's accepted interface, or authorizing D8, source, scheduler, runtime, release, or Production data work"
+    ],
+    "output": {
+      "type": "AgentPreflightTerminalCorrectiveEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "issue #274 planning only until a later accepted handoff names a consumer"
+      ]
+    }
+  },
+  "invalidation": [
+    "Changing the allowed closed-issue condition, rung vocabulary, manifest selection, duplicate-claim behavior, or any preserved preflight gate requires a new prepared revision before implementation.",
+    "Any attempt to combine this helper with a D4 permission change, D8 implementation, source access, scheduler, runtime, release, or data path requires separate authorization."
+  ],
+  "rollback": "Revert only the future D9 preflight helper and its evidence; do not mutate D4, D8, issue lifecycle state, source policy, runtime, or historical governance evidence."
+}
