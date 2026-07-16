@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "open_issue_default",
+      "issue_number": 210,
+      "issue_state": "OPEN",
+      "allow_closed_terminal_rerun": false,
+      "manifest": null,
+      "expected": "allow"
+    },
+    {
+      "name": "closed_issue_default_rejection",
+      "issue_number": 210,
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": false,
+      "manifest": {
+        "batch_id": "D4-datahub-interface",
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_terminal_done_opt_in",
+      "issue_number": 210,
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": {
+        "batch_id": "D4-datahub-interface",
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "allow"
+    },
+    {
+      "name": "closed_non_terminal_rejection",
+      "issue_number": 210,
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": {
+        "batch_id": "D4-datahub-interface",
+        "issue": 210,
+        "status": "active",
+        "last_accepted_rung": "E1",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_mismatched_rungs_rejection",
+      "issue_number": 210,
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": {
+        "batch_id": "D4-datahub-interface",
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E3",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_invalid_rung_rejection",
+      "issue_number": 210,
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": {
+        "batch_id": "D4-datahub-interface",
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E9",
+        "target_rung": "E9",
+        "terminal_rung": "E9"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_malformed_manifest_rejection",
+      "issue_number": 210,
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": {
+        "batch_id": "D4-datahub-interface",
+        "issue": 210
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_wrong_issue_rejection",
+      "issue_number": 210,
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": {
+        "batch_id": "D4-datahub-interface",
+        "issue": 211,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_standalone_rejection",
+      "issue_number": 210,
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": null,
+      "expected": "reject"
+    }
+  ]
+}
