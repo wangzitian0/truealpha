@@ -1,0 +1,147 @@
+name: Deploy release
+
+run-name: Deploy ${{ inputs.deploy_type }} ${{ inputs.version_ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_type:
+        description: Immutable release promotion target.
+        required: true
+        type: choice
+        options: [preview/tag, staging, prod]
+      version_ref:
+        description: Stable vX.Y.Z release tag.
+        required: true
+        type: string
+      source_run_id:
+        description: Successful tag ci-required run id for this release.
+        required: true
+        type: string
+      staging_run_url:
+        description: Required for prod; successful TrueAlpha staging sender run URL.
+        required: false
+        type: string
+      reviewed_change_url:
+        description: Required for prod; merged PR whose merge commit is the release SHA.
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: truealpha-release-${{ inputs.deploy_type }}-${{ inputs.version_ref }}
+  cancel-in-progress: false
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Install the pinned SDK contract
+        run: uv sync --frozen --only-group dev --no-install-workspace
+      - name: Verify release evidence and render request
+        id: request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_TYPE: ${{ inputs.deploy_type }}
+          VERSION_REF: ${{ inputs.version_ref }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          STAGING_RUN_URL: ${{ inputs.staging_run_url }}
+          REVIEWED_CHANGE_URL: ${{ inputs.reviewed_change_url }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version_ref must be a stable vX.Y.Z tag"
+            exit 1
+          fi
+          request_id="truealpha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          source_sha="$(git rev-list -n 1 "refs/tags/${VERSION_REF}^{commit}")"
+          source_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"
+          run_json="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
+          jq -e \
+            --arg sha "$source_sha" \
+            --arg tag "$VERSION_REF" \
+            '.conclusion == "success" and .head_sha == $sha and .head_branch == $tag' \
+            <<<"$run_json" >/dev/null || {
+              echo "::error::source run must be a successful exact-tag run"
+              exit 1
+            }
+          request="$(uv run --no-sync python tools/app_deploy_request.py \
+            --request-id "$request_id" \
+            --deploy-type "$DEPLOY_TYPE" \
+            --version-ref "$VERSION_REF" \
+            --source-sha "$source_sha" \
+            --source-run-url "$source_run_url" \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --staging-run-url "$STAGING_RUN_URL" \
+            --reviewed-change-url "$REVIEWED_CHANGE_URL")"
+          jq . <<<"$request"
+          {
+            echo 'json<<EOF'
+            echo "$request"
+            echo EOF
+          } >>"$GITHUB_OUTPUT"
+      - name: Dispatch the validated request to infra2
+        env:
+          GH_TOKEN: ${{ secrets.INFRA2_PAT }}
+          event_type: app-deploy-request
+          REQUEST_JSON: ${{ steps.request.outputs.json }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::error::INFRA2_PAT is required"
+            exit 1
+          fi
+          payload="$(jq -n --arg event_type "$event_type" --argjson request "$REQUEST_JSON" \
+            '{event_type: $event_type, "client_payload": $request}')"
+          gh api --method POST /repos/wangzitian0/infra2/dispatches --input - <<<"$payload"
+
+          request_id="$(jq -r '.request_id' <<<"$REQUEST_JSON")"
+          service="$(jq -r '.service' <<<"$REQUEST_JSON")"
+          deploy_type="$(jq -r '.deploy_type' <<<"$REQUEST_JSON")"
+          version_ref="$(jq -r '.version_ref' <<<"$REQUEST_JSON")"
+          source_sha="$(jq -r '.source_sha' <<<"$REQUEST_JSON")"
+          expected_title="Deploy ${service} ${deploy_type} ${version_ref} ${source_sha} [${request_id}]"
+
+          receiver_run_id=""
+          for _ in {1..60}; do
+            runs="$(gh api '/repos/wangzitian0/infra2/actions/workflows/app-deploy-request.yml/runs?event=repository_dispatch&per_page=100')"
+            receiver_run_id="$(jq -r --arg title "$expected_title" \
+              'first(.workflow_runs[] | select(.display_title == $title) | .id) // empty' \
+              <<<"$runs")"
+            [[ -n "$receiver_run_id" ]] && break
+            sleep 10
+          done
+          if [[ -z "$receiver_run_id" ]]; then
+            echo "::error::infra2 receiver run was not created for ${request_id}"
+            exit 1
+          fi
+
+          receiver_conclusion=""
+          receiver_run_url=""
+          for _ in {1..60}; do
+            receiver_run="$(gh api "/repos/wangzitian0/infra2/actions/runs/${receiver_run_id}")"
+            receiver_status="$(jq -r '.status' <<<"$receiver_run")"
+            receiver_conclusion="$(jq -r '.conclusion // empty' <<<"$receiver_run")"
+            receiver_run_url="$(jq -r '.html_url' <<<"$receiver_run")"
+            [[ "$receiver_status" == "completed" ]] && break
+            sleep 30
+          done
+          if [[ "$receiver_conclusion" != "success" ]]; then
+            echo "::error::infra2 receiver did not succeed: ${receiver_run_url:-unknown} (${receiver_conclusion:-timeout})"
+            exit 1
+          fi
+          {
+            echo "### infra2 deployment receipt"
+            echo
+            echo "- Environment: \`${deploy_type}\`"
+            echo "- Release: \`${version_ref}\` (\`${source_sha}\`)"
+            echo "- Receiver: ${receiver_run_url}"
+          } >>"$GITHUB_STEP_SUMMARY"

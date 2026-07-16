@@ -48,13 +48,17 @@ requires #11/#52 to add an immutable data-engine/Dagster artifact and bind every
 migration, catalog/SLO version, and configuration hash in one signed release manifest;
 manual host sweeps cannot satisfy scheduled or promotion evidence.
 
-The local tool below validates and renders a staging `DeployRequest v1` as canonical
-JSON. It does not send the request. The infra2 receiver is not enabled for TrueAlpha,
-and Production requests remain deny-all until infra2 verifies remote evidence.
+The local tool below validates and renders a release-only `DeployRequest v1` as canonical
+JSON. It has no transport or deployment side effects. The manual `Deploy release`
+workflow sends that exact payload to infra2 and succeeds only after the matching infra2
+receiver run succeeds; its receiver URL is the staging evidence required for Production.
+The workflow remains intentionally unusable until infra2 issue #500 enables the
+TrueAlpha receiver/profile and exact receipt identity.
 
 ```bash
 uv run python tools/app_deploy_request.py \
   --request-id truealpha-run-12345678 \
+  --deploy-type staging \
   --version-ref v1.2.3 \
   --source-sha 1234567890abcdef1234567890abcdef12345678 \
   --source-run-url https://github.com/wangzitian0/truealpha/actions/runs/12345678 \
