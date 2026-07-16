@@ -120,6 +120,26 @@ class CaptureListObligation(BaseModel):
         return self.obligation.partition
 
 
+class CaptureObligationWorkBinding(BaseModel):
+    """Bind one D5 list-bound obligation to one campaign work item."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    binding_id: str = Field(default="", pattern=r"^(?:|capture-obligation-work-binding:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    obligation_id: str = Field(pattern=r"^capture-list-obligation:[0-9a-f]{64}$")
+    work_item_id: str = Field(pattern=r"^capture-work-item:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def identify(self) -> Self:
+        _freeze_wrapped(
+            self,
+            id_field="binding_id",
+            prefix="capture-obligation-work-binding",
+            identity_fields=("obligation_id", "work_item_id"),
+        )
+        return self
+
 class CaptureCheckpoint(BaseModel):
     """One append-only resume checkpoint for a capture run."""
 

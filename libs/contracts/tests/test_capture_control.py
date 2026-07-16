@@ -7,6 +7,7 @@ from truealpha_contracts.capture_control import (
     CaptureCheckpoint,
     CaptureListObligation,
     CaptureListVersion,
+    CaptureObligationWorkBinding,
     CaptureRecapturePlan,
     CheckpointPhase,
 )
@@ -104,6 +105,19 @@ def test_capture_obligation_identity_preserves_list_version() -> None:
     overlap = CaptureListObligation(list_version_id=f"list-version:{'c' * 64}", obligation=obligation)
     assert primary.obligation == overlap.obligation
     assert primary.obligation_id != overlap.obligation_id
+
+
+def test_capture_binding_uses_the_list_bound_obligation_namespace() -> None:
+    binding = CaptureObligationWorkBinding(
+        obligation_id=f"capture-list-obligation:{'b' * 64}",
+        work_item_id=f"capture-work-item:{'c' * 64}",
+    )
+    assert binding.binding_id.startswith("capture-obligation-work-binding:")
+    with pytest.raises(ValidationError):
+        CaptureObligationWorkBinding(
+            obligation_id=f"list-obligation:{'b' * 64}",
+            work_item_id=f"capture-work-item:{'c' * 64}",
+        )
 
 
 def test_checkpoint_identity_is_append_only_sequence_grain() -> None:

@@ -360,7 +360,7 @@ create table if not exists raw.capture_work_items (
 );
 
 create table if not exists raw.capture_obligation_work_bindings (
-    binding_id         text primary key check (binding_id ~ '^obligation-work-binding:[0-9a-f]{64}$'),
+    binding_id         text primary key check (binding_id ~ '^capture-obligation-work-binding:[0-9a-f]{64}$'),
     obligation_id      text not null references raw.capture_obligations(obligation_id),
     work_item_id       text not null references raw.capture_work_items(work_item_id),
     content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
@@ -452,6 +452,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_campaign_address on raw.capture_campaigns;
 create trigger zz_validate_campaign_address
 before insert on raw.capture_campaigns
 for each row execute function raw.validate_capture_campaign_address();
@@ -478,6 +479,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_run_address on raw.capture_runs;
 create trigger zz_validate_run_address
 before insert on raw.capture_runs
 for each row execute function raw.validate_capture_run_address();
@@ -507,6 +509,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_list_version_address on raw.capture_list_versions;
 create trigger zz_validate_list_version_address
 before insert on raw.capture_list_versions
 for each row execute function raw.validate_capture_list_version_address();
@@ -554,6 +557,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_obligation_address on raw.capture_obligations;
 create trigger zz_validate_obligation_address
 before insert on raw.capture_obligations
 for each row execute function raw.validate_capture_obligation_address();
@@ -590,6 +594,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_work_item_address on raw.capture_work_items;
 create trigger zz_validate_work_item_address
 before insert on raw.capture_work_items
 for each row execute function raw.validate_capture_work_item_address();
@@ -602,8 +607,8 @@ begin
     payload := jsonb_build_object('obligation_id', new.obligation_id, 'work_item_id', new.work_item_id);
     perform raw.assert_content_address(
         new.binding_id,
-        'obligation-work-binding',
-        jsonb_build_object('kind', 'obligation-work-binding', 'identity', payload),
+        'capture-obligation-work-binding',
+        jsonb_build_object('kind', 'capture-obligation-work-binding', 'identity', payload),
         new.content_sha256,
         payload
     );
@@ -611,6 +616,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_binding_address on raw.capture_obligation_work_bindings;
 create trigger zz_validate_binding_address
 before insert on raw.capture_obligation_work_bindings
 for each row execute function raw.validate_capture_binding_address();
@@ -638,6 +644,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_attempt_address on raw.capture_attempts;
 create trigger zz_validate_attempt_address
 before insert on raw.capture_attempts
 for each row execute function raw.validate_capture_attempt_address();
@@ -671,6 +678,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_attempt_result_address on raw.capture_attempt_results;
 create trigger zz_validate_attempt_result_address
 before insert on raw.capture_attempt_results
 for each row execute function raw.validate_capture_attempt_result_address();
@@ -695,6 +703,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_checkpoint_address on raw.capture_checkpoints;
 create trigger zz_validate_checkpoint_address
 before insert on raw.capture_checkpoints
 for each row execute function raw.validate_capture_checkpoint_address();
@@ -795,6 +804,7 @@ begin
 end;
 $$;
 
+drop trigger if exists zz_validate_recapture_plan_address on raw.recapture_plans;
 create trigger zz_validate_recapture_plan_address
 before insert on raw.recapture_plans
 for each row execute function raw.validate_recapture_plan_address();
@@ -856,6 +866,7 @@ begin
 end;
 $$;
 
+drop trigger if exists validate_campaign_list_version on raw.capture_campaign_list_versions;
 create trigger validate_campaign_list_version
 before insert on raw.capture_campaign_list_versions
 for each row execute function raw.validate_campaign_list_version();

@@ -526,7 +526,7 @@ end $$;
 insert into raw.capture_obligation_work_bindings (
     binding_id, obligation_id, work_item_id, content_sha256
 ) values (
-    'obligation-work-binding:28e5d95907540d2163b3a066be1c6d3878cd3cce59a5b9a328e9252afb531e27',
+    'capture-obligation-work-binding:850854bbdd96755fb09d96540e5959c89d8dfabcc19010134243e62fd57b8fc6',
     'capture-list-obligation:3970939515b9abea8e87e25bdbe7ea21f1ed3f50a0afd007005f94709fae7eac',
     'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
     'c854e7ff2957e3d8e5778f82bcda3391a9e25eca5e8e7cd7ac6276876489f8f7'
@@ -617,7 +617,7 @@ do $$ begin
         insert into raw.capture_obligation_work_bindings (
             binding_id, obligation_id, work_item_id, content_sha256
         ) values (
-            'obligation-work-binding:10696431700926bd691b70493d54e462f6df6e507853f3c3628c8287b04264a8',
+            'capture-obligation-work-binding:beb5fb3494d8c7abe243f3fa6b41973269c899ab0248f825b04ecbc01fa835e6',
             'capture-list-obligation:3970939515b9abea8e87e25bdbe7ea21f1ed3f50a0afd007005f94709fae7eac',
             'capture-work-item:c9941e95ea943d8e0b3d8388552553fce0e09f2213b3af6a9fa8d9d3dc487cf3',
             'f388d58c17ddaf6ccc6b7c5fdee067d699edbbe9e5729dd593b42c7c19795f13'
