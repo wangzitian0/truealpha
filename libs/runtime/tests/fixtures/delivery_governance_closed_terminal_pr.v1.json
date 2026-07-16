@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "open_issue_existing_path",
+      "issue_state": "open",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "active",
+        "last_accepted_rung": "E1",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "allow"
+    },
+    {
+      "name": "closed_exact_done_to_done",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "allow"
+    },
+    {
+      "name": "closed_standalone",
+      "issue_state": "closed",
+      "advance_kind": "standalone",
+      "base": null,
+      "candidate": null,
+      "expected": "reject"
+    },
+    {
+      "name": "closed_registration",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": null,
+      "candidate": {
+        "issue": 210,
+        "status": "queued",
+        "last_accepted_rung": null,
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_prepared_terminal_acceptance",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "prepared",
+        "last_accepted_rung": null,
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E0",
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_active_terminal_acceptance",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "active",
+        "last_accepted_rung": "E1",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_mismatched_candidate_issue",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "candidate": {
+        "issue": 211,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_mismatched_exported_issue",
+      "issue_state": "closed",
+      "issue_number": 211,
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_changed_target_rung",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E3",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_invalid_rung",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E9",
+        "target_rung": "E9",
+        "terminal_rung": "E9"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E9",
+        "target_rung": "E9",
+        "terminal_rung": "E9"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_malformed_base",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "done"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    }
+  ]
+}
