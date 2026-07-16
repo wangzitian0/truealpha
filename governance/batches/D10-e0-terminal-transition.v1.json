@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "batch_id": "D10-e0-terminal-transition",
+  "revision": 1,
+  "issue": 278,
+  "owner_gate": 32,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Repair the delivery-governance lifecycle so a prepared batch whose declared terminal target is E0 can accept that exact result directly to done without weakening any non-terminal transition.",
+  "claim_ceiling": "Registration only: no checker code, test, corpus, batch transition, or issue closure occurs in this registration. A later accepted terminal D10 result may close #278 only; this registration changes no D9/D4/D8 scope, source, credential, database, object-store, scheduler, runtime, release, consumer, or Production data claim.",
+  "capability_issues": [],
+  "closes_issues": [
+    278
+  ],
+  "informational_issues": [
+    210,
+    271,
+    274
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "the queued registration is merged on main before a preparation revision pins the activation base, independent reviewer, and frozen Local/CI corpus",
+      "the implementation permits prepared-to-done only when the base target is the declared terminal E0 and the candidate accepts exactly that E0",
+      "prepared E1+ batches and malformed, mismatched, or non-terminal E0 candidates remain rejected",
+      "the implementation changes no batch manifest other than D10, and no issue state, D9/D4/D8 scope, source, scheduler, runtime, release, consumer, database, or Production data path"
+    ]
+  },
+  "dependencies": [],
+  "later_claim_dependencies": [
+    "D9 #274 remains prepared until D10 accepts the narrowly corrected E0 terminal transition.",
+    "D4 #210 may use an accepted D9 result only for its existing checker-authorized done-to-done corrective terminal rerun; D10 does not authorize that rerun or a D8 implementation."
+  ],
+  "corpus": {
+    "environment": "Local/CI delivery-governance transition cases only",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "prepared terminal E0 accepts directly to done",
+      "prepared non-terminal E0 cannot complete directly",
+      "prepared terminal E0 with changed target or invalid accepted rung is rejected",
+      "all existing queued, prepared, active, blocked, and done transition restrictions remain intact"
+    ]
+  },
+  "source_ceiling": "No network source, credential, Vault, database, object-store, scheduler, runtime, release, consumer, or Production data operation is authorized.",
+  "paths": {
+    "writable": [
+      "tools/check_delivery_governance.py",
+      "libs/runtime/tests/test_delivery_governance.py",
+      "libs/runtime/tests/fixtures/delivery_governance_e0_transition.v1.json",
+      "governance/evidence/D10-e0-terminal-transition-E0.v1.json"
+    ],
+    "read_only": [
+      "AGENTS.md",
+      "docs/iterative-delivery.md",
+      "governance/batches/D9-terminal-corrective-preflight.v1.json"
+    ],
+    "forbidden": [
+      "init.md",
+      "vision.md",
+      "apps/**",
+      "db/**",
+      "libs/contracts/**",
+      "libs/factors/**",
+      "libs/runtime/src/**",
+      "Makefile",
+      "tools/agent_preflight.py",
+      "governance/batches/D4-datahub-interface.v1.json",
+      "governance/batches/D8-manual-production-topt-datahub.v1.json",
+      "governance/handoffs/D4-datahub-interface.v1.json",
+      "governance/handoffs/D4-datahub-interface-d3-staging.v1.json",
+      "uv.lock",
+      "pyproject.toml"
+    ],
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "D10 changes only the offline delivery-governance lifecycle validator and cannot activate a source, runtime, schedule, consumer, release, or data flow."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/runtime/tests/test_delivery_governance.py -q",
+      "uv run python tools/check_delivery_governance.py",
+      "git diff --check"
+    ],
+    "negative_controls": [
+      "a prepared non-terminal E0 or any prepared E1+ batch completing directly to done",
+      "a terminal E0 candidate whose accepted or target rung differs from the base target",
+      "bypassing the one-rung, immutable activation-base, corpus, changed-path, or review requirements",
+      "changing D9, D4, D8, issue lifecycle, source policy, scheduler, runtime, release, consumer, database, or Production data authorization"
+    ],
+    "output": {
+      "type": "DeliveryGovernanceE0TransitionEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "issue #278 planning only until a later accepted result names a bounded corrective consumer"
+      ]
+    }
+  },
+  "invalidation": [
+    "Changing the transition condition, affected lifecycle states, path authorization, or corpus requires a new prepared revision before implementation.",
+    "Any attempt to combine this checker repair with a D9/D4/D8 permission change, source access, scheduler, runtime, release, consumer, database, or data path requires separate authorization."
+  ],
+  "rollback": "Revert only the future D10 lifecycle validator, tests, and E0 evidence; do not mutate D9, D4, D8, issue state, source policy, runtime, release, consumer, database, or historical governance evidence."
+}
