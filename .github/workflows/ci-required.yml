@@ -9,6 +9,12 @@ on:
     branches: [main]
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
+    inputs:
+      force_images:
+        description: Publish all current-ref images after required checks.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -156,11 +162,12 @@ jobs:
   images_release:
     if: >-
       always() &&
-      github.event_name == 'push' &&
-      (needs.changes.outputs.image_app_web == 'true' ||
-       needs.changes.outputs.image_llm_service == 'true' ||
-       needs.changes.outputs.image_data_engine == 'true' ||
-       github.ref_type == 'tag') &&
+      ((github.event_name == 'push' &&
+        (needs.changes.outputs.image_app_web == 'true' ||
+         needs.changes.outputs.image_llm_service == 'true' ||
+         needs.changes.outputs.image_data_engine == 'true' ||
+         github.ref_type == 'tag')) ||
+       (github.event_name == 'workflow_dispatch' && inputs.force_images)) &&
       (needs.security.result == 'success' || needs.security.result == 'skipped') &&
       (needs.db.result == 'success' || needs.db.result == 'skipped') &&
       (needs.python.result == 'success' || needs.python.result == 'skipped') &&
