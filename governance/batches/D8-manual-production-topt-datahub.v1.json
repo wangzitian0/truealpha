@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "batch_id": "D8-manual-production-topt-datahub",
+  "revision": 1,
+  "issue": 271,
+  "owner_gate": 32,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E4",
+  "objective": "Prove a manually triggered, isolated Production TOPT capture and read-only DataHub query loop without enabling a recurring scheduler or claiming the seven-module Production shadow release.",
+  "claim_ceiling": "Registration only: no code, persistent runtime, source activation, Production credential use, scheduler, query-provider binding, data-readiness, or #53 completion claim.",
+  "capability_issues": [],
+  "closes_issues": [],
+  "informational_issues": [
+    41,
+    52,
+    53,
+    60,
+    61,
+    66,
+    171,
+    205,
+    207,
+    210
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "an accepted Production-scoped D4 DataHub handoff explicitly names this batch and its allowed environment",
+      "accepted D5 capture-control persistence/runtime handoff and accepted D6 confidence/provenance handoff",
+      "accepted #171 bounded TOPT Staging evidence and #41 stable DataHub read handoff",
+      "accepted #52 exact-release/recovery readiness, #60 Production source-rights/budget approval, and #61 frozen applicability/SLO policy",
+      "a preparation revision freezes the immutable TOPT UniverseRef, source policy, production destination, manual command, query fixtures, reviewer, paths, and rollback before implementation"
+    ]
+  },
+  "dependencies": [],
+  "later_claim_dependencies": [
+    "A new accepted D4 handoff must authorize this exact batch in Production; the current D4 handoffs authorize Local/CI consumers or D3 in Staging only.",
+    "D5 must first publish its accepted E4 capture-control handoff; this batch must not duplicate its migrations, run/work/attempt persistence, retry, checkpoint, or recapture paths.",
+    "D6 must publish accepted confidence/provenance persistence and indexed traversal evidence before this batch makes trusted metadata or trace claims.",
+    "#171 must publish accepted bounded TOPT Staging evidence before Production source activation.",
+    "#41 must publish an accepted stable DataHub read handoff before downstream query-provider or consumer-contract claims.",
+    "#52, #60, and #61 must be accepted before Production source calls, release binding, or readiness thresholds.",
+    "#53 remains open: this batch proves only the manual TOPT slice and cannot claim a seven-module shadow canary, scheduled operation, or Production graduation."
+  ],
+  "corpus": {
+    "environment": "No execution corpus is authorized during queued registration.",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "one immutable TOPT UniverseRef with 20 issuers, 21 instruments, and 84 required obligations",
+      "an explicit operator-triggered Production run with no registered schedule, sensor, or cron",
+      "idempotent same-byte rerun and append-only changed-vintage behavior",
+      "bounded capture-status, run-metadata, forward-trace, and reverse-trace queries",
+      "negative authorization for raw/staging reads, raw-byte responses, arbitrary SQL, mutable universe resolution, and any scheduler activation"
+    ]
+  },
+  "source_ceiling": "No live source call, Production credential, Vault read, release binding, or scheduler activation is authorized until the listed handoffs and Production approvals are accepted.",
+  "paths": {
+    "writable": [
+      "apps/data-engine/src/data_engine/datahub/production_topt/**",
+      "apps/data-engine/scripts/run_production_topt_capture.py",
+      "apps/data-engine/scripts/query_production_topt_datahub.py",
+      "apps/data-engine/tests/production_topt/**",
+      "docs/runbooks/manual_production_topt_datahub.md",
+      "governance/evidence/D8-manual-production-topt-datahub-E0.v1.json",
+      "governance/evidence/D8-manual-production-topt-datahub-E1.v1.json",
+      "governance/evidence/D8-manual-production-topt-datahub-E2.v1.json",
+      "governance/evidence/D8-manual-production-topt-datahub-E3.v1.json",
+      "governance/evidence/D8-manual-production-topt-datahub-E4.v1.json",
+      "governance/handoffs/D8-manual-production-topt-datahub.v1.json",
+      "governance/leases/D8-manual-production-topt-datahub.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "docs/iterative-delivery.md",
+      "governance/batches/D3-staging-topt-capture.v1.json",
+      "governance/batches/D4-datahub-interface.v1.json",
+      "governance/batches/D5-list-capture-control-plane.v1.json",
+      "governance/handoffs/D4-datahub-interface.v1.json",
+      "governance/handoffs/D4-datahub-interface-d3-staging.v1.json",
+      "libs/contracts/src/truealpha_contracts/datahub.py",
+      "libs/contracts/src/truealpha_contracts/capture_control.py",
+      "db/migrations/0023_capture_control.sql"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "init.md",
+      "vision.md",
+      "libs/contracts/src/truealpha_contracts/__init__.py",
+      "libs/contracts/src/truealpha_contracts/datahub.py",
+      "libs/contracts/src/truealpha_contracts/capture_control.py",
+      "apps/data-engine/src/data_engine/datahub/control_plane.py",
+      "apps/data-engine/src/data_engine/dagster_defs.py",
+      "apps/data-engine/src/data_engine/sources/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "libs/factors/**",
+      "db/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "Queued registration permits neither Production runtime selection nor any schedule, source route, release, or consumer binding."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run python tools/check_delivery_governance.py",
+      "git diff --check"
+    ],
+    "negative_controls": [
+      "Production source call, credential use, release binding, or scheduler activation before all named handoffs and approvals",
+      "reuse of a Local/CI or D3-Staging-only D4 handoff for this Production batch",
+      "changes to D5-owned control-plane migrations, persistence, retry, checkpoint, or recapture paths",
+      "direct raw/staging downstream access, raw-byte return, arbitrary SQL, or mutable universe resolution",
+      "claiming #53 completion, all-seven-module operation, scheduled execution, or Production graduation"
+    ],
+    "output": {
+      "type": "ManualProductionToptDatahubEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "issue #271 planning only until a later accepted handoff names a consumer"
+      ]
+    }
+  },
+  "invalidation": [
+    "A changed TOPT universe, source/parser/mapping policy, DataHub handoff scope, D5/D6 handoff, query contract, Production destination, release binding, or SLO policy requires a new prepared revision before implementation.",
+    "Any attempt to enable a schedule, broad universe, source route, shared migration, or consumer surface outside this batch requires separate authorization and path ownership."
+  ],
+  "rollback": "Revert only the future isolated D8 implementation and its evidence after a prepared revision; never delete or overwrite captured raw, normalized, attempt, provenance, or prior vintage records."
+}
