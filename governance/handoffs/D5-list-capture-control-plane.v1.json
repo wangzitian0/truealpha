@@ -1,0 +1,39 @@
+{
+  "handoff_id": "handoff:d5-list-capture-control-plane-local-ci:627e2eaba2137819a824f56787321505f9982118c4ba91a7876225407b9e77f9",
+  "schema_version": 1,
+  "revision": 1,
+  "state": "accepted",
+  "producer": {
+    "batch_id": "D5-list-capture-control-plane",
+    "issue": 205,
+    "owner": "wangzitian0",
+    "head_sha": "bf615ab91b26f93c509c6c81994880ec19411604"
+  },
+  "schema_epoch": "truealpha-datahub.capture-control.v1",
+  "readiness_ceiling": "E2",
+  "evidence": [
+    {
+      "path": "governance/evidence/D5-list-capture-control-plane-E2.v1.json",
+      "sha256": "6bc83863b3c2b940c7b6a66768540db90ee58e4404afc31e10ed3d93b7f0c8b5"
+    }
+  ],
+  "allowed_consumers": [
+    "D6-confidence-provenance"
+  ],
+  "allowed_environments": [
+    "ci",
+    "local"
+  ],
+  "retention": "permanent while an allowed Local/CI consumer depends on this handoff",
+  "verification": {
+    "reviewer": "github-actions[bot]",
+    "evidence_sha256": "0f6f5b546e0d404fa02b186ea87dc8ec7bd2c047d7ec954c1f23a8425b43f305",
+    "accepted_at": "2026-07-16T12:17:19Z",
+    "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29497486195"
+  },
+  "revocation": {
+    "reason": null,
+    "revoked_at": null,
+    "superseded_by": null
+  }
+}

@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D5-list-capture-control-plane",
-  "revision": 5,
+  "revision": 6,
   "issue": 205,
   "owner_gate": 29,
-  "status": "blocked",
+  "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": "E1",
-  "target_rung": "E2",
+  "last_accepted_rung": "E2",
+  "target_rung": "E3",
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
-  "claim_ceiling": "accepted E1 immutable Local/CI tiny replay evidence plus a frozen E2 acceptance candidate for the append-only capture-control schema and runtime; no accepted E2 handoff, source activation, default schedule, TOPT completeness, Staging operation, Production route, capacity, or data-readiness claim",
+  "claim_ceiling": "accepted E2 Local/CI capture-control handoff for exact overlapping lists, append-only identities, bounded attempts, terminal-state coverage, deterministic crash resume, and content-hashed bounded recapture; no source activation, default schedule, TOPT completeness, Staging operation, Production route, capacity, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
@@ -195,11 +195,11 @@
     "output": {
       "type": "ListCaptureControlPlaneHandoff",
       "stable_handoff": true,
-      "state": "planned",
+      "state": "accepted",
       "handoff_id": "list-capture-control-plane-handoff:7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93",
       "sha256": "7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93",
       "schema_epoch": "truealpha-datahub.capture-control.v1",
-      "planned_permission_scopes": [
+      "accepted_permission_scopes": [
         {
           "scope": "local-ci-consumers",
           "allowed_consumers": [
@@ -211,12 +211,23 @@
           ]
         }
       ],
+      "rung_evidence": {
+        "path": "governance/evidence/D5-list-capture-control-plane-E2.v1.json",
+        "sha256": "6bc83863b3c2b940c7b6a66768540db90ee58e4404afc31e10ed3d93b7f0c8b5"
+      },
+      "handoff_manifests": [
+        {
+          "scope": "local-ci-consumers",
+          "path": "governance/handoffs/D5-list-capture-control-plane.v1.json",
+          "sha256": "8c8df4c08f9ba3fad8a887bde6fd54041c4887578eff8b14a8314b4cc94d55b7"
+        }
+      ],
       "allowed_evidence_readers": [
         "D6-confidence-provenance preparation after D5 E2 acceptance",
         "issue #171 TOPT Staging preparation after D5 E4 acceptance",
         "issue #206 QQQ capacity preparation after D5 E4 acceptance"
       ],
-      "retention": "the frozen E2 candidate is retained until independently accepted or revoked; failed rung evidence follows CI retention"
+      "retention": "the accepted E2 handoff is permanent while an allowed Local/CI consumer depends on it; failed rung evidence follows CI retention"
     }
   },
   "invalidation": [
