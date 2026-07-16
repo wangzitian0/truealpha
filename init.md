@@ -404,17 +404,14 @@ throughout; Dagster is introduced early in Gate 1 and is the only authority for 
 scheduled runs; Production remains isolated shadow output until Gate 4 data, strategy,
 consumer, recovery, soak, capture-audit, and human-graduation evidence all pass.
 
-Release gates define claims and promotion order; capability batches define implementation
-and evidence streams. A batch owns one bounded vertical slice across an explicit contiguous
-rung range: code, tiny execution, toolkit/contract repair, medium validation,
-hardening/freeze, or large shadow execution. Each batch PR advances exactly one rung. A
-gate contains many batches, and verified rung PRs may merge independently into `main`; a
-stage merge never promotes an environment or implies gate completion.
-Disjoint capture, platform, strategy, consumption, and verification lanes may work in
-parallel against exact content-hashed handoffs. Contracts/toolkit is a shared integration
-surface rather than a sixth execution lane. One integration owner serializes shared types,
-exports, registries, migration numbering, generated contracts, lockfiles, and authoritative
-architecture documents.
+Release gates define claims and promotion order; implementation is conventional issue→PR
+work (see `AGENTS.md`). Grow evidence incrementally — prove a slice on a tiny fixed
+corpus before scaling it — and merge verified PRs independently into `main`; a merge
+never promotes an environment or implies gate completion. Disjoint capture, platform,
+strategy, consumption, and verification lanes work in parallel against exact
+content-hashed handoffs; coordinate through issues before touching shared surfaces
+(types, exports, registries, migration numbering, generated contracts, lockfiles,
+authoritative architecture documents).
 
 Dependencies state whether they block provisional implementation, candidate freeze, or
 issue/gate closure. Downstream fixture/local development may begin after its required

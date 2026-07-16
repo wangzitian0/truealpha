@@ -1,14 +1,11 @@
 # Accepted Handoffs
 
-Store one canonical JSON file per produced E2-or-higher handoff. Files follow
+Store one canonical JSON file per accepted producer-to-consumer handoff. Files follow
 `governance/schemas/handoff-manifest.schema.json` and are immutable after acceptance;
-revocation creates a new revision that points at the prior handoff.
+a revocation or correction creates a new revision that points at the prior handoff.
 
-A handoff may be consumed only when `state` is `accepted`, its reviewer differs from the
-producer owner, every evidence digest matches, the consumer batch ID is explicitly listed,
-and the requested environment is allowed. The consumer records both this file path and its
-SHA-256 in its batch manifest. The delivery-governance check rejects unverified, altered,
-revoked, or unauthorized dependencies.
-
-Issue #57/#58 contracts predate this lifecycle. Their two explicitly marked legacy Git refs
-are the only exemption; no new `legacy_accepted` dependency is permitted.
+These are records, not merge gates. To publish a handoff: write the file with the exact
+evidence digests and allowed environments, reference it from the producing PR, and note
+it on the issue. To consume one: pin the file path and its SHA-256 in the consuming code
+or test (never `latest`), so a drifted handoff fails the consumer's own tests. Historical
+records may reference pre-2026-07-17 batch IDs; new records reference issues and PRs.

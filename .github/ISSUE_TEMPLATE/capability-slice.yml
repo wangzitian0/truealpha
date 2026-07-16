@@ -1,6 +1,6 @@
 name: Task
 description: Describe one goal that a single pull request can deliver.
-title: "[lane] "
+title: "[workspace] "
 body:
   - type: textarea
     id: problem
