@@ -435,14 +435,14 @@ insert into raw.capture_work_items (
     work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
     retryable_outcomes, terminal_outcomes, content_sha256, storage_envelope_sha256
 ) values (
-    'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
+    'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
     'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
     'source-request:9999999999999999999999999999999999999999999999999999999999999999',
-    'schedule-policy:9999999999999999999999999999999999999999999999999999999999999999',
+    'schedule-policy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     3, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
     array['failed', 'success', 'unavailable', 'unchanged'],
-    '5f045ca0f5b4169e0c1dffef3080534f4d9924ad8672220d6e4ed3788e646964',
-    '4d04d9077001e2da9ca0794d2b60c80c1d596905408ebc06ceb272d72e5a8fdd'
+    '50c4053abc97596f04ecc5857d284337dd4b81af14a62f66320c49d9aef19f17',
+    '6a300a34b166f67d752d1ba9395151ee758c0864118ad1c1041251881cce9f61'
 );
 
 do $$ begin
@@ -488,14 +488,14 @@ do $$ begin
             maximum_attempts, retryable_outcomes, terminal_outcomes,
             content_sha256, storage_envelope_sha256
         ) values (
-            'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
+            'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
             'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
             'source-request:9999999999999999999999999999999999999999999999999999999999999999',
-            'schedule-policy:9999999999999999999999999999999999999999999999999999999999999999',
+            'schedule-policy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             4, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
             array['failed', 'success', 'unavailable', 'unchanged'],
-            '5f045ca0f5b4169e0c1dffef3080534f4d9924ad8672220d6e4ed3788e646964',
-            '76bd8e6c4726c04f398bd52ee539b23b96dee654e5ac12b03c6392e33a95990a'
+            '50c4053abc97596f04ecc5857d284337dd4b81af14a62f66320c49d9aef19f17',
+            '42ae75218b75d54b76f5f944a0b0239fa1d472c053378a59536705e92f6feead'
         );
         raise exception 'same work identity with changed retry envelope unexpectedly succeeded';
     exception when unique_violation then null;
@@ -526,11 +526,64 @@ end $$;
 insert into raw.capture_obligation_work_bindings (
     binding_id, obligation_id, work_item_id, content_sha256
 ) values (
-    'capture-obligation-work-binding:850854bbdd96755fb09d96540e5959c89d8dfabcc19010134243e62fd57b8fc6',
+    'capture-obligation-work-binding:a6689f8ffcbec151dee7b3cc67a435e66ae23f88563cc125eed3c364246b4918',
     'capture-list-obligation:3970939515b9abea8e87e25bdbe7ea21f1ed3f50a0afd007005f94709fae7eac',
-    'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
-    'c854e7ff2957e3d8e5778f82bcda3391a9e25eca5e8e7cd7ac6276876489f8f7'
+    'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
+    '64d38081f1a72ebcde402232a679266db70d388a1688c6bc4a058057c03d7467'
 );
+
+insert into raw.capture_work_items (
+    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
+    retryable_outcomes, terminal_outcomes, content_sha256, storage_envelope_sha256
+) values
+(
+    'capture-work-item:2b502d40794610e7662b1cc42233979f84856808e6638bc2fa519e2f24ee6d5e',
+    'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
+    'source-request:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    'schedule-policy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    1, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
+    array['failed', 'success', 'unavailable', 'unchanged'],
+    '2a2b98a300feaef77d5cdffe0ddfa31227f2d73d3903a0abc117a920bda1bb17',
+    '83059192ec66e90c725864c22e142ced24baf6fd3ab519544b25d136b2595516'
+),
+(
+    'capture-work-item:e77f6d81853d8f07cd5aa3462ef9929176cf0395109c412f9c270a3419f73cbb',
+    'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
+    'source-request:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+    'schedule-policy:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    1, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
+    array['failed', 'success', 'unavailable', 'unchanged'],
+    '412d85882dd2b70b7c2859382be5029fa81b9f0c77c7402a644dea904e805123',
+    'f959baa8a1c58f499cdd20f7e65676a609c50ef6cac8ca65c0f2e9be12607efe'
+);
+
+do $$ begin
+    begin
+        insert into raw.capture_obligation_work_bindings (
+            binding_id, obligation_id, work_item_id, content_sha256
+        ) values (
+            'capture-obligation-work-binding:070bafddaea8433ff9ca82e6e7297e2917a33bdff28b2fce3d872a6de75f3e4e',
+            'capture-list-obligation:3970939515b9abea8e87e25bdbe7ea21f1ed3f50a0afd007005f94709fae7eac',
+            'capture-work-item:2b502d40794610e7662b1cc42233979f84856808e6638bc2fa519e2f24ee6d5e',
+            'fd24f50efe4b51f6933bf80b4e40fc5517cf87c0e7c91268b8e1c10e8e4fcb6d'
+        );
+        raise exception 'second work binding for one obligation unexpectedly succeeded';
+    exception when unique_violation then null;
+    end;
+    begin
+        insert into raw.capture_obligation_work_bindings (
+            binding_id, obligation_id, work_item_id, content_sha256
+        ) values (
+            'capture-obligation-work-binding:c2c4657a3ca7a1a90d7b5974f3f35e2606a3bcb59a9c939c5c8c62068a723f3a',
+            'capture-list-obligation:3970939515b9abea8e87e25bdbe7ea21f1ed3f50a0afd007005f94709fae7eac',
+            'capture-work-item:e77f6d81853d8f07cd5aa3462ef9929176cf0395109c412f9c270a3419f73cbb',
+            '1de41df277f1eeb788eed2586d85e4b7d93241c34a1df18873c88a10f926e208'
+        );
+        raise exception 'cross-schedule binding unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'cross-schedule binding unexpectedly succeeded' then raise; end if;
+    end;
+end $$;
 
 insert into raw.capture_campaigns (
     campaign_id, content_sha256, policy_id, environment, cutoff, universe_refs
@@ -681,17 +734,17 @@ end $$;
 insert into raw.capture_attempts (
     attempt_id, work_item_id, attempt_number, started_at, content_sha256
 ) values (
-    'fetch-attempt:df166738a7cb93ff784d9640cda0438aafa61d711eb3a4b7bc790e3bba00ff13',
-    'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
-    1, '2026-04-01T00:01:00Z', '2ac4f30fb41d2e76608cac846a50dd6447e72d88a55d51e2510e778c23194c7e'
+    'fetch-attempt:4703dd01bf0c3abd4849a04d9997a1ce45ceb0793bcd97820dbde2fe5765d3c4',
+    'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
+    1, '2026-04-01T00:01:00Z', 'f4a2fdf03b4df968c03e9c6284c0d6b94ae3bb12342ff0278e0e94a73302b8b4'
 );
 insert into raw.capture_attempt_results (
     attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
 ) values (
-    'fetch-attempt-result:2dddb7c76a0c4c49af1112cd510ac9f649e4a508c087b000c76d0d5c2ac935ee',
-    'fetch-attempt:df166738a7cb93ff784d9640cda0438aafa61d711eb3a4b7bc790e3bba00ff13',
+    'fetch-attempt-result:ec5faa9d229ff502efbe76f2e80c30601c93ecf4224787e1bd3c8bf048f68962',
+    'fetch-attempt:4703dd01bf0c3abd4849a04d9997a1ce45ceb0793bcd97820dbde2fe5765d3c4',
     '2026-04-01T00:01:01Z', 'interrupted', array['retry'],
-    'b0a0fb161abd9665487b9ce5fe052e909cfb20514cfdf22a90ef0c5cb24f130d'
+    'acea7ae2639221865c7354867d57da04309a4938a83769012e1fe3db046a0d38'
 );
 
 do $$ begin
@@ -699,8 +752,8 @@ do $$ begin
         insert into raw.capture_attempts (
             attempt_id, work_item_id, attempt_number, started_at, content_sha256
         ) values (
-            'fetch-attempt:cdb5883072f178863a87dd6744c52148706ebf2c2d7d14d856d123740937fe23',
-            'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
+            'fetch-attempt:041e13b06db57a3f5ebef81b6c3a155a18c92b2e1457cff811fcb15566d05adb',
+            'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
             2, '2026-04-01T00:01:00Z', repeat('a', 64)
         );
         raise exception 'backdated retry unexpectedly succeeded';
@@ -714,8 +767,8 @@ do $$ begin
         insert into raw.capture_attempts (
             attempt_id, work_item_id, attempt_number, started_at, content_sha256
         ) values (
-            'fetch-attempt:cdb5883072f178863a87dd6744c52148706ebf2c2d7d14d856d123740937fe23',
-            'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
+            'fetch-attempt:041e13b06db57a3f5ebef81b6c3a155a18c92b2e1457cff811fcb15566d05adb',
+            'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
             2, '2026-04-01T00:01:02Z', repeat('a', 64)
         );
         raise exception 'mismatched attempt content unexpectedly succeeded';
@@ -726,9 +779,9 @@ end $$;
 insert into raw.capture_attempts (
     attempt_id, work_item_id, attempt_number, started_at, content_sha256
 ) values (
-    'fetch-attempt:cdb5883072f178863a87dd6744c52148706ebf2c2d7d14d856d123740937fe23',
-    'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
-    2, '2026-04-01T00:01:02Z', '7cb8955caad6a865ad4278ce4fea35da84345c5e3daad3fa79abcbd0698c6a4b'
+    'fetch-attempt:041e13b06db57a3f5ebef81b6c3a155a18c92b2e1457cff811fcb15566d05adb',
+    'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
+    2, '2026-04-01T00:01:02Z', 'cdafb3803ea23384eee4a2d0ce23764c5f5dfac454f3a27429422a58602c0782'
 );
 
 do $$ begin
@@ -737,7 +790,7 @@ do $$ begin
             attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
         ) values (
             'fetch-attempt-result:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            'fetch-attempt:cdb5883072f178863a87dd6744c52148706ebf2c2d7d14d856d123740937fe23',
+            'fetch-attempt:041e13b06db57a3f5ebef81b6c3a155a18c92b2e1457cff811fcb15566d05adb',
             '2026-04-01T00:01:03Z', 'rate_limited', array['retry'], repeat('a', 64)
         );
         raise exception 'mismatched attempt result unexpectedly succeeded';
@@ -748,26 +801,26 @@ end $$;
 insert into raw.capture_attempt_results (
     attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
 ) values (
-    'fetch-attempt-result:adca14280e5bcb9626a3d653fceeb3fd0c9accf5de0aad4d488178a5dc58d380',
-    'fetch-attempt:cdb5883072f178863a87dd6744c52148706ebf2c2d7d14d856d123740937fe23',
+    'fetch-attempt-result:ddbb457010b0d14cc1cad83dff1ea88323f5c1828280332e0d70e898d5cffd15',
+    'fetch-attempt:041e13b06db57a3f5ebef81b6c3a155a18c92b2e1457cff811fcb15566d05adb',
     '2026-04-01T00:01:03Z', 'rate_limited', array['retry'],
-    '856372587fd96f0be6a49c65c78b6999e0a1f3862acfdea623d4470a0489f329'
+    '6df17944e9cdb0a40bf34e91f7826037fca4a6fe2134bbf9a7f6c2aad2f3e86b'
 );
 
 insert into raw.capture_attempts (
     attempt_id, work_item_id, attempt_number, started_at, content_sha256
 ) values (
-    'fetch-attempt:d3e59400db48f814647bb3a4c48ab2eb297f73ad0162af091d02c12ad6045d2a',
-    'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
-    3, '2026-04-01T00:01:04Z', '04f4210b35ccd6c07b3a011a3c8918415ed52d8950bc42fcd62893cc45c67f03'
+    'fetch-attempt:0d853af574ad2cac226735de07534d4cb1f8043f5b130b151058debec3bf35c2',
+    'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
+    3, '2026-04-01T00:01:04Z', 'd1c2351cfc549b3dd862354f09e929c581be2afd4e9ddb06268634b0386026c4'
 );
 insert into raw.capture_attempt_results (
     attempt_result_id, attempt_id, completed_at, outcome, status_code, reason_codes, content_sha256
 ) values (
-    'fetch-attempt-result:b1fa0a61def1bf7436d8d36b2456e9085536ea1b0ebe35123f12485a13387be2',
-    'fetch-attempt:d3e59400db48f814647bb3a4c48ab2eb297f73ad0162af091d02c12ad6045d2a',
+    'fetch-attempt-result:2a2c52b24cdfef1815e469ee3c2fcabb4245a7fcd11787fdfd45b40706ec3fd6',
+    'fetch-attempt:0d853af574ad2cac226735de07534d4cb1f8043f5b130b151058debec3bf35c2',
     '2026-04-01T00:01:05Z', 'failed', 503, array['fixture_failure'],
-    '0389bc6b0cff20cd84d9c39471d0b442b1e8aa73819322a7ff66ef5936cc42f4'
+    '8c90fc336e7d27bf956830edaa236eb3999abc8775d9cd82c20cbf4014ec109a'
 );
 
 do $$ begin
@@ -776,7 +829,7 @@ do $$ begin
             attempt_id, work_item_id, attempt_number, started_at, content_sha256
         ) values (
             'fetch-attempt:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
+            'capture-work-item:25e1905020c88a8414c9be010be32b62d3aed62e77e09b3e85e90a70a60bfe81',
             4, '2026-04-01T00:01:06Z', repeat('a', 64)
         );
         raise exception 'attempt above maximum unexpectedly succeeded';

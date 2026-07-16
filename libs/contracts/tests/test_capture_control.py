@@ -82,7 +82,9 @@ def test_d5_recapture_plan_preserves_non_utc_offset_identity() -> None:
     )
 
 
-@pytest.mark.parametrize("planner_version", ("latest", "planner:default", "planner:stable", "planner:main"))
+@pytest.mark.parametrize(
+    "planner_version", ("latest", "planner:default", "planner:stable", "planner:main", "capture_planner_latest_v1")
+)
 def test_d5_recapture_plan_rejects_mutable_planner_versions(planner_version: str) -> None:
     with pytest.raises(ValidationError, match="must not be mutable"):
         CaptureRecapturePlan(

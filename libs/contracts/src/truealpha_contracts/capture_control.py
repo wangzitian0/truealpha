@@ -199,7 +199,7 @@ class CaptureRecapturePlan(BaseModel):
         if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]*", value) is None:
             raise ValueError("planner_version must be a stable coordinate")
         mutable_tokens = {"latest", "current", "default", "stable", "main", "head", "tip"}
-        if any(token in mutable_tokens for token in re.split(r"[.:/@+\-]", value.lower())):
+        if any(token in mutable_tokens for token in re.split(r"[._:/@+\-]", value.lower())):
             raise ValueError("planner_version must not be mutable")
         return value
 

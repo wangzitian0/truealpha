@@ -365,7 +365,7 @@ create table if not exists raw.capture_obligation_work_bindings (
     work_item_id       text not null references raw.capture_work_items(work_item_id),
     content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at         timestamptz not null default now(),
-    unique (obligation_id, work_item_id)
+    unique (obligation_id)
 );
 
 create table if not exists raw.capture_attempts (
@@ -904,15 +904,22 @@ returns trigger language plpgsql as $$
 declare
     obligation_campaign text;
     work_campaign text;
+    obligation_schedule_policy text;
+    work_schedule_policy text;
 begin
-    select campaign_id into obligation_campaign
-      from raw.capture_obligations
-     where obligation_id = new.obligation_id;
-    select campaign_id into work_campaign
+    select obligation.campaign_id, run.schedule_policy_id
+      into obligation_campaign, obligation_schedule_policy
+      from raw.capture_obligations obligation
+      join raw.capture_runs run using (run_id, campaign_id)
+     where obligation.obligation_id = new.obligation_id;
+    select campaign_id, schedule_policy_id into work_campaign, work_schedule_policy
       from raw.capture_work_items
      where work_item_id = new.work_item_id;
     if obligation_campaign is distinct from work_campaign then
         raise exception 'obligation and work item must belong to the same capture campaign';
+    end if;
+    if obligation_schedule_policy is distinct from work_schedule_policy then
+        raise exception 'obligation and work item must use the same schedule policy';
     end if;
     return new;
 end;
