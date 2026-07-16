@@ -1550,8 +1550,9 @@ def validate_status_transition(
         )
         return None
     if (before, after) == ("prepared", "done"):
+        accepted_rung = base_manifest.get("target_rung")
         validation.require(
-            base_manifest.get("target_rung") == "E0" and base_manifest.get("terminal_rung") == "E0",
+            accepted_rung == "E0" and base_manifest.get("terminal_rung") == "E0",
             f"{batch_id}: prepared batch may complete directly only from a terminal E0 target",
         )
         validation.require(
@@ -1560,7 +1561,7 @@ def validate_status_transition(
             and manifest.get("terminal_rung") == "E0",
             f"{batch_id}: prepared direct completion must accept the exact terminal E0",
         )
-        return "E0"
+        return accepted_rung if isinstance(accepted_rung, str) else None
     if after not in {"active", "done"}:
         return None
     accepted_rung = base_manifest.get("target_rung")

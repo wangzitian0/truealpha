@@ -1673,6 +1673,7 @@ def test_prepared_terminal_e0_transition_matches_frozen_corpus(case):
         assert accepted_rung == "E0"
     else:
         assert validation.errors
+        assert accepted_rung == case["base"]["target_rung"]
 
 
 def test_blocked_terminal_batch_can_accept_target_and_finish():
