@@ -11,9 +11,12 @@ from factors.production_topt import (
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
+    OperatingBranch,
     ThreeTierV0Definition,
+    ToptCellQualityInput,
     ToptCoreResult,
     ToptCoreSnapshotInput,
+    ToptMarketValueComponent,
     ToptMetricInput,
     compute_topt_core,
 )
@@ -49,12 +52,14 @@ class FinancialFactPayload(_FrozenModel):
     issuer_id: str = Field(min_length=1)
     instrument_id: str = Field(min_length=1)
     listing_id: str = Field(min_length=1)
+    operating_branch: OperatingBranch
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     gross_profit: Decimal | None
     total_assets: Decimal | None
     headcount: Decimal | None
     revenue: Decimal | None
     shares_outstanding: Decimal | None
+    pre_provision_profit: Decimal | None
 
     @field_validator(
         "gross_profit",
@@ -62,6 +67,7 @@ class FinancialFactPayload(_FrozenModel):
         "headcount",
         "revenue",
         "shares_outstanding",
+        "pre_provision_profit",
         mode="before",
     )
     @classmethod
@@ -93,13 +99,16 @@ class SnapshotMember(_FrozenModel):
     issuer_id: str
     instrument_id: str
     listing_id: str
+    operating_branch: OperatingBranch
     observation_ids: tuple[str, str, str, str]
+    cell_inputs: tuple[ToptCellQualityInput, ToptCellQualityInput, ToptCellQualityInput, ToptCellQualityInput]
     gross_profit: ToptMetricInput | None
     total_assets: ToptMetricInput | None
     headcount: ToptMetricInput | None
     revenue: ToptMetricInput | None
-    shares_outstanding: ToptMetricInput | None
-    market_price: ToptMetricInput | None
+    pre_provision_profit: ToptMetricInput | None
+    shares_outstanding: ToptMetricInput
+    market_price: ToptMetricInput
 
     @field_validator("observation_ids")
     @classmethod
@@ -152,27 +161,59 @@ class ToptCoreSnapshot(_FrozenModel):
         return self
 
     def factor_inputs(self) -> tuple[ToptCoreSnapshotInput, ...]:
-        return tuple(
-            ToptCoreSnapshotInput(
-                snapshot_id=self.snapshot_id,
-                run_id=self.run_id,
-                release_manifest_id=self.release_manifest_id,
-                universe_id=self.universe_id,
-                universe_version=self.universe_version,
-                universe_sha256=self.universe_sha256,
-                cutoff=self.cutoff,
-                issuer_id=member.issuer_id,
+        grouped: dict[str, list[SnapshotMember]] = {}
+        for member in self.members:
+            grouped.setdefault(member.issuer_id, []).append(member)
+        return tuple(self._issuer_factor_input(grouped[issuer_id]) for issuer_id in sorted(grouped))
+
+    def _issuer_factor_input(self, members: list[SnapshotMember]) -> ToptCoreSnapshotInput:
+        ordered = sorted(members, key=lambda member: member.instrument_id)
+        execution = ordered[0]
+        if len({member.operating_branch for member in ordered}) != 1:
+            raise ValueError(f"issuer {execution.issuer_id} has inconsistent operating branches")
+
+        def common_metric(field_name: str) -> ToptMetricInput | None:
+            metrics = [getattr(member, field_name) for member in ordered]
+            signatures = {
+                None if metric is None else (metric.value, metric.unit, metric.availability) for metric in metrics
+            }
+            if len(signatures) != 1:
+                raise ValueError(f"issuer {execution.issuer_id} has inconsistent {field_name} facts")
+            return metrics[0]
+
+        observations = tuple(sorted(item for member in ordered for item in member.observation_ids))
+        cells = tuple(
+            sorted((item for member in ordered for item in member.cell_inputs), key=lambda item: item.input_id)
+        )
+        components = tuple(
+            ToptMarketValueComponent(
                 instrument_id=member.instrument_id,
                 listing_id=member.listing_id,
-                observation_ids=member.observation_ids,
-                gross_profit=member.gross_profit,
-                total_assets=member.total_assets,
-                headcount=member.headcount,
-                revenue=member.revenue,
-                shares_outstanding=member.shares_outstanding,
                 market_price=member.market_price,
+                shares_outstanding=member.shares_outstanding,
             )
-            for member in self.members
+            for member in ordered
+        )
+        return ToptCoreSnapshotInput(
+            snapshot_id=self.snapshot_id,
+            run_id=self.run_id,
+            release_manifest_id=self.release_manifest_id,
+            universe_id=self.universe_id,
+            universe_version=self.universe_version,
+            universe_sha256=self.universe_sha256,
+            cutoff=self.cutoff,
+            issuer_id=execution.issuer_id,
+            instrument_id=execution.instrument_id,
+            listing_id=execution.listing_id,
+            operating_branch=execution.operating_branch,
+            observation_ids=observations,
+            cell_inputs=cells,
+            gross_profit=common_metric("gross_profit"),
+            total_assets=common_metric("total_assets"),
+            headcount=common_metric("headcount"),
+            revenue=common_metric("revenue"),
+            pre_provision_profit=common_metric("pre_provision_profit"),
+            market_value_components=components,
         )
 
 
@@ -184,6 +225,7 @@ class ToptCoreIdentity:
     universe_version: str
     universe_sha256: str
     snapshot_id: str
+    invocation_id: str
 
 
 @dataclass(frozen=True)
@@ -200,7 +242,10 @@ class ToptCoreReadResult:
     issuer_id: str
     instrument_id: str
     listing_id: str
+    operating_branch: str
+    operating_metric: str
     availability: str
+    operating_efficiency: Decimal | None
     capital_adjusted_gross_profit: Decimal | None
     gppe: Decimal | None
     tier: str | None
@@ -275,6 +320,15 @@ def _metric(
     )
 
 
+def _cell(row: _ObservationRow) -> ToptCellQualityInput:
+    return ToptCellQualityInput(
+        input_id=row.observation_id,
+        confidence=row.confidence,
+        knowable_at=row.knowable_at,
+        freshness=row.freshness,
+    )
+
+
 class PostgresToptCoreRepository:
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
@@ -283,15 +337,38 @@ class PostgresToptCoreRepository:
         status = self._connection.execute(
             """
             select environment, cutoff, universe_id, universe_version, universe_sha256,
-                   obligation_count, terminal_count, complete
+                   obligation_count, terminal_count, success_count, unchanged_count,
+                   unavailable_count, skipped_count, failed_count, complete
             from mart.topt_capture_status where run_id = %s
             """,
             (run_id,),
         ).fetchone()
         if status is None:
             raise LookupError(f"capture run not found: {run_id}")
-        environment, cutoff, universe_id, universe_version, universe_sha256, obligations, terminal, complete = status
-        if environment != "production" or (obligations, terminal, complete) != (84, 84, True):
+        (
+            environment,
+            cutoff,
+            universe_id,
+            universe_version,
+            universe_sha256,
+            obligations,
+            terminal,
+            success,
+            unchanged,
+            unavailable,
+            skipped,
+            failed,
+            complete,
+        ) = status
+        if environment != "production" or (
+            obligations,
+            terminal,
+            success + unchanged,
+            unavailable,
+            skipped,
+            failed,
+            complete,
+        ) != (84, 84, 84, 0, 0, 0, True):
             raise ValueError("TOPT core snapshot requires a complete 84-cell Production run")
         rows = self._load_observations(run_id, cutoff=cutoff)
         if len(rows) != _EXPECTED_OBSERVATIONS:
@@ -347,7 +424,7 @@ class PostgresToptCoreRepository:
                 where obligation.run_id = %s and observation.knowable_at <= %s
             )
             select obligation_id, subject_id,
-                   replace(capture_requirement_id, ':v1', ''),
+                   regexp_replace(capture_requirement_id, ':v1$', ''),
                    observation_id, confidence, freshness_state, knowable_at,
                    normalized_payload
             from selected where selection_rank = 1
@@ -393,11 +470,18 @@ class PostgresToptCoreRepository:
             issuer_id=listing.issuer_id,
             instrument_id=listing.instrument_id,
             listing_id=listing.listing_id,
+            operating_branch=financial.operating_branch,
             observation_ids=(
                 observation_ids[0],
                 observation_ids[1],
                 observation_ids[2],
                 observation_ids[3],
+            ),
+            cell_inputs=(
+                _cell(by_type["financial-fact"]),
+                _cell(by_type["listing-identity"]),
+                _cell(by_type["market-price"]),
+                _cell(by_type["universe-membership"]),
             ),
             gross_profit=_metric(
                 financial_row,
@@ -413,6 +497,12 @@ class PostgresToptCoreRepository:
             ),
             headcount=_metric(financial_row, name="headcount", value=financial.headcount, unit="employees"),
             revenue=_metric(financial_row, name="revenue", value=financial.revenue, unit=financial.currency),
+            pre_provision_profit=_metric(
+                financial_row,
+                name="pre_provision_profit",
+                value=financial.pre_provision_profit,
+                unit=financial.currency,
+            ),
             shares_outstanding=_metric(
                 financial_row,
                 name="shares_outstanding",
@@ -467,7 +557,7 @@ class PostgresToptCoreRepository:
                         snapshot_id, instrument_id, issuer_id, listing_id,
                         observation_ids, member_sha256, factor_input
                     ) values (%s, %s, %s, %s, %s, %s, %s)
-                    on conflict (snapshot_id, instrument_id) do nothing
+                    on conflict (snapshot_id, issuer_id) do nothing
                     returning instrument_id
                     """,
                     (
@@ -485,9 +575,9 @@ class PostgresToptCoreRepository:
                         """
                         select issuer_id, listing_id, observation_ids, member_sha256, factor_input
                         from staging.topt_core_snapshot_members
-                        where snapshot_id = %s and instrument_id = %s
+                        where snapshot_id = %s and issuer_id = %s
                         """,
-                        (snapshot.snapshot_id, factor_input.instrument_id),
+                        (snapshot.snapshot_id, factor_input.issuer_id),
                     ).fetchone()
                     expected_member = (
                         factor_input.issuer_id,
@@ -523,7 +613,7 @@ class PostgresToptCoreRepository:
             )
             for factor_input in snapshot.factor_inputs()
         )
-        if len(results) != _EXPECTED_INSTRUMENTS or len({item.issuer_id for item in results}) != _EXPECTED_ISSUERS:
+        if len(results) != _EXPECTED_ISSUERS or len({item.issuer_id for item in results}) != _EXPECTED_ISSUERS:
             raise ValueError("TOPT core materialization denominator drifted")
         with self._connection.transaction():
             inserted = self._connection.execute(
@@ -564,7 +654,8 @@ class PostgresToptCoreRepository:
             insert into mart.topt_core_results (
                 result_id, content_sha256, invocation_id, snapshot_id, run_id,
                 release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, availability,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
                 capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
                 target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
                 confidence, freshness, reason_codes, input_observation_ids,
@@ -573,7 +664,7 @@ class PostgresToptCoreRepository:
             ) values (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s
+                %s, %s, %s, %s, %s, %s
             ) on conflict (result_id) do nothing returning result_id
             """,
             (
@@ -590,7 +681,10 @@ class PostgresToptCoreRepository:
                 result.issuer_id,
                 result.instrument_id,
                 result.listing_id,
+                result.operating_branch.value,
+                result.operating_metric.value,
                 result.availability.value,
+                result.operating_efficiency,
                 result.capital_adjusted_gross_profit,
                 result.gppe,
                 None if result.tier is None else result.tier.value,
@@ -635,7 +729,8 @@ class PostgresToptCoreRepository:
             """
             select result_id, invocation_id, snapshot_id, run_id, release_manifest_id,
                    universe_id, universe_version, universe_sha256, cutoff, issuer_id,
-                   instrument_id, listing_id, availability, capital_adjusted_gross_profit,
+                   instrument_id, listing_id, operating_branch, operating_metric,
+                   availability, operating_efficiency, capital_adjusted_gross_profit,
                    gppe, tier, target_ps_lower, target_ps_upper, target_ps_midpoint,
                    current_ps, valuation_gap, confidence, freshness, reason_codes,
                    gppe_definition_id, gppe_definition_sha256,
@@ -643,7 +738,8 @@ class PostgresToptCoreRepository:
             from mart.topt_core_result_read
             where run_id = %s and release_manifest_id = %s and universe_id = %s
               and universe_version = %s and universe_sha256 = %s and snapshot_id = %s
-            order by instrument_id limit %s offset %s
+              and invocation_id = %s
+            order by issuer_id limit %s offset %s
             """,
             (
                 identity.run_id,
@@ -652,6 +748,7 @@ class PostgresToptCoreRepository:
                 identity.universe_version,
                 identity.universe_sha256,
                 identity.snapshot_id,
+                identity.invocation_id,
                 limit,
                 offset,
             ),
@@ -670,23 +767,26 @@ class PostgresToptCoreRepository:
                 issuer_id=row[9],
                 instrument_id=row[10],
                 listing_id=row[11],
-                availability=row[12],
-                capital_adjusted_gross_profit=row[13],
-                gppe=row[14],
-                tier=row[15],
-                target_ps_lower=row[16],
-                target_ps_upper=row[17],
-                target_ps_midpoint=row[18],
-                current_ps=row[19],
-                valuation_gap=row[20],
-                confidence=row[21],
-                freshness=row[22],
-                reason_codes=tuple(row[23]),
-                gppe_definition_id=row[24],
-                gppe_definition_sha256=row[25],
-                tier_definition_id=row[26],
-                tier_definition_sha256=row[27],
-                created_at=row[28],
+                operating_branch=row[12],
+                operating_metric=row[13],
+                availability=row[14],
+                operating_efficiency=row[15],
+                capital_adjusted_gross_profit=row[16],
+                gppe=row[17],
+                tier=row[18],
+                target_ps_lower=row[19],
+                target_ps_upper=row[20],
+                target_ps_midpoint=row[21],
+                current_ps=row[22],
+                valuation_gap=row[23],
+                confidence=row[24],
+                freshness=row[25],
+                reason_codes=tuple(row[26]),
+                gppe_definition_id=row[27],
+                gppe_definition_sha256=row[28],
+                tier_definition_id=row[29],
+                tier_definition_sha256=row[30],
+                created_at=row[31],
             )
             for row in rows
         )
@@ -710,7 +810,8 @@ class PostgresToptCoreRepository:
             from mart.topt_core_meta_info
             where run_id = %s and release_manifest_id = %s and universe_id = %s
               and universe_version = %s and universe_sha256 = %s and snapshot_id = %s
-            order by instrument_id limit %s offset %s
+              and invocation_id = %s
+            order by issuer_id limit %s offset %s
             """,
             (
                 identity.run_id,
@@ -719,6 +820,7 @@ class PostgresToptCoreRepository:
                 identity.universe_version,
                 identity.universe_sha256,
                 identity.snapshot_id,
+                identity.invocation_id,
                 limit,
                 offset,
             ),

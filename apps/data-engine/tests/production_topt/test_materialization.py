@@ -65,14 +65,17 @@ def _normalized_payload(
     if semantic_type == "market-price":
         return {**identity, "currency": "USD", "close": "40"}
     if semantic_type == "financial-fact":
+        financial = ticker == "JPM"
         return {
             **identity,
+            "operating_branch": "financial" if financial else "non_financial",
             "currency": "USD",
-            "gross_profit": "210000000",
-            "total_assets": "200000000",
+            "gross_profit": None if financial else "210000000",
+            "total_assets": None if financial else "200000000",
             "headcount": "100",
-            "revenue": "100000000",
+            "revenue": None if financial else "100000000",
             "shares_outstanding": "10000000",
+            "pre_provision_profit": "80000000" if financial else None,
         }
     raise AssertionError(f"unexpected semantic type: {semantic_type}")
 
@@ -260,10 +263,16 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     repeated = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.050"))
 
     assert repeated == results
-    assert len(results) == 21
+    assert len(results) == 20
     assert len({item.issuer_id for item in results}) == 20
-    assert {item.availability for item in results} == {ToptCoreAvailability.AVAILABLE}
-    assert {item.gppe for item in results} == {Decimal("2000000")}
+    assert sum(item.availability is ToptCoreAvailability.AVAILABLE for item in results) == 19
+    assert {item.gppe for item in results if item.gppe is not None} == {Decimal("2000000")}
+    alphabet = next(item for item in results if item.issuer_id == "issuer:lei:5493006MHB84DD0ZWV18")
+    assert alphabet.current_ps == Decimal("8")
+    financial = next(item for item in results if item.issuer_id == "issuer:lei:8I5DZWZKVSZI1NUHU748")
+    assert financial.availability is ToptCoreAvailability.UNAVAILABLE
+    assert financial.operating_efficiency == Decimal("800000")
+    assert tuple(item.value for item in financial.reason_codes) == ("financial_valuation_not_comparable",)
     identity = ToptCoreIdentity(
         run_id=run.run_id,
         release_manifest_id=release_manifest_id,
@@ -271,17 +280,28 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
         universe_version=list_version.universe.universe_version,
         universe_sha256=list_version.universe.content_sha256,
         snapshot_id=snapshot.snapshot_id,
+        invocation_id=results[0].invocation_id,
     )
     reads = repository.results(identity)
     meta_info = repository.meta_info(identity)
-    assert len(reads) == len(meta_info) == 21
-    assert all(len(item.input_observation_ids) == len(item.lineage) == 4 for item in meta_info)
+    assert len(reads) == len(meta_info) == 20
+    assert sorted(len(item.lineage) for item in meta_info) == [4] * 19 + [8]
     assert (
         repository.results(ToptCoreIdentity(**{**identity.__dict__, "snapshot_id": f"topt-core-snapshot:{'0' * 64}"}))
         == ()
     )
+    assert (
+        repository.results(
+            ToptCoreIdentity(**{**identity.__dict__, "invocation_id": f"topt-core-invocation:{'0' * 64}"})
+        )
+        == ()
+    )
+    different = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.04"))
+    assert len(different) == 20
+    assert different[0].invocation_id != identity.invocation_id
+    assert repository.results(identity) == reads
     assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (84,)
-    assert connection.execute("select count(*) from staging.topt_core_snapshot_members").fetchone() == (21,)
+    assert connection.execute("select count(*) from staging.topt_core_snapshot_members").fetchone() == (20,)
 
     with pytest.raises(psycopg.errors.RaiseException, match="append-only"), connection.transaction():
         connection.execute(

@@ -8,10 +8,14 @@ from factors.production_topt import (
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
+    OperatingBranch,
+    OperatingEfficiencyMetric,
     ThreeTierV0Definition,
+    ToptCellQualityInput,
     ToptCoreAvailability,
     ToptCoreReasonCode,
     ToptCoreSnapshotInput,
+    ToptMarketValueComponent,
     ToptMetricInput,
     compute_topt_core,
 )
@@ -20,25 +24,60 @@ from truealpha_contracts.research import ValuationTier
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 OBSERVATION_IDS = tuple(f"normalized-observation:{character * 64}" for character in "1234")
+SECOND_LISTING_IDS = tuple(f"normalized-observation:{character * 64}" for character in "5678")
 
 
 def _metric(
     name: str,
     value: str | None,
     *,
-    input_index: int = 0,
+    input_id: str = OBSERVATION_IDS[0],
     confidence: str = "0.9",
-    freshness: MetricFreshness = MetricFreshness.FRESH,
 ) -> ToptMetricInput:
     return ToptMetricInput(
-        input_id=OBSERVATION_IDS[input_index],
+        input_id=input_id,
         metric=name,
         value=value,
         unit="USD",
         confidence=confidence,
         knowable_at=CUTOFF - timedelta(days=1),
-        freshness=freshness,
+        freshness=MetricFreshness.FRESH,
         availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
+    )
+
+
+def _cell(
+    input_id: str,
+    *,
+    confidence: str = "0.9",
+    freshness: MetricFreshness = MetricFreshness.FRESH,
+) -> ToptCellQualityInput:
+    return ToptCellQualityInput(
+        input_id=input_id,
+        confidence=confidence,
+        knowable_at=CUTOFF - timedelta(days=1),
+        freshness=freshness,
+    )
+
+
+def _cells(ids: tuple[str, ...] = OBSERVATION_IDS) -> tuple[ToptCellQualityInput, ...]:
+    return tuple(_cell(input_id) for input_id in ids)
+
+
+def _component(
+    *,
+    instrument_id: str = "instrument:example",
+    listing_id: str = "listing:example",
+    financial_observation_id: str = OBSERVATION_IDS[0],
+    market_observation_id: str = OBSERVATION_IDS[1],
+    price: str | None = "40",
+    shares: str | None = "10000000",
+) -> ToptMarketValueComponent:
+    return ToptMarketValueComponent(
+        instrument_id=instrument_id,
+        listing_id=listing_id,
+        market_price=_metric("market_price", price, input_id=market_observation_id),
+        shares_outstanding=_metric("shares_outstanding", shares, input_id=financial_observation_id),
     )
 
 
@@ -54,13 +93,15 @@ def _snapshot(**overrides: object) -> ToptCoreSnapshotInput:
         "issuer_id": "issuer:example",
         "instrument_id": "instrument:example",
         "listing_id": "listing:example",
+        "operating_branch": OperatingBranch.NON_FINANCIAL,
         "observation_ids": OBSERVATION_IDS,
-        "gross_profit": _metric("gross_profit", "210000000", input_index=0),
-        "total_assets": _metric("total_assets", "200000000", input_index=0),
-        "headcount": _metric("headcount", "100", input_index=0, confidence="0.7"),
-        "revenue": _metric("revenue", "100000000", input_index=0),
-        "shares_outstanding": _metric("shares_outstanding", "10000000", input_index=0),
-        "market_price": _metric("market_price", "40", input_index=1, confidence="0.8"),
+        "cell_inputs": _cells(),
+        "gross_profit": _metric("gross_profit", "210000000"),
+        "total_assets": _metric("total_assets", "200000000"),
+        "headcount": _metric("headcount", "100"),
+        "revenue": _metric("revenue", "100000000"),
+        "pre_provision_profit": _metric("pre_provision_profit", None),
+        "market_value_components": (_component(),),
     }
     values.update(overrides)
     return ToptCoreSnapshotInput.model_validate(values)
@@ -75,10 +116,18 @@ def _compute(snapshot: ToptCoreSnapshotInput):
     )
 
 
-def test_available_result_uses_owner_selected_formula_and_minimum_confidence() -> None:
-    result = _compute(_snapshot())
+def test_available_result_uses_owner_selected_formula_and_all_cell_confidence() -> None:
+    cells = (
+        _cell(OBSERVATION_IDS[0], confidence="0.7"),
+        _cell(OBSERVATION_IDS[1], confidence="0.6"),
+        _cell(OBSERVATION_IDS[2], confidence="0.8"),
+        _cell(OBSERVATION_IDS[3], confidence="0.9"),
+    )
+    result = _compute(_snapshot(cell_inputs=cells))
 
     assert result.availability is ToptCoreAvailability.AVAILABLE
+    assert result.operating_metric is OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
+    assert result.operating_efficiency == Decimal("2000000")
     assert result.capital_adjusted_gross_profit == Decimal("200000000")
     assert result.gppe == Decimal("2000000")
     assert result.tier is ValuationTier.TECH
@@ -89,7 +138,7 @@ def test_available_result_uses_owner_selected_formula_and_minimum_confidence() -
     )
     assert result.current_ps == Decimal("4")
     assert result.valuation_gap == Decimal("1.25")
-    assert result.confidence == Decimal("0.7")
+    assert result.confidence == Decimal("0.6")
     assert result.reason_codes == ()
 
 
@@ -130,14 +179,60 @@ def test_invalid_input_is_explicitly_unavailable(
     assert result.gppe is None
 
 
-def test_stale_input_never_silently_computes() -> None:
+def test_identity_cell_freshness_and_confidence_are_not_dropped() -> None:
+    stale_identity = list(_cells())
+    stale_identity[2] = _cell(OBSERVATION_IDS[2], freshness=MetricFreshness.STALE)
+    stale = _compute(_snapshot(cell_inputs=tuple(stale_identity)))
+
+    assert stale.availability is ToptCoreAvailability.UNAVAILABLE
+    assert stale.reason_codes == (ToptCoreReasonCode.STALE_INPUT,)
+    assert stale.freshness is MetricFreshness.STALE
+
+    low_confidence_identity = list(_cells())
+    low_confidence_identity[3] = _cell(OBSERVATION_IDS[3], confidence="0.2")
+    available = _compute(_snapshot(cell_inputs=tuple(low_confidence_identity)))
+    assert available.confidence == Decimal("0.2")
+
+
+def test_current_ps_aggregates_all_share_classes_once_per_issuer() -> None:
+    observation_ids = tuple(sorted((*OBSERVATION_IDS, *SECOND_LISTING_IDS)))
+    components = (
+        _component(),
+        _component(
+            instrument_id="instrument:example-b",
+            listing_id="listing:example-b",
+            financial_observation_id=SECOND_LISTING_IDS[0],
+            market_observation_id=SECOND_LISTING_IDS[1],
+        ),
+    )
     result = _compute(
-        _snapshot(market_price=_metric("market_price", "40", input_index=1, freshness=MetricFreshness.STALE))
+        _snapshot(
+            observation_ids=observation_ids,
+            cell_inputs=_cells(observation_ids),
+            market_value_components=components,
+        )
+    )
+
+    assert result.current_ps == Decimal("8")
+    assert result.input_observation_ids == observation_ids
+
+
+def test_financial_branch_uses_pre_provision_profit_without_nonfinancial_valuation() -> None:
+    result = _compute(
+        _snapshot(
+            operating_branch=OperatingBranch.FINANCIAL,
+            gross_profit=None,
+            total_assets=None,
+            revenue=None,
+            pre_provision_profit=_metric("pre_provision_profit", "80000000"),
+        )
     )
 
     assert result.availability is ToptCoreAvailability.UNAVAILABLE
-    assert result.reason_codes == (ToptCoreReasonCode.STALE_INPUT,)
-    assert result.freshness is MetricFreshness.STALE
+    assert result.operating_metric is OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE
+    assert result.operating_efficiency == Decimal("800000")
+    assert result.gppe is result.tier is result.current_ps is None
+    assert result.reason_codes == (ToptCoreReasonCode.FINANCIAL_VALUATION_NOT_COMPARABLE,)
 
 
 def test_definitions_are_content_addressed_and_reject_binary_floats() -> None:
@@ -152,14 +247,16 @@ def test_definitions_are_content_addressed_and_reject_binary_floats() -> None:
 
 
 def test_snapshot_rejects_future_dated_or_unselected_inputs() -> None:
-    future = _metric("market_price", "40", input_index=1).model_copy(
+    future_price = _metric("market_price", "40", input_id=OBSERVATION_IDS[1]).model_copy(
         update={"knowable_at": CUTOFF + timedelta(seconds=1)}
     )
     with pytest.raises(ValidationError, match="future-dated"):
-        _snapshot(market_price=future)
+        _snapshot(market_value_components=(_component().model_copy(update={"market_price": future_price}),))
 
-    unselected = _metric("market_price", "40", input_index=1).model_copy(
-        update={"input_id": f"normalized-observation:{'f' * 64}"}
+    unselected_price = _metric(
+        "market_price",
+        "40",
+        input_id=f"normalized-observation:{'f' * 64}",
     )
     with pytest.raises(ValidationError, match="not selected"):
-        _snapshot(market_price=unselected)
+        _snapshot(market_value_components=(_component().model_copy(update={"market_price": unselected_price}),))

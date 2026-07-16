@@ -110,11 +110,13 @@ create table if not exists staging.topt_core_snapshot_members (
     instrument_id                   text not null,
     issuer_id                       text not null,
     listing_id                      text not null,
-    observation_ids                 text[] not null check (cardinality(observation_ids) = 4),
+    observation_ids                 text[] not null
+        check (cardinality(observation_ids) >= 4 and cardinality(observation_ids) % 4 = 0),
     member_sha256                   text not null check (member_sha256 ~ '^[0-9a-f]{64}$'),
     factor_input                    jsonb not null check (jsonb_typeof(factor_input) = 'object'),
     created_at                      timestamptz not null default clock_timestamp(),
-    primary key (snapshot_id, instrument_id),
+    primary key (snapshot_id, issuer_id),
+    unique (snapshot_id, instrument_id),
     unique (snapshot_id, listing_id)
 );
 
@@ -240,7 +242,11 @@ create table if not exists mart.topt_core_results (
     issuer_id                       text not null,
     instrument_id                   text not null,
     listing_id                      text not null,
+    operating_branch                text not null check (operating_branch in ('non_financial', 'financial')),
+    operating_metric                text not null
+        check (operating_metric in ('capital_adjusted_gppe', 'pre_provision_profit_per_employee')),
     availability                    text not null check (availability in ('available', 'unavailable')),
+    operating_efficiency            numeric,
     capital_adjusted_gross_profit   numeric,
     gppe                            numeric,
     tier                            text check (tier in ('traditional', 'tech', 'large_model_native')),
@@ -252,17 +258,20 @@ create table if not exists mart.topt_core_results (
     confidence                      numeric not null check (confidence between 0 and 1),
     freshness                       text not null check (freshness in ('fresh', 'stale', 'unknown')),
     reason_codes                    text[] not null,
-    input_observation_ids           text[] not null check (cardinality(input_observation_ids) = 4),
+    input_observation_ids           text[] not null
+        check (cardinality(input_observation_ids) >= 4 and cardinality(input_observation_ids) % 4 = 0),
     gppe_definition_id              text not null,
     gppe_definition_sha256          text not null check (gppe_definition_sha256 ~ '^[0-9a-f]{64}$'),
     tier_definition_id              text not null,
     tier_definition_sha256          text not null check (tier_definition_sha256 ~ '^[0-9a-f]{64}$'),
     payload                         jsonb not null check (jsonb_typeof(payload) = 'object'),
     created_at                      timestamptz not null default clock_timestamp(),
-    unique (invocation_id, instrument_id),
+    unique (invocation_id, issuer_id),
     check (split_part(result_id, ':', 2) = content_sha256),
     check (
-        (availability = 'available' and capital_adjusted_gross_profit is not null and gppe is not null
+        (availability = 'available' and operating_branch = 'non_financial'
+            and operating_metric = 'capital_adjusted_gppe' and operating_efficiency is not null
+            and capital_adjusted_gross_profit is not null and gppe is not null
             and tier is not null and target_ps_lower is not null and target_ps_upper is not null
             and target_ps_midpoint is not null and current_ps is not null and valuation_gap is not null
             and cardinality(reason_codes) = 0)
@@ -270,6 +279,10 @@ create table if not exists mart.topt_core_results (
         (availability = 'unavailable' and capital_adjusted_gross_profit is null and gppe is null
             and tier is null and target_ps_lower is null and target_ps_upper is null
             and target_ps_midpoint is null and current_ps is null and valuation_gap is null
+            and (operating_efficiency is null
+                or (operating_branch = 'financial'
+                    and operating_metric = 'pre_provision_profit_per_employee'
+                    and reason_codes @> array['financial_valuation_not_comparable']::text[]))
             and cardinality(reason_codes) > 0)
     )
 );
@@ -329,7 +342,10 @@ select
     result.issuer_id,
     result.instrument_id,
     result.listing_id,
+    result.operating_branch,
+    result.operating_metric,
     result.availability,
+    result.operating_efficiency,
     result.capital_adjusted_gross_profit,
     result.gppe,
     result.tier,

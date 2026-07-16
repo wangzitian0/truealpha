@@ -27,6 +27,16 @@ def persist_manual_production_plan(
     if recorded_at < plan.campaign.cutoff:
         raise ValueError("planned checkpoint cannot precede the Production cutoff")
 
+    durable_release = connection.execute(
+        """
+        select 1 from staging.contract_objects
+        where contract_id = %s and contract_kind = 'release_manifest'
+        """,
+        (plan.release_manifest_id,),
+    ).fetchone()
+    if durable_release is None:
+        raise LookupError(f"release manifest is not durably persisted: {plan.release_manifest_id}")
+
     repository = PostgresCaptureControlRepository(connection)
     checkpoint = CaptureCheckpoint(
         run_id=plan.run.run_id,

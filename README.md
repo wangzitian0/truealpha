@@ -61,11 +61,13 @@ uv run --package truealpha-data-engine python \
   --universe-id universe:<id> \
   --universe-version <version> \
   --universe-sha256 <sha256> \
-  --snapshot-id topt-core-snapshot:<sha256>
+  --snapshot-id topt-core-snapshot:<sha256> \
+  --invocation-id topt-core-invocation:<sha256>
 ```
 
 Use `--read status` or `--read meta_info` with the run ID for capture progress,
-and `--read core_meta_info` with the exact core identities for four-cell lineage.
+and `--read core_meta_info` with the exact core identities for issuer-level lineage
+(four cells per listing, eight for an issuer with two share classes).
 These commands are manual-only and do not register or activate a schedule.
 
 ## Deployment

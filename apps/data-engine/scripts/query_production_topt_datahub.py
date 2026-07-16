@@ -21,11 +21,13 @@ def main() -> int:
     parser.add_argument("--universe-version")
     parser.add_argument("--universe-sha256")
     parser.add_argument("--snapshot-id")
+    parser.add_argument("--invocation-id")
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--offset", type=int, default=0)
     args = parser.parse_args()
 
     with psycopg.connect(settings.database_url, autocommit=True) as connection:
+        output: object
         capture = PostgresCaptureControlRepository(connection)
         if args.read == "status":
             output = asdict(capture.status(args.run_id))
@@ -38,11 +40,12 @@ def main() -> int:
                 args.universe_version,
                 args.universe_sha256,
                 args.snapshot_id,
+                args.invocation_id,
             )
             if any(value is None for value in exact):
                 parser.error(
                     "core reads require --release-manifest-id, --universe-id, --universe-version, "
-                    "--universe-sha256, and --snapshot-id"
+                    "--universe-sha256, --snapshot-id, and --invocation-id"
                 )
             identity = ToptCoreIdentity(
                 run_id=args.run_id,
@@ -51,6 +54,7 @@ def main() -> int:
                 universe_version=args.universe_version,
                 universe_sha256=args.universe_sha256,
                 snapshot_id=args.snapshot_id,
+                invocation_id=args.invocation_id,
             )
             core = PostgresToptCoreRepository(connection)
             reader = core.results if args.read == "core_results" else core.meta_info
