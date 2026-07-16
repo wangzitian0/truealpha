@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "A0-governed-research-access",
-  "revision": 4,
+  "revision": 5,
   "issue": 230,
   "owner_gate": 31,
-  "status": "active",
+  "status": "blocked",
   "lane": "consumption",
   "last_accepted_rung": "E1",
   "target_rung": "E2",
@@ -27,8 +27,10 @@
       "#81 has accepted the actual-diff, merge-base, corpus-byte, integration-lease, command-evidence, and handoff enforcement required to activate queued batches",
       "this preparation freezes the access corpus path and SHA-256 without changing implementation paths",
       "the stable activation base remains 2fe3bc7e43c89b317caceeb4d627657cf7c50729 while implementation evidence records its exact current PR base and head",
-      "the independent reviewer remains assigned through E1 acceptance",
-      "the active A0 integration lease covers only the E0 architecture decision, additive migration, db/roles.sql, and SQL contract test; frozen Gate 0 candidate paths remain unchanged",
+      "the independent reviewer remains assigned through terminal E2 acceptance",
+      "the active A0 integration lease authorizes only the authoritative architecture/export integration and the generic versioned Gate 0 successor support required to publish manifest v5",
+      "this preparation changes no implementation, preserves manifest-v4.json byte-for-byte, and leaves the accepted claim ceiling at E1",
+      "the E2 implementation must preserve every external blocker carried by Gate 0 v4 and must not claim Gate 0 acceptance",
       "post-merge E0 review findings are classified as local contract bugs, rerun at E0, and included in the E1 tiny-corpus acceptance",
       "issue #230 contains this manifest path and exact SHA-256",
       "Delivery Governance CI passes offline validation and live GitHub parity"
@@ -36,7 +38,7 @@
   },
   "dependencies": [],
   "later_claim_dependencies": [
-    "E2 freeze requires a separately valid candidate/version that integrates the accepted access boundary into authoritative init.md and the stable contracts export without mutating the frozen Gate 0 v4 candidate in place",
+    "E2 freeze requires a separately valid Gate 0 v5 successor that binds the accepted access boundary into authoritative init.md and the stable contracts export without mutating frozen manifest-v4.json",
     "#41 must publish an accepted E2 stable typed mart-read handoff before #42, #43, or #45 implement against this access handoff",
     "#225, #226, and #227 must each publish their resolved implementation design before their conversation, document, or Web work is scheduled",
     "#66 owns deployed authentication, entitlement, privacy, and consumer validation; this batch makes no Production claim",
@@ -73,7 +75,14 @@
       "governance/evidence/A0-governed-research-access-E0.v1.json",
       "governance/evidence/A0-governed-research-access-E1.v1.json",
       "governance/evidence/A0-governed-research-access-E2.v1.json",
-      "governance/handoffs/A0-governed-research-access.v1.json"
+      "governance/handoffs/A0-governed-research-access.v1.json",
+      "governance/gate0/README.md",
+      "governance/gate0/manifest-v5.json",
+      "governance/schemas/gate0-candidate-manifest.schema.json",
+      "libs/runtime/tests/test_gate0_candidate.py",
+      "libs/runtime/tests/test_delivery_governance.py",
+      "tools/check_gate0_candidate.py",
+      "tools/check_delivery_governance.py"
     ],
     "read_only": [
       "vision.md",
@@ -88,7 +97,7 @@
       "AGENTS.md",
       "apps/**",
       "libs/factors/**",
-      "libs/runtime/**",
+      "governance/gate0/manifest-v4.json",
       "db/migrations/0002_staging_core.sql",
       "db/migrations/0003_ops.sql",
       "db/migrations/0004_runtime_contracts.sql",
@@ -109,12 +118,19 @@
       "libs/contracts/src/truealpha_contracts/__init__.py",
       "db/migrations/0022_app_identity.sql",
       "db/roles.sql",
-      "db/tests/governed_research_access_contract.sql"
+      "db/tests/governed_research_access_contract.sql",
+      "governance/gate0/README.md",
+      "governance/gate0/manifest-v5.json",
+      "governance/schemas/gate0-candidate-manifest.schema.json",
+      "libs/runtime/tests/test_gate0_candidate.py",
+      "libs/runtime/tests/test_delivery_governance.py",
+      "tools/check_gate0_candidate.py",
+      "tools/check_delivery_governance.py"
     ],
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/A0-governed-research-access.v1.json",
-      "sha256": "96f0c9727f23b8739504e677dc5f2b3a5535941e0c4e0b3aa78ec71a5ab1468b"
+      "sha256": "88eaa841fe6f8b4a188e368cd35fba1883d10fec9ee407cdbfa685f3cb171e51"
     }
   },
   "release_activation": {
@@ -128,6 +144,9 @@
       "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/tests/test_access.py",
       "uv run mypy",
       "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
+      "uv run pytest libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py -q",
+      "uv run ruff check tools/check_gate0_candidate.py tools/check_delivery_governance.py libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py",
+      "uv run python tools/check_gate0_candidate.py governance/gate0/manifest-v5.json",
       "uv run python tools/check_delivery_governance.py"
     ],
     "negative_controls": [
@@ -142,7 +161,9 @@
       "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
       "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
       "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated",
-      "the experimental access DTOs are exported from the stable truealpha_contracts package root before E2 freeze"
+      "the experimental access DTOs are exported from the stable truealpha_contracts package root before E2 freeze",
+      "the frozen governance/gate0/manifest-v4.json bytes or its historical acceptance boundary are changed",
+      "the Gate 0 v5 successor drops, weakens, or marks accepted any external blocker inherited from v4"
     ],
     "output": {
       "type": "TinyEvidence",
@@ -162,7 +183,8 @@
     "AccessContext identity grain, authentication method, action/resource vocabulary, publication-policy identity, RLS context protocol, append-only event semantics, retention policy, or corpus change creates a new batch revision and reruns affected rungs",
     "a change to App-direct-mart, LLM/MCP typed-read, factor/backtest isolation, or source-budget constraints requires an init.md amendment before implementation",
     "a release, route, identity-provider, credential, sharing, export, break-glass, or replay-execution requirement expands scope and requires a separate authorized batch",
+    "any change to frozen manifest-v4.json, a v5 predecessor artifact/hash, the generic Gate 0 version contract, init.md, or the stable package-root export invalidates E2 and requires a new successor candidate and handoff revision",
     "a revoked grant or policy preserves historical audit/evidence but blocks new authorization decisions under that grant or policy"
   ],
-  "rollback": "Revert the active batch revision and revoke any produced handoff before consumer activation. The additive app schema remains backward compatible; authorization, grant, revocation, publication-policy, and audit records are never mutated or deleted."
+  "rollback": "Before E2 implementation, revert this preparation revision and its expanded lease together. After E2, revoke the produced handoff, remove only manifest-v5.json and the generic successor support if no later candidate consumes it, and revert the init/export integration; never edit or delete manifest-v4.json. The additive app schema remains backward compatible, and authorization, grant, revocation, publication-policy, and audit records are never mutated or deleted."
 }
