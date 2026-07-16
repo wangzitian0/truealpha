@@ -26,7 +26,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "b13b232e135933462ba84ef7682b10f6d793ecad",
+    "base_sha": "0452dbd7752f664a0a35b50b367eb8b30645fef3",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "the queued registration is merged on main before a preparation revision pins the activation base, independent reviewer, and frozen Local/CI corpus",
