@@ -178,3 +178,15 @@ def test_attempt_result_rejects_invalid_source_vintage_grain(
             source_vintage_id=source_vintage_id,
             reused_source_vintage_id=reused_source_vintage_id,
         )
+
+
+def test_attempt_result_contract_validation_is_a_value_error() -> None:
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'3' * 64}", maximum_attempts=1)
+    attempt = ledger.start(started_at=AT)
+    with pytest.raises(ValueError):
+        ledger.finish(
+            attempt=attempt,
+            completed_at=AT,
+            outcome=FetchAttemptOutcome.SUCCESS,
+            source_vintage_id="source-vintage:not-canonical",
+        )

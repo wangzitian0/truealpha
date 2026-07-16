@@ -71,7 +71,7 @@ class CaptureListObligation(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    obligation_id: str = Field(default="", pattern=r"^(?:|list-obligation:[0-9a-f]{64})$")
+    obligation_id: str = Field(default="", pattern=r"^(?:|capture-list-obligation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     list_version_id: str = Field(pattern=r"^list-version:[0-9a-f]{64}$")
     obligation: ListObligation
@@ -81,7 +81,7 @@ class CaptureListObligation(BaseModel):
         _freeze(
             self,
             id_field="obligation_id",
-            prefix="list-obligation",
+            prefix="capture-list-obligation",
             identity_fields=("list_version_id", "obligation"),
         )
         return self
@@ -125,7 +125,7 @@ class CaptureCheckpoint(BaseModel):
     def canonical_obligations(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         if len(values) != len(set(values)):
             raise ValueError("completed_obligation_ids must not contain duplicates")
-        if any(re.fullmatch(r"list-obligation:[0-9a-f]{64}", value) is None for value in values):
+        if any(re.fullmatch(r"capture-list-obligation:[0-9a-f]{64}", value) is None for value in values):
             raise ValueError("completed_obligation_ids must use canonical identities")
         return tuple(sorted(values))
 

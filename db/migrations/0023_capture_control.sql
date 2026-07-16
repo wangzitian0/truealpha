@@ -9,7 +9,7 @@ begin
         return allow_empty;
     end if;
     for item_index in 1..cardinality(ids) loop
-        if ids[item_index] is null or ids[item_index] !~ '^list-obligation:[0-9a-f]{64}$' then
+        if ids[item_index] is null or ids[item_index] !~ '^capture-list-obligation:[0-9a-f]{64}$' then
             return false;
         end if;
         if item_index > 1 and ids[item_index - 1] >= ids[item_index] then
@@ -51,7 +51,7 @@ create table if not exists raw.capture_list_version_members (
 );
 
 create table if not exists raw.capture_obligations (
-    obligation_id          text primary key check (obligation_id ~ '^list-obligation:[0-9a-f]{64}$'),
+    obligation_id          text primary key check (obligation_id ~ '^capture-list-obligation:[0-9a-f]{64}$'),
     campaign_id            text not null references raw.capture_campaigns(campaign_id),
     run_id                 text not null check (run_id ~ '^capture-run:[0-9a-f]{64}$'),
     list_version_id        text not null check (list_version_id ~ '^list-version:[0-9a-f]{64}$'),

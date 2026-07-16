@@ -56,7 +56,7 @@ def test_capture_obligation_identity_preserves_list_version() -> None:
 
 def test_checkpoint_identity_is_append_only_sequence_grain() -> None:
     run_id = f"capture-run:{SHA}"
-    obligation_id = f"list-obligation:{'b' * 64}"
+    obligation_id = f"capture-list-obligation:{'b' * 64}"
     first = CaptureCheckpoint(
         run_id=run_id, sequence=1, phase=CheckpointPhase.PLANNED, completed_obligation_ids=(), recorded_at=AT
     )
@@ -81,6 +81,6 @@ def test_checkpoint_identity_is_append_only_sequence_grain() -> None:
             run_id=run_id,
             sequence=3,
             phase=CheckpointPhase.NORMALIZED,
-            completed_obligation_ids=("list-obligation:not-a-hash",),
+            completed_obligation_ids=("capture-list-obligation:not-a-hash",),
             recorded_at=AT,
         )

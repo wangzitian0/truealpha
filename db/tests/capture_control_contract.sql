@@ -35,14 +35,14 @@ insert into raw.capture_obligations (
     capture_requirement_id, partition_key, content_sha256
 ) values
 (
-    'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253', 'listing', 'listing:xnas:goog',
     'market-price:v1', '2026-03-31', repeat('b', 64)
 ),
 (
-    'list-obligation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    'capture-list-obligation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
     'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253', 'listing', 'listing:xnas:googl',
@@ -56,7 +56,7 @@ begin
             obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
             capture_requirement_id, partition_key, content_sha256
         ) values (
-            'list-obligation:7777777777777777777777777777777777777777777777777777777777777777',
+            'capture-list-obligation:7777777777777777777777777777777777777777777777777777777777777777',
             'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'list-version:not-canonical', 'listing', 'listing:xnas:invalid',
@@ -75,7 +75,7 @@ begin
             obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
             capture_requirement_id, partition_key, content_sha256
         ) values (
-            'list-obligation:6666666666666666666666666666666666666666666666666666666666666666',
+            'capture-list-obligation:6666666666666666666666666666666666666666666666666666666666666666',
             'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'list-version:6666666666666666666666666666666666666666666666666666666666666666',
@@ -166,7 +166,7 @@ begin
         ) values (
             'capture-checkpoint:7777777777777777777777777777777777777777777777777777777777777777',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            1, 'raw_landed', array['list-obligation:not-canonical'],
+            1, 'raw_landed', array['capture-list-obligation:not-canonical'],
             '2026-04-01T00:02:00Z', repeat('7', 64)
         );
         raise exception 'malformed checkpoint obligation unexpectedly succeeded';
@@ -184,8 +184,8 @@ begin
             'capture-checkpoint:8888888888888888888888888888888888888888888888888888888888888888',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             1, 'raw_landed', array[
-                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+                'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
             ], '2026-04-01T00:02:00Z', repeat('8', 64)
         );
         raise exception 'duplicate checkpoint obligations unexpectedly succeeded';
@@ -203,8 +203,8 @@ begin
         ) values (
             'recapture-plan:8888888888888888888888888888888888888888888888888888888888888888',
             '2026-04-01T00:00:00Z', repeat('8', 64), array[
-                'list-obligation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+                'capture-list-obligation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
             ], 'capture-planner:v1', repeat('8', 64)
         );
         raise exception 'unsorted recapture obligations unexpectedly succeeded';
@@ -239,7 +239,7 @@ begin
         ) values (
             'recapture-plan:6666666666666666666666666666666666666666666666666666666666666666',
             '2026-04-01T00:00:00Z', repeat('6', 64), array[
-                'list-obligation:6666666666666666666666666666666666666666666666666666666666666666'
+                'capture-list-obligation:6666666666666666666666666666666666666666666666666666666666666666'
             ], 'capture-planner:v1', repeat('6', 64)
         );
         raise exception 'unknown recapture obligation unexpectedly succeeded';
@@ -258,7 +258,7 @@ begin
             'capture-checkpoint:6666666666666666666666666666666666666666666666666666666666666666',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             1, 'raw_landed', array[
-                'list-obligation:6666666666666666666666666666666666666666666666666666666666666666'
+                'capture-list-obligation:6666666666666666666666666666666666666666666666666666666666666666'
             ], '2026-04-01T00:02:00Z', repeat('6', 64)
         );
         raise exception 'unknown checkpoint obligation unexpectedly succeeded';
@@ -274,7 +274,7 @@ insert into raw.capture_checkpoints (
     'capture-checkpoint:1111111111111111111111111111111111111111111111111111111111111111',
     'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     1, 'raw_landed', array[
-        'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+        'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
     ], '2026-04-01T00:02:00Z', repeat('1', 64)
 );
 
@@ -287,7 +287,7 @@ begin
             'capture-checkpoint:2222222222222222222222222222222222222222222222222222222222222222',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             3, 'normalized', array[
-                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+                'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
             ], '2026-04-01T00:02:01Z', repeat('2', 64)
         );
         raise exception 'checkpoint sequence gap unexpectedly succeeded';
@@ -306,7 +306,7 @@ begin
             'capture-checkpoint:3333333333333333333333333333333333333333333333333333333333333333',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             2, 'planned', array[
-                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+                'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
             ], '2026-04-01T00:02:01Z', repeat('3', 64)
         );
         raise exception 'checkpoint phase regression unexpectedly succeeded';
@@ -340,7 +340,7 @@ begin
             obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
             capture_requirement_id, partition_key, content_sha256
         ) values (
-            'list-obligation:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            'capture-list-obligation:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
             'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253', 'listing', 'listing:xnas:goog',
@@ -403,7 +403,7 @@ do $$
 begin
     begin
         delete from raw.capture_obligations
-         where obligation_id = 'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+         where obligation_id = 'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
         raise exception 'append-only delete unexpectedly succeeded';
     exception when raise_exception then
         if sqlerrm = 'append-only delete unexpectedly succeeded' then raise; end if;
