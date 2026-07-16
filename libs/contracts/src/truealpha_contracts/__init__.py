@@ -1,5 +1,20 @@
 """Stable contracts shared by ingestion, factors, runtime, and backtests."""
 
+from truealpha_contracts.access import (
+    AccessAction,
+    AccessAuditEventKind,
+    AccessContext,
+    AccessDecisionKind,
+    AccessDenialReason,
+    AccessResource,
+    AccessResourceType,
+    AuthenticationMethod,
+    AuthorizationDecision,
+    AuthorizationService,
+    PrincipalKind,
+    PublicationPolicy,
+    authorize_access,
+)
 from truealpha_contracts.capture_contracts import (
     ApplicabilityBinding,
     ApplicabilityMapping,
@@ -380,6 +395,13 @@ from truealpha_contracts.usage import (
 )
 
 __all__ = [
+    "AccessAction",
+    "AccessAuditEventKind",
+    "AccessContext",
+    "AccessDecisionKind",
+    "AccessDenialReason",
+    "AccessResource",
+    "AccessResourceType",
     "AnalystRatingEvent",
     "ApplicabilityCatalog",
     "ApplicabilityCell",
@@ -387,6 +409,9 @@ __all__ = [
     "ApplicabilityMapping",
     "ApplicabilityPolicy",
     "ArtifactRole",
+    "AuthenticationMethod",
+    "AuthorizationDecision",
+    "AuthorizationService",
     "AsOfQuery",
     "AvailabilityStatus",
     "BacktestDataGateway",
@@ -505,11 +530,13 @@ __all__ = [
     "PolicyRole",
     "PriceBar",
     "PriceBasis",
+    "PrincipalKind",
     "ProductionGraduationEvidence",
     "ProductionGraduationPlan",
     "ProductionGraduationReport",
     "ProductionRecheckSchedule",
     "ProductOwnerApproval",
+    "PublicationPolicy",
     "ProvenanceNeutralInput",
     "QualityCheckResult",
     "QualityState",
@@ -700,6 +727,7 @@ __all__ = [
     "ValuationTier",
     "ZeroGrowthBehavior",
     "applicability_mapping_from_catalog",
+    "authorize_access",
     "authorize_evaluation",
     "build_usage_frequency_slice",
     "build_runner_input_selection",

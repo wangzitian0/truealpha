@@ -29,6 +29,7 @@ validate_gate0_candidate = gate0_validator.validate_gate0_candidate
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH_PATH = ROOT / "governance" / "vision-issue-graph.json"
 GATE0_MANIFEST_PATH = "governance/gate0/manifest-v4.json"
+GATE0_MANIFEST_RE = re.compile(r"^governance/gate0/manifest-v(?P<version>[0-9]+)\.json$")
 GATE0_AUTHORIZATION_CONTROL_PATHS = (
     ".github/**",
     "AGENTS.md",
@@ -72,9 +73,7 @@ ISSUE_ACTIONS = frozenset(("managed-by-batch", "complete-on-merge", "keep-open")
 MANIFEST_PREFIX = "governance/batches/"
 CAPABILITY_PREFIX = "governance/capabilities/"
 CAPABILITY_SOURCE = f"{CAPABILITY_PREFIX}issue-*.v1.json"
-CAPABILITY_REQUIRED_FIELDS = frozenset(
-    {"schema_version", "issue", "gate", "terminal_evidence", "artifact_edges"}
-)
+CAPABILITY_REQUIRED_FIELDS = frozenset({"schema_version", "issue", "gate", "terminal_evidence", "artifact_edges"})
 CAPABILITY_ALLOWED_FIELDS = CAPABILITY_REQUIRED_FIELDS | {"accepted_evidence"}
 CAPABILITY_EDGE_FIELDS = frozenset({"from", "to", "class", "artifact"})
 BATCH_MIRROR_START = "<!-- capability-batch-mirror:start -->"
@@ -667,7 +666,9 @@ def validate_pull_request_metadata(
             github_work_issue.get("number") == work_issue_number,
             "pull-request Work-Issue disagrees with the exported issue",
         )
-        validation.require(github_work_issue.get("state") == "open", f"pull-request Work-Issue #{work_issue_number} is not open")
+        validation.require(
+            github_work_issue.get("state") == "open", f"pull-request Work-Issue #{work_issue_number} is not open"
+        )
 
     if advance is not None and advance.kind == "capability_batch":
         owned_issue = advance.manifest.get("issue")
@@ -1432,7 +1433,11 @@ def validate_integration_lease(
     )
     validation.require(lease.get("lease_id") == expected_id, f"{batch_id}: integration lease ID mismatch")
     validation.require(lease.get("batch_id") == batch_id, f"{batch_id}: integration lease names another batch")
-    validation.require(lease.get("state") == "active", f"{batch_id}: integration lease is not active")
+    terminal_release = manifest.get("status") == "done" and lease.get("state") == "revoked"
+    validation.require(
+        lease.get("state") == "active" or terminal_release,
+        f"{batch_id}: integration lease is neither active nor terminally released",
+    )
     validation.require(lease.get("owner") == paths.get("lease_owner"), f"{batch_id}: integration lease owner mismatch")
     validation.require(lease.get("base_sha") == base_sha, f"{batch_id}: integration lease base SHA is stale")
     lease_paths = lease.get("paths", [])
@@ -1617,12 +1622,15 @@ def validate_new_batch_registration(
 def validate_gate0_pr_advance(
     validation: Validation,
     *,
+    gate0_manifest_path: str,
     base_sha: str,
     changed_paths: tuple[str, ...],
     target_drift_paths: tuple[str, ...],
 ) -> PullRequestAdvance | None:
-    label = "Gate 0 v4 aggregate candidate"
-    manifest_path = repo_path(GATE0_MANIFEST_PATH)
+    match = GATE0_MANIFEST_RE.fullmatch(gate0_manifest_path)
+    version = int(match.group("version")) if match is not None else None
+    label = f"Gate 0 v{version} aggregate candidate"
+    manifest_path = repo_path(gate0_manifest_path)
     validation.require(
         manifest_path is not None and manifest_path.is_file() and not manifest_path.is_symlink(),
         f"{label}: manifest is missing from the PR head",
@@ -1633,8 +1641,7 @@ def validate_gate0_pr_advance(
     validation.require(isinstance(manifest, dict), f"{label}: manifest must be an object")
     if not isinstance(manifest, dict):
         return None
-    base_manifest = git_json(base_sha, GATE0_MANIFEST_PATH)
-    validation.require(isinstance(base_manifest, dict), f"{label}: base manifest is unavailable")
+    base_manifest = git_json(base_sha, gate0_manifest_path)
     if isinstance(base_manifest, dict):
         validation.require(
             manifest.get("integration_base_sha") == base_manifest.get("integration_base_sha"),
@@ -1660,7 +1667,7 @@ def validate_gate0_pr_advance(
             not drift_dependencies,
             f"{label}: target-branch drift intersects candidate paths: {drift_dependencies}",
         )
-    non_manifest_paths = tuple(path for path in changed_paths if path != GATE0_MANIFEST_PATH)
+    non_manifest_paths = tuple(path for path in changed_paths if path != gate0_manifest_path)
     validation.require(bool(non_manifest_paths), f"{label}: aggregate PR changes only its manifest")
     claims_acceptance = manifest.get("status") == "accepted"
     if isinstance(paths, list):
@@ -1679,7 +1686,7 @@ def validate_gate0_pr_advance(
             f"{label}: accepted candidate modifies authorization controls: {changed_controls}",
         )
     gate_result = validate_gate0_candidate(
-        Path(GATE0_MANIFEST_PATH),
+        Path(gate0_manifest_path),
         root=ROOT,
         check_live_comments=claims_acceptance,
         require_accepted=claims_acceptance,
@@ -1689,8 +1696,8 @@ def validate_gate0_pr_advance(
     if validation.errors:
         return None
     return PullRequestAdvance(
-        batch_id="gate-0-v4",
-        manifest_path=GATE0_MANIFEST_PATH,
+        batch_id=f"gate-0-v{version}",
+        manifest_path=gate0_manifest_path,
         base_manifest={},
         manifest=manifest,
         accepted_rung=None,
@@ -1737,16 +1744,24 @@ def validate_pr_advance(
     changed_manifests = tuple(
         path for path in changed_paths if path.startswith(MANIFEST_PREFIX) and path.endswith(".json")
     )
-    gate0_manifest_changed = GATE0_MANIFEST_PATH in changed_paths
+    changed_gate0_manifests = tuple(path for path in changed_paths if GATE0_MANIFEST_RE.fullmatch(path) is not None)
+    gate0_manifest_changed = GATE0_MANIFEST_PATH in changed_gate0_manifests
     validation.require(
         not (gate0_manifest_changed and changed_manifests),
-        "PR cannot mix the Gate 0 aggregate manifest with capability-batch manifests",
+        "PR cannot modify frozen Gate 0 v4 while advancing a capability-batch manifest",
     )
     if gate0_manifest_changed and changed_manifests:
         return None
-    if gate0_manifest_changed:
+    if changed_gate0_manifests and not changed_manifests:
+        validation.require(
+            len(changed_gate0_manifests) == 1,
+            "standalone Gate 0 PR must advance exactly one versioned manifest",
+        )
+        if len(changed_gate0_manifests) != 1:
+            return None
         return validate_gate0_pr_advance(
             validation,
+            gate0_manifest_path=changed_gate0_manifests[0],
             base_sha=merge_base,
             changed_paths=changed_paths,
             target_drift_paths=target_drift_paths,
@@ -1865,6 +1880,13 @@ def validate_pr_advance(
         changed_paths=changed_paths,
         base_sha=merge_base,
     )
+    for successor_path in changed_gate0_manifests:
+        match = GATE0_MANIFEST_RE.fullmatch(successor_path)
+        if match is None or int(match.group("version")) < 5:
+            continue
+        gate_result = validate_gate0_candidate(Path(successor_path), root=ROOT)
+        for error in gate_result.errors:
+            validation.require(False, f"Gate 0 batch successor: {error}")
     return PullRequestAdvance(
         batch_id=batch_id,
         manifest_path=manifest_path,

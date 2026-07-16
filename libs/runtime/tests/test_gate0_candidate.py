@@ -108,12 +108,95 @@ def _validate(root: Path, **kwargs):
     return gate0.validate_gate0_candidate(MANIFEST_PATH, root=root, **kwargs)
 
 
+def _create_v5_successor(root: Path) -> Path:
+    for relative in set(gate0.SUCCESSOR_MANIFEST_PATHS) - set(gate0.V4_MANIFEST_PATHS):
+        source = REPO_ROOT / relative
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    predecessor_path = root / MANIFEST_PATH
+    manifest = _load(predecessor_path)
+    manifest.update(
+        {
+            "manifest_id": "gate-0-batch-v5",
+            "manifest_version": 5,
+            "integration_branch": "batch/gate-0-v5-governed-access-successor",
+            "paths": list(gate0.SUCCESSOR_MANIFEST_PATHS),
+            "predecessor_manifest": {
+                "manifest_id": "gate-0-batch-v4",
+                "manifest_version": 4,
+                "path": MANIFEST_PATH.as_posix(),
+                "sha256": _sha256(predecessor_path),
+            },
+            "integration_bindings": [
+                {"role": role, "path": path, "sha256": _sha256(root / path)}
+                for role, path in gate0.SUCCESSOR_BINDINGS.items()
+            ],
+        }
+    )
+    manifest["candidate_payload_sha256"] = gate0.candidate_payload_sha256(manifest)
+    successor_path = root / "governance/gate0/manifest-v5.json"
+    _write(successor_path, manifest)
+    manifest["candidate_tree_sha256"] = gate0.candidate_tree_sha256(
+        root,
+        manifest["paths"],
+        manifest_path=Path("governance/gate0/manifest-v5.json"),
+    )
+    _write(successor_path, manifest)
+    return successor_path
+
+
 def test_checked_in_candidate_is_valid_but_blocked(candidate_root):
     result = _validate(candidate_root)
 
     assert result.valid
     assert not result.accepted
     assert len(result.blockers) == 4
+
+
+def test_v5_successor_is_valid_and_preserves_v4(candidate_root):
+    v4_tree = gate0.candidate_tree_sha256(candidate_root, gate0.V4_MANIFEST_PATHS)
+    successor = _create_v5_successor(candidate_root)
+
+    v4_result = _validate(candidate_root)
+    v5_result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert v4_result.valid
+    assert v5_result.valid
+    assert not v5_result.accepted
+    assert gate0.candidate_tree_sha256(candidate_root, gate0.V4_MANIFEST_PATHS) == v4_tree
+
+
+def test_v5_successor_rejects_predecessor_byte_drift(candidate_root):
+    successor = _create_v5_successor(candidate_root)
+    predecessor = candidate_root / MANIFEST_PATH
+    predecessor.write_bytes(predecessor.read_bytes() + b"\n")
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert "Gate 0 predecessor: file SHA-256 mismatch" in result.errors
+
+
+def test_v5_successor_rejects_bound_integration_drift(candidate_root):
+    successor = _create_v5_successor(candidate_root)
+    architecture = candidate_root / "init.md"
+    architecture.write_bytes(architecture.read_bytes() + b"\n")
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert "Gate 0 integration binding[0]: file SHA-256 mismatch" in result.errors
+
+
+def test_v5_successor_cannot_drop_inherited_blockers(candidate_root):
+    successor = _create_v5_successor(candidate_root)
+    manifest = _load(successor)
+    manifest["blocking_reasons"] = manifest["blocking_reasons"][:-1]
+    manifest["candidate_payload_sha256"] = gate0.candidate_payload_sha256(manifest)
+    _write(successor, manifest)
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert "Gate 0 successor: predecessor field changed: blocking_reasons" in result.errors
 
 
 def test_require_accepted_rejects_valid_blocked_candidate(candidate_root):
@@ -216,11 +299,11 @@ def test_candidate_payload_hash_cannot_be_manually_flipped(candidate_root):
 
 
 def test_candidate_tree_binds_non_artifact_authorized_files(candidate_root):
-    _refresh_chain(candidate_root)
+    successor = _create_v5_successor(candidate_root)
     architecture = candidate_root / "docs/architecture-contract-closure.md"
     architecture.write_bytes(architecture.read_bytes() + b"\n")
 
-    result = _validate(candidate_root)
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
 
     assert "Gate 0 manifest: candidate tree SHA-256 mismatch" in result.errors
 

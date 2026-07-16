@@ -1010,7 +1010,46 @@ def test_gate0_aggregate_cannot_mix_capability_batch_manifest(tmp_path, monkeypa
     )
 
     assert advance is None
-    assert "PR cannot mix the Gate 0 aggregate manifest with capability-batch manifests" in validation.errors
+    assert "PR cannot modify frozen Gate 0 v4 while advancing a capability-batch manifest" in validation.errors
+
+
+def test_versioned_gate0_successor_may_be_produced_by_authorized_batch(tmp_path, monkeypatch):
+    changed_paths = (
+        "governance/batches/D0.json",
+        "governance/gate0/manifest-v5.json",
+    )
+    graph, base_sha, head_sha = _pr_context(
+        tmp_path,
+        monkeypatch,
+        before="prepared",
+        after="active",
+        changed_paths=changed_paths,
+    )
+    batch_manifest_path = tmp_path / "governance/batches/D0.json"
+    batch_manifest = json.loads(batch_manifest_path.read_text(encoding="utf-8"))
+    batch_manifest["paths"]["writable"].append("governance/gate0/manifest-v5.json")
+    _write_json(batch_manifest_path, batch_manifest)
+    _write_json(tmp_path / "governance/gate0/manifest-v5.json", {"manifest_version": 5})
+    calls: list[str] = []
+
+    def validate_candidate(path, *, root):
+        calls.append(path.as_posix())
+        assert root == tmp_path
+        return type("GateResult", (), {"errors": ()})()
+
+    monkeypatch.setattr(governance, "validate_gate0_candidate", validate_candidate)
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph=graph,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert validation.errors == []
+    assert advance is not None and advance.batch_id == "D0"
+    assert calls == ["governance/gate0/manifest-v5.json"]
 
 
 def test_accepted_gate0_candidate_rejects_future_authorization_control_changes(tmp_path, monkeypatch):
@@ -1261,7 +1300,7 @@ def test_global_shared_surface_requires_declared_lease():
     assert "D0: integration lease: file reference must be an object" in validation.errors
 
 
-def _validate_lease(tmp_path, monkeypatch, mutation=None):
+def _validate_lease(tmp_path, monkeypatch, mutation=None, *, manifest_status=None):
     base_sha = "a" * 40
     content = {
         "schema_version": 1,
@@ -1286,10 +1325,11 @@ def _validate_lease(tmp_path, monkeypatch, mutation=None):
         validation,
         batch_id="D0",
         manifest={
+            "status": manifest_status,
             "paths": {
                 "lease_owner": "integrator",
                 "lease_manifest": _reference(tmp_path, lease_path),
-            }
+            },
         },
         changed_integration_paths=("shared/export.py",),
         base_sha=base_sha,
@@ -1299,6 +1339,17 @@ def _validate_lease(tmp_path, monkeypatch, mutation=None):
 
 def test_live_integration_lease_authorizes_shared_path(tmp_path, monkeypatch):
     validation = _validate_lease(tmp_path, monkeypatch)
+
+    assert validation.errors == []
+
+
+def test_done_batch_may_release_lease_in_terminal_pr(tmp_path, monkeypatch):
+    validation = _validate_lease(
+        tmp_path,
+        monkeypatch,
+        lambda lease: lease.update(state="revoked"),
+        manifest_status="done",
+    )
 
     assert validation.errors == []
 
