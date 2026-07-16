@@ -74,9 +74,8 @@ manually changed readiness flag cannot satisfy any of these release outcomes.
 ## Current Decision
 
 The targeted 2026-07 evidence set is sufficient for toolchain and local boundary
-implementation. The sample audit intentionally keeps `local_backtest` blocked until a
-composite-factor replay fixture exists; that is implementation work, not another blind
-raw-sampling round. `strategy_evaluation` corpus readiness remains blocked by five-year
+implementation. The composite-factor replay fixture has since landed and every `local_backtest` row
+passes the executable audit (`make sample-audit`). `strategy_evaluation` corpus readiness remains blocked by five-year
 coverage for every declared evaluation subject and primary/fallback price
 reconciliation. Even after those checks pass, the Gate 0, module holdout, operational,
 consumer, and graduation gates above remain blocking. Run the executable corpus audit

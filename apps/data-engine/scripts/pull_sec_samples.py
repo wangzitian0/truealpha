@@ -13,7 +13,7 @@ from pathlib import Path
 
 from data_engine.sources.sec import save_sample
 
-DEFAULT_TICKERS = ["DDOG", "NICE", "SHOP", "DUOL"]  # init.md Section 11
+DEFAULT_TICKERS = ["DDOG", "NICE", "SHOP", "DUOL"]  # reconnaissance test universe
 OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "samples"
 
 # Tags worth eyeballing first; absence is a finding, not an error.
