@@ -185,6 +185,7 @@ def test_workflows_compile_and_enforce_reconciliation_contract() -> None:
     assert "cancel-in-progress: false" in batch_workflow
     assert "If-Match: {etag}" in batch_workflow
     assert "error.status != 412" in batch_workflow
+    assert "attempts=1" not in batch_workflow
     assert '"done": ("closed", "completed")' in batch_workflow
     assert '"cancelled": ("closed", "not_planned")' in batch_workflow
     assert 'graph["gates"][str(batch["owner_gate"])]["milestone"]' in batch_workflow

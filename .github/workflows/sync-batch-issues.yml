@@ -212,7 +212,6 @@ jobs:
                               "-",
                           ],
                           input_text=json.dumps(payload),
-                          attempts=1,
                       )
                       return
                   except ApiFailure as error:
