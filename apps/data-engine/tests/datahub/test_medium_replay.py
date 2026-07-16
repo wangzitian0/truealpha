@@ -27,6 +27,7 @@ def test_topt_medium_replay_is_deterministic_and_complete() -> None:
     assert first == replay
     assert (first.issuer_count, first.instrument_count, first.obligation_count_per_run) == (20, 21, 84)
     assert (first.run_count, first.cutoff_count, first.source_vintage_count) == (3, 3, 168)
+    assert first.raw_object_count == 168
     assert first.total_obligation_count == first.total_binding_count == first.total_terminal_obligation_count == 252
     assert first.total_work_item_count == first.total_attempt_count == 252
     assert dict(first.semantic_obligation_counts) == {
@@ -51,6 +52,9 @@ def test_every_medium_run_uses_the_exact_topt_denominator() -> None:
     assert all(summary.binding_count == 84 for summary in report.run_summaries)
     assert all(summary.attempt_count == 84 for summary in report.run_summaries)
     assert all(summary.terminal_obligation_count == 84 for summary in report.run_summaries)
+    assert all(summary.raw_object_count == 84 for summary in report.run_summaries)
+    assert all(summary.source_vintage_count == 84 for summary in report.run_summaries)
+    assert len({summary.bundle_sha256 for summary in report.run_summaries}) == 3
 
 
 @pytest.mark.parametrize(
@@ -66,6 +70,14 @@ def test_every_medium_run_uses_the_exact_topt_denominator() -> None:
         (
             lambda corpus: corpus["topt_denominator"]["obligation_expansion"]["semantic_types"].append("market-price"),
             "semantic denominator drift",
+        ),
+        (
+            lambda corpus: corpus["topt_denominator"]["instruments"][3].__setitem__(0, "issuer:lei:REPLACED-IDENTITY"),
+            "instrument mapping drift",
+        ),
+        (
+            lambda corpus: corpus["topt_denominator"]["instruments"][3].__setitem__(1, "security:cusip:REPLACED"),
+            "instrument mapping drift",
         ),
     ),
 )

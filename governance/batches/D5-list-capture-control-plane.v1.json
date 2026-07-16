@@ -196,11 +196,12 @@
       "type": "ListCaptureControlPlaneEvidence",
       "stable_handoff": false,
       "state": "accepted_development_candidate_e3",
-      "medium_report_sha256": "d8a6a4b5f2774836a50f038f56064efb2d282b3aabc04f66729623b86f560bc5",
+      "medium_report_sha256": "8c27357139c9b7fb6c6c6575b56b4eed3673bbb089b9659bb981de3f45c1fb9a",
       "issuer_count": 20,
       "instrument_count": 21,
       "obligation_count_per_run": 84,
       "cutoff_count": 3,
+      "raw_object_count": 168,
       "source_vintage_count": 168,
       "source_calls": 0,
       "preserved_e2_handoff": {
