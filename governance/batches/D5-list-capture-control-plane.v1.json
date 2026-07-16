@@ -160,7 +160,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/D5-list-capture-control-plane.v1.json",
-      "sha256": "2498c707d2b381d7efdc6eab6ff3d21aa7170a5007fe3edbe833939a6970a814"
+      "sha256": "db5e6bf5bf1ef0e77dcdb67df9bb582870fb88cec76dd3debad20966fae4d69e"
     }
   },
   "release_activation": {
