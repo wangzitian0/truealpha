@@ -2,6 +2,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import tracemalloc
 from copy import deepcopy
 from pathlib import Path
 
@@ -60,6 +61,16 @@ def test_hardening_resource_observation_stays_inside_every_frozen_ceiling() -> N
         assert observation[field] <= ceiling
     assert observation["throughput_milli_obligations_per_second"] > 0
     assert observation["overfetch_count"] == 0
+
+
+def test_hardening_replay_preserves_an_existing_tracemalloc_session() -> None:
+    tracemalloc.start()
+    try:
+        report = run_topt_hardening_replay(load_corpus())
+        assert tracemalloc.is_tracing()
+        assert report.resource_observation.peak_traced_bytes <= report.resource_ceilings.peak_traced_bytes
+    finally:
+        tracemalloc.stop()
 
 
 def test_hardening_replay_fails_closed_on_partial_persisted_state() -> None:

@@ -208,22 +208,31 @@ def _serialized_bytes(value: object) -> int:
 
 
 def _scope_metrics(medium: ToptMediumReplayReport) -> tuple[HardeningScopeMetric, ...]:
-    campaign_metrics = tuple(
-        HardeningScopeMetric(
-            scope_kind="campaign",
-            scope_id=summary.campaign_id,
-            obligation_count=summary.obligation_count,
-            terminal_obligation_count=summary.terminal_obligation_count,
-            denominator_completeness_ppm=summary.terminal_obligation_count * 1_000_000 // summary.obligation_count,
-            freshness_age_seconds=86_400 if summary.outcome == FetchAttemptOutcome.UNCHANGED.value else 0,
-            attempt_count=summary.attempt_count,
-            retry_amplification_ppm=summary.attempt_count * 1_000_000 // summary.work_item_count,
-            overfetch_count=summary.attempt_count - summary.obligation_count,
-            provider_calls=0,
-            source_cost_microunits=0,
+    campaign_metrics: list[HardeningScopeMetric] = []
+    last_content_cutoff: datetime | None = None
+    for summary in medium.run_summaries:
+        if summary.outcome == FetchAttemptOutcome.SUCCESS.value:
+            last_content_cutoff = summary.cutoff
+        freshness_age_seconds = (
+            int((summary.cutoff - last_content_cutoff).total_seconds()) if last_content_cutoff is not None else 0
         )
-        for summary in medium.run_summaries
-    )
+        campaign_metrics.append(
+            HardeningScopeMetric(
+                scope_kind="campaign",
+                scope_id=summary.campaign_id,
+                obligation_count=summary.obligation_count,
+                terminal_obligation_count=summary.terminal_obligation_count,
+                denominator_completeness_ppm=(
+                    summary.terminal_obligation_count * 1_000_000 // summary.obligation_count
+                ),
+                freshness_age_seconds=freshness_age_seconds,
+                attempt_count=summary.attempt_count,
+                retry_amplification_ppm=summary.attempt_count * 1_000_000 // summary.work_item_count,
+                overfetch_count=summary.attempt_count - summary.obligation_count,
+                provider_calls=0,
+                source_cost_microunits=0,
+            )
+        )
     list_metric = HardeningScopeMetric(
         scope_kind="list",
         scope_id=medium.list_version_id,
@@ -294,6 +303,7 @@ def run_topt_hardening_replay(corpus: Mapping[str, Any]) -> ToptHardeningReplayR
     started_tracing = not tracemalloc.is_tracing()
     if started_tracing:
         tracemalloc.start()
+    trace_current_started, _ = tracemalloc.get_traced_memory()
     wall_started = time.perf_counter_ns()
     cpu_started = time.process_time_ns()
     try:
@@ -304,7 +314,8 @@ def run_topt_hardening_replay(corpus: Mapping[str, Any]) -> ToptHardeningReplayR
         resume_results = replay_resume_scenarios(corpus)
         cpu_ns = time.process_time_ns() - cpu_started
         elapsed_ns = time.perf_counter_ns() - wall_started
-        _, peak_traced_bytes = tracemalloc.get_traced_memory()
+        trace_current_completed, traced_peak = tracemalloc.get_traced_memory()
+        peak_traced_bytes = traced_peak if started_tracing else max(0, trace_current_completed - trace_current_started)
     finally:
         if started_tracing:
             tracemalloc.stop()
