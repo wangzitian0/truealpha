@@ -260,3 +260,10 @@ def test_snapshot_rejects_future_dated_or_unselected_inputs() -> None:
     )
     with pytest.raises(ValidationError, match="not selected"):
         _snapshot(market_value_components=(_component().model_copy(update={"market_price": unselected_price}),))
+
+
+def test_snapshot_rejects_malformed_observation_identity() -> None:
+    malformed = (*OBSERVATION_IDS[:-1], "normalized-observation:not-a-sha256")
+
+    with pytest.raises(ValidationError, match="normalized observation identities"):
+        _snapshot(observation_ids=malformed)

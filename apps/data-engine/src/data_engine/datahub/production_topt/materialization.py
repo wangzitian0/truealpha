@@ -334,6 +334,23 @@ class PostgresToptCoreRepository:
         self._connection = connection
 
     def freeze_snapshot(self, *, run_id: str, release_manifest_id: str) -> ToptCoreSnapshot:
+        existing = self._connection.execute(
+            """
+            select snapshot_id, content_sha256, release_manifest_id, payload
+            from staging.topt_core_snapshots where run_id = %s
+            """,
+            (run_id,),
+        ).fetchone()
+        if existing is not None:
+            if existing[2] != release_manifest_id:
+                raise ValueError("frozen TOPT snapshot is bound to a different release manifest")
+            return ToptCoreSnapshot.model_validate(
+                {
+                    **existing[3],
+                    "snapshot_id": existing[0],
+                    "content_sha256": existing[1],
+                }
+            )
         status = self._connection.execute(
             """
             select environment, cutoff, universe_id, universe_version, universe_sha256,

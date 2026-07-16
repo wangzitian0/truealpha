@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
@@ -14,6 +15,7 @@ from truealpha_contracts.research import ValuationTier
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _CONTENT_ID_PATTERN = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
+_OBSERVATION_ID_PATTERN = re.compile(r"^normalized-observation:[0-9a-f]{64}$")
 
 
 class _FrozenModel(BaseModel):
@@ -306,7 +308,7 @@ class ToptCoreSnapshotInput(_FrozenModel):
             or tuple(sorted(values)) != values
         ):
             raise ValueError("issuer snapshot observation IDs must contain sorted unique four-cell listing groups")
-        if any(not value.startswith("normalized-observation:") for value in values):
+        if any(_OBSERVATION_ID_PATTERN.fullmatch(value) is None for value in values):
             raise ValueError("snapshot members must use normalized observation identities")
         return values
 

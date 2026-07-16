@@ -483,11 +483,14 @@ class PostgresCaptureControlRepository:
         capture_obligation_id: str,
         observation: NormalizedObservation,
         *,
+        normalized_payload: dict[str, Any],
         confidence: Decimal,
         freshness_state: str = "unknown",
     ) -> bool:
         if not Decimal("0") <= confidence <= Decimal("1"):
             raise ValueError("observation confidence must be between zero and one")
+        if canonical_sha256(normalized_payload) != observation.normalized_payload_sha256:
+            raise ValueError("normalized payload does not match the observation hash")
         payload = self._payload(observation)
         inserted = self._connection.execute(
             """
@@ -540,9 +543,10 @@ class PostgresCaptureControlRepository:
             """,
             (capture_obligation_id, observation.observation_id),
         )
+        self._put_observation_payload(observation, normalized_payload)
         return created
 
-    def put_observation_payload(
+    def _put_observation_payload(
         self,
         observation: NormalizedObservation,
         normalized_payload: dict[str, Any],

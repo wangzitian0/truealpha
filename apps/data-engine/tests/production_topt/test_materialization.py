@@ -235,10 +235,10 @@ def _seed_complete_production_run(connection):
         repository.put_observation(
             obligation.obligation_id,
             observation,
+            normalized_payload=normalized_payload,
             confidence=Decimal("0.9"),
             freshness_state="fresh",
         )
-        repository.put_observation_payload(observation, normalized_payload)
         repository.put_obligation_result(obligation.obligation_id, terminal)
 
         if ordinal == 0:
@@ -256,10 +256,10 @@ def _seed_complete_production_run(connection):
             repository.put_observation(
                 obligation.obligation_id,
                 future_valid,
+                normalized_payload=normalized_payload,
                 confidence=Decimal("1"),
                 freshness_state="fresh",
             )
-            repository.put_observation_payload(future_valid, normalized_payload)
 
     connection.execute(
         """
@@ -279,7 +279,40 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
 
     repository = PostgresToptCoreRepository(connection)
     snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+
+    base_payload, obligation_id, normalized_payload = connection.execute(
+        """
+        select observation.payload, observation.capture_obligation_id, payload.normalized_payload
+        from staging.capture_normalized_observations observation
+        join staging.capture_observation_payloads payload using (observation_id)
+        join raw.capture_obligations obligation
+          on obligation.obligation_id = observation.capture_obligation_id
+        where obligation.run_id = %s
+          and (observation.valid_from at time zone 'UTC')::date = date '2026-03-31'
+        order by observation.knowable_at limit 1
+        """,
+        (run.run_id,),
+    ).fetchone()
+    later_payload = {
+        **base_payload,
+        "observation_id": "",
+        "content_sha256": "",
+        "knowable_at": CUTOFF - timedelta(minutes=10),
+    }
+    later_observation = NormalizedObservation.model_validate(later_payload)
+    capture_repository.put_observation(
+        obligation_id,
+        later_observation,
+        normalized_payload=normalized_payload,
+        confidence=Decimal("1"),
+        freshness_state="fresh",
+    )
     assert repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id) == snapshot
+    with pytest.raises(ValueError, match="different release manifest"):
+        repository.freeze_snapshot(
+            run_id=run.run_id,
+            release_manifest_id=f"release-manifest:{'0' * 64}",
+        )
     results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     repeated = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.050"))
 
@@ -321,7 +354,7 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert len(different) == 20
     assert different[0].invocation_id != identity.invocation_id
     assert repository.results(identity) == reads
-    assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (85,)
+    assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (86,)
     assert connection.execute("select count(*) from staging.topt_core_snapshot_members").fetchone() == (20,)
 
     with pytest.raises(psycopg.errors.CheckViolation, match="does not match its invocation"), connection.transaction():
