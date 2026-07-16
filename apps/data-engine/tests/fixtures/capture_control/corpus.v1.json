@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "corpus_id": "d5-capture-control-plane-tiny-v1",
+  "batch_id": "D5-list-capture-control-plane",
+  "fixture_kind": "frozen-declarative-control-plane-corpus",
+  "source_ceiling": "Local/CI checked-in fixtures only; no network, credential, provider-rights, default-schedule, or Staging operation is authorized.",
+  "identity_policy": {
+    "campaign_id": "capture-campaign:b89f6b689747db8bfc6eb09866f34a38af453623eee6c7e040d5379b54ed62c7",
+    "list_version_ids": [
+      "list-version:d5-primary-v1",
+      "list-version:d5-overlap-v1"
+    ],
+    "source_version_id": "source-version:fixture-market-v1",
+    "parser_version_id": "parser-version:fixture-market-v1",
+    "mapping_version_id": "mapping-version:topt-2026-03-31-v1",
+    "policy_version_id": "capture-policy:d5-tiny-v1",
+    "maximum_attempts": 3,
+    "attempt_numbers_start_at": 1,
+    "mutable_aliases_forbidden": true
+  },
+  "topt_denominator": {
+    "universe_id": "universe:topt-us-2026-03-31",
+    "accession": "000207169126012475",
+    "report_date": "2026-03-31",
+    "issuer_count": 20,
+    "instrument_count": 21,
+    "obligation_count": 84,
+    "obligation_expansion": {
+      "grain": "one obligation per instrument and semantic type",
+      "semantic_types": [
+        "market-price",
+        "listing-identity",
+        "universe-membership",
+        "financial-fact"
+      ]
+    },
+    "instruments": [
+      ["issuer:lei:FR5LCKFTG8054YNNRU85", "security:cusip:00287Y109", "listing:xnys:abbv", "ABBV"],
+      ["issuer:lei:5493006MHB84DD0ZWV18", "security:cusip:02079K107", "listing:xnas:goog", "GOOG"],
+      ["issuer:lei:5493006MHB84DD0ZWV18", "security:cusip:02079K305", "listing:xnas:googl", "GOOGL"],
+      ["issuer:lei:ZXTILKJKG63JELOEG630", "security:cusip:023135106", "listing:xnas:amzn", "AMZN"],
+      ["issuer:lei:HWUPKR0MPOU8FGXBT394", "security:cusip:037833100", "listing:xnas:aapl", "AAPL"],
+      ["issuer:lei:5493000C01ZX7D35SD85", "security:cusip:084670702", "listing:xnys:brk.b", "BRK.B"],
+      ["issuer:lei:549300WV6GIDOZJTV909", "security:cusip:11135F101", "listing:xnas:avgo", "AVGO"],
+      ["issuer:lei:29DX7H14B9S6O3FD6V18", "security:cusip:22160K105", "listing:xnas:cost", "COST"],
+      ["issuer:lei:J3WHBG0MTS7O8ZVMDC91", "security:cusip:30231G102", "listing:xnys:xom", "XOM"],
+      ["issuer:lei:BQ4BKCS1HXDV9HN80Z93", "security:cusip:30303M102", "listing:xnas:meta", "META"],
+      ["issuer:lei:8I5DZWZKVSZI1NUHU748", "security:cusip:46625H100", "listing:xnys:jpm", "JPM"],
+      ["issuer:lei:549300G0CFPGEF6X2043", "security:cusip:478160104", "listing:xnys:jnj", "JNJ"],
+      ["issuer:lei:FRDRIPF3EKNDJ2CQJL29", "security:cusip:532457108", "listing:xnys:lly", "LLY"],
+      ["issuer:lei:AR5L2ODV9HN37376R084", "security:cusip:57636Q104", "listing:xnys:ma", "MA"],
+      ["issuer:lei:INR2EJN1ERAN0W5ZP974", "security:cusip:594918104", "listing:xnas:msft", "MSFT"],
+      ["issuer:lei:B3DXGBC8GAIYWI2Z0172", "security:cusip:595112103", "listing:xnas:mu", "MU"],
+      ["issuer:lei:549300Y7VHGU0I7CE873", "security:cusip:64110L106", "listing:xnas:nflx", "NFLX"],
+      ["issuer:lei:549300S4KLFTLO7GSQ80", "security:cusip:67066G104", "listing:xnas:nvda", "NVDA"],
+      ["issuer:lei:54930043XZGB27CTOV49", "security:cusip:88160R101", "listing:xnas:tsla", "TSLA"],
+      ["issuer:lei:549300JZ4OKEHW3DPJ59", "security:cusip:92826C839", "listing:xnys:v", "V"],
+      ["issuer:lei:Y87794H0US1R65VBXU25", "security:cusip:931142103", "listing:xnas:wmt", "WMT"]
+    ],
+    "instrument_tuple_fields": ["issuer_id", "instrument_id", "listing_id", "ticker"],
+    "identity_assertions": [
+      "the 21 rows contain exactly 20 distinct issuer_id values",
+      "GOOG and GOOGL have distinct instrument_id and listing_id values",
+      "expanding four semantic types over all 21 instruments yields exactly 84 obligations"
+    ]
+  },
+  "tiny_lists": [
+    {
+      "list_version_id": "list-version:d5-primary-v1",
+      "members": ["security:cusip:67066G104", "security:cusip:02079K107", "security:cusip:02079K305"],
+      "expected_terminal_states": ["success", "unchanged", "unavailable", "skipped_by_policy", "failed"]
+    },
+    {
+      "list_version_id": "list-version:d5-overlap-v1",
+      "members": ["security:cusip:67066G104", "security:cusip:594918104"],
+      "shared_work_item": {
+        "instrument_id": "security:cusip:67066G104",
+        "semantic_type": "market-price",
+        "expected_obligation_count": 2,
+        "expected_provider_work_item_count": 1
+      }
+    }
+  ],
+  "attempt_scenarios": [
+    {
+      "scenario_id": "success-first-attempt",
+      "outcomes": ["success"],
+      "terminal": true,
+      "expected_attempt_count": 1
+    },
+    {
+      "scenario_id": "rate-limit-then-success",
+      "outcomes": ["rate_limited", "success"],
+      "terminal": true,
+      "expected_attempt_count": 2
+    },
+    {
+      "scenario_id": "bounded-terminal-failure",
+      "outcomes": ["transport_error", "server_error", "failed"],
+      "terminal": true,
+      "expected_attempt_count": 3
+    },
+    {
+      "scenario_id": "interrupted-then-success",
+      "outcomes": ["interrupted", "success"],
+      "terminal": true,
+      "expected_attempt_count": 2
+    },
+    {
+      "scenario_id": "identical-bytes-new-attempt",
+      "outcomes": ["success", "unchanged"],
+      "raw_content_sha256": "a6bf655955317bd4940ab646d9cc93fb23562c70ad469d62d97ebe01da0efbdc",
+      "expected_attempt_count": 2,
+      "expected_raw_object_count": 1,
+      "expected_observation_event_count": 2
+    },
+    {
+      "scenario_id": "out-of-order-outcome-rejected",
+      "outcomes": ["success", "transport_error"],
+      "expected_error": "attempt_after_terminal_outcome"
+    }
+  ],
+  "resume_scenarios": [
+    {
+      "scenario_id": "crash-after-planning",
+      "checkpoint": "plan-persisted",
+      "expected_resume": "reuse-plan-and-create-first-attempt"
+    },
+    {
+      "scenario_id": "crash-after-raw-landing",
+      "checkpoint": "raw-object-persisted",
+      "expected_resume": "reuse-raw-object-and-complete-attempt"
+    },
+    {
+      "scenario_id": "crash-after-normalization",
+      "checkpoint": "observation-persisted",
+      "expected_resume": "reuse-observation-and-complete-manifest"
+    },
+    {
+      "scenario_id": "crash-after-partial-manifest",
+      "checkpoint": "one-of-two-obligations-terminal",
+      "expected_resume": "preserve-terminal-obligation-and-finish-pending-obligation"
+    }
+  ],
+  "recapture_scenarios": [
+    {
+      "scenario_id": "bounded-multi-predicate-dry-run",
+      "selection_cutoff": "2026-04-01T00:00:00Z",
+      "predicates": {
+        "list_version_id": "list-version:d5-primary-v1",
+        "instrument_id": "security:cusip:67066G104",
+        "source_version_id": "source-version:fixture-market-v1",
+        "semantic_type": "market-price",
+        "partition": "2026-03-31",
+        "outcome": "failed",
+        "freshness_state": "stale",
+        "parser_version_id": "parser-version:fixture-market-v1",
+        "mapping_version_id": "mapping-version:topt-2026-03-31-v1",
+        "confidence_state": "unavailable"
+      },
+      "expected_selected_obligations": [
+        {
+          "obligation_id": "list-obligation:e8ac62c8831208b2d2dbda13136e04349ff6c8775d92b40e374cd814a9d91d13",
+          "run_id": "capture-run:89218d2ccfd82036527934f2fbcdb03776b9e6ce36d3dfb9e10b2b11338867ae",
+          "universe_ref": {
+            "universe_id": "universe:topt-us-2026-03-31",
+            "universe_version": "topt-candidate-2026-03-31-v1",
+            "content_sha256": "8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f"
+          },
+          "subject": {"kind": "listing", "id": "listing:xnas:nvda"},
+          "capture_requirement_id": "market-price:v1",
+          "partition": "2026-03-31"
+        }
+      ],
+      "execution_must_equal_dry_run": true,
+      "unaffected_cells_must_not_be_fetched_or_rewritten": true
+    },
+    {
+      "scenario_id": "empty-selection-fails-closed",
+      "selection_cutoff": "2026-04-01T00:00:00Z",
+      "predicates": {"instrument_id": "security:cusip:does-not-exist"},
+      "expected_error": "empty_recapture_selection"
+    },
+    {
+      "scenario_id": "mutable-or-broad-predicate-rejected",
+      "selection_cutoff": "2026-04-01T00:00:00Z",
+      "predicates": {"list_version_id": "latest", "semantic_type": "*"},
+      "expected_error": "unbounded_or_mutable_recapture_predicate"
+    }
+  ],
+  "negative_controls": [
+    "duplicate obligation identity",
+    "non-contiguous attempt number",
+    "attempt after terminal outcome",
+    "attempt count above the frozen maximum",
+    "missing confidence on an observation",
+    "UPDATE or DELETE of an obligation, work item, attempt, raw object, observation, plan, or checkpoint",
+    "resume creates duplicate logical work",
+    "identical bytes erase a later attempt or a separate list obligation",
+    "recapture execution broadens or differs from its frozen dry-run selection",
+    "GOOG and GOOGL collapse to one instrument",
+    "source call before scope, policy, rights, budget, and call-plan authorization",
+    "root export, global Dagster registration, default schedule, Staging route, or release binding"
+  ]
+}
