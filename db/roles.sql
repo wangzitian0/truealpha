@@ -26,7 +26,10 @@ alter role app_runtime set statement_timeout = '5s';
 grant usage on schema app to app_runtime;
 grant select on app.publication_policies to app_runtime;
 grant select on app.private_research_objects to app_runtime;
+revoke select on app.access_audit_metadata from app_runtime;
 grant insert on app.authorization_decisions, app.access_audit_events to app_runtime;
+revoke all on function app.validate_access_audit_decision_tenant() from public;
+grant execute on function app.validate_access_audit_decision_tenant() to app_runtime;
 
 -- Audit readers use a separate role and receive only the administrator-filtered,
 -- non-content metadata view; they cannot select either audit base table.

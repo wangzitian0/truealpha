@@ -181,6 +181,40 @@ values
 do $$
 begin
     begin
+        insert into app.access_audit_events (
+            audit_event_id,
+            decision_id,
+            tenant_id,
+            principal_id,
+            event_kind,
+            occurred_at,
+            recorded_at
+        )
+        values (
+            'audit-event:cross-tenant-invalid',
+            'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'tenant:beta',
+            'principal:alpha:alice',
+            'access_allowed',
+            '2026-07-15T00:01:00Z',
+            '2026-07-15T00:01:00Z'
+        );
+        raise exception 'cross-tenant audit event unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'cross-tenant audit event unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'access audit tenant must match its authorization decision' then
+                raise;
+            end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
         update app.private_research_objects
         set object_ref = 'object:alpha:replacement'
         where resource_id = 'document:alpha:private-001';

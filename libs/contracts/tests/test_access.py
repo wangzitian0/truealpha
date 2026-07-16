@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from truealpha_contracts.access import (
     AccessResource,
     AuthenticationMethod,
     AuthorizationDecision,
+    AuthorizationService,
     PrincipalKind,
     PublicationPolicy,
     authorize_access,
@@ -122,6 +124,37 @@ def test_context_rejects_naive_time_and_client_authority_claims() -> None:
         AccessContext.model_validate({**valid, "client_claimed_tier": "internal"})
 
 
+@pytest.mark.parametrize(
+    "resource",
+    [
+        {
+            "resource_id": "strategy-result:alpha:restricted-001",
+            "resource_type": "materialized_strategy_result",
+            "tenant_id": "tenant:alpha",
+            "owner_principal_id": "principal:alpha:alice",
+            "publication_class_id": "publication-class:restricted:v1",
+            "content_private": True,
+        },
+        {
+            "resource_id": "document:alpha:public-001",
+            "resource_type": "private_document",
+            "tenant_id": "tenant:alpha",
+            "content_private": False,
+        },
+        {
+            "resource_id": "audit:alpha:private-001",
+            "resource_type": "access_audit_metadata",
+            "tenant_id": "tenant:alpha",
+            "owner_principal_id": "principal:alpha:alice",
+            "content_private": True,
+        },
+    ],
+)
+def test_resource_type_rejects_contradictory_privacy_shape(resource: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="private resource types require"):
+        AccessResource.model_validate(resource)
+
+
 def test_policy_and_decision_identities_are_immutable() -> None:
     with pytest.raises(ValidationError, match="immutable version"):
         PublicationPolicy(
@@ -201,6 +234,19 @@ def test_context_cannot_authorize_before_issuance() -> None:
     assert decision.decision is AccessDecisionKind.DENY
     assert decision.reason is AccessDenialReason.AUTHENTICATION_NOT_YET_VALID
     assert decision.audit_event is AccessAuditEventKind.AUTHENTICATION_DENIED
+
+
+def test_authorization_service_signature_exposes_all_decision_inputs() -> None:
+    assert set(inspect.signature(AuthorizationService.authorize).parameters) == {
+        "self",
+        "context",
+        "action",
+        "resource",
+        "policy",
+        "observed_at",
+        "authentication_failure",
+        "revoked_delegation_ids",
+    }
 
 
 def test_access_metadata_never_enters_computation_contracts() -> None:

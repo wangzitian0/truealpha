@@ -145,8 +145,12 @@ class AccessResource(StrictFrozenModel):
 
     @model_validator(mode="after")
     def validate_resource(self) -> AccessResource:
-        if self.content_private and not self.owner_principal_id:
-            raise ValueError("private resources require an owner")
+        private = self.resource_type in {
+            AccessResourceType.PRIVATE_CONVERSATION,
+            AccessResourceType.PRIVATE_DOCUMENT,
+        }
+        if private != self.content_private or private != bool(self.owner_principal_id):
+            raise ValueError("private resource types require private content and an owner")
         materialized = self.resource_type in {
             AccessResourceType.MATERIALIZED_STRATEGY_RESULT,
             AccessResourceType.MATERIALIZED_BACKTEST_RESULT,
@@ -350,5 +354,8 @@ class AuthorizationService(Protocol):
         context: AccessContext | None,
         action: AccessAction,
         resource: AccessResource,
+        policy: PublicationPolicy,
         observed_at: datetime,
+        authentication_failure: AccessDenialReason | None = None,
+        revoked_delegation_ids: frozenset[str] = frozenset(),
     ) -> AuthorizationDecision: ...

@@ -116,6 +116,34 @@ create table if not exists app.access_audit_events (
     check (recorded_at >= occurred_at)
 );
 
+create or replace function app.validate_access_audit_decision_tenant()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, app
+as $$
+declare
+    decision_tenant_id text;
+begin
+    select tenant_id into decision_tenant_id
+    from app.authorization_decisions
+    where decision_id = new.decision_id;
+
+    if not found then
+        raise exception 'access audit decision does not exist';
+    end if;
+    if decision_tenant_id is distinct from new.tenant_id then
+        raise exception 'access audit tenant must match its authorization decision';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists trg_access_audit_events_validate_tenant on app.access_audit_events;
+create trigger trg_access_audit_events_validate_tenant
+before insert on app.access_audit_events
+for each row execute function app.validate_access_audit_decision_tenant();
+
 create or replace view app.access_audit_metadata
 with (security_barrier = true)
 as
@@ -133,7 +161,9 @@ select
     event.occurred_at,
     event.recorded_at
 from app.access_audit_events as event
-join app.authorization_decisions as decision using (decision_id)
+join app.authorization_decisions as decision
+  on decision.decision_id = event.decision_id
+ and decision.tenant_id is not distinct from event.tenant_id
 where exists (
     select 1
     from app.principals as principal
