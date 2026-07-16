@@ -9,6 +9,10 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: vision-issue-reconciliation-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   sync:
     if: github.event_name != 'issues' || github.actor != 'github-actions[bot]'
@@ -29,7 +33,9 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
           import subprocess
+          import time
 
           from tools.check_delivery_governance import (
               batch_status_labels,
@@ -39,19 +45,68 @@ jobs:
 
           graph = load_vision_graph()
           repository = os.environ["GITHUB_REPOSITORY"]
-          response = subprocess.run(
-              [
-                  "gh",
-                  "api",
-                  "--paginate",
-                  "--slurp",
-                  f"repos/{repository}/issues?state=all&per_page=100",
-              ],
-              check=True,
-              capture_output=True,
-              text=True,
+
+          class ApiFailure(RuntimeError):
+              def __init__(self, status, output):
+                  super().__init__(output)
+                  self.status = status
+
+
+          def api(arguments, *, input_text=None, attempts=4):
+              for attempt in range(attempts):
+                  response = subprocess.run(
+                      ["gh", "api", *arguments],
+                      input=input_text,
+                      capture_output=True,
+                      text=True,
+                  )
+                  if response.returncode == 0:
+                      return response.stdout
+
+                  output = response.stdout + response.stderr
+                  statuses = re.findall(r"(?:HTTP/\S+\s+|\(HTTP\s+)(\d{3})", output)
+                  status = int(statuses[-1]) if statuses else None
+                  retryable = status in {403, 429, 500, 502, 503, 504}
+                  if not retryable or attempt == attempts - 1:
+                      raise ApiFailure(status, output)
+
+                  delay = 2**attempt
+                  if status in {403, 429}:
+                      reset = re.search(r"(?im)^x-ratelimit-reset:\s*(\d+)\s*$", output)
+                      if reset is None:
+                          rate_limit = subprocess.run(
+                              ["gh", "api", "rate_limit", "--jq", ".resources.core.reset"],
+                              capture_output=True,
+                              text=True,
+                          )
+                          if rate_limit.returncode == 0 and rate_limit.stdout.strip().isdigit():
+                              reset = re.match(r"(\d+)", rate_limit.stdout.strip())
+                      if reset:
+                          delay = max(1, int(reset.group(1)) - int(time.time()) + 1)
+                      if delay > 300:
+                          raise ApiFailure(status, "rate-limit reset exceeds reconciliation budget\n" + output)
+                  time.sleep(delay)
+              raise AssertionError("unreachable")
+
+
+          def included_issue(issue_number):
+              output = api(["--include", f"repos/{repository}/issues/{issue_number}"])
+              etags = re.findall(r"(?im)^etag:\s*(.+?)\s*$", output)
+              body_start = output.find("{")
+              if not etags or body_start < 0:
+                  raise SystemExit(f"#{issue_number}: direct issue response omitted ETag or JSON")
+              return json.loads(output[body_start:]), etags[-1]
+
+
+          pages = json.loads(
+              api(
+                  [
+                      "--paginate",
+                      "--slurp",
+                      f"repos/{repository}/issues?state=all&per_page=100",
+                  ]
+              )
           )
-          pages = json.loads(response.stdout)
           issues = {
               issue["number"]: issue
               for page in pages
@@ -72,7 +127,22 @@ jobs:
           if missing:
               raise SystemExit(f"managed Vision issues are missing from GitHub: {missing}")
 
-          for issue_number, issue in issues.items():
+          milestone_pages = json.loads(
+              api(
+                  [
+                      "--paginate",
+                      "--slurp",
+                      f"repos/{repository}/milestones?state=all&per_page=100",
+                  ]
+              )
+          )
+          milestones = {
+              milestone["title"]: milestone["number"]
+              for page in milestone_pages
+              for milestone in page
+          }
+
+          def desired_patch(issue_number, issue):
               current_labels = {label["name"] for label in issue["labels"]}
               desired_labels = set(current_labels)
               if issue_number in expected:
@@ -81,6 +151,9 @@ jobs:
                   desired_labels.discard("scope:vision")
 
               desired_body = issue.get("body") or ""
+              desired_state = issue["state"]
+              desired_reason = issue.get("state_reason")
+              desired_milestone = issue.get("milestone", {}).get("number") if issue.get("milestone") else None
               if issue_number in batches_by_issue:
                   batch_id, batch = batches_by_issue[issue_number]
                   desired_labels = {
@@ -90,25 +163,88 @@ jobs:
                   }
                   desired_labels.update(batch_status_labels(batch))
                   desired_body = render_batch_issue_body(desired_body, batch_id, batch)
+                  lifecycle = {
+                      "done": ("closed", "completed"),
+                      "cancelled": ("closed", "not_planned"),
+                  }
+                  desired_state, desired_reason = lifecycle.get(batch["status"], ("open", None))
+                  milestone_title = graph["gates"][str(batch["owner_gate"])]["milestone"]
+                  if milestone_title not in milestones:
+                      raise SystemExit(f"required milestone does not exist: {milestone_title}")
+                  desired_milestone = milestones[milestone_title]
 
-              if current_labels != desired_labels or issue.get("body") != desired_body:
-                  endpoint = f"repos/{repository}/issues/{issue_number}"
-                  subprocess.run(
-                      ["gh", "api", "--method", "PATCH", endpoint, "--input", "-"],
-                      input=json.dumps({"body": desired_body, "labels": sorted(desired_labels)}),
-                      check=True,
-                      capture_output=True,
-                      text=True,
-                  )
+              changed = current_labels != desired_labels or issue.get("body") != desired_body
+              current_milestone = issue.get("milestone", {}).get("number") if issue.get("milestone") else None
+              changed = changed or current_milestone != desired_milestone
+              changed = changed or issue["state"] != desired_state
+              if desired_state == "closed":
+                  changed = changed or issue.get("state_reason") != desired_reason
+              if not changed:
+                  return None
+
+              payload = json.loads(json.dumps({"body": desired_body, "labels": sorted(desired_labels)}))
+              if current_milestone != desired_milestone:
+                  payload["milestone"] = desired_milestone
+              if issue["state"] != desired_state or (
+                  desired_state == "closed" and issue.get("state_reason") != desired_reason
+              ):
+                  payload["state"] = desired_state
+                  payload["state_reason"] = desired_reason if desired_state == "closed" else "reopened"
+              return payload
+
+
+          def reconcile(issue_number):
+              endpoint = f"repos/{repository}/issues/{issue_number}"
+              for attempt in range(4):
+                  current, etag = included_issue(issue_number)
+                  payload = desired_patch(issue_number, current)
+                  if payload is None:
+                      return
+                  try:
+                      api(
+                          [
+                              "--method",
+                              "PATCH",
+                              "-H",
+                              f"If-Match: {etag}",
+                              endpoint,
+                              "--input",
+                              "-",
+                          ],
+                          input_text=json.dumps(payload),
+                      )
+                      return
+                  except ApiFailure as error:
+                      if error.status != 412 or attempt == 3:
+                          raise
+              raise AssertionError("unreachable")
+
+
+          for issue_number, issue in issues.items():
+              if desired_patch(issue_number, issue) is not None:
+                  reconcile(issue_number)
+
+          refetched_pages = json.loads(
+              api(
+                  [
+                      "--paginate",
+                      "--slurp",
+                      f"repos/{repository}/issues?state=all&per_page=100",
+                  ]
+              )
+          )
+          exported_fields = ("number", "title", "state", "state_reason", "body", "labels", "milestone")
+          vision_issues = [
+              {field: issue.get(field) for field in exported_fields}
+              for page in refetched_pages
+              for issue in page
+              if "pull_request" not in issue
+              and any(label["name"] == "scope:vision" for label in issue["labels"])
+          ]
+          output_path = os.path.join(os.environ["RUNNER_TEMP"], "vision-issues.json")
+          with open(output_path, "w", encoding="utf-8") as output:
+              json.dump(vision_issues, output)
           PY
-      - name: Export reconciled Vision issues
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/issues?state=all&labels=scope%3Avision&per_page=100" \
-            | jq -s '[.[][] | select(has("pull_request") | not) | {number, title, state, body, labels, milestone}]' \
-            > "$RUNNER_TEMP/vision-issues.json"
       - name: Validate reconciled GitHub parity
         run: >-
           python3 tools/check_delivery_governance.py

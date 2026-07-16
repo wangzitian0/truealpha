@@ -28,7 +28,16 @@ jobs:
 
           body = os.environ.get("PR_BODY", "")
           fields = {}
-          for key in ("Work-Issue", "Work-Key", "Issue-Action"):
+          action_values = re.findall(r"^Issue-Action:[ \t]*([^\r\n]+?)[ \t]*$", body, re.MULTILINE)
+          if len(action_values) != 1:
+              raise SystemExit("expected exactly one Issue-Action")
+          fields["Issue-Action"] = action_values[0]
+          if fields["Issue-Action"] in {"managed-by-batch", "keep-open"}:
+              raise SystemExit(0)
+          if fields["Issue-Action"] != "complete-on-merge":
+              raise SystemExit("invalid Issue-Action")
+
+          for key in ("Work-Issue", "Work-Key"):
               values = re.findall(rf"^{key}:[ \t]*([^\r\n]+?)[ \t]*$", body, re.MULTILINE)
               if len(values) != 1:
                   raise SystemExit(f"expected exactly one {key}")
@@ -39,8 +48,6 @@ jobs:
           issue = issue_match.group(1)
           if fields["Work-Key"] != f"standalone-{issue}":
               raise SystemExit("invalid standalone Work-Key")
-          if fields["Issue-Action"] != "complete-on-merge":
-              raise SystemExit(0)
           print(issue)
           PY
           )"
