@@ -20,7 +20,13 @@ from truealpha_contracts.datahub import (
     CaptureWorkItem,
     SourceRequest,
 )
-from truealpha_contracts.release import ReleaseManifest
+from truealpha_contracts.release import (
+    ArtifactRole,
+    ReleaseManifest,
+    ReleaseManifestRepository,
+    ReleaseSignatureVerifier,
+    resolve_accepted_release,
+)
 
 from data_engine.datahub.control_plane import expand_obligations, replay_retry_policy
 from data_engine.datahub.medium_replay import frozen_topt_list_version
@@ -46,10 +52,23 @@ _SOURCE_KEYS = {
 @dataclass(frozen=True)
 class ManualProductionToptRequest:
     release_manifest_id: str
-    release: ReleaseManifest
     cutoff: datetime
     run_sequence: int
     confirmation: str
+
+
+@dataclass(frozen=True)
+class ProductionReleaseBinding:
+    artifact_digest: str
+    capture_scope_id: str
+    capture_scope_sha256: str
+    research_catalog_id: str
+    research_catalog_sha256: str
+    registry_snapshot_id: str
+    registry_snapshot_sha256: str
+    source_readiness_report_id: str
+    source_readiness_report_sha256: str
+    configuration_sha256: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -115,13 +134,15 @@ def _source_request(
 def plan_manual_production_topt(
     corpus: Mapping[str, Any],
     request: ManualProductionToptRequest,
+    *,
+    release_repository: ReleaseManifestRepository,
+    signature_verifier: ReleaseSignatureVerifier,
+    release_binding: ProductionReleaseBinding,
 ) -> ManualProductionToptPlan:
     """Freeze one Production run without dispatching work or registering a schedule."""
 
     if request.confirmation != PRODUCTION_CONFIRMATION:
         raise ValueError(f"production confirmation must be exactly {PRODUCTION_CONFIRMATION!r}")
-    if request.release_manifest_id != request.release.release_manifest_id:
-        raise ValueError("requested release does not match the resolved ReleaseManifest")
     if request.cutoff.tzinfo is None or request.cutoff.utcoffset() is None:
         raise ValueError("Production cutoff must be timezone-aware")
     if request.run_sequence < 1:
@@ -129,8 +150,23 @@ def plan_manual_production_topt(
 
     denominator = corpus["topt_denominator"]
     list_version = frozen_topt_list_version(corpus)
-    if request.release.universe != list_version.universe:
-        raise ValueError("release UniverseRef does not match the frozen TOPT list")
+    release = resolve_accepted_release(
+        release_repository,
+        signature_verifier,
+        release_manifest_id=request.release_manifest_id,
+        artifact_role=ArtifactRole.DATA_ENGINE_DAGSTER,
+        artifact_digest=release_binding.artifact_digest,
+        capture_scope_id=release_binding.capture_scope_id,
+        capture_scope_sha256=release_binding.capture_scope_sha256,
+        research_catalog_id=release_binding.research_catalog_id,
+        research_catalog_sha256=release_binding.research_catalog_sha256,
+        universe=list_version.universe,
+        registry_snapshot_id=release_binding.registry_snapshot_id,
+        registry_snapshot_sha256=release_binding.registry_snapshot_sha256,
+        source_readiness_report_id=release_binding.source_readiness_report_id,
+        source_readiness_report_sha256=release_binding.source_readiness_report_sha256,
+        configuration_sha256=release_binding.configuration_sha256,
+    )
     if request.cutoff < list_version.effective_at:
         raise ValueError("Production cutoff precedes the frozen TOPT list")
     if tuple(denominator["obligation_expansion"]["semantic_types"]) != _SEMANTIC_TYPES:
@@ -141,9 +177,9 @@ def plan_manual_production_topt(
     if (issuer_count, instrument_count) != (_EXPECTED_ISSUER_COUNT, _EXPECTED_INSTRUMENT_COUNT):
         raise ValueError("TOPT issuer or instrument denominator drift")
 
-    schedule_policy = _schedule_policy(request.release)
+    schedule_policy = _schedule_policy(release)
     campaign = CaptureCampaign(
-        campaign_policy_id=f"capture-policy:production-topt-{request.release.manifest_sha256}",
+        campaign_policy_id=f"capture-policy:production-topt-{release.manifest_sha256}",
         environment=CaptureEnvironment.PRODUCTION,
         cutoff=request.cutoff,
         universe_refs=(list_version.universe,),
@@ -152,7 +188,7 @@ def plan_manual_production_topt(
         campaign_id=campaign.campaign_id,
         run_sequence=request.run_sequence,
         schedule_policy_id=schedule_policy.schedule_policy_id,
-        capture_scope_id=request.release.capture_scope_id,
+        capture_scope_id=release.capture_scope_id,
     )
     obligations = expand_obligations(
         run_id=run.run_id,
@@ -163,7 +199,7 @@ def plan_manual_production_topt(
     if len(obligations) != _EXPECTED_OBLIGATION_COUNT:
         raise ValueError("TOPT obligation denominator drift")
 
-    source_requests = tuple(_source_request(release=request.release, obligation=item) for item in obligations)
+    source_requests = tuple(_source_request(release=release, obligation=item) for item in obligations)
     work_items = tuple(
         CaptureWorkItem(
             campaign_id=campaign.campaign_id,

@@ -114,6 +114,26 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
     )
     repository = PostgresCaptureControlRepository(connection)
 
+    raw_fetch_id = connection.execute(
+        """
+        insert into raw.fetches (
+            source, source_record_id, payload_sha256, object_uri, content_type,
+            byte_length, fetched_at, recorded_at, metadata
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, '{}'::jsonb)
+        returning id
+        """,
+        (
+            "yahoo",
+            vintage.source_record_id,
+            raw_sha256,
+            f"s3://test/{raw_sha256}",
+            "application/json",
+            18,
+            STARTED_AT,
+            STARTED_AT,
+        ),
+    ).fetchone()[0]
+
     assert repository.put_schedule_policy(policy)
     assert repository.put_campaign(campaign)
     assert repository.put_list_version(list_version)
@@ -124,7 +144,7 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
     assert repository.put_work_item(work_item, policy.retry)
     assert repository.put_binding(binding)
     assert repository.put_attempt(attempt)
-    assert repository.put_source_vintage(vintage, raw_fetch_id=None)
+    assert repository.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id)
     assert repository.put_attempt_result(attempt_result)
     assert repository.put_observation(
         obligation.obligation_id,
@@ -158,11 +178,28 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
     assert repository.put_work_item(work_item, policy.retry) is False
     assert repository.put_binding(binding) is False
     assert repository.put_attempt(attempt) is False
-    assert repository.put_source_vintage(vintage, raw_fetch_id=None) is False
+    assert repository.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id) is False
     assert repository.put_attempt_result(attempt_result) is False
-    assert repository.put_observation(obligation.obligation_id, observation) is False
+    assert (
+        repository.put_observation(
+            obligation.obligation_id,
+            observation,
+            confidence=Decimal("0.95"),
+        )
+        is False
+    )
     assert repository.put_obligation_result(obligation.obligation_id, obligation_result) is False
     assert repository.put_checkpoint(checkpoint) is False
+
+    mismatched_result = ListObligationResult(
+        obligation_id="list-obligation:" + "0" * 64,
+        terminal_state=ObligationTerminalState.SUCCESS,
+        completed_at=STARTED_AT + timedelta(seconds=2),
+        final_attempt_id=attempt.attempt_id,
+        reason_codes=("success",),
+    )
+    with pytest.raises(ValueError, match="logical obligation does not match"):
+        repository.put_obligation_result(obligation.obligation_id, mismatched_result)
 
 
 def test_repository_reads_are_bounded_and_capture_rows_are_append_only(connection) -> None:

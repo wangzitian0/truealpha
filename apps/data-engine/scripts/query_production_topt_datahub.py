@@ -8,14 +8,13 @@ from dataclasses import asdict
 
 import psycopg
 from data_engine.config import settings
-from data_engine.datahub.production_topt import PostgresGppeResultRepository
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--read", choices=("status", "meta_info", "gppe"), required=True)
+    parser.add_argument("--read", choices=("status", "meta_info"), required=True)
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--offset", type=int, default=0)
     args = parser.parse_args()
@@ -24,14 +23,8 @@ def main() -> int:
         capture = PostgresCaptureControlRepository(connection)
         if args.read == "status":
             output = asdict(capture.status(args.run_id))
-        elif args.read == "meta_info":
-            output = [asdict(item) for item in capture.meta_info(args.run_id, limit=args.limit, offset=args.offset)]
         else:
-            output = PostgresGppeResultRepository(connection).for_run(
-                args.run_id,
-                limit=args.limit,
-                offset=args.offset,
-            )
+            output = [asdict(item) for item in capture.meta_info(args.run_id, limit=args.limit, offset=args.offset)]
     print(json.dumps(output, default=str, sort_keys=True))
     return 0
 

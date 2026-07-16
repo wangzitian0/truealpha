@@ -449,7 +449,7 @@ class PostgresCaptureControlRepository:
             )
         )
 
-    def put_source_vintage(self, vintage: SourceVintage, *, raw_fetch_id: int | None) -> bool:
+    def put_source_vintage(self, vintage: SourceVintage, *, raw_fetch_id: int) -> bool:
         payload = self._payload(vintage)
         inserted = self._connection.execute(
             """
@@ -483,9 +483,11 @@ class PostgresCaptureControlRepository:
         capture_obligation_id: str,
         observation: NormalizedObservation,
         *,
-        confidence: Any = None,
+        confidence: Decimal,
         freshness_state: str = "unknown",
     ) -> bool:
+        if not Decimal("0") <= confidence <= Decimal("1"):
+            raise ValueError("observation confidence must be between zero and one")
         payload = self._payload(observation)
         inserted = self._connection.execute(
             """
@@ -532,6 +534,35 @@ class PostgresCaptureControlRepository:
         )
 
     def put_obligation_result(self, capture_obligation_id: str, result: ListObligationResult) -> bool:
+        expected = self._connection.execute(
+            """
+            select 'list-obligation:' || raw.canonical_sha256(jsonb_build_object(
+                'kind', 'list-obligation',
+                'identity', jsonb_build_object(
+                    'run_id', obligation.run_id,
+                    'universe_ref', jsonb_build_object(
+                        'universe_id', version.universe_id,
+                        'universe_version', version.universe_version,
+                        'content_sha256', version.universe_sha256
+                    ),
+                    'subject', jsonb_build_object(
+                        'kind', obligation.subject_kind,
+                        'id', obligation.subject_id
+                    ),
+                    'capture_requirement_id', obligation.capture_requirement_id,
+                    'partition', obligation.partition_key
+                )
+            ))
+            from raw.capture_obligations obligation
+            join raw.capture_list_versions version using (list_version_id)
+            where obligation.obligation_id = %s
+            """,
+            (capture_obligation_id,),
+        ).fetchone()
+        if expected is None:
+            raise LookupError(f"capture obligation not found: {capture_obligation_id}")
+        if expected[0] != result.obligation_id:
+            raise ValueError("terminal result logical obligation does not match capture obligation")
         payload = self._payload(result)
         inserted = self._connection.execute(
             """

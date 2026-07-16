@@ -46,10 +46,30 @@ create table if not exists raw.capture_source_vintages (
     source_record_id               text not null,
     source_published_at            timestamptz,
     raw_object_id                  text not null check (raw_object_id ~ '^raw-object:[0-9a-f]{64}$'),
-    raw_fetch_id                   bigint references raw.fetches(id),
+    raw_fetch_id                   bigint not null references raw.fetches(id),
     payload                        jsonb not null check (jsonb_typeof(payload) = 'object'),
     created_at                     timestamptz not null default now()
 );
+
+alter table raw.capture_source_vintages alter column raw_fetch_id set not null;
+
+create or replace function raw.validate_capture_source_vintage_lineage()
+returns trigger language plpgsql as $$
+declare
+    landed_sha256 text;
+begin
+    select payload_sha256 into landed_sha256 from raw.fetches where id = new.raw_fetch_id;
+    if landed_sha256 is null or new.raw_object_id <> 'raw-object:' || landed_sha256 then
+        raise check_violation using message = 'capture source vintage raw lineage does not match landed bytes';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists validate_raw_lineage on raw.capture_source_vintages;
+create trigger validate_raw_lineage
+before insert on raw.capture_source_vintages
+for each row execute function raw.validate_capture_source_vintage_lineage();
 
 alter table raw.capture_attempt_results
     drop constraint if exists capture_attempt_results_source_vintage_id_fkey;
@@ -81,7 +101,7 @@ create table if not exists staging.capture_normalized_observations (
     normalized_payload_sha256      text not null check (normalized_payload_sha256 ~ '^[0-9a-f]{64}$'),
     is_restatement                 boolean not null,
     supersedes_observation_id      text references staging.capture_normalized_observations(observation_id),
-    confidence                     numeric check (confidence between 0 and 1),
+    confidence                     numeric not null check (confidence between 0 and 1),
     freshness_state                text not null default 'unknown' check (freshness_state in ('fresh', 'stale', 'unknown')),
     payload                        jsonb not null check (jsonb_typeof(payload) = 'object'),
     recorded_at                    timestamptz not null default now(),

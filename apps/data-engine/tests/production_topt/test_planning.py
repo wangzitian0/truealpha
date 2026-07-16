@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
 
 import psycopg
@@ -11,10 +10,8 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub.production_topt import (
     PRODUCTION_CONFIRMATION,
-    GppeCalculationInput,
     ManualProductionToptRequest,
-    PostgresGppeResultRepository,
-    calculate_gppe,
+    ProductionReleaseBinding,
     persist_manual_production_plan,
     plan_manual_production_topt,
 )
@@ -113,10 +110,69 @@ def _request(corpus: dict[str, object]) -> ManualProductionToptRequest:
     )
     return ManualProductionToptRequest(
         release_manifest_id=release.release_manifest_id,
-        release=release,
         cutoff=CUTOFF,
         run_sequence=1,
         confirmation=PRODUCTION_CONFIRMATION,
+    )
+
+
+class MemoryReleaseRepository:
+    def __init__(self, release: ReleaseManifest) -> None:
+        self.release = release
+
+    def get(self, release_manifest_id: str) -> ReleaseManifest | None:
+        return self.release if release_manifest_id == self.release.release_manifest_id else None
+
+
+class StubSignatureVerifier:
+    def __init__(self, verified: bool = True) -> None:
+        self.verified = verified
+
+    def verify(self, manifest: ReleaseManifest) -> bool:
+        return self.verified
+
+
+def _release_for_corpus(corpus: dict[str, object]) -> ReleaseManifest:
+    denominator = corpus["topt_denominator"]
+    assert isinstance(denominator, dict)
+    return _release(
+        UniverseRef(
+            universe_id=str(denominator["universe_id"]),
+            universe_version="topt-candidate-2026-03-31-v1",
+            content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
+        )
+    )
+
+
+def _binding(release: ReleaseManifest) -> ProductionReleaseBinding:
+    return ProductionReleaseBinding(
+        artifact_digest=release.artifact(ArtifactRole.DATA_ENGINE_DAGSTER).digest,
+        capture_scope_id=release.capture_scope_id,
+        capture_scope_sha256=release.capture_scope_sha256,
+        research_catalog_id=release.research_catalog_id,
+        research_catalog_sha256=release.research_catalog_sha256,
+        registry_snapshot_id=release.registry_snapshot_id,
+        registry_snapshot_sha256=release.registry_snapshot_sha256,
+        source_readiness_report_id=release.source_readiness_report_id,
+        source_readiness_report_sha256=release.source_readiness_report_sha256,
+        configuration_sha256=release.configuration_sha256,
+    )
+
+
+def _plan(
+    corpus: dict[str, object],
+    request: ManualProductionToptRequest | None = None,
+    release: ReleaseManifest | None = None,
+    *,
+    verified: bool = True,
+):
+    accepted = release or _release_for_corpus(corpus)
+    return plan_manual_production_topt(
+        corpus,
+        request or _request(corpus),
+        release_repository=MemoryReleaseRepository(accepted),
+        signature_verifier=StubSignatureVerifier(verified),
+        release_binding=_binding(accepted),
     )
 
 
@@ -124,13 +180,14 @@ def test_plan_is_exact_deterministic_and_manual_only() -> None:
     corpus = _corpus()
     request = _request(corpus)
 
-    first = plan_manual_production_topt(corpus, request)
-    repeated = plan_manual_production_topt(corpus, request)
+    release = _release_for_corpus(corpus)
+    first = _plan(corpus, request, release)
+    repeated = _plan(corpus, request, release)
 
     assert first == repeated
     assert (first.issuer_count, first.instrument_count, first.obligation_count) == (20, 21, 84)
     assert first.campaign.environment.value == "production"
-    assert first.run.capture_scope_id == request.release.capture_scope_id
+    assert first.run.capture_scope_id == release.capture_scope_id
     assert len(first.source_requests) == len(first.work_items) == len(first.bindings) == 84
     assert len({item.source_request_id for item in first.source_requests}) == 84
     assert len({item.work_item_id for item in first.work_items}) == 84
@@ -148,7 +205,7 @@ def test_plan_is_exact_deterministic_and_manual_only() -> None:
 
 def test_plan_persistence_is_atomic_and_idempotent(connection) -> None:
     corpus = _corpus()
-    plan = plan_manual_production_topt(corpus, _request(corpus))
+    plan = _plan(corpus)
     recorded_at = CUTOFF + timedelta(seconds=1)
 
     first = persist_manual_production_plan(connection, plan, recorded_at=recorded_at)
@@ -163,22 +220,6 @@ def test_plan_persistence_is_atomic_and_idempotent(connection) -> None:
         (plan.run.run_id,),
     ).fetchone() == (1,)
 
-    calculation = calculate_gppe(
-        GppeCalculationInput(
-            run_id=plan.run.run_id,
-            issuer_id="issuer:lei:EXAMPLE",
-            cutoff=CUTOFF,
-            gross_profit=Decimal("3000000"),
-            employee_headcount=3,
-            is_financial=False,
-            confidence=Decimal("0.9"),
-        )
-    )
-    result_repository = PostgresGppeResultRepository(connection)
-    assert result_repository.put(calculation)
-    assert result_repository.put(calculation) is False
-    assert result_repository.for_run(plan.run.run_id)[0]["tier"] == "tech"
-
 
 @pytest.mark.parametrize(
     ("mutation", "message"),
@@ -186,7 +227,7 @@ def test_plan_persistence_is_atomic_and_idempotent(connection) -> None:
         (lambda request: {**request.__dict__, "confirmation": "yes"}, "confirmation must be exactly"),
         (
             lambda request: {**request.__dict__, "release_manifest_id": "release-manifest:" + "0" * 64},
-            "requested release does not match",
+            "does not exist",
         ),
         (lambda request: {**request.__dict__, "cutoff": datetime(2026, 4, 2)}, "timezone-aware"),
         (
@@ -200,29 +241,32 @@ def test_plan_rejects_unsafe_operator_input(mutation, message: str) -> None:
     corpus = _corpus()
     request = ManualProductionToptRequest(**mutation(_request(corpus)))
 
-    with pytest.raises(ValueError, match=message):
-        plan_manual_production_topt(corpus, request)
+    with pytest.raises((ValueError, LookupError), match=message):
+        _plan(corpus, request)
 
 
 def test_plan_rejects_release_universe_drift() -> None:
     corpus = _corpus()
-    request = _request(corpus)
-    drifted_release = request.release.model_copy(
-        update={
-            "universe": UniverseRef(
-                universe_id="universe:topt-replaced",
-                universe_version=request.release.universe.universe_version,
-                content_sha256=request.release.universe.content_sha256,
-            )
-        }
+    release = _release_for_corpus(corpus)
+    drifted_release = _release(
+        UniverseRef(
+            universe_id="universe:topt-replaced",
+            universe_version=release.universe.universe_version,
+            content_sha256=release.universe.content_sha256,
+        )
     )
     drifted_request = ManualProductionToptRequest(
         release_manifest_id=drifted_release.release_manifest_id,
-        release=drifted_release,
-        cutoff=request.cutoff,
-        run_sequence=request.run_sequence,
-        confirmation=request.confirmation,
+        cutoff=CUTOFF,
+        run_sequence=1,
+        confirmation=PRODUCTION_CONFIRMATION,
     )
 
     with pytest.raises(ValueError, match="UniverseRef does not match"):
-        plan_manual_production_topt(corpus, drifted_request)
+        _plan(corpus, drifted_request, drifted_release)
+
+
+def test_plan_rejects_unverified_release() -> None:
+    corpus = _corpus()
+    with pytest.raises(ValueError, match="signature verification failed"):
+        _plan(corpus, verified=False)

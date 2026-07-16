@@ -309,7 +309,7 @@ def _issuer_is_candidate(binding: LargeModelValueV0Binding, issuer_id: str) -> b
     return any(candidate.issuer.id == issuer_id for candidate in binding.candidate_universe.candidates)
 
 
-def tier_for_gppe(value: Decimal) -> ValuationTier:
+def _tier_for_gppe(value: Decimal) -> ValuationTier:
     if value < Decimal("1000000"):
         return ValuationTier.TRADITIONAL
     if value < Decimal("3000000"):
@@ -374,7 +374,7 @@ def compute_issuer_tier_valuation(
     if request.gppe.metric is GppeMetric.FINANCIAL_EFFICIENCY:
         return _unavailable(binding, request, TierValuationReasonCode.FINANCIAL_TIER_MAPPING_UNAPPROVED)
 
-    tier = tier_for_gppe(request.gppe.value)
+    tier = _tier_for_gppe(request.gppe.value)
     target_low, target_high = _TARGET_PS[tier]
     with localcontext(_DECIMAL_CONTEXT):
         midpoint = (target_low + target_high) / Decimal("2")
