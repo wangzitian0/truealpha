@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:463fb74c742b676912dffab2effac87873ae4226b5c0666da55c2a6c23e6ef74",
+  "batch_id": "A0-governed-research-access",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "docs/architecture-decisions/A0-governed-research-access.md",
+    "db/migrations/0022_app_identity.sql",
+    "db/roles.sql",
+    "db/tests/governed_research_access_contract.sql"
+  ],
+  "base_sha": "0fa56bc2e11e69c65e94440108d7cd25bc3ba412",
+  "expires_at": "2026-07-30T00:00:00Z"
+}
