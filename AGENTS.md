@@ -1,309 +1,389 @@
-# TrueAlpha — Agent & Contributor Guide
+# TrueAlpha Agent Operating Contract
 
-> **Prohibition**: AI may NOT modify this file without explicit authorization.
-> **Language**: All code, PRs, commits, and reports must be in **English**.
-> **Authoritative architecture doc**: `init.md`. If this file and `init.md` disagree, `init.md` wins.
+> **Protected file**: AI may modify this file only with explicit user authorization.
+> **Repository language**: Code, commits, branches, pull requests, issues, manifests,
+> and repository reports are written in English. User-facing conversation may follow
+> the user's language.
+> **Architecture authority**: `init.md` wins on architecture and public contracts.
 
----
+This file is the short, tool-neutral entry point for Codex, Claude Code, Gemini, and
+human contributors. It defines how an agent chooses work, coordinates through issues,
+and preserves state across context compaction. Detailed delivery and governance rules
+live in the referenced SOPs; do not copy them back into this file.
 
-## 🚨 Red Lines (CRITICAL)
+## Authority And SOP Map
 
-- **NEVER** commit `.env`, `*.pem`, or credential files.
-- **NEVER** overwrite a point-in-time record — restatements insert new rows (`is_restatement`), never UPDATE.
-- **NEVER** put computation logic outside `libs/factors` — the App layer does deterministic reformatting only (init.md Section 1, rule 2).
-- **NEVER** let a factor branch on data provenance — factors see `(entity_id, value, confidence, as_of)` only.
-- **NEVER** write staging rows without a `confidence` value.
-- **NEVER** use float for monetary calculations where precision matters (DB columns are `numeric`).
+Use the narrowest authoritative source for the decision at hand:
 
-## 🧱 Structure
+1. The user's latest explicit instruction defines the current task and may grant a
+   named exception. An exception is narrow; it does not transfer to another PR or turn.
+2. `init.md` defines architecture, module boundaries, and public interfaces.
+3. `vision.md` defines product scope and capability outcomes.
+4. This `AGENTS.md` defines agent operating, ownership, and handoff rules.
+5. `docs/iterative-delivery.md` defines the E0-E5 evidence ladder, lanes,
+   dependencies, batches, and handoffs.
+6. `governance/README.md` defines canonical governance artifacts and validation.
+7. `governance/gate0/README.md` and `governance/handoffs/README.md` are specialist
+   runbooks.
+8. `CLAUDE.md` is a relative symlink to this file so Claude Code receives this exact
+   contract. `GEMINI.md` is a thin adapter that delegates here.
 
-- `apps/data-engine/` — Python (uv): ingestion → Postgres `raw` schema
-- `apps/llm-service/` — Python (uv): FastAPI, MCP endpoint first, `/chat` Tier 3
-- `apps/app-web/` — TypeScript (Bun): Next.js, reads `mart` directly
-- `libs/factors/` — Python (uv): the seven modules; `base/` `composite/` `shared/`
-- `db/` — plain SQL migrations for `raw`/`staging`/`mart`/`dagster` + `roles.sql`
+The repository therefore has three primary operational SOP surfaces: this operating
+contract, iterative delivery, and delivery governance. Gate 0 and handoff documents are
+two specialist runbooks.
 
-No moon — CI is GitHub Actions with path filtering (`.github/workflows/`).
+## Project Context
 
-## 🔧 Commands
+TrueAlpha is a fundamental and supply-chain research monorepo. It combines immutable raw
+source capture, Postgres warehouse and knowledge-graph metadata, factor computation under
+Dagster, and typed `mart` consumption through the Web App, MCP, and `/chat`. Current host
+scripts are reconnaissance/bootstrap tooling, not scheduled release evidence.
 
-- `make install` / `make check` (lint + typecheck + test) / `make test`
-- Python: `uv sync --all-packages`, `uv run pytest`, `uv run ruff check .`
-- Web: `cd apps/app-web && bun run typecheck && bun run build`
-- DB: `make db-up` (compose applies `db/` DDL on first boot)
+Read `vision.md` for the investment questions and product rationale. Read `init.md` before
+cross-service design, public contract, schema, release-gate, or known-risk decisions. Do
+not load either document indiscriminately when a narrower source answers the task. Initial
+reconnaissance findings and captured evidence live in
+`apps/data-engine/samples/README.md`.
 
-## Workspace Work Prefix and Deduplication
+## Start And Resume Checkpoint
 
-Derive the workspace identity from the actual repository-root directory for the
-current checkout. Never hard-code it or infer it from the remote repository name:
+At the start of a task, after context compaction, and before resuming prior work:
 
-```sh
-workspace_root="$(git rev-parse --show-toplevel)"
-workspace_name="$(basename "$workspace_root")"
-work_prefix="[$workspace_name]"
-```
+1. Re-read the user's latest instruction. Do not treat a summary as newer authority.
+2. Run `git status --short --branch` and preserve unrelated or user-owned changes.
+3. Derive the workspace prefix from the checkout, never from the remote name:
 
-For example, this checkout is rooted at `truealpha`, so its exact work prefix is
-`[truealpha]`. A separately named worktree or checkout has its own prefix derived
-from its own root directory. Recompute the prefix before creating or renaming work.
+   ```sh
+   workspace_root="$(git rev-parse --show-toplevel)"
+   workspace_name="$(basename "$workspace_root")"
+   work_prefix="[$workspace_name]"
+   ```
 
-1. **Prefix owned work.** Agent task names and every GitHub issue or pull request
-   created or exclusively owned by this workspace must use the exact title form
-   `<work_prefix> <plain English description>`, for example
-   `[truealpha] Freeze the Yahoo parser corpus`. Do not add batch, lane, rung, stage,
-   or task tokens such as `[S1]`, `[D1]`, `[S8:E1]`, or `[prep]` to titles. Record
-   those identities in the canonical manifest, labels, branch name, or issue/PR body.
-2. **Respect PR workspace ownership.** Agents may inspect and work on issues with
-   any title prefix. By default, an agent may create, push to, edit, review, resolve
-   threads on, or merge only a pull request whose bracketed title prefix exactly
-   matches the checkout-derived `<work_prefix>`. Read-only inspection of other PRs
-   is allowed when needed for coordination. Acting on a cross-prefix PR requires an
-   explicit user instruction that names that PR; a general request to help the
-   repository is not an exception. This is an agent operating rule, not a repository
-   automation requirement.
-3. **Claim one work key.** The unique work key is the issue or batch ID plus its
-   target rung, or an explicit standalone task ID when no batch applies. Only one
-   active agent, issue, and pull request may own a work key at a time.
-4. **Search before creating.** Before opening an issue, branch, or pull request,
-   search open and recently closed issues and pull requests, remote branches, and
-   canonical batch manifests for the same work key. Continue the existing work
-   instead of creating a parallel copy.
-5. **Keep parallel work disjoint.** A shared prefix does not make work independent.
-   Agents in this workspace may run concurrently only when both their work keys and
-   writable paths are disjoint. Changes to shared graphs, migrations, registries,
-   exports, lockfiles, or authoritative docs remain serialized through the existing
-   integration-lease rules.
-6. **Do not claim shared parents.** Root capability and gate issues remain unprefixed
-   unless ownership is explicitly assigned to this workspace. Prefixed batch issues
-   and pull requests should reference those shared parents without relabeling them as
-   exclusively owned work.
-7. **Collapse duplicates immediately.** If duplicate work is discovered, keep the
-   complete, verified issue or pull request and close the duplicate with a cross-link
-   and a concise reason before either line advances further.
-8. **Declare PR ownership structurally.** Every PR body contains exactly one
-   `Work-Issue: #<number>`, `Work-Key: <key>`, and `Issue-Action: <action>` field.
-   Batch PRs use `<batch-id>:<target-rung>` with `managed-by-batch`; standalone PRs
-   use `standalone-<issue>` with `complete-on-merge` or `keep-open`. Free-form issue
-   mentions and closing keywords are not lifecycle authority.
-9. **Run preflight before editing.** Run `make agent-preflight WORK_ISSUE=<number>`
-   before claiming work. It validates the checkout-derived prefix, clean worktree,
-   upstream state, open issue state, duplicate open PRs, and delivery graph. A clean
-   branch whose upstream was deleted may be repaired automatically; dirty worktrees,
-   detached heads, and duplicate claims fail closed.
+4. Declare the operating mode: issue coordination, owned delivery, review, or a
+   user-named override.
+5. Identify the exact issue, work key, PR, branch, writable paths, and read-only paths.
+   Unknown ownership means read-only.
+6. Search open and recently closed issues and PRs, remote branches, and batch manifests
+   before creating work. Continue the existing work key; collapse duplicates promptly.
+7. Read only the relevant authoritative documents and code. If `.codegraph/` exists,
+   use CodeGraph before broad text search.
+8. Before claiming repository implementation, run
+   `make agent-preflight WORK_ISSUE=<number>`.
 
-## Mergeability Definition
+A clean-looking branch, matching title prefix, old session summary, or prior inspection
+does not by itself authorize PR mutation.
 
-`mergeable` means **ready and authorized to merge into the target branch now**. It is
-not synonymous with GitHub's `mergeable: MERGEABLE`, which only establishes that Git
-can combine the branches without an unresolved content conflict. A PR is mergeable
-only when every condition below is true for its exact current head SHA:
+## Operating Modes And PR Ownership
 
-1. **Authorized scope.** The PR owns one non-duplicated work key and, when applicable,
-   exactly one manifest target rung. Required start dependencies and consumed handoffs
-   are accepted, and the diff stays within the declared writable paths and integration
-   lease.
-2. **Compatible base.** The PR has no merge conflict and audits target-branch drift
-   from its recorded base before merge. Advancement of `main` alone does not require a
-   rebase. Update the branch and rerun affected evidence when that drift intersects the
-   declared writable or read-only paths, integration lease, consumed handoffs, generated
-   artifacts, frozen inputs, or otherwise invalidates the PR's evidence. Disjoint drift
-   neither blocks merge nor rewrites the stable batch activation base, manifest hash, or
-   exact-head evidence. CI records the exact base and head that it tested.
-3. **Exact-head evidence.** Every required status check has completed successfully on
-   that head SHA, including the declared acceptance and negative commands. Pending,
-   skipped when required, stale, cancelled, or failing required evidence is not a pass.
-4. **Review complete.** The PR is not a draft, required reviewers have reviewed the
-   exact material change, requested changes are addressed, and every review thread is
-   resolved. Author statements and bot summaries are not substitutes for required
-   evidence or authority.
-5. **Truthful claim and closure.** The PR description names the evidence ceiling and
-   leaves higher claims open. It has no accidental closing keyword. It closes an issue
-   only when that issue's terminal evidence and closure dependencies are accepted; an
-   intermediate rung PR links the issue without closing it.
-6. **Deployable result.** Merging preserves a deployable `main`: additive migrations
-   remain backward compatible, provisional code is disabled from accepted release
-   bindings and default runtime selection, and rollback remains possible.
-7. **Repository enforcement.** The target-branch ruleset reports no remaining block:
-   the compatible-base audit passes, required checks pass, required review resolution
-   passes, and the current user has no bypass that is being used to override these
-   conditions. An informational stale-base or `BEHIND` state is not itself a block.
+### Issue Coordination (Default)
 
-An open parent capability, incomplete higher rung, pending closure dependency, or
-incomplete release gate does not by itself block a lower-rung PR whose manifest permits
-that work and whose claim stays below the corresponding ceiling. Conversely, a green
-CI badge, label, approval, conflict-free diff, or completed lower rung alone never makes
-a PR mergeable. A PR that changes frozen semantics or a frozen candidate must create the
-required new version/candidate and satisfy the invalidation rules before it can merge.
+Broad requests such as "review progress", "check the goal", "triage blockers", or
+"continue" default to issue coordination. In this mode an agent may inspect repository
+and GitHub state and create, edit, reprioritize, link, or close issues. Pull requests,
+branches, review threads, CI controls, and merges remain read-only.
 
-## Iterative Capability Delivery Protocol
+Issues are the live, shared coordination surface. Multiple agents may improve an issue's
+problem statement, priority, dependencies, findings, owner, and next action. Treat issue
+updates as cheap and immediate; do not wait for a code owner to record a newly verified
+finding there.
 
-Release-gate milestones define product claims and promotion order. They are not
-implementation batches. A capability batch owns one bounded vertical slice across an
-explicit contiguous range of the data-application loop. Each batch PR advances that
-slice by exactly one rung, and a gate may contain many independently mergeable batches.
-Passing a lower rung never implies that a higher rung or gate passed.
+### Owned Delivery
 
-The evidence ladder is:
+An agent may mutate a PR or its branch only when both gates pass:
 
-1. **E0 Code** - Build the smallest typed vertical slice. Run lint, type, unit, and
-   negative contract checks. APIs remain experimental and no data-readiness claim is
-   allowed.
-2. **E1 Tiny** - Run end to end on a content-hashed, predeclared tiny corpus chosen to
-   expose semantic branches. Where applicable include success, missing/unavailable,
-   revision/restatement, and cutoffs on both sides of public availability. Prove PIT
-   exclusion, append-only writes, deterministic replay, lineage, and fail-closed errors.
-3. **E2 Contract repair** - Classify every tiny-run finding as a local bug, generic
-   toolkit gap, semantic ambiguity, or data/source issue. Version generic contract or
-   schema changes, add compatibility and negative tests, rerun E1, and publish an exact
-   content-hashed handoff.
-4. **E3 Medium** - Run the pinned handoff over an immutable stratified denominator with
-   multiple subjects, cutoffs, vintages, regimes, and declared failure states. Prove no
-   denominator shrink, fixture/Postgres parity, replay equality, reconciliation, SLO
-   calculation, and resource telemetry. This is development evidence, not a holdout.
-5. **E4 Harden and freeze** - Meet predeclared latency, throughput, memory, storage,
-   cost, and headroom budgets. Inject partial writes, retries, rate limits, crashes,
-   schema drift, and out-of-order inputs as applicable. Freeze exact code, configuration,
-   contract, catalog, universe, and threshold hashes before an independent holdout. A
-   bounded Staging canary may prove operation for that exact candidate, but not full-scope
-   capacity, natural refresh, or Production readiness.
-6. **E5 Large and shadow** - Build an empty isolated database/object store from the
-   approved release and full scope. Prove row completeness, capacity, non-starvation,
-   recovery/checksums, rights/budget validity, real consumers, and observed post-freeze
-   natural source transitions. Fixture replay, retries, unchanged bytes, reparsing, and
-   synthetic mutation never count as natural refresh.
+1. The current task explicitly assigns the issue/work key or named PR to this agent or
+   workspace for implementation, repair, rebase, review-thread cleanup, or merge.
+2. The PR title's leading bracketed prefix exactly equals the checkout-derived
+   `work_prefix`.
 
-Gate acceptance and Production graduation are a separate fan-in state, not an evidence
-rung. E5 can supply shadow evidence but cannot close a gate by itself. Graduation requires
-the exact candidate's complete gate bundle, independent capture audit, final Vision audit,
-and recorded human approval.
+A matching prefix is necessary but not sufficient. Repository-wide responsibility,
+issue edit permission, authorship of an earlier comment, or a request to review does not
+grant delivery ownership. Write only the declared paths and work key.
 
-Every implementation batch follows these rules:
+### User-Named Override
 
-1. **Freeze a narrow manifest.** The canonical manifest is a checked-in, content-hashed
-   artifact under `governance/batches/`; a mutable issue body is never the source of truth.
-   Record the batch ID/revision, capability issue IDs, last-accepted/current-target/
-   terminal rung, objective, claim and readiness ceiling, stable activation base SHA, exact input handoff
-   IDs/hashes, dependency class, corpus/denominator, expected outputs,
-   acceptance and negative commands, owners/reviewers, non-goals, invalidation triggers,
-   rollback, and writable, read-only, and forbidden path globs. Holdout manifests record
-   custody and protocol, never protected labels or results. `batch:*` labels belong only
-   to batch-manifest issues, never release-gate epics or capability issues.
-2. **Use lanes and exclusive path ownership.** The primary lanes are capture/storage,
-   orchestration/platform, strategy, consumption, and verification/operations.
-   Contracts/toolkit is not an independent execution lane: it is a shared integration
-   surface. Up to five work packets may run concurrently when their writable paths are
-   disjoint and their consumed handoffs are already merged. There is one active writer per
-   path and one integration lease for shared types/exports, registries, migrations,
-   generated conformance artifacts, root lockfiles, and authoritative docs.
-3. **Classify dependencies by the claim they block.** A start dependency blocks even
-   provisional implementation; a freeze dependency permits fixture work but blocks a
-   stable candidate; a closure dependency permits a frozen candidate but blocks issue or
-   gate acceptance. After an accepted E2 handoff merges, downstream agents may implement
-   against that exact ID without waiting for the whole release gate. Earlier fixture
-   prototypes are allowed only when the manifest marks them provisional. Consumers pin
-   exact handoffs and never resolve `latest` or infer policy.
-4. **Keep source and computation boundaries strict.** Data-engine hands strategy only a
-   ready capture evaluation, exact snapshot, and typed inputs. Strategy never reads raw
-   rows, vendor identity, rights, or source priority. Consumers receive only materialized
-   outputs plus trace, usage, availability, catalog, universe, and release identities.
-5. **Merge small verified increments.** One PR accepts exactly the batch's current target
-   rung and names its manifest hash and handoffs. It audits drift from its recorded base,
-   updates only when the compatibility rule above requires it, passes rung-specific checks
-   on its exact tested base/head pair, advances the target by at most one rung, and may
-   merge independently.
-   Dependency-topological merge order and the integration lease serialize shared paths.
-   A stage merge never promotes an environment
-   or claims gate completion. A required branch update does not change the stable
-   activation base; rerun affected evidence and record the exact CI base/head instead.
-   Stale evidence cannot merge.
-   Capability nodes and incoming edges are assembled from independent files under
-   `governance/capabilities/`, and batch nodes are assembled from independent files under
-   `governance/batches/`; ordinary capability and batch PRs never edit the shared static
-   root/Gate graph. `main` remains deployable:
-   provisional code is absent from the accepted `ReleaseManifest` registry/configuration
-   bindings and is not registered, scheduled, routed, or selected by default. Its
-   migrations are additive and backward
-   compatible, and a negative release test proves an unaccepted capability cannot run.
-6. **Freeze before observing protected results.** Formula semantics, sampling strata,
-   thresholds, minimum sample counts, custody/conflict rules, source/knowability policy,
-   applicability, and SLO denominators freeze before medium evaluation or holdout reveal
-   as applicable. Any evaluated-code or policy change after freeze creates a new version
-   and requires a fresh untouched holdout.
-7. **Respect the evidence ceiling.** E1 emits immutable `TinyEvidence`, not a stable
-   handoff. Only an independently verified E2 `HandoffManifest` may grant named consumers
-   permission to depend on an interface. Handoffs move through produced, verified,
-   accepted, and revoked states; they record the producer head, schema epoch, evidence,
-   approver, allowed consumers/environments, retention, readiness ceiling, and revocation.
-   Fixtures prove contracts; development goldens prove
-   candidate behavior; calibration data may tune only a new version; sealed holdouts prove
-   module acceptance; a Staging canary proves bounded operation; natural-refresh soak and
-   independent Production evidence are required for graduation. Labels or manual flags
-   cannot raise this ceiling.
-8. **Do not turn external waits into local idle time.** Pending rights, budget, owner, or
-   wall-clock evidence blocks source activation and higher-rung claims, but not fixture/
-   local work whose manifest declares that ceiling. Expiry or revocation immediately
-   blocks affected live work without erasing historical reproducibility.
-9. **Invalidate precisely and preserve failures.** Never edit failed evidence into a pass.
-   A local bug reruns the affected rung and all higher rungs. A semantic, PIT, schema,
-   threshold, catalog, universe, or selection change creates a new handoff and invalidates
-   dependent evidence. Any code fix after candidate freeze is a new candidate/version and
-   uses a fresh untouched holdout; a revealed holdout is never rerun as acceptance evidence.
-   Denominator shrink is a product-scope change, not a repair.
-10. **Close gates only at fan-in.** Capability issues close only at their declared terminal
-   rung. Gate epics close in order only when their complete transitive acceptance bundle
-   passes on one exact release candidate. The checked-in static root/Gate graph,
-   independently writable capability fragments and batch manifests, and live GitHub parity
-   check must together contain every `scope:vision` issue, batch, Gate owner, artifact edge,
-   terminal rung, and evidence ceiling with no cycle or orphan. Promotion, graduation,
-    and rollback remain candidate-wide even though implementation increments merged earlier.
+The user may explicitly ask this agent to modify a named cross-prefix PR. That instruction
+temporarily overrides the prefix gate for that PR and requested operation only. Record the
+override in the context checkpoint; do not generalize it.
 
-Agents continue across packets in an approved manifest without waiting for a prompt at
-each boundary. Escalate only product semantics, security/legal authority, protected-label
-custody, a handoff-invalidating scope change, or an external blocker that caps the next
-rung. Reports name the batch manifest revision, handoff IDs, rung, evidence, and remaining
-readiness ceiling.
+### Review And Handoff
+
+For an unowned PR, inspect as needed but put actionable findings on its corresponding
+issue and let the PR owner implement them. Do not push fixes, edit the PR body, reply to
+or resolve threads, rerun or watch CI, rebase, close, or merge it unless the user grants a
+named override.
+
+For an authorized PR, independently verify every review thread. Resolve a thread directly
+when its concern is fixed or demonstrably obsolete; unresolved verified threads must not
+block delivery. Never resolve actionable, ambiguous, or unverified feedback.
+
+## Issue-To-PR Contract
+
+Every PR must correspond to exactly one issue. Create or repair the issue relationship
+before implementation proceeds.
+
+- Every PR body contains exactly one `Work-Issue: #<number>`, `Work-Key: <key>`, and
+  `Issue-Action: <action>` field.
+- Batch PRs use `<batch-id>:<target-rung>` and `managed-by-batch`.
+- Standalone PRs use `standalone-<issue>` and either `complete-on-merge` or `keep-open`.
+- Free-form mentions and GitHub closing keywords are not lifecycle authority.
+- The issue records mutable coordination: current owner, priority, verified findings,
+  dependencies, decisions, and next action.
+- The checked-in batch manifest records immutable authorization and evidence inputs.
+  Copying it into an issue body does not make the issue canonical.
+- A PR owner reads the issue and applies changes to their PR. A coordination agent edits
+  the issue rather than taking over the PR.
+- An intermediate rung PR links the issue but does not close it. Close a capability issue
+  only at its declared terminal evidence and after closure dependencies are accepted.
+
+The unique work key is the issue or batch ID plus target rung, or an explicit standalone
+task ID. Only one active issue ownership claim and one active PR may own a work key.
+
+## Prefix, Deduplication, And Parallel Work
+
+Owned issues and PRs use the exact title form
+`<work_prefix> <plain English description>`. Do not put lane, batch, rung, stage, or task
+tokens in titles; store them in manifests, labels, branches, or bodies. Shared root
+capability and Gate issues remain unprefixed unless explicitly assigned.
+
+Parallel agents may work only when work keys and writable paths are disjoint. There is one
+active writer for shared graphs, migrations, registries, public exports, generated
+conformance artifacts, root lockfiles, and authoritative documents. These surfaces require
+the integration lease defined by the delivery SOP. Pending external authority or elapsed
+evidence caps the claim; it does not justify taking another agent's work.
+
+## Architecture Red Lines
+
+- Never commit `.env`, `*.pem`, tokens, credentials, account identifiers, private hosts,
+  or secrets in code, fixtures, comments, or docs. Redact live-session output before it
+  reaches a tracked file. Secret scanning is a backstop, not permission.
+- Point-in-time data distinguishes `valid_time` from `transaction_time` (knowable-at).
+  Write `transaction_time` explicitly from a source property, never an insertion-clock
+  default. `recorded_at` is ingestion audit time only.
+- Never overwrite a point-in-time record. Restatements insert new rows and set
+  `is_restatement`; they never update history in place. Parsed facts carry
+  `mapping_version` so reparses remain distinguishable from restatements.
+- Source fusion never selects the most recently inserted row. The metric registry's
+  per-field `source_priority` selects the mart assertion. Backtesting and factors operate
+  only on what was knowable at the historical cutoff.
+- Immutable source-response bytes live in S3-compatible object storage. Postgres
+  `raw.fetches` stores checksums, object pointers, timestamps, and lineage. Apps and LLM
+  services never use object storage as a service-to-service data path.
+- Never put computation logic outside `libs/factors`. Application and LLM layers perform
+  only deterministic formatting and transport over materialized outputs. Screens and the
+  three-tier valuation framework are composite factors, not consumer-side rules.
+- Factor inputs are provenance-neutral typed records with opaque input identity, subject,
+  value/unit/currency and valid period where applicable, confidence, and snapshot cutoff.
+  Factor code never sees or branches on vendor, raw reference, accession, rights, source
+  priority, or extractor metadata. Composite confidence cannot exceed the minimum consumed
+  confidence unless a versioned policy is stricter.
+- Never write staging rows without `confidence`. Never use binary floating point where
+  monetary precision matters; database monetary columns use `numeric`.
+- LLM surfaces use typed `mart` reads only, never raw/staging access, arbitrary SQL, or
+  live factor computation. `mart_readonly` enforces the database boundary and
+  `ResearchQueryService` enforces allowed queries, pagination, and row limits.
+- LLM extraction is a separate versioned, append-only step. Bind model, instructions,
+  schema, and decoding settings; store semantic results and evidence spans. Replay never
+  silently calls a model. Self-reported confidence is not calibrated evidence without an
+  accepted sealed holdout/SLO policy.
+- Every moomoo request goes through `api_call_ledger`; no module calls the API directly.
+  The ledger is throttle and audit infrastructure, not a fictional monthly-call quota.
+  The relevant quote/fundamental endpoints use burst rate limits; do not confuse a
+  subscription tier ceiling with a call budget. See `init.md` Section 5.
+- Moomoo access is Quote API read-only. Never import or call trade contexts, `place_order`,
+  `modify_order`, `cancel_order`, or `unlock_trade`. The public repository's security CI
+  must reject trading APIs rather than relying on review alone.
+- Data-engine may hand strategy only ready capture evaluation, exact snapshots, and typed
+  inputs. Consumers receive materialized outputs plus trace, usage, availability, catalog,
+  universe, and release identities. Consumers pin accepted handoff IDs, never `latest`.
+
+Repository shape:
+
+- `apps/data-engine/`: Python source adapters, sweep scripts, dlt, and Dagster assets.
+- `apps/llm-service/`: Python FastAPI, MCP first, `/chat` SSE Tier 3.
+- `apps/app-web/`: TypeScript/Next.js; reads `mart` through a read-only account.
+- `libs/contracts/`: cross-module PIT DTOs and repository/storage/backtest ports.
+- `libs/factors/base/`: provenance-neutral PIT factors; modules 1-6.
+- `libs/factors/composite/`: factors that reload materialized upstream outputs; module 7.
+- `libs/factors/shared/`: KG entity resolution and the shared structured-extraction
+  primitive. Do not reimplement extraction per factor.
+- `libs/runtime/`: environment/dependency contracts and Postgres/KG/S3 probes.
+- `db/migrations/`: the schema source of truth for `raw`, `staging`, `mart`, and `dagster`.
+- `db/roles.sql`: database role and permission configuration.
+- `.github/workflows/`: GitHub Actions with path filtering; there is no moon setup.
+
+## Evidence And Merge Boundary
+
+Use `docs/iterative-delivery.md` for full rules. The claim ceilings are:
+
+| Rung | Evidence | Maximum claim |
+|---|---|---|
+| E0 | Typed slice, lint/type/unit/negative checks | Experimental code |
+| E1 | Immutable edge-case tiny run | Contract behavior |
+| E2 | Classified repair and accepted pinned handoff | Stable local handoff |
+| E3 | Immutable stratified medium run | Development candidate |
+| E4 | Hardening, failure injection, freeze, independent holdout | Accepted candidate or bounded operation |
+| E5 | Empty full build, capacity, recovery, real consumers, natural refresh | Large-scale shadow evidence |
+
+E5 is not Production graduation. Gate acceptance is a separate fan-in over one exact
+candidate, independent audits, complete terminal evidence, and human approval. Preserve
+failed evidence. Semantic, PIT, schema, threshold, catalog, universe, or selection changes
+invalidate dependent evidence; a post-freeze code change creates a new candidate.
+
+`mergeable` means authorized and ready to merge now, not merely conflict-free. For the
+exact head SHA, verify all of the following:
+
+1. One non-duplicated authorized work key and valid path/lease ownership.
+2. Compatible target-branch drift. Rebase only when intersecting drift invalidates code,
+   inputs, generated artifacts, handoffs, or evidence; a disjoint `BEHIND` state alone is
+   not a blocker.
+3. Required acceptance and negative checks pass on the exact tested base/head pair.
+4. Required review is current and every verified thread is resolved.
+5. The PR's claim and issue action respect the evidence ceiling and terminal rung.
+6. The result keeps `main` deployable, provisional capabilities disabled by default, and
+   migrations backward compatible with rollback available.
+7. Repository rules report no remaining block and no bypass is being used.
 
 ## Issue Quality Gate
 
-Every issue must explain a complete causal path from the observed problem to the
-project goal. A task list without that argument is not ready for implementation.
-Before creating an issue, check `vision.md`, `init.md`, existing issues, and the
-current code or evidence so the proposal does not duplicate work or contradict
-the authoritative architecture.
+Before creating or substantially changing an issue, inspect `vision.md`, `init.md`, the
+current code/evidence, and existing issues/PRs. A task list without a causal argument is
+not implementation-ready.
 
-An implementation issue is not ready to start unless its exact issue ID is in a versioned
-capability-batch manifest, every start dependency is already accepted, and any earlier-rung
-input produced inside the batch has passed its declared acceptance. Milestone assignment
-alone is insufficient. Provisional fixture work must declare its evidence ceiling; it may
-merge after its rung passes but cannot close an issue whose terminal rung is higher.
-The issue links its canonical manifest path and SHA-256; copying manifest fields into the
-issue body does not make the body authoritative.
+Every implementation issue contains:
 
-Every implementation issue must contain these sections:
+1. **Problem context**: observed behavior, affected users/modules, evidence, scope, parent
+   goal, and relevant code or artifact links.
+2. **Root-cause analysis**: verified semantic, data, interface, or operational causes,
+   clearly separated from hypotheses.
+3. **Remediation**: changes mapped to causes, ownership boundaries, order, migrations,
+   and explicit non-goals.
+4. **Acceptance criteria**: executable positive, negative, PIT, replay, and operational
+   evidence rather than proof that code was merely written.
+5. **Why this completes the larger goal**: cause-to-change-to-evidence closure argument,
+   downstream capability unblocked, residual risks, and remaining dependencies.
 
-1. **Problem context** — Describe the observed behavior, affected users or
-   modules, current evidence, scope, and the larger goal that is blocked. Link
-   the relevant `vision.md` / `init.md` phase, parent issue, code, data, or run.
-2. **Root-cause analysis** — Explain why the problem exists at the semantic,
-   data, interface, or operational boundary. Distinguish verified causes from
-   hypotheses. Do not restate the symptom as the cause.
-3. **Remediation** — Specify the proposed changes, ownership boundaries, data or
-   interface migrations, implementation order, and explicit non-goals. Each
-   change must address a named root cause.
-4. **Acceptance criteria** — Use observable, executable outcomes wherever
-   possible: tests, queries, quality gates, replay assertions, workflow runs, or
-   artifacts. Cover negative and point-in-time cases, not only the happy path.
-5. **Why this completes the larger goal** — Provide the closure argument:
-   map root causes to changes, changes to acceptance evidence, and that evidence
-   to the downstream capability that becomes unblocked. List residual risks,
-   dependencies, and follow-up work; if any dependency still blocks the stated
-   goal, narrow the issue's claimed outcome instead of declaring completion.
+A capability implementation issue is not ready to start until its exact ID appears in a
+versioned batch manifest, start dependencies are accepted, and earlier-rung inputs meet
+their stated acceptance. Standalone repository operations use an explicit standalone work
+key and do not claim a capability rung. Provisional work declares its evidence ceiling.
+Exploration issues instead state competing hypotheses, evidence to collect, the enabled
+decision, and a termination criterion.
 
-Exploration issues may begin with an unverified root cause, but must state the
-competing hypotheses, the evidence to collect, the decision that evidence will
-enable, and a termination criterion. They must result in either a verified
-implementation issue or a documented decision that no change is required.
+## Context Compaction And Handoff
 
-An issue is not ready when acceptance criteria only confirm that code was
-written, when evidence can be satisfied by manually flipping a flag, or when
-the proposed work does not prove which downstream blocker it removes.
+Before context compaction, agent handoff, or session end, write a concise checkpoint using
+this exact structure. It combines Claude Code's current-state/error-correction emphasis
+with Codex's exact-state resumption needs:
+
+```md
+# Session Title
+
+## Objective And Latest User Intent
+- Objective:
+- Latest instruction:
+- Explicit user corrections that must survive compaction:
+
+## Mode And Authorization
+- Mode: issue coordination | owned delivery | review | named override
+- Owned issue and work key:
+- Owned PR and branch:
+- Exact override, if any:
+- Writable paths/surfaces:
+- Read-only or unowned paths/PRs:
+
+## Authoritative Context
+- Required docs and decisions:
+- Architecture or product invariants:
+- Exact handoffs/manifests/hashes:
+
+## Current State
+- Repository root, branch, base/head SHA, and worktree state:
+- GitHub issue/PR/check/review state:
+- Completed work:
+- Files and symbols changed or inspected:
+
+## Verification And Corrections
+- Commands/evidence and results:
+- Errors, failed approaches, and user corrections:
+- Facts versus unresolved hypotheses:
+
+## Next Actions
+1. Immediate next action:
+2. Remaining ordered actions:
+- Blockers or external waits:
+- Stop/termination condition:
+
+## Do Not
+- Unowned PR operations:
+- Invalidated assumptions or approaches:
+- User-owned/unrelated changes to preserve:
+```
+
+Compaction rules:
+
+- Preserve the latest user correction even when it conflicts with an older plan.
+- Record exact issue/PR numbers, work key, paths, SHAs, commands, evidence state, and next
+  action. Do not write vague summaries such as "continue the goal".
+- Separate completed, observed, inferred, blocked, and pending work.
+- Record failed approaches so the resumed agent does not repeat them.
+- A checkpoint preserves context but grants no authority. The resumed agent must rerun the
+  Start And Resume Checkpoint and ownership gates before mutation.
+- Never convert stale evidence, an unresolved hypothesis, or another agent's PR into owned
+  work through summary wording.
+
+## Environments And Source Gotchas
+
+The target topology has Local, GitHub CI, Staging, and Production. This describes intent,
+not proof that an environment or release gate is ready. Staging and Production are isolated
+namespaced stacks; infra2 owns external Vault, MinIO, deployment, and promotion authority.
+This repository consumes only released `infra2-sdk` contracts and never treats infra2 as a
+TrueAlpha source dependency.
+
+| Environment | Postgres | Object storage | Provisioning |
+|---|---|---|---|
+| Local | `make runtime-up` or localhost | Local MinIO | `make db-migrate`; bucket bootstrap |
+| GitHub CI | Ephemeral service container | Ephemeral MinIO container | Per workflow run |
+| Staging | `truealpha-postgres-staging`, host loopback `:15432` | Platform MinIO staging, bucket `truealpha-raw` | infra2 release promotion and `scripts/setup_vps_ingest.sh` |
+| Production | `truealpha-postgres`, host loopback `:15433` | Platform MinIO, bucket `truealpha-raw` | Gate 4 shadow bootstrap, exact release manifest, explicit graduation |
+
+- Current VPS host scripts and direct OpenD loopback access are reconnaissance/bootstrap
+  only. They cannot satisfy scheduled-run or Staging/Production evidence. Issue #11 must
+  provide an immutable data-engine/Dagster artifact and least-privilege OpenD boundary
+  before scheduling counts.
+- SEC XBRL concept tags and units vary across industries. Do not assume one field mapping
+  works for every issuer.
+- yfinance has no official SLA. Represent that limitation through lower row confidence;
+  never make it a critical-path dependency or invent a provenance branch in factors.
+- N-PORT holdings identify positions by CUSIP/ISIN, not ticker/CIK. Resolve identifiers
+  through OpenFIGI or equivalent before writing PIT `same_as` KG edges. Do not recreate a
+  flat `symbol_mapping` table in place of `staging.kg_entities`, `staging.kg_identifiers`,
+  and `staging.kg_edges`.
+- Build the structured-extraction primitive in `libs/factors/shared` before factor-specific
+  gross-profit/headcount or pure-blood extraction. Do not duplicate extraction logic.
+
+## Commands
+
+- Install/check/test: `make install`, `make check`, `make test`.
+- Local dependencies: `make runtime-up`, `make runtime-check`.
+- Database: `make db-up`, `make db-migrate`.
+- Python: `uv sync --all-packages`, `uv run pytest`, `uv run ruff check .`.
+- Web: `cd apps/app-web && bun install`, `bun run dev`, `bun run typecheck`,
+  `bun run build`.
+- Governance: `make issue-graph-check`.
+- Work claim: `make agent-preflight WORK_ISSUE=<number>`.
+
+Reconnaissance/bootstrap ingestion is ordered and is never scheduled Gate evidence:
+
+```sh
+uv run --package truealpha-data-engine python apps/data-engine/scripts/bootstrap_universe.py
+uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_sec_facts.py
+uv run --package truealpha-data-engine python apps/data-engine/scripts/probe_moomoo_nonus.py
+uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_moomoo_fundamentals.py --dry-run
+```
+
+The two moomoo commands require the OpenD host and
+`MOOMOO_LEDGER_BACKEND=postgres`. Probe non-US endpoints before a full sweep.
+
+Run the narrowest relevant tests first, then the declared manifest commands. Report what
+was not run and why.
