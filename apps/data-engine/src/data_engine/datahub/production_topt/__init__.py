@@ -1,5 +1,12 @@
 """Manual-only Production TOPT capture planning."""
 
+from data_engine.datahub.production_topt.calculation import (
+    GppeCalculationAvailability,
+    GppeCalculationInput,
+    GppeCalculationResult,
+    PostgresGppeResultRepository,
+    calculate_gppe,
+)
 from data_engine.datahub.production_topt.execution import persist_manual_production_plan
 from data_engine.datahub.production_topt.planning import (
     PRODUCTION_CONFIRMATION,
@@ -10,8 +17,13 @@ from data_engine.datahub.production_topt.planning import (
 
 __all__ = [
     "PRODUCTION_CONFIRMATION",
+    "GppeCalculationAvailability",
+    "GppeCalculationInput",
+    "GppeCalculationResult",
+    "PostgresGppeResultRepository",
     "ManualProductionToptPlan",
     "ManualProductionToptRequest",
     "persist_manual_production_plan",
     "plan_manual_production_topt",
+    "calculate_gppe",
 ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import psycopg
@@ -10,7 +11,10 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub.production_topt import (
     PRODUCTION_CONFIRMATION,
+    GppeCalculationInput,
     ManualProductionToptRequest,
+    PostgresGppeResultRepository,
+    calculate_gppe,
     persist_manual_production_plan,
     plan_manual_production_topt,
 )
@@ -158,6 +162,22 @@ def test_plan_persistence_is_atomic_and_idempotent(connection) -> None:
         "select count(*) from raw.capture_checkpoints where run_id = %s",
         (plan.run.run_id,),
     ).fetchone() == (1,)
+
+    calculation = calculate_gppe(
+        GppeCalculationInput(
+            run_id=plan.run.run_id,
+            issuer_id="issuer:lei:EXAMPLE",
+            cutoff=CUTOFF,
+            gross_profit=Decimal("3000000"),
+            employee_headcount=3,
+            is_financial=False,
+            confidence=Decimal("0.9"),
+        )
+    )
+    result_repository = PostgresGppeResultRepository(connection)
+    assert result_repository.put(calculation)
+    assert result_repository.put(calculation) is False
+    assert result_repository.for_run(plan.run.run_id)[0]["tier"] == "tech"
 
 
 @pytest.mark.parametrize(

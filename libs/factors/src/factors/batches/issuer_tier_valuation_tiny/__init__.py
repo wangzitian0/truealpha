@@ -10,6 +10,7 @@ from factors.batches.issuer_tier_valuation_tiny.kernel import (
     TierValuationAvailability,
     TierValuationReasonCode,
     compute_issuer_tier_valuation,
+    tier_for_gppe,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "TierValuationAvailability",
     "TierValuationReasonCode",
     "compute_issuer_tier_valuation",
+    "tier_for_gppe",
 ]
