@@ -344,7 +344,7 @@ TrueAlpha source dependency.
 |---|---|---|---|
 | Local | `make runtime-up` or localhost | Local MinIO | `make db-migrate`; bucket bootstrap |
 | GitHub CI | Ephemeral service container | Ephemeral MinIO container | Per workflow run |
-| Staging | `truealpha-postgres-staging`, host loopback `:15432` | Platform MinIO staging, bucket `truealpha-raw` | infra2 release promotion and `scripts/setup_vps_ingest.sh` |
+| Staging | `truealpha-postgres-staging`, host loopback `:15432` | Platform MinIO staging, bucket `truealpha-raw` | infra2 release promotion and `apps/data-engine/scripts/setup_vps_ingest.sh` |
 | Production | `truealpha-postgres`, host loopback `:15433` | Platform MinIO, bucket `truealpha-raw` | Gate 4 shadow bootstrap, exact release manifest, explicit graduation |
 
 - Current VPS host scripts and direct OpenD loopback access are reconnaissance/bootstrap
