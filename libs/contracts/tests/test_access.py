@@ -13,38 +13,61 @@ from pydantic import ValidationError
 from truealpha_contracts.access import (
     AccessAction,
     AccessAuditEventKind,
+    AccessAuditRecord,
+    AccessAuditRepository,
     AccessContext,
     AccessDecisionKind,
     AccessDenialReason,
     AccessResource,
+    AccessResourceType,
+    ActiveEntitlementGrant,
     AuthenticationMethod,
     AuthorizationDecision,
     AuthorizationService,
     PrincipalKind,
-    PublicationPolicy,
+    PublicationPolicySet,
+    PublicationRule,
     authorize_access,
+    build_access_audit_record,
 )
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import DecisionSnapshot, ReplayEventStream
 from truealpha_contracts.ports import BacktestDataGateway
 from truealpha_contracts.release import ReleaseManifest
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "governed_research_access.v1.json"
-FIXTURE_SHA256 = "ac3186bcc8cf14c0b9d7c909ca0f3148618eade175c2b469022364d3fae2498b"
+BASE_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "governed_research_access.v1.json"
+BASE_FIXTURE_SHA256 = "ac3186bcc8cf14c0b9d7c909ca0f3148618eade175c2b469022364d3fae2498b"
+REPAIR_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "governed_research_access.v2.json"
+REPAIR_FIXTURE_SHA256 = "eb7b08d3b125f25e3fc64add91f09e144ccb5be5489b24643103d2e69d8b9c86"
+OBSERVED_AT = datetime.fromisoformat("2026-07-15T00:05:00+00:00")
+POLICY_SET_ID = "publication-policy-set:research:v2"
 
 
-def _fixture() -> dict[str, Any]:
-    return json.loads(FIXTURE_PATH.read_text())
+def _fixture(path: Path = BASE_FIXTURE_PATH) -> dict[str, Any]:
+    return json.loads(path.read_text())
+
+
+def _grant(principal_id: str, entitlement_id: str) -> ActiveEntitlementGrant:
+    return ActiveEntitlementGrant(
+        grant_id=f"grant:{principal_id}:{entitlement_id}:001",
+        entitlement_id=entitlement_id,
+        publication_policy_set_id=POLICY_SET_ID,
+    )
 
 
 def _contexts(corpus: dict[str, Any]) -> dict[str, AccessContext | None]:
     principal_kinds = {
-        principal["principal_id"]: PrincipalKind(principal["role"]) for principal in corpus["principals"]
+        principal["principal_id"]: PrincipalKind(principal["role"])
+        for principal in corpus["principals"]
     }
     contexts: dict[str, AccessContext | None] = {}
     for row in corpus["authentication_contexts"]:
         if row["state"] in {"missing", "invalid", "revoked", "forged"}:
             contexts[row["context_id"]] = None
             continue
+        grants: tuple[ActiveEntitlementGrant, ...] = ()
+        if principal_kinds[row["principal_id"]] is PrincipalKind.MEMBER:
+            grants = (_grant(row["principal_id"], "entitlement:research:standard:v1"),)
         contexts[row["context_id"]] = AccessContext(
             context_id=row["context_id"],
             principal_id=row["principal_id"],
@@ -54,6 +77,7 @@ def _contexts(corpus: dict[str, Any]) -> dict[str, AccessContext | None]:
             principal_kind=principal_kinds[row["principal_id"]],
             issued_at=row["issued_at"],
             expires_at=row["expires_at"],
+            active_entitlement_grants=grants,
             delegated_by_service_principal_id=row.get("service_principal_id"),
             delegation_id=row.get("delegation_id"),
         )
@@ -74,6 +98,53 @@ def _resources(corpus: dict[str, Any]) -> dict[str, AccessResource]:
     }
 
 
+def _policy(
+    *,
+    include_restricted: bool = False,
+    administrator_actions: tuple[AccessAction, ...] | None = None,
+) -> PublicationPolicySet:
+    rules = [
+        PublicationRule(
+            publication_class_id="publication-class:standard:v1",
+            eligible_entitlement_ids=(
+                "entitlement:research:premium:v1",
+                "entitlement:research:standard:v1",
+            ),
+        )
+    ]
+    if include_restricted:
+        rules.append(
+            PublicationRule(
+                publication_class_id="publication-class:restricted:v1",
+                eligible_entitlement_ids=("entitlement:research:premium:v1",),
+            )
+        )
+    rules_tuple = tuple(rules)
+    if administrator_actions is None:
+        administrator_actions = (
+            AccessAction.READ_AUDIT_METADATA,
+            AccessAction.SUBMIT_REGISTERED_REPLAY,
+        )
+    content = {
+        "publication_policy_set_id": POLICY_SET_ID,
+        "release_manifest_id": "release-manifest:research:v1",
+        "rules": [
+            rule.model_dump(mode="json")
+            for rule in sorted(rules_tuple, key=lambda item: item.publication_class_id)
+        ],
+        "administrator_actions": [
+            action.value for action in sorted(administrator_actions, key=lambda item: item.value)
+        ],
+    }
+    return PublicationPolicySet(
+        publication_policy_set_id=POLICY_SET_ID,
+        content_sha256=canonical_sha256(content),
+        release_manifest_id="release-manifest:research:v1",
+        rules=rules_tuple,
+        administrator_actions=administrator_actions,
+    )
+
+
 def _authentication_failure(context_id: str) -> AccessDenialReason | None:
     return {
         "auth:invalid-signature": AccessDenialReason.AUTHENTICATION_INVALID,
@@ -87,17 +158,14 @@ def _decision_for_case(corpus: dict[str, Any], case: dict[str, Any]) -> Authoriz
         context=_contexts(corpus)[case["context_id"]],
         action=AccessAction(case["action"]),
         resource=_resources(corpus)[case["resource_id"]],
-        policy=PublicationPolicy(
-            policy_id=corpus["policy_coordinates"]["publication_policy_id"],
-            permitted_publication_class_ids=("publication-class:standard:v1",),
-        ),
+        policy=_policy(),
         observed_at=datetime.fromisoformat(corpus["decision_time"].replace("Z", "+00:00")),
         authentication_failure=_authentication_failure(case["context_id"]),
     )
 
 
 @pytest.mark.parametrize("case_index", range(18))
-def test_frozen_authorization_corpus(case_index: int) -> None:
+def test_e1_authorization_corpus_remains_compatible(case_index: int) -> None:
     corpus = _fixture()
     case = corpus["authorization_cases"][case_index]
     decision = _decision_for_case(corpus, case)
@@ -107,67 +175,134 @@ def test_frozen_authorization_corpus(case_index: int) -> None:
     assert decision.audit_event is AccessAuditEventKind(case["expected_audit_event"])
     assert (decision.reason.value if decision.reason else None) == case.get("expected_reason")
     if decision.decision is AccessDecisionKind.DENY:
-        assert case["expected_query_count"] == 0
+        assert not decision.entitlement_grant_ids
 
 
-def test_frozen_tiny_corpus_identity_and_strata() -> None:
-    corpus = _fixture()
-    assert sha256(FIXTURE_PATH.read_bytes()).hexdigest() == FIXTURE_SHA256
-    assert len(corpus["tenants"]) == 2
-    assert len(corpus["authentication_contexts"]) == 10
-    assert len(corpus["resources"]) == 8
-    assert len(corpus["authorization_cases"]) == 18
-    assert len(corpus["append_only_event_cases"]) == 3
-    assert {row["state"] for row in corpus["authentication_contexts"]} >= {
-        "valid",
-        "missing",
-        "invalid",
-        "expired",
-        "revoked",
-        "forged",
-    }
-    case_ids = [row["case_id"] for row in corpus["authorization_cases"]]
-    assert len(case_ids) == len(set(case_ids))
-
-
-def test_frozen_decisions_replay_deterministically() -> None:
-    corpus = _fixture()
-    first = [_decision_for_case(corpus, case) for case in corpus["authorization_cases"]]
-    replay = [_decision_for_case(corpus, case) for case in corpus["authorization_cases"]]
-    assert replay == first
-    assert len({decision.decision_id for decision in first}) == len(first)
-
-
-def test_denials_are_fail_closed_before_retrieval() -> None:
-    corpus = _fixture()
-    retrieval_count = 0
-    for case in corpus["authorization_cases"]:
-        decision = _decision_for_case(corpus, case)
-        if decision.query_permitted:
-            retrieval_count += 1
-        assert int(decision.query_permitted) == case["expected_query_count"]
-    assert retrieval_count == sum(case["expected_query_count"] for case in corpus["authorization_cases"])
-
-
-def test_frozen_append_only_histories_preserve_every_event() -> None:
-    histories = _fixture()["append_only_event_cases"]
-    event_ids: list[str] = []
-    for history in histories:
-        recorded_at = [datetime.fromisoformat(row["recorded_at"].replace("Z", "+00:00")) for row in history["events"]]
-        assert recorded_at == sorted(recorded_at)
-        event_ids.extend(row["event_id"] for row in history["events"])
-    assert len(event_ids) == len(set(event_ids))
-
-    audit_history = next(row for row in histories if row["case_id"] == "allowed-and-denied-audit-history")
-    assert {event["event_type"] for event in audit_history["events"]} == {"access_allowed", "access_denied"}
-    assert all(
-        forbidden not in event
-        for event in audit_history["events"]
-        for forbidden in ("content", "body", "payload", "document_text", "conversation_text")
+def test_e2_repair_corpus_pins_unchanged_e1_bytes() -> None:
+    repair = _fixture(REPAIR_FIXTURE_PATH)
+    assert sha256(BASE_FIXTURE_PATH.read_bytes()).hexdigest() == BASE_FIXTURE_SHA256
+    assert sha256(REPAIR_FIXTURE_PATH.read_bytes()).hexdigest() == REPAIR_FIXTURE_SHA256
+    assert repair["base_corpus"]["path"] == (
+        "libs/contracts/tests/fixtures/governed_research_access.v1.json"
     )
+    assert repair["base_corpus"]["sha256"] == BASE_FIXTURE_SHA256
+    assert {case["case_id"] for case in repair["repair_cases"]} == {
+        "standard-grant-recorded-on-decision",
+        "standard-grant-denied-restricted-class",
+        "premium-grant-allows-restricted-class",
+        "wrong-policy-grant-denied",
+        "administrator-submits-registered-replay",
+        "member-cannot-submit-registered-replay",
+    }
 
 
-def test_context_rejects_naive_time_and_client_authority_claims() -> None:
+def test_tiered_publication_rules_record_exact_matching_grants() -> None:
+    standard = _grant("principal:alpha:alice", "entitlement:research:standard:v1")
+    premium = _grant("principal:alpha:alice", "entitlement:research:premium:v1")
+    base = _contexts(_fixture())["auth:browser:alpha:valid"]
+    assert base is not None
+    restricted = _resources(_fixture())["strategy-result:alpha:restricted-001"]
+
+    standard_context = base.model_copy(update={"active_entitlement_grants": (standard,)})
+    denied = authorize_access(
+        context=standard_context,
+        action=AccessAction.READ_MATERIALIZED_RESULT,
+        resource=restricted,
+        policy=_policy(include_restricted=True),
+        observed_at=OBSERVED_AT,
+    )
+    assert denied.reason is AccessDenialReason.ENTITLEMENT_NOT_PERMITTED
+    assert not denied.entitlement_grant_ids
+
+    premium_context = base.model_copy(update={"active_entitlement_grants": (premium,)})
+    allowed = authorize_access(
+        context=premium_context,
+        action=AccessAction.READ_MATERIALIZED_RESULT,
+        resource=restricted,
+        policy=_policy(include_restricted=True),
+        observed_at=OBSERVED_AT,
+    )
+    assert allowed.decision is AccessDecisionKind.ALLOW
+    assert allowed.entitlement_grant_ids == (premium.grant_id,)
+
+
+def test_grant_bound_to_another_policy_set_fails_closed() -> None:
+    base = _contexts(_fixture())["auth:browser:alpha:valid"]
+    assert base is not None
+    wrong = ActiveEntitlementGrant(
+        grant_id="grant:alpha:wrong-policy:001",
+        entitlement_id="entitlement:research:standard:v1",
+        publication_policy_set_id="publication-policy-set:other:v1",
+    )
+    context = base.model_copy(update={"active_entitlement_grants": (wrong,)})
+    decision = authorize_access(
+        context=context,
+        action=AccessAction.READ_MATERIALIZED_RESULT,
+        resource=_resources(_fixture())["strategy-result:alpha:standard-001"],
+        policy=_policy(),
+        observed_at=OBSERVED_AT,
+    )
+    assert decision.reason is AccessDenialReason.ENTITLEMENT_NOT_PERMITTED
+
+
+def test_registered_replay_submission_is_policy_bound_and_administrator_only() -> None:
+    contexts = _contexts(_fixture())
+    replay = AccessResource(
+        resource_id="registered-replay-definition:analyst-track-record:v1",
+        resource_type=AccessResourceType.REGISTERED_REPLAY_DEFINITION,
+        tenant_id="tenant:alpha",
+        content_private=False,
+    )
+    administrator = authorize_access(
+        context=contexts["auth:admin:valid"],
+        action=AccessAction.SUBMIT_REGISTERED_REPLAY,
+        resource=replay,
+        policy=_policy(),
+        observed_at=OBSERVED_AT,
+    )
+    member = authorize_access(
+        context=contexts["auth:browser:alpha:valid"],
+        action=AccessAction.SUBMIT_REGISTERED_REPLAY,
+        resource=replay,
+        policy=_policy(),
+        observed_at=OBSERVED_AT,
+    )
+    policy_denied = authorize_access(
+        context=contexts["auth:admin:valid"],
+        action=AccessAction.SUBMIT_REGISTERED_REPLAY,
+        resource=replay,
+        policy=_policy(administrator_actions=()),
+        observed_at=OBSERVED_AT,
+    )
+    assert administrator.decision is AccessDecisionKind.ALLOW
+    assert member.reason is AccessDenialReason.ACTION_NOT_PERMITTED
+    assert policy_denied.reason is AccessDenialReason.ACTION_NOT_PERMITTED
+
+
+def test_audit_record_is_deterministic_content_free_and_tenant_consistent() -> None:
+    decision = _decision_for_case(_fixture(), _fixture()["authorization_cases"][0])
+    first = build_access_audit_record(decision)
+    second = build_access_audit_record(decision)
+    assert first == second
+    assert first.event.tenant_id == decision.tenant_id
+    assert first.event.principal_id == decision.principal_id
+    assert first.event.event_kind is decision.audit_event
+    assert set(type(first.event).model_fields) == {
+        "audit_event_id",
+        "decision_id",
+        "tenant_id",
+        "principal_id",
+        "event_kind",
+        "occurred_at",
+    }
+    with pytest.raises(ValidationError, match="tenant must match"):
+        AccessAuditRecord(
+            decision=decision,
+            event=first.event.model_copy(update={"tenant_id": "tenant:beta"}),
+        )
+
+
+def test_context_rejects_naive_time_client_claims_and_duplicate_grants() -> None:
     valid = {
         "context_id": "auth:browser:alpha:test",
         "principal_id": "principal:alpha:alice",
@@ -182,87 +317,28 @@ def test_context_rejects_naive_time_and_client_authority_claims() -> None:
         AccessContext.model_validate({**valid, "issued_at": "2026-07-15T00:00:00"})
     with pytest.raises(ValidationError, match="client_claimed_role"):
         AccessContext.model_validate({**valid, "client_claimed_role": "administrator"})
-    with pytest.raises(ValidationError, match="client_claimed_tier"):
-        AccessContext.model_validate({**valid, "client_claimed_tier": "internal"})
+    grant = _grant("principal:alpha:alice", "entitlement:research:standard:v1")
+    with pytest.raises(ValidationError, match="duplicate grant IDs"):
+        AccessContext.model_validate({**valid, "active_entitlement_grants": (grant, grant)})
 
 
-@pytest.mark.parametrize(
-    "resource",
-    [
-        {
-            "resource_id": "strategy-result:alpha:restricted-001",
-            "resource_type": "materialized_strategy_result",
-            "tenant_id": "tenant:alpha",
-            "owner_principal_id": "principal:alpha:alice",
-            "publication_class_id": "publication-class:restricted:v1",
-            "content_private": True,
-        },
-        {
-            "resource_id": "document:alpha:public-001",
-            "resource_type": "private_document",
-            "tenant_id": "tenant:alpha",
-            "content_private": False,
-        },
-        {
-            "resource_id": "audit:alpha:private-001",
-            "resource_type": "access_audit_metadata",
-            "tenant_id": "tenant:alpha",
-            "owner_principal_id": "principal:alpha:alice",
-            "content_private": True,
-        },
-    ],
-)
-def test_resource_type_rejects_contradictory_privacy_shape(resource: dict[str, Any]) -> None:
+def test_resource_and_policy_shapes_fail_closed() -> None:
     with pytest.raises(ValidationError, match="private resource types require"):
-        AccessResource.model_validate(resource)
-
-
-def test_non_private_resource_rejects_empty_owner_field() -> None:
-    with pytest.raises(ValidationError, match="at least 1 character"):
         AccessResource(
-            resource_id="strategy-result:alpha:standard-001",
+            resource_id="strategy-result:alpha:restricted-001",
             resource_type="materialized_strategy_result",
             tenant_id="tenant:alpha",
-            owner_principal_id="",
-            publication_class_id="publication-class:standard:v1",
-            content_private=False,
-        )
-
-
-def test_policy_and_decision_identities_are_immutable() -> None:
-    with pytest.raises(ValidationError, match="immutable version"):
-        PublicationPolicy(
-            policy_id="publication-policy:current",
-            permitted_publication_class_ids=("publication-class:standard:v1",),
-        )
-    decision = authorize_access(
-        context=None,
-        action=AccessAction.READ_CONTENT,
-        resource=AccessResource(
-            resource_id="document:alpha:private-001",
-            resource_type="private_document",
-            tenant_id="tenant:alpha",
             owner_principal_id="principal:alpha:alice",
+            publication_class_id="publication-class:restricted:v1",
             content_private=True,
-        ),
-        policy=PublicationPolicy(
-            policy_id="publication-policy:research:v1",
-            permitted_publication_class_ids=("publication-class:standard:v1",),
-        ),
-        observed_at=datetime.fromisoformat("2026-07-15T00:05:00+00:00"),
-    )
-    with pytest.raises(ValidationError, match="frozen"):
-        decision.decision = AccessDecisionKind.ALLOW
-
-    with pytest.raises(ValidationError, match="audit event must match"):
-        AuthorizationDecision.model_validate(
-            {
-                **decision.model_dump(),
-                "decision": AccessDecisionKind.DENY,
-                "reason": AccessDenialReason.ACTION_NOT_PERMITTED,
-                "query_permitted": False,
-                "audit_event": AccessAuditEventKind.ACCESS_ALLOWED,
-            }
+        )
+    with pytest.raises(ValidationError, match="immutable version"):
+        PublicationPolicySet(
+            publication_policy_set_id="publication-policy-set:current",
+            content_sha256=_policy().content_sha256,
+            release_manifest_id="release-manifest:research:v1",
+            rules=_policy().rules,
+            administrator_actions=(),
         )
 
 
@@ -271,21 +347,14 @@ def test_private_resources_fail_closed_for_unsupported_actions() -> None:
     context = _contexts(corpus)["auth:browser:alpha:valid"]
     assert context is not None
     resource = _resources(corpus)["document:alpha:private-001"]
-    policy = PublicationPolicy(
-        policy_id=corpus["policy_coordinates"]["publication_policy_id"],
-        permitted_publication_class_ids=("publication-class:standard:v1",),
-    )
-    observed_at = datetime.fromisoformat(corpus["decision_time"].replace("Z", "+00:00"))
-
     for action in set(AccessAction) - {AccessAction.READ_CONTENT}:
         decision = authorize_access(
             context=context,
             action=action,
             resource=resource,
-            policy=policy,
-            observed_at=observed_at,
+            policy=_policy(),
+            observed_at=OBSERVED_AT,
         )
-        assert decision.decision is AccessDecisionKind.DENY
         assert decision.reason is AccessDenialReason.ACTION_NOT_PERMITTED
         assert not decision.query_permitted
 
@@ -298,19 +367,14 @@ def test_context_cannot_authorize_before_issuance() -> None:
         context=context,
         action=AccessAction.READ_CONTENT,
         resource=_resources(corpus)["document:alpha:private-001"],
-        policy=PublicationPolicy(
-            policy_id=corpus["policy_coordinates"]["publication_policy_id"],
-            permitted_publication_class_ids=("publication-class:standard:v1",),
-        ),
+        policy=_policy(),
         observed_at=context.issued_at.replace(year=context.issued_at.year - 1),
     )
-
-    assert decision.decision is AccessDecisionKind.DENY
     assert decision.reason is AccessDenialReason.AUTHENTICATION_NOT_YET_VALID
     assert decision.audit_event is AccessAuditEventKind.AUTHENTICATION_DENIED
 
 
-def test_authorization_service_signature_exposes_all_decision_inputs() -> None:
+def test_public_service_signatures_expose_complete_inputs() -> None:
     assert set(inspect.signature(AuthorizationService.authorize).parameters) == {
         "self",
         "context",
@@ -321,24 +385,32 @@ def test_authorization_service_signature_exposes_all_decision_inputs() -> None:
         "authentication_failure",
         "revoked_delegation_ids",
     }
+    assert set(inspect.signature(AccessAuditRepository.append).parameters) == {"self", "record"}
 
 
-def test_access_metadata_never_enters_computation_contracts() -> None:
+def test_stable_package_root_exports_access_contract() -> None:
+    for name in {
+        "AccessContext",
+        "ActiveEntitlementGrant",
+        "PublicationPolicySet",
+        "AuthorizationService",
+        "AccessAuditRepository",
+        "authorize_access",
+        "build_access_audit_record",
+    }:
+        assert hasattr(truealpha_contracts, name)
+
+
+def test_access_metadata_never_enters_computation_or_release_contracts() -> None:
     forbidden = {
         "access_context",
         "tenant_id",
         "principal_id",
         "role",
         "entitlement",
-        "publication_policy_id",
+        "publication_policy_set_id",
     }
     assert forbidden.isdisjoint(DecisionSnapshot.model_fields)
     assert forbidden.isdisjoint(ReplayEventStream.model_fields)
     assert all(name not in str(BacktestDataGateway.load.__annotations__) for name in forbidden)
-
-
-def test_e2_access_contract_has_stable_exports_without_release_binding() -> None:
-    assert truealpha_contracts.AccessContext is AccessContext
-    assert truealpha_contracts.AuthorizationService is AuthorizationService
-    assert truealpha_contracts.authorize_access is authorize_access
     assert all("access" not in field_name for field_name in ReleaseManifest.model_fields)

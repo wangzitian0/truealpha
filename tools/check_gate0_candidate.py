@@ -458,6 +458,96 @@ def candidate_tree_sha256(
     return digest.hexdigest()
 
 
+def candidate_tree_files_at_commit(
+    root: Path,
+    commit: str,
+    patterns: list[str] | tuple[str, ...],
+) -> tuple[tuple[str, bytes], ...]:
+    """Read an immutable candidate tree from one reachable Git commit."""
+
+    authorized: dict[str, bytes] = {}
+    for pattern in patterns:
+        pathspec = pattern.removesuffix("/**") if pattern.endswith("/**") else pattern
+        listing = subprocess.run(
+            ["git", "-C", str(root), "ls-tree", "-r", "-z", commit, "--", pathspec],
+            check=False,
+            capture_output=True,
+        )
+        if listing.returncode != 0:
+            raise ValueError(f"cannot inspect frozen candidate commit {commit}")
+        for record in listing.stdout.split(b"\0"):
+            if not record:
+                continue
+            metadata, raw_path = record.split(b"\t", maxsplit=1)
+            mode = metadata.split(b" ", maxsplit=1)[0]
+            relative_path = raw_path.decode()
+            if not mode.startswith(b"100"):
+                raise ValueError(f"frozen candidate path is not a regular file: {relative_path}")
+            if not path_matches(relative_path, pattern):
+                continue
+            if VERSIONED_MANIFEST_RE.fullmatch(relative_path) is not None:
+                continue
+            blob = subprocess.run(
+                ["git", "-C", str(root), "show", f"{commit}:{relative_path}"],
+                check=False,
+                capture_output=True,
+            )
+            if blob.returncode != 0:
+                raise ValueError(f"cannot read frozen candidate path: {relative_path}")
+            authorized[relative_path] = blob.stdout
+    return tuple(sorted(authorized.items()))
+
+
+def candidate_tree_sha256_at_commit(
+    root: Path,
+    commit: str,
+    patterns: list[str] | tuple[str, ...],
+) -> str:
+    digest = hashlib.sha256()
+    for relative_path, raw in candidate_tree_files_at_commit(root, commit, patterns):
+        digest.update(relative_path.encode())
+        digest.update(b"\0")
+        digest.update(len(raw).to_bytes(8, "big"))
+        digest.update(raw)
+    return digest.hexdigest()
+
+
+def resolve_frozen_candidate_commit(
+    root: Path,
+    patterns: list[str] | tuple[str, ...],
+    expected_sha256: str,
+    *,
+    manifest_path: Path = DEFAULT_MANIFEST,
+) -> str | None:
+    """Find the reachable commit that introduced an exact candidate-tree hash."""
+
+    history = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "log",
+            "HEAD",
+            "--format=%H",
+            f"-S{expected_sha256}",
+            "--",
+            manifest_path.as_posix(),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if history.returncode != 0:
+        return None
+    for commit in history.stdout.splitlines():
+        try:
+            if candidate_tree_sha256_at_commit(root, commit, patterns) == expected_sha256:
+                return commit
+        except ValueError:
+            continue
+    return None
+
+
 def _strict_fields(validation: Validation, value: Any, expected: frozenset[str], label: str) -> bool:
     validation.require(isinstance(value, dict), f"{label}: expected an object")
     if not isinstance(value, dict):
@@ -1514,23 +1604,28 @@ def _validate_successor_manifest(
         and predecessor.get("manifest_version") == predecessor_ref.get("manifest_version"),
         "Gate 0 predecessor: referenced identity does not match file content",
     )
-    for field in (
-        "gate_issue",
-        "included_issues",
-        "dependency_order",
-        "artifacts",
-        "external_attestations",
-        "merge_policy",
-        "blocking_reasons",
-    ):
+    for field in ("gate_issue", "included_issues", "dependency_order", "merge_policy"):
         validation.require(
             manifest.get(field) == predecessor.get(field),
             f"Gate 0 successor: predecessor field changed: {field}",
         )
-    validation.require(
-        manifest.get("status") == predecessor.get("status") == "candidate_blocked_external_attestation",
-        "Gate 0 successor: external blockers must remain active",
-    )
+    if manifest.get("status") == "accepted":
+        validation.require(
+            predecessor.get("status") in {"candidate_blocked_external_attestation", "accepted"},
+            "Gate 0 successor: predecessor status is invalid",
+        )
+    else:
+        for field in ("artifacts", "external_attestations", "blocking_reasons"):
+            validation.require(
+                manifest.get(field) == predecessor.get(field),
+                f"Gate 0 successor: blocked predecessor field changed: {field}",
+            )
+        validation.require(
+            manifest.get("status")
+            == predecessor.get("status")
+            == "candidate_blocked_external_attestation",
+            "Gate 0 successor: external blockers must remain active",
+        )
 
     bindings = manifest.get("integration_bindings")
     validation.require(
@@ -1912,6 +2007,17 @@ def validate_gate0_candidate(
                     manifest.get("candidate_tree_sha256") == V4_FROZEN_TREE_SHA256,
                     "Gate 0 v4 manifest: frozen candidate tree identity changed",
                 )
+                if root.resolve() == ROOT.resolve():
+                    frozen_commit = resolve_frozen_candidate_commit(
+                        root,
+                        patterns,
+                        V4_FROZEN_TREE_SHA256,
+                        manifest_path=manifest_relative,
+                    )
+                    validation.require(
+                        frozen_commit is not None,
+                        "Gate 0 v4 manifest: exact frozen Git tree is not reachable",
+                    )
             else:
                 validation.require(
                     manifest.get("candidate_tree_sha256")

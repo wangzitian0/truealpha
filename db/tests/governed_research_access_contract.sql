@@ -10,7 +10,10 @@ begin
     end if;
     if to_regclass('app.private_research_objects') is null
        or to_regclass('app.authorization_decisions') is null
+       or to_regclass('app.authorization_decision_grants') is null
        or to_regclass('app.access_audit_events') is null
+       or to_regclass('app.publication_policy_sets') is null
+       or to_regclass('app.publication_policy_entitlements') is null
        or to_regclass('app.access_audit_metadata') is null then
         raise exception 'governed access storage boundary is incomplete';
     end if;
@@ -46,9 +49,12 @@ begin
           'app.publication_policies'::regclass,
           'app.private_research_objects'::regclass,
           'app.authorization_decisions'::regclass,
+          'app.authorization_decision_grants'::regclass,
+          'app.publication_policy_sets'::regclass,
+          'app.publication_policy_entitlements'::regclass,
           'app.access_audit_events'::regclass
       );
-    if append_only_trigger_count <> 9 then
+    if append_only_trigger_count <> 12 then
         raise exception 'all governed access records must be append-only';
     end if;
 
@@ -122,7 +128,7 @@ values
         'tenant:alpha',
         'principal:alpha:alice',
         'entitlement:research:standard:v1',
-        'publication-policy:research:v1',
+        'publication-policy-set:research:v2',
         '2026-07-15T00:00:00Z',
         '2026-07-15T01:00:00Z',
         '2026-07-15T00:00:00Z'
@@ -173,6 +179,49 @@ values
         'publication-policy:research:v2',
         '2026-07-15T00:20:00Z',
         '2026-07-15T00:20:00Z'
+    );
+
+insert into app.publication_policy_sets (
+    publication_policy_set_id,
+    content_sha256,
+    release_manifest_id,
+    recorded_at
+)
+values (
+    'publication-policy-set:research:v2',
+    '4cc4f0d79486130bda4de3451b56770a5c295881535602b692bbf1cda585cdfd',
+    'release-manifest:research:v1',
+    '2026-07-15T00:00:00Z'
+);
+
+insert into app.publication_policy_entitlements (
+    publication_policy_rule_id,
+    publication_policy_set_id,
+    publication_class_id,
+    entitlement_id,
+    recorded_at
+)
+values
+    (
+        'publication-policy-rule:standard-standard:v2',
+        'publication-policy-set:research:v2',
+        'publication-class:standard:v1',
+        'entitlement:research:standard:v1',
+        '2026-07-15T00:00:00Z'
+    ),
+    (
+        'publication-policy-rule:standard-premium:v2',
+        'publication-policy-set:research:v2',
+        'publication-class:standard:v1',
+        'entitlement:research:premium:v1',
+        '2026-07-15T00:00:00Z'
+    ),
+    (
+        'publication-policy-rule:restricted-premium:v2',
+        'publication-policy-set:research:v2',
+        'publication-class:restricted:v1',
+        'entitlement:research:premium:v1',
+        '2026-07-15T00:00:00Z'
     );
 
 insert into app.private_research_objects (
@@ -236,7 +285,7 @@ values
         'principal:alpha:alice',
         'read_content',
         'document:alpha:private-001',
-        'publication-policy:research:v1',
+        'publication-policy-set:research:v2',
         'allow',
         null,
         '2026-07-15T00:01:00Z',
@@ -248,7 +297,7 @@ values
         'principal:beta:bob',
         'read_content',
         'document:beta:private-001',
-        'publication-policy:research:v1',
+        'publication-policy-set:research:v2',
         'allow',
         null,
         '2026-07-15T00:01:00Z',
@@ -260,12 +309,75 @@ values
         'principal:alpha:alice',
         'read_content',
         'conversation:beta:private-001',
-        'publication-policy:research:v1',
+        'publication-policy-set:research:v2',
         'deny',
         'tenant_mismatch',
         '2026-07-15T00:06:00Z',
         '2026-07-15T00:06:00Z'
+    ),
+    (
+        'access-decision:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        'tenant:alpha',
+        'principal:alpha:alice',
+        'read_materialized_result',
+        'strategy-result:alpha:standard-001',
+        'publication-policy-set:research:v2',
+        'allow',
+        null,
+        '2026-07-15T00:11:00Z',
+        '2026-07-15T00:11:00Z'
     );
+
+insert into app.authorization_decision_grants (decision_id, grant_id, recorded_at)
+values (
+    'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'grant:alpha:alice:001',
+    '2026-07-15T00:01:00Z'
+);
+
+do $$
+begin
+    begin
+        insert into app.authorization_decision_grants (decision_id, grant_id, recorded_at)
+        values (
+            'access-decision:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'grant:alpha:alice:001',
+            '2026-07-15T00:01:00Z'
+        );
+        raise exception 'cross-tenant decision grant unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'cross-tenant decision grant unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'authorization decision grant identity mismatch' then
+                raise;
+            end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into app.authorization_decision_grants (decision_id, grant_id, recorded_at)
+        values (
+            'access-decision:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            'grant:alpha:alice:001',
+            '2026-07-15T00:11:00Z'
+        );
+        raise exception 'revoked decision grant unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'revoked decision grant unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'authorization decision grant was not active at decision time' then
+                raise;
+            end if;
+    end;
+end;
+$$;
 
 insert into app.access_audit_events (
     audit_event_id,
@@ -352,6 +464,9 @@ begin
         'publication_policies',
         'private_research_objects',
         'authorization_decisions',
+        'authorization_decision_grants',
+        'publication_policy_sets',
+        'publication_policy_entitlements',
         'access_audit_events'
     ]
     loop
@@ -385,6 +500,12 @@ begin
     if (select count(*) from app.access_audit_events where tenant_id = 'tenant:alpha') <> 2 then
         raise exception 'allowed-and-denied access audit history was not preserved';
     end if;
+    if (select array_agg(grant_id order by grant_id)
+        from app.authorization_decision_grants
+        where decision_id = 'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+       is distinct from array['grant:alpha:alice:001']::text[] then
+        raise exception 'authorization decision did not retain the exact entitlement grant identity';
+    end if;
 end;
 $$;
 
@@ -411,7 +532,7 @@ begin
     end if;
     if has_table_privilege('app_runtime', 'app.authorization_decisions', 'select')
        or has_table_privilege('app_runtime', 'app.access_audit_events', 'select') then
-        raise exception 'runtime audit reads must use the restricted metadata view';
+        raise exception 'app runtime must not read immutable audit base tables';
     end if;
 end;
 $$;

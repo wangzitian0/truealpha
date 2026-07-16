@@ -20,9 +20,9 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 1. **Point-in-time correctness is priority one.** Distinguish `valid_time` (the period the data describes) from `transaction_time` (when the data became knowable). A restatement always produces a new vintage — never overwrite an old record. Factor computation and backtesting always operate on "the data that was visible as of a specific point in time."
 2. **Computation logic is allowed to exist in exactly one place**, implemented in `libs/factors` and invoked by data-engine/Dagster. `llm-service` and the App consume materialized outputs through typed mart read contracts; they never invoke factor computation. The App layer is only allowed to do **deterministic reformatting**: sorting, filtering, pagination, unit conversion, simple within-row arithmetic that doesn't span tables (e.g., "change vs. prior period"). Any logic that jointly computes a new metric across factors or time points must go back into `libs/factors` and be materialized into mart — it must not be computed on the fly in the Next.js backend. Use this concrete rule wherever the boundary feels blurry. **This includes screening/tagging logic** (e.g., the three-tier valuation framework, Section 7 module 7) — it reads other factors' mart outputs, but it is still a factor (a "composite factor," Section 6), not app-layer business logic.
 3. **Factors never know their data's provenance.** Factors consume provenance-neutral typed semantic records: an opaque `input_id`, typed subject identity, value/unit/currency where relevant, valid period, confidence, and the snapshot cutoff. They must not receive or branch on `source`, `raw_ref`, accession, or extractor metadata. The runner uses the opaque IDs to record exact consumed-input lineage outside factor computation.
-4. **LLM surfaces read only typed `mart` projections.** MCP and `/chat` call bounded `ResearchQueryService` methods over a `mart_readonly` repository; they never execute arbitrary model-generated SQL or recompute factors. The database role has a `statement_timeout` (5s recommended), and repositories enforce pagination and row caps. The App implements the same semantic read contract directly against mart.
-5. **The App reads the database directly** (querying the mart schema), not through FastAPI. FastAPI's scope is narrowed to LLM-call orchestration only.
-6. **Every moomoo call must go through the global call-budget gateway** — no module decides for itself whether to call. **Currently single-user only; how this quota gets allocated across multiple users is a deliberately deferred architectural debt, not something to design now** — see Section 10. **This is a public repo: moomoo trading contexts/order calls are hard-forbidden (quote/read-only data only) and no real credential ever gets committed — see `CLAUDE.md`'s hard constraints and `.github/workflows/security-gate.yml`.**
+4. **LLM surfaces read only authorized typed `mart` projections.** MCP and `/chat` call bounded `ResearchQueryService` methods over a `mart_readonly` repository; they never execute arbitrary model-generated SQL or recompute factors. A trusted server adapter derives `AccessContext` from the browser session, delegated MCP OAuth credential, or service identity and authorizes the exact resource before the repository issues mart SQL or retrieves an artifact. Tool arguments never supply tenant, principal, role, entitlement, or publication authority. The database role has a `statement_timeout` (5s recommended), and repositories enforce pagination and row caps. The App implements the same semantic read contract and authorization decision directly against mart.
+5. **The App reads the database directly** (querying the mart and app schemas through server-only typed repositories), not through FastAPI. FastAPI's scope is narrowed to LLM-call orchestration only. Direct database access does not bypass authorization: publication policy is checked before a mart query, and forced owner RLS is a second boundary for private app rows.
+6. **Every moomoo call must go through the global call-budget gateway** — no module decides for itself whether to call. End-user access only reads completed materialized results and never triggers a source call, so user entitlements do not allocate or bypass source quota. Pipeline-wide source budgeting and scheduling remain separate from consumer authorization; any future user-funded source-demand product requires a new architecture decision. **This is a public repo: moomoo trading contexts/order calls are hard-forbidden (quote/read-only data only) and no real credential ever gets committed — see `CLAUDE.md`'s hard constraints and `.github/workflows/security-gate.yml`.**
 7. **Schema changes must raise an active alert.** Core point-in-time tables use dlt's frozen/contract mode, not the default auto-evolve.
 8. **Scheduling has exactly one authority: Dagster.** Local reconnaissance may use one-shot scripts, but Dagster is introduced with the first executable Gate 1 snapshot/factor slice and is the only authority for real recurring runs — see Section 8.
 9. **Observability is centered on the Dagster UI** — on the condition that Dagster's own runtime metadata is persisted (see Section 6), not left on its default local storage.
@@ -42,6 +42,7 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 23. **Data usage is automatic, idempotent infrastructure evidence.** Capture manifests, repositories, snapshot selection, and factor/strategy runners record append-only semantic-use identities outside factor code. Usage views distinguish planned demand, capture/normalization evidence, snapshot selection, factor consumption, and strategy consumption. Retries do not double-count one semantic use, missing telemetry is an error rather than zero use, and source attribution is recovered through lineage rather than exposed to a factor. V1 deliberately excludes page-view/query analytics so the App remains strictly `mart_readonly`.
 24. **Strategy quality review starts from expected data, not successful outputs.** The framework compiles source-neutral `DataRequirement` records from the immutable strategy, factor, and execution/return-rule graph for every scheduled cutoff and applicable subject, then left-joins actual capture, snapshot, consumption, lineage, rights, freshness, and quality evidence. Missing data that suppresses a candidate or produces no trade remains a failed expected cell with affected decisions; undeclared consumption or broken reverse lineage also fails. Observed low usage can prioritize remediation but can never relax applicability, retention, source policy, or an SLO retroactively.
 25. **Qlib is the selected factor-expression and backtest engine, not a data or semantic authority.** Serializable TrueAlpha definitions wrap versioned Qlib expressions and operators, and only adapters inside `libs/factors` may invoke Qlib. Qlib receives provenance-neutral inputs projected from durable PIT snapshots and the explicit post-decision market-event stream; it may not crawl or select vintages, resolve membership, infer confidence or lineage, combine adjusted prices with explicit actions, or replace Decimal monetary logic. Every run pins the Qlib build, adapter, operator registry, strategy, and input snapshot identities. Native `libs/factors` implementations remain valid for Decimal, graph, and other computations that do not fit Qlib's matrix-expression model.
+26. **Consumer identity and research access are governed outside computation.** The additive `app` schema stores principals, memberships, append-only entitlement grants/revocations, immutable release-bound publication policy sets, owner-only private object locators, authorization decisions, and content-free audit events. Browser, App, chat, Claude Code, Codex, and service-agent access uses the same server-derived `AccessContext` and stable authorization contract. Private conversation/document content is owner-only by default; administrators may see policy-permitted materialized strategy/backtest results and tenant-filtered non-content audit metadata, not private content. Only a policy-authorized administrator may record a request for an already registered immutable replay definition; that request cannot carry code, parameters, dates, source selectors, or execution inputs, and Dagster remains the sole execution authority. `AccessContext`, tenant, principal, role, entitlement, and publication identities never enter factors, Qlib, `BacktestDataGateway`, `DecisionSnapshot`, or `ReplayEventStream`.
 
 ---
 
@@ -61,7 +62,9 @@ L2 Factor computation     ── libs/factors: Qlib-backed expressions plus nati
                               - composite factors reload other factors' mart outputs; confidence cannot exceed the minimum consumed confidence, and a versioned stricter policy is allowed
 L3 Analytics modules      ── the 7 concrete tools (Section 7)
 L4 Backtest/portfolio validation ── Qlib behind the TrueAlpha adapter: PIT decision snapshots + a separate monotonic future market-event stream
-L5 Consumption layer      ── App direct mart adapter + typed MCP/ResearchQueryService tools used by `/chat`
+L5 Consumption layer      ── server-derived AccessContext + policy-before-read authorization
+                           + App direct mart adapter + typed MCP/ResearchQueryService tools used by `/chat`
+                           + owner-only private state and content-free audit metadata in app
 ```
 
 The extensible core stays intentionally small:
@@ -171,7 +174,7 @@ executable connectivity and negative-network proof.
                         boto3 immutable raw-object adapter; local/CI use Compose Postgres + MinIO,
                         deployed environments receive the same DATABASE_URL/S3_* contract from infra2
 /db
-  /migrations          DDL for the four schemas: raw / staging / mart / dagster
+  /migrations          DDL for the five schemas: raw / staging / mart / dagster / app
   /roles.sql           mart_readonly (incl. statement_timeout config) and other role permissions
 /.github
   /workflows           CI triggered with path filtering
@@ -198,7 +201,7 @@ executable connectivity and negative-network proof.
 
 ## 6. Database Schema Design
 
-Four schemas: `raw`, `staging`, `mart`, `dagster` (Dagster's own run/event/schedule storage, explicitly configured, not left on default local storage).
+Five schemas: `raw`, `staging`, `mart`, `dagster` (Dagster's own run/event/schedule storage, explicitly configured, not left on default local storage), and `app` (consumer identity, immutable access policy/audit records, and owner-isolated private object locators; never factor computation or materialized analytics).
 
 **Time axes (every staging table carries all three):**
 
@@ -345,9 +348,11 @@ supply tenant, principal, role, entitlement, or publication-policy authority. Ev
 private-content or materialized-result request is authorized before mart SQL, private
 row lookup, or artifact retrieval. Private conversations and documents are tenant- and
 owner-bound, administrators receive non-content audit metadata by default, and
-materialized strategy/backtest results require an immutable permitted publication
-class. Missing, invalid, not-yet-valid, expired, revoked, forged, or cross-tenant
-authority fails closed and emits an append-only decision/audit event. Identity and
+materialized strategy/backtest results require an immutable release-bound publication
+policy set and a matching active entitlement grant unless an explicit administrator
+rule applies. Missing, invalid, not-yet-valid, expired, revoked, forged, wrong-policy,
+or cross-tenant authority fails closed and emits a paired append-only decision/audit
+record. Identity and
 access metadata never enters factor inputs, `BacktestDataGateway`, `DecisionSnapshot`,
 `ReplayEventStream`, or Qlib types. This contract does not activate authentication,
 routes, identity-provider bindings, retention policy, replay execution, or sharing.

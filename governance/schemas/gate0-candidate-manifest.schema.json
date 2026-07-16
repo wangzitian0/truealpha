@@ -25,11 +25,11 @@
   ],
   "properties": {
     "schema_version": {"const": 1},
-    "manifest_id": {"type": "string", "pattern": "^gate-0-batch-v[45]$"},
-    "manifest_version": {"enum": [4, 5]},
+    "manifest_id": {"type": "string", "pattern": "^gate-0-batch-v[0-9]+$"},
+    "manifest_version": {"type": "integer", "minimum": 4},
     "gate_issue": {"const": 56},
     "status": {"enum": ["candidate_blocked_external_attestation", "accepted"]},
-    "integration_branch": {"type": "string", "pattern": "^batch/gate-0-v[45]-[a-z0-9-]+$"},
+    "integration_branch": {"type": "string", "pattern": "^batch/gate-0-v[0-9]+-[a-z0-9-]+$"},
     "integration_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "included_issues": {"const": [57, 58, 59, 60, 61]},
     "dependency_order": {"const": [57, 58, 59, 60, 61]},
@@ -190,9 +190,9 @@
       "additionalProperties": false,
       "required": ["manifest_id", "manifest_version", "path", "sha256"],
       "properties": {
-        "manifest_id": {"const": "gate-0-batch-v4"},
-        "manifest_version": {"const": 4},
-        "path": {"const": "governance/gate0/manifest-v4.json"},
+        "manifest_id": {"type": "string", "pattern": "^gate-0-batch-v[0-9]+$"},
+        "manifest_version": {"type": "integer", "minimum": 4},
+        "path": {"type": "string", "pattern": "^governance/gate0/manifest-v[0-9]+\\.json$"},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
@@ -236,11 +236,7 @@
         }
       },
       "else": {
-        "required": ["predecessor_manifest", "integration_bindings"],
-        "properties": {
-          "manifest_id": {"const": "gate-0-batch-v5"},
-          "integration_branch": {"const": "batch/gate-0-v5-governed-access-successor"}
-        }
+        "required": ["predecessor_manifest", "integration_bindings"]
       }
     },
     {

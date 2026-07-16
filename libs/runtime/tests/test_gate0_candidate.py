@@ -154,6 +154,26 @@ def test_checked_in_candidate_is_valid_but_blocked(candidate_root):
     assert len(result.blockers) == 4
 
 
+def test_checked_in_v4_resolves_the_exact_historical_git_tree() -> None:
+    result = gate0.validate_gate0_candidate(MANIFEST_PATH, root=REPO_ROOT)
+
+    assert result.valid
+    assert gate0.resolve_frozen_candidate_commit(
+        REPO_ROOT,
+        gate0.V4_MANIFEST_PATHS,
+        gate0.V4_FROZEN_TREE_SHA256,
+        manifest_path=MANIFEST_PATH,
+    ) is not None
+
+
+def test_checked_in_v4_rejects_missing_historical_git_tree(monkeypatch) -> None:
+    monkeypatch.setattr(gate0, "resolve_frozen_candidate_commit", lambda *args, **kwargs: None)
+
+    result = gate0.validate_gate0_candidate(MANIFEST_PATH, root=REPO_ROOT)
+
+    assert "Gate 0 v4 manifest: exact frozen Git tree is not reachable" in result.errors
+
+
 def test_v5_successor_is_valid_and_preserves_v4(candidate_root):
     v4_tree = gate0.candidate_tree_sha256(candidate_root, gate0.V4_MANIFEST_PATHS)
     successor = _create_v5_successor(candidate_root)
@@ -196,7 +216,10 @@ def test_v5_successor_cannot_drop_inherited_blockers(candidate_root):
 
     result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
 
-    assert "Gate 0 successor: predecessor field changed: blocking_reasons" in result.errors
+    assert (
+        "Gate 0 successor: blocked predecessor field changed: blocking_reasons"
+        in result.errors
+    )
 
 
 def test_require_accepted_rejects_valid_blocked_candidate(candidate_root):
@@ -306,6 +329,25 @@ def test_candidate_tree_binds_non_artifact_authorized_files(candidate_root):
     result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
 
     assert "Gate 0 manifest: candidate tree SHA-256 mismatch" in result.errors
+
+
+def test_successor_acceptance_may_advance_fan_in_state(candidate_root) -> None:
+    successor_path = _create_v5_successor(candidate_root)
+    successor = _load(successor_path)
+    successor["status"] = "accepted"
+    successor["blocking_reasons"] = []
+    for artifact in successor["artifacts"]:
+        artifact["state"] = "accepted"
+    for index, attestation in enumerate(successor["external_attestations"], start=1):
+        attestation["status"] = "accepted"
+        attestation["ref"] = f"https://github.com/wangzitian0/truealpha/issues/{attestation['issue']}#issuecomment-{index}"
+    _write(successor_path, successor)
+
+    validation = gate0.Validation()
+    gate0._validate_successor_manifest(validation, root=candidate_root, manifest=successor)
+
+    assert not any("predecessor field changed" in error for error in validation.errors)
+    assert "Gate 0 successor: external blockers must remain active" not in validation.errors
 
 
 def test_manifest_bytes_are_excluded_from_candidate_tree(candidate_root):
