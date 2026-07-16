@@ -1014,6 +1014,12 @@ def validate_capability_evidence(
     commit = evidence.get("producer_commit")
     commit_is_valid = isinstance(commit, str) and GIT_SHA_RE.fullmatch(commit) is not None
     validation.require(commit_is_valid, f"issue #{issue_number}: invalid evidence producer commit")
+    if commit_is_valid:
+        assert isinstance(commit, str)
+        validation.require(
+            git_is_ancestor(commit, "HEAD") is True,
+            f"issue #{issue_number}: evidence producer commit is not reachable from HEAD",
+        )
     commands = evidence.get("commands")
     validation.require(
         isinstance(commands, list)

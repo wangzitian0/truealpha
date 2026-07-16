@@ -4,8 +4,8 @@
   "gate": 31,
   "terminal_evidence": "E2",
   "accepted_evidence": {
-    "path": "governance/evidence/issue-229.v2.json",
-    "sha256": "532a7cbbe3030019b69cd4dfe0ecbbff748b19afa646de3f31883d7a711b886d"
+    "path": "governance/evidence/issue-229.v3.json",
+    "sha256": "ec66d360d97ea5c473309f96662dd802a1a6df06376c0bfb37d937c96e102188"
   },
   "artifact_edges": []
 }
