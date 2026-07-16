@@ -1,0 +1,44 @@
+{
+  "handoff_id": "handoff:a0-governed-research-access:d04d5b178d1e5455607062e57a70ae154291311d8a12231cbd1e7a59c1439820",
+  "schema_version": 1,
+  "revision": 1,
+  "state": "accepted",
+  "producer": {
+    "batch_id": "A0-governed-research-access",
+    "issue": 230,
+    "owner": "wangzitian0",
+    "head_sha": "73bf3996aa4577264dc34969692f6d273065dc52"
+  },
+  "schema_epoch": "truealpha-contracts.governed-research-access.v1",
+  "readiness_ceiling": "E2",
+  "evidence": [
+    {
+      "path": "governance/evidence/A0-governed-research-access-E2.v1.json",
+      "sha256": "0b78334e87c00bb2f4679601e55a86569b0f8661ff23e8ce60224537ee70bbea"
+    }
+  ],
+  "allowed_consumers": [
+    "C1-stable-mart-reads",
+    "C2-typed-mcp-tools",
+    "C3-traceable-research-reports",
+    "C5-mart-backed-dashboard",
+    "C6-deferred-chat",
+    "P0-deployed-consumer-validation"
+  ],
+  "allowed_environments": [
+    "ci",
+    "local"
+  ],
+  "retention": "permanent while a named Local/CI consumer depends on this access contract",
+  "verification": {
+    "reviewer": "copilot-pull-request-reviewer",
+    "evidence_sha256": "132566aa98c88ad8ad723eda9d4574aa280ecde8b1f2f63816f7fbf1d7f56536",
+    "accepted_at": "2026-07-16T06:28:42Z",
+    "attestation_ref": "https://github.com/wangzitian0/truealpha/pull/270"
+  },
+  "revocation": {
+    "reason": null,
+    "revoked_at": null,
+    "superseded_by": null
+  }
+}

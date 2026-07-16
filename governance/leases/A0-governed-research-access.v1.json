@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:c221a9d068de934cb246a408e595013b61baf69a8bfbf5034dfb63cedd834f32",
+  "lease_id": "integration-lease:37e20f9a8b46f96859b1b8b23c248868679a4c42f45727a7957497a239da451b",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
-  "state": "active",
+  "state": "revoked",
   "paths": [
     "init.md",
     "libs/contracts/src/truealpha_contracts/__init__.py",
@@ -15,6 +15,6 @@
     "tools/check_gate0_candidate.py",
     "tools/check_delivery_governance.py"
   ],
-  "base_sha": "5e1be12550ed8e7f8528f8017adffaa009a0ef40",
+  "base_sha": "6b0226cd920cdd906820ce328b504b5e08aa4ada",
   "expires_at": "2026-07-30T00:00:00Z"
 }
