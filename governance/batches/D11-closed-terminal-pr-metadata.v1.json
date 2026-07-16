@@ -10,7 +10,7 @@
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Authorize a closed Work-Issue only for an exact checker-validated capability-batch done-to-done corrective PR without weakening the default open-issue requirement.",
-  "claim_ceiling": "Accepted E0 offline PR-metadata correction only: a closed Work-Issue may pass required metadata validation only for an exact owned capability-batch done-to-done corrective advance with identical valid accepted, target, terminal, and issue identities. A contiguous blocked Gate 0 v7 successor preserves frozen v6 and every artifact, attestation, blocker, and readiness state. This does not accept D9, authorize a D4 handoff or D8 implementation, reopen any issue, or permit source, scheduler, runtime, release, database, consumer, or Production data work.",
+  "claim_ceiling": "Accepted E0 offline PR-metadata correction only: a closed Work-Issue may pass required metadata validation only for an exact owned capability-batch done-to-done corrective advance with identical valid accepted, target, terminal, issue, dependency, closure, and path/lease authorization identities. A contiguous blocked Gate 0 v7 successor preserves frozen v6 and every artifact, attestation, blocker, and readiness state. This does not accept D9, authorize a D4 handoff or D8 implementation, reopen any issue, or permit source, scheduler, runtime, release, database, consumer, or Production data work.",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [
@@ -44,10 +44,11 @@
   "corpus": {
     "environment": "Local/CI pull-request metadata fixtures only",
     "manifest_path": "libs/runtime/tests/fixtures/delivery_governance_closed_terminal_pr.v1.json",
-    "sha256": "63f23769a73c80a6a15b75b28b4d0dbe15785d589b14e0d08c7ca5e8bf7e79f2",
+    "sha256": "d0eeb65906c2d1412800b3b116c4c740336570cbe626c64680de46cd529ee433",
     "required_strata": [
       "an open Work-Issue remains accepted under the existing metadata rules",
       "a closed Work-Issue is accepted only for an exact owned capability-batch done-to-done corrective advance",
+      "a closed corrective candidate cannot expand writable paths, leases, dependencies, capability ownership, or issue-closure authority",
       "closed standalone, registration, preparation, active, and normal terminal-acceptance advances are rejected",
       "closed mismatched-issue, malformed-manifest, invalid-rung, and rung-changing corrective candidates are rejected",
       "Work-Key, Issue-Action, closing-keyword, changed-path, lease, lifecycle, and review controls remain mandatory"
@@ -114,6 +115,7 @@
     "negative_controls": [
       "any closed Work-Issue outside an exact owned capability-batch done-to-done corrective advance",
       "a closed standalone, registration, preparation, active, normal terminal-acceptance, mismatched-issue, malformed, invalid-rung, or rung-changing candidate",
+      "changing owner-gate, dependency, capability, closure, writable, read-only, forbidden, integration-surface, or lease authorization in a closed corrective candidate",
       "bypassing Work-Key, Issue-Action, closing-keyword, changed-path, integration-lease, lifecycle, or review validation",
       "mutating Gate 0 v6 bytes, accepted artifacts, external attestations, blockers, or readiness while rebinding the delivery validator",
       "reopening an issue or changing D9, D4, D8, source policy, scheduler, runtime, release, database, consumer, or Production data authorization"

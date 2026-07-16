@@ -2257,17 +2257,27 @@ def test_pull_request_metadata_closed_terminal_corrective_corpus(case):
     else:
         candidate = case["candidate"]
         base = case["base"] or {}
+        authorization = {
+            "owner_gate": 29,
+            "capability_issues": [],
+            "dependencies": [],
+            "closes_issues": [],
+            "paths": {
+                "writable": ["governance/batches/D0.json"],
+                "read_only": [],
+                "forbidden": [],
+                "integration_surface": [],
+                "lease_manifest": None,
+            },
+        }
         accepted_rung = candidate.get("last_accepted_rung") if candidate.get("status") == "done" else None
         advance = governance.PullRequestAdvance(
             batch_id="D0",
             manifest_path="governance/batches/D0.json",
-            base_manifest=base,
+            base_manifest={**authorization, **base} if base else {},
             manifest={
+                **authorization,
                 **candidate,
-                "owner_gate": 29,
-                "capability_issues": [],
-                "dependencies": [],
-                "closes_issues": [],
             },
             accepted_rung=accepted_rung,
             changed_paths=("governance/batches/D0.json",),
@@ -2293,7 +2303,10 @@ def test_pull_request_metadata_closed_terminal_corrective_corpus(case):
     )
 
     issue_state_errors = [error for error in validation.errors if "Work-Issue" in error and "not open" in error]
-    assert (not issue_state_errors) == (case["expected"] == "allow")
+    if case["expected"] == "allow":
+        assert validation.errors == []
+    else:
+        assert issue_state_errors
 
 
 def test_pull_request_metadata_rejects_duplicate_structured_fields():

@@ -657,6 +657,13 @@ def closed_terminal_corrective_work_issue_allowed(
     base = advance.base_manifest
     candidate = advance.manifest
     terminal_rung = base.get("terminal_rung")
+    authorization_fields = (
+        "owner_gate",
+        "capability_issues",
+        "closes_issues",
+        "dependencies",
+        "paths",
+    )
     return (
         base.get("status") == "done"
         and candidate.get("status") == "done"
@@ -669,6 +676,7 @@ def closed_terminal_corrective_work_issue_allowed(
         and candidate.get("target_rung") == terminal_rung
         and candidate.get("terminal_rung") == terminal_rung
         and advance.accepted_rung == terminal_rung
+        and all(candidate.get(field) == base.get(field) for field in authorization_fields)
     )
 
 
@@ -716,7 +724,10 @@ def validate_pull_request_metadata(
                 work_issue_state == "closed"
                 and closed_terminal_corrective_work_issue_allowed(advance, work_issue_number)
             ),
-            f"pull-request Work-Issue #{work_issue_number} is not open",
+            (
+                f"pull-request Work-Issue #{work_issue_number} is not open and the PR is not an exact "
+                "closed-terminal corrective advance"
+            ),
         )
 
     if advance is not None and advance.kind == "capability_batch":
