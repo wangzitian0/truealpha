@@ -95,7 +95,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/D12-vision-issue-reconciliation.v1.json",
-      "sha256": "95c12bf4041db4ed70f47751ab4df43f362adccf2b352d237bf5508ef78de89a"
+      "sha256": "168b9f287d1aeba47187a1eb6ff4d212ede01833be7c739a1180924c7278d699"
     }
   },
   "release_activation": {
