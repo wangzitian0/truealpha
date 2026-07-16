@@ -197,12 +197,14 @@ insert into app.publication_policy_sets (
     publication_policy_set_id,
     content_sha256,
     release_manifest_id,
+    administrator_actions,
     recorded_at
 )
 values (
     'publication-policy-set:research:v2',
     '4cc4f0d79486130bda4de3451b56770a5c295881535602b692bbf1cda585cdfd',
     'release-manifest:research:v1',
+    array['read_audit_metadata', 'submit_registered_replay']::text[],
     '2026-07-15T00:00:00Z'
 );
 
@@ -474,6 +476,34 @@ values (
     'grant:alpha:alice:001',
     '2026-07-15T00:05:00Z'
 );
+
+do $$
+begin
+    begin
+        insert into app.authorization_decisions (
+            decision_id, tenant_id, principal_id, action, resource_id, resource_type,
+            publication_class_id, publication_policy_id, decision, reason_code,
+            decided_at, recorded_at
+        ) values (
+            'access-decision:7777777777777777777777777777777777777777777777777777777777777777',
+            'tenant:beta', 'principal:beta:bob', 'read_materialized_result',
+            'strategy-result:beta:orphan-001', 'materialized_strategy_result',
+            'publication-class:standard:v1', 'publication-policy-set:research:v2',
+            'allow', null, '2026-07-15T00:01:00Z', '2026-07-15T00:01:00Z'
+        );
+        set constraints app.trg_authorization_decisions_require_grants immediate;
+        raise exception 'materialized allow without grant unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'materialized allow without grant unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'non-administrator materialized allow decision requires an entitlement grant' then
+                raise;
+            end if;
+    end;
+end;
+$$;
 
 do $$
 begin
@@ -782,6 +812,12 @@ begin
     end if;
     if (select count(*) from app.publication_policy_set_seals where publication_policy_set_id = 'publication-policy-set:research:v2') <> 1 then
         raise exception 'publication policy set was not sealed exactly once';
+    end if;
+    if (select administrator_actions
+        from app.publication_policy_sets
+        where publication_policy_set_id = 'publication-policy-set:research:v2')
+       is distinct from array['read_audit_metadata', 'submit_registered_replay']::text[] then
+        raise exception 'publication policy set did not retain its exact administrator actions';
     end if;
     if (select count(*) from app.access_audit_events where tenant_id = 'tenant:alpha') <> 3 then
         raise exception 'allowed-and-denied access audit history was not preserved';

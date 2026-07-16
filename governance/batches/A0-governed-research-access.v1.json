@@ -78,14 +78,18 @@
       "db/tests/governed_research_access_contract.sql",
       "governance/leases/A0-governed-research-access.v1.json",
       "governance/leases/A0-governed-research-access.v2.json",
+      "governance/leases/A0-governed-research-access.v3.json",
       "governance/evidence/A0-governed-research-access-E0.v1.json",
       "governance/evidence/A0-governed-research-access-E1.v1.json",
       "governance/evidence/A0-governed-research-access-E2.v1.json",
       "governance/evidence/A0-governed-research-access-E2.v2.json",
+      "governance/evidence/A0-governed-research-access-E2.v3.json",
       "governance/evidence/issue-229.v1.json",
       "governance/evidence/issue-229.v2.json",
+      "governance/evidence/issue-229.v3.json",
       "governance/handoffs/A0-governed-research-access.v1.json",
       "governance/handoffs/A0-governed-research-access.v2.json",
+      "governance/handoffs/A0-governed-research-access.v3.json",
       "governance/capabilities/issue-229.v1.json",
       "governance/vision-issue-graph.json",
       "governance/gate0/README.md",
@@ -151,8 +155,8 @@
     ],
     "lease_owner": "wangzitian0",
     "lease_manifest": {
-      "path": "governance/leases/A0-governed-research-access.v2.json",
-      "sha256": "671c42a6499c37e911d64e5d7c07cf99c2f7576db2ed3edbe3636cf22cc49007"
+      "path": "governance/leases/A0-governed-research-access.v3.json",
+      "sha256": "7111822423175133366627cbc3a08fdcb9559bcd3578826651fc7efd03c64c88"
     }
   },
   "release_activation": {

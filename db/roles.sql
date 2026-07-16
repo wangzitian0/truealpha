@@ -33,11 +33,13 @@ grant insert on app.authorization_decisions, app.authorization_decision_grants,
 revoke all on function app.validate_access_audit_decision_tenant() from public;
 revoke all on function app.validate_authorization_decision_policy_set() from public;
 revoke all on function app.validate_authorization_decision_grant() from public;
+revoke all on function app.validate_authorization_decision_required_grants() from public;
 revoke all on function app.validate_publication_policy_entitlement_insert() from public;
 revoke all on function app.validate_publication_policy_set_seal() from public;
 grant execute on function app.validate_access_audit_decision_tenant() to app_runtime;
 grant execute on function app.validate_authorization_decision_policy_set() to app_runtime;
 grant execute on function app.validate_authorization_decision_grant() to app_runtime;
+grant execute on function app.validate_authorization_decision_required_grants() to app_runtime;
 
 -- Audit readers receive only the administrator-filtered, non-content view.
 do $$ begin

@@ -246,9 +246,10 @@ def test_registered_replay_submission_is_policy_bound_and_administrator_only() -
     replay = AccessResource(
         resource_id="registered-replay-definition:analyst-track-record:v1",
         resource_type=AccessResourceType.REGISTERED_REPLAY_DEFINITION,
-        tenant_id="tenant:alpha",
+        tenant_id="tenant:platform",
         content_private=False,
     )
+    cross_tenant_replay = replay.model_copy(update={"tenant_id": "tenant:alpha"})
     administrator = authorize_access(
         context=contexts["auth:admin:valid"],
         action=AccessAction.SUBMIT_REGISTERED_REPLAY,
@@ -259,7 +260,7 @@ def test_registered_replay_submission_is_policy_bound_and_administrator_only() -
     member = authorize_access(
         context=contexts["auth:browser:alpha:valid"],
         action=AccessAction.SUBMIT_REGISTERED_REPLAY,
-        resource=replay,
+        resource=cross_tenant_replay,
         policy=_policy(),
         observed_at=OBSERVED_AT,
     )
@@ -270,9 +271,17 @@ def test_registered_replay_submission_is_policy_bound_and_administrator_only() -
         policy=_policy(administrator_actions=()),
         observed_at=OBSERVED_AT,
     )
+    cross_tenant_administrator = authorize_access(
+        context=contexts["auth:admin:valid"],
+        action=AccessAction.SUBMIT_REGISTERED_REPLAY,
+        resource=cross_tenant_replay,
+        policy=_policy(),
+        observed_at=OBSERVED_AT,
+    )
     assert administrator.decision is AccessDecisionKind.ALLOW
     assert member.reason is AccessDenialReason.ACTION_NOT_PERMITTED
     assert policy_denied.reason is AccessDenialReason.ACTION_NOT_PERMITTED
+    assert cross_tenant_administrator.reason is AccessDenialReason.TENANT_MISMATCH
 
 
 def test_audit_record_is_deterministic_content_free_and_tenant_consistent() -> None:

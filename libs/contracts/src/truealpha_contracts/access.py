@@ -474,7 +474,9 @@ def authorize_access(
         ):
             reason = AccessDenialReason.ACTION_NOT_PERMITTED
     elif resource.resource_type is AccessResourceType.REGISTERED_REPLAY_DEFINITION:
-        if (
+        if context.tenant_id != resource.tenant_id:
+            reason = AccessDenialReason.TENANT_MISMATCH
+        elif (
             action is not AccessAction.SUBMIT_REGISTERED_REPLAY
             or context.principal_kind is not PrincipalKind.ADMINISTRATOR
             or action not in policy.administrator_actions

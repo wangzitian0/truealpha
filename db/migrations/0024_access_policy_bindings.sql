@@ -4,8 +4,32 @@ create table if not exists app.publication_policy_sets (
     publication_policy_set_id text primary key check (length(publication_policy_set_id) > 0),
     content_sha256            text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     release_manifest_id       text not null check (length(release_manifest_id) > 0),
+    administrator_actions     text[] not null default array[]::text[],
     recorded_at               timestamptz not null default now()
 );
+
+alter table app.publication_policy_sets
+    add column if not exists administrator_actions text[] not null default array[]::text[];
+
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conrelid = 'app.publication_policy_sets'::regclass
+          and conname = 'publication_policy_sets_administrator_actions_check'
+    ) then
+        alter table app.publication_policy_sets
+            add constraint publication_policy_sets_administrator_actions_check check (
+                array_position(administrator_actions, null) is null
+                and administrator_actions <@ array[
+                    'read_audit_metadata',
+                    'submit_registered_replay'
+                ]::text[]
+            );
+    end if;
+end;
+$$;
 
 create table if not exists app.publication_policy_entitlements (
     publication_policy_rule_id text primary key check (length(publication_policy_rule_id) > 0),
@@ -61,8 +85,10 @@ set search_path = pg_catalog, app
 as $$
 declare
     policy_content_sha256 text;
+    policy_administrator_actions text[];
 begin
-    select content_sha256 into policy_content_sha256
+    select content_sha256, administrator_actions
+    into policy_content_sha256, policy_administrator_actions
     from app.publication_policy_sets
     where publication_policy_set_id = new.publication_policy_set_id
     for update;
@@ -72,6 +98,12 @@ begin
     end if;
     if policy_content_sha256 <> new.content_sha256 then
         raise exception 'publication policy set seal content hash mismatch';
+    end if;
+    if cardinality(policy_administrator_actions) <> (
+        select count(distinct administrator_action)
+        from unnest(policy_administrator_actions) as administrator_action
+    ) then
+        raise exception 'publication policy set administrator actions must be unique';
     end if;
     if not exists (
         select 1
@@ -212,6 +244,42 @@ drop trigger if exists trg_authorization_decision_grants_validate on app.authori
 create trigger trg_authorization_decision_grants_validate
 before insert on app.authorization_decision_grants
 for each row execute function app.validate_authorization_decision_grant();
+
+create or replace function app.validate_authorization_decision_required_grants()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, app
+as $$
+begin
+    if new.decision = 'allow'
+       and new.resource_type in (
+           'materialized_strategy_result',
+           'materialized_backtest_result'
+       )
+       and not exists (
+           select 1
+           from app.principals as principal
+           where principal.principal_id = new.principal_id
+             and principal.principal_kind = 'administrator'
+       )
+       and not exists (
+           select 1
+           from app.authorization_decision_grants as decision_grant
+           where decision_grant.decision_id = new.decision_id
+       ) then
+        raise exception 'non-administrator materialized allow decision requires an entitlement grant';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists trg_authorization_decisions_require_grants
+on app.authorization_decisions;
+create constraint trigger trg_authorization_decisions_require_grants
+after insert on app.authorization_decisions
+deferrable initially deferred
+for each row execute function app.validate_authorization_decision_required_grants();
 
 create or replace function app.validate_access_audit_decision_tenant()
 returns trigger
