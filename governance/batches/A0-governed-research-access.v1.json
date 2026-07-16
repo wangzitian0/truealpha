@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "A0-governed-research-access",
-  "revision": 3,
+  "revision": 4,
   "issue": 230,
   "owner_gate": 31,
   "status": "active",
   "lane": "consumption",
-  "last_accepted_rung": "E0",
-  "target_rung": "E1",
+  "last_accepted_rung": "E1",
+  "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Establish a governed multi-user research access boundary before MCP, reports, cards, the Web App, or chat expose personal research state.",
-  "claim_ceiling": "E0 experimental governed-access submodule, additive app schema, forced owner RLS, and append-only policy/decision/audit boundary only; no authoritative init.md amendment, stable package-root export, tiny-corpus acceptance, authentication route, identity-provider binding, browser or MCP access, content retention, report or card mutation, replay submission, factor execution, Qlib invocation, source call, stable handoff, or release activation is accepted.",
+  "claim_ceiling": "E1 content-hashed Local/CI authorization evidence for the corrected experimental contract, frozen two-tenant corpus, deterministic decision replay, fail-closed denial, owner RLS, tenant-bound administrator-only audit metadata, and append-only identity, grant, revocation, policy, decision, and audit histories only; no authoritative init.md amendment, stable package-root export, E2 contract repair, authentication route, identity-provider binding, browser or MCP access, content retention, report or card mutation, replay submission, factor execution, Qlib invocation, source call, stable handoff, or release activation is accepted.",
   "capability_issues": [229],
   "closes_issues": [229],
   "informational_issues": [31, 41, 42, 43, 45, 46, 66, 224, 225, 226, 227],
@@ -29,6 +29,7 @@
       "the stable activation base remains 2fe3bc7e43c89b317caceeb4d627657cf7c50729 while implementation evidence records its exact current PR base and head",
       "the independent reviewer remains assigned through E1 acceptance",
       "the active A0 integration lease covers only the E0 architecture decision, additive migration, db/roles.sql, and SQL contract test; frozen Gate 0 candidate paths remain unchanged",
+      "post-merge E0 review findings are classified as local contract bugs, rerun at E0, and included in the E1 tiny-corpus acceptance",
       "issue #230 contains this manifest path and exact SHA-256",
       "Delivery Governance CI passes offline validation and live GitHub parity"
     ]
@@ -113,7 +114,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/A0-governed-research-access.v1.json",
-      "sha256": "e0d87412ba50ba9713a3e1d6d15e6aa8c30028b0d803bd6155f00d7039888ad1"
+      "sha256": "96f0c9727f23b8739504e677dc5f2b3a5535941e0c4e0b3aa78ec71a5ab1468b"
     }
   },
   "release_activation": {
@@ -134,15 +135,19 @@
       "administrator reads private conversation or document content without separately approved break-glass evidence",
       "grant, revocation, publication policy, or access audit row is updated or deleted instead of appended",
       "private app rows bypass RLS or return after cross-tenant object-ID guessing",
+      "a contradictory resource privacy shape bypasses the publication policy for a materialized strategy or backtest result",
+      "an audit event and its authorization decision carry different tenant identities or expose cross-tenant decision metadata",
+      "ordinary app runtime reads administrator audit metadata or either immutable audit base table",
+      "AuthorizationService hides publication-policy, authentication-failure, or delegation-revocation inputs required by authorize_access",
       "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
       "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
       "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated",
       "the experimental access DTOs are exported from the stable truealpha_contracts package root before E2 freeze"
     ],
     "output": {
-      "type": "GovernedResearchAccessEvidence",
+      "type": "TinyEvidence",
       "stable_handoff": false,
-      "state": "provisional_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "the future #42 MCP implementation batch",
         "the future #43 report/document implementation batch",

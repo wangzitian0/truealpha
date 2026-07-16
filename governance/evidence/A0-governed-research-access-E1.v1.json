@@ -1,0 +1,52 @@
+{
+  "accepted_rung": "E1",
+  "base_sha": "2fe3bc7e43c89b317caceeb4d627657cf7c50729",
+  "batch_id": "A0-governed-research-access",
+  "commands": [
+    {
+      "command": "uv run pytest libs/contracts/tests/test_access.py -q",
+      "exit_code": 0,
+      "output_sha256": "d6b043c02d4c18aec71134ae89b5d2f2b5c49cb5be663792e87304afc7ba6467"
+    },
+    {
+      "command": "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/tests/test_access.py",
+      "exit_code": 0,
+      "output_sha256": "c822b811c2e0019bee1324669633ca6aa6ae681c738309b0a31c13bbeebac766"
+    },
+    {
+      "command": "uv run mypy",
+      "exit_code": 0,
+      "output_sha256": "55c1a1546fc041d4b1f469088abc8b81d35b560fbda44538abb7cd83c7d2a941"
+    },
+    {
+      "command": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
+      "exit_code": 0,
+      "output_sha256": "3986cde518ba0f1f689ad0e7ce95159ceb0f71788d5cb55e1f27f1a3157324b3"
+    },
+    {
+      "command": "uv run python tools/check_delivery_governance.py",
+      "exit_code": 0,
+      "output_sha256": "3ce0a3f4b2b2d3fcc83181896297ac73b4b7b3034209f9e2b7514b3d55b0ebfa"
+    }
+  ],
+  "created_at": "2026-07-16T05:11:33.986394Z",
+  "evidence_id": "rung-evidence:A0-governed-research-access:\u00638c523bb590f694942087ee762d989e22688e6425b270d38c7d538890b825891",
+  "manifest_sha256": "34c95093bf92b1f09b562d06d3fe495e90ed941a4c6e45ecd3bd3ba2ec28ae1f",
+  "negative_controls": [
+    "missing, expired, revoked, cross-tenant, or client-supplied access identity reaches a mart query, artifact retrieval, or mutation",
+    "administrator reads private conversation or document content without separately approved break-glass evidence",
+    "grant, revocation, publication policy, or access audit row is updated or deleted instead of appended",
+    "private app rows bypass RLS or return after cross-tenant object-ID guessing",
+    "a contradictory resource privacy shape bypasses the publication policy for a materialized strategy or backtest result",
+    "an audit event and its authorization decision carry different tenant identities or expose cross-tenant decision metadata",
+    "ordinary app runtime reads administrator audit metadata or either immutable audit base table",
+    "AuthorizationService hides publication-policy, authentication-failure, or delegation-revocation inputs required by authorize_access",
+    "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
+    "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
+    "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated",
+    "the experimental access DTOs are exported from the stable truealpha_contracts package root before E2 freeze"
+  ],
+  "producer_head_sha": "d9ade24cdb7c30bf846a571036426cf2882e20b2",
+  "schema_version": 1,
+  "stable_handoff": false
+}

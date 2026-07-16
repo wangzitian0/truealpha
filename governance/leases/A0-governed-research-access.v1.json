@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:3eef1db667d98eea400052f07288a5723353924265f50dc4f1b00dbdacad8d54",
+  "lease_id": "integration-lease:64843b97cbe131f3aa32b470077ee7d407781bdcdb84637fb671fe4066813101",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
   "state": "active",
@@ -10,6 +10,6 @@
     "db/roles.sql",
     "db/tests/governed_research_access_contract.sql"
   ],
-  "base_sha": "0fa56bc2e11e69c65e94440108d7cd25bc3ba412",
+  "base_sha": "ce15dedab1e5596a09112bdbd1911f7e7bfe3e6d",
   "expires_at": "2026-07-30T00:00:00Z"
 }
