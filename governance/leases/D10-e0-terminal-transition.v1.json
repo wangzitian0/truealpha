@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:3600c5e1f244cf17eda615b062e2bc6190325e7f11644311d16e5a9ba43cd5e7",
+  "batch_id": "D10-e0-terminal-transition",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "governance/gate0/manifest-v6.json",
+    "governance/gate0/v5-frozen-tree-proof.v1.json",
+    "libs/runtime/tests/test_delivery_governance.py",
+    "tools/check_delivery_governance.py"
+  ],
+  "base_sha": "60a4be55ce80cccc556363821d0d79d6068e511c",
+  "expires_at": "2026-07-30T00:00:00Z"
+}
