@@ -12,6 +12,7 @@ create table if not exists raw.capture_campaigns (
 create table if not exists raw.capture_obligations (
     obligation_id          text primary key check (obligation_id ~ '^list-obligation:[0-9a-f]{64}$'),
     campaign_id            text not null references raw.capture_campaigns(campaign_id),
+    run_id                 text not null check (run_id ~ '^capture-run:[0-9a-f]{64}$'),
     list_version_id        text not null,
     subject_kind           text not null,
     subject_id             text not null,
@@ -19,19 +20,21 @@ create table if not exists raw.capture_obligations (
     partition_key          text not null,
     content_sha256         text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at             timestamptz not null default now(),
-    unique (campaign_id, list_version_id, subject_kind, subject_id, capture_requirement_id, partition_key)
+    unique (run_id, list_version_id, subject_kind, subject_id, capture_requirement_id, partition_key)
 );
 
 create table if not exists raw.capture_work_items (
     work_item_id       text primary key check (work_item_id ~ '^capture-work-item:[0-9a-f]{64}$'),
     campaign_id        text not null references raw.capture_campaigns(campaign_id),
-    request_id         text not null,
+    source_request_id  text not null check (source_request_id ~ '^source-request:[0-9a-f]{64}$'),
+    schedule_policy_id text not null check (schedule_policy_id ~ '^schedule-policy:[0-9a-f]{64}$'),
     content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
-    created_at         timestamptz not null default now()
+    created_at         timestamptz not null default now(),
+    unique (campaign_id, source_request_id, schedule_policy_id)
 );
 
 create table if not exists raw.capture_obligation_work_bindings (
-    binding_id         text primary key,
+    binding_id         text primary key check (binding_id ~ '^obligation-work-binding:[0-9a-f]{64}$'),
     obligation_id      text not null references raw.capture_obligations(obligation_id),
     work_item_id       text not null references raw.capture_work_items(work_item_id),
     created_at         timestamptz not null default now(),
@@ -48,7 +51,7 @@ create table if not exists raw.capture_attempts (
 );
 
 create table if not exists raw.capture_attempt_results (
-    attempt_result_id  text primary key,
+    attempt_result_id  text primary key check (attempt_result_id ~ '^fetch-attempt-result:[0-9a-f]{64}$'),
     attempt_id         text not null unique references raw.capture_attempts(attempt_id),
     completed_at       timestamptz not null,
     outcome            text not null check (outcome in (
@@ -56,7 +59,16 @@ create table if not exists raw.capture_attempt_results (
         'success', 'unchanged', 'unavailable', 'failed'
     )),
     reason_codes       text[] not null check (cardinality(reason_codes) > 0),
+    source_vintage_id  text check (source_vintage_id is null or source_vintage_id ~ '^source-vintage:[0-9a-f]{64}$'),
+    reused_source_vintage_id text check (
+        reused_source_vintage_id is null or reused_source_vintage_id ~ '^source-vintage:[0-9a-f]{64}$'
+    ),
     content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$')
+    ,check (
+        (outcome = 'success' and source_vintage_id is not null and reused_source_vintage_id is null)
+        or (outcome = 'unchanged' and reused_source_vintage_id is not null and source_vintage_id is null)
+        or (outcome not in ('success', 'unchanged') and source_vintage_id is null and reused_source_vintage_id is null)
+    )
 );
 
 create table if not exists raw.capture_checkpoints (

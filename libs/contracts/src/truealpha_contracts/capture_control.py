@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import StrEnum
 from typing import Self
@@ -82,7 +83,7 @@ class CaptureCheckpoint(BaseModel):
     def canonical_obligations(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         if len(values) != len(set(values)):
             raise ValueError("completed_obligation_ids must not contain duplicates")
-        if any(not value.startswith("list-obligation:") for value in values):
+        if any(re.fullmatch(r"list-obligation:[0-9a-f]{64}", value) is None for value in values):
             raise ValueError("completed_obligation_ids must use canonical identities")
         return tuple(sorted(values))
 

@@ -56,3 +56,11 @@ def test_checkpoint_identity_is_append_only_sequence_grain() -> None:
             completed_obligation_ids=(),
             recorded_at=datetime(2026, 4, 1),
         )
+    with pytest.raises(ValidationError, match="canonical identities"):
+        CaptureCheckpoint(
+            run_id=run_id,
+            sequence=3,
+            phase=CheckpointPhase.NORMALIZED,
+            completed_obligation_ids=("list-obligation:not-a-hash",),
+            recorded_at=AT,
+        )

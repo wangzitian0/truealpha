@@ -26,6 +26,7 @@ def test_frozen_topt_denominator_expands_without_share_class_collapse() -> None:
         members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=listing) for listing in listings),
         effective_at=AT,
     )
+    assert list_version.list_version_id == denominator["list_version_id"]
     obligations = expand_obligations(
         run_id=f"capture-run:{'a' * 64}",
         list_version=list_version,
@@ -36,6 +37,22 @@ def test_frozen_topt_denominator_expands_without_share_class_collapse() -> None:
     assert len({row[0] for row in denominator["instruments"]}) == 20
     assert len(obligations) == denominator["obligation_count"] == 84
     assert {item.subject.id for item in obligations} >= {"listing:xnas:goog", "listing:xnas:googl"}
+
+
+def test_frozen_tiny_list_ids_reconstruct_from_security_members() -> None:
+    corpus = json.loads(CORPUS.read_text())
+    universe = UniverseRef(
+        universe_id=corpus["topt_denominator"]["universe_id"],
+        universe_version="topt-candidate-2026-03-31-v1",
+        content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
+    )
+    for frozen in corpus["tiny_lists"]:
+        reconstructed = CaptureListVersion(
+            universe=universe,
+            members=tuple(SubjectRef(kind=SubjectKind.SECURITY, id=member) for member in frozen["members"]),
+            effective_at=AT,
+        )
+        assert reconstructed.list_version_id == frozen["list_version_id"]
 
 
 def test_attempts_are_contiguous_bounded_and_stop_at_terminal_outcome() -> None:

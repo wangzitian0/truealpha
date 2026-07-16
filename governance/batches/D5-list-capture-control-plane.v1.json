@@ -24,7 +24,8 @@
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D5 registration is merged and this preparation is based on main at 5c1721617acaaedf43245f3beccdefcb2182154e",
-      "the preparation PR freezes the exact tiny control-plane corpus at 611aab472c6705936cd300552c9c29782f86f24b22d2c28472b30a269df474e7 without changing implementation paths",
+      "the E0 repair replaces the pre-evidence alias corpus with canonical list-version identities at 603fe49e09257df8030c75e58898cee03787605df4756e46b8e368c1d75212c0",
+      "the superseded preparation corpus is revoked before any E1 execution, protected result, or handoff consumption",
       "the stable activation base remains 5c1721617acaaedf43245f3beccdefcb2182154e while E0 evidence records its exact current PR base and head",
       "the E0 implementation starts from exact current main ce15dedab1e5596a09112bdbd1911f7e7bfe3e6d",
       "the accepted D4 E2 Local/CI handoff remains unchanged and permits this batch",
@@ -78,7 +79,7 @@
   "corpus": {
     "environment": "Local/CI checked-in capture-control fixtures through E2; immutable TOPT development denominator at E3; no live source before separately accepted policy and authorization",
     "manifest_path": "apps/data-engine/tests/fixtures/capture_control/corpus.v1.json",
-    "sha256": "611aab472c6705936cd300552c9c29782f86f24b22d2c28472b30a269df474e7",
+    "sha256": "603fe49e09257df8030c75e58898cee03787605df4756e46b8e368c1d75212c0",
     "required_strata": [
       "one exact immutable list with success, unchanged, unavailable, skipped-policy, and explicit-failure obligations",
       "two overlapping immutable lists whose separate obligations share one compatible provider work item",
@@ -201,6 +202,7 @@
     }
   },
   "invalidation": [
+    "the revision-2 alias corpus is superseded before E1 and grants no evidence or handoff authority",
     "identity grain, cadence semantics, terminal state, retry semantics, recapture predicate vocabulary, checkpoint semantics, or corpus change creates a new D5 revision",
     "a D4 interface or D2 data-plane invalidation revokes dependent D5 evidence",
     "a migration, threshold, source policy, catalog, universe, or denominator change invalidates the affected rung and every higher rung",
