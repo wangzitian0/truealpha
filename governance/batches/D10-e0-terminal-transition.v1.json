@@ -105,7 +105,7 @@
     "output": {
       "type": "DeliveryGovernanceE0TransitionEvidence",
       "stable_handoff": false,
-      "state": "prepared",
+      "state": "queued",
       "allowed_evidence_readers": [
         "issue #278 planning only until a later accepted result names a bounded corrective consumer"
       ]
