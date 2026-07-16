@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "prepared_terminal_e0_direct_done",
+      "base": {
+        "status": "prepared",
+        "last_accepted_rung": null,
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "candidate": {
+        "status": "done",
+        "last_accepted_rung": "E0",
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "expected": "allow"
+    },
+    {
+      "name": "prepared_non_terminal_e0_direct_done",
+      "base": {
+        "status": "prepared",
+        "last_accepted_rung": null,
+        "target_rung": "E0",
+        "terminal_rung": "E1"
+      },
+      "candidate": {
+        "status": "done",
+        "last_accepted_rung": "E0",
+        "target_rung": "E1",
+        "terminal_rung": "E1"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "prepared_terminal_e0_changed_target",
+      "base": {
+        "status": "prepared",
+        "last_accepted_rung": null,
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "candidate": {
+        "status": "done",
+        "last_accepted_rung": "E0",
+        "target_rung": "E1",
+        "terminal_rung": "E0"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "prepared_terminal_e0_invalid_accepted_rung",
+      "base": {
+        "status": "prepared",
+        "last_accepted_rung": null,
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "candidate": {
+        "status": "done",
+        "last_accepted_rung": "E9",
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "prepared_terminal_e1_direct_done",
+      "base": {
+        "status": "prepared",
+        "last_accepted_rung": "E0",
+        "target_rung": "E1",
+        "terminal_rung": "E1"
+      },
+      "candidate": {
+        "status": "done",
+        "last_accepted_rung": "E1",
+        "target_rung": "E1",
+        "terminal_rung": "E1"
+      },
+      "expected": "reject"
+    }
+  ]
+}
