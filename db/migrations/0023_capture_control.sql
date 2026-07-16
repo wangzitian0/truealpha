@@ -28,6 +28,7 @@ create table if not exists raw.capture_work_items (
     campaign_id        text not null references raw.capture_campaigns(campaign_id),
     source_request_id  text not null check (source_request_id ~ '^source-request:[0-9a-f]{64}$'),
     schedule_policy_id text not null check (schedule_policy_id ~ '^schedule-policy:[0-9a-f]{64}$'),
+    maximum_attempts   integer not null check (maximum_attempts > 0),
     content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at         timestamptz not null default now(),
     unique (campaign_id, source_request_id, schedule_policy_id)
@@ -96,15 +97,23 @@ create or replace function raw.enforce_capture_attempt_sequence()
 returns trigger language plpgsql as $$
 declare
     expected_attempt integer;
+    allowed_attempts integer;
     previous_outcome text;
 begin
-    perform 1 from raw.capture_work_items where work_item_id = new.work_item_id for update;
+    select maximum_attempts
+      into allowed_attempts
+      from raw.capture_work_items
+     where work_item_id = new.work_item_id
+       for update;
     select coalesce(max(attempt_number), 0) + 1
       into expected_attempt
       from raw.capture_attempts
      where work_item_id = new.work_item_id;
     if new.attempt_number <> expected_attempt then
         raise exception 'capture attempts must be contiguous';
+    end if;
+    if new.attempt_number > allowed_attempts then
+        raise exception 'capture attempt exceeds maximum attempts';
     end if;
     if expected_attempt > 1 then
         select result.outcome

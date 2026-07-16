@@ -47,6 +47,76 @@ begin
 end;
 $$;
 
+insert into raw.capture_work_items (
+    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts, content_sha256
+) values (
+    'capture-work-item:9999999999999999999999999999999999999999999999999999999999999999',
+    'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'source-request:9999999999999999999999999999999999999999999999999999999999999999',
+    'schedule-policy:9999999999999999999999999999999999999999999999999999999999999999',
+    3, repeat('9', 64)
+);
+
+insert into raw.capture_attempts (
+    attempt_id, work_item_id, attempt_number, started_at, content_sha256
+) values (
+    'fetch-attempt:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+    'capture-work-item:9999999999999999999999999999999999999999999999999999999999999999',
+    1, '2026-04-01T00:01:00Z', repeat('1', 64)
+);
+insert into raw.capture_attempt_results (
+    attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
+) values (
+    'fetch-attempt-result:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+    'fetch-attempt:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+    '2026-04-01T00:01:01Z', 'interrupted', array['retry'], repeat('1', 64)
+);
+insert into raw.capture_attempts (
+    attempt_id, work_item_id, attempt_number, started_at, content_sha256
+) values (
+    'fetch-attempt:a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2',
+    'capture-work-item:9999999999999999999999999999999999999999999999999999999999999999',
+    2, '2026-04-01T00:01:02Z', repeat('2', 64)
+);
+insert into raw.capture_attempt_results (
+    attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
+) values (
+    'fetch-attempt-result:a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2',
+    'fetch-attempt:a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2',
+    '2026-04-01T00:01:03Z', 'rate_limited', array['retry'], repeat('2', 64)
+);
+insert into raw.capture_attempts (
+    attempt_id, work_item_id, attempt_number, started_at, content_sha256
+) values (
+    'fetch-attempt:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+    'capture-work-item:9999999999999999999999999999999999999999999999999999999999999999',
+    3, '2026-04-01T00:01:04Z', repeat('3', 64)
+);
+insert into raw.capture_attempt_results (
+    attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
+) values (
+    'fetch-attempt-result:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+    'fetch-attempt:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+    '2026-04-01T00:01:05Z', 'server_error', array['retry'], repeat('3', 64)
+);
+
+do $$
+begin
+    begin
+        insert into raw.capture_attempts (
+            attempt_id, work_item_id, attempt_number, started_at, content_sha256
+        ) values (
+            'fetch-attempt:a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4',
+            'capture-work-item:9999999999999999999999999999999999999999999999999999999999999999',
+            4, '2026-04-01T00:01:06Z', repeat('4', 64)
+        );
+        raise exception 'attempt beyond frozen maximum unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'attempt beyond frozen maximum unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
 do $$
 begin
     begin
@@ -67,12 +137,13 @@ end;
 $$;
 
 insert into raw.capture_work_items (
-    work_item_id, campaign_id, source_request_id, schedule_policy_id, content_sha256
+    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts, content_sha256
 ) values (
     'capture-work-item:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
     'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'source-request:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
     'schedule-policy:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    3,
     repeat('e', 64)
 );
 
@@ -80,12 +151,13 @@ do $$
 begin
     begin
         insert into raw.capture_work_items (
-            work_item_id, campaign_id, source_request_id, schedule_policy_id, content_sha256
+            work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts, content_sha256
         ) values (
             'capture-work-item:4444444444444444444444444444444444444444444444444444444444444444',
             'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'source-request:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
             'schedule-policy:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            3,
             repeat('4', 64)
         );
         raise exception 'duplicate logical work item unexpectedly succeeded';

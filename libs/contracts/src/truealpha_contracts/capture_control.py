@@ -10,6 +10,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from truealpha_contracts import SubjectRef, UniverseRef, canonical_sha256
+from truealpha_contracts.datahub import ListObligation
 
 
 def _freeze(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:
@@ -63,6 +64,47 @@ class CaptureListVersion(BaseModel):
             identity_fields=("universe", "members", "effective_at"),
         )
         return self
+
+
+class CaptureListObligation(BaseModel):
+    """A D4 obligation bound to the exact list version that created it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    obligation_id: str = Field(default="", pattern=r"^(?:|list-obligation:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    list_version_id: str = Field(pattern=r"^list-version:[0-9a-f]{64}$")
+    obligation: ListObligation
+
+    @model_validator(mode="after")
+    def identify(self) -> Self:
+        _freeze(
+            self,
+            id_field="obligation_id",
+            prefix="list-obligation",
+            identity_fields=("list_version_id", "obligation"),
+        )
+        return self
+
+    @property
+    def run_id(self) -> str:
+        return self.obligation.run_id
+
+    @property
+    def universe_ref(self) -> UniverseRef:
+        return self.obligation.universe_ref
+
+    @property
+    def subject(self) -> SubjectRef:
+        return self.obligation.subject
+
+    @property
+    def capture_requirement_id(self) -> str:
+        return self.obligation.capture_requirement_id
+
+    @property
+    def partition(self) -> str:
+        return self.obligation.partition
 
 
 class CaptureCheckpoint(BaseModel):

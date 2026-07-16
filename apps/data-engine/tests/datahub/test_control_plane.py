@@ -46,6 +46,7 @@ def test_frozen_tiny_list_ids_reconstruct_from_security_members() -> None:
         universe_version="topt-candidate-2026-03-31-v1",
         content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
     )
+    reconstructed_lists = []
     for frozen in corpus["tiny_lists"]:
         reconstructed = CaptureListVersion(
             universe=universe,
@@ -53,6 +54,43 @@ def test_frozen_tiny_list_ids_reconstruct_from_security_members() -> None:
             effective_at=AT,
         )
         assert reconstructed.list_version_id == frozen["list_version_id"]
+        reconstructed_lists.append(reconstructed)
+
+    obligations = tuple(
+        obligation
+        for list_version in reconstructed_lists
+        for obligation in expand_obligations(
+            run_id=f"capture-run:{'b' * 64}",
+            list_version=list_version,
+            semantic_types=("market-price",),
+            partition="2026-03-31",
+        )
+        if obligation.subject.id == "security:cusip:67066G104"
+    )
+    assert len(obligations) == 2
+    assert len({obligation.obligation_id for obligation in obligations}) == 2
+    assert len({obligation.list_version_id for obligation in obligations}) == 2
+
+
+def test_obligation_expansion_rejects_empty_semantic_denominator() -> None:
+    corpus = json.loads(CORPUS.read_text())
+    frozen = corpus["tiny_lists"][0]
+    list_version = CaptureListVersion(
+        universe=UniverseRef(
+            universe_id=corpus["topt_denominator"]["universe_id"],
+            universe_version="topt-candidate-2026-03-31-v1",
+            content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
+        ),
+        members=tuple(SubjectRef(kind=SubjectKind.SECURITY, id=member) for member in frozen["members"]),
+        effective_at=AT,
+    )
+    with pytest.raises(ValueError, match="must not be empty"):
+        expand_obligations(
+            run_id=f"capture-run:{'c' * 64}",
+            list_version=list_version,
+            semantic_types=(),
+            partition="2026-03-31",
+        )
 
 
 def test_attempts_are_contiguous_bounded_and_stop_at_terminal_outcome() -> None:
@@ -101,3 +139,9 @@ def test_attempt_dispatch_waits_for_result_and_completion_is_monotonic() -> None
 def test_attempt_budget_must_be_positive() -> None:
     with pytest.raises(ValueError, match="positive"):
         AttemptLedger(work_item_id=f"capture-work-item:{'f' * 64}", maximum_attempts=0)
+
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'1' * 64}", maximum_attempts=1)
+    attempt = ledger.start(started_at=AT)
+    ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.INTERRUPTED)
+    with pytest.raises(ValueError, match="maximum attempts"):
+        ledger.start(started_at=AT)

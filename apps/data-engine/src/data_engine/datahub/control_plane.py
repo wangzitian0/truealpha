@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from truealpha_contracts import SubjectKind
-from truealpha_contracts.capture_control import CaptureListVersion
+from truealpha_contracts.capture_control import CaptureListObligation, CaptureListVersion
 from truealpha_contracts.datahub import (
     FetchAttempt,
     FetchAttemptOutcome,
@@ -28,20 +28,26 @@ def expand_obligations(
     list_version: CaptureListVersion,
     semantic_types: tuple[str, ...],
     partition: str,
-) -> tuple[ListObligation, ...]:
+) -> tuple[CaptureListObligation, ...]:
     """Expand the exact list/type denominator without collapsing share classes."""
+    if not semantic_types:
+        raise ValueError("semantic_types must not be empty")
     if len(semantic_types) != len(set(semantic_types)):
         raise ValueError("obligation inputs must not contain duplicates")
-    if any(member.kind is not SubjectKind.LISTING for member in list_version.members):
-        raise ValueError("capture-control expansion requires listing members")
+    supported_kinds = {SubjectKind.LISTING, SubjectKind.SECURITY}
+    if any(member.kind not in supported_kinds for member in list_version.members):
+        raise ValueError("capture-control expansion requires listing or security members")
     ordered_semantic_types = tuple(sorted(semantic_types))
     obligations = (
-        ListObligation(
-            run_id=run_id,
-            universe_ref=list_version.universe,
-            subject=member,
-            capture_requirement_id=f"{semantic_type}:v1",
-            partition=partition,
+        CaptureListObligation(
+            list_version_id=list_version.list_version_id,
+            obligation=ListObligation(
+                run_id=run_id,
+                universe_ref=list_version.universe,
+                subject=member,
+                capture_requirement_id=f"{semantic_type}:v1",
+                partition=partition,
+            ),
         )
         for member in list_version.members
         for semantic_type in ordered_semantic_types

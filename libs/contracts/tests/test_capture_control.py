@@ -3,7 +3,13 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts import SubjectKind, SubjectRef, UniverseRef
-from truealpha_contracts.capture_control import CaptureCheckpoint, CaptureListVersion, CheckpointPhase
+from truealpha_contracts.capture_control import (
+    CaptureCheckpoint,
+    CaptureListObligation,
+    CaptureListVersion,
+    CheckpointPhase,
+)
+from truealpha_contracts.datahub import ListObligation
 
 SHA = "a" * 64
 AT = datetime(2026, 4, 1, tzinfo=UTC)
@@ -32,6 +38,20 @@ def test_list_version_rejects_duplicates_and_identity_drift() -> None:
         CaptureListVersion(
             list_version_id=f"list-version:{'b' * 64}", universe=_universe(), members=(member,), effective_at=AT
         )
+
+
+def test_capture_obligation_identity_preserves_list_version() -> None:
+    obligation = ListObligation(
+        run_id=f"capture-run:{SHA}",
+        universe_ref=_universe(),
+        subject=SubjectRef(kind=SubjectKind.SECURITY, id="security:cusip:67066G104"),
+        capture_requirement_id="market-price:v1",
+        partition="2026-03-31",
+    )
+    primary = CaptureListObligation(list_version_id=f"list-version:{'b' * 64}", obligation=obligation)
+    overlap = CaptureListObligation(list_version_id=f"list-version:{'c' * 64}", obligation=obligation)
+    assert primary.obligation == overlap.obligation
+    assert primary.obligation_id != overlap.obligation_id
 
 
 def test_checkpoint_identity_is_append_only_sequence_grain() -> None:
