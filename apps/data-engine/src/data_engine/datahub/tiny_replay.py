@@ -629,9 +629,7 @@ def materialize_shared_provider_work(
         obligations = tuple(item for item in _obligations(corpus) if item.subject.id == overlap_id)
     if not obligations:
         raise ValueError("shared provider work requires at least one obligation")
-    coordinates = {
-        (item.subject.id, item.capture_requirement_id, item.partition) for item in obligations
-    }
+    coordinates = {(item.subject.id, item.capture_requirement_id, item.partition) for item in obligations}
     if len(coordinates) != 1:
         raise ValueError("shared provider work received incompatible obligations")
     provider_coordinate = next(iter(coordinates))
