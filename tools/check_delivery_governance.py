@@ -657,13 +657,6 @@ def closed_terminal_corrective_work_issue_allowed(
     base = advance.base_manifest
     candidate = advance.manifest
     terminal_rung = base.get("terminal_rung")
-    authorization_fields = (
-        "owner_gate",
-        "capability_issues",
-        "closes_issues",
-        "dependencies",
-        "paths",
-    )
     return (
         base.get("status") == "done"
         and candidate.get("status") == "done"
@@ -676,7 +669,7 @@ def closed_terminal_corrective_work_issue_allowed(
         and candidate.get("target_rung") == terminal_rung
         and candidate.get("terminal_rung") == terminal_rung
         and advance.accepted_rung == terminal_rung
-        and all(candidate.get(field) == base.get(field) for field in authorization_fields)
+        and closed_corrective_authorization_matches(base, candidate)
     )
 
 
@@ -1514,7 +1507,6 @@ def validate_integration_lease(
         f"{batch_id}: integration lease is neither active nor terminally released",
     )
     validation.require(lease.get("owner") == paths.get("lease_owner"), f"{batch_id}: integration lease owner mismatch")
-    validation.require(lease.get("base_sha") == base_sha, f"{batch_id}: integration lease base SHA is stale")
     lease_paths = lease.get("paths", [])
     lease_paths_are_strings = isinstance(lease_paths, list) and all(
         isinstance(path, str) and valid_repo_pattern(path) for path in lease_paths
@@ -1526,6 +1518,28 @@ def validate_integration_lease(
         and len(lease_paths) == len(set(lease_paths)),
         f"{batch_id}: integration lease paths are invalid",
     )
+    acquisition_base = lease.get("base_sha")
+    if (
+        isinstance(acquisition_base, str)
+        and GIT_SHA_RE.fullmatch(acquisition_base) is not None
+        and git_commit_exists(acquisition_base)
+    ):
+        lease_merge_base = git_merge_base(acquisition_base, base_sha)
+        is_ancestor = lease_merge_base == acquisition_base
+        validation.require(is_ancestor, f"{batch_id}: integration lease acquisition base is not an ancestor")
+        if is_ancestor:
+            lease_drift = git_target_drift_paths(acquisition_base, base_sha)
+            validation.require(lease_drift is not None, f"{batch_id}: integration lease path drift is unavailable")
+            if lease_drift is not None:
+                changed_leased_paths = sorted(
+                    path for path in lease_drift if isinstance(lease_paths, list) and matches_any(path, lease_paths)
+                )
+                validation.require(
+                    not changed_leased_paths,
+                    f"{batch_id}: integration lease paths changed after acquisition: {changed_leased_paths}",
+                )
+    else:
+        validation.require(False, f"{batch_id}: integration lease acquisition base is unavailable")
     for changed_path in changed_integration_paths:
         validation.require(
             isinstance(lease_paths, list) and matches_any(changed_path, lease_paths),
@@ -1539,6 +1553,82 @@ def validate_integration_lease(
     validation.require(expiry is not None and expiry.tzinfo is not None, f"{batch_id}: lease expiry is invalid")
     if expiry is not None and expiry.tzinfo is not None:
         validation.require(expiry > (now or datetime.now(UTC)), f"{batch_id}: integration lease is expired")
+
+
+def closed_corrective_authorization_matches(
+    base_manifest: dict[str, Any],
+    manifest: dict[str, Any],
+) -> bool:
+    for field in ("owner_gate", "capability_issues", "closes_issues", "dependencies"):
+        if manifest.get(field) != base_manifest.get(field):
+            return False
+    base_paths = base_manifest.get("paths")
+    paths = manifest.get("paths")
+    if not isinstance(base_paths, dict) or not isinstance(paths, dict) or set(paths) != set(base_paths):
+        return False
+    for key in paths:
+        if key != "lease_manifest" and paths.get(key) != base_paths.get(key):
+            return False
+    base_reference = base_paths.get("lease_manifest")
+    reference = paths.get("lease_manifest")
+    if reference == base_reference:
+        return True
+    return (
+        isinstance(base_reference, dict)
+        and isinstance(reference, dict)
+        and set(base_reference) == {"path", "sha256"}
+        and set(reference) == {"path", "sha256"}
+        and reference.get("path") == base_reference.get("path")
+    )
+
+
+def validate_closed_corrective_lease_renewal(
+    validation: Validation,
+    *,
+    batch_id: str,
+    base_manifest: dict[str, Any],
+    manifest: dict[str, Any],
+    base_sha: str,
+) -> None:
+    if base_manifest.get("status") != "done" or manifest.get("status") != "done":
+        return
+    base_paths = base_manifest.get("paths")
+    paths = manifest.get("paths")
+    base_reference = base_paths.get("lease_manifest") if isinstance(base_paths, dict) else None
+    reference = paths.get("lease_manifest") if isinstance(paths, dict) else None
+    if reference == base_reference:
+        return
+    authorization_matches = closed_corrective_authorization_matches(base_manifest, manifest)
+    validation.require(
+        authorization_matches,
+        f"{batch_id}: closed corrective changed authorization outside the lease digest",
+    )
+    if not authorization_matches:
+        return
+    assert isinstance(base_reference, dict) and isinstance(reference, dict)
+    if reference.get("sha256") == base_reference.get("sha256"):
+        return
+    loaded = validate_file_reference(
+        validation,
+        owner=f"{batch_id}: corrective integration lease",
+        reference=reference,
+    )
+    base_lease = git_json(base_sha, base_reference["path"])
+    validation.require(isinstance(base_lease, dict), f"{batch_id}: accepted integration lease is unavailable")
+    if loaded is None or not isinstance(base_lease, dict):
+        return
+    _path, lease = loaded
+    validation.require(set(lease) == LEASE_FIELDS, f"{batch_id}: corrective integration lease fields changed")
+    validation.require(set(base_lease) == LEASE_FIELDS, f"{batch_id}: accepted integration lease fields changed")
+    if set(lease) != LEASE_FIELDS or set(base_lease) != LEASE_FIELDS:
+        return
+    mutable_fields = {"lease_id", "base_sha"}
+    validation.require(
+        all(lease.get(field) == base_lease.get(field) for field in LEASE_FIELDS - mutable_fields),
+        f"{batch_id}: corrective integration lease changed immutable authorization",
+    )
+    expected_id = f"integration-lease:{canonical_sha256({key: value for key, value in lease.items() if key != 'lease_id'})}"
+    validation.require(lease.get("lease_id") == expected_id, f"{batch_id}: corrective integration lease ID mismatch")
 
 
 def validate_status_transition(
@@ -1974,6 +2064,13 @@ def validate_pr_advance(
         batch_id=batch_id,
         base_manifest=base_manifest,
         manifest=manifest,
+    )
+    validate_closed_corrective_lease_renewal(
+        validation,
+        batch_id=batch_id,
+        base_manifest=base_manifest,
+        manifest=manifest,
+        base_sha=merge_base,
     )
     if base_manifest.get("status") == "queued" and manifest.get("status") == "prepared":
         preparation_paths = {

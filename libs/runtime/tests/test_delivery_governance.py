@@ -17,6 +17,7 @@ sys.modules[SPEC.name] = governance
 SPEC.loader.exec_module(governance)
 E0_TRANSITION_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "delivery_governance_e0_transition.v1.json"
 CLOSED_TERMINAL_PR_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "delivery_governance_closed_terminal_pr.v1.json"
+INTEGRATION_LEASE_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "integration_lease_stability.v1.json"
 
 
 def _e0_transition_cases():
@@ -29,6 +30,12 @@ def _closed_terminal_pr_cases():
     fixture = json.loads(CLOSED_TERMINAL_PR_FIXTURE_PATH.read_text(encoding="utf-8"))
     assert fixture["schema_version"] == 1
     return fixture["cases"]
+
+
+def _integration_lease_cases(key):
+    fixture = json.loads(INTEGRATION_LEASE_FIXTURE_PATH.read_text(encoding="utf-8"))
+    assert fixture["schema_version"] == 1
+    return fixture[key]
 
 
 def _valid_evidence():
@@ -1372,15 +1379,24 @@ def test_global_shared_surface_requires_declared_lease():
     assert "D0: integration lease: file reference must be an object" in validation.errors
 
 
-def _validate_lease(tmp_path, monkeypatch, mutation=None, *, manifest_status=None):
+def _validate_lease(
+    tmp_path,
+    monkeypatch,
+    mutation=None,
+    *,
+    manifest_status=None,
+    relationship="exact",
+    drift_paths=(),
+):
     base_sha = "a" * 40
+    acquisition_sha = base_sha if relationship == "exact" else "b" * 40
     content = {
         "schema_version": 1,
         "batch_id": "D0",
         "owner": "integrator",
         "state": "active",
         "paths": ["shared/**"],
-        "base_sha": base_sha,
+        "base_sha": acquisition_sha,
         "expires_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
     }
     if mutation is not None:
@@ -1392,6 +1408,17 @@ def _validate_lease(tmp_path, monkeypatch, mutation=None, *, manifest_status=Non
     lease_path = tmp_path / "governance" / "leases" / "D0.json"
     _write_json(lease_path, lease)
     monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        governance,
+        "git_commit_exists",
+        lambda commit: relationship != "unavailable" and commit == acquisition_sha,
+    )
+    monkeypatch.setattr(
+        governance,
+        "git_merge_base",
+        lambda left, _right: left if relationship in {"exact", "ancestor"} else "c" * 40,
+    )
+    monkeypatch.setattr(governance, "git_target_drift_paths", lambda _base, _head: tuple(drift_paths))
     validation = governance.Validation()
     governance.validate_integration_lease(
         validation,
@@ -1427,9 +1454,27 @@ def test_done_batch_may_release_lease_in_terminal_pr(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "case",
+    _integration_lease_cases("lease_base_cases"),
+    ids=lambda case: case["name"],
+)
+def test_integration_lease_base_stability_corpus(tmp_path, monkeypatch, case):
+    validation = _validate_lease(
+        tmp_path,
+        monkeypatch,
+        relationship=case["relationship"],
+        drift_paths=case["changed_paths"],
+    )
+
+    if case["expected"] == "allow":
+        assert validation.errors == []
+    else:
+        assert validation.errors
+
+
+@pytest.mark.parametrize(
     ("mutation", "expected"),
     [
-        (lambda lease: lease.update(base_sha="b" * 40), "integration lease base SHA is stale"),
         (
             lambda lease: lease.update(expires_at="2020-01-01T00:00:00+00:00"),
             "integration lease is expired",
@@ -1441,6 +1486,106 @@ def test_integration_lease_rejects_stale_or_uncovered_state(tmp_path, monkeypatc
     validation = _validate_lease(tmp_path, monkeypatch, mutation)
 
     assert any(expected in error for error in validation.errors)
+
+
+def _validate_corrective_renewal_case(tmp_path, monkeypatch, case):
+    base_lease = {
+        "schema_version": 1,
+        "lease_id": "integration-lease:base",
+        "batch_id": "D0",
+        "owner": "integrator",
+        "state": "active",
+        "paths": ["shared/**"],
+        "base_sha": "a" * 40,
+        "expires_at": "2026-07-30T00:00:00Z",
+    }
+    candidate_lease = json.loads(json.dumps(base_lease))
+    candidate_paths = {
+        "writable": ["shared/**", "governance/leases/D0.json"],
+        "read_only": ["reference/**"],
+        "forbidden": ["apps/**"],
+        "integration_surface": ["shared/**"],
+        "lease_owner": "integrator",
+        "lease_manifest": {
+            "path": "governance/leases/D0.json",
+            "sha256": "a" * 64,
+        },
+    }
+    base_paths = json.loads(json.dumps(candidate_paths))
+    base_manifest = {
+        "status": "done",
+        "owner_gate": 29,
+        "capability_issues": [],
+        "closes_issues": [],
+        "dependencies": [],
+        "paths": base_paths,
+    }
+    candidate_manifest = json.loads(json.dumps(base_manifest))
+
+    for mutation in case.get("manifest_mutations", []):
+        assert mutation == "dependencies"
+        candidate_manifest["dependencies"] = [{"issue": 99}]
+    for mutation in case.get("path_mutations", []):
+        if mutation == "lease_manifest.sha256":
+            candidate_paths["lease_manifest"]["sha256"] = "b" * 64
+        elif mutation == "lease_manifest.path":
+            candidate_paths["lease_manifest"]["path"] = "governance/leases/other.json"
+        elif mutation == "lease_owner":
+            candidate_paths["lease_owner"] = "other"
+        else:
+            candidate_paths[mutation] = [*candidate_paths[mutation], "other/**"]
+    candidate_manifest["paths"] = candidate_paths
+    for mutation in case.get("lease_mutations", []):
+        if mutation == "lease_id":
+            continue
+        elif mutation == "base_sha":
+            candidate_lease[mutation] = "b" * 40
+        elif mutation == "paths":
+            candidate_lease[mutation] = [*candidate_lease[mutation], "other/**"]
+        elif mutation == "expires_at":
+            candidate_lease[mutation] = "2026-08-30T00:00:00Z"
+        elif mutation == "state":
+            candidate_lease[mutation] = "revoked"
+        else:
+            candidate_lease[mutation] = "other"
+    if "lease_id" in case.get("lease_mutations", []):
+        content = {key: value for key, value in candidate_lease.items() if key != "lease_id"}
+        candidate_lease["lease_id"] = f"integration-lease:{governance.canonical_sha256(content)}"
+
+    lease_path = tmp_path / "governance" / "leases" / "D0.json"
+    _write_json(lease_path, candidate_lease)
+    candidate_paths["lease_manifest"]["sha256"] = hashlib.sha256(lease_path.read_bytes()).hexdigest()
+    if not case.get("path_mutations") and not case.get("lease_mutations"):
+        base_paths["lease_manifest"]["sha256"] = candidate_paths["lease_manifest"]["sha256"]
+    monkeypatch.setattr(governance, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        governance,
+        "git_json",
+        lambda _commit, _path: base_lease if case.get("base_lease_available", True) else None,
+    )
+    validation = governance.Validation()
+    governance.validate_closed_corrective_lease_renewal(
+        validation,
+        batch_id="D0",
+        base_manifest=base_manifest,
+        manifest=candidate_manifest,
+        base_sha="c" * 40,
+    )
+    return validation
+
+
+@pytest.mark.parametrize(
+    "case",
+    _integration_lease_cases("corrective_renewal_cases"),
+    ids=lambda case: case["name"],
+)
+def test_closed_corrective_lease_renewal_corpus(tmp_path, monkeypatch, case):
+    validation = _validate_corrective_renewal_case(tmp_path, monkeypatch, case)
+
+    if case["expected"] == "allow":
+        assert validation.errors == []
+    else:
+        assert validation.errors
 
 
 def test_acceptance_commands_emit_head_bound_evidence(tmp_path, monkeypatch):
@@ -2307,6 +2452,56 @@ def test_pull_request_metadata_closed_terminal_corrective_corpus(case):
         assert validation.errors == []
     else:
         assert issue_state_errors
+
+
+def test_closed_corrective_metadata_allows_content_addressed_lease_renewal():
+    authorization = {
+        "owner_gate": 29,
+        "capability_issues": [],
+        "closes_issues": [],
+        "dependencies": [],
+        "paths": {
+            "writable": ["shared/**"],
+            "read_only": [],
+            "forbidden": [],
+            "integration_surface": ["shared/**"],
+            "lease_owner": "integrator",
+            "lease_manifest": {"path": "governance/leases/D0.json", "sha256": "a" * 64},
+        },
+    }
+    base = {
+        **authorization,
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E0",
+        "target_rung": "E0",
+        "terminal_rung": "E0",
+    }
+    candidate = json.loads(json.dumps(base))
+    candidate["paths"]["lease_manifest"]["sha256"] = "b" * 64
+    advance = governance.PullRequestAdvance(
+        batch_id="D0",
+        manifest_path="governance/batches/D0.json",
+        base_manifest=base,
+        manifest=candidate,
+        accepted_rung="E0",
+        changed_paths=("governance/batches/D0.json",),
+    )
+    issue = {"number": 210, "title": "[truealpha-bt] Correct terminal batch", "state": "closed"}
+    validation = governance.Validation()
+
+    governance.validate_pull_request_metadata(
+        validation,
+        {
+            "title": "[truealpha-bt] Correct terminal batch",
+            "body": "Work-Issue: #210\nWork-Key: D0:E0\nIssue-Action: managed-by-batch",
+        },
+        [issue],
+        advance,
+        issue,
+    )
+
+    assert validation.errors == []
 
 
 def test_pull_request_metadata_rejects_duplicate_structured_fields():

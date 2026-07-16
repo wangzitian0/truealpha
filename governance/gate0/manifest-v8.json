@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "manifest_id": "gate-0-batch-v8",
+  "manifest_version": 8,
+  "gate_issue": 56,
+  "status": "candidate_blocked_external_attestation",
+  "integration_branch": "batch/gate-0-v8-integration-lease-stability-successor",
+  "integration_base_sha": "352c5583a785bbaaf9ab5ec1bb48ca8410d72bf5",
+  "included_issues": [
+    57,
+    58,
+    59,
+    60,
+    61
+  ],
+  "dependency_order": [
+    57,
+    58,
+    59,
+    60,
+    61
+  ],
+  "candidate_payload_sha256": "953753239b521967de260fa86cada7de93986cf5305daaa93953f6a69a0f553c",
+  "candidate_tree_sha256": "4cc541b43bb95857b0155ff37f2c11400868f695cc4892e556d2118f8247e91d",
+  "paths": [
+    "apps/data-engine/tests/batches/mvp_medium_validation/test_e1_slice.py",
+    "apps/data-engine/tests/batches/mvp_medium_validation/test_e2_slice.py",
+    "apps/data-engine/tests/batches/mvp_medium_validation/test_e3_slice.py",
+    "docs/architecture-contract-closure.md",
+    "init.md",
+    "governance/gate0/**",
+    "governance/schemas/gate0-candidate-manifest.schema.json",
+    "libs/contracts/src/truealpha_contracts/__init__.py",
+    "libs/contracts/src/truealpha_contracts/policy_bundle.py",
+    "libs/contracts/tests/test_policy_bundle.py",
+    "libs/runtime/tests/test_gate0_candidate.py",
+    "tools/check_gate0_candidate.py",
+    "libs/runtime/tests/test_delivery_governance.py",
+    "tools/check_delivery_governance.py"
+  ],
+  "artifacts": [
+    {
+      "issue": 57,
+      "kind": "accepted_capability_evidence",
+      "path": "governance/evidence/issue-57.v1.json",
+      "sha256": "4babd9e6616622d303a700cb13b702120f9c138450c4d20b14ea9d079436a640",
+      "state": "accepted"
+    },
+    {
+      "issue": 58,
+      "kind": "accepted_capability_evidence",
+      "path": "governance/evidence/issue-58.v2.json",
+      "sha256": "45435fb47fda58f691609cb409b76dc8161547f8eda7344dc5d2c675ee436f99",
+      "state": "accepted"
+    },
+    {
+      "issue": 59,
+      "kind": "research_semantics_candidate",
+      "path": "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "state": "candidate_unapproved",
+      "depends_on": [
+        57,
+        58
+      ]
+    },
+    {
+      "issue": 60,
+      "kind": "source_readiness_candidate",
+      "path": "governance/gate0/issue-60.source-readiness.candidate-v1.json",
+      "sha256": "a8aedb818e04389386b8fb856b84cce3307c7407e30b5444d43c9b7d322bdec2",
+      "state": "candidate_incomplete",
+      "depends_on": [
+        59
+      ]
+    },
+    {
+      "issue": 61,
+      "kind": "policy_bundle_candidate",
+      "path": "governance/gate0/issue-61.policy-bundle.candidate-v1.json",
+      "sha256": "cc7466a1c93f75cf61cb60d1b7f7e164f7d0fafe6e73ea40094a915a057e6889",
+      "state": "candidate_unapproved",
+      "depends_on": [
+        59,
+        60
+      ]
+    }
+  ],
+  "external_attestations": [
+    {
+      "key": "issue59_product_owner",
+      "issue": 59,
+      "target_sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "status": "missing",
+      "ref": null
+    },
+    {
+      "key": "issue59_independent_review",
+      "issue": 59,
+      "target_sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "status": "missing",
+      "ref": null
+    },
+    {
+      "key": "issue59_holdout_custody",
+      "issue": 59,
+      "target_sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "status": "missing",
+      "ref": null
+    },
+    {
+      "key": "issue59_known_reference",
+      "issue": 59,
+      "target_sha256": "d0b2865cbde85181bb17801ac3be467c5049906f793876c8b6ac319b7525cc5a",
+      "status": "missing",
+      "ref": null
+    },
+    {
+      "key": "issue60_rights_authority",
+      "issue": 60,
+      "target_sha256": "a8aedb818e04389386b8fb856b84cce3307c7407e30b5444d43c9b7d322bdec2",
+      "status": "missing",
+      "ref": null
+    },
+    {
+      "key": "issue60_budget_authority",
+      "issue": 60,
+      "target_sha256": "a8aedb818e04389386b8fb856b84cce3307c7407e30b5444d43c9b7d322bdec2",
+      "status": "missing",
+      "ref": null
+    },
+    {
+      "key": "issue60_live_probe_owner",
+      "issue": 60,
+      "target_sha256": "a8aedb818e04389386b8fb856b84cce3307c7407e30b5444d43c9b7d322bdec2",
+      "status": "missing",
+      "ref": null
+    },
+    {
+      "key": "issue61_product_owner_policy",
+      "issue": 61,
+      "target_sha256": "cc7466a1c93f75cf61cb60d1b7f7e164f7d0fafe6e73ea40094a915a057e6889",
+      "status": "missing",
+      "ref": null
+    },
+    {
+      "key": "issue61_independent_slo_review",
+      "issue": 61,
+      "target_sha256": "cc7466a1c93f75cf61cb60d1b7f7e164f7d0fafe6e73ea40094a915a057e6889",
+      "status": "missing",
+      "ref": null
+    }
+  ],
+  "merge_policy": {
+    "target_branch": "main",
+    "partial_gate_acceptance_allowed": false,
+    "one_immutable_candidate_required": true,
+    "candidate_change_invalidates_acceptance": true,
+    "historical_foundation_already_merged": [
+      57,
+      58
+    ],
+    "historical_note": "Issues #57 and #58 entered main before the iterative delivery correction. Manifest v4 binds their exact accepted evidence into the complete candidate; it does not rewrite Git history or claim the historical no-partial-merge condition was met."
+  },
+  "acceptance": {
+    "commands": [
+      "make gate0-candidate-check",
+      "make gate0-candidate-acceptance",
+      "make issue-graph-check",
+      "make check"
+    ],
+    "candidate_validation_claim": "machine-readable candidate chain is internally consistent and preserves all blockers",
+    "acceptance_claim": "all #57-#61 terminal evidence and external attestations are accepted on this exact payload"
+  },
+  "blocking_reasons": [
+    "#59 product-owner, independent-review, custody, and known-reference attestations are missing",
+    "#60 exact catalog-wide source matrix, rights, budget, live probe, and runtime enforcement evidence are missing",
+    "#61 accepted predecessor artifacts, targeted policy approvals, TOPT baseline, and content-addressed runtime policy-bundle evidence are missing",
+    "the candidate cannot target main or close Gate 0 while any blocker remains"
+  ],
+  "predecessor_manifest": {
+    "manifest_id": "gate-0-batch-v7",
+    "manifest_version": 7,
+    "path": "governance/gate0/manifest-v7.json",
+    "sha256": "230ea229c267f671a9fcf55bd13fe9b9ef7029a70e9728ad7de8d8250ef15d6d",
+    "candidate_commit_sha": "18205db396f2ddb0062d54d603d36eee5e841b2e",
+    "candidate_tree_proof": {
+      "path": "governance/gate0/v7-frozen-tree-proof.v1.json",
+      "sha256": "f951faee865a5e01a481baaa2bb3ff62c99f1e332cd21adb8c98b566a4216148"
+    }
+  },
+  "integration_bindings": [
+    {
+      "role": "authoritative_architecture",
+      "path": "init.md",
+      "sha256": "9040f7bb264b6963501559b4c90a972bae85d8a045730bdde1f929b13c2b9627"
+    },
+    {
+      "role": "stable_contract_export",
+      "path": "libs/contracts/src/truealpha_contracts/__init__.py",
+      "sha256": "33f451c3e37afae5bfdf1844d5055d10ea1c05942d1308053909d96d7974d489"
+    },
+    {
+      "role": "candidate_validator",
+      "path": "tools/check_gate0_candidate.py",
+      "sha256": "ea28e1d5319e2afa08de92cf0d4136f4508d7ba058d4630d591c8ff914899861"
+    },
+    {
+      "role": "delivery_validator",
+      "path": "tools/check_delivery_governance.py",
+      "sha256": "f755f1baa56b2ad5e35a8d01da8cd8251c503814adf778c55032aa9693d06174"
+    }
+  ]
+}
