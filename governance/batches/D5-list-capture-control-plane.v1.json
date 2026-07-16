@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D5-list-capture-control-plane",
-  "revision": 4,
+  "revision": 5,
   "issue": 205,
   "owner_gate": 29,
-  "status": "active",
+  "status": "blocked",
   "lane": "capture-platform",
   "last_accepted_rung": "E1",
   "target_rung": "E2",
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
-  "claim_ceiling": "E1 immutable Local/CI tiny replay evidence for exact overlapping lists, bounded attempts, terminal-state coverage, identical-byte capture cycles, deterministic crash resume, and content-hashed bounded recapture only; no stable handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
+  "claim_ceiling": "accepted E1 immutable Local/CI tiny replay evidence plus a frozen E2 acceptance candidate for the append-only capture-control schema and runtime; no accepted E2 handoff, source activation, default schedule, TOPT completeness, Staging operation, Production route, capacity, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
@@ -188,18 +188,35 @@
       "resume duplicates logical work, loses an attempt, or repairs history with UPDATE or DELETE",
       "recapture execution differs from its frozen dry-run selection, broadens a predicate, or rewrites an unaffected cell",
       "GOOG and GOOGL collapse to one instrument or TOPT differs from 20 issuers, 21 instruments, and 84 obligations",
+      "an E2 consumer/environment permission grants Staging or Production access before D5 terminal acceptance",
       "source call before scope, policy, rights, budget, and call-plan authorization",
       "root export, global Dagster definition, default schedule, Staging route, Production route, or release binding"
     ],
     "output": {
-      "type": "ListCaptureControlPlaneEvidence",
-      "stable_handoff": false,
-      "state": "provisional_e1",
+      "type": "ListCaptureControlPlaneHandoff",
+      "stable_handoff": true,
+      "state": "planned",
+      "handoff_id": "list-capture-control-plane-handoff:7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93",
+      "sha256": "7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93",
+      "schema_epoch": "truealpha-datahub.capture-control.v1",
+      "planned_permission_scopes": [
+        {
+          "scope": "local-ci-consumers",
+          "allowed_consumers": [
+            "D6-confidence-provenance"
+          ],
+          "allowed_environments": [
+            "ci",
+            "local"
+          ]
+        }
+      ],
       "allowed_evidence_readers": [
         "D6-confidence-provenance preparation after D5 E2 acceptance",
         "issue #171 TOPT Staging preparation after D5 E4 acceptance",
         "issue #206 QQQ capacity preparation after D5 E4 acceptance"
-      ]
+      ],
+      "retention": "the frozen E2 candidate is retained until independently accepted or revoked; failed rung evidence follows CI retention"
     }
   },
   "invalidation": [
