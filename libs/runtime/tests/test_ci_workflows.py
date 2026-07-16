@@ -5,8 +5,11 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_manual_image_release_is_explicit_and_waits_for_required_jobs():
     required = (ROOT / ".github" / "workflows" / "ci-required.yml").read_text(encoding="utf-8")
-    image_release = required.split("  images_release:\n", 1)[1].split("\n  required:\n", 1)[0]
+    _before_release, release_marker, after_release = required.partition("  images_release:\n")
+    image_release, required_marker, _after_required = after_release.partition("\n  required:\n")
 
+    assert release_marker, "images_release job is missing"
+    assert required_marker, "required job boundary is missing after images_release"
     assert "workflow_dispatch:\n    inputs:\n      force_images:" in required
     assert "description: Publish all current-ref images after required checks." in required
     assert "type: boolean\n        default: false" in required
