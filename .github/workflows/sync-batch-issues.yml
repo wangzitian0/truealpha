@@ -89,13 +89,9 @@ jobs:
               raise AssertionError("unreachable")
 
 
-          def included_issue(issue_number):
-              output = api(["--include", f"repos/{repository}/issues/{issue_number}"])
-              etags = re.findall(r"(?im)^etag:\s*(.+?)\s*$", output)
-              body_start = output.find("{")
-              if not etags or body_start < 0:
-                  raise SystemExit(f"#{issue_number}: direct issue response omitted ETag or JSON")
-              return json.loads(output[body_start:]), etags[-1]
+          def fetch_issue(issue_number):
+              endpoint = f"repos/{repository}/issues/{issue_number}"
+              return json.loads(api([endpoint]))
 
 
           pages = json.loads(
@@ -195,29 +191,20 @@ jobs:
 
           def reconcile(issue_number):
               endpoint = f"repos/{repository}/issues/{issue_number}"
-              for attempt in range(4):
-                  current, etag = included_issue(issue_number)
-                  payload = desired_patch(issue_number, current)
-                  if payload is None:
-                      return
-                  try:
-                      api(
-                          [
-                              "--method",
-                              "PATCH",
-                              "-H",
-                              f"If-Match: {etag}",
-                              endpoint,
-                              "--input",
-                              "-",
-                          ],
-                          input_text=json.dumps(payload),
-                      )
-                      return
-                  except ApiFailure as error:
-                      if error.status != 412 or attempt == 3:
-                          raise
-              raise AssertionError("unreachable")
+              current = fetch_issue(issue_number)
+              payload = desired_patch(issue_number, current)
+              if payload is None:
+                  return
+              api(
+                  [
+                      "--method",
+                      "PATCH",
+                      endpoint,
+                      "--input",
+                      "-",
+                  ],
+                  input_text=json.dumps(payload),
+              )
 
 
           for issue_number, issue in issues.items():
