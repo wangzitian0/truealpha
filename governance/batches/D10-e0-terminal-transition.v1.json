@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D10-e0-terminal-transition",
-  "revision": 1,
+  "revision": 2,
   "issue": 278,
   "owner_gate": 32,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Repair the delivery-governance lifecycle so a prepared batch whose declared terminal target is E0 can accept that exact result directly to done without weakening any non-terminal transition.",
-  "claim_ceiling": "Registration only: no checker code, test, corpus, batch transition, or issue closure occurs in this registration. A later accepted terminal D10 result may close #278 only; this registration changes no D9/D4/D8 scope, source, credential, database, object-store, scheduler, runtime, release, consumer, or Production data claim.",
+  "claim_ceiling": "Preparation only: freeze the Local/CI transition corpus, exact activation base, and independent reviewer for a future D10 E0 validator repair. No checker code, test assertion, accepted rung, issue closure, D9/D4/D8 change, source, credential, database, object-store, scheduler, runtime, release, consumer, or Production data claim occurs in this revision.",
   "capability_issues": [],
   "closes_issues": [
     278
@@ -22,11 +22,11 @@
   ],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "0452dbd7752f664a0a35b50b367eb8b30645fef3",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "the queued registration is merged on main before a preparation revision pins the activation base, independent reviewer, and frozen Local/CI corpus",
@@ -42,8 +42,8 @@
   ],
   "corpus": {
     "environment": "Local/CI delivery-governance transition cases only",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/runtime/tests/fixtures/delivery_governance_e0_transition.v1.json",
+    "sha256": "1929eafbcfa9966fb3c5361bf459c4bc6558b950c46898bb9b214e6dba3a3ec3",
     "required_strata": [
       "prepared terminal E0 accepts directly to done",
       "prepared non-terminal E0 cannot complete directly",
