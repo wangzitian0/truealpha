@@ -43,7 +43,7 @@
   "corpus": {
     "environment": "Local/CI delivery-governance transition cases only",
     "manifest_path": "libs/runtime/tests/fixtures/delivery_governance_e0_transition.v1.json",
-    "sha256": "de2a9f6552f6c3fb19c87b270fd2ba522adf9d9da44c8df7c6a8541a34eef1a7",
+    "sha256": "5c49e5cc18cc213cc45d8aca6db4b0879d66415220704be8e8fe27fc3c8737cc",
     "required_strata": [
       "prepared terminal E0 accepts directly to done",
       "prepared non-terminal E0 cannot complete directly",

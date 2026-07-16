@@ -34,6 +34,22 @@
       "expected": "reject"
     },
     {
+      "name": "prepared_non_terminal_e1_rewrites_terminal_e0",
+      "base": {
+        "status": "prepared",
+        "last_accepted_rung": null,
+        "target_rung": "E0",
+        "terminal_rung": "E1"
+      },
+      "candidate": {
+        "status": "done",
+        "last_accepted_rung": "E0",
+        "target_rung": "E0",
+        "terminal_rung": "E0"
+      },
+      "expected": "reject"
+    },
+    {
       "name": "prepared_terminal_e0_changed_target",
       "base": {
         "status": "prepared",
