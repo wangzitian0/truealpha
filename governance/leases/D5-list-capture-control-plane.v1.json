@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:164f25c4e73899cd077102c40f84c87a17f06c02b8b293efa82827ecef30c460",
+  "lease_id": "integration-lease:257ee2830b5ba470525f659b5553a55581c06115f7c32e7669806db2a6f6ccb0",
   "batch_id": "D5-list-capture-control-plane",
   "owner": "wangzitian0",
-  "state": "active",
+  "state": "revoked",
   "paths": [
     "apps/data-engine/src/data_engine/datahub/__init__.py",
     "db/migrations/0023_capture_control.sql",
     "db/tests/capture_control_contract.sql"
   ],
-  "base_sha": "a5cd1fa8a570d37638656eb8ada7f3826064dd3f",
+  "base_sha": "88dbd297c61f4cea55142e4c52d69142dfe4ed36",
   "expires_at": "2026-07-30T00:00:00Z"
 }

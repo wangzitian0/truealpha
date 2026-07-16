@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D5-list-capture-control-plane",
-  "revision": 7,
+  "revision": 8,
   "issue": 205,
   "owner_gate": 29,
-  "status": "active",
+  "status": "done",
   "lane": "capture-platform",
-  "last_accepted_rung": "E3",
+  "last_accepted_rung": "E4",
   "target_rung": "E4",
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
-  "claim_ceiling": "E3 immutable Local/CI TOPT development candidate for the exact 20-issuer, 21-instrument, 84-obligation denominator across three cutoffs and two source-vintage waves; the accepted E2 Local/CI handoff remains available only to its pinned consumer; no live source activation, default schedule, Staging operation, Production route, capacity, or data-readiness claim",
+  "claim_ceiling": "E4 terminal Local/CI TOPT control-plane hardening for the exact 20-issuer, 21-instrument, 84-obligation denominator, bounded retry/failure/resume/recapture controls, and explicitly scoped resource baselines; the accepted E2 handoff remains available only to its pinned consumer, while E4 downstream consumption waits for a corrective evidence-and-attestation handoff; no live source activation, default schedule, Staging operation, Production route, physical capacity, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
@@ -160,7 +160,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/D5-list-capture-control-plane.v1.json",
-      "sha256": "db5e6bf5bf1ef0e77dcdb67df9bb582870fb88cec76dd3debad20966fae4d69e"
+      "sha256": "73269c4e904c9156e70e5d826c116a43fdf5b3b95fb6739e1ab3e5fcc560a09f"
     }
   },
   "release_activation": {
@@ -172,7 +172,7 @@
     "commands": [
       "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_capture_control.py -q",
       "uv run --package truealpha-data-engine python -m pytest apps/data-engine/tests/datahub -q",
-      "uv run --package truealpha-data-engine python apps/data-engine/scripts/run_capture_control.py --corpus apps/data-engine/tests/fixtures/capture_control/corpus.v1.json --expected-sha256 7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93 --replay medium",
+      "uv run --package truealpha-data-engine python apps/data-engine/scripts/run_capture_control.py --corpus apps/data-engine/tests/fixtures/capture_control/corpus.v1.json --expected-sha256 7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93 --replay hardening",
       "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/capture_control.py libs/contracts/tests/test_capture_control.py",
       "uv run --package truealpha-data-engine python -m ruff check apps/data-engine/src/data_engine/datahub apps/data-engine/tests/datahub apps/data-engine/scripts/run_capture_control.py",
       "uv run --package truealpha-contracts python -m mypy",
@@ -194,27 +194,50 @@
     ],
     "output": {
       "type": "ListCaptureControlPlaneEvidence",
+      "state": "accepted_terminal_hardening_e4",
       "stable_handoff": false,
-      "state": "accepted_development_candidate_e3",
+      "hardening_identity_sha256": "a32bacbd54b598f2cc4637b597b57dca2ccdaa8c950f56015fb6439112989a97",
       "medium_report_sha256": "8c27357139c9b7fb6c6c6575b56b4eed3673bbb089b9659bb981de3f45c1fb9a",
+      "tiny_report_sha256": "2a6eae6d5381dc43c329591d976830ab544e8b1511f2d7b034e068e758f85d10",
       "issuer_count": 20,
       "instrument_count": 21,
       "obligation_count_per_run": 84,
       "cutoff_count": 3,
       "raw_object_count": 168,
       "source_vintage_count": 168,
+      "terminal_obligation_count": 252,
+      "denominator_completeness_ppm": 1000000,
+      "negative_control_count": 8,
+      "resume_checkpoint_count": 4,
+      "recapture_selection_count": 1,
       "source_calls": 0,
+      "resource_ceilings": {
+        "wall_time_ms": 10000,
+        "cpu_time_ms": 10000,
+        "peak_traced_bytes": 134217728,
+        "database_record_bytes": 2097152,
+        "object_payload_bytes": 2097152,
+        "peak_queue_depth": 84,
+        "retry_amplification_ppm": 3000000,
+        "provider_calls": 0,
+        "source_cost_microunits": 0
+      },
+      "resource_metric_semantics": [
+        "database_record_bytes is canonical serialized Local/CI evidence, not physical database allocation",
+        "object_payload_bytes is two frozen logical fixture waves, not live-source object-store allocation",
+        "wall, CPU, traced memory, queue depth, throughput, retries, overfetch, calls, and cost are measured in-process"
+      ],
       "preserved_e2_handoff": {
         "handoff_id": "handoff:d5-list-capture-control-plane-local-ci:627e2eaba2137819a824f56787321505f9982118c4ba91a7876225407b9e77f9",
         "path": "governance/handoffs/D5-list-capture-control-plane.v1.json",
         "sha256": "8c8df4c08f9ba3fad8a887bde6fd54041c4887578eff8b14a8314b4cc94d55b7"
       },
       "allowed_evidence_readers": [
-        "D6-confidence-provenance preparation after D5 E2 acceptance",
-        "issue #171 TOPT Staging preparation after D5 E4 acceptance",
-        "issue #206 QQQ capacity preparation after D5 E4 acceptance"
+        "D6-confidence-provenance remains limited to the accepted E2 handoff until the corrective E4 handoff is accepted",
+        "issue #171 TOPT Staging preparation only after the corrective E4 evidence-and-attestation handoff is accepted",
+        "issue #206 QQQ capacity preparation only after the corrective E4 evidence-and-attestation handoff is accepted"
       ],
-      "retention": "the accepted E2 handoff is permanent while an allowed Local/CI consumer depends on it; failed rung evidence follows CI retention"
+      "retention": "the accepted E2 handoff is permanent while an allowed Local/CI consumer depends on it; the E4 CI artifact must be pinned by the corrective handoff before ordinary CI retention expires"
     }
   },
   "invalidation": [
