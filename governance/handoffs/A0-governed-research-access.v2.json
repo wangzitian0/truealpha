@@ -2,7 +2,7 @@
   "handoff_id": "handoff:a0-governed-research-access:3d7ca230:2d885dc4:fdd20eae:528ba4d7:ca0a1bfb:5be7d3e6:48bd2fdf:68d39e45",
   "schema_version": 1,
   "revision": 2,
-  "state": "accepted",
+  "state": "revoked",
   "producer": {
     "batch_id": "A0-governed-research-access",
     "issue": 230,
@@ -37,8 +37,8 @@
     "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29482629975"
   },
   "revocation": {
-    "reason": null,
-    "revoked_at": null,
-    "superseded_by": null
+    "reason": "Superseded after review invalidated cross-tenant replay isolation, materialized allow grant completeness, and sealed administrator-action persistence",
+    "revoked_at": "2026-07-16T09:03:57Z",
+    "superseded_by": "handoff:a0-governed-research-access:3d0859d0:25df02f5:3ecbe3e2:b5481c3d:a43f160f:da02eb59:ed595784:87630296"
   }
 }

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "A0-governed-research-access",
-  "revision": 6,
+  "revision": 7,
   "issue": 230,
   "owner_gate": 31,
   "status": "done",
@@ -156,7 +156,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/A0-governed-research-access.v3.json",
-      "sha256": "7111822423175133366627cbc3a08fdcb9559bcd3578826651fc7efd03c64c88"
+      "sha256": "3eaffd6e60e94744d37b4aec2296f11705dc7a2b3389fdd27806d5b5f09acb14"
     }
   },
   "release_activation": {
@@ -202,14 +202,14 @@
       "stable_handoff": true,
       "state": "accepted",
       "schema_epoch": "truealpha-contracts.governed-research-access.v2",
-      "handoff_id": "handoff:a0-governed-research-access:3d7ca230:2d885dc4:fdd20eae:528ba4d7:ca0a1bfb:5be7d3e6:48bd2fdf:68d39e45",
+      "handoff_id": "handoff:a0-governed-research-access:3d0859d0:25df02f5:3ecbe3e2:b5481c3d:a43f160f:da02eb59:ed595784:87630296",
       "rung_evidence": {
-        "path": "governance/evidence/A0-governed-research-access-E2.v2.json",
-        "sha256": "5ddfbe15daceeb3367996447a8441f482c8e444b5ab1fb5c5a76c5fe611af2c4"
+        "path": "governance/evidence/A0-governed-research-access-E2.v3.json",
+        "sha256": "a5d48e52d68f85b912a12113873c276f7cd6c9988c2da3130102cfb5568f52a6"
       },
       "handoff_manifest": {
-        "path": "governance/handoffs/A0-governed-research-access.v2.json",
-        "sha256": "799851bd1fbbf98363552e6f97f379dfb49fe0c316ec7ccc1d162a6b450cd770"
+        "path": "governance/handoffs/A0-governed-research-access.v3.json",
+        "sha256": "7e8ff79267f20209013a079e27184d15c49935490d00fcb1fa2efe7b7d19a150"
       },
       "allowed_evidence_readers": [
         "the future #42 MCP implementation batch",
