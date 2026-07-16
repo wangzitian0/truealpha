@@ -2,7 +2,7 @@
   "schema_version": 1,
   "batch_id": "D5-list-capture-control-plane",
   "revision": 1,
-  "issue": 261,
+  "issue": 205,
   "owner_gate": 29,
   "status": "queued",
   "lane": "capture-platform",
@@ -11,7 +11,7 @@
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
   "claim_ceiling": "queued E0 Local/CI implementation only; no accepted runtime handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
-  "capability_issues": [205],
+  "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
   "owners": {
@@ -30,7 +30,7 @@
       "the accepted D2 E3 data-plane evidence remains unchanged",
       "an independent reviewer is assigned before E0 acceptance",
       "an active integration lease covers the additive migration before it changes",
-      "issue #261 contains this manifest path and exact SHA-256",
+      "issue #205 contains this manifest path and exact SHA-256",
       "Delivery Governance CI passes offline validation and live GitHub parity"
     ]
   },
