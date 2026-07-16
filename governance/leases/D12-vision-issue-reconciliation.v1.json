@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:a715c49a1eee79842dcd24fe1394f3a74c272e43b78861e1c765b70d73cf9057",
+  "lease_id": "integration-lease:0cc04a22913d7637087b25a2c25466e040a74e582aaa964878245a03a46f6040",
   "batch_id": "D12-vision-issue-reconciliation",
   "owner": "wangzitian0",
   "state": "active",
@@ -8,6 +8,6 @@
     ".github/workflows/sync-batch-issues.yml",
     ".github/workflows/sync-standalone-issue.yml"
   ],
-  "base_sha": "6c1dd259fb3a23750e76fb9665c40005d3f23691",
+  "base_sha": "2ae1f3ba0c2e3c8761b409d559646e9d953059b2",
   "expires_at": "2026-07-30T00:00:00Z"
 }

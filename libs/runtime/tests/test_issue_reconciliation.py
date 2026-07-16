@@ -183,8 +183,11 @@ def test_workflows_compile_and_enforce_reconciliation_contract() -> None:
 
     assert "group: vision-issue-reconciliation-${{ github.repository }}" in batch_workflow
     assert "cancel-in-progress: false" in batch_workflow
-    assert "If-Match: {etag}" in batch_workflow
-    assert "error.status != 412" in batch_workflow
+    assert "If-Match" not in batch_workflow
+    assert "current = direct_issue(issue_number)" in batch_workflow
+    assert batch_workflow.index("current = direct_issue(issue_number)") < batch_workflow.index(
+        "payload = desired_patch(issue_number, current)"
+    )
     assert "attempts=1" not in batch_workflow
     assert '"done": ("closed", "completed")' in batch_workflow
     assert '"cancelled": ("closed", "not_planned")' in batch_workflow
