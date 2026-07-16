@@ -55,6 +55,7 @@
       "Makefile",
       "tools/agent_preflight.py",
       "libs/runtime/tests/test_agent_preflight.py",
+      "libs/runtime/tests/fixtures/agent_preflight_terminal_rerun.v1.json",
       "governance/evidence/D9-terminal-corrective-preflight-E0.v1.json",
       "governance/handoffs/D9-terminal-corrective-preflight.v1.json"
     ],
