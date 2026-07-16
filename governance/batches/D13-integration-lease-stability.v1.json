@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D13-integration-lease-stability",
-  "revision": 2,
+  "revision": 3,
   "issue": 248,
   "owner_gate": 32,
-  "status": "prepared",
+  "status": "done",
   "lane": "orchestration-platform",
-  "last_accepted_rung": null,
+  "last_accepted_rung": "E0",
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Preserve an unused integration lease across unrelated main drift and permit a closed corrective PR to renew only the content-addressed lease identity, base, and manifest reference without changing any authorization boundary.",
-  "claim_ceiling": "Prepared D13 E0 only: the exact base, independent reviewer, Local/CI corpus, path scope, renewal equality, and negative controls are frozen. No lease-validator behavior, closed-corrective authorization, issue lifecycle, Gate 0 binding, application, data, factor, backtest, release, or Production behavior changes yet.",
+  "claim_ceiling": "Accepted D13 E0 offline delivery-governance behavior only: an unused integration lease may survive unrelated ancestor drift only while every leased path remains unchanged, and a closed done-to-done corrective PR may renew only its content-addressed lease identity, exact PR base, and manifest hash while every authorization boundary remains identical. Gate 0 v7 remains frozen and blocked v8 preserves every accepted artifact, attestation, blocker, and readiness state. This does not authorize broader lease lifecycle, application, data, factor, backtest, release, or Production behavior.",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [
@@ -37,7 +37,7 @@
   },
   "dependencies": [],
   "later_claim_dependencies": [
-    "D13 E0 may unblock D12 corrective PR #304 only after exact-head acceptance; it does not itself repair or accept D12.",
+    "Accepted D13 E0 permits D12 corrective PR #304 to renew only its exact content-addressed lease; it does not itself repair or accept D12.",
     "Transferred, released, and automatic lease lifecycle states plus root-export redesign remain later #248 work.",
     "Any closed-corrective change beyond a content-addressed lease renewal with identical authorization boundaries, plus any application, data, factor, backtest, release, or Production change, requires separate authorization."
   ],
@@ -97,7 +97,10 @@
       "governance/gate0/v7-frozen-tree-proof.v1.json"
     ],
     "lease_owner": "wangzitian0",
-    "lease_manifest": null
+    "lease_manifest": {
+      "path": "governance/leases/D13-integration-lease-stability.v1.json",
+      "sha256": "ea461b21259dd4fe377d9579598cd840df5301212b94698f7ff4b42d9b2d0775"
+    }
   },
   "release_activation": {
     "allowed": false,
@@ -123,9 +126,9 @@
     "output": {
       "type": "IntegrationLeaseStabilityEvidence",
       "stable_handoff": false,
-      "state": "prepared",
+      "state": "accepted",
       "allowed_evidence_readers": [
-        "D13 #248 E0 implementation and D12 corrective-blocker analysis only until a later accepted D13 E0 result"
+        "D12 corrective PR #304 lease renewal and repository delivery-governance validation only; no broader lease lifecycle or runtime authorization"
       ]
     }
   },
@@ -133,5 +136,5 @@
     "Changing ancestor policy, leased-path drift detection, git object handling, corrective lease-renewal equality, lease identity, overlap, expiry, state, owner, path, dependency, or corpus semantics requires a new prepared revision before implementation.",
     "Any attempt to modify closed-corrective behavior beyond the exact content-addressed lease renewal, application, data, factor, backtest, release, database, consumer, or Production behavior requires separate authorization."
   ],
-  "rollback": "Revert only the future D13 lease-validation predicate, tests, Gate 0 successor, evidence, and lease; do not mutate D12, historical Actions evidence, application, data, factor, backtest, release, or Production state."
+  "rollback": "Revert only the D13 lease-validation predicate, tests, Gate 0 successor, evidence, and lease; do not mutate D12, historical Actions evidence, application, data, factor, backtest, release, or Production state."
 }

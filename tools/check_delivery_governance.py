@@ -217,6 +217,43 @@ def git_target_drift_paths(base: str, target: str) -> tuple[str, ...] | None:
     return tuple(sorted(path for path in result.stdout.splitlines() if path))
 
 
+def git_is_ancestor(ancestor: str, descendant: str) -> bool | None:
+    result = run_git("merge-base", "--is-ancestor", ancestor, descendant)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def git_changed_paths_between(base: str, head: str) -> tuple[str, ...] | None:
+    """Return every historically touched path, including both sides of renames."""
+    result = run_git(
+        "log",
+        "-m",
+        "--format=",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        "--diff-filter=ACMRD",
+        f"{base}..{head}",
+    )
+    if result.returncode != 0:
+        return None
+    fields = result.stdout.split("\0")
+    changed: set[str] = set()
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        index += 1
+        path_count = 2 if status.startswith(("R", "C")) else 1
+        if index + path_count > len(fields):
+            return None
+        changed.update(path for path in fields[index : index + path_count] if path)
+        index += path_count
+    return tuple(sorted(changed))
+
+
 def git_json(commit: str, relative_path: str) -> Any | None:
     result = run_git("show", f"{commit}:{relative_path}")
     if result.returncode != 0:
@@ -225,6 +262,23 @@ def git_json(commit: str, relative_path: str) -> Any | None:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
         return None
+
+
+def git_referenced_json(commit: str, reference: Any) -> dict[str, Any] | None:
+    if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
+        return None
+    relative_path = reference.get("path")
+    expected_hash = reference.get("sha256")
+    if not isinstance(relative_path, str) or not isinstance(expected_hash, str):
+        return None
+    result = run_git("show", f"{commit}:{relative_path}")
+    if result.returncode != 0 or hashlib.sha256(result.stdout.encode()).hexdigest() != expected_hash:
+        return None
+    try:
+        loaded = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    return loaded if isinstance(loaded, dict) else None
 
 
 def batch_graph_entry(manifest: dict[str, Any], relative_path: str, digest: str) -> dict[str, Any]:
@@ -599,6 +653,8 @@ class PullRequestAdvance:
     accepted_rung: str | None
     changed_paths: tuple[str, ...]
     kind: str = "capability_batch"
+    base_sha: str | None = None
+    base_lease: dict[str, Any] | None = None
 
 
 def work_prefix(title: Any) -> str | None:
@@ -662,7 +718,6 @@ def closed_terminal_corrective_work_issue_allowed(
         "capability_issues",
         "closes_issues",
         "dependencies",
-        "paths",
     )
     return (
         base.get("status") == "done"
@@ -677,7 +732,56 @@ def closed_terminal_corrective_work_issue_allowed(
         and candidate.get("terminal_rung") == terminal_rung
         and advance.accepted_rung == terminal_rung
         and all(candidate.get(field) == base.get(field) for field in authorization_fields)
+        and corrective_paths_preserve_authorization(advance)
     )
+
+
+def corrective_paths_preserve_authorization(advance: PullRequestAdvance) -> bool:
+    base_paths = advance.base_manifest.get("paths")
+    candidate_paths = advance.manifest.get("paths")
+    if base_paths == candidate_paths:
+        return True
+    if not isinstance(base_paths, dict) or not isinstance(candidate_paths, dict):
+        return False
+    if set(base_paths) != set(candidate_paths):
+        return False
+    if any(base_paths.get(field) != candidate_paths.get(field) for field in base_paths if field != "lease_manifest"):
+        return False
+
+    base_reference = base_paths.get("lease_manifest")
+    candidate_reference = candidate_paths.get("lease_manifest")
+    if not isinstance(base_reference, dict) or not isinstance(candidate_reference, dict):
+        return False
+    if set(base_reference) != {"path", "sha256"} or set(candidate_reference) != {"path", "sha256"}:
+        return False
+    if base_reference.get("path") != candidate_reference.get("path"):
+        return False
+    candidate_hash = candidate_reference.get("sha256")
+    if not isinstance(candidate_hash, str) or SHA256_RE.fullmatch(candidate_hash) is None:
+        return False
+
+    base_lease = advance.base_lease
+    candidate_path = candidate_reference.get("path")
+    if not isinstance(base_lease, dict) or not isinstance(candidate_path, str):
+        return False
+    resolved_candidate_path = repo_path(candidate_path)
+    if resolved_candidate_path is None or not resolved_candidate_path.is_file():
+        return False
+    if sha256(resolved_candidate_path) != candidate_hash:
+        return False
+    try:
+        candidate_lease = load_json(resolved_candidate_path)
+    except (json.JSONDecodeError, OSError):
+        return False
+    if set(base_lease) != LEASE_FIELDS or set(candidate_lease) != LEASE_FIELDS:
+        return False
+    immutable_lease_fields = LEASE_FIELDS - {"lease_id", "base_sha"}
+    if any(base_lease.get(field) != candidate_lease.get(field) for field in immutable_lease_fields):
+        return False
+    if candidate_lease.get("base_sha") != advance.base_sha:
+        return False
+    expected_id = f"integration-lease:{canonical_sha256({key: value for key, value in candidate_lease.items() if key != 'lease_id'})}"
+    return candidate_lease.get("lease_id") == expected_id
 
 
 def validate_pull_request_metadata(
@@ -1514,7 +1618,6 @@ def validate_integration_lease(
         f"{batch_id}: integration lease is neither active nor terminally released",
     )
     validation.require(lease.get("owner") == paths.get("lease_owner"), f"{batch_id}: integration lease owner mismatch")
-    validation.require(lease.get("base_sha") == base_sha, f"{batch_id}: integration lease base SHA is stale")
     lease_paths = lease.get("paths", [])
     lease_paths_are_strings = isinstance(lease_paths, list) and all(
         isinstance(path, str) and valid_repo_pattern(path) for path in lease_paths
@@ -1526,6 +1629,25 @@ def validate_integration_lease(
         and len(lease_paths) == len(set(lease_paths)),
         f"{batch_id}: integration lease paths are invalid",
     )
+    acquisition_base = lease.get("base_sha")
+    acquisition_base_is_sha = isinstance(acquisition_base, str) and GIT_SHA_RE.fullmatch(acquisition_base) is not None
+    validation.require(acquisition_base_is_sha, f"{batch_id}: integration lease acquisition base is invalid")
+    if acquisition_base_is_sha and acquisition_base != base_sha:
+        assert isinstance(acquisition_base, str)
+        ancestor = git_is_ancestor(acquisition_base, base_sha)
+        if ancestor is None:
+            validation.require(False, f"{batch_id}: integration lease acquisition base is unavailable")
+        elif not ancestor:
+            validation.require(False, f"{batch_id}: integration lease acquisition base is not an ancestor")
+        if ancestor is True:
+            drift_paths = git_changed_paths_between(acquisition_base, base_sha)
+            validation.require(drift_paths is not None, f"{batch_id}: integration lease base drift is unavailable")
+            if drift_paths is not None:
+                for drift_path in drift_paths:
+                    validation.require(
+                        isinstance(lease_paths, list) and not matches_any(drift_path, lease_paths),
+                        f"{batch_id}: leased path drifted after acquisition: {drift_path!r}",
+                    )
     for changed_path in changed_integration_paths:
         validation.require(
             isinstance(lease_paths, list) and matches_any(changed_path, lease_paths),
@@ -1992,6 +2114,11 @@ def validate_pr_advance(
         changed_paths=changed_paths,
         base_sha=merge_base,
     )
+    base_paths = base_manifest.get("paths", {})
+    base_lease = git_referenced_json(
+        merge_base,
+        base_paths.get("lease_manifest") if isinstance(base_paths, dict) else None,
+    )
     for successor_path in changed_gate0_manifests:
         match = GATE0_MANIFEST_RE.fullmatch(successor_path)
         if match is None or int(match.group("version")) < 5:
@@ -2006,6 +2133,8 @@ def validate_pr_advance(
         manifest=manifest,
         accepted_rung=accepted_rung,
         changed_paths=changed_paths,
+        base_sha=merge_base,
+        base_lease=base_lease,
     )
 
 
