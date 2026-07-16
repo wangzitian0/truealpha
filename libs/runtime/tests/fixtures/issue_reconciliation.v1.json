@@ -11,9 +11,9 @@
     {
       "name": "valid_standalone_completes",
       "issue_action": "complete-on-merge",
-      "work_issue": "#250",
-      "work_identity": "standalone-250",
-      "expected": "close-250"
+      "work_issue": "#9001",
+      "work_identity": "standalone-9001",
+      "expected": "close-9001"
     },
     {
       "name": "invalid_standalone_work_key_fails_closed",
@@ -81,6 +81,48 @@
       "name": "changed_etag_never_overwrites",
       "etag_changed_before_patch": true,
       "expected": "retry-or-fail-visible"
+    }
+  ],
+  "api_resilience": [
+    {
+      "name": "pagination_preserves_every_issue",
+      "page_sizes": [
+        100,
+        37
+      ],
+      "expected_issue_count": 137,
+      "expected": "complete"
+    },
+    {
+      "name": "transient_server_error_retries",
+      "statuses": [
+        502,
+        200
+      ],
+      "expected": "retry-then-complete"
+    },
+    {
+      "name": "rate_limit_waits_for_reset",
+      "statuses": [
+        403,
+        200
+      ],
+      "rate_limit_remaining": 0,
+      "expected": "wait-reset-then-complete"
+    },
+    {
+      "name": "partial_patch_failure_never_reports_parity",
+      "statuses": [
+        200,
+        422
+      ],
+      "expected": "fail-visible"
+    },
+    {
+      "name": "idempotent_rerun_writes_nothing",
+      "initial_state_matches": true,
+      "expected_patch_count": 0,
+      "expected": "complete"
     }
   ]
 }

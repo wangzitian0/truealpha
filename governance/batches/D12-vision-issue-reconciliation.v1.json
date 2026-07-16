@@ -44,7 +44,7 @@
   "corpus": {
     "environment": "Local/CI deterministic GitHub event and lifecycle fixtures only; no live issue mutation is authorized during preparation.",
     "manifest_path": "libs/runtime/tests/fixtures/issue_reconciliation.v1.json",
-    "sha256": "4d64526ccdefdb44abab136bb005f42d506e2aeae5b964893003f79a901dfd21",
+    "sha256": "60a411775f7edd2de68db8c3a1ec6a2ff6218a41d2ab14cad0e052d313c2bcde",
     "required_strata": [
       "merged managed-by-batch PR closure skips standalone issue completion without error",
       "merged complete-on-merge standalone PR closes exactly its declared issue and malformed metadata fails closed",
@@ -87,9 +87,15 @@
       "uv.lock",
       "pyproject.toml"
     ],
-    "integration_surface": [],
-    "lease_owner": null,
-    "lease_manifest": null
+    "integration_surface": [
+      ".github/workflows/sync-batch-issues.yml",
+      ".github/workflows/sync-standalone-issue.yml"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/D12-vision-issue-reconciliation.v1.json",
+      "sha256": "c31a3b55af721d50ccc43f1b308bc0d319cf2fc766993afbfde384089991e025"
+    }
   },
   "release_activation": {
     "allowed": false,
