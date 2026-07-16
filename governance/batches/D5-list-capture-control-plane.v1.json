@@ -196,7 +196,7 @@
       "type": "ListCaptureControlPlaneEvidence",
       "state": "accepted_terminal_hardening_e4",
       "stable_handoff": false,
-      "hardening_identity_sha256": "a32bacbd54b598f2cc4637b597b57dca2ccdaa8c950f56015fb6439112989a97",
+      "hardening_identity_sha256": "13913c8de21b93b0f524ba1201ef0d93cdb69a47b841891185873fb834868d01",
       "medium_report_sha256": "8c27357139c9b7fb6c6c6575b56b4eed3673bbb089b9659bb981de3f45c1fb9a",
       "tiny_report_sha256": "2a6eae6d5381dc43c329591d976830ab544e8b1511f2d7b034e068e758f85d10",
       "issuer_count": 20,

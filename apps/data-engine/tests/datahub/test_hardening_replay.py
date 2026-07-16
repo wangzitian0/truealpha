@@ -41,6 +41,14 @@ def test_hardening_replay_closes_the_exact_topt_control_plane() -> None:
     )
     assert first.source_calls == 0
     assert len(first.resource_metric_semantics) == 3
+    assert [metric.scope_kind for metric in first.scope_metrics] == ["list", "campaign", "campaign", "campaign"]
+    assert all(metric.denominator_completeness_ppm == 1_000_000 for metric in first.scope_metrics)
+    assert all(metric.retry_amplification_ppm == 1_000_000 for metric in first.scope_metrics)
+    assert all(
+        metric.overfetch_count == metric.provider_calls == metric.source_cost_microunits == 0
+        for metric in first.scope_metrics
+    )
+    assert [metric.freshness_age_seconds for metric in first.scope_metrics] == [86_400, 0, 0, 86_400]
 
 
 def test_hardening_resource_observation_stays_inside_every_frozen_ceiling() -> None:

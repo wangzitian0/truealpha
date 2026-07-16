@@ -4,6 +4,7 @@ from data_engine.datahub.control_plane import AttemptLedger, expand_obligations
 from data_engine.datahub.hardening_replay import (
     HardeningResourceCeilings,
     HardeningResourceObservation,
+    HardeningScopeMetric,
     ToptHardeningReplayReport,
     run_topt_hardening_replay,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "FrozenRecapturePlan",
     "HardeningResourceCeilings",
     "HardeningResourceObservation",
+    "HardeningScopeMetric",
     "TinyReplayReport",
     "ToptHardeningReplayReport",
     "ToptMediumReplayReport",

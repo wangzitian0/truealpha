@@ -73,6 +73,24 @@ class HardeningResourceObservation:
 
 
 @dataclass(frozen=True)
+class HardeningScopeMetric:
+    scope_kind: str
+    scope_id: str
+    obligation_count: int
+    terminal_obligation_count: int
+    denominator_completeness_ppm: int
+    freshness_age_seconds: int
+    attempt_count: int
+    retry_amplification_ppm: int
+    overfetch_count: int
+    provider_calls: int
+    source_cost_microunits: int
+
+    def as_dict(self) -> dict[str, int | str]:
+        return dict(self.__dict__)
+
+
+@dataclass(frozen=True)
 class ToptHardeningReplayReport:
     corpus_id: str
     medium_report_sha256: str
@@ -86,6 +104,7 @@ class ToptHardeningReplayReport:
     recapture_selection_count: int
     resume_checkpoint_count: int
     negative_controls: tuple[str, ...]
+    scope_metrics: tuple[HardeningScopeMetric, ...]
     resource_metric_semantics: tuple[str, ...]
     resource_observation: HardeningResourceObservation
     resource_ceilings: HardeningResourceCeilings
@@ -108,6 +127,7 @@ class ToptHardeningReplayReport:
             "recapture_selection_count": self.recapture_selection_count,
             "resume_checkpoint_count": self.resume_checkpoint_count,
             "negative_controls": list(self.negative_controls),
+            "scope_metrics": [metric.as_dict() for metric in self.scope_metrics],
             "resource_metric_semantics": list(self.resource_metric_semantics),
             "resource_ceilings": self.resource_ceilings.as_dict(),
             "source_calls": self.source_calls,
@@ -187,6 +207,41 @@ def _serialized_bytes(value: object) -> int:
     return len(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
+def _scope_metrics(medium: ToptMediumReplayReport) -> tuple[HardeningScopeMetric, ...]:
+    campaign_metrics = tuple(
+        HardeningScopeMetric(
+            scope_kind="campaign",
+            scope_id=summary.campaign_id,
+            obligation_count=summary.obligation_count,
+            terminal_obligation_count=summary.terminal_obligation_count,
+            denominator_completeness_ppm=summary.terminal_obligation_count * 1_000_000 // summary.obligation_count,
+            freshness_age_seconds=86_400 if summary.outcome == FetchAttemptOutcome.UNCHANGED.value else 0,
+            attempt_count=summary.attempt_count,
+            retry_amplification_ppm=summary.attempt_count * 1_000_000 // summary.work_item_count,
+            overfetch_count=summary.attempt_count - summary.obligation_count,
+            provider_calls=0,
+            source_cost_microunits=0,
+        )
+        for summary in medium.run_summaries
+    )
+    list_metric = HardeningScopeMetric(
+        scope_kind="list",
+        scope_id=medium.list_version_id,
+        obligation_count=medium.total_obligation_count,
+        terminal_obligation_count=medium.total_terminal_obligation_count,
+        denominator_completeness_ppm=(
+            medium.total_terminal_obligation_count * 1_000_000 // medium.total_obligation_count
+        ),
+        freshness_age_seconds=max(metric.freshness_age_seconds for metric in campaign_metrics),
+        attempt_count=medium.total_attempt_count,
+        retry_amplification_ppm=medium.total_attempt_count * 1_000_000 // medium.total_work_item_count,
+        overfetch_count=medium.total_attempt_count - medium.total_obligation_count,
+        provider_calls=0,
+        source_cost_microunits=0,
+    )
+    return (list_metric, *campaign_metrics)
+
+
 def _resource_observation(
     *,
     corpus: Mapping[str, Any],
@@ -236,7 +291,9 @@ def _enforce_resource_ceilings(
 def run_topt_hardening_replay(corpus: Mapping[str, Any]) -> ToptHardeningReplayReport:
     """Exercise terminal Local/CI controls without source or environment activation."""
 
-    tracemalloc.start()
+    started_tracing = not tracemalloc.is_tracing()
+    if started_tracing:
+        tracemalloc.start()
     wall_started = time.perf_counter_ns()
     cpu_started = time.process_time_ns()
     try:
@@ -249,7 +306,8 @@ def run_topt_hardening_replay(corpus: Mapping[str, Any]) -> ToptHardeningReplayR
         elapsed_ns = time.perf_counter_ns() - wall_started
         _, peak_traced_bytes = tracemalloc.get_traced_memory()
     finally:
-        tracemalloc.stop()
+        if started_tracing:
+            tracemalloc.stop()
 
     ceilings = HardeningResourceCeilings()
     observation = _resource_observation(
@@ -278,6 +336,7 @@ def run_topt_hardening_replay(corpus: Mapping[str, Any]) -> ToptHardeningReplayR
         recapture_selection_count=len(plan.selected_obligation_ids),
         resume_checkpoint_count=len(resume_results),
         negative_controls=negative_controls,
+        scope_metrics=_scope_metrics(medium),
         resource_metric_semantics=(
             "database_record_bytes is canonical serialized Local/CI evidence, not physical database allocation",
             "object_payload_bytes is two frozen logical fixture waves, not live-source object-store allocation",
