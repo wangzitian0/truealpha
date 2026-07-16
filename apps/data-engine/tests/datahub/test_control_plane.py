@@ -119,6 +119,8 @@ def test_attempt_result_cannot_be_replaced_or_duplicated() -> None:
 
 def test_attempt_dispatch_waits_for_result_and_completion_is_monotonic() -> None:
     ledger = AttemptLedger(work_item_id=f"capture-work-item:{'e' * 64}", maximum_attempts=2)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        ledger.start(started_at=datetime(2026, 4, 1))
     attempt = ledger.start(started_at=AT)
     with pytest.raises(ValueError, match="no result"):
         ledger.start(started_at=AT)

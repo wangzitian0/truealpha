@@ -206,6 +206,40 @@ insert into raw.capture_attempts (
 do $$
 begin
     begin
+        insert into raw.capture_attempts (
+            attempt_id, work_item_id, attempt_number, started_at, content_sha256
+        ) values (
+            'fetch-attempt:5555555555555555555555555555555555555555555555555555555555555555',
+            'capture-work-item:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            2, '2026-04-01T00:00:01Z', repeat('5', 64)
+        );
+        raise exception 'attempt before prior result unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'attempt before prior result unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_attempt_results (
+            attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
+        ) values (
+            'fetch-attempt-result:5555555555555555555555555555555555555555555555555555555555555555',
+            'fetch-attempt:1111111111111111111111111111111111111111111111111111111111111111',
+            '2026-03-31T23:59:59Z', 'interrupted', array['clock_skew'], repeat('5', 64)
+        );
+        raise exception 'completion before dispatch unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'completion before dispatch unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
         insert into raw.capture_attempt_results (
             attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
         ) values (

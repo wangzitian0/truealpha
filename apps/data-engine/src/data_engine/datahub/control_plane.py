@@ -69,6 +69,8 @@ class AttemptLedger:
             raise ValueError("maximum_attempts must be positive")
 
     def start(self, *, started_at: datetime) -> FetchAttempt:
+        if started_at.tzinfo is None or started_at.utcoffset() is None:
+            raise ValueError("started_at must be timezone-aware")
         if self.is_terminal:
             raise ValueError("attempt after terminal outcome")
         if len(self.results) != len(self.attempts):
