@@ -147,3 +147,34 @@ def test_attempt_budget_must_be_positive() -> None:
     ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.INTERRUPTED)
     with pytest.raises(ValueError, match="maximum attempts"):
         ledger.start(started_at=AT)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "source_vintage_id", "reused_source_vintage_id", "message"),
+    (
+        (FetchAttemptOutcome.SUCCESS, None, None, "successful result"),
+        (FetchAttemptOutcome.UNCHANGED, None, None, "unchanged result"),
+        (
+            FetchAttemptOutcome.INTERRUPTED,
+            f"source-vintage:{'2' * 64}",
+            None,
+            "non-content result",
+        ),
+    ),
+)
+def test_attempt_result_rejects_invalid_source_vintage_grain(
+    outcome: FetchAttemptOutcome,
+    source_vintage_id: str | None,
+    reused_source_vintage_id: str | None,
+    message: str,
+) -> None:
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'2' * 64}", maximum_attempts=1)
+    attempt = ledger.start(started_at=AT)
+    with pytest.raises(ValueError, match=message):
+        ledger.finish(
+            attempt=attempt,
+            completed_at=AT,
+            outcome=outcome,
+            source_vintage_id=source_vintage_id,
+            reused_source_vintage_id=reused_source_vintage_id,
+        )

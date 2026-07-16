@@ -103,6 +103,14 @@ class AttemptLedger:
             raise ValueError("completed_at must be timezone-aware")
         if completed_at < attempt.started_at:
             raise ValueError("completed_at precedes started_at")
+        if outcome is FetchAttemptOutcome.SUCCESS:
+            if source_vintage_id is None or reused_source_vintage_id is not None:
+                raise ValueError("a successful result must create exactly one source vintage")
+        elif outcome is FetchAttemptOutcome.UNCHANGED:
+            if reused_source_vintage_id is None or source_vintage_id is not None:
+                raise ValueError("an unchanged result must reuse exactly one source vintage")
+        elif source_vintage_id is not None or reused_source_vintage_id is not None:
+            raise ValueError("a non-content result cannot name a source vintage")
         result = FetchAttemptResult(
             attempt_id=attempt.attempt_id,
             completed_at=completed_at,
