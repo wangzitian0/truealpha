@@ -1,0 +1,304 @@
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from data_engine.datahub import AttemptLedger, expand_obligations
+from truealpha_contracts import SubjectKind, SubjectRef, UniverseRef
+from truealpha_contracts.capture_control import CaptureListVersion
+from truealpha_contracts.datahub import FetchAttemptOutcome, RetryPolicy
+
+ROOT = Path(__file__).parents[1]
+CORPUS = ROOT / "fixtures" / "capture_control" / "corpus.v1.json"
+AT = datetime(2026, 4, 1, tzinfo=UTC)
+
+
+def retry_policy(max_attempts: int) -> RetryPolicy:
+    return RetryPolicy(
+        max_attempts=max_attempts,
+        retryable_outcomes=(
+            FetchAttemptOutcome.INTERRUPTED,
+            FetchAttemptOutcome.RATE_LIMITED,
+            FetchAttemptOutcome.SERVER_ERROR,
+            FetchAttemptOutcome.TRANSPORT_ERROR,
+        ),
+        terminal_outcomes=(
+            FetchAttemptOutcome.FAILED,
+            FetchAttemptOutcome.SUCCESS,
+            FetchAttemptOutcome.UNAVAILABLE,
+            FetchAttemptOutcome.UNCHANGED,
+        ),
+    )
+
+
+def test_frozen_topt_denominator_expands_without_share_class_collapse() -> None:
+    corpus = json.loads(CORPUS.read_text())
+    denominator = corpus["topt_denominator"]
+    listings = tuple(row[2] for row in denominator["instruments"])
+    list_version = CaptureListVersion(
+        universe=UniverseRef(
+            universe_id=denominator["universe_id"],
+            universe_version="topt-candidate-2026-03-31-v1",
+            content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
+        ),
+        members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=listing) for listing in listings),
+        effective_at=AT,
+    )
+    assert list_version.list_version_id == denominator["list_version_id"]
+    obligations = expand_obligations(
+        run_id=f"capture-run:{'a' * 64}",
+        list_version=list_version,
+        semantic_types=tuple(denominator["obligation_expansion"]["semantic_types"]),
+        partition=denominator["report_date"],
+    )
+    assert len(set(listings)) == 21
+    assert len({row[0] for row in denominator["instruments"]}) == 20
+    assert len(obligations) == denominator["obligation_count"] == 84
+    assert {item.subject.id for item in obligations} >= {"listing:xnas:goog", "listing:xnas:googl"}
+
+
+def test_frozen_tiny_list_ids_reconstruct_from_security_members() -> None:
+    corpus = json.loads(CORPUS.read_text())
+    universe = UniverseRef(
+        universe_id=corpus["topt_denominator"]["universe_id"],
+        universe_version="topt-candidate-2026-03-31-v1",
+        content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
+    )
+    reconstructed_lists = []
+    for frozen in corpus["tiny_lists"]:
+        reconstructed = CaptureListVersion(
+            universe=universe,
+            members=tuple(SubjectRef(kind=SubjectKind.SECURITY, id=member) for member in frozen["members"]),
+            effective_at=AT,
+        )
+        assert reconstructed.list_version_id == frozen["list_version_id"]
+        reconstructed_lists.append(reconstructed)
+
+    obligations = tuple(
+        obligation
+        for list_version in reconstructed_lists
+        for obligation in expand_obligations(
+            run_id=f"capture-run:{'b' * 64}",
+            list_version=list_version,
+            semantic_types=("market-price",),
+            partition="2026-03-31",
+        )
+        if obligation.subject.id == "security:cusip:67066G104"
+    )
+    assert len(obligations) == 2
+    assert len({obligation.obligation_id for obligation in obligations}) == 2
+    assert len({obligation.list_version_id for obligation in obligations}) == 2
+
+    scenario = corpus["recapture_scenarios"][0]
+    selected = [
+        obligation.model_dump(mode="json")
+        for obligation in expand_obligations(
+            run_id="capture-run:89218d2ccfd82036527934f2fbcdb03776b9e6ce36d3dfb9e10b2b11338867ae",
+            list_version=reconstructed_lists[0],
+            semantic_types=("market-price",),
+            partition="2026-03-31",
+        )
+        if obligation.subject.id == scenario["predicates"]["instrument_id"]
+    ]
+    assert selected == scenario["expected_selected_obligations"]
+
+
+def test_obligation_expansion_rejects_empty_semantic_denominator() -> None:
+    corpus = json.loads(CORPUS.read_text())
+    frozen = corpus["tiny_lists"][0]
+    list_version = CaptureListVersion(
+        universe=UniverseRef(
+            universe_id=corpus["topt_denominator"]["universe_id"],
+            universe_version="topt-candidate-2026-03-31-v1",
+            content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
+        ),
+        members=tuple(SubjectRef(kind=SubjectKind.SECURITY, id=member) for member in frozen["members"]),
+        effective_at=AT,
+    )
+    with pytest.raises(ValueError, match="must not be empty"):
+        expand_obligations(
+            run_id=f"capture-run:{'c' * 64}",
+            list_version=list_version,
+            semantic_types=(),
+            partition="2026-03-31",
+        )
+
+
+def test_attempts_are_contiguous_bounded_and_stop_at_terminal_outcome() -> None:
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'b' * 64}", retry_policy=retry_policy(3))
+    first = ledger.start(started_at=AT)
+    completed_at = datetime(2026, 4, 1, 0, 0, 1, tzinfo=UTC)
+    ledger.finish(
+        attempt=first,
+        completed_at=completed_at,
+        outcome=FetchAttemptOutcome.INTERRUPTED,
+        error_code="worker_exit",
+    )
+    with pytest.raises(ValueError, match="before previous result completion"):
+        ledger.start(started_at=AT)
+    second = ledger.start(started_at=completed_at)
+    ledger.finish(
+        attempt=second,
+        completed_at=completed_at,
+        outcome=FetchAttemptOutcome.SUCCESS,
+        source_vintage_id=f"source-vintage:{'d' * 64}",
+    )
+    assert [attempt.attempt_number for attempt in ledger.attempts] == [1, 2]
+    with pytest.raises(ValueError, match="terminal"):
+        ledger.start(started_at=AT)
+
+
+def test_identical_bytes_are_separate_terminal_capture_cycles() -> None:
+    corpus = json.loads(CORPUS.read_text())
+    scenario = next(
+        item for item in corpus["attempt_scenarios"] if item["scenario_id"] == "identical-bytes-distinct-capture-cycles"
+    )
+    ledgers = [
+        AttemptLedger(work_item_id=cycle["work_item_id"], retry_policy=retry_policy(1))
+        for cycle in scenario["capture_cycles"]
+    ]
+    first_attempt = ledgers[0].start(started_at=AT)
+    ledgers[0].finish(
+        attempt=first_attempt,
+        completed_at=AT,
+        outcome=FetchAttemptOutcome.SUCCESS,
+        source_vintage_id=f"source-vintage:{'1' * 64}",
+    )
+    refresh_attempt = ledgers[1].start(started_at=AT)
+    ledgers[1].finish(
+        attempt=refresh_attempt,
+        completed_at=AT,
+        outcome=FetchAttemptOutcome.UNCHANGED,
+        reused_source_vintage_id=f"source-vintage:{'1' * 64}",
+    )
+    assert len({ledger.work_item_id for ledger in ledgers}) == scenario["expected_work_item_count"] == 2
+    assert sum(len(ledger.attempts) for ledger in ledgers) == scenario["expected_attempt_count"] == 2
+    assert all(ledger.is_terminal for ledger in ledgers)
+
+
+def test_attempt_result_cannot_be_replaced_or_duplicated() -> None:
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'c' * 64}", retry_policy=retry_policy(1))
+    attempt = ledger.start(started_at=AT)
+    ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.FAILED, error_code="fixture_failure")
+    with pytest.raises(ValueError, match="already has a result"):
+        ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.SUCCESS)
+
+
+def test_attempt_dispatch_waits_for_result_and_completion_is_monotonic() -> None:
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'e' * 64}", retry_policy=retry_policy(2))
+    with pytest.raises(ValueError, match="timezone-aware"):
+        ledger.start(started_at=datetime(2026, 4, 1))
+    attempt = ledger.start(started_at=AT)
+    with pytest.raises(ValueError, match="no result"):
+        ledger.start(started_at=AT)
+    with pytest.raises(ValueError, match="precedes"):
+        ledger.finish(
+            attempt=attempt,
+            completed_at=datetime(2026, 3, 31, tzinfo=UTC),
+            outcome=FetchAttemptOutcome.INTERRUPTED,
+        )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        ledger.finish(
+            attempt=attempt,
+            completed_at=datetime(2026, 4, 1),
+            outcome=FetchAttemptOutcome.INTERRUPTED,
+        )
+
+
+@pytest.mark.parametrize("maximum_attempts", (0, 21))
+def test_attempt_budget_uses_shared_retry_bound(maximum_attempts: int) -> None:
+    with pytest.raises(ValueError):
+        AttemptLedger(work_item_id=f"capture-work-item:{'f' * 64}", retry_policy=retry_policy(maximum_attempts))
+
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'1' * 64}", retry_policy=retry_policy(1))
+    attempt = ledger.start(started_at=AT)
+    with pytest.raises(ValueError, match="terminal outcome"):
+        ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.INTERRUPTED)
+
+
+def test_attempt_ledger_uses_the_bound_retry_policy_partition() -> None:
+    custom_policy = RetryPolicy(
+        max_attempts=2,
+        retryable_outcomes=(FetchAttemptOutcome.INTERRUPTED,),
+        terminal_outcomes=(
+            FetchAttemptOutcome.FAILED,
+            FetchAttemptOutcome.RATE_LIMITED,
+            FetchAttemptOutcome.SUCCESS,
+            FetchAttemptOutcome.UNAVAILABLE,
+            FetchAttemptOutcome.UNCHANGED,
+        ),
+    )
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'6' * 64}", retry_policy=custom_policy)
+    attempt = ledger.start(started_at=AT)
+    ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.RATE_LIMITED)
+    assert ledger.is_terminal
+    with pytest.raises(ValueError, match="terminal"):
+        ledger.start(started_at=AT)
+
+    unclassified = AttemptLedger(work_item_id=f"capture-work-item:{'7' * 64}", retry_policy=custom_policy)
+    attempt = unclassified.start(started_at=AT)
+    with pytest.raises(ValueError, match="not classified"):
+        unclassified.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.SERVER_ERROR)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "source_vintage_id", "reused_source_vintage_id", "message"),
+    (
+        (FetchAttemptOutcome.SUCCESS, None, None, "successful result"),
+        (FetchAttemptOutcome.UNCHANGED, None, None, "unchanged result"),
+        (
+            FetchAttemptOutcome.INTERRUPTED,
+            f"source-vintage:{'2' * 64}",
+            None,
+            "non-content result",
+        ),
+    ),
+)
+def test_attempt_result_rejects_invalid_source_vintage_grain(
+    outcome: FetchAttemptOutcome,
+    source_vintage_id: str | None,
+    reused_source_vintage_id: str | None,
+    message: str,
+) -> None:
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'2' * 64}", retry_policy=retry_policy(1))
+    attempt = ledger.start(started_at=AT)
+    with pytest.raises(ValueError, match=message):
+        ledger.finish(
+            attempt=attempt,
+            completed_at=AT,
+            outcome=outcome,
+            source_vintage_id=source_vintage_id,
+            reused_source_vintage_id=reused_source_vintage_id,
+        )
+
+
+def test_attempt_result_contract_validation_is_a_value_error() -> None:
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'3' * 64}", retry_policy=retry_policy(1))
+    attempt = ledger.start(started_at=AT)
+    with pytest.raises(ValueError):
+        ledger.finish(
+            attempt=attempt,
+            completed_at=AT,
+            outcome=FetchAttemptOutcome.SUCCESS,
+            source_vintage_id="source-vintage:not-canonical",
+        )
+
+    valid_ledger = AttemptLedger(work_item_id=f"capture-work-item:{'4' * 64}", retry_policy=retry_policy(1))
+    valid_attempt = valid_ledger.start(started_at=AT)
+    result = valid_ledger.finish(
+        attempt=valid_attempt,
+        completed_at=AT,
+        outcome=FetchAttemptOutcome.FAILED,
+        status_code=503,
+    )
+    assert result.status_code == 503
+
+    invalid_ledger = AttemptLedger(work_item_id=f"capture-work-item:{'5' * 64}", retry_policy=retry_policy(1))
+    invalid_attempt = invalid_ledger.start(started_at=AT)
+    with pytest.raises(ValueError):
+        invalid_ledger.finish(
+            attempt=invalid_attempt,
+            completed_at=AT,
+            outcome=FetchAttemptOutcome.FAILED,
+            status_code=99,
+        )
