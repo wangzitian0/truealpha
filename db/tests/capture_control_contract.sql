@@ -133,12 +133,61 @@ insert into raw.capture_attempts (
     'capture-work-item:9999999999999999999999999999999999999999999999999999999999999999',
     3, '2026-04-01T00:01:04Z', repeat('3', 64)
 );
+do $$
+begin
+    begin
+        insert into raw.capture_attempt_results (
+            attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
+        ) values (
+            'fetch-attempt-result:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+            'fetch-attempt:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+            '2026-04-01T00:01:05Z', 'server_error', array['retry'], repeat('3', 64)
+        );
+        raise exception 'retryable final result unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'retryable final result unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_attempt_results (
+            attempt_result_id, attempt_id, completed_at, outcome, status_code, reason_codes, content_sha256
+        ) values (
+            'fetch-attempt-result:a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4',
+            'fetch-attempt:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+            '2026-04-01T00:01:05Z', 'failed', 99, array['fixture_failure'], repeat('4', 64)
+        );
+        raise exception 'invalid status code unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_attempt_results (
+            attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
+        ) values (
+            'fetch-attempt-result:a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5',
+            'fetch-attempt:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+            '2026-04-01T00:01:05Z', 'failed', array['duplicate', 'duplicate'], repeat('5', 64)
+        );
+        raise exception 'noncanonical reason codes unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end;
+$$;
+
 insert into raw.capture_attempt_results (
-    attempt_result_id, attempt_id, completed_at, outcome, reason_codes, content_sha256
+    attempt_result_id, attempt_id, completed_at, outcome, status_code, reason_codes, content_sha256
 ) values (
-    'fetch-attempt-result:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+    'fetch-attempt-result:a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6',
     'fetch-attempt:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
-    '2026-04-01T00:01:05Z', 'server_error', array['retry'], repeat('3', 64)
+    '2026-04-01T00:01:05Z', 'failed', 503, array['fixture_failure'], repeat('6', 64)
 );
 
 do $$

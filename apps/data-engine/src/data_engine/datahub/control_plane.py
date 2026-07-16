@@ -92,6 +92,7 @@ class AttemptLedger:
         completed_at: datetime,
         outcome: FetchAttemptOutcome,
         error_code: str | None = None,
+        status_code: int | None = None,
         source_vintage_id: str | None = None,
         reused_source_vintage_id: str | None = None,
     ) -> FetchAttemptResult:
@@ -111,10 +112,13 @@ class AttemptLedger:
                 raise ValueError("an unchanged result must reuse exactly one source vintage")
         elif source_vintage_id is not None or reused_source_vintage_id is not None:
             raise ValueError("a non-content result cannot name a source vintage")
+        if attempt.attempt_number == self.maximum_attempts and outcome not in _TERMINAL:
+            raise ValueError("the final permitted attempt must have a terminal outcome")
         result = FetchAttemptResult(
             attempt_id=attempt.attempt_id,
             completed_at=completed_at,
             outcome=outcome,
+            status_code=status_code,
             reason_codes=(error_code or outcome.value,),
             source_vintage_id=source_vintage_id,
             reused_source_vintage_id=reused_source_vintage_id,

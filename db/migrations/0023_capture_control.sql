@@ -20,6 +20,26 @@ begin
 end;
 $$;
 
+create or replace function raw.has_canonical_reason_codes(codes text[])
+returns boolean language plpgsql immutable strict as $$
+declare
+    item_index integer;
+begin
+    if cardinality(codes) = 0 then
+        return false;
+    end if;
+    for item_index in 1..cardinality(codes) loop
+        if codes[item_index] is null or codes[item_index] !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$' then
+            return false;
+        end if;
+        if item_index > 1 and codes[item_index - 1] >= codes[item_index] then
+            return false;
+        end if;
+    end loop;
+    return true;
+end;
+$$;
+
 create table if not exists raw.capture_campaigns (
     campaign_id       text primary key check (campaign_id ~ '^capture-campaign:[0-9a-f]{64}$'),
     content_sha256    text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
@@ -103,7 +123,8 @@ create table if not exists raw.capture_attempt_results (
         'rate_limited', 'transport_error', 'server_error', 'interrupted',
         'success', 'unchanged', 'unavailable', 'failed'
     )),
-    reason_codes       text[] not null check (cardinality(reason_codes) > 0),
+    status_code        integer check (status_code between 100 and 599),
+    reason_codes       text[] not null check (raw.has_canonical_reason_codes(reason_codes)),
     source_vintage_id  text check (source_vintage_id is null or source_vintage_id ~ '^source-vintage:[0-9a-f]{64}$'),
     reused_source_vintage_id text check (
         reused_source_vintage_id is null or reused_source_vintage_id ~ '^source-vintage:[0-9a-f]{64}$'
@@ -333,15 +354,23 @@ create or replace function raw.validate_capture_attempt_result()
 returns trigger language plpgsql as $$
 declare
     dispatch_started_at timestamptz;
+    dispatched_attempt integer;
+    allowed_attempts integer;
 begin
-    select started_at into dispatch_started_at
-      from raw.capture_attempts
-     where attempt_id = new.attempt_id;
+    select attempt.started_at, attempt.attempt_number, work.maximum_attempts
+      into dispatch_started_at, dispatched_attempt, allowed_attempts
+      from raw.capture_attempts attempt
+      join raw.capture_work_items work using (work_item_id)
+     where attempt.attempt_id = new.attempt_id;
     if dispatch_started_at is null then
         raise exception 'attempt result has no persisted dispatch';
     end if;
     if new.completed_at < dispatch_started_at then
         raise exception 'attempt result completion precedes dispatch';
+    end if;
+    if dispatched_attempt = allowed_attempts
+       and new.outcome in ('rate_limited', 'transport_error', 'server_error', 'interrupted') then
+        raise exception 'final permitted attempt must have a terminal outcome';
     end if;
     return new;
 end;

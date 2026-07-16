@@ -165,16 +165,22 @@
       },
       "expected_selected_obligations": [
         {
-          "obligation_id": "list-obligation:e8ac62c8831208b2d2dbda13136e04349ff6c8775d92b40e374cd814a9d91d13",
-          "run_id": "capture-run:89218d2ccfd82036527934f2fbcdb03776b9e6ce36d3dfb9e10b2b11338867ae",
-          "universe_ref": {
-            "universe_id": "universe:topt-us-2026-03-31",
-            "universe_version": "topt-candidate-2026-03-31-v1",
-            "content_sha256": "8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f"
-          },
-          "subject": {"kind": "listing", "id": "listing:xnas:nvda"},
-          "capture_requirement_id": "market-price:v1",
-          "partition": "2026-03-31"
+          "obligation_id": "capture-list-obligation:90c466e7ffde054983f3cf85cd1465303fa0197398855d531349edde0fe25f24",
+          "content_sha256": "90c466e7ffde054983f3cf85cd1465303fa0197398855d531349edde0fe25f24",
+          "list_version_id": "list-version:63dea0ed14b68cbc0ffa9a83512197b3bc73bae964d99340109ffe02eeb19f4d",
+          "obligation": {
+            "obligation_id": "list-obligation:5606dc0655b9e00e978cd18e0cd99ceb7afb28bb3bdfb171ff875fb38443bb91",
+            "content_sha256": "eadc76146f41581d191b075103dfb2c384f613d543549c1a3710605a5a720664",
+            "run_id": "capture-run:89218d2ccfd82036527934f2fbcdb03776b9e6ce36d3dfb9e10b2b11338867ae",
+            "universe_ref": {
+              "universe_id": "universe:topt-us-2026-03-31",
+              "universe_version": "topt-candidate-2026-03-31-v1",
+              "content_sha256": "8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f"
+            },
+            "subject": {"kind": "security", "id": "security:cusip:67066G104"},
+            "capture_requirement_id": "market-price:v1",
+            "partition": "2026-03-31"
+          }
         }
       ],
       "execution_must_equal_dry_run": true,

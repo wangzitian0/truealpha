@@ -71,6 +71,19 @@ def test_frozen_tiny_list_ids_reconstruct_from_security_members() -> None:
     assert len({obligation.obligation_id for obligation in obligations}) == 2
     assert len({obligation.list_version_id for obligation in obligations}) == 2
 
+    scenario = corpus["recapture_scenarios"][0]
+    selected = [
+        obligation.model_dump(mode="json")
+        for obligation in expand_obligations(
+            run_id="capture-run:89218d2ccfd82036527934f2fbcdb03776b9e6ce36d3dfb9e10b2b11338867ae",
+            list_version=reconstructed_lists[0],
+            semantic_types=("market-price",),
+            partition="2026-03-31",
+        )
+        if obligation.subject.id == scenario["predicates"]["instrument_id"]
+    ]
+    assert selected == scenario["expected_selected_obligations"]
+
 
 def test_obligation_expansion_rejects_empty_semantic_denominator() -> None:
     corpus = json.loads(CORPUS.read_text())
@@ -144,9 +157,8 @@ def test_attempt_budget_must_be_positive() -> None:
 
     ledger = AttemptLedger(work_item_id=f"capture-work-item:{'1' * 64}", maximum_attempts=1)
     attempt = ledger.start(started_at=AT)
-    ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.INTERRUPTED)
-    with pytest.raises(ValueError, match="maximum attempts"):
-        ledger.start(started_at=AT)
+    with pytest.raises(ValueError, match="terminal outcome"):
+        ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.INTERRUPTED)
 
 
 @pytest.mark.parametrize(
@@ -189,4 +201,24 @@ def test_attempt_result_contract_validation_is_a_value_error() -> None:
             completed_at=AT,
             outcome=FetchAttemptOutcome.SUCCESS,
             source_vintage_id="source-vintage:not-canonical",
+        )
+
+    valid_ledger = AttemptLedger(work_item_id=f"capture-work-item:{'4' * 64}", maximum_attempts=1)
+    valid_attempt = valid_ledger.start(started_at=AT)
+    result = valid_ledger.finish(
+        attempt=valid_attempt,
+        completed_at=AT,
+        outcome=FetchAttemptOutcome.FAILED,
+        status_code=503,
+    )
+    assert result.status_code == 503
+
+    invalid_ledger = AttemptLedger(work_item_id=f"capture-work-item:{'5' * 64}", maximum_attempts=1)
+    invalid_attempt = invalid_ledger.start(started_at=AT)
+    with pytest.raises(ValueError):
+        invalid_ledger.finish(
+            attempt=invalid_attempt,
+            completed_at=AT,
+            outcome=FetchAttemptOutcome.FAILED,
+            status_code=99,
         )
