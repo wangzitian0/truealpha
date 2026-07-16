@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "batch_id": "S11-historical-cagr-peg",
+  "revision": 1,
+  "issue": 284,
+  "owner_gate": 30,
+  "status": "queued",
+  "lane": "strategy",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E1",
+  "objective": "Build and replay one batch-private historical-CAGR PEG computational slice for legacy capability #33 without freezing product semantics or activating the shared factor pipeline.",
+  "claim_ceiling": "Registration only for a provisional E0/E1 historical-CAGR PEG batch; no arithmetic implementation, approved product semantics, stable handoff, shared factor registration, data-source integration, Dagster asset, mart output, release activation, issue closure, or E2+ readiness claim",
+  "capability_issues": [
+    33
+  ],
+  "closes_issues": [],
+  "informational_issues": [
+    30,
+    59,
+    65
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "the queued S11 registration is merged to main before preparation",
+      "the preparation revision freezes the exact Local/CI corpus, activation base, and independent reviewer",
+      "each rung PR audits target-branch drift and updates only when it intersects declared paths or invalidates evidence",
+      "issue #284 contains the exact manifest path and SHA-256",
+      "issue #59 remains a freeze dependency and no provisional result may be represented as approved PEG semantics",
+      "no shared export, registry, base factor, lockfile, authoritative document, runtime binding, or release path changes"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "freeze",
+      "issue": 59,
+      "artifact": "approved historical-CAGR PEG formula, period, unit, availability, and negative-value semantics with product reference evidence",
+      "state": "pending_external_approval"
+    }
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in synthetic Decimal fixture",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "valid positive price-to-earnings and positive historical CAGR",
+      "negative earnings or nonpositive price-to-earnings",
+      "zero or negative historical growth",
+      "unavailable, future-known, stale, wrong-entity, and duplicate inputs",
+      "growth period or unit mismatch",
+      "canonical input reordering and ambient Decimal-context determinism"
+    ]
+  },
+  "paths": {
+    "writable": [
+      "libs/factors/src/factors/batches/historical_cagr_peg_tiny/**",
+      "libs/factors/tests/batches/historical_cagr_peg_tiny/**",
+      "governance/evidence/S11-historical-cagr-peg-E0.v1.json",
+      "governance/evidence/S11-historical-cagr-peg-E1.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "libs/factors/src/factors/types.py",
+      "libs/factors/src/factors/base/peg.py",
+      "governance/capabilities/issue-33.v1.json",
+      "governance/capabilities/issue-59.v1.json",
+      "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "governance/batches/S8-qlib-factor-expression.v1.json",
+      "governance/batches/S9-direct-pe-qlib-smoke.v1.json"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "init.md",
+      "vision.md",
+      "db/**",
+      "apps/**",
+      "libs/contracts/**",
+      "libs/factors/src/factors/registry.py",
+      "libs/factors/src/factors/types.py",
+      "libs/factors/src/factors/base/**",
+      "libs/factors/src/factors/composite/**",
+      "libs/factors/src/factors/shared/**",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "S11 is an isolated provisional historical-CAGR PEG kernel; #59 semantic approval and the remaining #33 E2-E4 pipeline evidence are mandatory before shared use"
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/factors/tests/batches/historical_cagr_peg_tiny -q",
+      "uv run ruff check libs/factors/src/factors/batches/historical_cagr_peg_tiny libs/factors/tests/batches/historical_cagr_peg_tiny",
+      "uv run mypy"
+    ],
+    "negative_controls": [
+      "future-known, unavailable, stale, wrong-entity, or duplicate input accepted",
+      "non-Decimal arithmetic, non-finite value, invalid period, or invalid unit accepted",
+      "zero or negative growth silently divided",
+      "negative earnings or nonpositive price-to-earnings represented as an ordinary positive PEG",
+      "input ordering or ambient Decimal context changes the result identity",
+      "analyst-consensus, guidance, vendor identity, source priority, shared registration, or release semantics introduced"
+    ],
+    "output": {
+      "type": "HistoricalCagrPegTinyEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "issue #33 historical-CAGR PEG pipeline batches",
+        "issue #59 PEG semantic-freeze work",
+        "issue #65 independent factor verification preparation"
+      ]
+    }
+  },
+  "invalidation": [
+    "formula, annualization, period, unit, availability, negative-value policy, input identity, output identity, or corpus change creates a new batch revision",
+    "any need for a shared export, registry, base factor, contract, lockfile, authoritative document, or runtime binding blocks this batch until separately authorized",
+    "approval of #59 does not retroactively raise this provisional evidence ceiling or create a stable handoff",
+    "real source, PIT restatement, Dagster, mart, replay, or release integration requires a separate higher-rung batch"
+  ],
+  "rollback": "Revert the isolated S11 batch package, tests, corpus, and evidence together; no accepted shared registry, runtime, mart, or release manifest may reference them."
+}
