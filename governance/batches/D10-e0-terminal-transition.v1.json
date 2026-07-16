@@ -10,7 +10,7 @@
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Repair the delivery-governance lifecycle so a prepared batch whose declared terminal target is E0 can accept that exact result directly to done without weakening any non-terminal transition.",
-  "claim_ceiling": "Registration only: no checker code, test, corpus, batch transition, issue closure, D9/D4/D8 change, source call, credential, database, object-store, scheduler, runtime, release, consumer, or Production data claim.",
+  "claim_ceiling": "Registration only: no checker code, test, corpus, batch transition, or issue closure occurs in this registration. A later accepted terminal D10 result may close #278 only; this registration changes no D9/D4/D8 scope, source, credential, database, object-store, scheduler, runtime, release, consumer, or Production data claim.",
   "capability_issues": [],
   "closes_issues": [
     278
@@ -32,7 +32,7 @@
       "the queued registration is merged on main before a preparation revision pins the activation base, independent reviewer, and frozen Local/CI corpus",
       "the implementation permits prepared-to-done only when the base target is the declared terminal E0 and the candidate accepts exactly that E0",
       "prepared E1+ batches and malformed, mismatched, or non-terminal E0 candidates remain rejected",
-      "the implementation changes no batch manifest, issue state, D9/D4/D8 scope, source, scheduler, runtime, release, consumer, database, or Production data path"
+      "the implementation changes no batch manifest other than D10, and no issue state, D9/D4/D8 scope, source, scheduler, runtime, release, consumer, database, or Production data path"
     ]
   },
   "dependencies": [],
