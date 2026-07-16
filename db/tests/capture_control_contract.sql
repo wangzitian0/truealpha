@@ -20,6 +20,15 @@ do $$ begin
     ) then
         raise exception 'universe validator accepted a mutable reference';
     end if;
+    if raw.has_retry_outcome_partition(
+        array['rate_limited', 'interrupted'],
+        array['failed', 'success', 'unavailable', 'unchanged']
+    ) or raw.has_retry_outcome_partition(
+        array['interrupted', 'rate_limited'],
+        array['failed', 'interrupted', 'success', 'unavailable', 'unchanged']
+    ) then
+        raise exception 'retry partition accepted noncanonical or overlapping outcomes';
+    end if;
 end $$;
 
 do $$
@@ -229,6 +238,7 @@ insert into raw.capture_work_items (
     '35975634c3501a457f2f513d275fb6898663d5538c57834f38c919db9a78b941',
     '6e3cbe0a761b6ef3fde767e7b64eff604bbe18017d1a7a8c4cca193fe84bd32d'
 );
+
 insert into raw.capture_attempts (
     attempt_id, work_item_id, attempt_number, started_at, started_at_canonical, content_sha256
 ) values (
@@ -434,6 +444,42 @@ insert into raw.capture_work_items (
     '5f045ca0f5b4169e0c1dffef3080534f4d9924ad8672220d6e4ed3788e646964',
     '4d04d9077001e2da9ca0794d2b60c80c1d596905408ebc06ceb272d72e5a8fdd'
 );
+
+do $$ begin
+    begin
+        insert into raw.capture_work_items (
+            work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
+            retryable_outcomes, terminal_outcomes, content_sha256, storage_envelope_sha256
+        ) values (
+            'capture-work-item:4c679d3c16ced6641d88e1195a808412ba4af409cf1fc78ff300717291b4abfe',
+            'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
+            'source-request:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'schedule-policy:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            1, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
+            array['failed', 'success', 'unavailable', 'unchanged'],
+            '5e5f1204dfcb90cc2927d07378dcbb2ec5a5fb9cf805ce24fb8701d73224b8d3', repeat('b', 64)
+        );
+        raise exception 'mutated storage envelope unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+    begin
+        insert into raw.capture_work_items (
+            work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
+            retryable_outcomes, terminal_outcomes, content_sha256, storage_envelope_sha256
+        ) values (
+            'capture-work-item:78d39274f57a83b752718f3ad26f05059ef36c6e05355c60b98a4edf3d0558ab',
+            'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
+            'source-request:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            'schedule-policy:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            2, array['interrupted', 'rate_limited'],
+            array['failed', 'interrupted', 'success', 'unavailable', 'unchanged'],
+            '64a394a2ef1b0f3c85fde4078d8bd45a96205e794b6939f6a8246c493b76b496',
+            '123d393cd464c39d3f1db4823c5d6f2d6f5c23956b13ddc0e15774b6f84fcab4'
+        );
+        raise exception 'overlapping retry policy unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end $$;
 
 do $$ begin
     begin
