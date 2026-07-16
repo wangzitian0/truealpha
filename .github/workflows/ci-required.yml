@@ -162,6 +162,7 @@ jobs:
   images_release:
     if: >-
       always() &&
+      needs.changes.result == 'success' &&
       ((github.event_name == 'push' &&
         (needs.changes.outputs.image_app_web == 'true' ||
          needs.changes.outputs.image_llm_service == 'true' ||
