@@ -1,0 +1,71 @@
+{
+  "accepted_rung": "E2",
+  "base_sha": "2fe3bc7e43c89b317caceeb4d627657cf7c50729",
+  "batch_id": "A0-governed-research-access",
+  "commands": [
+    {
+      "command": "uv run pytest libs/contracts/tests/test_access.py -q",
+      "exit_code": 0,
+      "output_sha256": "bbecdbb94ae4af92bb6b97aaaea387de0634498eafff382fee4d0dcc67f21e15"
+    },
+    {
+      "command": "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/src/truealpha_contracts/__init__.py libs/contracts/tests/test_access.py",
+      "exit_code": 0,
+      "output_sha256": "c822b811c2e0019bee1324669633ca6aa6ae681c738309b0a31c13bbeebac766"
+    },
+    {
+      "command": "uv run mypy",
+      "exit_code": 0,
+      "output_sha256": "55c1a1546fc041d4b1f469088abc8b81d35b560fbda44538abb7cd83c7d2a941"
+    },
+    {
+      "command": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
+      "exit_code": 0,
+      "output_sha256": "937e6ad98926b04b33c16ad74efc2c255245afb208df495b1260f24bc6913631"
+    },
+    {
+      "command": "uv run pytest libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py -q",
+      "exit_code": 0,
+      "output_sha256": "8f64c259d23b1f0cb87f3541d57379b0fd87f709476e2bc779ef1673eb9247f7"
+    },
+    {
+      "command": "uv run ruff check tools/check_gate0_candidate.py tools/check_delivery_governance.py libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py",
+      "exit_code": 0,
+      "output_sha256": "c822b811c2e0019bee1324669633ca6aa6ae681c738309b0a31c13bbeebac766"
+    },
+    {
+      "command": "uv run python tools/check_gate0_candidate.py --manifest governance/gate0/manifest-v5.json",
+      "exit_code": 0,
+      "output_sha256": "7ff64d8e458b4bff204169f6ea532b6018f4781ad4fe98237bbfd14aa991e978"
+    },
+    {
+      "command": "uv run python tools/check_delivery_governance.py",
+      "exit_code": 0,
+      "output_sha256": "3ce0a3f4b2b2d3fcc83181896297ac73b4b7b3034209f9e2b7514b3d55b0ebfa"
+    }
+  ],
+  "created_at": "2026-07-16T07:04:36.902718Z",
+  "evidence_id": "rung-evidence:A0-governed-research-access:f028c382e0629d864d5989274fc41d7ce5afc6f0661c19ed324a9a1f29219106",
+  "manifest_sha256": "cb6b541a4a64842999e6b00112b2d825df7d4d94dc4048e94230a3ff8cff8127",
+  "negative_controls": [
+    "missing, expired, revoked, cross-tenant, or client-supplied access identity reaches a mart query, artifact retrieval, or mutation",
+    "administrator reads private conversation or document content without separately approved break-glass evidence",
+    "grant, revocation, publication policy, or access audit row is updated or deleted instead of appended",
+    "private app rows bypass RLS or return after cross-tenant object-ID guessing",
+    "a contradictory resource privacy shape bypasses the publication policy for a materialized strategy or backtest result",
+    "an audit event and its authorization decision disagree on tenant, principal, event kind, or time, or administrator metadata exposes a private resource identifier or crosses tenants",
+    "ordinary app runtime reads administrator audit metadata or either immutable audit base table",
+    "AuthorizationService hides publication-policy, authentication-failure, or delegation-revocation inputs required by authorize_access",
+    "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
+    "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
+    "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated",
+    "the stable package root omits the exact governed-access symbols or ReleaseManifest gains an access binding",
+    "a materialized result is authorized without a matching publication rule and active entitlement grant, or a wrong-policy grant is recorded on an allow decision",
+    "a non-administrator or a policy without the explicit action authorizes a registered replay request",
+    "the frozen governance/gate0/manifest-v4.json bytes or its historical acceptance boundary are changed",
+    "the Gate 0 v5 successor drops, weakens, or marks accepted any external blocker inherited from v4"
+  ],
+  "producer_head_sha": "108e456383cb7461e2fc7a53c8517b4594c247d8",
+  "schema_version": 1,
+  "stable_handoff": false
+}
