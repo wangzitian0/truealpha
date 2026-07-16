@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D12-vision-issue-reconciliation",
-  "revision": 1,
+  "revision": 2,
   "issue": 250,
   "owner_gate": 32,
-  "status": "queued",
+  "status": "prepared",
   "lane": "orchestration-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Make Vision issue reconciliation deterministic so batch merges do not create false-red workflows, stale lifecycle state, or search-index-dependent parity failures.",
-  "claim_ceiling": "Registration only: no workflow, issue, label, body, lifecycle, validator, or retry behavior changes. A future accepted D12 E0 result may repair only GitHub issue reconciliation and standalone merge-hook routing; it cannot weaken Vision parity or authorize application, data, factor, backtest, release, or Production work.",
+  "claim_ceiling": "Prepared E0 only: the exact base, reviewer, event corpus, writable paths, negative controls, and integration-lease requirement are frozen. No workflow, issue, label, body, lifecycle, validator, or retry behavior changes yet. A future accepted D12 E0 result may repair only GitHub issue reconciliation and standalone merge-hook routing; it cannot weaken Vision parity or authorize application, data, factor, backtest, release, or Production work.",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [
@@ -22,11 +22,11 @@
   ],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "78052c06ff64d2dbed41984fdccc6bb1e713351b",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "the queued registration is merged on main before preparation pins the activation base, independent reviewer, frozen event corpus, and integration lease",
@@ -42,9 +42,9 @@
     "Any broader GitHub governance redesign, application behavior, or delivery-policy relaxation requires separate authorization."
   ],
   "corpus": {
-    "environment": "No execution corpus is authorized during queued registration.",
-    "manifest_path": null,
-    "sha256": null,
+    "environment": "Local/CI deterministic GitHub event and lifecycle fixtures only; no live issue mutation is authorized during preparation.",
+    "manifest_path": "libs/runtime/tests/fixtures/issue_reconciliation.v1.json",
+    "sha256": "60a411775f7edd2de68db8c3a1ec6a2ff6218a41d2ab14cad0e052d313c2bcde",
     "required_strata": [
       "merged managed-by-batch PR closure skips standalone issue completion without error",
       "merged complete-on-merge standalone PR closes exactly its declared issue and malformed metadata fails closed",
@@ -87,8 +87,11 @@
       "uv.lock",
       "pyproject.toml"
     ],
-    "integration_surface": [],
-    "lease_owner": null,
+    "integration_surface": [
+      ".github/workflows/sync-batch-issues.yml",
+      ".github/workflows/sync-standalone-issue.yml"
+    ],
+    "lease_owner": "wangzitian0",
     "lease_manifest": null
   },
   "release_activation": {
@@ -112,7 +115,7 @@
     "output": {
       "type": "VisionIssueReconciliationEvidence",
       "stable_handoff": false,
-      "state": "queued",
+      "state": "prepared",
       "allowed_evidence_readers": [
         "repository CI and governance operations planning only until a later accepted E0 result"
       ]
