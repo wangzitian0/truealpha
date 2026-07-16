@@ -9,6 +9,27 @@ insert into raw.capture_campaigns (
     repeat('a', 64), 'capture-policy:d5-tiny:v1', 'github_ci', '2026-04-01T00:00:00Z'
 );
 
+insert into raw.capture_list_versions (
+    list_version_id, universe_id, universe_version, universe_sha256,
+    effective_at, member_count, content_sha256
+) values (
+    'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253',
+    'universe:topt-us-2026-03-31', 'topt-sql-contract-v1', repeat('8', 64),
+    '2026-04-01T00:00:00Z', 2, '07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253'
+);
+
+insert into raw.capture_list_version_members (
+    list_version_id, member_ordinal, subject_kind, subject_id
+) values
+(
+    'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253',
+    1, 'listing', 'listing:xnas:goog'
+),
+(
+    'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253',
+    2, 'listing', 'listing:xnas:googl'
+);
+
 insert into raw.capture_obligations (
     obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
     capture_requirement_id, partition_key, content_sha256
@@ -17,14 +38,14 @@ insert into raw.capture_obligations (
     'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'list-version:63dea0ed14b68cbc0ffa9a83512197b3bc73bae964d99340109ffe02eeb19f4d', 'listing', 'listing:xnas:goog',
+    'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253', 'listing', 'listing:xnas:goog',
     'market-price:v1', '2026-03-31', repeat('b', 64)
 ),
 (
     'list-obligation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
     'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'list-version:63dea0ed14b68cbc0ffa9a83512197b3bc73bae964d99340109ffe02eeb19f4d', 'listing', 'listing:xnas:googl',
+    'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253', 'listing', 'listing:xnas:googl',
     'market-price:v1', '2026-03-31', repeat('c', 64)
 );
 
@@ -43,6 +64,26 @@ begin
         );
         raise exception 'non-canonical list version unexpectedly succeeded';
     exception when check_violation then null;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_obligations (
+            obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
+            capture_requirement_id, partition_key, content_sha256
+        ) values (
+            'list-obligation:6666666666666666666666666666666666666666666666666666666666666666',
+            'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'list-version:6666666666666666666666666666666666666666666666666666666666666666',
+            'listing', 'listing:xnas:goog', 'market-price:v1', '2026-03-31', repeat('6', 64)
+        );
+        raise exception 'unpersisted list version unexpectedly succeeded';
+    exception when raise_exception or foreign_key_violation then
+        if sqlerrm = 'unpersisted list version unexpectedly succeeded' then raise; end if;
     end;
 end;
 $$;
@@ -175,6 +216,126 @@ $$;
 do $$
 begin
     begin
+        insert into raw.recapture_plans (
+            plan_id, selection_cutoff, predicate_sha256, selected_obligation_ids,
+            planner_version, content_sha256
+        ) values (
+            'recapture-plan:7777777777777777777777777777777777777777777777777777777777777777',
+            '2026-04-01T00:00:00Z', repeat('7', 64), array[null]::text[],
+            'capture-planner:v1', repeat('7', 64)
+        );
+        raise exception 'null recapture obligation unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.recapture_plans (
+            plan_id, selection_cutoff, predicate_sha256, selected_obligation_ids,
+            planner_version, content_sha256
+        ) values (
+            'recapture-plan:6666666666666666666666666666666666666666666666666666666666666666',
+            '2026-04-01T00:00:00Z', repeat('6', 64), array[
+                'list-obligation:6666666666666666666666666666666666666666666666666666666666666666'
+            ], 'capture-planner:v1', repeat('6', 64)
+        );
+        raise exception 'unknown recapture obligation unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'unknown recapture obligation unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_checkpoints (
+            checkpoint_id, run_id, sequence, phase, completed_obligation_ids, recorded_at, content_sha256
+        ) values (
+            'capture-checkpoint:6666666666666666666666666666666666666666666666666666666666666666',
+            'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            1, 'raw_landed', array[
+                'list-obligation:6666666666666666666666666666666666666666666666666666666666666666'
+            ], '2026-04-01T00:02:00Z', repeat('6', 64)
+        );
+        raise exception 'unknown checkpoint obligation unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'unknown checkpoint obligation unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
+insert into raw.capture_checkpoints (
+    checkpoint_id, run_id, sequence, phase, completed_obligation_ids, recorded_at, content_sha256
+) values (
+    'capture-checkpoint:1111111111111111111111111111111111111111111111111111111111111111',
+    'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    1, 'raw_landed', array[
+        'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    ], '2026-04-01T00:02:00Z', repeat('1', 64)
+);
+
+do $$
+begin
+    begin
+        insert into raw.capture_checkpoints (
+            checkpoint_id, run_id, sequence, phase, completed_obligation_ids, recorded_at, content_sha256
+        ) values (
+            'capture-checkpoint:2222222222222222222222222222222222222222222222222222222222222222',
+            'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            3, 'normalized', array[
+                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            ], '2026-04-01T00:02:01Z', repeat('2', 64)
+        );
+        raise exception 'checkpoint sequence gap unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'checkpoint sequence gap unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_checkpoints (
+            checkpoint_id, run_id, sequence, phase, completed_obligation_ids, recorded_at, content_sha256
+        ) values (
+            'capture-checkpoint:3333333333333333333333333333333333333333333333333333333333333333',
+            'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            2, 'planned', array[
+                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            ], '2026-04-01T00:02:01Z', repeat('3', 64)
+        );
+        raise exception 'checkpoint phase regression unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'checkpoint phase regression unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_checkpoints (
+            checkpoint_id, run_id, sequence, phase, completed_obligation_ids, recorded_at, content_sha256
+        ) values (
+            'capture-checkpoint:4444444444444444444444444444444444444444444444444444444444444444',
+            'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            2, 'normalized', array[]::text[], '2026-04-01T00:02:01Z', repeat('4', 64)
+        );
+        raise exception 'checkpoint obligation regression unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'checkpoint obligation regression unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
         insert into raw.capture_obligations (
             obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
             capture_requirement_id, partition_key, content_sha256
@@ -182,7 +343,7 @@ begin
             'list-obligation:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
             'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            'list-version:63dea0ed14b68cbc0ffa9a83512197b3bc73bae964d99340109ffe02eeb19f4d', 'listing', 'listing:xnas:goog',
+            'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253', 'listing', 'listing:xnas:goog',
             'market-price:v1', '2026-03-31', repeat('d', 64)
         );
         raise exception 'duplicate logical obligation unexpectedly succeeded';

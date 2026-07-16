@@ -9,7 +9,7 @@ begin
         return allow_empty;
     end if;
     for item_index in 1..cardinality(ids) loop
-        if ids[item_index] !~ '^list-obligation:[0-9a-f]{64}$' then
+        if ids[item_index] is null or ids[item_index] !~ '^list-obligation:[0-9a-f]{64}$' then
             return false;
         end if;
         if item_index > 1 and ids[item_index - 1] >= ids[item_index] then
@@ -29,6 +29,27 @@ create table if not exists raw.capture_campaigns (
     created_at        timestamptz not null default now()
 );
 
+create table if not exists raw.capture_list_versions (
+    list_version_id        text primary key check (list_version_id ~ '^list-version:[0-9a-f]{64}$'),
+    universe_id            text not null,
+    universe_version       text not null,
+    universe_sha256        text not null check (universe_sha256 ~ '^[0-9a-f]{64}$'),
+    effective_at           timestamptz not null,
+    member_count           integer not null check (member_count > 0),
+    content_sha256         text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
+    created_at             timestamptz not null default now()
+);
+
+create table if not exists raw.capture_list_version_members (
+    list_version_id        text not null references raw.capture_list_versions(list_version_id),
+    member_ordinal         integer not null check (member_ordinal > 0),
+    subject_kind           text not null,
+    subject_id             text not null,
+    created_at             timestamptz not null default now(),
+    primary key (list_version_id, member_ordinal),
+    unique (list_version_id, subject_kind, subject_id)
+);
+
 create table if not exists raw.capture_obligations (
     obligation_id          text primary key check (obligation_id ~ '^list-obligation:[0-9a-f]{64}$'),
     campaign_id            text not null references raw.capture_campaigns(campaign_id),
@@ -40,7 +61,10 @@ create table if not exists raw.capture_obligations (
     partition_key          text not null,
     content_sha256         text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at             timestamptz not null default now(),
-    unique (run_id, list_version_id, subject_kind, subject_id, capture_requirement_id, partition_key)
+    unique (run_id, list_version_id, subject_kind, subject_id, capture_requirement_id, partition_key),
+    foreign key (list_version_id) references raw.capture_list_versions(list_version_id),
+    foreign key (list_version_id, subject_kind, subject_id)
+        references raw.capture_list_version_members(list_version_id, subject_kind, subject_id)
 );
 
 create table if not exists raw.capture_work_items (
@@ -116,6 +140,148 @@ create table if not exists raw.recapture_plans (
     content_sha256             text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at                 timestamptz not null default now()
 );
+
+create or replace function raw.validate_capture_list_member()
+returns trigger language plpgsql as $$
+declare
+    expected_members integer;
+begin
+    select member_count into expected_members
+      from raw.capture_list_versions
+     where list_version_id = new.list_version_id
+       for update;
+    if new.member_ordinal > expected_members then
+        raise exception 'list member ordinal exceeds frozen member count';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists validate_list_member on raw.capture_list_version_members;
+create trigger validate_list_member
+before insert on raw.capture_list_version_members
+for each row execute function raw.validate_capture_list_member();
+
+create or replace function raw.validate_capture_obligation_list()
+returns trigger language plpgsql as $$
+declare
+    expected_members integer;
+    persisted_members integer;
+begin
+    select member_count into expected_members
+      from raw.capture_list_versions
+     where list_version_id = new.list_version_id
+       for share;
+    select count(*) into persisted_members
+      from raw.capture_list_version_members
+     where list_version_id = new.list_version_id;
+    if expected_members is null then
+        return new;
+    end if;
+    if persisted_members <> expected_members then
+        raise exception 'capture obligation requires a complete frozen list version';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists validate_obligation_list on raw.capture_obligations;
+create trigger validate_obligation_list
+before insert on raw.capture_obligations
+for each row execute function raw.validate_capture_obligation_list();
+
+create or replace function raw.enforce_capture_checkpoint_progress()
+returns trigger language plpgsql as $$
+declare
+    previous_sequence integer;
+    previous_phase text;
+    previous_completed text[];
+    previous_phase_rank integer;
+    new_phase_rank integer;
+begin
+    perform pg_advisory_xact_lock(hashtextextended(new.run_id, 0));
+    select sequence, phase, completed_obligation_ids
+      into previous_sequence, previous_phase, previous_completed
+      from raw.capture_checkpoints
+     where run_id = new.run_id
+     order by sequence desc
+     limit 1;
+    if previous_sequence is null then
+        if new.sequence <> 1 then
+            raise exception 'first capture checkpoint sequence must be one';
+        end if;
+        return new;
+    end if;
+    if new.sequence <> previous_sequence + 1 then
+        raise exception 'capture checkpoint sequences must be contiguous';
+    end if;
+    previous_phase_rank := array_position(
+        array['planned', 'raw_landed', 'normalized', 'manifest_persisted'], previous_phase
+    );
+    new_phase_rank := array_position(
+        array['planned', 'raw_landed', 'normalized', 'manifest_persisted'], new.phase
+    );
+    if new_phase_rank < previous_phase_rank then
+        raise exception 'capture checkpoint phase cannot regress';
+    end if;
+    if not previous_completed <@ new.completed_obligation_ids then
+        raise exception 'capture checkpoint obligations cannot regress';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists enforce_checkpoint_progress on raw.capture_checkpoints;
+create trigger enforce_checkpoint_progress
+before insert on raw.capture_checkpoints
+for each row execute function raw.enforce_capture_checkpoint_progress();
+
+create or replace function raw.validate_checkpoint_obligation_refs()
+returns trigger language plpgsql as $$
+declare
+    persisted_count integer;
+begin
+    if not raw.has_canonical_obligation_ids(new.completed_obligation_ids, true) then
+        return new;
+    end if;
+    select count(*) into persisted_count
+      from raw.capture_obligations
+     where run_id = new.run_id
+       and obligation_id = any(new.completed_obligation_ids);
+    if persisted_count <> cardinality(new.completed_obligation_ids) then
+        raise exception 'capture checkpoint references an unknown or cross-run obligation';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists validate_checkpoint_obligation_refs on raw.capture_checkpoints;
+create trigger validate_checkpoint_obligation_refs
+before insert on raw.capture_checkpoints
+for each row execute function raw.validate_checkpoint_obligation_refs();
+
+create or replace function raw.validate_recapture_obligation_refs()
+returns trigger language plpgsql as $$
+declare
+    persisted_count integer;
+begin
+    if not raw.has_canonical_obligation_ids(new.selected_obligation_ids, false) then
+        return new;
+    end if;
+    select count(*) into persisted_count
+      from raw.capture_obligations
+     where obligation_id = any(new.selected_obligation_ids);
+    if persisted_count <> cardinality(new.selected_obligation_ids) then
+        raise exception 'recapture plan references an unknown obligation';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists validate_recapture_obligation_refs on raw.recapture_plans;
+create trigger validate_recapture_obligation_refs
+before insert on raw.recapture_plans
+for each row execute function raw.validate_recapture_obligation_refs();
 
 create or replace function raw.enforce_capture_attempt_sequence()
 returns trigger language plpgsql as $$
@@ -198,7 +364,8 @@ declare
     table_name text;
 begin
     foreach table_name in array array[
-        'capture_campaigns', 'capture_obligations', 'capture_work_items',
+        'capture_campaigns', 'capture_list_versions', 'capture_list_version_members',
+        'capture_obligations', 'capture_work_items',
         'capture_obligation_work_bindings', 'capture_attempts',
         'capture_attempt_results', 'capture_checkpoints', 'recapture_plans'
     ] loop
