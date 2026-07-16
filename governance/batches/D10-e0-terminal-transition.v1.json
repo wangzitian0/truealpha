@@ -12,9 +12,7 @@
   "objective": "Repair the delivery-governance lifecycle so a prepared batch whose declared terminal target is E0 can accept that exact result directly to done without weakening any non-terminal transition.",
   "claim_ceiling": "Accepted E0 offline delivery-governance lifecycle correction only: a prepared batch may finish directly only when its immutable base target and terminal rung are E0 and the candidate accepts that exact E0. This makes D9's separately prepared terminal path reachable but does not authorize D9/D4/D8 work, source access, scheduler, runtime, release, consumer, database, or Production data activity.",
   "capability_issues": [],
-  "closes_issues": [
-    278
-  ],
+  "closes_issues": [],
   "informational_issues": [
     210,
     271,
