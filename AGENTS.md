@@ -24,8 +24,17 @@ tests prove it, review and green CI gate the merge.
    (migrations, registries, public exports, lockfiles) deserve a heads-up comment before
    you touch them.
 4. **Before starting**: `git status --short --branch`, sync `main`, check open issues and
-   PRs for the same work. Before merging: green `ci-required`, review threads resolved,
-   `main` stays deployable, migrations stay backward compatible.
+   PRs for the same work. The configured code-review process is every reviewer required by
+   repository settings or explicitly requested on the PR. It is complete only when each has
+   submitted a review for the exact head SHA. An actionable finding is an unresolved review
+   comment that requests a concrete code, documentation, test, or process change; questions
+   and informational comments do not count. Before declaring a PR merge-ready, require that
+   process to complete; an empty thread list before completion is not evidence of a clean
+   review. An actionable finding without an explicit High, Medium, or Low severity
+   classification in the review output blocks readiness. Evaluate unresolved actionable
+   findings against the budget of High = 0, Medium <= 2, and Low <= 4 on the exact head
+   immediately before merge readiness is declared. A green `ci-required`, a deployable
+   `main`, and backward-compatible migrations are also required.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
    Records live under `governance/` (see its README); they document what happened and are
