@@ -26,5 +26,16 @@ alter role app_runtime set statement_timeout = '5s';
 grant usage on schema app to app_runtime;
 grant select on app.publication_policies to app_runtime;
 grant select on app.private_research_objects to app_runtime;
-grant select on app.access_audit_metadata to app_runtime;
 grant insert on app.authorization_decisions, app.access_audit_events to app_runtime;
+
+-- Audit readers use a separate role and receive only the administrator-filtered,
+-- non-content metadata view; they cannot select either audit base table.
+do $$ begin
+    create role app_audit_reader nologin;
+exception when duplicate_object then null;
+end $$;
+
+alter role app_audit_reader set statement_timeout = '5s';
+
+grant usage on schema app to app_audit_reader;
+grant select on app.access_audit_metadata to app_audit_reader;
