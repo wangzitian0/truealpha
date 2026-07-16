@@ -92,10 +92,7 @@
       ".github/workflows/sync-standalone-issue.yml"
     ],
     "lease_owner": "wangzitian0",
-    "lease_manifest": {
-      "path": "governance/leases/D12-vision-issue-reconciliation.v1.json",
-      "sha256": "c31a3b55af721d50ccc43f1b308bc0d319cf2fc766993afbfde384089991e025"
-    }
+    "lease_manifest": null
   },
   "release_activation": {
     "allowed": false,
