@@ -65,8 +65,8 @@ class AttemptLedger:
     results: list[FetchAttemptResult] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if self.maximum_attempts < 1:
-            raise ValueError("maximum_attempts must be positive")
+        if not 1 <= self.maximum_attempts <= 20:
+            raise ValueError("maximum_attempts must be between 1 and 20")
 
     def start(self, *, started_at: datetime) -> FetchAttempt:
         if started_at.tzinfo is None or started_at.utcoffset() is None:

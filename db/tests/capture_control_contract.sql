@@ -68,6 +68,39 @@ insert into raw.capture_list_version_members (
     1, 'listing', 'listing:xnas:goog'
 );
 
+insert into raw.capture_list_versions (
+    list_version_id, universe_id, universe_version, universe_sha256,
+    effective_at, effective_at_canonical, member_count, members, content_sha256
+) values (
+    'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
+    'universe:topt-us-2026-03-31', 'topt-sql-contract-v1', repeat('8', 64),
+    '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00', 1,
+    '[{"kind":"listing","id":"listing:xnas:goog"}]',
+    '503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef'
+);
+insert into raw.capture_list_version_members (
+    list_version_id, member_ordinal, subject_kind, subject_id
+) values (
+    'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
+    1, 'listing', 'listing:xnas:goog'
+);
+
+do $$ begin
+    begin
+        insert into raw.capture_list_versions (
+            list_version_id, universe_id, universe_version, universe_sha256,
+            effective_at, effective_at_canonical, member_count, members, content_sha256
+        ) values (
+            'list-version:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'universe:topt-us-2026-03-31', 'topt-sql-contract-v1', repeat('8', 64),
+            '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+07:00', 1,
+            '[{"kind":"listing","id":"listing:xnas:goog"}]', repeat('a', 64)
+        );
+        raise exception 'tampered canonical timestamp unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end $$;
+
 insert into raw.capture_campaign_list_versions (campaign_id, list_version_id) values (
     'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
     'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253'

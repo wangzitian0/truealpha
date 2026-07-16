@@ -186,9 +186,10 @@ def test_attempt_dispatch_waits_for_result_and_completion_is_monotonic() -> None
         )
 
 
-def test_attempt_budget_must_be_positive() -> None:
-    with pytest.raises(ValueError, match="positive"):
-        AttemptLedger(work_item_id=f"capture-work-item:{'f' * 64}", maximum_attempts=0)
+@pytest.mark.parametrize("maximum_attempts", (0, 21))
+def test_attempt_budget_uses_shared_retry_bound(maximum_attempts: int) -> None:
+    with pytest.raises(ValueError, match="between 1 and 20"):
+        AttemptLedger(work_item_id=f"capture-work-item:{'f' * 64}", maximum_attempts=maximum_attempts)
 
     ledger = AttemptLedger(work_item_id=f"capture-work-item:{'1' * 64}", maximum_attempts=1)
     attempt = ledger.start(started_at=AT)

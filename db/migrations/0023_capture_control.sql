@@ -68,6 +68,19 @@ begin
 end;
 $$;
 
+create or replace function raw.persisted_canonical_timestamp(value timestamptz, canonical text)
+returns text language plpgsql immutable as $$
+declare
+    persisted text := coalesce(canonical, raw.canonical_timestamp(value));
+begin
+    if persisted !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$'
+       or persisted::timestamptz <> value then
+        raise check_violation using message = 'canonical timestamp does not match persisted instant';
+    end if;
+    return persisted;
+end;
+$$;
+
 create or replace function raw.assert_content_address(
     actual_id text,
     id_prefix text,
@@ -194,6 +207,7 @@ create table if not exists raw.capture_campaigns (
     policy_id         text not null,
     environment       text not null,
     cutoff            timestamptz not null,
+    cutoff_canonical  text not null,
     universe_refs     jsonb not null check (raw.has_canonical_universe_refs(universe_refs)),
     created_at        timestamptz not null default now()
 );
@@ -216,6 +230,7 @@ create table if not exists raw.capture_list_versions (
     universe_version       text not null,
     universe_sha256        text not null check (universe_sha256 ~ '^[0-9a-f]{64}$'),
     effective_at           timestamptz not null,
+    effective_at_canonical text not null,
     member_count           integer not null check (member_count > 0),
     members                jsonb not null check (raw.has_canonical_subjects(members)),
     content_sha256         text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
@@ -284,6 +299,7 @@ create table if not exists raw.capture_attempts (
     work_item_id       text not null references raw.capture_work_items(work_item_id),
     attempt_number     integer not null check (attempt_number > 0),
     started_at         timestamptz not null,
+    started_at_canonical text not null,
     content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     unique (work_item_id, attempt_number)
 );
@@ -292,6 +308,7 @@ create table if not exists raw.capture_attempt_results (
     attempt_result_id  text primary key check (attempt_result_id ~ '^fetch-attempt-result:[0-9a-f]{64}$'),
     attempt_id         text not null unique references raw.capture_attempts(attempt_id),
     completed_at       timestamptz not null,
+    completed_at_canonical text not null,
     outcome            text not null check (outcome in (
         'rate_limited', 'transport_error', 'server_error', 'interrupted',
         'success', 'unchanged', 'unavailable', 'failed'
@@ -319,6 +336,7 @@ create table if not exists raw.capture_checkpoints (
         raw.has_canonical_obligation_ids(completed_obligation_ids, true)
     ),
     recorded_at                timestamptz not null,
+    recorded_at_canonical      text not null,
     content_sha256             text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     unique (run_id, sequence)
 );
@@ -326,6 +344,7 @@ create table if not exists raw.capture_checkpoints (
 create table if not exists raw.recapture_plans (
     plan_id                    text primary key check (plan_id ~ '^recapture-plan:[0-9a-f]{64}$'),
     selection_cutoff           timestamptz not null,
+    selection_cutoff_canonical text not null,
     predicate_sha256           text not null check (predicate_sha256 ~ '^[0-9a-f]{64}$'),
     predicate                  jsonb not null check (jsonb_typeof(predicate) = 'object'),
     selected_obligation_ids    text[] not null check (
@@ -341,10 +360,11 @@ returns trigger language plpgsql as $$
 declare
     payload jsonb;
 begin
+    new.cutoff_canonical := raw.persisted_canonical_timestamp(new.cutoff, new.cutoff_canonical);
     payload := jsonb_build_object(
         'campaign_policy_id', new.policy_id,
         'environment', new.environment,
-        'cutoff', raw.canonical_timestamp(new.cutoff),
+        'cutoff', new.cutoff_canonical,
         'universe_refs', new.universe_refs
     );
     perform raw.assert_content_address(
@@ -393,6 +413,9 @@ returns trigger language plpgsql as $$
 declare
     payload jsonb;
 begin
+    new.effective_at_canonical := raw.persisted_canonical_timestamp(
+        new.effective_at, new.effective_at_canonical
+    );
     if new.member_count <> jsonb_array_length(new.members) then
         raise check_violation using message = 'list member count does not match canonical members';
     end if;
@@ -403,7 +426,7 @@ begin
             'content_sha256', new.universe_sha256
         ),
         'members', new.members,
-        'effective_at', raw.canonical_timestamp(new.effective_at)
+        'effective_at', new.effective_at_canonical
     );
     perform raw.assert_content_address(new.list_version_id, 'list-version', payload, new.content_sha256, payload);
     return new;
@@ -516,11 +539,12 @@ declare
     identity_payload jsonb;
     content_payload jsonb;
 begin
+    new.started_at_canonical := raw.persisted_canonical_timestamp(new.started_at, new.started_at_canonical);
     identity_payload := jsonb_build_object(
         'work_item_id', new.work_item_id,
         'attempt_number', new.attempt_number
     );
-    content_payload := identity_payload || jsonb_build_object('started_at', raw.canonical_timestamp(new.started_at));
+    content_payload := identity_payload || jsonb_build_object('started_at', new.started_at_canonical);
     perform raw.assert_content_address(
         new.attempt_id,
         'fetch-attempt',
@@ -542,9 +566,12 @@ declare
     identity_payload jsonb;
     content_payload jsonb;
 begin
+    new.completed_at_canonical := raw.persisted_canonical_timestamp(
+        new.completed_at, new.completed_at_canonical
+    );
     identity_payload := jsonb_build_object('attempt_id', new.attempt_id);
     content_payload := identity_payload || jsonb_build_object(
-        'completed_at', raw.canonical_timestamp(new.completed_at),
+        'completed_at', new.completed_at_canonical,
         'outcome', new.outcome,
         'status_code', new.status_code,
         'source_vintage_id', new.source_vintage_id,
@@ -572,11 +599,12 @@ declare
     identity_payload jsonb;
     content_payload jsonb;
 begin
+    new.recorded_at_canonical := raw.persisted_canonical_timestamp(new.recorded_at, new.recorded_at_canonical);
     identity_payload := jsonb_build_object('run_id', new.run_id, 'sequence', new.sequence);
     content_payload := identity_payload || jsonb_build_object(
         'phase', new.phase,
         'completed_obligation_ids', to_jsonb(new.completed_obligation_ids),
-        'recorded_at', raw.canonical_timestamp(new.recorded_at)
+        'recorded_at', new.recorded_at_canonical
     );
     perform raw.assert_content_address(
         new.checkpoint_id, 'capture-checkpoint', identity_payload, new.content_sha256, content_payload
@@ -594,11 +622,14 @@ returns trigger language plpgsql as $$
 declare
     payload jsonb;
 begin
+    new.selection_cutoff_canonical := raw.persisted_canonical_timestamp(
+        new.selection_cutoff, new.selection_cutoff_canonical
+    );
     if new.predicate_sha256 <> raw.canonical_sha256(new.predicate) then
         raise check_violation using message = 'recapture predicate hash does not match canonical payload';
     end if;
     payload := jsonb_build_object(
-        'selection_cutoff', raw.canonical_timestamp(new.selection_cutoff),
+        'selection_cutoff', new.selection_cutoff_canonical,
         'predicate', new.predicate,
         'selected_obligation_ids', to_jsonb(new.selected_obligation_ids),
         'planner_version', new.planner_version

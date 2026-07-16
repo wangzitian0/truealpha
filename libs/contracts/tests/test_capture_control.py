@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -51,6 +51,19 @@ def test_list_version_preserves_six_digit_fractional_timestamp_identity() -> Non
         effective_at=datetime(2026, 4, 1, 0, 0, 0, 123000, tzinfo=UTC),
     )
     assert version.list_version_id == ("list-version:0d312e5b25aa8a450ffefa2c039a1286a035093c3f9a7ef5dc4f47f31cd971a8")
+
+
+def test_list_version_preserves_non_utc_offset_identity() -> None:
+    version = CaptureListVersion(
+        universe=UniverseRef(
+            universe_id="universe:topt-us-2026-03-31",
+            universe_version="topt-sql-contract-v1",
+            content_sha256="8" * 64,
+        ),
+        members=(SubjectRef(kind=SubjectKind.LISTING, id="listing:xnas:goog"),),
+        effective_at=datetime(2026, 4, 1, 8, tzinfo=timezone(timedelta(hours=8))),
+    )
+    assert version.list_version_id == ("list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef")
 
 
 def test_capture_obligation_identity_preserves_list_version() -> None:
