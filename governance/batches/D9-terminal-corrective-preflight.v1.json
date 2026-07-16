@@ -73,7 +73,6 @@
       "libs/contracts/**",
       "libs/factors/**",
       "libs/runtime/src/**",
-      "governance/batches/D4-datahub-interface.v1.json",
       "governance/handoffs/D4-datahub-interface.v1.json",
       "governance/handoffs/D4-datahub-interface-d3-staging.v1.json",
       "uv.lock",
