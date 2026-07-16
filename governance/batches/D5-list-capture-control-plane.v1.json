@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D5-list-capture-control-plane",
-  "revision": 2,
+  "revision": 3,
   "issue": 205,
   "owner_gate": 29,
-  "status": "prepared",
+  "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": null,
-  "target_rung": "E0",
+  "last_accepted_rung": "E0",
+  "target_rung": "E1",
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
-  "claim_ceiling": "Preparation-only frozen capture-control corpus; this revision earns no rung and approves no runtime handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
+  "claim_ceiling": "E0 experimental capture-control contract, deterministic list expansion, append-only attempt ledger, checkpoint contract, and additive persistence schema only; no tiny replay evidence, stable handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
@@ -26,6 +26,7 @@
       "queued D5 registration is merged and this preparation is based on main at 5c1721617acaaedf43245f3beccdefcb2182154e",
       "the preparation PR freezes the exact tiny control-plane corpus at 611aab472c6705936cd300552c9c29782f86f24b22d2c28472b30a269df474e7 without changing implementation paths",
       "the stable activation base remains 5c1721617acaaedf43245f3beccdefcb2182154e while E0 evidence records its exact current PR base and head",
+      "the E0 implementation starts from exact current main ce15dedab1e5596a09112bdbd1911f7e7bfe3e6d",
       "the accepted D4 E2 Local/CI handoff remains unchanged and permits this batch",
       "the accepted D2 E3 data-plane evidence remains unchanged",
       "an independent reviewer is assigned before E0 acceptance",
@@ -156,7 +157,10 @@
       "db/tests/capture_control_contract.sql"
     ],
     "lease_owner": "wangzitian0",
-    "lease_manifest": null
+    "lease_manifest": {
+      "path": "governance/leases/D5-list-capture-control-plane.v1.json",
+      "sha256": "934161386c95945b6a56aabf4a2b6ec98e55b46085320e32ee2edf381af9ad8b"
+    }
   },
   "release_activation": {
     "allowed": false,
@@ -188,7 +192,7 @@
     "output": {
       "type": "ListCaptureControlPlaneEvidence",
       "stable_handoff": false,
-      "state": "queued",
+      "state": "provisional_e0",
       "allowed_evidence_readers": [
         "D6-confidence-provenance preparation after D5 E2 acceptance",
         "issue #171 TOPT Staging preparation after D5 E4 acceptance",
