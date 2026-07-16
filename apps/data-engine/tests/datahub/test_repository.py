@@ -152,6 +152,7 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         confidence=Decimal("0.95"),
         freshness_state="fresh",
     )
+    assert repository.put_observation_payload(observation, {"close": "175.20"})
     assert repository.put_obligation_result(obligation.obligation_id, obligation_result)
     assert repository.put_checkpoint(checkpoint)
 
@@ -188,6 +189,9 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         )
         is False
     )
+    assert repository.put_observation_payload(observation, {"close": "175.20"}) is False
+    with pytest.raises(ValueError, match="does not match the observation hash"):
+        repository.put_observation_payload(observation, {"close": "0"})
     assert repository.put_obligation_result(obligation.obligation_id, obligation_result) is False
     assert repository.put_checkpoint(checkpoint) is False
 

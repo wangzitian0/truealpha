@@ -35,6 +35,39 @@ Compose, GitHub CI, and infra2 may provide different backends behind it.
 
 Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
+### Manual Production TOPT core
+
+After an explicitly triggered Production TOPT run has completed all 84 obligations,
+freeze its exact snapshot and materialize GPPE v0 plus three-tier valuation with:
+
+```bash
+uv run --package truealpha-data-engine python \
+  apps/data-engine/scripts/materialize_production_topt_core.py \
+  --run-id capture-run:<sha256> \
+  --release-manifest-id release-manifest:<sha256> \
+  --risk-free-rate 0.05 \
+  --confirmation 'MATERIALIZE PRODUCTION TOPT CORE'
+```
+
+The command prints the immutable `snapshot_id` and definition/invocation identities.
+Downstream reads must supply those exact identities; no `latest` read exists:
+
+```bash
+uv run --package truealpha-data-engine python \
+  apps/data-engine/scripts/query_production_topt_datahub.py \
+  --run-id capture-run:<sha256> \
+  --read core_results \
+  --release-manifest-id release-manifest:<sha256> \
+  --universe-id universe:<id> \
+  --universe-version <version> \
+  --universe-sha256 <sha256> \
+  --snapshot-id topt-core-snapshot:<sha256>
+```
+
+Use `--read status` or `--read meta_info` with the run ID for capture progress,
+and `--read core_meta_info` with the exact core identities for four-cell lineage.
+These commands are manual-only and do not register or activate a schedule.
+
 ## Deployment
 
 Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC.

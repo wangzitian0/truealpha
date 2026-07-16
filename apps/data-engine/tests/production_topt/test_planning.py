@@ -219,6 +219,10 @@ def test_plan_persistence_is_atomic_and_idempotent(connection) -> None:
         "select count(*) from raw.capture_checkpoints where run_id = %s",
         (plan.run.run_id,),
     ).fetchone() == (1,)
+    assert connection.execute(
+        "select release_manifest_id from raw.production_topt_run_plans where run_id = %s",
+        (plan.run.run_id,),
+    ).fetchone() == (plan.release_manifest_id,)
 
 
 @pytest.mark.parametrize(

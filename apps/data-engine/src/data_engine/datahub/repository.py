@@ -522,7 +522,7 @@ class PostgresCaptureControlRepository:
                 Jsonb(payload),
             ),
         ).fetchone()
-        return (
+        created = (
             True
             if inserted
             else self._check_existing(
@@ -532,6 +532,47 @@ class PostgresCaptureControlRepository:
                 observation.content_sha256,
             )
         )
+        self._connection.execute(
+            """
+            insert into staging.capture_observation_obligations (
+                capture_obligation_id, observation_id
+            ) values (%s, %s) on conflict do nothing
+            """,
+            (capture_obligation_id, observation.observation_id),
+        )
+        return created
+
+    def put_observation_payload(
+        self,
+        observation: NormalizedObservation,
+        normalized_payload: dict[str, Any],
+    ) -> bool:
+        payload_sha256 = canonical_sha256(normalized_payload)
+        if payload_sha256 != observation.normalized_payload_sha256:
+            raise ValueError("normalized payload does not match the observation hash")
+        inserted = self._connection.execute(
+            """
+            insert into staging.capture_observation_payloads (
+                observation_id, normalized_payload_sha256, normalized_payload
+            ) values (%s, %s, %s)
+            on conflict (observation_id) do nothing returning observation_id
+            """,
+            (observation.observation_id, payload_sha256, Jsonb(normalized_payload)),
+        ).fetchone()
+        if inserted:
+            return True
+        row = self._connection.execute(
+            """
+            select normalized_payload_sha256, normalized_payload
+            from staging.capture_observation_payloads where observation_id = %s
+            """,
+            (observation.observation_id,),
+        ).fetchone()
+        if row is None or row[0] != payload_sha256 or row[1] != normalized_payload:
+            raise CaptureRepositoryConflictError(
+                f"{observation.observation_id} is already bound to a different normalized payload"
+            )
+        return False
 
     def put_obligation_result(self, capture_obligation_id: str, result: ListObligationResult) -> bool:
         expected = self._connection.execute(

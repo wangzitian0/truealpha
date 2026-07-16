@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Any
 
 from psycopg import Connection
+from psycopg.types.json import Jsonb
+from truealpha_contracts import canonical_sha256
 from truealpha_contracts.capture_control import CaptureCheckpoint, CheckpointPhase
 
 from data_engine.datahub.production_topt.planning import ManualProductionToptPlan
@@ -39,6 +41,35 @@ def persist_manual_production_plan(
         repository.put_list_version(plan.list_version)
         repository.bind_campaign_list(plan.campaign.campaign_id, plan.list_version.list_version_id)
         repository.put_run(plan.run)
+        plan_payload = {
+            "run_id": plan.run.run_id,
+            "release_manifest_id": plan.release_manifest_id,
+        }
+        plan_sha256 = canonical_sha256(plan_payload)
+        inserted = connection.execute(
+            """
+            insert into raw.production_topt_run_plans (
+                run_id, release_manifest_id, content_sha256, payload
+            ) values (%s, %s, %s, %s)
+            on conflict (run_id) do nothing returning run_id
+            """,
+            (
+                plan.run.run_id,
+                plan.release_manifest_id,
+                plan_sha256,
+                Jsonb(plan_payload),
+            ),
+        ).fetchone()
+        if inserted is None:
+            existing = connection.execute(
+                """
+                select release_manifest_id, content_sha256, payload
+                from raw.production_topt_run_plans where run_id = %s
+                """,
+                (plan.run.run_id,),
+            ).fetchone()
+            if existing != (plan.release_manifest_id, plan_sha256, plan_payload):
+                raise ValueError("Production TOPT run is already bound to a different release plan")
         for obligation, request, work_item, binding in zip(
             plan.obligations,
             plan.source_requests,
