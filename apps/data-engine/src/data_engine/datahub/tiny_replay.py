@@ -12,11 +12,13 @@ from truealpha_contracts.capture_control import (
     CaptureCheckpoint,
     CaptureListObligation,
     CaptureListVersion,
+    CaptureObligationWorkBinding,
     CaptureRecapturePlan,
     CheckpointPhase,
 )
 from truealpha_contracts.datahub import (
     AssessmentFreshness,
+    CaptureWorkItem,
     FetchAttemptOutcome,
     ObligationTerminalState,
     RecapturePredicate,
@@ -48,6 +50,19 @@ class FrozenRecapturePlan:
     selected_obligation_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class RecaptureCandidateState:
+    obligation_id: str
+    recorded_at: datetime
+    coordinates: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class SharedProviderWork:
+    work_item: CaptureWorkItem
+    bindings: tuple[CaptureObligationWorkBinding, ...]
+
+
 @dataclass
 class _TinyReplayStore:
     planned_obligation_ids: tuple[str, ...]
@@ -68,6 +83,39 @@ class _TinyReplayStore:
             observations={},
             terminal_results={},
         )
+
+    @classmethod
+    def from_persisted_records(
+        cls,
+        obligations: Sequence[CaptureListObligation],
+        records: Mapping[str, Any],
+    ) -> _TinyReplayStore:
+        store = cls.for_obligations(obligations)
+        by_ordinal = {index: obligation.obligation_id for index, obligation in enumerate(obligations)}
+
+        def obligation_id(value: Any) -> str:
+            if not isinstance(value, int) or value not in by_ordinal:
+                raise ValueError("persisted replay record names an unknown obligation ordinal")
+            return by_ordinal[value]
+
+        for ordinal in records.get("attempt_obligation_ordinals", ()):
+            store.put_attempt(obligation_id(ordinal))
+        for ordinal in records.get("attempt_result_obligation_ordinals", ()):
+            store.put_attempt_result(obligation_id(ordinal))
+        for ordinal in records.get("raw_object_obligation_ordinals", ()):
+            store.put_raw(obligation_id(ordinal))
+        for ordinal in records.get("observation_obligation_ordinals", ()):
+            store.put_observation(obligation_id(ordinal))
+        for terminal in records.get("terminal_results", ()):
+            if not isinstance(terminal, Mapping):
+                raise ValueError("persisted terminal result must be a record")
+            store.put_terminal(obligation_id(terminal.get("obligation_ordinal")), str(terminal.get("state")))
+        if records.get("manifest_obligation_ordinals") is not None:
+            manifest = tuple(sorted(obligation_id(value) for value in records["manifest_obligation_ordinals"]))
+            if manifest != store.planned_obligation_ids:
+                raise ValueError("persisted manifest cannot hide a pending obligation")
+            store.manifest_obligation_ids = manifest
+        return store
 
     @staticmethod
     def _put(mapping: dict[str, str], key: str, value: str) -> bool:
@@ -299,41 +347,30 @@ def reject_out_of_order_attempt(corpus: Mapping[str, Any]) -> None:
     ledger.start(started_at=_AT)
 
 
-def _resume_phase(checkpoint: str) -> CheckpointPhase:
-    return {
-        "plan-persisted": CheckpointPhase.PLANNED,
-        "raw-object-persisted": CheckpointPhase.RAW_LANDED,
-        "observation-persisted": CheckpointPhase.NORMALIZED,
-        "one-of-two-obligations-terminal": CheckpointPhase.MANIFEST_PERSISTED,
-    }[checkpoint]
-
-
 def replay_resume_scenarios(corpus: Mapping[str, Any]) -> tuple[ResumeResult, ...]:
     obligations = _obligations(corpus)[:2]
     results: list[ResumeResult] = []
     for sequence, row in enumerate(corpus["resume_scenarios"], start=1):
-        completed = (obligations[0].obligation_id,) if row["checkpoint"] == "one-of-two-obligations-terminal" else ()
+        persisted_checkpoint = row.get("persisted_checkpoint")
+        persisted_records = row.get("persisted_records")
+        if not isinstance(persisted_checkpoint, Mapping) or not isinstance(persisted_records, Mapping):
+            raise ValueError("resume scenario requires persisted checkpoint and artifact records")
+        completed = tuple(
+            obligations[int(ordinal)].obligation_id
+            for ordinal in persisted_checkpoint.get("completed_obligation_ordinals", ())
+        )
         checkpoint = CaptureCheckpoint(
             run_id=_RUN_ID,
             sequence=sequence,
-            phase=_resume_phase(str(row["checkpoint"])),
+            phase=CheckpointPhase(str(persisted_checkpoint["phase"])),
             completed_obligation_ids=completed,
             recorded_at=_AT,
         )
         replay = CaptureCheckpoint.model_validate(checkpoint.model_dump(mode="json"))
         if replay != checkpoint:
             raise ValueError("checkpoint replay identity drift")
-        store = _TinyReplayStore.for_obligations(obligations)
+        store = _TinyReplayStore.from_persisted_records(obligations, persisted_records)
         first_id = obligations[0].obligation_id
-        checkpoint_name = str(row["checkpoint"])
-        if checkpoint_name in {"raw-object-persisted", "observation-persisted", "one-of-two-obligations-terminal"}:
-            store.put_attempt(first_id)
-            store.put_raw(first_id)
-        if checkpoint_name in {"observation-persisted", "one-of-two-obligations-terminal"}:
-            store.put_observation(first_id)
-        if checkpoint_name == "one-of-two-obligations-terminal":
-            store.put_attempt_result(first_id)
-            store.put_terminal(first_id, "success")
         if set(checkpoint.completed_obligation_ids) != set(store.terminal_results):
             raise ValueError("checkpoint completion set differs from persisted terminal results")
 
@@ -469,25 +506,68 @@ def _validate_recapture_predicates(predicates: Mapping[str, Any]) -> None:
             raise ValueError("unbounded_or_mutable_recapture_predicate")
 
 
-def select_recapture(corpus: Mapping[str, Any], predicates: Mapping[str, Any]) -> tuple[CaptureListObligation, ...]:
-    _validate_recapture_predicates(predicates)
+def _recapture_candidate_history(
+    corpus: Mapping[str, Any],
+    obligations: Sequence[CaptureListObligation],
+) -> tuple[RecaptureCandidateState, ...]:
     metadata = corpus["identity_policy"]
-    selected: list[CaptureListObligation] = []
-    for obligation in _obligations(corpus):
-        candidate = {
+    history: list[RecaptureCandidateState] = []
+    for obligation in obligations:
+        failed = obligation.subject.id == "security:cusip:67066G104"
+        base = {
             "list_version_id": obligation.list_version_id,
             "instrument_id": obligation.subject.id,
-            "source_version_id": metadata["source_version_id"],
+            "source_version_id": str(metadata["source_version_id"]),
             "semantic_type": obligation.capture_requirement_id.removesuffix(":v1"),
             "partition": obligation.partition,
-            "outcome": "failed" if obligation.subject.id == "security:cusip:67066G104" else "success",
-            "freshness_state": "stale" if obligation.subject.id == "security:cusip:67066G104" else "fresh",
-            "parser_version_id": metadata["parser_version_id"],
-            "mapping_version_id": metadata["mapping_version_id"],
-            "confidence_state": "unavailable" if obligation.subject.id == "security:cusip:67066G104" else "available",
+            "outcome": "failed" if failed else "success",
+            "freshness_state": "stale" if failed else "fresh",
+            "parser_version_id": str(metadata["parser_version_id"]),
+            "mapping_version_id": str(metadata["mapping_version_id"]),
+            "confidence_state": "unavailable" if failed else "available",
         }
-        if all(candidate.get(key) == value for key, value in predicates.items()):
-            selected.append(obligation)
+        history.append(
+            RecaptureCandidateState(
+                obligation_id=obligation.obligation_id,
+                recorded_at=_AT - timedelta(seconds=1),
+                coordinates=base,
+            )
+        )
+        if failed:
+            history.append(
+                RecaptureCandidateState(
+                    obligation_id=obligation.obligation_id,
+                    recorded_at=_AT + timedelta(seconds=1),
+                    coordinates={**base, "outcome": "success", "freshness_state": "fresh"},
+                )
+            )
+    return tuple(history)
+
+
+def select_recapture(
+    corpus: Mapping[str, Any],
+    predicates: Mapping[str, Any],
+    *,
+    selection_cutoff: datetime | None = None,
+) -> tuple[CaptureListObligation, ...]:
+    _validate_recapture_predicates(predicates)
+    cutoff = selection_cutoff or datetime.fromisoformat(
+        str(corpus["recapture_scenarios"][0]["selection_cutoff"]).replace("Z", "+00:00")
+    )
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+        raise ValueError("selection_cutoff must be timezone-aware")
+    obligations = _obligations(corpus)
+    by_id = {obligation.obligation_id: obligation for obligation in obligations}
+    states: dict[str, RecaptureCandidateState] = {}
+    for state in _recapture_candidate_history(corpus, obligations):
+        if state.recorded_at <= cutoff and (
+            state.obligation_id not in states or states[state.obligation_id].recorded_at < state.recorded_at
+        ):
+            states[state.obligation_id] = state
+    selected: list[CaptureListObligation] = []
+    for obligation_id, state in states.items():
+        if all(state.coordinates.get(key) == value for key, value in predicates.items()):
+            selected.append(by_id[obligation_id])
     if not selected:
         raise ValueError("empty_recapture_selection")
     return tuple(sorted(selected, key=lambda item: item.obligation_id))
@@ -495,14 +575,15 @@ def select_recapture(corpus: Mapping[str, Any], predicates: Mapping[str, Any]) -
 
 def build_recapture_plan(corpus: Mapping[str, Any]) -> FrozenRecapturePlan:
     scenario = corpus["recapture_scenarios"][0]
-    selected = select_recapture(corpus, scenario["predicates"])
+    selection_cutoff = datetime.fromisoformat(str(scenario["selection_cutoff"]).replace("Z", "+00:00"))
+    selected = select_recapture(corpus, scenario["predicates"], selection_cutoff=selection_cutoff)
     expected = tuple(item["obligation_id"] for item in scenario["expected_selected_obligations"])
     selected_ids = tuple(item.obligation_id for item in selected)
     if selected_ids != expected:
         raise ValueError("recapture selection drift")
     raw_predicates = {str(key): str(value) for key, value in scenario["predicates"].items()}
     contract_plan = CaptureRecapturePlan(
-        selection_cutoff=datetime.fromisoformat(str(scenario["selection_cutoff"]).replace("Z", "+00:00")),
+        selection_cutoff=selection_cutoff,
         predicate=RecapturePredicate(
             universe_refs=(_universe(corpus),),
             subject_ids=(raw_predicates["instrument_id"],),
@@ -539,15 +620,45 @@ def execute_recapture(plan: FrozenRecapturePlan, selected_obligation_ids: Sequen
     return selection
 
 
+def materialize_shared_provider_work(
+    corpus: Mapping[str, Any],
+    obligations: Sequence[CaptureListObligation] | None = None,
+) -> SharedProviderWork:
+    if obligations is None:
+        overlap_id = str(corpus["tiny_lists"][1]["shared_work_item"]["instrument_id"])
+        obligations = tuple(item for item in _obligations(corpus) if item.subject.id == overlap_id)
+    if not obligations:
+        raise ValueError("shared provider work requires at least one obligation")
+    coordinates = {
+        (item.subject.id, item.capture_requirement_id, item.partition) for item in obligations
+    }
+    if len(coordinates) != 1:
+        raise ValueError("shared provider work received incompatible obligations")
+    provider_coordinate = next(iter(coordinates))
+    work_item = CaptureWorkItem(
+        campaign_id=str(corpus["identity_policy"]["campaign_id"]),
+        source_request_id=f"source-request:{canonical_sha256({'provider_coordinate': provider_coordinate})}",
+        schedule_policy_id=f"schedule-policy:{canonical_sha256({'policy': 'd5-tiny-replay:v1'})}",
+    )
+    bindings = tuple(
+        CaptureObligationWorkBinding(obligation_id=item.obligation_id, work_item_id=work_item.work_item_id)
+        for item in sorted(obligations, key=lambda value: value.obligation_id)
+    )
+    return SharedProviderWork(work_item=work_item, bindings=bindings)
+
+
 def run_tiny_replay(corpus: Mapping[str, Any]) -> TinyReplayReport:
     obligations = _obligations(corpus)
     overlap = corpus["tiny_lists"][1]["shared_work_item"]
     shared = tuple(item for item in obligations if item.subject.id == overlap["instrument_id"])
     if len(shared) != overlap["expected_obligation_count"]:
         raise ValueError("overlapping list obligations collapsed")
-    provider_keys = {(item.subject.id, item.capture_requirement_id, item.partition) for item in shared}
-    if len(provider_keys) != overlap["expected_provider_work_item_count"]:
+    shared_work = materialize_shared_provider_work(corpus, shared)
+    provider_work_item_ids = {binding.work_item_id for binding in shared_work.bindings}
+    if len(provider_work_item_ids) != overlap["expected_provider_work_item_count"]:
         raise ValueError("compatible provider work was not shared")
+    if {binding.obligation_id for binding in shared_work.bindings} != {item.obligation_id for item in shared}:
+        raise ValueError("shared provider work lost an obligation binding")
 
     raw_object_count, observation_event_count = _replay_identical_bytes(corpus)
     terminal_obligation_count, terminal_states = _terminal_state_coverage(corpus)
@@ -558,7 +669,7 @@ def run_tiny_replay(corpus: Mapping[str, Any]) -> TinyReplayReport:
         list_count=len(corpus["tiny_lists"]),
         obligation_count=len(obligations),
         shared_obligation_count=len(shared),
-        shared_provider_work_item_count=len(provider_keys),
+        shared_provider_work_item_count=len(provider_work_item_ids),
         attempt_counts=replay_attempt_scenarios(corpus),
         raw_object_count=raw_object_count,
         observation_event_count=observation_event_count,

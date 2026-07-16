@@ -2,12 +2,15 @@ import hashlib
 import json
 import subprocess
 import sys
+from copy import deepcopy
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from data_engine.datahub import (
     build_recapture_plan,
     execute_recapture,
+    materialize_shared_provider_work,
     reject_out_of_order_attempt,
     replay_resume_scenarios,
     run_tiny_replay,
@@ -48,6 +51,15 @@ def test_tiny_replay_is_deterministic_and_covers_the_frozen_strata() -> None:
     assert len(first.report_sha256) == 64
 
 
+def test_shared_provider_work_keeps_both_obligation_bindings() -> None:
+    corpus = load_corpus()
+    shared = materialize_shared_provider_work(corpus)
+
+    assert len(shared.bindings) == 2
+    assert len({binding.obligation_id for binding in shared.bindings}) == 2
+    assert {binding.work_item_id for binding in shared.bindings} == {shared.work_item.work_item_id}
+
+
 def test_out_of_order_attempt_after_terminal_fails_closed() -> None:
     with pytest.raises(ValueError, match="terminal"):
         reject_out_of_order_attempt(load_corpus())
@@ -65,6 +77,13 @@ def test_every_resume_checkpoint_replays_without_an_extra_append() -> None:
     assert len({result.checkpoint_id for result in results}) == len(results)
 
 
+def test_resume_requires_persisted_checkpoint_and_artifact_records() -> None:
+    corpus = deepcopy(load_corpus())
+    del corpus["resume_scenarios"][0]["persisted_records"]
+    with pytest.raises(ValueError, match="persisted checkpoint and artifact records"):
+        replay_resume_scenarios(corpus)
+
+
 def test_recapture_execution_equals_the_frozen_dry_run() -> None:
     corpus = load_corpus()
     plan = build_recapture_plan(corpus)
@@ -76,6 +95,21 @@ def test_recapture_execution_equals_the_frozen_dry_run() -> None:
     assert execute_recapture(plan, plan.selected_obligation_ids) == plan.selected_obligation_ids
     with pytest.raises(ValueError, match="differs"):
         execute_recapture(plan, ())
+
+
+def test_recapture_selection_uses_state_as_of_the_frozen_cutoff() -> None:
+    corpus = load_corpus()
+    scenario = corpus["recapture_scenarios"][0]
+    cutoff = datetime.fromisoformat(scenario["selection_cutoff"].replace("Z", "+00:00"))
+
+    selected = select_recapture(corpus, scenario["predicates"], selection_cutoff=cutoff)
+    assert tuple(item.obligation_id for item in selected) == tuple(
+        item["obligation_id"] for item in scenario["expected_selected_obligations"]
+    )
+    with pytest.raises(ValueError, match="empty_recapture_selection"):
+        select_recapture(corpus, scenario["predicates"], selection_cutoff=cutoff + timedelta(seconds=2))
+    with pytest.raises(ValueError, match="timezone-aware"):
+        select_recapture(corpus, scenario["predicates"], selection_cutoff=datetime(2026, 4, 1))
 
 
 def test_recapture_empty_or_mutable_selection_fails_closed() -> None:
