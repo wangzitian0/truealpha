@@ -234,6 +234,10 @@ def test_release_workflow_dispatches_only_the_rendered_sdk_request() -> None:
 
     assert "workflow_dispatch:" in workflow
     assert "options: [preview/tag, staging, prod]" in workflow
+    assert 'GITHUB_REF" != "refs/heads/main"' in workflow
+    assert "merge-base --is-ancestor" in workflow
+    assert '.path == ".github/workflows/ci-required.yml"' in workflow
+    assert '.event == "push"' in workflow
     assert "python tools/app_deploy_request.py" in workflow
     assert "event_type: app-deploy-request" in workflow
     assert '"client_payload": $request' in workflow

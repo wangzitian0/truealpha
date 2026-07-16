@@ -57,18 +57,27 @@ jobs:
           REVIEWED_CHANGE_URL: ${{ inputs.reviewed_change_url }}
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::release requests must run from the reviewed main workflow"
+            exit 1
+          fi
           if ! [[ "$VERSION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::version_ref must be a stable vX.Y.Z tag"
             exit 1
           fi
           request_id="truealpha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           source_sha="$(git rev-list -n 1 "refs/tags/${VERSION_REF}^{commit}")"
+          if ! git merge-base --is-ancestor "$source_sha" origin/main; then
+            echo "::error::release tag must be reachable from origin/main"
+            exit 1
+          fi
           source_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"
           run_json="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
           jq -e \
             --arg sha "$source_sha" \
             --arg tag "$VERSION_REF" \
-            '.conclusion == "success" and .head_sha == $sha and .head_branch == $tag' \
+            '.conclusion == "success" and .head_sha == $sha and .head_branch == $tag
+             and .event == "push" and .path == ".github/workflows/ci-required.yml"' \
             <<<"$run_json" >/dev/null || {
               echo "::error::source run must be a successful exact-tag run"
               exit 1
