@@ -1,4 +1,4 @@
-.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit agent-preflight lint format typecheck test contract-conformance issue-graph-check gate0-candidate-check gate0-candidate-acceptance check clean
+.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit lint format typecheck test contract-conformance check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -17,14 +17,10 @@ help:
 	@echo "  make sample       Phase -1: pull SEC company-facts samples"
 	@echo "  make sample-evidence Capture the bounded issue #14 public evidence set"
 	@echo "  make sample-audit Check fixture readiness for tooling and backtests"
-	@echo "  make agent-preflight WORK_ISSUE=228 Validate an agent work claim before editing"
 	@echo ""
 	@echo "Quality:"
 	@echo "  make check        lint + typecheck + test"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
-	@echo "  make issue-graph-check Validate delivery manifests and Vision issue DAG"
-	@echo "  make gate0-candidate-check Validate the immutable Gate 0 v4 candidate and blockers"
-	@echo "  make gate0-candidate-acceptance Require complete accepted Gate 0 evidence"
 
 install:
 	uv sync --all-packages
@@ -81,10 +77,6 @@ sample-evidence:
 sample-audit:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/audit_strategy_samples.py
 
-agent-preflight:
-	@test -n "$(WORK_ISSUE)" || (echo "WORK_ISSUE is required" >&2; exit 1)
-	uv run python tools/agent_preflight.py --work-issue "$(WORK_ISSUE)" --repair-clean-gone
-
 lint:
 	uv run ruff check apps libs
 	uv run ruff format --check apps libs
@@ -104,16 +96,7 @@ contract-conformance:
 	uv run python libs/contracts/conformance/export_issue58.py --check
 	cd apps/app-web && bun run tests/issue58-conformance.test.ts
 
-issue-graph-check:
-	python3 tools/check_delivery_governance.py
-
-gate0-candidate-check:
-	python3 tools/check_gate0_candidate.py
-
-gate0-candidate-acceptance:
-	python3 tools/check_gate0_candidate.py --check-live-comments --require-accepted
-
-check: issue-graph-check gate0-candidate-check lint typecheck test contract-conformance
+check: lint typecheck test contract-conformance
 	@echo "✅ All checks passed"
 
 clean:

@@ -104,40 +104,6 @@ jobs:
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
 
-  governance_pr:
-    if: github.event_name == 'pull_request' && github.event.pull_request.state == 'open'
-    needs: changes
-    permissions:
-      contents: read
-      issues: read
-    uses: ./.github/workflows/ci-governance.yml
-    with:
-      mode: pull_request
-      pr_base_sha: ${{ github.event.pull_request.base.sha }}
-      pr_head_sha: ${{ github.event.pull_request.head.sha }}
-      pr_number: ${{ github.event.pull_request.number }}
-
-  sync_issues:
-    if: github.event_name == 'push' && github.ref_type != 'tag'
-    needs: changes
-    permissions:
-      contents: read
-      issues: write
-    uses: ./.github/workflows/sync-batch-issues.yml
-
-  governance_push:
-    if: >-
-      always() &&
-      github.event_name != 'pull_request' &&
-      (needs.sync_issues.result == 'success' || needs.sync_issues.result == 'skipped')
-    needs: [changes, sync_issues]
-    permissions:
-      contents: read
-      issues: read
-    uses: ./.github/workflows/ci-governance.yml
-    with:
-      mode: ${{ github.ref_type == 'tag' && 'tag' || github.event_name }}
-
   security:
     needs: changes
     permissions:
@@ -195,16 +161,13 @@ jobs:
        needs.changes.outputs.image_llm_service == 'true' ||
        needs.changes.outputs.image_data_engine == 'true' ||
        github.ref_type == 'tag') &&
-      (needs.governance_pr.result == 'success' || needs.governance_pr.result == 'skipped') &&
-      (needs.sync_issues.result == 'success' || needs.sync_issues.result == 'skipped') &&
-      (needs.governance_push.result == 'success' || needs.governance_push.result == 'skipped') &&
       (needs.security.result == 'success' || needs.security.result == 'skipped') &&
       (needs.db.result == 'success' || needs.db.result == 'skipped') &&
       (needs.python.result == 'success' || needs.python.result == 'skipped') &&
       (needs.qlib.result == 'success' || needs.qlib.result == 'skipped') &&
       (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') &&
       (needs.web.result == 'success' || needs.web.result == 'skipped')
-    needs: [changes, governance_pr, sync_issues, governance_push, security, db, python, qlib, runtime, web]
+    needs: [changes, security, db, python, qlib, runtime, web]
     permissions:
       contents: read
       packages: write
@@ -218,7 +181,7 @@ jobs:
   required:
     name: ci-required
     if: always()
-    needs: [changes, governance_pr, sync_issues, governance_push, security, db, python, qlib, runtime, web, images_check, images_release]
+    needs: [changes, security, db, python, qlib, runtime, web, images_check, images_release]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

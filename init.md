@@ -429,23 +429,14 @@ fresh untouched evidence. PIT rules, append-only restatements, fixed denominator
 environment-scoped rights/budgets, row-complete capture, recovery, and human approvals
 remain mandatory at their applicable rung.
 
-Gate epics still close in order at acceptance fan-in. Promotion binds one exact release
-candidate and the gate's complete fail-closed evidence bundle; subsets, rebuilt artifacts,
-and lower-rung substitutions remain invalid. `AGENTS.md` defines batch manifests, path
-ownership, merge ordering, rung acceptance, invalidation, and rollback mechanics.
-E5 large/shadow evidence is not graduation: the independent capture audit, final Vision
-audit, and recorded human approval form a separate candidate-wide fan-in.
-
-Delivery control is partitioned by ownership. The static Vision graph owns gates,
-capabilities, and artifact edges; batch nodes are assembled from content-hashed files under
-`governance/batches/`, so disjoint factor, backtest, and datahub PRs do not rewrite one
-global registry. A batch activation base is fixed at preparation as a historical anchor;
-rebases record the exact PR base/head in CI evidence rather than mutating that anchor.
-Every PR declares one structured Work-Issue, Work-Key, and Issue-Action. Batch issue state
-is a repairable manifest mirror, while a standalone issue closes only after its declared
-`complete-on-merge` PR has actually merged. Agents run repository preflight before editing
-to reject wrong checkout prefixes, dirty or detached worktrees, deleted upstreams, duplicate
-claims, and overlapping active ownership before those errors enter a PR.
+Gate epics still close in order as product decisions. Each gate is an issue-tracked
+milestone whose acceptance criteria live in its issue and whose evidence (captured
+corpora, evaluation records, handoff documents) is content-hashed under `governance/` for
+replayability. Graduation additionally requires the independent capture audit, the final
+Vision audit, and recorded human approval. Day-to-day delivery is conventional: one issue,
+one pull request, tests and review before merge, as defined in `AGENTS.md`. The
+capability dependency graph under `governance/capabilities/` is planning information, not
+merge enforcement.
 
 ---
 

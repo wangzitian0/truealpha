@@ -1,128 +1,25 @@
-name: Capability slice
-description: Advance one TrueAlpha capability by one evidence rung.
-title: "[Capability] "
-labels:
-  - scope:vision
+name: Task
+description: Describe one goal that a single pull request can deliver.
+title: "[lane] "
 body:
-  - type: markdown
-    attributes:
-      value: |
-        One issue must claim one terminal evidence rung. Lower-rung success cannot close a higher-rung claim. Gate acceptance is a separate fan-in, not an E6 rung.
-  - type: dropdown
-    id: lane
-    attributes:
-      label: Primary lane
-      options:
-        - capture-storage
-        - orchestration-platform
-        - strategy
-        - consumption
-        - verification-operations
-    validations:
-      required: true
-  - type: dropdown
-    id: terminal_rung
-    attributes:
-      label: Terminal evidence rung
-      options:
-        - E0 code
-        - E1 tiny
-        - E2 contract repair
-        - E3 medium
-        - E4 harden and freeze
-        - E5 large and shadow
-    validations:
-      required: true
-  - type: input
-    id: manifest
-    attributes:
-      label: Canonical batch manifest
-      description: Provide the checked-in governance/batches path and SHA-256. The issue body is not the manifest.
-      placeholder: "governance/batches/example.v1.json @ sha256:..."
-    validations:
-      required: true
   - type: textarea
     id: problem
     attributes:
-      label: Problem context
-      description: Link the Vision criterion, parent epic, observed behavior/evidence, affected users/modules, and blocked capability.
+      label: Problem
+      description: Observed behavior or missing capability, with evidence and links.
     validations:
       required: true
   - type: textarea
-    id: root_cause
+    id: plan
     attributes:
-      label: Root-cause analysis
-      description: Separate verified semantic/data/interface/operational causes from hypotheses; do not restate the symptom.
-    validations:
-      required: true
-  - type: textarea
-    id: remediation
-    attributes:
-      label: Remediation
-      description: Map each change to a named cause; include boundaries, order, migrations, activation behavior, and explicit non-goals.
-    validations:
-      required: true
-  - type: textarea
-    id: dependencies
-    attributes:
-      label: Exact dependency classes
-      description: Classify each edge as start, freeze, closure, or informational; list issue, artifact type, exact ID/hash when known, and acceptance condition.
-      placeholder: "- class: start; issue: #58; artifact: ExecutionContractPack; id/hash: ...; acceptance: ..."
-    validations:
-      required: true
-  - type: textarea
-    id: smallest_slice
-    attributes:
-      label: Smallest executable slice
-      description: Define the tiny corpus, subjects, cutoffs, vintages, expected denominator, semantic branches, and look-ahead sentinel.
-    validations:
-      required: true
-  - type: textarea
-    id: outputs
-    attributes:
-      label: Planned handoff outputs
-      description: Name typed artifacts, ID prefixes, owner, allowed consumers/environments, readiness ceiling, and invalidation conditions.
-    validations:
-      required: true
-  - type: textarea
-    id: freeze
-    attributes:
-      label: Freeze before observation
-      description: State semantics, parameters, thresholds, sampling, custody, source policy, and hashes that must freeze before medium or protected results.
+      label: Plan
+      description: The change, mapped to the cause. Note explicit non-goals.
     validations:
       required: true
   - type: textarea
     id: acceptance
     attributes:
-      label: Executable acceptance
-      description: Include environment, commands, exact artifacts/counts, replay/PIT assertions, evidence tier, budgets, retention, and failure exit behavior.
-    validations:
-      required: true
-  - type: textarea
-    id: negative_controls
-    attributes:
-      label: Negative controls
-      description: Cover missing data, restatement, look-ahead, scope shrink, wrong identity, retry/partial write, and seeded bad evidence as applicable.
-    validations:
-      required: true
-  - type: textarea
-    id: ownership
-    attributes:
-      label: Path ownership and integration lease
-      description: List writable, read-only, forbidden, and shared paths plus implementer, reviewer/custodian, exclusive integration owner, lease expiry, and merge predecessors.
-    validations:
-      required: true
-  - type: textarea
-    id: invalidation
-    attributes:
-      label: Invalidation, rollback, and residual risks
-      description: State which changes reset which rung, whether a fresh holdout is required, external decisions, wall-clock waits, and explicit non-goals.
-    validations:
-      required: true
-  - type: textarea
-    id: closure
-    attributes:
-      label: Why this rung unblocks the next capability
-      description: Map root cause to change, evidence, exact handoff, downstream work, and the claim that remains prohibited.
+      label: Acceptance
+      description: Executable checks (positive and negative) that prove it works.
     validations:
       required: true
