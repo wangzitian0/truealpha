@@ -84,6 +84,18 @@ def test_resume_requires_persisted_checkpoint_and_artifact_records() -> None:
         replay_resume_scenarios(corpus)
 
 
+def test_resume_rejects_checkpoint_with_missing_persisted_artifact() -> None:
+    corpus = deepcopy(load_corpus())
+    corpus["resume_scenarios"][1]["persisted_records"]["raw_object_obligation_ordinals"] = []
+    with pytest.raises(ValueError, match="raw_landed checkpoint is missing"):
+        replay_resume_scenarios(corpus)
+
+    corpus = deepcopy(load_corpus())
+    corpus["resume_scenarios"][2]["persisted_records"]["observation_obligation_ordinals"] = []
+    with pytest.raises(ValueError, match="normalized checkpoint is missing"):
+        replay_resume_scenarios(corpus)
+
+
 def test_recapture_execution_equals_the_frozen_dry_run() -> None:
     corpus = load_corpus()
     plan = build_recapture_plan(corpus)

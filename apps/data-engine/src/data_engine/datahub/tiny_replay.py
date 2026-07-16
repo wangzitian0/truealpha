@@ -179,6 +179,24 @@ class _TinyReplayStore:
         self.manifest_obligation_ids = completed
         return True
 
+    def validate_checkpoint(self, checkpoint: CaptureCheckpoint) -> None:
+        if checkpoint.phase is CheckpointPhase.RAW_LANDED and (not self.attempts or not self.raw_objects):
+            raise ValueError("raw_landed checkpoint is missing persisted attempt or raw object")
+        if checkpoint.phase is CheckpointPhase.NORMALIZED and (
+            not self.attempts or not self.raw_objects or not self.observations
+        ):
+            raise ValueError("normalized checkpoint is missing persisted attempt, raw object, or observation")
+        if checkpoint.phase is CheckpointPhase.MANIFEST_PERSISTED and (
+            not self.attempts
+            or not self.attempt_results
+            or not self.raw_objects
+            or not self.observations
+            or not self.terminal_results
+        ):
+            raise ValueError("manifest checkpoint is missing persisted capture artifacts")
+        if set(checkpoint.completed_obligation_ids) != set(self.terminal_results):
+            raise ValueError("checkpoint completion set differs from persisted terminal results")
+
 
 @dataclass(frozen=True)
 class TinyReplayReport:
@@ -371,8 +389,7 @@ def replay_resume_scenarios(corpus: Mapping[str, Any]) -> tuple[ResumeResult, ..
             raise ValueError("checkpoint replay identity drift")
         store = _TinyReplayStore.from_persisted_records(obligations, persisted_records)
         first_id = obligations[0].obligation_id
-        if set(checkpoint.completed_obligation_ids) != set(store.terminal_results):
-            raise ValueError("checkpoint completion set differs from persisted terminal results")
+        store.validate_checkpoint(checkpoint)
 
         append_count = _resume_capture(store, obligations)
         first_terminal = store.terminal_results[first_id]
