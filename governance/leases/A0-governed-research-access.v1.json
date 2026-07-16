@@ -1,12 +1,16 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:e011b81b8e90c3aaf721592f1950bd8eb27f737410094af2a3a13eb1d406830c",
+  "lease_id": "integration-lease:f03491cdf54ec81410cd53184781b44ad9fbcee279bfa4b686d9206a65f57ec5",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
-  "state": "active",
+  "state": "revoked",
   "paths": [
     "init.md",
+    "docs/architecture-decisions/A0-governed-research-access.md",
     "libs/contracts/src/truealpha_contracts/__init__.py",
+    "db/migrations/0024_access_policy_bindings.sql",
+    "db/roles.sql",
+    "db/tests/governed_research_access_contract.sql",
     "governance/gate0/README.md",
     "governance/gate0/manifest-v5.json",
     "governance/gate0/v4-frozen-tree-proof.v1.json",

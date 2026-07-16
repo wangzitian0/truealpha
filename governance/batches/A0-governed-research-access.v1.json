@@ -4,13 +4,13 @@
   "revision": 6,
   "issue": 230,
   "owner_gate": 31,
-  "status": "blocked",
+  "status": "done",
   "lane": "consumption",
-  "last_accepted_rung": "E1",
+  "last_accepted_rung": "E2",
   "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Establish a governed multi-user research access boundary before MCP, reports, cards, the Web App, or chat expose personal research state.",
-  "claim_ceiling": "E1 remains the accepted ceiling while the implemented E2 governed-research-access contract awaits independent verification. The candidate implementation contains authoritative architecture, stable package-root exports, frozen two-tenant typed/SQL command evidence, and a valid blocked Gate 0 v5 successor that binds immutable v4 bytes and current integration controls. It does not yet grant a stable handoff and makes no Gate 0 acceptance, authentication route, identity-provider binding, browser or MCP deployment, content retention, sharing, break-glass, report or card mutation, replay submission, factor execution, Qlib invocation, live source, Staging/Production readiness, or release activation claim.",
+  "claim_ceiling": "Accepted E2 Local/CI governed-research-access contract with stable package-root exports, release-bound publication policy sets, entitlement-backed materialized-result authorization, administrator-only registered-replay request authorization, paired append-only decision/audit records, additive SQL bindings, frozen repair corpus, and a stable handoff for explicitly named consumers. This does not accept Gate 0, activate authentication or an identity provider, deploy browser or MCP access, retain private content, enable sharing or break-glass access, write replay requests, execute factors, Qlib, or replay, call live sources, bind a release, or claim Staging/Production readiness.",
   "capability_issues": [229],
   "closes_issues": [229],
   "informational_issues": [31, 41, 42, 43, 45, 46, 66, 224, 225, 226, 227],
@@ -46,17 +46,18 @@
   ],
   "corpus": {
     "environment": "Local/CI checked-in synthetic authorization fixtures only",
-    "manifest_path": "libs/contracts/tests/fixtures/governed_research_access.v1.json",
-    "sha256": "ac3186bcc8cf14c0b9d7c909ca0f3148618eade175c2b469022364d3fae2498b",
+    "manifest_path": "libs/contracts/tests/fixtures/governed_research_access.v2.json",
+    "sha256": "eb7b08d3b125f25e3fc64add91f09e144ccb5be5489b24643103d2e69d8b9c86",
     "required_strata": [
       "two isolated tenants with positive owner reads and owner-only conversation and document records",
-      "one permitted and one denied immutable publication class for materialized research",
-      "administrator access to permitted strategy/backtest results and non-content audit metadata only",
+      "standard and premium entitlements over two immutable publication classes plus a wrong-policy grant denial",
+      "administrator access to policy-permitted strategy/backtest results and non-content audit metadata only",
+      "administrator-only authorization to request an already registered replay definition when the policy explicitly permits that action",
       "administrator denial for private conversation/document content",
       "missing, invalid, expired, revoked, and forged role/tier authentication contexts",
       "valid browser-session, delegated-MCP, administrator, and service-identity authentication contexts",
       "cross-tenant guessed conversation and document object IDs with denial before any mart SQL, private-row lookup, or artifact retrieval",
-      "append-only grant, revocation, publication-policy, allowed-access, denied-access, and non-content audit event histories"
+      "paired decision/audit identity, private-resource-ID redaction, and append-only grant, revocation, publication-policy-set, decision-grant, allowed-access, denied-access, and non-content audit histories"
     ]
   },
   "source_ceiling": "Checked-in typed and SQL fixtures only through E2; no network identity-provider call, credential, live source, data refresh, or external MCP client is used.",
@@ -68,7 +69,9 @@
       "libs/contracts/src/truealpha_contracts/__init__.py",
       "libs/contracts/tests/test_access.py",
       "libs/contracts/tests/fixtures/governed_research_access.v1.json",
+      "libs/contracts/tests/fixtures/governed_research_access.v2.json",
       "db/migrations/0022_app_identity.sql",
+      "db/migrations/0024_access_policy_bindings.sql",
       "db/roles.sql",
       "db/tests/governed_research_access_contract.sql",
       "governance/leases/A0-governed-research-access.v1.json",
@@ -114,6 +117,7 @@
       "db/migrations/0019_mvp_filing_document.sql",
       "db/migrations/0020_headcount_extraction.sql",
       "db/migrations/0021_mvp_medium_domains.sql",
+      "db/migrations/0023_capture_control.sql",
       "uv.lock",
       "pyproject.toml",
       "Makefile"
@@ -123,6 +127,7 @@
       "docs/architecture-decisions/A0-governed-research-access.md",
       "libs/contracts/src/truealpha_contracts/__init__.py",
       "db/migrations/0022_app_identity.sql",
+      "db/migrations/0024_access_policy_bindings.sql",
       "db/roles.sql",
       "db/tests/governed_research_access_contract.sql",
     "governance/gate0/README.md",
@@ -139,7 +144,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/A0-governed-research-access.v1.json",
-      "sha256": "350ab4afe649c9fa6c00a43d6855a1b70d9ebb31762fbbc21636b2d3269d6426"
+      "sha256": "bd06645409bfd14b8ca57d2c125b5855931af227ea919e8a885db32aedc35172"
     }
   },
   "release_activation": {
@@ -150,7 +155,7 @@
   "acceptance": {
     "commands": [
       "uv run pytest libs/contracts/tests/test_access.py -q",
-      "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/tests/test_access.py",
+      "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/src/truealpha_contracts/__init__.py libs/contracts/tests/test_access.py",
       "uv run mypy",
       "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
       "uv run pytest libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py -q",
@@ -164,20 +169,23 @@
       "grant, revocation, publication policy, or access audit row is updated or deleted instead of appended",
       "private app rows bypass RLS or return after cross-tenant object-ID guessing",
       "a contradictory resource privacy shape bypasses the publication policy for a materialized strategy or backtest result",
-      "an audit event and its authorization decision carry different tenant identities or expose cross-tenant decision metadata",
+      "an audit event and its authorization decision disagree on tenant, principal, event kind, or time, or administrator metadata exposes a private resource identifier or crosses tenants",
       "ordinary app runtime reads administrator audit metadata or either immutable audit base table",
       "AuthorizationService hides publication-policy, authentication-failure, or delegation-revocation inputs required by authorize_access",
       "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
       "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
       "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated",
       "the stable package root omits the exact governed-access symbols or ReleaseManifest gains an access binding",
+      "a materialized result is authorized without a matching publication rule and active entitlement grant, or a wrong-policy grant is recorded on an allow decision",
+      "a non-administrator or a policy without the explicit action authorizes a registered replay request",
       "the frozen governance/gate0/manifest-v4.json bytes or its historical acceptance boundary are changed",
       "the Gate 0 v5 successor drops, weakens, or marks accepted any external blocker inherited from v4"
     ],
     "output": {
-      "type": "TinyEvidence",
-      "stable_handoff": false,
-      "state": "accepted_e1",
+      "type": "GovernedResearchAccessHandoff",
+      "stable_handoff": true,
+      "state": "accepted",
+      "schema_epoch": "truealpha-contracts.governed-research-access.v2",
       "allowed_evidence_readers": [
         "the future #42 MCP implementation batch",
         "the future #43 report/document implementation batch",
