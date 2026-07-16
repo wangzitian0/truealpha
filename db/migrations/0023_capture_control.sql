@@ -1,5 +1,25 @@
 -- D5 E0: additive, append-only storage for list capture control identities.
 
+create or replace function raw.has_canonical_obligation_ids(ids text[], allow_empty boolean)
+returns boolean language plpgsql immutable strict as $$
+declare
+    item_index integer;
+begin
+    if cardinality(ids) = 0 then
+        return allow_empty;
+    end if;
+    for item_index in 1..cardinality(ids) loop
+        if ids[item_index] !~ '^list-obligation:[0-9a-f]{64}$' then
+            return false;
+        end if;
+        if item_index > 1 and ids[item_index - 1] >= ids[item_index] then
+            return false;
+        end if;
+    end loop;
+    return true;
+end;
+$$;
+
 create table if not exists raw.capture_campaigns (
     campaign_id       text primary key check (campaign_id ~ '^capture-campaign:[0-9a-f]{64}$'),
     content_sha256    text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
@@ -77,7 +97,9 @@ create table if not exists raw.capture_checkpoints (
     run_id                     text not null check (run_id ~ '^capture-run:[0-9a-f]{64}$'),
     sequence                   integer not null check (sequence > 0),
     phase                      text not null check (phase in ('planned', 'raw_landed', 'normalized', 'manifest_persisted')),
-    completed_obligation_ids   text[] not null,
+    completed_obligation_ids   text[] not null check (
+        raw.has_canonical_obligation_ids(completed_obligation_ids, true)
+    ),
     recorded_at                timestamptz not null,
     content_sha256             text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     unique (run_id, sequence)
@@ -87,7 +109,9 @@ create table if not exists raw.recapture_plans (
     plan_id                    text primary key check (plan_id ~ '^recapture-plan:[0-9a-f]{64}$'),
     selection_cutoff           timestamptz not null,
     predicate_sha256           text not null check (predicate_sha256 ~ '^[0-9a-f]{64}$'),
-    selected_obligation_ids    text[] not null check (cardinality(selected_obligation_ids) > 0),
+    selected_obligation_ids    text[] not null check (
+        raw.has_canonical_obligation_ids(selected_obligation_ids, false)
+    ),
     planner_version            text not null,
     content_sha256             text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at                 timestamptz not null default now()

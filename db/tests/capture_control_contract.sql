@@ -120,6 +120,61 @@ $$;
 do $$
 begin
     begin
+        insert into raw.capture_checkpoints (
+            checkpoint_id, run_id, sequence, phase, completed_obligation_ids, recorded_at, content_sha256
+        ) values (
+            'capture-checkpoint:7777777777777777777777777777777777777777777777777777777777777777',
+            'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            1, 'raw_landed', array['list-obligation:not-canonical'],
+            '2026-04-01T00:02:00Z', repeat('7', 64)
+        );
+        raise exception 'malformed checkpoint obligation unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_checkpoints (
+            checkpoint_id, run_id, sequence, phase, completed_obligation_ids, recorded_at, content_sha256
+        ) values (
+            'capture-checkpoint:8888888888888888888888888888888888888888888888888888888888888888',
+            'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            1, 'raw_landed', array[
+                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            ], '2026-04-01T00:02:00Z', repeat('8', 64)
+        );
+        raise exception 'duplicate checkpoint obligations unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.recapture_plans (
+            plan_id, selection_cutoff, predicate_sha256, selected_obligation_ids,
+            planner_version, content_sha256
+        ) values (
+            'recapture-plan:8888888888888888888888888888888888888888888888888888888888888888',
+            '2026-04-01T00:00:00Z', repeat('8', 64), array[
+                'list-obligation:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                'list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            ], 'capture-planner:v1', repeat('8', 64)
+        );
+        raise exception 'unsorted recapture obligations unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
         insert into raw.capture_obligations (
             obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
             capture_requirement_id, partition_key, content_sha256
