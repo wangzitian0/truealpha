@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:464db9be7e233c598a966bfd85cd0c3fd4a58e9300c5de9d18c4da6173a53dbf",
+  "lease_id": "integration-lease:c5a1baad672410089ac102b19f8a1f5c24d0732693ad29e5eea13618073727cd",
   "batch_id": "D5-list-capture-control-plane",
   "owner": "wangzitian0",
   "state": "active",
