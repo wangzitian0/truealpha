@@ -152,7 +152,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/A0-governed-research-access.v2.json",
-      "sha256": "7ee0dc68bd1892793de6a36ab62a777a59a21db26152b366fef5cfe69706575b"
+      "sha256": "82e8c119f328516af51609cf4e34814ec3d6331dd0d407930dae281f47b0c051"
     }
   },
   "release_activation": {
