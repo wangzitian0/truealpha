@@ -10,7 +10,7 @@
   "target_rung": "E0",
   "terminal_rung": "E1",
   "objective": "Build and replay one batch-private historical-CAGR PEG computational slice for legacy capability #33 without freezing product semantics or activating the shared factor pipeline.",
-  "claim_ceiling": "Registration only for a provisional E0/E1 historical-CAGR PEG batch; no arithmetic implementation, approved product semantics, stable handoff, shared factor registration, data-source integration, Dagster asset, mart output, release activation, issue closure, or E2+ readiness claim",
+  "claim_ceiling": "E1 batch-private historical-CAGR PEG kernel and deterministic fixture-replay evidence only; no approved product semantics, stable handoff, shared factor registration, real-source or shared-pipeline replay, Dagster asset, mart output, release activation, issue closure, or E2+ readiness claim",
   "capability_issues": [
     33
   ],
@@ -130,7 +130,7 @@
     "formula, annualization, period, unit, availability, negative-value policy, input identity, output identity, or corpus change creates a new batch revision",
     "any need for a shared export, registry, base factor, contract, lockfile, authoritative document, or runtime binding blocks this batch until separately authorized",
     "approval of #59 does not retroactively raise this provisional evidence ceiling or create a stable handoff",
-    "real source, PIT restatement, Dagster, mart, replay, or release integration requires a separate higher-rung batch"
+    "real-source, PIT-restatement, shared-pipeline replay, Dagster, mart, or release integration requires a separate higher-rung batch; deterministic replay of the frozen S11 fixture remains required for E1"
   ],
   "rollback": "Revert the isolated S11 batch package, tests, corpus, and evidence together; no accepted shared registry, runtime, mart, or release manifest may reference them."
 }
