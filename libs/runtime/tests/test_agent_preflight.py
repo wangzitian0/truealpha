@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -62,6 +63,54 @@ def test_expected_work_key_fails_closed_on_malformed_manifest(tmp_path):
 
     with pytest.raises(preflight.PreflightError, match="broken.json"):
         preflight.expected_work_key(tmp_path, 228)
+
+
+def test_closed_terminal_rerun_requires_an_accepted_terminal_batch(tmp_path):
+    batch_dir = tmp_path / "governance" / "batches"
+    batch_dir.mkdir(parents=True)
+    manifest_path = batch_dir / "D4.json"
+    manifest = {
+        "batch_id": "D4-datahub-interface",
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2",
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert preflight.closed_terminal_rerun_allowed(tmp_path, 210)
+    assert not preflight.closed_terminal_rerun_allowed(tmp_path, 228)
+
+    manifest["target_rung"] = "E3"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert not preflight.closed_terminal_rerun_allowed(tmp_path, 210)
+
+
+def test_closed_issue_requires_explicit_terminal_rerun_opt_in(tmp_path):
+    batch_dir = tmp_path / "governance" / "batches"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "D4.json").write_text(
+        json.dumps(
+            {
+                "batch_id": "D4-datahub-interface",
+                "issue": 210,
+                "status": "done",
+                "last_accepted_rung": "E2",
+                "target_rung": "E2",
+                "terminal_rung": "E2",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(preflight.PreflightError, match="not open"):
+        preflight.validate_issue_state(tmp_path, 210, "CLOSED", False)
+
+    preflight.validate_issue_state(tmp_path, 210, "CLOSED", True)
+
+    with pytest.raises(preflight.PreflightError, match="not an accepted terminal batch"):
+        preflight.validate_issue_state(tmp_path, 228, "CLOSED", True)
 
 
 def test_gone_upstream_detection_is_exact():

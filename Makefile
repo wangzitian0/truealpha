@@ -18,6 +18,7 @@ help:
 	@echo "  make sample-evidence Capture the bounded issue #14 public evidence set"
 	@echo "  make sample-audit Check fixture readiness for tooling and backtests"
 	@echo "  make agent-preflight WORK_ISSUE=228 Validate an agent work claim before editing"
+	@echo "    ALLOW_CLOSED_TERMINAL_RERUN=1 is limited to accepted terminal corrective reruns"
 	@echo ""
 	@echo "Quality:"
 	@echo "  make check        lint + typecheck + test"
@@ -83,7 +84,7 @@ sample-audit:
 
 agent-preflight:
 	@test -n "$(WORK_ISSUE)" || (echo "WORK_ISSUE is required" >&2; exit 1)
-	uv run python tools/agent_preflight.py --work-issue "$(WORK_ISSUE)" --repair-clean-gone
+	uv run python tools/agent_preflight.py --work-issue "$(WORK_ISSUE)" --repair-clean-gone $(if $(filter 1,$(ALLOW_CLOSED_TERMINAL_RERUN)),--allow-closed-terminal-rerun,)
 
 lint:
 	uv run ruff check apps libs

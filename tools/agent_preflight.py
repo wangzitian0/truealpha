@@ -14,6 +14,7 @@ from typing import Any
 WORKSPACE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 WORK_ISSUE_RE = re.compile(r"^Work-Issue:[ \t]*#(?P<issue>[1-9][0-9]*)[ \t]*$", re.MULTILINE)
 WORK_KEY_RE = re.compile(r"^Work-Key:[ \t]*(?P<key>[A-Za-z0-9][A-Za-z0-9._:-]*)[ \t]*$", re.MULTILINE)
+RUNGS = frozenset({"E0", "E1", "E2", "E3", "E4", "E5"})
 
 
 class PreflightError(RuntimeError):
@@ -39,15 +40,50 @@ def upstream_is_gone(track: str) -> bool:
     return track.strip() == "[gone]"
 
 
-def expected_work_key(root: Path, issue_number: int) -> str:
+def batch_manifest_for_issue(root: Path, issue_number: int) -> dict[str, Any] | None:
     for path in sorted((root / "governance" / "batches").glob("*.json")):
         try:
             manifest = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise PreflightError(f"cannot read batch manifest {path.relative_to(root)}: {exc}") from exc
         if manifest.get("issue") == issue_number:
-            return f"{manifest['batch_id']}:{manifest['target_rung']}"
+            return manifest
+    return None
+
+
+def expected_work_key(root: Path, issue_number: int) -> str:
+    manifest = batch_manifest_for_issue(root, issue_number)
+    if manifest is not None:
+        return f"{manifest['batch_id']}:{manifest['target_rung']}"
     return f"standalone-{issue_number}"
+
+
+def closed_terminal_rerun_allowed(root: Path, issue_number: int) -> bool:
+    manifest = batch_manifest_for_issue(root, issue_number)
+    if manifest is None or manifest.get("status") != "done":
+        return False
+    terminal_rung = manifest.get("terminal_rung")
+    return (
+        terminal_rung in RUNGS
+        and manifest.get("last_accepted_rung") == terminal_rung
+        and manifest.get("target_rung") == terminal_rung
+    )
+
+
+def validate_issue_state(
+    root: Path,
+    issue_number: int,
+    state: str,
+    allow_closed_terminal_rerun: bool,
+) -> None:
+    if state == "OPEN":
+        return
+    if not allow_closed_terminal_rerun:
+        raise PreflightError(f"issue #{issue_number} is not open")
+    if not closed_terminal_rerun_allowed(root, issue_number):
+        raise PreflightError(
+            f"issue #{issue_number} is closed and is not an accepted terminal batch eligible for a corrective rerun"
+        )
 
 
 def matching_work_claim_prs(
@@ -96,7 +132,11 @@ def clean_gone_upstream(root: Path, branch: str, repair: bool) -> str:
     return "main"
 
 
-def preflight(issue_number: int, repair_clean_gone: bool) -> tuple[str, str, str]:
+def preflight(
+    issue_number: int,
+    repair_clean_gone: bool,
+    allow_closed_terminal_rerun: bool = False,
+) -> tuple[str, str, str]:
     root = repository_root()
     workspace_name, _ = workspace_identity(root)
     run("git", "fetch", "origin", "--prune", cwd=root)
@@ -119,9 +159,13 @@ def preflight(issue_number: int, repair_clean_gone: bool) -> tuple[str, str, str
             cwd=root,
         ).stdout
     )
-    if issue.get("state") != "OPEN":
-        raise PreflightError(f"issue #{issue_number} is not open")
     work_key = expected_work_key(root, issue_number)
+    validate_issue_state(
+        root,
+        issue_number,
+        str(issue.get("state", "")),
+        allow_closed_terminal_rerun,
+    )
 
     pull_requests = json.loads(
         run(
@@ -155,9 +199,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--work-issue", type=int, required=True)
     parser.add_argument("--repair-clean-gone", action="store_true")
+    parser.add_argument("--allow-closed-terminal-rerun", action="store_true")
     args = parser.parse_args()
     try:
-        workspace_name, branch, work_key = preflight(args.work_issue, args.repair_clean_gone)
+        workspace_name, branch, work_key = preflight(
+            args.work_issue,
+            args.repair_clean_gone,
+            args.allow_closed_terminal_rerun,
+        )
     except PreflightError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
