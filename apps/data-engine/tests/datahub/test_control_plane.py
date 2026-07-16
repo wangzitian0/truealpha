@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 from data_engine.datahub import AttemptLedger, expand_obligations
-from truealpha_contracts import UniverseRef
+from truealpha_contracts import SubjectKind, SubjectRef, UniverseRef
+from truealpha_contracts.capture_control import CaptureListVersion
 from truealpha_contracts.datahub import FetchAttemptOutcome
 
 ROOT = Path(__file__).parents[1]
@@ -16,14 +17,18 @@ def test_frozen_topt_denominator_expands_without_share_class_collapse() -> None:
     corpus = json.loads(CORPUS.read_text())
     denominator = corpus["topt_denominator"]
     listings = tuple(row[2] for row in denominator["instruments"])
-    obligations = expand_obligations(
-        run_id=f"capture-run:{'a' * 64}",
+    list_version = CaptureListVersion(
         universe=UniverseRef(
             universe_id=denominator["universe_id"],
             universe_version="topt-candidate-2026-03-31-v1",
             content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
         ),
-        listings=listings,
+        members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=listing) for listing in listings),
+        effective_at=AT,
+    )
+    obligations = expand_obligations(
+        run_id=f"capture-run:{'a' * 64}",
+        list_version=list_version,
         semantic_types=tuple(denominator["obligation_expansion"]["semantic_types"]),
         partition=denominator["report_date"],
     )
@@ -55,3 +60,21 @@ def test_attempt_result_cannot_be_replaced_or_duplicated() -> None:
     ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.FAILED, error_code="fixture_failure")
     with pytest.raises(ValueError, match="already has a result"):
         ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.SUCCESS)
+
+
+def test_attempt_dispatch_waits_for_result_and_completion_is_monotonic() -> None:
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'e' * 64}", maximum_attempts=2)
+    attempt = ledger.start(started_at=AT)
+    with pytest.raises(ValueError, match="no result"):
+        ledger.start(started_at=AT)
+    with pytest.raises(ValueError, match="precedes"):
+        ledger.finish(
+            attempt=attempt,
+            completed_at=datetime(2026, 3, 31, tzinfo=UTC),
+            outcome=FetchAttemptOutcome.INTERRUPTED,
+        )
+
+
+def test_attempt_budget_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        AttemptLedger(work_item_id=f"capture-work-item:{'f' * 64}", maximum_attempts=0)

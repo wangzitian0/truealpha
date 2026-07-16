@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from truealpha_contracts import SubjectKind, SubjectRef, UniverseRef
+from truealpha_contracts import SubjectKind
+from truealpha_contracts.capture_control import CaptureListVersion
 from truealpha_contracts.datahub import (
     FetchAttempt,
     FetchAttemptOutcome,
@@ -24,23 +25,24 @@ _TERMINAL = {
 def expand_obligations(
     *,
     run_id: str,
-    universe: UniverseRef,
-    listings: tuple[str, ...],
+    list_version: CaptureListVersion,
     semantic_types: tuple[str, ...],
     partition: str,
 ) -> tuple[ListObligation, ...]:
     """Expand the exact list/type denominator without collapsing share classes."""
-    if len(listings) != len(set(listings)) or len(semantic_types) != len(set(semantic_types)):
+    if len(semantic_types) != len(set(semantic_types)):
         raise ValueError("obligation inputs must not contain duplicates")
+    if any(member.kind is not SubjectKind.LISTING for member in list_version.members):
+        raise ValueError("capture-control expansion requires listing members")
     obligations = (
         ListObligation(
             run_id=run_id,
-            universe_ref=universe,
-            subject=SubjectRef(kind=SubjectKind.LISTING, id=listing),
+            universe_ref=list_version.universe,
+            subject=member,
             capture_requirement_id=f"{semantic_type}:v1",
             partition=partition,
         )
-        for listing in sorted(listings)
+        for member in list_version.members
         for semantic_type in sorted(semantic_types)
     )
     return tuple(obligations)
@@ -55,9 +57,15 @@ class AttemptLedger:
     attempts: list[FetchAttempt] = field(default_factory=list)
     results: list[FetchAttemptResult] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        if self.maximum_attempts < 1:
+            raise ValueError("maximum_attempts must be positive")
+
     def start(self, *, started_at: datetime) -> FetchAttempt:
         if self.is_terminal:
             raise ValueError("attempt after terminal outcome")
+        if len(self.results) != len(self.attempts):
+            raise ValueError("previous attempt has no result")
         if len(self.attempts) >= self.maximum_attempts:
             raise ValueError("maximum attempts exceeded")
         attempt = FetchAttempt(
@@ -82,6 +90,8 @@ class AttemptLedger:
             raise ValueError("attempt is not the current append-only attempt")
         if any(result.attempt_id == attempt.attempt_id for result in self.results):
             raise ValueError("attempt already has a result")
+        if completed_at < attempt.started_at:
+            raise ValueError("completed_at precedes started_at")
         result = FetchAttemptResult(
             attempt_id=attempt.attempt_id,
             completed_at=completed_at,

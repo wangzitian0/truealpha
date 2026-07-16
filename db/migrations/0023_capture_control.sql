@@ -80,6 +80,67 @@ create table if not exists raw.recapture_plans (
     created_at                 timestamptz not null default now()
 );
 
+create or replace function raw.enforce_capture_attempt_sequence()
+returns trigger language plpgsql as $$
+declare
+    expected_attempt integer;
+    previous_outcome text;
+begin
+    perform 1 from raw.capture_work_items where work_item_id = new.work_item_id for update;
+    select coalesce(max(attempt_number), 0) + 1
+      into expected_attempt
+      from raw.capture_attempts
+     where work_item_id = new.work_item_id;
+    if new.attempt_number <> expected_attempt then
+        raise exception 'capture attempts must be contiguous';
+    end if;
+    if expected_attempt > 1 then
+        select result.outcome
+          into previous_outcome
+          from raw.capture_attempts attempt
+          left join raw.capture_attempt_results result using (attempt_id)
+         where attempt.work_item_id = new.work_item_id
+         order by attempt.attempt_number desc
+         limit 1;
+        if previous_outcome is null then
+            raise exception 'previous capture attempt has no result';
+        end if;
+        if previous_outcome in ('success', 'unchanged', 'unavailable', 'failed') then
+            raise exception 'capture attempt after terminal outcome';
+        end if;
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists enforce_attempt_sequence on raw.capture_attempts;
+create trigger enforce_attempt_sequence
+before insert on raw.capture_attempts
+for each row execute function raw.enforce_capture_attempt_sequence();
+
+create or replace function raw.validate_capture_attempt_result()
+returns trigger language plpgsql as $$
+declare
+    dispatch_started_at timestamptz;
+begin
+    select started_at into dispatch_started_at
+      from raw.capture_attempts
+     where attempt_id = new.attempt_id;
+    if dispatch_started_at is null then
+        raise exception 'attempt result has no persisted dispatch';
+    end if;
+    if new.completed_at < dispatch_started_at then
+        raise exception 'attempt result completion precedes dispatch';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists validate_attempt_result on raw.capture_attempt_results;
+create trigger validate_attempt_result
+before insert on raw.capture_attempt_results
+for each row execute function raw.validate_capture_attempt_result();
+
 create or replace function raw.reject_capture_control_mutation()
 returns trigger language plpgsql as $$
 begin
