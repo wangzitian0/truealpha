@@ -27,7 +27,7 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
-    { name = "infra2-sdk", url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl" },
+    { name = "infra2-sdk", url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.3.0/infra2_sdk-0.3.0-py3-none-any.whl" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pandas-stubs", specifier = ">=2.2" },
 ]
@@ -583,24 +583,48 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "0.1.0"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl" }
+version = "0.3.0"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.3.0/infra2_sdk-0.3.0-py3-none-any.whl" }
 dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl", hash = "sha256:94bfdc8b13c5bdcef9ee9150eda0ec794d3b3a0b4b11d529c29d6a2a1ba32a55" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.3.0/infra2_sdk-0.3.0-py3-none-any.whl", hash = "sha256:2046043be5d1072fe405851e7b5b9c9e2d0729a5ac8273552f24bd1228347c5c" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2,<2" },
+    { name = "boto3", marker = "extra == 'all'", specifier = ">=1.34,<2" },
+    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.34,<2" },
+    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.34,<2" },
+    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2,!=1.5.1,<2" },
+    { name = "httpx", marker = "extra == 'all'", specifier = ">=0.27,<1" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27,<1" },
+    { name = "httpx", marker = "extra == 'http'", specifier = ">=0.27,<1" },
+    { name = "opentelemetry-api", marker = "extra == 'all'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-api", marker = "extra == 'dev'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'all'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'dev'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-instrumentation-logging", marker = "extra == 'all'", specifier = ">=0.45b0,<1" },
+    { name = "opentelemetry-instrumentation-logging", marker = "extra == 'dev'", specifier = ">=0.45b0,<1" },
+    { name = "opentelemetry-instrumentation-logging", marker = "extra == 'otel'", specifier = ">=0.45b0,<1" },
+    { name = "opentelemetry-sdk", marker = "extra == 'all'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.24,<2" },
+    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.24,<2" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'all'", specifier = ">=3.2,<4" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.2,<4" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2,<4" },
+    { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2.7,<3" },
+    { name = "pydantic-settings", marker = "extra == 'dev'", specifier = ">=2.2,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<10" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23,<2" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<8" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["s3", "postgres", "otel", "http", "all", "dev"]
 
 [[package]]
 name = "iniconfig"

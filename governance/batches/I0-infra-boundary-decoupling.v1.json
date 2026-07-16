@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "I0-infra-boundary-decoupling",
-  "revision": 3,
+  "revision": 4,
   "issue": 201,
   "owner_gate": 32,
   "status": "active",
@@ -24,7 +24,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "f1b6d93051dbe553058d3c9f60bf3922165cbc54",
+    "base_sha": "c4049ba94f00199919a3bc8dd27c1a699b98b73e",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued batch registration is merged to main before corpus preparation",
@@ -45,9 +45,9 @@
   "corpus": {
     "environment": "Local/CI checked-in repository-boundary fixture",
     "manifest_path": "libs/runtime/tests/fixtures/infra_boundary.v1.json",
-    "sha256": "77b85d568747ac99ad6846d0fcdbca1788a6101a8cbc5ad57dbd7a2d758cd1f6",
+    "sha256": "4f4770eb961393f87371d377d14735d02a88ec6b2d16a8115712530174cd72d1",
     "required_strata": [
-      "SDK v0.1.0 immutable release pin and installed distribution identity",
+      "SDK v0.3.0 immutable release pin and installed distribution identity",
       "valid TrueAlpha staging DeployRequest v1 round trip",
       "invalid service, repository, ref, SHA, and evidence rejection",
       "production request rejection before remote evidence verification and receiver enablement",
@@ -91,7 +91,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/I0-infra-boundary-decoupling.v1.json",
-      "sha256": "c895b3dc631a63d291f159ca9506b81ec889718bfb9066a94c26396a4aba2ab2"
+      "sha256": "7bc3626ebc5669b1d23967fad27508cb2d4702228926639daaa8247e13fd0b42"
     }
   },
   "release_activation": {
