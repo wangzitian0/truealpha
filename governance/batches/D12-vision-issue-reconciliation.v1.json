@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "batch_id": "D12-vision-issue-reconciliation",
+  "revision": 1,
+  "issue": 250,
+  "owner_gate": 32,
+  "status": "queued",
+  "lane": "orchestration-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Make Vision issue reconciliation deterministic so batch merges do not create false-red workflows, stale lifecycle state, or search-index-dependent parity failures.",
+  "claim_ceiling": "Registration only: no workflow, issue, label, body, lifecycle, validator, or retry behavior changes. A future accepted D12 E0 result may repair only GitHub issue reconciliation and standalone merge-hook routing; it cannot weaken Vision parity or authorize application, data, factor, backtest, release, or Production work.",
+  "capability_issues": [],
+  "closes_issues": [],
+  "informational_issues": [
+    222,
+    223,
+    239,
+    278,
+    288
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "the queued registration is merged on main before preparation pins the activation base, independent reviewer, frozen event corpus, and integration lease",
+      "batch-managed PRs exit the standalone close hook before standalone Work-Key validation while complete-on-merge standalone PRs remain fail-closed",
+      "post-write parity refetches the unfiltered authoritative issue collection and filters scope:vision locally without label-search indexing",
+      "one repository concurrency group serializes reconciliation and terminal batch lifecycle is projected deterministically",
+      "concurrent human edits, pagination, retries, rate limits, partial failures, and reruns are either proven safe by executable tests or remain explicitly outside the accepted claim"
+    ]
+  },
+  "dependencies": [],
+  "later_claim_dependencies": [
+    "Historical failed workflow attempts remain immutable; D12 prevents recurrence and reruns only attempts whose original event and workflow revision can still produce valid evidence.",
+    "Any broader GitHub governance redesign, application behavior, or delivery-policy relaxation requires separate authorization."
+  ],
+  "corpus": {
+    "environment": "No execution corpus is authorized during queued registration.",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "merged managed-by-batch PR closure skips standalone issue completion without error",
+      "merged complete-on-merge standalone PR closes exactly its declared issue and malformed metadata fails closed",
+      "newly scoped issues are visible to post-write parity without label-search indexing",
+      "done and cancelled batches close with deterministic reasons while queued, prepared, and active batches remain open",
+      "concurrent edits, pagination, retries, rate limits, partial failures, and idempotent reruns"
+    ]
+  },
+  "source_ceiling": "GitHub issue and pull-request metadata only; no credential beyond the workflow token and no application, database, object-store, source, scheduler, release, consumer, or Production data operation is authorized.",
+  "paths": {
+    "writable": [
+      ".github/workflows/sync-batch-issues.yml",
+      ".github/workflows/sync-standalone-issue.yml",
+      "libs/runtime/tests/test_issue_reconciliation.py",
+      "libs/runtime/tests/fixtures/issue_reconciliation.v1.json",
+      "governance/evidence/D12-vision-issue-reconciliation-E0.v1.json",
+      "governance/leases/D12-vision-issue-reconciliation.v1.json"
+    ],
+    "read_only": [
+      "AGENTS.md",
+      "vision.md",
+      "init.md",
+      "docs/iterative-delivery.md",
+      "tools/check_delivery_governance.py",
+      "libs/runtime/tests/test_delivery_governance.py",
+      ".github/workflows/ci-required.yml",
+      ".github/workflows/ci-governance.yml"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "vision.md",
+      "init.md",
+      "apps/**",
+      "db/**",
+      "libs/contracts/**",
+      "libs/factors/**",
+      "libs/runtime/src/**",
+      "tools/**",
+      "Makefile",
+      "uv.lock",
+      "pyproject.toml"
+    ],
+    "integration_surface": [],
+    "lease_owner": null,
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "D12 changes delivery metadata reconciliation only and cannot activate an application, source, runtime, schedule, consumer, release, or data flow."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/runtime/tests/test_issue_reconciliation.py -q",
+      "uv run python tools/check_delivery_governance.py",
+      "git diff --check"
+    ],
+    "negative_controls": [
+      "closing a batch Work-Issue through the standalone hook or accepting a malformed standalone Work-Key",
+      "using a label-filtered GitHub search immediately after reconciliation writes",
+      "overlapping reconciliation writers or nondeterministic terminal issue state",
+      "overwriting a concurrent human edit, silently dropping a partial failure, or claiming untested retry and rate-limit safety",
+      "weakening scope:vision parity or changing application, data, factor, backtest, release, or Production behavior"
+    ],
+    "output": {
+      "type": "VisionIssueReconciliationEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "repository CI and governance operations planning only until a later accepted E0 result"
+      ]
+    }
+  },
+  "invalidation": [
+    "Changing event routing, lifecycle policy, managed labels, body ownership, concurrency, API consistency, retry policy, or corpus requires a new prepared revision before implementation.",
+    "Any attempt to weaken live parity or modify application, data, factor, backtest, release, or Production surfaces requires separate authorization."
+  ],
+  "rollback": "Revert only the future D12 reconciliation workflow, tests, evidence, and lease; do not rewrite historical Actions runs or mutate application, data, factor, backtest, release, or Production state."
+}
