@@ -27,7 +27,7 @@
       "the E0 repair replaces the pre-evidence alias corpus with canonical list-version identities at 603fe49e09257df8030c75e58898cee03787605df4756e46b8e368c1d75212c0",
       "the superseded preparation corpus is revoked before any E1 execution, protected result, or handoff consumption",
       "the stable activation base remains 5c1721617acaaedf43245f3beccdefcb2182154e while E0 evidence records its exact current PR base and head",
-      "the E0 implementation starts from exact current main ce15dedab1e5596a09112bdbd1911f7e7bfe3e6d",
+      "the E0 implementation starts from exact current main 5e1be12550ed8e7f8528f8017adffaa009a0ef40",
       "the accepted D4 E2 Local/CI handoff remains unchanged and permits this batch",
       "the accepted D2 E3 data-plane evidence remains unchanged",
       "an independent reviewer is assigned before E0 acceptance",
@@ -160,7 +160,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/D5-list-capture-control-plane.v1.json",
-      "sha256": "e771e33f0b216cc6e738159dd682474926bd4c73e9ec18383898d6736c1efd52"
+      "sha256": "c1038674514c81eb0b96a02c10d20636d77b46729cab5b76fb76c8ffe31c93c4"
     }
   },
   "release_activation": {

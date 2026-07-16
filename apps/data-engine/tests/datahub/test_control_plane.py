@@ -90,6 +90,12 @@ def test_attempt_dispatch_waits_for_result_and_completion_is_monotonic() -> None
             completed_at=datetime(2026, 3, 31, tzinfo=UTC),
             outcome=FetchAttemptOutcome.INTERRUPTED,
         )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        ledger.finish(
+            attempt=attempt,
+            completed_at=datetime(2026, 4, 1),
+            outcome=FetchAttemptOutcome.INTERRUPTED,
+        )
 
 
 def test_attempt_budget_must_be_positive() -> None:

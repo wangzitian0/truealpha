@@ -91,6 +91,8 @@ class AttemptLedger:
             raise ValueError("attempt is not the current append-only attempt")
         if any(result.attempt_id == attempt.attempt_id for result in self.results):
             raise ValueError("attempt already has a result")
+        if completed_at.tzinfo is None or completed_at.utcoffset() is None:
+            raise ValueError("completed_at must be timezone-aware")
         if completed_at < attempt.started_at:
             raise ValueError("completed_at precedes started_at")
         result = FetchAttemptResult(
