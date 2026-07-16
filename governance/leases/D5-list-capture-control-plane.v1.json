@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:f1ac5a720282c9ab5dca6f4ad6b7ddea4f2ef1611ac6a3294546793dc263f54d",
+  "lease_id": "integration-lease:ec3a19ce6f800f4ffde4843463ad6e1a0afa4f0ab6ac729bf6877dab1dfd8b9c",
   "batch_id": "D5-list-capture-control-plane",
   "owner": "wangzitian0",
   "state": "active",
@@ -9,6 +9,6 @@
     "db/migrations/0023_capture_control.sql",
     "db/tests/capture_control_contract.sql"
   ],
-  "base_sha": "78052c06ff64d2dbed41984fdccc6bb1e713351b",
+  "base_sha": "6c1dd259fb3a23750e76fb9665c40005d3f23691",
   "expires_at": "2026-07-30T00:00:00Z"
 }
