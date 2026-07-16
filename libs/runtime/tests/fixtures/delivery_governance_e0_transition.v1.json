@@ -85,7 +85,7 @@
       "name": "prepared_terminal_e1_direct_done",
       "base": {
         "status": "prepared",
-        "last_accepted_rung": "E0",
+        "last_accepted_rung": null,
         "target_rung": "E1",
         "terminal_rung": "E1"
       },
