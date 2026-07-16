@@ -140,6 +140,7 @@ class CaptureObligationWorkBinding(BaseModel):
         )
         return self
 
+
 class CaptureCheckpoint(BaseModel):
     """One append-only resume checkpoint for a capture run."""
 
