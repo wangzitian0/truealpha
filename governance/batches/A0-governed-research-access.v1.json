@@ -127,7 +127,7 @@
       "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/tests/test_access.py",
       "uv run mypy",
       "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
-      "python3 tools/check_delivery_governance.py"
+      "uv run python tools/check_delivery_governance.py"
     ],
     "negative_controls": [
       "missing, expired, revoked, cross-tenant, or client-supplied access identity reaches a mart query, artifact retrieval, or mutation",
