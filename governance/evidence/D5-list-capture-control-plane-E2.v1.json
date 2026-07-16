@@ -1,0 +1,66 @@
+{
+  "accepted_rung": "E2",
+  "base_sha": "5c1721617acaaedf43245f3beccdefcb2182154e",
+  "batch_id": "D5-list-capture-control-plane",
+  "commands": [
+    {
+      "command": "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_capture_control.py -q",
+      "exit_code": 0,
+      "output_sha256": "09cad93f07e656d18120af89e59e0535a38eccc5c75bead2fe733d3e49a9bdfa"
+    },
+    {
+      "command": "uv run --package truealpha-data-engine python -m pytest apps/data-engine/tests/datahub -q",
+      "exit_code": 0,
+      "output_sha256": "f843840d0efaa31afbe2567f522380d9f4381e7531310cb21a49f694cb052103"
+    },
+    {
+      "command": "uv run --package truealpha-data-engine python apps/data-engine/scripts/run_capture_control.py --corpus apps/data-engine/tests/fixtures/capture_control/corpus.v1.json --expected-sha256 7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93",
+      "exit_code": 0,
+      "output_sha256": "66fee967b83a693e9d7ff93bc4c45a1dae32a02960cc537be556a0b9b513188c"
+    },
+    {
+      "command": "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/capture_control.py libs/contracts/tests/test_capture_control.py",
+      "exit_code": 0,
+      "output_sha256": "c822b811c2e0019bee1324669633ca6aa6ae681c738309b0a31c13bbeebac766"
+    },
+    {
+      "command": "uv run --package truealpha-data-engine python -m ruff check apps/data-engine/src/data_engine/datahub apps/data-engine/tests/datahub apps/data-engine/scripts/run_capture_control.py",
+      "exit_code": 0,
+      "output_sha256": "c822b811c2e0019bee1324669633ca6aa6ae681c738309b0a31c13bbeebac766"
+    },
+    {
+      "command": "uv run --package truealpha-contracts python -m mypy",
+      "exit_code": 0,
+      "output_sha256": "7515b574f07766a661d3852729668ace6cee22ad7d691d0058d1a6d7ef8ca176"
+    },
+    {
+      "command": "uv run --package truealpha-data-engine python -m mypy",
+      "exit_code": 0,
+      "output_sha256": "7515b574f07766a661d3852729668ace6cee22ad7d691d0058d1a6d7ef8ca176"
+    },
+    {
+      "command": "uv run python tools/check_delivery_governance.py",
+      "exit_code": 0,
+      "output_sha256": "3ce0a3f4b2b2d3fcc83181896297ac73b4b7b3034209f9e2b7514b3d55b0ebfa"
+    }
+  ],
+  "created_at": "2026-07-16T12:18:16.000638Z",
+  "evidence_id": "rung-evidence:D5-list-capture-control-plane:69be61c435dae24e1ab2f98f27d6a2f1232c2ae015ad2ff0201e0fc8c3107dd5",
+  "manifest_sha256": "070b958bb5b4418f32244c0cb4a7fac65978eb36e51c66809671b58a0a238e5b",
+  "negative_controls": [
+    "mutable latest/current list, source, schedule, parser, mapping, confidence, or recapture policy coordinate",
+    "campaign, run, obligation, work-item, attempt, raw-object, observation, plan, or checkpoint identity drift",
+    "identical raw bytes erase a later attempt, observation event, or separate list obligation",
+    "duplicate obligation, non-contiguous attempt, retry after terminal outcome, or unbounded retry",
+    "missing terminal state, denominator shrink, or aggregate-ratio substitution",
+    "resume duplicates logical work, loses an attempt, or repairs history with UPDATE or DELETE",
+    "recapture execution differs from its frozen dry-run selection, broadens a predicate, or rewrites an unaffected cell",
+    "GOOG and GOOGL collapse to one instrument or TOPT differs from 20 issuers, 21 instruments, and 84 obligations",
+    "an E2 consumer/environment permission grants Staging or Production access before D5 terminal acceptance",
+    "source call before scope, policy, rights, budget, and call-plan authorization",
+    "root export, global Dagster definition, default schedule, Staging route, Production route, or release binding"
+  ],
+  "producer_head_sha": "bf615ab91b26f93c509c6c81994880ec19411604",
+  "schema_version": 1,
+  "stable_handoff": false
+}
