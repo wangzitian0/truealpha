@@ -5,7 +5,7 @@
   "fixture_kind": "frozen-declarative-control-plane-corpus",
   "source_ceiling": "Local/CI checked-in fixtures only; no network, credential, provider-rights, default-schedule, or Staging operation is authorized.",
   "identity_policy": {
-    "campaign_id": "capture-campaign:eec610ead8e495909527d113082035d1263f99300f73cf67e926cf469fc5fe9b",
+    "campaign_id": "capture-campaign:b89f6b689747db8bfc6eb09866f34a38af453623eee6c7e040d5379b54ed62c7",
     "list_version_ids": [
       "list-version:d5-primary-v1",
       "list-version:d5-overlap-v1"
@@ -160,12 +160,12 @@
       },
       "expected_selected_obligations": [
         {
-          "obligation_id": "list-obligation:c65d30bb08313ee3d254ae7fb1fa12e9a7e36f2a9942a005b1d9eddbf694254c",
-          "run_id": "capture-run:f31944cfb4aff8c950809718b8a6efe9750cb5eb68144a1a3dd356abdd5c5fd7",
+          "obligation_id": "list-obligation:e8ac62c8831208b2d2dbda13136e04349ff6c8775d92b40e374cd814a9d91d13",
+          "run_id": "capture-run:89218d2ccfd82036527934f2fbcdb03776b9e6ce36d3dfb9e10b2b11338867ae",
           "universe_ref": {
-            "universe_id": "list-version:d5-primary-v1",
-            "universe_version": "v1",
-            "content_sha256": "64e38c2b1d0c4cb7a15982756f96051a5d6f5581d66cc9fdfb0353c13bf6d5ec"
+            "universe_id": "universe:topt-us-2026-03-31",
+            "universe_version": "topt-candidate-2026-03-31-v1",
+            "content_sha256": "8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f"
           },
           "subject": {"kind": "listing", "id": "listing:xnas:nvda"},
           "capture_requirement_id": "market-price:v1",
