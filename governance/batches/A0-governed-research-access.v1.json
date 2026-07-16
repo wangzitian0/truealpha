@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "A0-governed-research-access",
-  "revision": 3,
+  "revision": 4,
   "issue": 230,
   "owner_gate": 31,
   "status": "active",
@@ -10,7 +10,7 @@
   "target_rung": "E1",
   "terminal_rung": "E2",
   "objective": "Establish a governed multi-user research access boundary before MCP, reports, cards, the Web App, or chat expose personal research state.",
-  "claim_ceiling": "E0 experimental governed-access submodule, additive app schema, forced owner RLS, and append-only policy/decision/audit boundary only; no authoritative init.md amendment, stable package-root export, tiny-corpus acceptance, authentication route, identity-provider binding, browser or MCP access, content retention, report or card mutation, replay submission, factor execution, Qlib invocation, source call, stable handoff, or release activation is accepted.",
+  "claim_ceiling": "Corrected E0 experimental governed-access submodule, additive app schema, forced owner RLS, administrator-only audit metadata view, and append-only policy/decision/audit boundary only; no authoritative init.md amendment, stable package-root export, tiny-corpus acceptance, authentication route, identity-provider binding, browser or MCP access, content retention, report or card mutation, replay submission, factor execution, Qlib invocation, source call, stable handoff, or release activation is accepted.",
   "capability_issues": [229],
   "closes_issues": [229],
   "informational_issues": [31, 41, 42, 43, 45, 46, 66, 224, 225, 226, 227],
@@ -29,6 +29,7 @@
       "the stable activation base remains 2fe3bc7e43c89b317caceeb4d627657cf7c50729 while implementation evidence records its exact current PR base and head",
       "the independent reviewer remains assigned through E1 acceptance",
       "the active A0 integration lease covers only the E0 architecture decision, additive migration, db/roles.sql, and SQL contract test; frozen Gate 0 candidate paths remain unchanged",
+      "post-merge E0 review findings are classified as local contract bugs and rerun E0 without accepting the E1 tiny corpus",
       "issue #230 contains this manifest path and exact SHA-256",
       "Delivery Governance CI passes offline validation and live GitHub parity"
     ]
@@ -134,6 +135,10 @@
       "administrator reads private conversation or document content without separately approved break-glass evidence",
       "grant, revocation, publication policy, or access audit row is updated or deleted instead of appended",
       "private app rows bypass RLS or return after cross-tenant object-ID guessing",
+      "a contradictory resource privacy shape bypasses the publication policy for a materialized strategy or backtest result",
+      "an audit event and its authorization decision carry different tenant identities or expose cross-tenant decision metadata",
+      "ordinary app runtime reads administrator audit metadata or either immutable audit base table",
+      "AuthorizationService hides publication-policy, authentication-failure, or delegation-revocation inputs required by authorize_access",
       "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
       "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
       "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated",
