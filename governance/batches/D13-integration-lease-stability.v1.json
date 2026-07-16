@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "batch_id": "D13-integration-lease-stability",
+  "revision": 1,
+  "issue": 248,
+  "owner_gate": 32,
+  "status": "queued",
+  "lane": "orchestration-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E0",
+  "objective": "Preserve an integration lease across unrelated main drift while rejecting any leased-path drift or non-ancestor acquisition anchor.",
+  "claim_ceiling": "Queued D13 E0 registration only: no lease-validator behavior, closed-corrective authorization, issue lifecycle, Gate 0 binding, application, data, factor, backtest, release, or Production behavior changes yet.",
+  "capability_issues": [],
+  "closes_issues": [],
+  "informational_issues": [
+    250,
+    288,
+    295
+  ],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "the queued D13 registration is merged to main before preparation freezes the activation base, reviewer, corpus, and integration lease",
+      "a lease acquisition base must be an ancestor of the exact PR base",
+      "every leased path must remain unchanged from the acquisition base through the exact PR base",
+      "unrelated main drift may preserve lease identity only when owner, state, expiry, leased paths, dependencies, and authorization paths remain valid",
+      "non-ancestor anchors, leased-path drift, overlap, expiry, revocation, owner/path expansion, and malformed leases remain fail-closed"
+    ]
+  },
+  "dependencies": [],
+  "later_claim_dependencies": [
+    "D13 E0 may unblock D12 corrective PR #304 only after exact-head acceptance; it does not itself repair or accept D12.",
+    "Transferred, released, and automatic lease lifecycle states plus root-export redesign remain later #248 work.",
+    "Any broader closed-corrective predicate, application, data, factor, backtest, release, or Production change requires separate authorization."
+  ],
+  "corpus": {
+    "environment": "Local/CI git-history and lease fixtures only",
+    "manifest_path": null,
+    "sha256": null,
+    "required_strata": [
+      "lease acquisition base equals the exact PR base",
+      "lease acquisition base is an ancestor and only unrelated paths changed",
+      "a leased file changed between acquisition and PR base",
+      "an ancestor leased file was deleted or renamed before PR base",
+      "lease acquisition base is not an ancestor or is unavailable",
+      "overlap, expiry, revoked state, owner mismatch, path expansion, and malformed lease remain rejected"
+    ]
+  },
+  "source_ceiling": "Local git history and checked-in governance artifacts only; no network source, credential, database, object-store, scheduler, runtime, release, consumer, or Production operation is authorized.",
+  "paths": {
+    "writable": [
+      "tools/check_delivery_governance.py",
+      "libs/runtime/tests/test_delivery_governance.py",
+      "libs/runtime/tests/fixtures/integration_lease_stability.v1.json",
+      "governance/evidence/D13-integration-lease-stability-E0.v1.json",
+      "governance/gate0/manifest-v8.json",
+      "governance/gate0/v7-frozen-tree-proof.v1.json",
+      "governance/leases/D13-integration-lease-stability.v1.json"
+    ],
+    "read_only": [
+      "AGENTS.md",
+      "vision.md",
+      "init.md",
+      "docs/iterative-delivery.md",
+      "governance/batches/D11-closed-terminal-pr-metadata.v1.json",
+      "governance/batches/D12-vision-issue-reconciliation.v1.json",
+      "governance/gate0/manifest-v7.json"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "vision.md",
+      "init.md",
+      "apps/**",
+      "db/**",
+      "libs/contracts/**",
+      "libs/factors/**",
+      "libs/runtime/src/**",
+      ".github/workflows/**",
+      "Makefile",
+      "uv.lock",
+      "pyproject.toml"
+    ],
+    "integration_surface": [
+      "tools/check_delivery_governance.py",
+      "libs/runtime/tests/test_delivery_governance.py",
+      "governance/gate0/manifest-v8.json",
+      "governance/gate0/v7-frozen-tree-proof.v1.json"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "D13 changes offline repository lease validation only and cannot activate a source, runtime, schedule, consumer, release, or data flow."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run pytest libs/runtime/tests/test_delivery_governance.py -q",
+      "uv run python tools/check_delivery_governance.py",
+      "uv run python tools/check_gate0_candidate.py --manifest governance/gate0/manifest-v8.json",
+      "make gate0-candidate-check",
+      "git diff --check"
+    ],
+    "negative_controls": [
+      "accepting a non-ancestor or unavailable lease acquisition base",
+      "accepting any leased-path content, deletion, rename, or mode drift between acquisition and PR base",
+      "accepting overlap, expiry, revoked state, owner mismatch, path expansion, malformed identity, or stale dependency authorization",
+      "weakening closed-corrective path ownership, issue lifecycle, exact-head evidence, or review requirements",
+      "changing application, data, factor, backtest, release, database, consumer, or Production behavior"
+    ],
+    "output": {
+      "type": "IntegrationLeaseStabilityEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "issue #248 planning and D12 corrective-blocker analysis only until a later accepted D13 E0 result"
+      ]
+    }
+  },
+  "invalidation": [
+    "Changing ancestor policy, leased-path drift detection, git object handling, lease identity, overlap, expiry, state, owner, path, dependency, or corpus semantics requires a new prepared revision before implementation.",
+    "Any attempt to modify closed-corrective ownership, application, data, factor, backtest, release, database, consumer, or Production behavior requires separate authorization."
+  ],
+  "rollback": "Revert only the future D13 lease-validation predicate, tests, Gate 0 successor, evidence, and lease; do not mutate D12, historical Actions evidence, application, data, factor, backtest, release, or Production state."
+}
