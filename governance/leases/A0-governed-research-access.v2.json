@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:d76dfb36f56c5e6736240ff4c9102f6ef05e00373da46c122e19613028863301",
+  "batch_id": "A0-governed-research-access",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "init.md",
+    "docs/architecture-decisions/A0-governed-research-access.md",
+    "libs/contracts/src/truealpha_contracts/__init__.py",
+    "db/migrations/0024_access_policy_bindings.sql",
+    "db/roles.sql",
+    "db/tests/governed_research_access_contract.sql",
+    "governance/capabilities/issue-229.v1.json",
+    "governance/vision-issue-graph.json",
+    "governance/gate0/README.md",
+    "governance/gate0/manifest-v5.json",
+    "governance/gate0/v4-frozen-tree-proof.v1.json",
+    "governance/schemas/gate0-candidate-manifest.schema.json",
+    "governance/schemas/handoff-manifest.schema.json",
+    "governance/schemas/rung-evidence.schema.json",
+    "libs/runtime/tests/test_gate0_candidate.py",
+    "libs/runtime/tests/test_delivery_governance.py",
+    "tools/check_gate0_candidate.py",
+    "tools/check_delivery_governance.py"
+  ],
+  "base_sha": "6b0226cd920cdd906820ce328b504b5e08aa4ada",
+  "expires_at": "2026-07-30T00:00:00Z"
+}

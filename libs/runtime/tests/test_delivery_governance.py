@@ -899,7 +899,7 @@ def test_terminal_batch_comparison_ignores_only_owned_capability_evidence():
     comparable = governance.graph_without_owned_batch_updates(
         graph,
         batch_id="A0",
-        manifest={"status": "done", "closes_issues": [229]},
+        manifest={"status": "done", "capability_issues": [229], "closes_issues": [229, 230]},
     )
 
     assert "A0" not in comparable["batches"]
@@ -2159,17 +2159,18 @@ def test_pull_request_metadata_rejects_negated_closing_keyword():
 
 def test_pull_request_metadata_allows_declared_terminal_closure():
     validation = governance.Validation()
-    issue = {"number": 79, "title": "[truealpha-datahub] Replay the factor panel", "state": "open"}
+    batch_issue = {"number": 79, "title": "[truealpha-datahub] Replay the factor panel", "state": "open"}
+    capability_issue = {"number": 57, "title": "Replay the factor panel capability", "state": "open"}
 
     governance.validate_pull_request_metadata(
         validation,
         {
             "title": "[truealpha-datahub] Replay the factor panel",
-            "body": "Work-Issue: #79\nWork-Key: D0:E2\nIssue-Action: managed-by-batch\n\nCloses #79.",
+            "body": "Work-Issue: #79\nWork-Key: D0:E2\nIssue-Action: managed-by-batch\n\nCloses #57.",
         },
-        [issue],
-        _pull_request_advance(accepted_rung="E2", closes_issues=(79,)),
-        issue,
+        [batch_issue, capability_issue],
+        _pull_request_advance(accepted_rung="E2", closes_issues=(57,)),
+        batch_issue,
     )
 
     assert validation.errors == []

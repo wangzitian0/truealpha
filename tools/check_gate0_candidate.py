@@ -478,8 +478,7 @@ def frozen_candidate_tree_sha256(commit_sha: str, patterns: list[str] | tuple[st
     manifest_paths = {
         path
         for path in listing.stdout.splitlines()
-        if any(path_matches(path, pattern) for pattern in patterns)
-        and VERSIONED_MANIFEST_RE.fullmatch(path) is None
+        if any(path_matches(path, pattern) for pattern in patterns) and VERSIONED_MANIFEST_RE.fullmatch(path) is None
     }
     digest = hashlib.sha256()
     for relative_path in sorted(manifest_paths):
@@ -1009,8 +1008,10 @@ def _validate_candidate_identity(validation: Validation, payload: dict[str, Any]
     )
     artifact_version = payload.get("artifact_version")
     state = payload.get("state")
-    valid_version = artifact_version == "candidate-v1" if state != "accepted" else bool(
-        isinstance(artifact_version, str) and re.fullmatch(r"accepted-v[1-9][0-9]*", artifact_version)
+    valid_version = (
+        artifact_version == "candidate-v1"
+        if state != "accepted"
+        else bool(isinstance(artifact_version, str) and re.fullmatch(r"accepted-v[1-9][0-9]*", artifact_version))
     )
     validation.require(valid_version, f"issue #{issue}: artifact version does not match its state")
     validation.require(payload.get("issue") == issue, f"issue #{issue}: artifact issue mismatch")
@@ -1639,7 +1640,13 @@ def _validate_successor_manifest(
             predecessor_version=predecessor_version,
             candidate_commit=candidate_commit,
         )
-        if frozen_commit_available(candidate_commit):
+        commit_available = frozen_commit_available(candidate_commit)
+        if version > 5:
+            validation.require(
+                commit_available,
+                "Gate 0 predecessor: frozen candidate commit is unavailable",
+            )
+        if commit_available:
             frozen_manifest = frozen_file_bytes(candidate_commit, predecessor_path)
             frozen_tree = frozen_candidate_tree_sha256(candidate_commit, predecessor.get("paths", []))
             validation.require(

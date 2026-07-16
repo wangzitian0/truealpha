@@ -710,7 +710,11 @@ def validate_pull_request_metadata(
         and advance.kind == "capability_batch"
         and advance.accepted_rung == advance.manifest.get("terminal_rung")
     )
-    allowed_closures = set(advance.manifest.get("closes_issues", [])) if terminal_acceptance else set()
+    allowed_closures = (
+        set(advance.manifest.get("closes_issues", [])) & set(advance.manifest.get("capability_issues", []))
+        if terminal_acceptance
+        else set()
+    )
     for issue_number in sorted(closing_issues):
         validation.require(
             issue_number in allowed_closures,
@@ -1009,6 +1013,13 @@ def validate_manifest(
             validation.require(
                 len(issue_numbers) == len(set(issue_numbers)), f"{batch_id}: {field} contains duplicates"
             )
+    capability_issues = manifest.get("capability_issues")
+    closes_issues = manifest.get("closes_issues")
+    if isinstance(capability_issues, list) and isinstance(closes_issues, list):
+        validation.require(
+            set(closes_issues).issubset(capability_issues),
+            f"{batch_id}: closes_issues must be owned capability issues",
+        )
     validation.require(isinstance(manifest.get("owners"), dict), f"{batch_id}: owners must be an object")
     validation.require(isinstance(manifest.get("activation"), dict), f"{batch_id}: activation must be an object")
     validation.require(isinstance(manifest.get("paths"), dict), f"{batch_id}: paths must be an object")
@@ -1651,7 +1662,8 @@ def graph_without_owned_batch_updates(
     comparable = json.loads(json.dumps(graph))
     comparable["batches"].pop(batch_id, None)
     if manifest.get("status") == "done":
-        for issue_number in manifest.get("closes_issues", []):
+        owned_closures = set(manifest.get("closes_issues", [])) & set(manifest.get("capability_issues", []))
+        for issue_number in owned_closures:
             issue = comparable.get("issues", {}).get(str(issue_number))
             if isinstance(issue, dict):
                 issue.pop("accepted_evidence", None)

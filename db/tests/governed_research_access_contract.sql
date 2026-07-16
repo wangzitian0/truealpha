@@ -14,6 +14,7 @@ begin
        or to_regclass('app.access_audit_events') is null
        or to_regclass('app.publication_policy_sets') is null
        or to_regclass('app.publication_policy_entitlements') is null
+       or to_regclass('app.publication_policy_set_seals') is null
        or to_regclass('app.access_audit_metadata') is null then
         raise exception 'governed access storage boundary is incomplete';
     end if;
@@ -52,9 +53,10 @@ begin
           'app.authorization_decision_grants'::regclass,
           'app.publication_policy_sets'::regclass,
           'app.publication_policy_entitlements'::regclass,
+          'app.publication_policy_set_seals'::regclass,
           'app.access_audit_events'::regclass
       );
-    if append_only_trigger_count <> 12 then
+    if append_only_trigger_count <> 13 then
         raise exception 'all governed access records must be append-only';
     end if;
 
@@ -233,6 +235,124 @@ values
         'entitlement:research:premium:v1',
         '2026-07-15T00:00:00Z'
     );
+
+insert into app.publication_policy_set_seals (
+    publication_policy_set_id,
+    content_sha256,
+    sealed_at,
+    recorded_at
+)
+values (
+    'publication-policy-set:research:v2',
+    '4cc4f0d79486130bda4de3451b56770a5c295881535602b692bbf1cda585cdfd',
+    '2026-07-15T00:00:00Z',
+    '2026-07-15T00:00:00Z'
+);
+
+do $$
+begin
+    begin
+        insert into app.publication_policy_entitlements (
+            publication_policy_rule_id,
+            publication_policy_set_id,
+            publication_class_id,
+            entitlement_id,
+            recorded_at
+        ) values (
+            'publication-policy-rule:post-seal-invalid:v2',
+            'publication-policy-set:research:v2',
+            'publication-class:restricted:v1',
+            'entitlement:research:standard:v1',
+            '2026-07-15T00:01:00Z'
+        );
+        raise exception 'sealed policy rule insertion unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'sealed policy rule insertion unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'sealed publication policy set cannot accept new rules' then
+                raise;
+            end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into app.publication_policy_sets (
+            publication_policy_set_id, content_sha256, release_manifest_id, recorded_at
+        ) values (
+            'publication-policy-set:unsealed:v1',
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'release-manifest:research:v1',
+            '2026-07-15T00:00:00Z'
+        );
+        insert into app.authorization_decisions (
+            decision_id, tenant_id, principal_id, action, resource_id, resource_type,
+            publication_class_id, publication_policy_id, decision, reason_code,
+            decided_at, recorded_at
+        ) values (
+            'access-decision:9999999999999999999999999999999999999999999999999999999999999999',
+            'tenant:alpha', 'principal:alpha:alice', 'read_materialized_result',
+            'strategy-result:alpha:unsealed-001', 'materialized_strategy_result',
+            'publication-class:standard:v1', 'publication-policy-set:unsealed:v1',
+            'deny', 'publication_class_not_permitted',
+            '2026-07-15T00:02:00Z', '2026-07-15T00:02:00Z'
+        );
+        raise exception 'unsealed policy decision unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'unsealed policy decision unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'authorization decision policy set is missing or unsealed' then
+                raise;
+            end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into app.authorization_decisions (
+            decision_id, tenant_id, principal_id, action, resource_id,
+            publication_policy_id, decision, reason_code, decided_at, recorded_at
+        ) values (
+            'access-decision:8888888888888888888888888888888888888888888888888888888888888888',
+            'tenant:alpha', 'principal:alpha:alice', 'read_content',
+            'document:alpha:legacy-001', 'publication-policy:research:v1',
+            'allow', null, '2026-07-15T00:03:00Z', '2026-07-15T00:03:00Z'
+        );
+        insert into app.access_audit_events (
+            audit_event_id, decision_id, tenant_id, principal_id,
+            event_kind, occurred_at, recorded_at
+        ) values (
+            'access-audit-event:8888888888888888888888888888888888888888888888888888888888888888',
+            'access-decision:8888888888888888888888888888888888888888888888888888888888888888',
+            'tenant:alpha', 'principal:alpha:alice', 'access_allowed',
+            '2026-07-15T00:03:00Z', '2026-07-15T00:03:00Z'
+        );
+        perform set_config('truealpha.tenant_id', 'tenant:alpha', true);
+        perform set_config('truealpha.principal_id', 'principal:platform:admin', true);
+        if not exists (
+            select 1
+            from app.access_audit_metadata
+            where decision_id = 'access-decision:8888888888888888888888888888888888888888888888888888888888888888'
+        ) then
+            raise exception 'legacy authorization decision disappeared from audit metadata';
+        end if;
+        raise exception 'legacy compatibility rollback';
+    exception
+        when raise_exception then
+            if sqlerrm <> 'legacy compatibility rollback' then
+                raise;
+            end if;
+    end;
+end;
+$$;
 
 insert into app.private_research_objects (
     resource_id,
@@ -629,6 +749,7 @@ begin
         'authorization_decision_grants',
         'publication_policy_sets',
         'publication_policy_entitlements',
+        'publication_policy_set_seals',
         'access_audit_events'
     ]
     loop
@@ -658,6 +779,9 @@ begin
     end if;
     if (select count(*) from app.publication_policies where publication_policy_id = 'publication-policy:research:v1') <> 2 then
         raise exception 'publication policy supersession history was not preserved';
+    end if;
+    if (select count(*) from app.publication_policy_set_seals where publication_policy_set_id = 'publication-policy-set:research:v2') <> 1 then
+        raise exception 'publication policy set was not sealed exactly once';
     end if;
     if (select count(*) from app.access_audit_events where tenant_id = 'tenant:alpha') <> 3 then
         raise exception 'allowed-and-denied access audit history was not preserved';

@@ -25,7 +25,7 @@ alter role app_runtime set statement_timeout = '5s';
 
 grant usage on schema app to app_runtime;
 grant select on app.publication_policies, app.publication_policy_sets,
-    app.publication_policy_entitlements to app_runtime;
+    app.publication_policy_entitlements, app.publication_policy_set_seals to app_runtime;
 grant select on app.private_research_objects to app_runtime;
 revoke select on app.access_audit_metadata from app_runtime;
 grant insert on app.authorization_decisions, app.authorization_decision_grants,
@@ -33,6 +33,8 @@ grant insert on app.authorization_decisions, app.authorization_decision_grants,
 revoke all on function app.validate_access_audit_decision_tenant() from public;
 revoke all on function app.validate_authorization_decision_policy_set() from public;
 revoke all on function app.validate_authorization_decision_grant() from public;
+revoke all on function app.validate_publication_policy_entitlement_insert() from public;
+revoke all on function app.validate_publication_policy_set_seal() from public;
 grant execute on function app.validate_access_audit_decision_tenant() to app_runtime;
 grant execute on function app.validate_authorization_decision_policy_set() to app_runtime;
 grant execute on function app.validate_authorization_decision_grant() to app_runtime;

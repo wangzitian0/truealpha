@@ -197,6 +197,20 @@ def _create_v6_successor(root: Path) -> Path:
     return successor_path
 
 
+def _make_v6_predecessor_available(root: Path, monkeypatch) -> None:
+    monkeypatch.setattr(gate0, "frozen_commit_available", lambda _commit: True)
+    monkeypatch.setattr(
+        gate0,
+        "frozen_file_bytes",
+        lambda _commit, path: (root / path).read_bytes(),
+    )
+    monkeypatch.setattr(
+        gate0,
+        "frozen_candidate_tree_sha256",
+        lambda _commit, _paths: _load(root / "governance/gate0/manifest-v5.json")["candidate_tree_sha256"],
+    )
+
+
 def test_checked_in_candidate_is_valid_but_blocked(candidate_root):
     result = _validate(candidate_root)
 
@@ -250,8 +264,9 @@ def test_v5_successor_cannot_drop_inherited_blockers(candidate_root):
     assert "Gate 0 v5 successor: predecessor field changed: blocking_reasons" in result.errors
 
 
-def test_v6_successor_can_progress_blockers_under_normal_validation(candidate_root):
+def test_v6_successor_can_progress_blockers_under_normal_validation(candidate_root, monkeypatch):
     successor = _create_v6_successor(candidate_root)
+    _make_v6_predecessor_available(candidate_root, monkeypatch)
 
     result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
 
@@ -260,8 +275,18 @@ def test_v6_successor_can_progress_blockers_under_normal_validation(candidate_ro
     assert result.blockers[0].endswith("successor review recorded")
 
 
-def test_v6_successor_can_structurally_advance_to_accepted(candidate_root):
+def test_v6_successor_rejects_an_unavailable_predecessor_commit(candidate_root, monkeypatch):
     successor = _create_v6_successor(candidate_root)
+    monkeypatch.setattr(gate0, "frozen_commit_available", lambda _commit: False)
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert "Gate 0 predecessor: frozen candidate commit is unavailable" in result.errors
+
+
+def test_v6_successor_can_structurally_advance_to_accepted(candidate_root, monkeypatch):
+    successor = _create_v6_successor(candidate_root)
+    _make_v6_predecessor_available(candidate_root, monkeypatch)
     manifest = _load(successor)
     manifest["status"] = "accepted"
     manifest["blocking_reasons"] = []
@@ -278,8 +303,9 @@ def test_v6_successor_can_structurally_advance_to_accepted(candidate_root):
     assert not any("predecessor field changed" in error for error in validation.errors)
 
 
-def test_successor_cannot_extend_an_accepted_predecessor(candidate_root):
+def test_successor_cannot_extend_an_accepted_predecessor(candidate_root, monkeypatch):
     successor = _create_v6_successor(candidate_root)
+    _make_v6_predecessor_available(candidate_root, monkeypatch)
     predecessor = candidate_root / "governance/gate0/manifest-v5.json"
     predecessor_manifest = _load(predecessor)
     predecessor_manifest["status"] = "accepted"

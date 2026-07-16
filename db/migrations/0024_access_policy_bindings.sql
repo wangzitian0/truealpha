@@ -16,6 +16,80 @@ create table if not exists app.publication_policy_entitlements (
     unique (publication_policy_set_id, publication_class_id, entitlement_id)
 );
 
+create table if not exists app.publication_policy_set_seals (
+    publication_policy_set_id text primary key references app.publication_policy_sets,
+    content_sha256            text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
+    sealed_at                 timestamptz not null,
+    recorded_at               timestamptz not null default now(),
+    check (recorded_at >= sealed_at)
+);
+
+create or replace function app.validate_publication_policy_entitlement_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, app
+as $$
+begin
+    perform 1
+    from app.publication_policy_sets
+    where publication_policy_set_id = new.publication_policy_set_id
+    for update;
+
+    if exists (
+        select 1
+        from app.publication_policy_set_seals as seal
+        where seal.publication_policy_set_id = new.publication_policy_set_id
+    ) then
+        raise exception 'sealed publication policy set cannot accept new rules';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists trg_publication_policy_entitlements_validate_insert
+on app.publication_policy_entitlements;
+create trigger trg_publication_policy_entitlements_validate_insert
+before insert on app.publication_policy_entitlements
+for each row execute function app.validate_publication_policy_entitlement_insert();
+
+create or replace function app.validate_publication_policy_set_seal()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, app
+as $$
+declare
+    policy_content_sha256 text;
+begin
+    select content_sha256 into policy_content_sha256
+    from app.publication_policy_sets
+    where publication_policy_set_id = new.publication_policy_set_id
+    for update;
+
+    if policy_content_sha256 is null then
+        raise exception 'publication policy set does not exist';
+    end if;
+    if policy_content_sha256 <> new.content_sha256 then
+        raise exception 'publication policy set seal content hash mismatch';
+    end if;
+    if not exists (
+        select 1
+        from app.publication_policy_entitlements as policy_rule
+        where policy_rule.publication_policy_set_id = new.publication_policy_set_id
+    ) then
+        raise exception 'publication policy set cannot be sealed without rules';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists trg_publication_policy_set_seals_validate
+on app.publication_policy_set_seals;
+create trigger trg_publication_policy_set_seals_validate
+before insert on app.publication_policy_set_seals
+for each row execute function app.validate_publication_policy_set_seal();
+
 alter table app.authorization_decisions
     add column if not exists resource_type text,
     add column if not exists publication_class_id text;
@@ -34,6 +108,12 @@ security definer
 set search_path = pg_catalog, app
 as $$
 begin
+    if new.resource_type is null then
+        if new.publication_class_id is not null then
+            raise exception 'legacy authorization decision cannot carry a publication class';
+        end if;
+        return new;
+    end if;
     if new.resource_type not in (
         'private_conversation',
         'private_document',
@@ -51,9 +131,12 @@ begin
     if not exists (
         select 1
         from app.publication_policy_sets as policy_set
+        join app.publication_policy_set_seals as seal
+          on seal.publication_policy_set_id = policy_set.publication_policy_set_id
+         and seal.content_sha256 = policy_set.content_sha256
         where policy_set.publication_policy_set_id = new.publication_policy_id
     ) then
-        raise exception 'authorization decision policy set does not exist';
+        raise exception 'authorization decision policy set is missing or unsealed';
     end if;
     return new;
 end;
@@ -222,7 +305,7 @@ from app.access_audit_events as event
 join app.authorization_decisions as decision
   on decision.decision_id = event.decision_id
  and decision.tenant_id is not distinct from event.tenant_id
-join app.publication_policy_sets as policy_set
+left join app.publication_policy_sets as policy_set
   on policy_set.publication_policy_set_id = decision.publication_policy_id
 left join app.authorization_decision_grants as decision_grant
   on decision_grant.decision_id = decision.decision_id
@@ -233,7 +316,12 @@ where event.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
       where reader.principal_id = nullif(current_setting('truealpha.principal_id', true), '')
         and reader.principal_kind = 'administrator'
   )
-group by event.audit_event_id, decision.decision_id, policy_set.publication_policy_set_id;
+group by
+    event.audit_event_id,
+    decision.decision_id,
+    policy_set.publication_policy_set_id,
+    policy_set.content_sha256,
+    policy_set.release_manifest_id;
 
 do $$
 declare
@@ -242,6 +330,7 @@ begin
     foreach table_name in array array[
         'publication_policy_sets',
         'publication_policy_entitlements',
+        'publication_policy_set_seals',
         'authorization_decision_grants'
     ]
     loop

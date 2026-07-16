@@ -22,6 +22,10 @@ supersession add events instead of changing earlier records.
 Materialized research remains in `mart` and is read only after a release-bound,
 content-addressed `PublicationPolicySet` decision. Each member or service allow decision
 records the exact active entitlement grant identities that matched a publication rule.
+Policy rules are populated before an append-only seal record; once sealed, the set cannot
+accept another rule under the same identity or content hash. Legacy decision writers may
+continue writing their nullable pre-E2 shape during rollout, but only sealed E2 policy sets
+can authorize the new typed resource shape.
 `mart_readonly` limits database reach but does not replace application authorization.
 Administrators may read policy-permitted materialized strategy/backtest results and
 non-content audit metadata; they cannot read private conversation or document content
