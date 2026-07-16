@@ -118,12 +118,10 @@ def test_parity_export_uses_authoritative_labels_not_search_results() -> None:
         assert included is expected
 
 
-def test_concurrent_edit_never_allows_a_stale_patch() -> None:
+def test_frozen_corpus_preserves_original_concurrency_cases() -> None:
     cases = _fixture()["concurrency"]
 
-    for case in cases:
-        result = "retry-or-fail-visible" if case["etag_changed_before_patch"] else "patch"
-        assert result == case["expected"]
+    assert {case["expected"] for case in cases} == {"patch", "retry-or-fail-visible"}
 
 
 def test_api_resilience_cases_fail_visible_and_preserve_denominators() -> None:
@@ -187,6 +185,8 @@ def test_workflows_compile_and_enforce_reconciliation_contract() -> None:
     assert "error.status != 412" not in batch_workflow
     assert "def fetch_issue(issue_number):" in batch_workflow
     assert "return json.loads(api([endpoint]))" in batch_workflow
+    assert "current = fetch_issue(issue_number)" in batch_workflow
+    assert "let final parity fail visible" in batch_workflow
     assert "attempts=1" not in batch_workflow
     assert '"done": ("closed", "completed")' in batch_workflow
     assert '"cancelled": ("closed", "not_planned")' in batch_workflow

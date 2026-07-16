@@ -191,6 +191,8 @@ jobs:
 
           def reconcile(issue_number):
               endpoint = f"repos/{repository}/issues/{issue_number}"
+              # GitHub rejects conditional headers on issue PATCH. Serialize this
+              # workflow, refresh before writing, and let final parity fail visible.
               current = fetch_issue(issue_number)
               payload = desired_patch(issue_number, current)
               if payload is None:

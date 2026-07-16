@@ -1300,6 +1300,27 @@ def test_agents_guide_is_a_governance_control_and_remains_lease_protected(monkey
     assert governance.requires_integration_lease("AGENTS.md")
 
 
+def test_issue_reconciliation_contract_is_a_governance_control(monkeypatch):
+    monkeypatch.setattr(governance, "git_commit_exists", lambda _commit: True)
+    monkeypatch.setattr(governance, "git_merge_base", lambda base, _head: base)
+    monkeypatch.setattr(
+        governance,
+        "git_changed_paths",
+        lambda _base, _head: ("libs/runtime/tests/test_issue_reconciliation.py",),
+    )
+    validation = governance.Validation()
+
+    advance = governance.validate_pr_advance(
+        validation,
+        graph={"batches": {}},
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+    )
+
+    assert advance is None
+    assert validation.errors == []
+
+
 def test_agents_guide_does_not_require_current_main_for_disjoint_drift():
     guide = (governance.ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
