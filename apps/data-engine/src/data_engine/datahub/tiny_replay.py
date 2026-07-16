@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from truealpha_contracts import SubjectKind, SubjectRef, UniverseRef, canonical_sha256
+from truealpha_contracts import SubjectKind, SubjectRef, canonical_sha256
 from truealpha_contracts.capture_control import (
     CaptureCheckpoint,
     CaptureListObligation,
@@ -22,10 +22,14 @@ from truealpha_contracts.datahub import (
     FetchAttemptOutcome,
     ObligationTerminalState,
     RecapturePredicate,
-    RetryPolicy,
 )
 
-from data_engine.datahub.control_plane import AttemptLedger, expand_obligations
+from data_engine.datahub.control_plane import (
+    AttemptLedger,
+    expand_obligations,
+    frozen_topt_universe,
+    replay_retry_policy,
+)
 
 _RUN_ID = "capture-run:89218d2ccfd82036527934f2fbcdb03776b9e6ce36d3dfb9e10b2b11338867ae"
 _AT = datetime(2026, 4, 1, tzinfo=UTC)
@@ -249,35 +253,8 @@ class TinyReplayReport:
         return result
 
 
-def _retry_policy(max_attempts: int) -> RetryPolicy:
-    return RetryPolicy(
-        max_attempts=max_attempts,
-        retryable_outcomes=(
-            FetchAttemptOutcome.INTERRUPTED,
-            FetchAttemptOutcome.RATE_LIMITED,
-            FetchAttemptOutcome.SERVER_ERROR,
-            FetchAttemptOutcome.TRANSPORT_ERROR,
-        ),
-        terminal_outcomes=(
-            FetchAttemptOutcome.FAILED,
-            FetchAttemptOutcome.SUCCESS,
-            FetchAttemptOutcome.UNAVAILABLE,
-            FetchAttemptOutcome.UNCHANGED,
-        ),
-    )
-
-
-def _universe(corpus: Mapping[str, Any]) -> UniverseRef:
-    denominator = corpus["topt_denominator"]
-    return UniverseRef(
-        universe_id=denominator["universe_id"],
-        universe_version="topt-candidate-2026-03-31-v1",
-        content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
-    )
-
-
 def _lists(corpus: Mapping[str, Any]) -> tuple[CaptureListVersion, ...]:
-    universe = _universe(corpus)
+    universe = frozen_topt_universe(corpus)
     versions = tuple(
         CaptureListVersion(
             universe=universe,
@@ -312,7 +289,7 @@ def _run_attempt_scenario(row: Mapping[str, Any], maximum_attempts: int) -> int:
         return 0
     ledger = AttemptLedger(
         work_item_id=f"capture-work-item:{canonical_sha256({'scenario_id': scenario_id})}",
-        retry_policy=_retry_policy(maximum_attempts),
+        retry_policy=replay_retry_policy(maximum_attempts),
     )
     for offset, raw_outcome in enumerate(outcomes):
         attempt = ledger.start(started_at=_AT + timedelta(seconds=offset * 2))
@@ -353,7 +330,7 @@ def reject_out_of_order_attempt(corpus: Mapping[str, Any]) -> None:
     row = next(item for item in corpus["attempt_scenarios"] if "expected_error" in item)
     ledger = AttemptLedger(
         work_item_id=f"capture-work-item:{canonical_sha256({'scenario_id': row['scenario_id']})}",
-        retry_policy=_retry_policy(int(corpus["identity_policy"]["maximum_attempts"])),
+        retry_policy=replay_retry_policy(int(corpus["identity_policy"]["maximum_attempts"])),
     )
     first = ledger.start(started_at=_AT)
     ledger.finish(
@@ -417,7 +394,7 @@ def _resume_capture(store: _TinyReplayStore, obligations: Sequence[CaptureListOb
         if obligation_id not in store.attempts:
             ledger = AttemptLedger(
                 work_item_id=f"capture-work-item:{canonical_sha256({'obligation_id': obligation_id})}",
-                retry_policy=_retry_policy(1),
+                retry_policy=replay_retry_policy(1),
             )
             attempt = ledger.start(started_at=_AT)
             result = ledger.finish(
@@ -446,7 +423,7 @@ def _replay_identical_bytes(corpus: Mapping[str, Any]) -> tuple[int, int]:
     attempts = 0
     source_vintage_id = f"source-vintage:{scenario['raw_content_sha256']}"
     for cycle in scenario["capture_cycles"]:
-        ledger = AttemptLedger(work_item_id=cycle["work_item_id"], retry_policy=_retry_policy(1))
+        ledger = AttemptLedger(work_item_id=cycle["work_item_id"], retry_policy=replay_retry_policy(1))
         attempt = ledger.start(started_at=_AT)
         outcome = FetchAttemptOutcome(cycle["outcomes"][0])
         ledger.finish(
@@ -482,7 +459,7 @@ def _terminal_state_coverage(corpus: Mapping[str, Any]) -> tuple[int, tuple[str,
         outcome = FetchAttemptOutcome(str(state))
         ledger = AttemptLedger(
             work_item_id=f"capture-work-item:{canonical_sha256({'obligation_id': obligation_id})}",
-            retry_policy=_retry_policy(1),
+            retry_policy=replay_retry_policy(1),
         )
         attempt = ledger.start(started_at=_AT)
         source_vintage_id = (
@@ -602,7 +579,7 @@ def build_recapture_plan(corpus: Mapping[str, Any]) -> FrozenRecapturePlan:
     contract_plan = CaptureRecapturePlan(
         selection_cutoff=selection_cutoff,
         predicate=RecapturePredicate(
-            universe_refs=(_universe(corpus),),
+            universe_refs=(frozen_topt_universe(corpus),),
             subject_ids=(raw_predicates["instrument_id"],),
             source_policy_ids=(raw_predicates["source_version_id"],),
             semantic_types=(raw_predicates["semantic_type"],),
