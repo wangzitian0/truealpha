@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "D13-owner-only-gate0-signoff",
-  "revision": 1,
+  "revision": 2,
   "issue": 305,
   "owner_gate": 32,
-  "status": "queued",
+  "status": "prepared",
   "lane": "orchestration-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -21,17 +21,17 @@
   ],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "a5cd1fa8a570d37638656eb8ada7f3826064dd3f",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "the queued registration is merged on main before the preparation revision pins the activation base, reviewer, and frozen Local/CI corpus",
       "the E0 implementation installs a content-addressed integration lease before changing the shared Gate 0 validator, its tests, candidate files, or successor files",
       "the implementation removes only the four independence-role attestations and live role-separation checks; target-sha256 binding, byte-exact live comment verification, product-owner authorship, human-author, and no-ref-reuse rules remain mandatory",
-      "issue-59 and issue-61 candidate files drop only the deleted attestation entries and their role-flavored blocking reasons; every artifact-completeness blocker is preserved or reworded without a role requirement",
+      "issue-59 and issue-61 candidate files drop only the deleted attestation entries and their role-flavored blocking reasons; issue-60 changes only its issue-59 dependency hash; every artifact-completeness blocker is preserved or reworded without a role requirement",
       "Gate 0 v7 remains byte-for-byte frozen and a contiguous blocked v8 successor preserves every accepted artifact and readiness state with updated candidate hashes and attestation set",
       "no candidate is accepted and no attestation status changes from missing"
     ]
@@ -43,8 +43,8 @@
   ],
   "corpus": {
     "environment": "Local/CI Gate 0 candidate fixtures only",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/runtime/tests/fixtures/gate0_owner_only_attestations.v1.json",
+    "sha256": "25b4d119408ed1e22d5c589ac0ad03c473c31ef8266e5f1eebc560cae98a35f4",
     "required_strata": [
       "a chain whose five remaining attestations are all authored by the product owner passes live validation with no role-separation error",
       "each removed independence-role key is rejected as an unknown external attestation key",
@@ -64,6 +64,7 @@
       "governance/gate0/manifest-v8.json",
       "governance/gate0/v7-frozen-tree-proof.v1.json",
       "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "governance/gate0/issue-60.source-readiness.candidate-v1.json",
       "governance/gate0/issue-61.policy-bundle.candidate-v1.json",
       "governance/leases/D13-owner-only-gate0-signoff.v1.json"
     ],
@@ -72,8 +73,7 @@
       "docs/iterative-delivery.md",
       "governance/gate0/README.md",
       "governance/gate0/manifest-v7.json",
-      "governance/gate0/v6-frozen-tree-proof.v1.json",
-      "governance/gate0/issue-60.source-readiness.candidate-v1.json"
+      "governance/gate0/v6-frozen-tree-proof.v1.json"
     ],
     "forbidden": [
       "init.md",
@@ -96,6 +96,7 @@
       "governance/gate0/manifest-v8.json",
       "governance/gate0/v7-frozen-tree-proof.v1.json",
       "governance/gate0/issue-59.research-semantics.candidate-v1.json",
+      "governance/gate0/issue-60.source-readiness.candidate-v1.json",
       "governance/gate0/issue-61.policy-bundle.candidate-v1.json"
     ],
     "lease_owner": "wangzitian0",

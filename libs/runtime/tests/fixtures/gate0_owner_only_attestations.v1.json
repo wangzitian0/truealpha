@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "owner_signs_all_five_attestations",
+      "keys": [
+        "issue59_product_owner",
+        "issue60_rights_authority",
+        "issue60_budget_authority",
+        "issue60_live_probe_owner",
+        "issue61_product_owner_policy"
+      ],
+      "author_login": "wangzitian0",
+      "body_template": "compliant",
+      "expected": "allow",
+      "forbidden_errors": [
+        "cannot satisfy an independent review or custody role",
+        "must be separate"
+      ]
+    },
+    {
+      "name": "removed_key_issue59_independent_review",
+      "keys": ["issue59_independent_review"],
+      "author_login": "wangzitian0",
+      "body_template": "compliant",
+      "expected": "unknown key"
+    },
+    {
+      "name": "removed_key_issue59_holdout_custody",
+      "keys": ["issue59_holdout_custody"],
+      "author_login": "wangzitian0",
+      "body_template": "compliant",
+      "expected": "unknown key"
+    },
+    {
+      "name": "removed_key_issue59_known_reference",
+      "keys": ["issue59_known_reference"],
+      "author_login": "wangzitian0",
+      "body_template": "compliant",
+      "expected": "unknown key"
+    },
+    {
+      "name": "removed_key_issue61_independent_slo_review",
+      "keys": ["issue61_independent_slo_review"],
+      "author_login": "wangzitian0",
+      "body_template": "compliant",
+      "expected": "unknown key"
+    },
+    {
+      "name": "body_missing_target_sha256",
+      "keys": ["issue59_product_owner"],
+      "author_login": "wangzitian0",
+      "body_template": "missing_target_sha",
+      "expected": "does not bind target SHA-256"
+    },
+    {
+      "name": "body_missing_authority_statement",
+      "keys": ["issue60_rights_authority"],
+      "author_login": "wangzitian0",
+      "body_template": "missing_authority_terms",
+      "expected": "omits required authority statement"
+    },
+    {
+      "name": "body_missing_approval_verb",
+      "keys": ["issue61_product_owner_policy"],
+      "author_login": "wangzitian0",
+      "body_template": "missing_approval_verb",
+      "expected": "not an explicit approval or attestation"
+    },
+    {
+      "name": "bot_author_rejected",
+      "keys": ["issue60_live_probe_owner"],
+      "author_login": "some-agent[bot]",
+      "body_template": "compliant",
+      "expected": "must be a named human"
+    },
+    {
+      "name": "non_owner_on_product_owner_key",
+      "keys": ["issue59_product_owner"],
+      "author_login": "someone-else",
+      "body_template": "compliant",
+      "expected": "product-owner approval must come from wangzitian0"
+    },
+    {
+      "name": "wrong_issue_url",
+      "keys": ["issue59_product_owner"],
+      "author_login": "wangzitian0",
+      "body_template": "compliant",
+      "ref_issue_override": 60,
+      "expected": "names another issue"
+    },
+    {
+      "name": "reused_comment_ref_across_roles",
+      "keys": ["issue60_rights_authority", "issue60_budget_authority"],
+      "author_login": "wangzitian0",
+      "body_template": "compliant",
+      "shared_ref": true,
+      "expected": "reused by another role"
+    },
+    {
+      "name": "candidate_retaining_deleted_internal_attestation_fails",
+      "internal_candidate": 59,
+      "internal_key": "independent_review",
+      "expected": "unexpected fields"
+    },
+    {
+      "name": "missing_attestation_cannot_fabricate_identity",
+      "internal_candidate": 60,
+      "internal_key": "rights_authority",
+      "internal_field": "approver",
+      "internal_value": "approver:plausible-human",
+      "expected": "fabricates"
+    }
+  ]
+}
