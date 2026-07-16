@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from data_engine.datahub.hardening_replay import run_topt_hardening_replay
 from data_engine.datahub.medium_replay import run_topt_medium_replay
 from data_engine.datahub.tiny_replay import run_tiny_replay
 
@@ -15,7 +16,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--expected-sha256", required=True)
-    parser.add_argument("--replay", choices=("tiny", "medium"), default="tiny")
+    parser.add_argument("--replay", choices=("tiny", "medium", "hardening"), default="tiny")
     args = parser.parse_args()
 
     corpus_bytes = args.corpus.read_bytes()
@@ -23,7 +24,12 @@ def main() -> int:
     if actual_sha256 != args.expected_sha256:
         raise SystemExit("frozen corpus SHA-256 mismatch")
     corpus = json.loads(corpus_bytes)
-    report = run_tiny_replay(corpus) if args.replay == "tiny" else run_topt_medium_replay(corpus)
+    if args.replay == "tiny":
+        report = run_tiny_replay(corpus)
+    elif args.replay == "medium":
+        report = run_topt_medium_replay(corpus)
+    else:
+        report = run_topt_hardening_replay(corpus)
     print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
     return 0
 
