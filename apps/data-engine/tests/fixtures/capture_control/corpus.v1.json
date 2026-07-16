@@ -141,21 +141,74 @@
     {
       "scenario_id": "crash-after-planning",
       "checkpoint": "plan-persisted",
+      "persisted_checkpoint": {
+        "phase": "planned",
+        "completed_obligation_ordinals": []
+      },
+      "persisted_records": {
+        "attempt_obligation_ordinals": [],
+        "attempt_result_obligation_ordinals": [],
+        "raw_object_obligation_ordinals": [],
+        "observation_obligation_ordinals": [],
+        "terminal_results": [],
+        "manifest_obligation_ordinals": null
+      },
       "expected_resume": "reuse-plan-and-create-first-attempt"
     },
     {
       "scenario_id": "crash-after-raw-landing",
       "checkpoint": "raw-object-persisted",
+      "persisted_checkpoint": {
+        "phase": "raw_landed",
+        "completed_obligation_ordinals": []
+      },
+      "persisted_records": {
+        "attempt_obligation_ordinals": [0],
+        "attempt_result_obligation_ordinals": [],
+        "raw_object_obligation_ordinals": [0],
+        "observation_obligation_ordinals": [],
+        "terminal_results": [],
+        "manifest_obligation_ordinals": null
+      },
       "expected_resume": "reuse-raw-object-and-complete-attempt"
     },
     {
       "scenario_id": "crash-after-normalization",
       "checkpoint": "observation-persisted",
+      "persisted_checkpoint": {
+        "phase": "normalized",
+        "completed_obligation_ordinals": []
+      },
+      "persisted_records": {
+        "attempt_obligation_ordinals": [0],
+        "attempt_result_obligation_ordinals": [],
+        "raw_object_obligation_ordinals": [0],
+        "observation_obligation_ordinals": [0],
+        "terminal_results": [],
+        "manifest_obligation_ordinals": null
+      },
       "expected_resume": "reuse-observation-and-complete-manifest"
     },
     {
       "scenario_id": "crash-after-partial-manifest",
       "checkpoint": "one-of-two-obligations-terminal",
+      "persisted_checkpoint": {
+        "phase": "manifest_persisted",
+        "completed_obligation_ordinals": [0]
+      },
+      "persisted_records": {
+        "attempt_obligation_ordinals": [0],
+        "attempt_result_obligation_ordinals": [0],
+        "raw_object_obligation_ordinals": [0],
+        "observation_obligation_ordinals": [0],
+        "terminal_results": [
+          {
+            "obligation_ordinal": 0,
+            "state": "success"
+          }
+        ],
+        "manifest_obligation_ordinals": null
+      },
       "expected_resume": "preserve-terminal-obligation-and-finish-pending-obligation"
     }
   ],

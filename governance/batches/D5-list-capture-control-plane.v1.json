@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D5-list-capture-control-plane",
-  "revision": 3,
+  "revision": 4,
   "issue": 205,
   "owner_gate": 29,
   "status": "active",
   "lane": "capture-platform",
-  "last_accepted_rung": "E0",
-  "target_rung": "E1",
+  "last_accepted_rung": "E1",
+  "target_rung": "E2",
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
-  "claim_ceiling": "E0 experimental capture-control contract, deterministic list expansion, append-only attempt ledger, checkpoint contract, and additive persistence schema only; no tiny replay evidence, stable handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
+  "claim_ceiling": "E1 immutable Local/CI tiny replay evidence for exact overlapping lists, bounded attempts, terminal-state coverage, identical-byte capture cycles, deterministic crash resume, and content-hashed bounded recapture only; no stable handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
@@ -24,7 +24,7 @@
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued D5 registration is merged and this preparation is based on main at 5c1721617acaaedf43245f3beccdefcb2182154e",
-      "the E0 repair replaces the pre-evidence alias corpus with canonical list-version and list-bound obligation identities at a40d2d15361b6e182a4ad7e379ba1ecb22c48f6b6726a27ba52c75c150e46361",
+      "the E0 repair replaces the pre-evidence alias corpus with canonical list-version and list-bound obligation identities at 7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93",
       "the superseded preparation corpus is revoked before any E1 execution, protected result, or handoff consumption",
       "the stable activation base remains 5c1721617acaaedf43245f3beccdefcb2182154e while E0 evidence records its exact current PR base and head",
       "the E0 implementation starts from exact current main 5e1be12550ed8e7f8528f8017adffaa009a0ef40",
@@ -79,7 +79,7 @@
   "corpus": {
     "environment": "Local/CI checked-in capture-control fixtures through E2; immutable TOPT development denominator at E3; no live source before separately accepted policy and authorization",
     "manifest_path": "apps/data-engine/tests/fixtures/capture_control/corpus.v1.json",
-    "sha256": "a40d2d15361b6e182a4ad7e379ba1ecb22c48f6b6726a27ba52c75c150e46361",
+    "sha256": "7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93",
     "required_strata": [
       "one exact immutable list with success, unchanged, unavailable, skipped-policy, and explicit-failure obligations",
       "two overlapping immutable lists whose separate obligations share one compatible provider work item",
@@ -160,7 +160,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/D5-list-capture-control-plane.v1.json",
-      "sha256": "f74f748dfe38a0fb31e84f65b5db725184f230a54d7a45f5fe20d7a013a0be72"
+      "sha256": "4201e4a9f2b5cfbaefe0cc02ea55d9e8a5836c7581a4985c4518ad3f3cc542f2"
     }
   },
   "release_activation": {
@@ -172,8 +172,9 @@
     "commands": [
       "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_capture_control.py -q",
       "uv run --package truealpha-data-engine python -m pytest apps/data-engine/tests/datahub -q",
+      "uv run --package truealpha-data-engine python apps/data-engine/scripts/run_capture_control.py --corpus apps/data-engine/tests/fixtures/capture_control/corpus.v1.json --expected-sha256 7819552d83d4e8f887cf1be4f579409afabc7fb9de9fc9ecc53c8e0382ac5d93",
       "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/capture_control.py libs/contracts/tests/test_capture_control.py",
-      "uv run --package truealpha-data-engine python -m ruff check apps/data-engine/src/data_engine/datahub apps/data-engine/tests/datahub",
+      "uv run --package truealpha-data-engine python -m ruff check apps/data-engine/src/data_engine/datahub apps/data-engine/tests/datahub apps/data-engine/scripts/run_capture_control.py",
       "uv run --package truealpha-contracts python -m mypy",
       "uv run --package truealpha-data-engine python -m mypy",
       "uv run python tools/check_delivery_governance.py"
@@ -193,7 +194,7 @@
     "output": {
       "type": "ListCaptureControlPlaneEvidence",
       "stable_handoff": false,
-      "state": "provisional_e0",
+      "state": "provisional_e1",
       "allowed_evidence_readers": [
         "D6-confidence-provenance preparation after D5 E2 acceptance",
         "issue #171 TOPT Staging preparation after D5 E4 acceptance",
