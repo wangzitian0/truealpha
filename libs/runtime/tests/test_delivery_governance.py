@@ -15,6 +15,13 @@ assert SPEC is not None and SPEC.loader is not None
 governance = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = governance
 SPEC.loader.exec_module(governance)
+E0_TRANSITION_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "delivery_governance_e0_transition.v1.json"
+
+
+def _e0_transition_cases():
+    fixture = json.loads(E0_TRANSITION_FIXTURE_PATH.read_text(encoding="utf-8"))
+    assert fixture["schema_version"] == 1
+    return fixture["cases"]
 
 
 def _valid_evidence():
@@ -1289,7 +1296,9 @@ def test_agents_guide_is_a_governance_control_and_remains_lease_protected(monkey
 def test_agents_guide_does_not_require_current_main_for_disjoint_drift():
     guide = (governance.ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
-    assert "**Compatible base.**" in guide
+    assert "Compatible target-branch drift." in guide
+    assert "a disjoint `BEHIND` state alone is" in guide
+    assert "not a blocker." in guide
     assert "branch is current" not in guide
     assert "rebased on current `main`" not in guide
 
@@ -1646,6 +1655,25 @@ def test_completed_batch_can_rerun_its_exact_terminal_acceptance():
 
     assert validation.errors == []
     assert accepted_rung == "E1"
+
+
+@pytest.mark.parametrize("case", _e0_transition_cases(), ids=lambda case: case["name"])
+def test_prepared_terminal_e0_transition_matches_frozen_corpus(case):
+    validation = governance.Validation()
+
+    accepted_rung = governance.validate_status_transition(
+        validation,
+        batch_id="D10",
+        base_manifest=case["base"],
+        manifest=case["candidate"],
+    )
+
+    if case["expected"] == "allow":
+        assert validation.errors == []
+        assert accepted_rung == "E0"
+    else:
+        assert validation.errors
+        assert accepted_rung == case["base"]["target_rung"]
 
 
 def test_blocked_terminal_batch_can_accept_target_and_finish():

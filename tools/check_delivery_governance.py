@@ -1512,6 +1512,7 @@ def validate_status_transition(
     allowed = {
         ("queued", "prepared"),
         ("prepared", "active"),
+        ("prepared", "done"),
         ("active", "active"),
         ("active", "blocked"),
         ("active", "cancelled"),
@@ -1548,6 +1549,19 @@ def validate_status_transition(
             f"{batch_id}: preparation cannot accept or advance a rung",
         )
         return None
+    if (before, after) == ("prepared", "done"):
+        accepted_rung = base_manifest.get("target_rung")
+        validation.require(
+            accepted_rung == "E0" and base_manifest.get("terminal_rung") == "E0",
+            f"{batch_id}: prepared batch may complete directly only from a terminal E0 target",
+        )
+        validation.require(
+            manifest.get("last_accepted_rung") == "E0"
+            and manifest.get("target_rung") == "E0"
+            and manifest.get("terminal_rung") == "E0",
+            f"{batch_id}: prepared direct completion must accept the exact terminal E0",
+        )
+        return accepted_rung if isinstance(accepted_rung, str) else None
     if after not in {"active", "done"}:
         return None
     accepted_rung = base_manifest.get("target_rung")
