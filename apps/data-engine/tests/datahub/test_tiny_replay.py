@@ -42,6 +42,7 @@ def test_tiny_replay_is_deterministic_and_covers_the_frozen_strata() -> None:
     }
     assert first.raw_object_count == 1
     assert first.observation_event_count == 2
+    assert first.terminal_obligation_count == first.obligation_count == 5
     assert set(first.terminal_states) == set(corpus["tiny_lists"][0]["expected_terminal_states"])
     assert first.source_calls == 0
     assert len(first.report_sha256) == 64
@@ -67,6 +68,11 @@ def test_every_resume_checkpoint_replays_without_an_extra_append() -> None:
 def test_recapture_execution_equals_the_frozen_dry_run() -> None:
     corpus = load_corpus()
     plan = build_recapture_plan(corpus)
+    assert dict(plan.predicates) == corpus["recapture_scenarios"][0]["predicates"]
+    assert (
+        len(plan.contract_plan.predicate.model_dump(exclude={"predicate_id", "content_sha256"}, exclude_defaults=True))
+        == 10
+    )
     assert execute_recapture(plan, plan.selected_obligation_ids) == plan.selected_obligation_ids
     with pytest.raises(ValueError, match="differs"):
         execute_recapture(plan, ())

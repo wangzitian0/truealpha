@@ -15,7 +15,13 @@ from truealpha_contracts.capture_control import (
     CaptureRecapturePlan,
     CheckpointPhase,
 )
-from truealpha_contracts.datahub import FetchAttemptOutcome, RecapturePredicate, RetryPolicy
+from truealpha_contracts.datahub import (
+    AssessmentFreshness,
+    FetchAttemptOutcome,
+    ObligationTerminalState,
+    RecapturePredicate,
+    RetryPolicy,
+)
 
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations
 
@@ -35,6 +41,98 @@ class ResumeResult:
 
 
 @dataclass(frozen=True)
+class FrozenRecapturePlan:
+    plan_id: str
+    contract_plan: CaptureRecapturePlan
+    predicates: tuple[tuple[str, str], ...]
+    selected_obligation_ids: tuple[str, ...]
+
+
+@dataclass
+class _TinyReplayStore:
+    planned_obligation_ids: tuple[str, ...]
+    attempts: dict[str, str]
+    attempt_results: dict[str, str]
+    raw_objects: set[str]
+    observations: dict[str, str]
+    terminal_results: dict[str, str]
+    manifest_obligation_ids: tuple[str, ...] | None = None
+
+    @classmethod
+    def for_obligations(cls, obligations: Sequence[CaptureListObligation]) -> _TinyReplayStore:
+        return cls(
+            planned_obligation_ids=tuple(sorted(item.obligation_id for item in obligations)),
+            attempts={},
+            attempt_results={},
+            raw_objects=set(),
+            observations={},
+            terminal_results={},
+        )
+
+    @staticmethod
+    def _put(mapping: dict[str, str], key: str, value: str) -> bool:
+        existing = mapping.get(key)
+        if existing is not None and existing != value:
+            raise ValueError("append-only replay identity conflict")
+        if existing is not None:
+            return False
+        mapping[key] = value
+        return True
+
+    def put_attempt(self, obligation_id: str, attempt_id: str | None = None) -> bool:
+        return self._put(
+            self.attempts,
+            obligation_id,
+            attempt_id or f"fetch-attempt:{canonical_sha256({'obligation_id': obligation_id})}",
+        )
+
+    def put_attempt_result(self, obligation_id: str, result_id: str | None = None) -> bool:
+        if obligation_id not in self.attempts:
+            raise ValueError("attempt result without an append-only attempt")
+        return self._put(
+            self.attempt_results,
+            obligation_id,
+            result_id or f"fetch-attempt-result:{canonical_sha256({'obligation_id': obligation_id})}",
+        )
+
+    def put_raw(self, obligation_id: str) -> bool:
+        raw_id = f"raw-object:{canonical_sha256({'obligation_id': obligation_id})}"
+        before = len(self.raw_objects)
+        self.raw_objects.add(raw_id)
+        return len(self.raw_objects) > before
+
+    def put_observation(self, obligation_id: str) -> bool:
+        if obligation_id not in self.attempts:
+            raise ValueError("observation without an append-only attempt")
+        return self._put(
+            self.observations,
+            obligation_id,
+            f"normalized-observation:{canonical_sha256({'obligation_id': obligation_id})}",
+        )
+
+    def put_terminal(self, obligation_id: str, state: str) -> bool:
+        if state != "skipped_by_policy" and obligation_id not in self.attempt_results:
+            raise ValueError("non-skipped terminal result without an attempt result")
+        return self._put(self.terminal_results, obligation_id, state)
+
+    def put_policy_skip(self, obligation_id: str) -> bool:
+        if obligation_id in self.attempts:
+            raise ValueError("a policy skip cannot follow a source attempt")
+        return self.put_terminal(obligation_id, "skipped_by_policy")
+
+    def put_manifest(self) -> bool:
+        completed = tuple(sorted(self.terminal_results))
+        if completed != self.planned_obligation_ids:
+            raise ValueError("manifest cannot hide a pending obligation")
+        if self.manifest_obligation_ids is not None and self.manifest_obligation_ids != completed:
+            raise ValueError("append-only manifest identity conflict")
+        if self.manifest_obligation_ids is not None:
+            return False
+        self.manifest_obligation_ids = completed
+        return True
+
+
+@dataclass(frozen=True)
 class TinyReplayReport:
     corpus_id: str
     list_count: int
@@ -44,6 +142,7 @@ class TinyReplayReport:
     attempt_counts: tuple[tuple[str, int], ...]
     raw_object_count: int
     observation_event_count: int
+    terminal_obligation_count: int
     terminal_states: tuple[str, ...]
     resume_results: tuple[ResumeResult, ...]
     recapture_plan_id: str
@@ -63,6 +162,7 @@ class TinyReplayReport:
             ],
             "raw_object_count": self.raw_object_count,
             "observation_event_count": self.observation_event_count,
+            "terminal_obligation_count": self.terminal_obligation_count,
             "terminal_states": list(self.terminal_states),
             "resume_results": [
                 {
@@ -209,7 +309,7 @@ def _resume_phase(checkpoint: str) -> CheckpointPhase:
 
 
 def replay_resume_scenarios(corpus: Mapping[str, Any]) -> tuple[ResumeResult, ...]:
-    obligations = _obligations(corpus)
+    obligations = _obligations(corpus)[:2]
     results: list[ResumeResult] = []
     for sequence, row in enumerate(corpus["resume_scenarios"], start=1):
         completed = (obligations[0].obligation_id,) if row["checkpoint"] == "one-of-two-obligations-terminal" else ()
@@ -220,33 +320,67 @@ def replay_resume_scenarios(corpus: Mapping[str, Any]) -> tuple[ResumeResult, ..
             completed_obligation_ids=completed,
             recorded_at=_AT,
         )
-        # Replaying the same immutable checkpoint yields no additional append.
         replay = CaptureCheckpoint.model_validate(checkpoint.model_dump(mode="json"))
         if replay != checkpoint:
             raise ValueError("checkpoint replay identity drift")
-        complete_artifacts = {"attempt", "manifest", "observation", "plan", "raw"}
-        existing_artifacts = {
-            "plan-persisted": {"plan"},
-            "raw-object-persisted": {"attempt", "plan", "raw"},
-            "observation-persisted": {"attempt", "observation", "plan", "raw"},
-            "one-of-two-obligations-terminal": {"attempt", "observation", "plan", "raw"},
-        }[str(row["checkpoint"])]
-        resumed_artifacts = set(existing_artifacts)
-        before_resume = len(resumed_artifacts)
-        resumed_artifacts.update(complete_artifacts)
-        append_count = len(resumed_artifacts) - before_resume
-        before_replay = len(resumed_artifacts)
-        resumed_artifacts.update(complete_artifacts)
+        store = _TinyReplayStore.for_obligations(obligations)
+        first_id = obligations[0].obligation_id
+        checkpoint_name = str(row["checkpoint"])
+        if checkpoint_name in {"raw-object-persisted", "observation-persisted", "one-of-two-obligations-terminal"}:
+            store.put_attempt(first_id)
+            store.put_raw(first_id)
+        if checkpoint_name in {"observation-persisted", "one-of-two-obligations-terminal"}:
+            store.put_observation(first_id)
+        if checkpoint_name == "one-of-two-obligations-terminal":
+            store.put_attempt_result(first_id)
+            store.put_terminal(first_id, "success")
+        if set(checkpoint.completed_obligation_ids) != set(store.terminal_results):
+            raise ValueError("checkpoint completion set differs from persisted terminal results")
+
+        append_count = _resume_capture(store, obligations)
+        first_terminal = store.terminal_results[first_id]
+        replay_append_count = _resume_capture(store, obligations)
+        if store.terminal_results[first_id] != first_terminal:
+            raise ValueError("resume rewrote an already terminal obligation")
         results.append(
             ResumeResult(
                 scenario_id=str(row["scenario_id"]),
                 expected_resume=str(row["expected_resume"]),
                 checkpoint_id=checkpoint.checkpoint_id,
                 append_count=append_count,
-                replay_append_count=len(resumed_artifacts) - before_replay,
+                replay_append_count=replay_append_count,
             )
         )
     return tuple(results)
+
+
+def _resume_capture(store: _TinyReplayStore, obligations: Sequence[CaptureListObligation]) -> int:
+    appends = 0
+    for obligation in obligations:
+        obligation_id = obligation.obligation_id
+        if obligation_id in store.terminal_results:
+            continue
+        if obligation_id not in store.attempts:
+            ledger = AttemptLedger(
+                work_item_id=f"capture-work-item:{canonical_sha256({'obligation_id': obligation_id})}",
+                retry_policy=_retry_policy(1),
+            )
+            attempt = ledger.start(started_at=_AT)
+            result = ledger.finish(
+                attempt=attempt,
+                completed_at=_AT,
+                outcome=FetchAttemptOutcome.SUCCESS,
+                source_vintage_id=f"source-vintage:{canonical_sha256({'obligation_id': obligation_id})}",
+            )
+            appends += store.put_attempt(obligation_id, attempt.attempt_id)
+            appends += store.put_attempt_result(obligation_id, result.attempt_result_id)
+        else:
+            appends += store.put_attempt_result(obligation_id)
+        appends += store.put_raw(obligation_id)
+        appends += store.put_observation(obligation_id)
+        appends += store.put_terminal(obligation_id, "success")
+    appends += store.put_manifest()
+    return appends
 
 
 def _replay_identical_bytes(corpus: Mapping[str, Any]) -> tuple[int, int]:
@@ -280,21 +414,50 @@ def _replay_identical_bytes(corpus: Mapping[str, Any]) -> tuple[int, int]:
     return len(raw_objects), len(observations)
 
 
-def _terminal_state_coverage(corpus: Mapping[str, Any]) -> tuple[str, ...]:
-    states = {"skipped_by_policy"}
-    for outcome in (
-        FetchAttemptOutcome.FAILED,
-        FetchAttemptOutcome.SUCCESS,
-        FetchAttemptOutcome.UNAVAILABLE,
-        FetchAttemptOutcome.UNCHANGED,
-    ):
-        scenario = {"scenario_id": f"terminal-{outcome.value}", "outcomes": [outcome.value]}
-        _run_attempt_scenario(scenario, int(corpus["identity_policy"]["maximum_attempts"]))
-        states.add(outcome.value)
-    result = tuple(sorted(states))
+def _terminal_state_coverage(corpus: Mapping[str, Any]) -> tuple[int, tuple[str, ...]]:
+    obligations = _obligations(corpus)
+    states = tuple(corpus["tiny_lists"][0]["expected_terminal_states"])
+    if len(obligations) != len(states):
+        raise ValueError("the frozen terminal-state denominator differs from obligations")
+    store = _TinyReplayStore.for_obligations(obligations)
+    for obligation, state in zip(obligations, states, strict=True):
+        obligation_id = obligation.obligation_id
+        if state == "skipped_by_policy":
+            store.put_policy_skip(obligation_id)
+            continue
+        outcome = FetchAttemptOutcome(str(state))
+        ledger = AttemptLedger(
+            work_item_id=f"capture-work-item:{canonical_sha256({'obligation_id': obligation_id})}",
+            retry_policy=_retry_policy(1),
+        )
+        attempt = ledger.start(started_at=_AT)
+        source_vintage_id = (
+            f"source-vintage:{canonical_sha256({'obligation_id': obligation_id})}"
+            if outcome is FetchAttemptOutcome.SUCCESS
+            else None
+        )
+        reused_source_vintage_id = (
+            f"source-vintage:{canonical_sha256({'obligation_id': obligation_id})}"
+            if outcome is FetchAttemptOutcome.UNCHANGED
+            else None
+        )
+        attempt_result = ledger.finish(
+            attempt=attempt,
+            completed_at=_AT,
+            outcome=outcome,
+            source_vintage_id=source_vintage_id,
+            reused_source_vintage_id=reused_source_vintage_id,
+        )
+        store.put_attempt(obligation_id, attempt.attempt_id)
+        store.put_attempt_result(obligation_id, attempt_result.attempt_result_id)
+        store.put_terminal(obligation_id, str(state))
+    store.put_manifest()
+    result = tuple(sorted(store.terminal_results.values()))
     if result != _TERMINAL_STATES:
         raise ValueError("terminal-state coverage drift")
-    return result
+    if tuple(sorted(store.terminal_results)) != store.planned_obligation_ids:
+        raise ValueError("a frozen obligation has no terminal result")
+    return len(store.terminal_results), result
 
 
 def _validate_recapture_predicates(predicates: Mapping[str, Any]) -> None:
@@ -330,22 +493,46 @@ def select_recapture(corpus: Mapping[str, Any], predicates: Mapping[str, Any]) -
     return tuple(sorted(selected, key=lambda item: item.obligation_id))
 
 
-def build_recapture_plan(corpus: Mapping[str, Any]) -> CaptureRecapturePlan:
+def build_recapture_plan(corpus: Mapping[str, Any]) -> FrozenRecapturePlan:
     scenario = corpus["recapture_scenarios"][0]
     selected = select_recapture(corpus, scenario["predicates"])
     expected = tuple(item["obligation_id"] for item in scenario["expected_selected_obligations"])
     selected_ids = tuple(item.obligation_id for item in selected)
     if selected_ids != expected:
         raise ValueError("recapture selection drift")
-    return CaptureRecapturePlan(
+    raw_predicates = {str(key): str(value) for key, value in scenario["predicates"].items()}
+    contract_plan = CaptureRecapturePlan(
         selection_cutoff=datetime.fromisoformat(str(scenario["selection_cutoff"]).replace("Z", "+00:00")),
-        predicate=RecapturePredicate(subject_ids=(scenario["predicates"]["instrument_id"],)),
+        predicate=RecapturePredicate(
+            universe_refs=(_universe(corpus),),
+            subject_ids=(raw_predicates["instrument_id"],),
+            source_policy_ids=(raw_predicates["source_version_id"],),
+            semantic_types=(raw_predicates["semantic_type"],),
+            partitions=(raw_predicates["partition"],),
+            terminal_states=(ObligationTerminalState(raw_predicates["outcome"]),),
+            freshness_states=(AssessmentFreshness(raw_predicates["freshness_state"]),),
+            parser_versions=(raw_predicates["parser_version_id"],),
+            mapping_versions=(raw_predicates["mapping_version_id"],),
+            assessment_policy_ids=(f"confidence-state:{raw_predicates['confidence_state']}",),
+        ),
         selected_obligation_ids=selected_ids,
         planner_version="d5-tiny-replay:v1",
     )
+    predicates = tuple(sorted(raw_predicates.items()))
+    plan_content = {
+        "contract_plan": contract_plan.model_dump(mode="json"),
+        "predicates": dict(predicates),
+        "selected_obligation_ids": selected_ids,
+    }
+    return FrozenRecapturePlan(
+        plan_id=f"frozen-recapture-plan:{canonical_sha256(plan_content)}",
+        contract_plan=contract_plan,
+        predicates=predicates,
+        selected_obligation_ids=selected_ids,
+    )
 
 
-def execute_recapture(plan: CaptureRecapturePlan, selected_obligation_ids: Sequence[str]) -> tuple[str, ...]:
+def execute_recapture(plan: FrozenRecapturePlan, selected_obligation_ids: Sequence[str]) -> tuple[str, ...]:
     selection = tuple(sorted(selected_obligation_ids))
     if selection != plan.selected_obligation_ids:
         raise ValueError("recapture execution differs from frozen dry run")
@@ -363,6 +550,7 @@ def run_tiny_replay(corpus: Mapping[str, Any]) -> TinyReplayReport:
         raise ValueError("compatible provider work was not shared")
 
     raw_object_count, observation_event_count = _replay_identical_bytes(corpus)
+    terminal_obligation_count, terminal_states = _terminal_state_coverage(corpus)
     plan = build_recapture_plan(corpus)
     selection = execute_recapture(plan, plan.selected_obligation_ids)
     report = TinyReplayReport(
@@ -374,7 +562,8 @@ def run_tiny_replay(corpus: Mapping[str, Any]) -> TinyReplayReport:
         attempt_counts=replay_attempt_scenarios(corpus),
         raw_object_count=raw_object_count,
         observation_event_count=observation_event_count,
-        terminal_states=_terminal_state_coverage(corpus),
+        terminal_obligation_count=terminal_obligation_count,
+        terminal_states=terminal_states,
         resume_results=replay_resume_scenarios(corpus),
         recapture_plan_id=plan.plan_id,
         recapture_selection=selection,

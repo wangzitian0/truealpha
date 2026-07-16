@@ -2,6 +2,7 @@
 
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations
 from data_engine.datahub.tiny_replay import (
+    FrozenRecapturePlan,
     TinyReplayReport,
     build_recapture_plan,
     execute_recapture,
@@ -13,6 +14,7 @@ from data_engine.datahub.tiny_replay import (
 
 __all__ = [
     "AttemptLedger",
+    "FrozenRecapturePlan",
     "TinyReplayReport",
     "build_recapture_plan",
     "execute_recapture",
