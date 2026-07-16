@@ -30,10 +30,12 @@ tests prove it, review and green CI gate the merge.
    comment that requests a concrete code, documentation, test, or process change; questions
    and informational comments do not count. Before declaring a PR merge-ready, require that
    process to complete; an empty thread list before completion is not evidence of a clean
-   review. Any unresolved `Changes requested` review blocks readiness even when it created
-   no review thread. Each actionable finding must be classified in its own review thread as
-   exactly `Severity: High`, `Severity: Medium`, or `Severity: Low`; a classification only
-   in a review summary does not count. An unclassified actionable finding blocks readiness.
+   review. For each reviewer, only their latest effective decision counts; a latest
+   `Changes requested` decision blocks readiness until a later approval or dismissal, even
+   when it created no review thread. Each actionable finding must be classified in its own
+   review thread as exactly `Severity: High`, `Severity: Medium`, or `Severity: Low`; a
+   classification only in a review summary does not count. An unclassified actionable
+   finding blocks readiness.
    Evaluate unresolved actionable findings against the budget of High = 0, Medium <= 2, and
    Low <= 4 on the exact head immediately before merge readiness is declared. A green
    `ci-required`, a deployable `main`, and backward-compatible migrations are also required.
