@@ -152,7 +152,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/A0-governed-research-access.v2.json",
-      "sha256": "7111822423175133366627cbc3a08fdcb9559bcd3578826651fc7efd03c64c88"
+      "sha256": "671c42a6499c37e911d64e5d7c07cf99c2f7576db2ed3edbe3636cf22cc49007"
     }
   },
   "release_activation": {
@@ -198,6 +198,15 @@
       "stable_handoff": true,
       "state": "accepted",
       "schema_epoch": "truealpha-contracts.governed-research-access.v2",
+      "handoff_id": "handoff:a0-governed-research-access:3d7ca230:2d885dc4:fdd20eae:528ba4d7:ca0a1bfb:5be7d3e6:48bd2fdf:68d39e45",
+      "rung_evidence": {
+        "path": "governance/evidence/A0-governed-research-access-E2.v2.json",
+        "sha256": "5ddfbe15daceeb3367996447a8441f482c8e444b5ab1fb5c5a76c5fe611af2c4"
+      },
+      "handoff_manifest": {
+        "path": "governance/handoffs/A0-governed-research-access.v2.json",
+        "sha256": "799851bd1fbbf98363552e6f97f379dfb49fe0c316ec7ccc1d162a6b450cd770"
+      },
       "allowed_evidence_readers": [
         "the future #42 MCP implementation batch",
         "the future #43 report/document implementation batch",

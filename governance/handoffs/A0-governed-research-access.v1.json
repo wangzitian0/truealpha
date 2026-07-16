@@ -1,8 +1,8 @@
 {
-  "handoff_id": "handoff:a0-governed-research-access:e6721b66:f4081d17:e065172d:8088d314:03599ef2:f35d025a:e9f40ebc:cc04bece",
+  "handoff_id": "handoff:a0-governed-research-access:b4aa646e:5e2c0902:82838b28:d79dbcc3:8a3247cb:47adb61f:ea88d0c3:4a62a9ce",
   "schema_version": 1,
   "revision": 1,
-  "state": "accepted",
+  "state": "revoked",
   "producer": {
     "batch_id": "A0-governed-research-access",
     "issue": 230,
@@ -37,8 +37,8 @@
     "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29480516025"
   },
   "revocation": {
-    "reason": null,
-    "revoked_at": null,
-    "superseded_by": null
+    "reason": "Superseded after review invalidated the producer's policy immutability, migration compatibility, and governance fail-closed claims",
+    "revoked_at": "2026-07-16T08:15:43Z",
+    "superseded_by": "handoff:a0-governed-research-access:3d7ca230:2d885dc4:fdd20eae:528ba4d7:ca0a1bfb:5be7d3e6:48bd2fdf:68d39e45"
   }
 }

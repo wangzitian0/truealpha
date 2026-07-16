@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:6e63744f925cd43df1a85813a5c7bf5d6d868c76e6a2fccd68376eef8f1ed6ac",
+  "lease_id": "integration-lease:10acdfd43ec13ec51e122d5909f7c00193efe6bf0a203804dec17c44ed74da74",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
-  "state": "active",
+  "state": "revoked",
   "paths": [
     "init.md",
     "docs/architecture-decisions/A0-governed-research-access.md",

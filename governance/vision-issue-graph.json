@@ -117,7 +117,14 @@
     "70": {"gate": 29, "terminal_evidence": "E3"},
     "71": {"gate": 29, "terminal_evidence": "E4"},
     "72": {"gate": 31, "terminal_evidence": "E4"},
-    "229": {"gate": 31, "terminal_evidence": "E2"},
+    "229": {
+      "gate": 31,
+      "terminal_evidence": "E2",
+      "accepted_evidence": {
+        "path": "governance/evidence/issue-229.v2.json",
+        "sha256": "532a7cbbe3030019b69cd4dfe0ecbbff748b19afa646de3f31883d7a711b886d"
+      }
+    },
     "235": {"gate": 31, "terminal_evidence": "E3"},
     "236": {"gate": 31, "terminal_evidence": "E3"}
   },

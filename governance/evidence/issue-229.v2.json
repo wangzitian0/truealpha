@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "evidence_id": "capability-evidence:issue-229:v2",
+  "issue": 229,
+  "state": "accepted",
+  "accepted_rung": "E2",
+  "producer_commit": "10f22e2902682759f4061d83bab1a3a2dc6a30d4",
+  "source_pr": 273,
+  "accepted_by": "github-actions[bot]",
+  "accepted_at": "2026-07-16T08:15:43Z",
+  "commands": [
+    "uv run pytest libs/contracts/tests/test_access.py -q",
+    "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/src/truealpha_contracts/__init__.py libs/contracts/tests/test_access.py",
+    "uv run mypy",
+    "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
+    "uv run pytest libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py -q",
+    "uv run ruff check tools/check_gate0_candidate.py tools/check_delivery_governance.py libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py",
+    "uv run python tools/check_gate0_candidate.py --manifest governance/gate0/manifest-v5.json",
+    "uv run python tools/check_delivery_governance.py",
+    "make check"
+  ],
+  "git_objects": [
+    {
+      "path": "libs/contracts/src/truealpha_contracts/access.py",
+      "oid": "076bb684081ac99d9a77d71ba22b67f253307ed1"
+    },
+    {
+      "path": "db/migrations/0024_access_policy_bindings.sql",
+      "oid": "173f93c7c73c095c24fcaffb0c65c251b705ca9c"
+    },
+    {
+      "path": "init.md",
+      "oid": "0e1ab07825c79edf30f51519599ea79880cab624"
+    }
+  ],
+  "attestation_ref": "https://github.com/wangzitian0/truealpha/actions/runs/29482629975",
+  "claim_ceiling": "Accepted E2 Local/CI governed research access contract with sealed publication policies and a stable handoff for explicitly named consumers",
+  "residual_risks": [
+    "No deployed authentication or identity-provider binding",
+    "No private-content retention, export, sharing, or break-glass policy",
+    "No persisted replay-request writer or replay execution",
+    "No Staging or Production consumer validation",
+    "Gate 0 remains blocked by its four inherited external blocker groups"
+  ]
+}
