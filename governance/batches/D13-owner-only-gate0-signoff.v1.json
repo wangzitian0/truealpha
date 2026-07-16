@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "D13-owner-only-gate0-signoff",
-  "revision": 1,
+  "revision": 2,
   "issue": 305,
   "owner_gate": 32,
-  "status": "queued",
+  "status": "prepared",
   "lane": "orchestration-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -21,11 +21,11 @@
   ],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "a5cd1fa8a570d37638656eb8ada7f3826064dd3f",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "the queued registration is merged on main before the preparation revision pins the activation base, reviewer, and frozen Local/CI corpus",
@@ -43,8 +43,8 @@
   ],
   "corpus": {
     "environment": "Local/CI Gate 0 candidate fixtures only",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/runtime/tests/fixtures/gate0_owner_only_attestations.v1.json",
+    "sha256": "25b4d119408ed1e22d5c589ac0ad03c473c31ef8266e5f1eebc560cae98a35f4",
     "required_strata": [
       "a chain whose five remaining attestations are all authored by the product owner passes live validation with no role-separation error",
       "each removed independence-role key is rejected as an unknown external attestation key",
