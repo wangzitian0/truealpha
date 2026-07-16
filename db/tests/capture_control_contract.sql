@@ -217,13 +217,17 @@ begin
     end loop;
 end $$;
 insert into raw.capture_work_items (
-    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts, content_sha256
+    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
+    retryable_outcomes, terminal_outcomes, content_sha256, storage_envelope_sha256
 ) values (
     'capture-work-item:bd49b6a7ab06f9db999456b28a01a7121526a3b90de2c72fc2899ea64decadef',
     'capture-campaign:9480d69e5ddf795495b5995cfe1afb2b4b4a40899bc5122c30064e1680d471cb',
     'source-request:6666666666666666666666666666666666666666666666666666666666666666',
     'schedule-policy:6666666666666666666666666666666666666666666666666666666666666666',
-    1, 'd75f4b20f0444ab4ef3361b194bfc4c9d38107e1f04887929d7a6484ffc14ee8'
+    1, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
+    array['failed', 'success', 'unavailable', 'unchanged'],
+    '35975634c3501a457f2f513d275fb6898663d5538c57834f38c919db9a78b941',
+    '6e3cbe0a761b6ef3fde767e7b64eff604bbe18017d1a7a8c4cca193fe84bd32d'
 );
 insert into raw.capture_attempts (
     attempt_id, work_item_id, attempt_number, started_at, started_at_canonical, content_sha256
@@ -418,26 +422,34 @@ insert into raw.capture_obligations (
 );
 
 insert into raw.capture_work_items (
-    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts, content_sha256
+    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
+    retryable_outcomes, terminal_outcomes, content_sha256, storage_envelope_sha256
 ) values (
     'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
     'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
     'source-request:9999999999999999999999999999999999999999999999999999999999999999',
     'schedule-policy:9999999999999999999999999999999999999999999999999999999999999999',
-    3, 'd5ee684035882a98daacaaa45a96ebd29f9b708b4b76d42517c529e7228648e3'
+    3, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
+    array['failed', 'success', 'unavailable', 'unchanged'],
+    '5f045ca0f5b4169e0c1dffef3080534f4d9924ad8672220d6e4ed3788e646964',
+    '4d04d9077001e2da9ca0794d2b60c80c1d596905408ebc06ceb272d72e5a8fdd'
 );
 
 do $$ begin
     begin
         insert into raw.capture_work_items (
             work_item_id, campaign_id, source_request_id, schedule_policy_id,
-            maximum_attempts, content_sha256
+            maximum_attempts, retryable_outcomes, terminal_outcomes,
+            content_sha256, storage_envelope_sha256
         ) values (
             'capture-work-item:2c6e08d49a213d0570374e51ed84cdaa858fadee33389ecee12761a3da6a4aad',
             'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
             'source-request:9999999999999999999999999999999999999999999999999999999999999999',
             'schedule-policy:9999999999999999999999999999999999999999999999999999999999999999',
-            4, '787bdb351d3d8c78aa4dafa4c07d0e1e40adc404b8a5cc5be431a1d91c4ab7bc'
+            4, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
+            array['failed', 'success', 'unavailable', 'unchanged'],
+            '5f045ca0f5b4169e0c1dffef3080534f4d9924ad8672220d6e4ed3788e646964',
+            '76bd8e6c4726c04f398bd52ee539b23b96dee654e5ac12b03c6392e33a95990a'
         );
         raise exception 'same work identity with changed retry envelope unexpectedly succeeded';
     exception when unique_violation then null;
@@ -448,13 +460,17 @@ do $$ begin
     begin
         insert into raw.capture_work_items (
             work_item_id, campaign_id, source_request_id, schedule_policy_id,
-            maximum_attempts, content_sha256
+            maximum_attempts, retryable_outcomes, terminal_outcomes,
+            content_sha256, storage_envelope_sha256
         ) values (
             'capture-work-item:ddc047ae9337de06520b889a05a3b44113d6dfdf72dde9d1809df5e9689bfedb',
             'capture-campaign:70ce3ee59a9026d15385946f4b0c798bcd49fd25b056c00dbf44d3d8ebbffee5',
             'source-request:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'schedule-policy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            21, '72595541ef57b4158045e70efe4a2dbc7cdbc2ccc1aa97f2e8084824a7a3c5b0'
+            21, array['interrupted', 'rate_limited', 'server_error', 'transport_error'],
+            array['failed', 'success', 'unavailable', 'unchanged'],
+            '221d96c5f497fd7bb9b748bcbd535b32475ab8ccdf3e5fe9c70876f7c5a48ce2',
+            '6cdcf29944d6c03fcc4af6e7de56415871f7572a15bc12d266d3452fbc387202'
         );
         raise exception 'retry maximum above shared policy bound unexpectedly succeeded';
     exception when check_violation then null;
@@ -488,14 +504,49 @@ insert into raw.capture_runs (
     '40bef2acd9fdf0a955f4c90a619afd9a7bc2601434cf0ed99626b371c74f3f3c'
 );
 insert into raw.capture_work_items (
-    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts, content_sha256
+    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
+    retryable_outcomes, terminal_outcomes, content_sha256, storage_envelope_sha256
 ) values (
     'capture-work-item:c9941e95ea943d8e0b3d8388552553fce0e09f2213b3af6a9fa8d9d3dc487cf3',
     'capture-campaign:1e46ac6e844e76cfa49b0da1e55121885b90149cce3967d0aaa01d7576e242f0',
     'source-request:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
     'schedule-policy:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-    1, '6030c631572a0fa6024b5df0d33dc9432776513bda625746a30246b4ceafcddf'
+    2, array['interrupted', 'server_error', 'transport_error'],
+    array['failed', 'rate_limited', 'success', 'unavailable', 'unchanged'],
+    '4f6d691e4a242027a1e884ed8f83061ad414c8f9cdb00d191329f3d62be191ea',
+    '63690493457c6ed88214a70091080d03d432a5381a71f69b7aa4312f250a4eff'
 );
+
+insert into raw.capture_attempts (
+    attempt_id, work_item_id, attempt_number, started_at, content_sha256
+) values (
+    'fetch-attempt:f2e14226d3ee4304a090048f368355f61c1e25c27a1ad47dec17575c9e6984e5',
+    'capture-work-item:c9941e95ea943d8e0b3d8388552553fce0e09f2213b3af6a9fa8d9d3dc487cf3',
+    1, '2026-04-01T00:00:00Z', '59be21a64eaac1cc93f61de45e27c983c94c862472b8ab45560d429bcdd7ccb9'
+);
+insert into raw.capture_attempt_results (
+    attempt_result_id, attempt_id, completed_at, outcome, status_code, reason_codes, content_sha256
+) values (
+    'fetch-attempt-result:4a39294c1bef30284466fe32a202a4672632fd707b8b297352d0a22fce75a182',
+    'fetch-attempt:f2e14226d3ee4304a090048f368355f61c1e25c27a1ad47dec17575c9e6984e5',
+    '2026-04-01T00:00:00Z', 'rate_limited', 429, array['policy_terminal'],
+    '09f78ab58647e42b0de730ce2d99c3c3fac6548ac051cca2d24929e50ac6b63f'
+);
+do $$ begin
+    begin
+        insert into raw.capture_attempts (
+            attempt_id, work_item_id, attempt_number, started_at, content_sha256
+        ) values (
+            'fetch-attempt:d8afe6424e2ca263757ee738deaf5e0bc10603c9b3fa7ea6c1a1a1e539f9f8db',
+            'capture-work-item:c9941e95ea943d8e0b3d8388552553fce0e09f2213b3af6a9fa8d9d3dc487cf3',
+            2, '2026-04-01T00:00:00Z',
+            '08505b7cef668ad37723b6d612fc540600c45a5c645e3cf48fd68af27515074d'
+        );
+        raise exception 'attempt after policy-terminal rate limit unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'attempt after policy-terminal rate limit unexpectedly succeeded' then raise; end if;
+    end;
+end $$;
 
 do $$ begin
     begin

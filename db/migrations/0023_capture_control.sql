@@ -236,6 +236,26 @@ begin
 end;
 $$;
 
+create or replace function raw.has_retry_outcome_partition(retryable text[], terminal text[])
+returns boolean language sql immutable strict as $$
+    select cardinality(retryable) > 0
+       and cardinality(terminal) > 0
+       and retryable = array(select outcome from unnest(retryable) as outcome order by outcome collate "C")
+       and terminal = array(select outcome from unnest(terminal) as outcome order by outcome collate "C")
+       and cardinality(retryable) = cardinality(array(select distinct unnest(retryable)))
+       and cardinality(terminal) = cardinality(array(select distinct unnest(terminal)))
+       and retryable <@ array[
+           'rate_limited', 'transport_error', 'server_error', 'interrupted',
+           'success', 'unchanged', 'unavailable', 'failed'
+       ]::text[]
+       and terminal <@ array[
+           'rate_limited', 'transport_error', 'server_error', 'interrupted',
+           'success', 'unchanged', 'unavailable', 'failed'
+       ]::text[]
+       and not retryable && terminal
+       and array['failed', 'success', 'unavailable', 'unchanged']::text[] <@ terminal
+$$;
+
 create table if not exists raw.capture_campaigns (
     campaign_id       text primary key check (campaign_id ~ '^capture-campaign:[0-9a-f]{64}$'),
     content_sha256    text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
@@ -330,8 +350,12 @@ create table if not exists raw.capture_work_items (
     source_request_id  text not null check (source_request_id ~ '^source-request:[0-9a-f]{64}$'),
     schedule_policy_id text not null check (schedule_policy_id ~ '^schedule-policy:[0-9a-f]{64}$'),
     maximum_attempts   integer not null check (maximum_attempts between 1 and 20),
+    retryable_outcomes text[] not null,
+    terminal_outcomes  text[] not null,
     content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
+    storage_envelope_sha256 text not null check (storage_envelope_sha256 ~ '^[0-9a-f]{64}$'),
     created_at         timestamptz not null default now(),
+    check (raw.has_retry_outcome_partition(retryable_outcomes, terminal_outcomes)),
     unique (campaign_id, source_request_id, schedule_policy_id)
 );
 
@@ -538,22 +562,30 @@ create or replace function raw.validate_capture_work_item_address()
 returns trigger language plpgsql as $$
 declare
     identity_payload jsonb;
-    content_payload jsonb;
+    envelope_payload jsonb;
 begin
     identity_payload := jsonb_build_object(
         'campaign_id', new.campaign_id,
         'source_request_id', new.source_request_id,
         'schedule_policy_id', new.schedule_policy_id
     );
-    -- maximum_attempts is a D5 storage-envelope field, not part of CaptureWorkItem.
-    content_payload := identity_payload || jsonb_build_object('maximum_attempts', new.maximum_attempts);
     perform raw.assert_content_address(
         new.work_item_id,
         'capture-work-item',
         jsonb_build_object('kind', 'capture-work-item', 'identity', identity_payload),
         new.content_sha256,
-        content_payload
+        identity_payload
     );
+    envelope_payload := jsonb_build_object(
+        'work_item_id', new.work_item_id,
+        'content_sha256', new.content_sha256,
+        'maximum_attempts', new.maximum_attempts,
+        'retryable_outcomes', to_jsonb(new.retryable_outcomes),
+        'terminal_outcomes', to_jsonb(new.terminal_outcomes)
+    );
+    if new.storage_envelope_sha256 <> raw.canonical_sha256(envelope_payload) then
+        raise check_violation using message = 'capture work-item storage envelope hash does not match';
+    end if;
     return new;
 end;
 $$;
@@ -984,11 +1016,12 @@ declare
     allowed_attempts integer;
     previous_outcome text;
     previous_completed_at timestamptz;
+    retryable_outcomes text[];
 begin
-    select maximum_attempts
-      into allowed_attempts
-      from raw.capture_work_items
-     where work_item_id = new.work_item_id
+    select work.maximum_attempts, work.retryable_outcomes
+      into allowed_attempts, retryable_outcomes
+      from raw.capture_work_items work
+     where work.work_item_id = new.work_item_id
        for update;
     select coalesce(max(attempt_number), 0) + 1
       into expected_attempt
@@ -1011,8 +1044,8 @@ begin
         if previous_outcome is null then
             raise exception 'previous capture attempt has no result';
         end if;
-        if previous_outcome in ('success', 'unchanged', 'unavailable', 'failed') then
-            raise exception 'capture attempt after terminal outcome';
+        if previous_outcome <> all(retryable_outcomes) then
+            raise exception 'capture attempt after non-retryable outcome';
         end if;
         if new.started_at < previous_completed_at then
             raise exception 'capture retry starts before previous result completion';
@@ -1033,9 +1066,13 @@ declare
     dispatch_started_at timestamptz;
     dispatched_attempt integer;
     allowed_attempts integer;
+    retryable_outcomes text[];
+    terminal_outcomes text[];
 begin
-    select attempt.started_at, attempt.attempt_number, work.maximum_attempts
-      into dispatch_started_at, dispatched_attempt, allowed_attempts
+    select attempt.started_at, attempt.attempt_number, work.maximum_attempts,
+           work.retryable_outcomes, work.terminal_outcomes
+      into dispatch_started_at, dispatched_attempt, allowed_attempts,
+           retryable_outcomes, terminal_outcomes
       from raw.capture_attempts attempt
       join raw.capture_work_items work using (work_item_id)
      where attempt.attempt_id = new.attempt_id;
@@ -1045,8 +1082,10 @@ begin
     if new.completed_at < dispatch_started_at then
         raise exception 'attempt result completion precedes dispatch';
     end if;
-    if dispatched_attempt = allowed_attempts
-       and new.outcome in ('rate_limited', 'transport_error', 'server_error', 'interrupted') then
+    if new.outcome <> all(retryable_outcomes) and new.outcome <> all(terminal_outcomes) then
+        raise exception 'attempt outcome is not classified by the retry policy';
+    end if;
+    if dispatched_attempt = allowed_attempts and new.outcome <> all(terminal_outcomes) then
         raise exception 'final permitted attempt must have a terminal outcome';
     end if;
     return new;

@@ -6,11 +6,29 @@ import pytest
 from data_engine.datahub import AttemptLedger, expand_obligations
 from truealpha_contracts import SubjectKind, SubjectRef, UniverseRef
 from truealpha_contracts.capture_control import CaptureListVersion
-from truealpha_contracts.datahub import FetchAttemptOutcome
+from truealpha_contracts.datahub import FetchAttemptOutcome, RetryPolicy
 
 ROOT = Path(__file__).parents[1]
 CORPUS = ROOT / "fixtures" / "capture_control" / "corpus.v1.json"
 AT = datetime(2026, 4, 1, tzinfo=UTC)
+
+
+def retry_policy(max_attempts: int) -> RetryPolicy:
+    return RetryPolicy(
+        max_attempts=max_attempts,
+        retryable_outcomes=(
+            FetchAttemptOutcome.INTERRUPTED,
+            FetchAttemptOutcome.RATE_LIMITED,
+            FetchAttemptOutcome.SERVER_ERROR,
+            FetchAttemptOutcome.TRANSPORT_ERROR,
+        ),
+        terminal_outcomes=(
+            FetchAttemptOutcome.FAILED,
+            FetchAttemptOutcome.SUCCESS,
+            FetchAttemptOutcome.UNAVAILABLE,
+            FetchAttemptOutcome.UNCHANGED,
+        ),
+    )
 
 
 def test_frozen_topt_denominator_expands_without_share_class_collapse() -> None:
@@ -107,7 +125,7 @@ def test_obligation_expansion_rejects_empty_semantic_denominator() -> None:
 
 
 def test_attempts_are_contiguous_bounded_and_stop_at_terminal_outcome() -> None:
-    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'b' * 64}", maximum_attempts=3)
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'b' * 64}", retry_policy=retry_policy(3))
     first = ledger.start(started_at=AT)
     completed_at = datetime(2026, 4, 1, 0, 0, 1, tzinfo=UTC)
     ledger.finish(
@@ -136,7 +154,8 @@ def test_identical_bytes_are_separate_terminal_capture_cycles() -> None:
         item for item in corpus["attempt_scenarios"] if item["scenario_id"] == "identical-bytes-distinct-capture-cycles"
     )
     ledgers = [
-        AttemptLedger(work_item_id=cycle["work_item_id"], maximum_attempts=1) for cycle in scenario["capture_cycles"]
+        AttemptLedger(work_item_id=cycle["work_item_id"], retry_policy=retry_policy(1))
+        for cycle in scenario["capture_cycles"]
     ]
     first_attempt = ledgers[0].start(started_at=AT)
     ledgers[0].finish(
@@ -158,7 +177,7 @@ def test_identical_bytes_are_separate_terminal_capture_cycles() -> None:
 
 
 def test_attempt_result_cannot_be_replaced_or_duplicated() -> None:
-    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'c' * 64}", maximum_attempts=1)
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'c' * 64}", retry_policy=retry_policy(1))
     attempt = ledger.start(started_at=AT)
     ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.FAILED, error_code="fixture_failure")
     with pytest.raises(ValueError, match="already has a result"):
@@ -166,7 +185,7 @@ def test_attempt_result_cannot_be_replaced_or_duplicated() -> None:
 
 
 def test_attempt_dispatch_waits_for_result_and_completion_is_monotonic() -> None:
-    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'e' * 64}", maximum_attempts=2)
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'e' * 64}", retry_policy=retry_policy(2))
     with pytest.raises(ValueError, match="timezone-aware"):
         ledger.start(started_at=datetime(2026, 4, 1))
     attempt = ledger.start(started_at=AT)
@@ -188,13 +207,38 @@ def test_attempt_dispatch_waits_for_result_and_completion_is_monotonic() -> None
 
 @pytest.mark.parametrize("maximum_attempts", (0, 21))
 def test_attempt_budget_uses_shared_retry_bound(maximum_attempts: int) -> None:
-    with pytest.raises(ValueError, match="between 1 and 20"):
-        AttemptLedger(work_item_id=f"capture-work-item:{'f' * 64}", maximum_attempts=maximum_attempts)
+    with pytest.raises(ValueError):
+        AttemptLedger(work_item_id=f"capture-work-item:{'f' * 64}", retry_policy=retry_policy(maximum_attempts))
 
-    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'1' * 64}", maximum_attempts=1)
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'1' * 64}", retry_policy=retry_policy(1))
     attempt = ledger.start(started_at=AT)
     with pytest.raises(ValueError, match="terminal outcome"):
         ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.INTERRUPTED)
+
+
+def test_attempt_ledger_uses_the_bound_retry_policy_partition() -> None:
+    custom_policy = RetryPolicy(
+        max_attempts=2,
+        retryable_outcomes=(FetchAttemptOutcome.INTERRUPTED,),
+        terminal_outcomes=(
+            FetchAttemptOutcome.FAILED,
+            FetchAttemptOutcome.RATE_LIMITED,
+            FetchAttemptOutcome.SUCCESS,
+            FetchAttemptOutcome.UNAVAILABLE,
+            FetchAttemptOutcome.UNCHANGED,
+        ),
+    )
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'6' * 64}", retry_policy=custom_policy)
+    attempt = ledger.start(started_at=AT)
+    ledger.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.RATE_LIMITED)
+    assert ledger.is_terminal
+    with pytest.raises(ValueError, match="terminal"):
+        ledger.start(started_at=AT)
+
+    unclassified = AttemptLedger(work_item_id=f"capture-work-item:{'7' * 64}", retry_policy=custom_policy)
+    attempt = unclassified.start(started_at=AT)
+    with pytest.raises(ValueError, match="not classified"):
+        unclassified.finish(attempt=attempt, completed_at=AT, outcome=FetchAttemptOutcome.SERVER_ERROR)
 
 
 @pytest.mark.parametrize(
@@ -216,7 +260,7 @@ def test_attempt_result_rejects_invalid_source_vintage_grain(
     reused_source_vintage_id: str | None,
     message: str,
 ) -> None:
-    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'2' * 64}", maximum_attempts=1)
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'2' * 64}", retry_policy=retry_policy(1))
     attempt = ledger.start(started_at=AT)
     with pytest.raises(ValueError, match=message):
         ledger.finish(
@@ -229,7 +273,7 @@ def test_attempt_result_rejects_invalid_source_vintage_grain(
 
 
 def test_attempt_result_contract_validation_is_a_value_error() -> None:
-    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'3' * 64}", maximum_attempts=1)
+    ledger = AttemptLedger(work_item_id=f"capture-work-item:{'3' * 64}", retry_policy=retry_policy(1))
     attempt = ledger.start(started_at=AT)
     with pytest.raises(ValueError):
         ledger.finish(
@@ -239,7 +283,7 @@ def test_attempt_result_contract_validation_is_a_value_error() -> None:
             source_vintage_id="source-vintage:not-canonical",
         )
 
-    valid_ledger = AttemptLedger(work_item_id=f"capture-work-item:{'4' * 64}", maximum_attempts=1)
+    valid_ledger = AttemptLedger(work_item_id=f"capture-work-item:{'4' * 64}", retry_policy=retry_policy(1))
     valid_attempt = valid_ledger.start(started_at=AT)
     result = valid_ledger.finish(
         attempt=valid_attempt,
@@ -249,7 +293,7 @@ def test_attempt_result_contract_validation_is_a_value_error() -> None:
     )
     assert result.status_code == 503
 
-    invalid_ledger = AttemptLedger(work_item_id=f"capture-work-item:{'5' * 64}", maximum_attempts=1)
+    invalid_ledger = AttemptLedger(work_item_id=f"capture-work-item:{'5' * 64}", retry_policy=retry_policy(1))
     invalid_attempt = invalid_ledger.start(started_at=AT)
     with pytest.raises(ValueError):
         invalid_ledger.finish(

@@ -12,14 +12,8 @@ from truealpha_contracts.datahub import (
     FetchAttemptOutcome,
     FetchAttemptResult,
     ListObligation,
+    RetryPolicy,
 )
-
-_TERMINAL = {
-    FetchAttemptOutcome.SUCCESS,
-    FetchAttemptOutcome.UNCHANGED,
-    FetchAttemptOutcome.UNAVAILABLE,
-    FetchAttemptOutcome.FAILED,
-}
 
 
 def expand_obligations(
@@ -60,13 +54,13 @@ class AttemptLedger:
     """Append-only in-memory E0 ledger; persistence is supplied by the repository layer later."""
 
     work_item_id: str
-    maximum_attempts: int
+    retry_policy: RetryPolicy
     attempts: list[FetchAttempt] = field(default_factory=list)
     results: list[FetchAttemptResult] = field(default_factory=list)
 
-    def __post_init__(self) -> None:
-        if not 1 <= self.maximum_attempts <= 20:
-            raise ValueError("maximum_attempts must be between 1 and 20")
+    @property
+    def maximum_attempts(self) -> int:
+        return self.retry_policy.max_attempts
 
     def start(self, *, started_at: datetime) -> FetchAttempt:
         if started_at.tzinfo is None or started_at.utcoffset() is None:
@@ -114,7 +108,10 @@ class AttemptLedger:
                 raise ValueError("an unchanged result must reuse exactly one source vintage")
         elif source_vintage_id is not None or reused_source_vintage_id is not None:
             raise ValueError("a non-content result cannot name a source vintage")
-        if attempt.attempt_number == self.maximum_attempts and outcome not in _TERMINAL:
+        classified = set(self.retry_policy.retryable_outcomes) | set(self.retry_policy.terminal_outcomes)
+        if outcome not in classified:
+            raise ValueError("outcome is not classified by the retry policy")
+        if attempt.attempt_number == self.maximum_attempts and outcome not in self.retry_policy.terminal_outcomes:
             raise ValueError("the final permitted attempt must have a terminal outcome")
         result = FetchAttemptResult(
             attempt_id=attempt.attempt_id,
@@ -130,4 +127,4 @@ class AttemptLedger:
 
     @property
     def is_terminal(self) -> bool:
-        return bool(self.results and self.results[-1].outcome in _TERMINAL)
+        return bool(self.results and self.results[-1].outcome in self.retry_policy.terminal_outcomes)
