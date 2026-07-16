@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:a715c49a1eee79842dcd24fe1394f3a74c272e43b78861e1c765b70d73cf9057",
+  "batch_id": "D12-vision-issue-reconciliation",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    ".github/workflows/sync-batch-issues.yml",
+    ".github/workflows/sync-standalone-issue.yml"
+  ],
+  "base_sha": "6c1dd259fb3a23750e76fb9665c40005d3f23691",
+  "expires_at": "2026-07-30T00:00:00Z"
+}

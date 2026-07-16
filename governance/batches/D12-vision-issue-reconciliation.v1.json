@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D12-vision-issue-reconciliation",
-  "revision": 2,
+  "revision": 3,
   "issue": 250,
   "owner_gate": 32,
-  "status": "prepared",
+  "status": "done",
   "lane": "orchestration-platform",
-  "last_accepted_rung": null,
+  "last_accepted_rung": "E0",
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Make Vision issue reconciliation deterministic so batch merges do not create false-red workflows, stale lifecycle state, or search-index-dependent parity failures.",
-  "claim_ceiling": "Prepared E0 only: the exact base, reviewer, event corpus, writable paths, negative controls, and integration-lease requirement are frozen. No workflow, issue, label, body, lifecycle, validator, or retry behavior changes yet. A future accepted D12 E0 result may repair only GitHub issue reconciliation and standalone merge-hook routing; it cannot weaken Vision parity or authorize application, data, factor, backtest, release, or Production work.",
+  "claim_ceiling": "Accepted E0 repository issue-reconciliation behavior only: batch-managed PRs skip standalone closure before standalone key validation; reconciliation writers are serialized; batch lifecycle, close reason, and owner-gate milestone are deterministic; writes refetch direct issue state and use ETag preconditions; retry exhaustion and partial failures fail visibly; and parity refetches the unfiltered issue collection before filtering scope:vision locally. This does not authorize application, data, factor, backtest, release, or Production work.",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [
@@ -92,7 +92,10 @@
       ".github/workflows/sync-standalone-issue.yml"
     ],
     "lease_owner": "wangzitian0",
-    "lease_manifest": null
+    "lease_manifest": {
+      "path": "governance/leases/D12-vision-issue-reconciliation.v1.json",
+      "sha256": "0b9f6bdb7b7f2c67e7a0fab806d52cbf7b42b5ca4a86afc8dd38ba78644926ed"
+    }
   },
   "release_activation": {
     "allowed": false,
@@ -115,9 +118,9 @@
     "output": {
       "type": "VisionIssueReconciliationEvidence",
       "stable_handoff": false,
-      "state": "prepared",
+      "state": "accepted",
       "allowed_evidence_readers": [
-        "repository CI and governance operations planning only until a later accepted E0 result"
+        "repository CI and governance operations only; no application, data, factor, backtest, release, or Production authorization"
       ]
     }
   },
