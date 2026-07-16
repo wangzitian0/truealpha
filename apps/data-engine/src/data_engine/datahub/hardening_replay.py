@@ -303,7 +303,7 @@ def run_topt_hardening_replay(corpus: Mapping[str, Any]) -> ToptHardeningReplayR
     started_tracing = not tracemalloc.is_tracing()
     if started_tracing:
         tracemalloc.start()
-    trace_current_started, _ = tracemalloc.get_traced_memory()
+    _, trace_peak_started = tracemalloc.get_traced_memory()
     wall_started = time.perf_counter_ns()
     cpu_started = time.process_time_ns()
     try:
@@ -314,8 +314,8 @@ def run_topt_hardening_replay(corpus: Mapping[str, Any]) -> ToptHardeningReplayR
         resume_results = replay_resume_scenarios(corpus)
         cpu_ns = time.process_time_ns() - cpu_started
         elapsed_ns = time.perf_counter_ns() - wall_started
-        trace_current_completed, traced_peak = tracemalloc.get_traced_memory()
-        peak_traced_bytes = traced_peak if started_tracing else max(0, trace_current_completed - trace_current_started)
+        _, traced_peak = tracemalloc.get_traced_memory()
+        peak_traced_bytes = traced_peak if started_tracing else max(0, traced_peak - trace_peak_started)
     finally:
         if started_tracing:
             tracemalloc.stop()

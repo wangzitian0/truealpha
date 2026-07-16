@@ -63,14 +63,18 @@ def test_hardening_resource_observation_stays_inside_every_frozen_ceiling() -> N
     assert observation["overfetch_count"] == 0
 
 
-def test_hardening_replay_preserves_an_existing_tracemalloc_session() -> None:
-    tracemalloc.start()
-    try:
-        report = run_topt_hardening_replay(load_corpus())
-        assert tracemalloc.is_tracing()
-        assert report.resource_observation.peak_traced_bytes <= report.resource_ceilings.peak_traced_bytes
-    finally:
-        tracemalloc.stop()
+def test_hardening_replay_preserves_an_existing_tracemalloc_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    traced_samples = iter(((1_000_000, 8_000_000), (1_000_000, 12_000_000)))
+    monkeypatch.setattr(tracemalloc, "is_tracing", lambda: True)
+    monkeypatch.setattr(tracemalloc, "get_traced_memory", lambda: next(traced_samples))
+    monkeypatch.setattr(tracemalloc, "start", lambda: pytest.fail("must not replace caller tracing"))
+    monkeypatch.setattr(tracemalloc, "stop", lambda: pytest.fail("must not stop caller tracing"))
+
+    report = run_topt_hardening_replay(load_corpus())
+
+    assert report.resource_observation.peak_traced_bytes == 4_000_000
 
 
 def test_hardening_replay_fails_closed_on_partial_persisted_state() -> None:
