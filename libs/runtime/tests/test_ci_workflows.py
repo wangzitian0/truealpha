@@ -17,7 +17,9 @@ def test_manual_image_release_is_explicit_and_waits_for_required_jobs():
     assert "github.ref == 'refs/heads/main' &&" in image_release
     assert "inputs.force_images" in image_release
     assert "github.event_name == 'push'" in image_release
-    for dependency in ("security", "db", "python", "qlib", "runtime", "web"):
+    assert "needs.changes.result == 'success'" in image_release
+    assert "needs.security.result == 'success'" in image_release
+    for dependency in ("db", "python", "qlib", "runtime", "web"):
         assert f"needs.{dependency}.result == 'success' || needs.{dependency}.result == 'skipped'" in image_release
     assert "publish: true" in image_release
     assert "app_web: true" in image_release
