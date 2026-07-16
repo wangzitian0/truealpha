@@ -4,13 +4,13 @@
   "revision": 4,
   "issue": 201,
   "owner_gate": 32,
-  "status": "active",
+  "status": "done",
   "lane": "orchestration-platform",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Remove TrueAlpha's reverse source dependency on infra2 and replace it with a versioned, side-effect-free deploy-request contract boundary.",
-  "claim_ceiling": "E0 repository-boundary code and deterministic staging DeployRequest rendering only; no dispatch sender, receiver activation, deployment side effect, live-environment evidence, or Production-readiness claim",
+  "claim_ceiling": "Accepted E1 repository-boundary evidence for the immutable infra2-sdk v0.3.0 pin and deterministic staging DeployRequest rendering only; no dispatch sender, receiver activation, deployment side effect, live-environment evidence, stable handoff, release activation, or Production-readiness claim",
   "capability_issues": [
     11
   ],
@@ -24,7 +24,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "c4049ba94f00199919a3bc8dd27c1a699b98b73e",
+    "base_sha": "f1b6d93051dbe553058d3c9f60bf3922165cbc54",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued batch registration is merged to main before corpus preparation",
@@ -117,7 +117,7 @@
     "output": {
       "type": "RepositoryBoundaryTinyEvidence",
       "stable_handoff": false,
-      "state": "provisional_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "issue #11 environment implementation batches",
         "infra2 workspace-submodule integration"
