@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D13-integration-lease-stability",
-  "revision": 1,
+  "revision": 2,
   "issue": 248,
   "owner_gate": 32,
-  "status": "queued",
+  "status": "prepared",
   "lane": "orchestration-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Preserve an unused integration lease across unrelated main drift and permit a closed corrective PR to renew only the content-addressed lease identity, base, and manifest reference without changing any authorization boundary.",
-  "claim_ceiling": "Queued D13 E0 registration only: no lease-validator behavior, closed-corrective authorization, issue lifecycle, Gate 0 binding, application, data, factor, backtest, release, or Production behavior changes yet.",
+  "claim_ceiling": "Prepared D13 E0 only: the exact base, independent reviewer, Local/CI corpus, path scope, renewal equality, and negative controls are frozen. No lease-validator behavior, closed-corrective authorization, issue lifecycle, Gate 0 binding, application, data, factor, backtest, release, or Production behavior changes yet.",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [
@@ -20,11 +20,11 @@
   ],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "f0f1f4202a2397c07837eb68fb2fc95edefff1f7",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "the queued D13 registration is merged to main before preparation freezes the activation base, reviewer, corpus, and integration lease",
@@ -43,8 +43,8 @@
   ],
   "corpus": {
     "environment": "Local/CI git-history and lease fixtures only",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/runtime/tests/fixtures/integration_lease_stability.v1.json",
+    "sha256": "1e92c5f32518b9a913328591f0a022a8f871019b9a1c431dcb55584eee534125",
     "required_strata": [
       "lease acquisition base equals the exact PR base",
       "lease acquisition base is an ancestor and only unrelated paths changed",
@@ -123,9 +123,9 @@
     "output": {
       "type": "IntegrationLeaseStabilityEvidence",
       "stable_handoff": false,
-      "state": "queued",
+      "state": "prepared",
       "allowed_evidence_readers": [
-        "issue #248 planning and D12 corrective-blocker analysis only until a later accepted D13 E0 result"
+        "D13 #248 E0 implementation and D12 corrective-blocker analysis only until a later accepted D13 E0 result"
       ]
     }
   },

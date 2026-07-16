@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "lease_base_cases": [
+    {
+      "name": "exact_pr_base",
+      "relationship": "exact",
+      "changed_paths": [],
+      "expected": "allow"
+    },
+    {
+      "name": "ancestor_with_unrelated_drift",
+      "relationship": "ancestor",
+      "changed_paths": [
+        "docs/unrelated.md"
+      ],
+      "expected": "allow"
+    },
+    {
+      "name": "ancestor_with_leased_content_drift",
+      "relationship": "ancestor",
+      "changed_paths": [
+        "shared/export.py"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "ancestor_with_leased_deletion",
+      "relationship": "ancestor",
+      "changed_paths": [
+        "shared/export.py"
+      ],
+      "change_kind": "delete",
+      "expected": "reject"
+    },
+    {
+      "name": "ancestor_with_leased_rename",
+      "relationship": "ancestor",
+      "changed_paths": [
+        "shared/export.py",
+        "shared/export_v2.py"
+      ],
+      "change_kind": "rename",
+      "expected": "reject"
+    },
+    {
+      "name": "non_ancestor_base",
+      "relationship": "diverged",
+      "changed_paths": [],
+      "expected": "reject"
+    },
+    {
+      "name": "unavailable_base",
+      "relationship": "unavailable",
+      "changed_paths": [],
+      "expected": "reject"
+    }
+  ],
+  "corrective_renewal_cases": [
+    {
+      "name": "content_addressed_identity_base_and_reference_only",
+      "path_mutations": [
+        "lease_manifest.sha256"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha"
+      ],
+      "expected": "allow"
+    },
+    {
+      "name": "unchanged_exact_authorization",
+      "path_mutations": [],
+      "lease_mutations": [],
+      "expected": "allow"
+    },
+    {
+      "name": "renewal_changes_lease_reference_path",
+      "path_mutations": [
+        "lease_manifest.path"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_expands_writable_scope",
+      "path_mutations": [
+        "writable"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_changes_owner",
+      "path_mutations": [
+        "lease_owner"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha",
+        "owner"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_changes_state",
+      "path_mutations": [
+        "lease_manifest.sha256"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha",
+        "state"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_extends_expiry",
+      "path_mutations": [
+        "lease_manifest.sha256"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha",
+        "expires_at"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_expands_leased_paths",
+      "path_mutations": [
+        "lease_manifest.sha256"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha",
+        "paths"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_changes_batch_identity",
+      "path_mutations": [
+        "lease_manifest.sha256"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha",
+        "batch_id"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_has_missing_accepted_lease",
+      "path_mutations": [
+        "lease_manifest.sha256"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha"
+      ],
+      "base_lease_available": false,
+      "expected": "reject"
+    }
+  ]
+}
