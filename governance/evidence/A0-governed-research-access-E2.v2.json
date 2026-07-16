@@ -1,0 +1,75 @@
+{
+  "accepted_rung": "E2",
+  "base_sha": "2fe3bc7e43c89b317caceeb4d627657cf7c50729",
+  "batch_id": "A0-governed-research-access",
+  "commands": [
+    {
+      "command": "uv run pytest libs/contracts/tests/test_access.py -q",
+      "exit_code": 0,
+      "output_sha256": "e4bbdbb83c9ed522d7511660f46345d9ed4865eff162b1ef0b46a76b94fac69f"
+    },
+    {
+      "command": "uv run ruff check libs/contracts/src/truealpha_contracts/access.py libs/contracts/src/truealpha_contracts/__init__.py libs/contracts/tests/test_access.py",
+      "exit_code": 0,
+      "output_sha256": "98733c3446b52dc3e6b6943142b19a142025d9727521f6abc3783a20e4b6d3c6"
+    },
+    {
+      "command": "uv run mypy",
+      "exit_code": 0,
+      "output_sha256": "a5c9295ac5b0e1a5b3d22cede994989fe812b7177478582f5135d93eedf1495e"
+    },
+    {
+      "command": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f db/tests/governed_research_access_contract.sql",
+      "exit_code": 0,
+      "output_sha256": "13c4f173b953f18c45e40eed059f3c27c30e413db90e0c78e892d1886560ee64"
+    },
+    {
+      "command": "uv run pytest libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py -q",
+      "exit_code": 0,
+      "output_sha256": "fac1f4bcee8f0819b51efef123d8030c8172aa4cd0e98db305edd0d41e3eca04"
+    },
+    {
+      "command": "uv run ruff check tools/check_gate0_candidate.py tools/check_delivery_governance.py libs/runtime/tests/test_gate0_candidate.py libs/runtime/tests/test_delivery_governance.py",
+      "exit_code": 0,
+      "output_sha256": "98733c3446b52dc3e6b6943142b19a142025d9727521f6abc3783a20e4b6d3c6"
+    },
+    {
+      "command": "uv run python tools/check_gate0_candidate.py --manifest governance/gate0/manifest-v5.json",
+      "exit_code": 0,
+      "output_sha256": "fee0b3a72b7973970c4825dad8493dcdd7a32c443a04f37ad7a7f293fc76a251"
+    },
+    {
+      "command": "uv run python tools/check_delivery_governance.py",
+      "exit_code": 0,
+      "output_sha256": "7c83a9ca048b73fb2bd32869aa97b2036f9c8bec082292c4c74af3814442e2d8"
+    }
+  ],
+  "created_at": "2026-07-16T08:11:01.234190Z",
+  "evidence_id": "rung-evidence:A0-governed-research-access:208efffa:89f33bf5:f15c376b:7174cb71:a7c41129:2a9be368:01741b9f:6caae5ee",
+  "manifest_sha256": "263f537fc65f2829cb6bb6775d224e5fb11c03575d8b1a0e92f68b071145dd73",
+  "negative_controls": [
+    "missing, expired, revoked, cross-tenant, or client-supplied access identity reaches a mart query, artifact retrieval, or mutation",
+    "administrator reads private conversation or document content without separately approved break-glass evidence",
+    "grant, revocation, publication policy, or access audit row is updated or deleted instead of appended",
+    "private app rows bypass RLS or return after cross-tenant object-ID guessing",
+    "a contradictory resource privacy shape bypasses the publication policy for a materialized strategy or backtest result",
+    "an audit event and its authorization decision disagree on tenant, principal, event kind, or time, or administrator metadata exposes a private resource identifier or crosses tenants",
+    "ordinary app runtime reads administrator audit metadata or either immutable audit base table",
+    "AuthorizationService hides publication-policy, authentication-failure, or delegation-revocation inputs required by authorize_access",
+    "raw or staging access, arbitrary SQL, model-generated SQL, factor computation, Qlib invocation, or replay execution is introduced",
+    "AccessContext, tenant, principal, role, entitlement, or publication-policy metadata enters factor, BacktestDataGateway, DecisionSnapshot, ReplayEventStream, or Qlib types",
+    "a default route, release binding, scheduler, live credential, identity-provider request, or Production readiness claim is activated",
+    "the stable package root omits the exact governed-access symbols or ReleaseManifest gains an access binding",
+    "a materialized result is authorized without a matching publication rule and active entitlement grant, or a wrong-policy grant is recorded on an allow decision",
+    "an unsealed publication policy set authorizes a typed E2 resource, or a sealed policy set accepts another entitlement rule under the unchanged identity and content hash",
+    "a pre-E2 decision writer that omits the new nullable resource fields is rejected during the additive migration rollout or disappears from administrator audit metadata",
+    "a non-administrator or a policy without the explicit action authorizes a registered replay request",
+    "the frozen governance/gate0/manifest-v4.json bytes or its historical acceptance boundary are changed",
+    "the Gate 0 v5 successor drops, weakens, or marks accepted any external blocker inherited from v4",
+    "a Gate 0 v6-or-later successor accepts without loading its frozen predecessor commit and comparing immutable Git bytes",
+    "a terminal batch closes an issue or exempts accepted-evidence changes for an issue outside its capability_issues ownership"
+  ],
+  "producer_head_sha": "10f22e2902682759f4061d83bab1a3a2dc6a30d4",
+  "schema_version": 1,
+  "stable_handoff": false
+}
