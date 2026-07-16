@@ -1,31 +1,31 @@
 {
   "schema_version": 1,
   "batch_id": "D5-list-capture-control-plane",
-  "revision": 1,
+  "revision": 2,
   "issue": 205,
   "owner_gate": 29,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E4",
   "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
-  "claim_ceiling": "queued E0 Local/CI implementation only; no accepted runtime handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
+  "claim_ceiling": "Preparation-only frozen capture-control corpus; this revision earns no rung and approves no runtime handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "5c1721617acaaedf43245f3beccdefcb2182154e",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
-      "queued batch registration is merged to main before corpus preparation",
-      "the preparation PR freezes the exact tiny control-plane corpus and additive migration ownership",
-      "the E0 implementation PR pins its stable activation base SHA",
+      "queued D5 registration is merged and this preparation is based on main at 5c1721617acaaedf43245f3beccdefcb2182154e",
+      "the preparation PR freezes the exact tiny control-plane corpus at 79b58c8c8613feb3b161b5ffa81970599aed02574666455f2b1bbd9b459d755c without changing implementation paths",
+      "the stable activation base remains 5c1721617acaaedf43245f3beccdefcb2182154e while E0 evidence records its exact current PR base and head",
       "the accepted D4 E2 Local/CI handoff remains unchanged and permits this batch",
       "the accepted D2 E3 data-plane evidence remains unchanged",
       "an independent reviewer is assigned before E0 acceptance",
@@ -77,7 +77,7 @@
   "corpus": {
     "environment": "Local/CI checked-in capture-control fixtures through E2; immutable TOPT development denominator at E3; no live source before separately accepted policy and authorization",
     "manifest_path": "apps/data-engine/tests/fixtures/capture_control/manifest.v1.json",
-    "sha256": null,
+    "sha256": "79b58c8c8613feb3b161b5ffa81970599aed02574666455f2b1bbd9b459d755c",
     "required_strata": [
       "one exact immutable list with success, unchanged, unavailable, skipped-policy, and explicit-failure obligations",
       "two overlapping immutable lists whose separate obligations share one compatible provider work item",
