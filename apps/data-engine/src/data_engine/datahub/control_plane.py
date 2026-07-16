@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
-from truealpha_contracts import SubjectKind
+from truealpha_contracts import SubjectKind, UniverseRef
 from truealpha_contracts.capture_control import CaptureListObligation, CaptureListVersion
 from truealpha_contracts.datahub import (
     FetchAttempt,
@@ -14,6 +16,35 @@ from truealpha_contracts.datahub import (
     ListObligation,
     RetryPolicy,
 )
+
+
+def replay_retry_policy(max_attempts: int) -> RetryPolicy:
+    """Build the frozen D5 retry partition without activating a scheduler."""
+    return RetryPolicy(
+        max_attempts=max_attempts,
+        retryable_outcomes=(
+            FetchAttemptOutcome.INTERRUPTED,
+            FetchAttemptOutcome.RATE_LIMITED,
+            FetchAttemptOutcome.SERVER_ERROR,
+            FetchAttemptOutcome.TRANSPORT_ERROR,
+        ),
+        terminal_outcomes=(
+            FetchAttemptOutcome.FAILED,
+            FetchAttemptOutcome.SUCCESS,
+            FetchAttemptOutcome.UNAVAILABLE,
+            FetchAttemptOutcome.UNCHANGED,
+        ),
+    )
+
+
+def frozen_topt_universe(corpus: Mapping[str, Any]) -> UniverseRef:
+    """Reconstruct the frozen TOPT universe coordinate used by every D5 rung."""
+    denominator = corpus["topt_denominator"]
+    return UniverseRef(
+        universe_id=denominator["universe_id"],
+        universe_version="topt-candidate-2026-03-31-v1",
+        content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
+    )
 
 
 def expand_obligations(
