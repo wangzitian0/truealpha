@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "open_issue_default",
+      "issue_state": "OPEN",
+      "allow_closed_terminal_rerun": false,
+      "manifest": null,
+      "expected": "allow"
+    },
+    {
+      "name": "closed_issue_default_rejection",
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": false,
+      "manifest": null,
+      "expected": "reject"
+    },
+    {
+      "name": "closed_terminal_done_opt_in",
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": {
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "expected": "allow"
+    },
+    {
+      "name": "closed_mismatched_rungs_rejection",
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": {
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E3",
+        "terminal_rung": "E2"
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_standalone_rejection",
+      "issue_state": "CLOSED",
+      "allow_closed_terminal_rerun": true,
+      "manifest": null,
+      "expected": "reject"
+    }
+  ]
+}

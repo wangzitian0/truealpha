@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "batch_id": "D9-terminal-corrective-preflight",
-  "revision": 1,
+  "revision": 2,
   "issue": 274,
   "owner_gate": 32,
-  "status": "queued",
+  "status": "prepared",
   "lane": "capture-platform",
   "last_accepted_rung": null,
   "target_rung": "E0",
@@ -19,11 +19,11 @@
   ],
   "owners": {
     "implementation": "wangzitian0",
-    "reviewer": null,
+    "reviewer": "copilot-pull-request-reviewer",
     "custodian": null
   },
   "activation": {
-    "base_sha": null,
+    "base_sha": "6056db95cc6360295d58db150b1be4b0070200e5",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "queued registration is merged on main before a preparation revision pins the activation base and reviewer",
@@ -39,8 +39,8 @@
   ],
   "corpus": {
     "environment": "Local/CI preflight fixtures and a closed terminal D4 manifest only",
-    "manifest_path": null,
-    "sha256": null,
+    "manifest_path": "libs/runtime/tests/fixtures/agent_preflight_terminal_rerun.v1.json",
+    "sha256": "98c09345dad8879416d1ac7f5e670fafbe62c3211ec29a8461e082a32a5e7355",
     "required_strata": [
       "an open standalone issue remains claimable under the default path",
       "a closed issue is rejected by default",
