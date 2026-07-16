@@ -71,18 +71,31 @@
       "expected": "exclude-from-unfiltered-refetch"
     }
   ],
-  "concurrency": [
-    {
-      "name": "unchanged_etag_allows_patch",
-      "etag_changed_before_patch": false,
-      "expected": "patch"
-    },
-    {
-      "name": "changed_etag_never_overwrites",
-      "etag_changed_before_patch": true,
-      "expected": "retry-or-fail-visible"
-    }
-  ],
+  "concurrency": {
+    "write_mode": "plain-patch",
+    "cases": [
+      {
+        "name": "human_edit_before_direct_refetch_is_observed",
+        "timeline": [
+          "human-edit",
+          "direct-refetch",
+          "compute-patch",
+          "plain-patch"
+        ],
+        "expected": "compute-from-refetched-human-state"
+      },
+      {
+        "name": "human_edit_after_direct_refetch_remains_residual",
+        "timeline": [
+          "direct-refetch",
+          "human-edit",
+          "compute-patch",
+          "plain-patch"
+        ],
+        "expected": "residual-race-outside-claim"
+      }
+    ]
+  },
   "api_resilience": [
     {
       "name": "pagination_preserves_every_issue",

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "batch_id": "D12-vision-issue-reconciliation",
-  "revision": 3,
+  "revision": 4,
   "issue": 250,
   "owner_gate": 32,
   "status": "done",
@@ -10,7 +10,7 @@
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Make Vision issue reconciliation deterministic so batch merges do not create false-red workflows, stale lifecycle state, or search-index-dependent parity failures.",
-  "claim_ceiling": "Accepted E0 repository issue-reconciliation behavior only: batch-managed PRs skip standalone closure before standalone key validation; reconciliation writers are serialized; batch lifecycle, close reason, and owner-gate milestone are deterministic; writes refetch direct issue state and use ETag preconditions; retry exhaustion and partial failures fail visibly; and parity refetches the unfiltered issue collection before filtering scope:vision locally. This does not authorize application, data, factor, backtest, release, or Production work.",
+  "claim_ceiling": "Accepted E0 repository issue-reconciliation behavior only: batch-managed PRs skip standalone closure before standalone key validation; repository reconciliation writers are serialized; batch lifecycle, close reason, and owner-gate milestone are deterministic; every write is recomputed from an immediate direct issue refetch; retry exhaustion and partial failures fail visibly; and parity refetches the unfiltered issue collection before filtering scope:vision locally. The GitHub Issues update endpoint provides no conditional unsafe write, so an external human mutation after the direct refetch remains an explicit residual risk outside this claim. This does not authorize application, data, factor, backtest, release, or Production work.",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [
@@ -39,18 +39,19 @@
   "dependencies": [],
   "later_claim_dependencies": [
     "Historical failed workflow attempts remain immutable; D12 prevents recurrence and reruns only attempts whose original event and workflow revision can still produce valid evidence.",
+    "Race-free composition with external human issue-body edits requires a GitHub endpoint with compare-and-swap semantics or a separately authorized ownership model; direct refetch narrows but cannot eliminate that interval.",
     "Any broader GitHub governance redesign, application behavior, or delivery-policy relaxation requires separate authorization."
   ],
   "corpus": {
     "environment": "Local/CI deterministic GitHub event and lifecycle fixtures only; no live issue mutation is authorized during preparation.",
     "manifest_path": "libs/runtime/tests/fixtures/issue_reconciliation.v1.json",
-    "sha256": "60a411775f7edd2de68db8c3a1ec6a2ff6218a41d2ab14cad0e052d313c2bcde",
+    "sha256": "e9364d3682d1646215c511600698725d161d17c2fc2307fd93534f8e777b6411",
     "required_strata": [
       "merged managed-by-batch PR closure skips standalone issue completion without error",
       "merged complete-on-merge standalone PR closes exactly its declared issue and malformed metadata fails closed",
       "newly scoped issues are visible to post-write parity without label-search indexing",
       "done and cancelled batches close with deterministic reasons while queued, prepared, and active batches remain open",
-      "concurrent edits, pagination, retries, rate limits, partial failures, and idempotent reruns"
+      "human edits before the direct refetch are included in patch computation while edits after the refetch remain an explicit unclaimed residual race; pagination, retries, rate limits, partial failures, and idempotent reruns remain fail-visible"
     ]
   },
   "source_ceiling": "GitHub issue and pull-request metadata only; no credential beyond the workflow token and no application, database, object-store, source, scheduler, release, consumer, or Production data operation is authorized.",
@@ -94,7 +95,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/D12-vision-issue-reconciliation.v1.json",
-      "sha256": "0b9f6bdb7b7f2c67e7a0fab806d52cbf7b42b5ca4a86afc8dd38ba78644926ed"
+      "sha256": "5e89ef941b6d7b8cda40e49047adbc416ef968ca3ee969a282d8558180cbe95c"
     }
   },
   "release_activation": {
@@ -112,7 +113,7 @@
       "closing a batch Work-Issue through the standalone hook or accepting a malformed standalone Work-Key",
       "using a label-filtered GitHub search immediately after reconciliation writes",
       "overlapping reconciliation writers or nondeterministic terminal issue state",
-      "overwriting a concurrent human edit, silently dropping a partial failure, or claiming untested retry and rate-limit safety",
+      "claiming race-free external human edits without compare-and-swap support, silently dropping a partial failure, or claiming untested retry and rate-limit safety",
       "weakening scope:vision parity or changing application, data, factor, backtest, release, or Production behavior"
     ],
     "output": {

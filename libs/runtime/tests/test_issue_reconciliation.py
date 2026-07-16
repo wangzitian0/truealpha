@@ -118,11 +118,19 @@ def test_parity_export_uses_authoritative_labels_not_search_results() -> None:
         assert included is expected
 
 
-def test_concurrent_edit_never_allows_a_stale_patch() -> None:
-    cases = _fixture()["concurrency"]
+def test_direct_refetch_bounds_but_does_not_eliminate_the_human_edit_race() -> None:
+    concurrency = _fixture()["concurrency"]
 
-    for case in cases:
-        result = "retry-or-fail-visible" if case["etag_changed_before_patch"] else "patch"
+    assert concurrency["write_mode"] == "plain-patch"
+    for case in concurrency["cases"]:
+        timeline = case["timeline"]
+        assert timeline.index("direct-refetch") < timeline.index("compute-patch")
+        assert timeline.index("compute-patch") < timeline.index("plain-patch")
+
+        if timeline.index("human-edit") < timeline.index("direct-refetch"):
+            result = "compute-from-refetched-human-state"
+        else:
+            result = "residual-race-outside-claim"
         assert result == case["expected"]
 
 
@@ -183,8 +191,11 @@ def test_workflows_compile_and_enforce_reconciliation_contract() -> None:
 
     assert "group: vision-issue-reconciliation-${{ github.repository }}" in batch_workflow
     assert "cancel-in-progress: false" in batch_workflow
-    assert "If-Match: {etag}" in batch_workflow
-    assert "error.status != 412" in batch_workflow
+    assert "If-Match" not in batch_workflow
+    assert "current = direct_issue(issue_number)" in batch_workflow
+    assert batch_workflow.index("current = direct_issue(issue_number)") < batch_workflow.index(
+        "payload = desired_patch(issue_number, current)"
+    )
     assert "attempts=1" not in batch_workflow
     assert '"done": ("closed", "completed")' in batch_workflow
     assert '"cancelled": ("closed", "not_planned")' in batch_workflow
