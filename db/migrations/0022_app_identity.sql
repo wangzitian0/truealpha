@@ -134,7 +134,12 @@ select
     event.recorded_at
 from app.access_audit_events as event
 join app.authorization_decisions as decision using (decision_id)
-where event.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '');
+where exists (
+    select 1
+    from app.principals as principal
+    where principal.principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+      and principal.principal_kind = 'administrator'
+);
 
 do $$
 declare

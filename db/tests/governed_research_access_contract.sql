@@ -10,7 +10,8 @@ begin
     end if;
     if to_regclass('app.private_research_objects') is null
        or to_regclass('app.authorization_decisions') is null
-       or to_regclass('app.access_audit_events') is null then
+       or to_regclass('app.access_audit_events') is null
+       or to_regclass('app.access_audit_metadata') is null then
         raise exception 'governed access storage boundary is incomplete';
     end if;
     if not exists (
@@ -64,18 +65,28 @@ begin
        or has_table_privilege('app_runtime', 'staging.financial_facts', 'select') then
         raise exception 'app runtime must not read raw or staging data';
     end if;
+    if has_table_privilege('app_runtime', 'app.access_audit_metadata', 'select') then
+        raise exception 'ordinary app runtime must not read administrator audit metadata';
+    end if;
+    if not has_table_privilege('app_audit_reader', 'app.access_audit_metadata', 'select')
+       or has_table_privilege('app_audit_reader', 'app.authorization_decisions', 'select')
+       or has_table_privilege('app_audit_reader', 'app.access_audit_events', 'select') then
+        raise exception 'audit reader must receive only the filtered metadata view';
+    end if;
 end;
 $$;
 
 insert into app.tenants (tenant_id, recorded_at)
 values
     ('tenant:alpha', '2026-07-15T00:00:00Z'),
-    ('tenant:beta', '2026-07-15T00:00:00Z');
+    ('tenant:beta', '2026-07-15T00:00:00Z'),
+    ('tenant:platform', '2026-07-15T00:00:00Z');
 
 insert into app.principals (principal_id, tenant_id, principal_kind, recorded_at)
 values
     ('principal:alpha:alice', 'tenant:alpha', 'member', '2026-07-15T00:00:00Z'),
-    ('principal:beta:bob', 'tenant:beta', 'member', '2026-07-15T00:00:00Z');
+    ('principal:beta:bob', 'tenant:beta', 'member', '2026-07-15T00:00:00Z'),
+    ('principal:platform:admin', 'tenant:platform', 'administrator', '2026-07-15T00:00:00Z');
 
 insert into app.private_research_objects (
     resource_id,
@@ -191,8 +202,6 @@ do $$
 declare
     own_count integer;
     cross_tenant_count integer;
-    own_audit_count integer;
-    cross_tenant_audit_count integer;
 begin
     select count(*) into own_count
     from app.private_research_objects
@@ -200,27 +209,40 @@ begin
     select count(*) into cross_tenant_count
     from app.private_research_objects
     where resource_id = 'document:beta:private-001';
-    select count(*) into own_audit_count
-    from app.access_audit_metadata
-    where audit_event_id = 'audit-event:alpha:001';
-    select count(*) into cross_tenant_audit_count
-    from app.access_audit_metadata
-    where audit_event_id = 'audit-event:beta:001';
     if own_count <> 1 then
         raise exception 'owner must see the private object through RLS';
     end if;
     if cross_tenant_count <> 0 then
         raise exception 'cross-tenant object-ID guessing bypassed RLS';
     end if;
-    if own_audit_count <> 1 then
-        raise exception 'authorized tenant audit metadata is unreadable';
+end;
+$$;
+
+reset role;
+
+set local role app_audit_reader;
+select set_config('truealpha.principal_id', 'principal:platform:admin', true);
+
+do $$
+declare
+    audit_count integer;
+begin
+    select count(*) into audit_count from app.access_audit_metadata;
+    if audit_count <> 2 then
+        raise exception 'authorized administrator must read all non-content audit metadata';
     end if;
-    if cross_tenant_audit_count <> 0 then
-        raise exception 'cross-tenant audit metadata is readable';
-    end if;
-    if has_table_privilege('app_runtime', 'app.authorization_decisions', 'select')
-       or has_table_privilege('app_runtime', 'app.access_audit_events', 'select') then
-        raise exception 'runtime audit reads must use the restricted metadata view';
+end;
+$$;
+
+select set_config('truealpha.principal_id', 'principal:alpha:alice', true);
+
+do $$
+declare
+    audit_count integer;
+begin
+    select count(*) into audit_count from app.access_audit_metadata;
+    if audit_count <> 0 then
+        raise exception 'ordinary member must not read administrator audit metadata';
     end if;
 end;
 $$;
