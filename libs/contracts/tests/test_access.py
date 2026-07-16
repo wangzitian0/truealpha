@@ -57,8 +57,7 @@ def _grant(principal_id: str, entitlement_id: str) -> ActiveEntitlementGrant:
 
 def _contexts(corpus: dict[str, Any]) -> dict[str, AccessContext | None]:
     principal_kinds = {
-        principal["principal_id"]: PrincipalKind(principal["role"])
-        for principal in corpus["principals"]
+        principal["principal_id"]: PrincipalKind(principal["role"]) for principal in corpus["principals"]
     }
     contexts: dict[str, AccessContext | None] = {}
     for row in corpus["authentication_contexts"]:
@@ -129,8 +128,7 @@ def _policy(
         "publication_policy_set_id": POLICY_SET_ID,
         "release_manifest_id": "release-manifest:research:v1",
         "rules": [
-            rule.model_dump(mode="json")
-            for rule in sorted(rules_tuple, key=lambda item: item.publication_class_id)
+            rule.model_dump(mode="json") for rule in sorted(rules_tuple, key=lambda item: item.publication_class_id)
         ],
         "administrator_actions": [
             action.value for action in sorted(administrator_actions, key=lambda item: item.value)
@@ -182,9 +180,7 @@ def test_e2_repair_corpus_pins_unchanged_e1_bytes() -> None:
     repair = _fixture(REPAIR_FIXTURE_PATH)
     assert sha256(BASE_FIXTURE_PATH.read_bytes()).hexdigest() == BASE_FIXTURE_SHA256
     assert sha256(REPAIR_FIXTURE_PATH.read_bytes()).hexdigest() == REPAIR_FIXTURE_SHA256
-    assert repair["base_corpus"]["path"] == (
-        "libs/contracts/tests/fixtures/governed_research_access.v1.json"
-    )
+    assert repair["base_corpus"]["path"] == ("libs/contracts/tests/fixtures/governed_research_access.v1.json")
     assert repair["base_corpus"]["sha256"] == BASE_FIXTURE_SHA256
     assert {case["case_id"] for case in repair["repair_cases"]} == {
         "standard-grant-recorded-on-decision",

@@ -1,7 +1,7 @@
 -- The LLM reads only the mart schema, via this role (init.md Section 1, rule 4).
 -- statement_timeout solves resource contention, not access control.
 -- The application layer ADDITIONALLY forces a LIMIT (1000 rows suggested) on
--- LLM-generated queries — don't rely solely on the database-side setting.
+-- typed repository queries; no consumer accepts model-generated SQL.
 
 do $$ begin
     create role mart_readonly nologin;

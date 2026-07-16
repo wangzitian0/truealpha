@@ -132,6 +132,16 @@ values
         '2026-07-15T00:00:00Z',
         '2026-07-15T01:00:00Z',
         '2026-07-15T00:00:00Z'
+    ),
+    (
+        'grant:alpha:alice:wrong-policy:001',
+        'tenant:alpha',
+        'principal:alpha:alice',
+        'entitlement:research:standard:v1',
+        'publication-policy-set:other:v1',
+        '2026-07-15T00:00:00Z',
+        '2026-07-15T01:00:00Z',
+        '2026-07-15T00:00:00Z'
     );
 
 insert into app.grant_revocations (
@@ -272,6 +282,8 @@ insert into app.authorization_decisions (
     principal_id,
     action,
     resource_id,
+    resource_type,
+    publication_class_id,
     publication_policy_id,
     decision,
     reason_code,
@@ -285,6 +297,8 @@ values
         'principal:alpha:alice',
         'read_content',
         'document:alpha:private-001',
+        'private_document',
+        null,
         'publication-policy-set:research:v2',
         'allow',
         null,
@@ -297,6 +311,8 @@ values
         'principal:beta:bob',
         'read_content',
         'document:beta:private-001',
+        'private_document',
+        null,
         'publication-policy-set:research:v2',
         'allow',
         null,
@@ -309,6 +325,8 @@ values
         'principal:alpha:alice',
         'read_content',
         'conversation:beta:private-001',
+        'private_conversation',
+        null,
         'publication-policy-set:research:v2',
         'deny',
         'tenant_mismatch',
@@ -316,31 +334,44 @@ values
         '2026-07-15T00:06:00Z'
     ),
     (
-        'access-decision:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        'access-decision:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
         'tenant:alpha',
         'principal:alpha:alice',
         'read_materialized_result',
         'strategy-result:alpha:standard-001',
+        'materialized_strategy_result',
+        'publication-class:standard:v1',
         'publication-policy-set:research:v2',
         'allow',
         null,
-        '2026-07-15T00:11:00Z',
-        '2026-07-15T00:11:00Z'
+        '2026-07-15T00:05:00Z',
+        '2026-07-15T00:05:00Z'
     );
 
 insert into app.authorization_decision_grants (decision_id, grant_id, recorded_at)
 values (
-    'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'access-decision:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
     'grant:alpha:alice:001',
-    '2026-07-15T00:01:00Z'
+    '2026-07-15T00:05:00Z'
 );
 
 do $$
 begin
     begin
+        insert into app.authorization_decisions (
+            decision_id, tenant_id, principal_id, action, resource_id, resource_type,
+            publication_class_id, publication_policy_id, decision, reason_code,
+            decided_at, recorded_at
+        ) values (
+            'access-decision:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+            'tenant:beta', 'principal:beta:bob', 'read_materialized_result',
+            'strategy-result:beta:standard-001', 'materialized_strategy_result',
+            'publication-class:standard:v1', 'publication-policy-set:research:v2',
+            'allow', null, '2026-07-15T00:01:00Z', '2026-07-15T00:01:00Z'
+        );
         insert into app.authorization_decision_grants (decision_id, grant_id, recorded_at)
         values (
-            'access-decision:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'access-decision:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
             'grant:alpha:alice:001',
             '2026-07-15T00:01:00Z'
         );
@@ -360,6 +391,17 @@ $$;
 do $$
 begin
     begin
+        insert into app.authorization_decisions (
+            decision_id, tenant_id, principal_id, action, resource_id, resource_type,
+            publication_class_id, publication_policy_id, decision, reason_code,
+            decided_at, recorded_at
+        ) values (
+            'access-decision:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            'tenant:alpha', 'principal:alpha:alice', 'read_materialized_result',
+            'strategy-result:alpha:standard-002', 'materialized_strategy_result',
+            'publication-class:standard:v1', 'publication-policy-set:research:v2',
+            'allow', null, '2026-07-15T00:11:00Z', '2026-07-15T00:11:00Z'
+        );
         insert into app.authorization_decision_grants (decision_id, grant_id, recorded_at)
         values (
             'access-decision:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
@@ -379,6 +421,50 @@ begin
 end;
 $$;
 
+do $$
+begin
+    begin
+        insert into app.authorization_decision_grants (decision_id, grant_id, recorded_at)
+        values (
+            'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'grant:alpha:alice:001',
+            '2026-07-15T00:01:00Z'
+        );
+        raise exception 'private-content decision grant unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'private-content decision grant unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'only materialized-result decisions can claim an entitlement grant' then
+                raise;
+            end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into app.authorization_decision_grants (decision_id, grant_id, recorded_at)
+        values (
+            'access-decision:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            'grant:alpha:alice:wrong-policy:001',
+            '2026-07-15T00:05:00Z'
+        );
+        raise exception 'wrong-policy decision grant unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'wrong-policy decision grant unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'authorization decision grant policy mismatch' then
+                raise;
+            end if;
+    end;
+end;
+$$;
+
 insert into app.access_audit_events (
     audit_event_id,
     decision_id,
@@ -390,7 +476,7 @@ insert into app.access_audit_events (
 )
 values
     (
-        'audit-event:alpha:001',
+        'access-audit-event:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         'tenant:alpha',
         'principal:alpha:alice',
@@ -399,7 +485,7 @@ values
         '2026-07-15T00:01:00Z'
     ),
     (
-        'audit-event:beta:001',
+        'access-audit-event:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         'access-decision:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         'tenant:beta',
         'principal:beta:bob',
@@ -408,13 +494,22 @@ values
         '2026-07-15T00:01:00Z'
     ),
     (
-        'audit-event:alpha:002',
+        'access-audit-event:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
         'access-decision:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
         'tenant:alpha',
         'principal:alpha:alice',
         'access_denied',
         '2026-07-15T00:06:00Z',
         '2026-07-15T00:06:00Z'
+    ),
+    (
+        'access-audit-event:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        'access-decision:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        'tenant:alpha',
+        'principal:alpha:alice',
+        'access_allowed',
+        '2026-07-15T00:05:00Z',
+        '2026-07-15T00:05:00Z'
     );
 
 do $$
@@ -430,7 +525,7 @@ begin
             recorded_at
         )
         values (
-            'audit-event:cross-tenant-invalid',
+            'access-audit-event:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
             'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'tenant:beta',
             'principal:alpha:alice',
@@ -445,6 +540,73 @@ begin
                 raise;
             end if;
             if sqlerrm <> 'access audit tenant must match its authorization decision' then
+                raise;
+            end if;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into app.access_audit_events (
+            audit_event_id, decision_id, tenant_id, principal_id,
+            event_kind, occurred_at, recorded_at
+        ) values (
+            'access-audit-event:1111111111111111111111111111111111111111111111111111111111111111',
+            'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'tenant:alpha', 'principal:beta:bob', 'access_allowed',
+            '2026-07-15T00:01:00Z', '2026-07-15T00:01:00Z'
+        );
+        raise exception 'mismatched-principal audit event unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'mismatched-principal audit event unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'access audit principal must match its authorization decision' then
+                raise;
+            end if;
+    end;
+
+    begin
+        insert into app.access_audit_events (
+            audit_event_id, decision_id, tenant_id, principal_id,
+            event_kind, occurred_at, recorded_at
+        ) values (
+            'access-audit-event:2222222222222222222222222222222222222222222222222222222222222222',
+            'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'tenant:alpha', 'principal:alpha:alice', 'access_denied',
+            '2026-07-15T00:01:00Z', '2026-07-15T00:01:00Z'
+        );
+        raise exception 'mismatched-kind audit event unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'mismatched-kind audit event unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'access audit event kind must match its authorization decision' then
+                raise;
+            end if;
+    end;
+
+    begin
+        insert into app.access_audit_events (
+            audit_event_id, decision_id, tenant_id, principal_id,
+            event_kind, occurred_at, recorded_at
+        ) values (
+            'access-audit-event:3333333333333333333333333333333333333333333333333333333333333333',
+            'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'tenant:alpha', 'principal:alpha:alice', 'access_allowed',
+            '2026-07-15T00:02:00Z', '2026-07-15T00:02:00Z'
+        );
+        raise exception 'mismatched-time audit event unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'mismatched-time audit event unexpectedly succeeded' then
+                raise;
+            end if;
+            if sqlerrm <> 'access audit time must match its authorization decision' then
                 raise;
             end if;
     end;
@@ -497,12 +659,12 @@ begin
     if (select count(*) from app.publication_policies where publication_policy_id = 'publication-policy:research:v1') <> 2 then
         raise exception 'publication policy supersession history was not preserved';
     end if;
-    if (select count(*) from app.access_audit_events where tenant_id = 'tenant:alpha') <> 2 then
+    if (select count(*) from app.access_audit_events where tenant_id = 'tenant:alpha') <> 3 then
         raise exception 'allowed-and-denied access audit history was not preserved';
     end if;
     if (select array_agg(grant_id order by grant_id)
         from app.authorization_decision_grants
-        where decision_id = 'access-decision:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+        where decision_id = 'access-decision:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee')
        is distinct from array['grant:alpha:alice:001']::text[] then
         raise exception 'authorization decision did not retain the exact entitlement grant identity';
     end if;
@@ -552,11 +714,26 @@ begin
     select count(*) into cross_tenant_count
     from app.access_audit_metadata
     where tenant_id = 'tenant:beta';
-    if audit_count <> 2 then
+    if audit_count <> 3 then
         raise exception 'authorized administrator must read target-tenant non-content audit metadata';
     end if;
     if cross_tenant_count <> 0 then
         raise exception 'administrator audit view crossed the configured tenant boundary';
+    end if;
+    if exists (
+        select 1 from app.access_audit_metadata
+        where resource_type in ('private_conversation', 'private_document')
+          and resource_id is not null
+    ) then
+        raise exception 'administrator audit metadata exposed a private resource identifier';
+    end if;
+    if not exists (
+        select 1 from app.access_audit_metadata
+        where resource_type = 'materialized_strategy_result'
+          and resource_id = 'strategy-result:alpha:standard-001'
+          and entitlement_grant_ids = array['grant:alpha:alice:001']::text[]
+    ) then
+        raise exception 'administrator audit metadata omitted materialized-result grant lineage';
     end if;
 end;
 $$;

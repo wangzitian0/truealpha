@@ -8,8 +8,8 @@
   "integration_base_sha": "352c5583a785bbaaf9ab5ec1bb48ca8410d72bf5",
   "included_issues": [57, 58, 59, 60, 61],
   "dependency_order": [57, 58, 59, 60, 61],
-  "candidate_payload_sha256": "c7691ff7e5fba3e9acdc7049709a554927298c23b4b90de02757dad48dd2a6fd",
-  "candidate_tree_sha256": "04bf20dc0f782a42f5f1f8ceca96b060338175eddcda2e74ba8044fd44cfbdfd",
+  "candidate_payload_sha256": "d1e5d50fd4467c4c7a199eca550af7653d8cb9173af5a5fe9a722108918e1db8",
+  "candidate_tree_sha256": "98e594ff6d04d11325b81866d4c7e6b640f7e28e68bb31775c0014609b7c3db1",
   "paths": [
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e1_slice.py",
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e2_slice.py",
@@ -165,17 +165,17 @@
     {
       "role": "authoritative_architecture",
       "path": "init.md",
-      "sha256": "7fe24184b9d22520d8bd8701b433b36d4552a5b7ffb118b8099ef6da11a0851b"
+      "sha256": "9040f7bb264b6963501559b4c90a972bae85d8a045730bdde1f929b13c2b9627"
     },
     {
       "role": "stable_contract_export",
       "path": "libs/contracts/src/truealpha_contracts/__init__.py",
-      "sha256": "414fe8dc2aafe38c3f6fe35fc4040e078978290395c57c83896e8948a1a20d3b"
+      "sha256": "33f451c3e37afae5bfdf1844d5055d10ea1c05942d1308053909d96d7974d489"
     },
     {
       "role": "candidate_validator",
       "path": "tools/check_gate0_candidate.py",
-      "sha256": "7cde77ad9bbcb5fcc501e18d75a311598811fddd5ba902adfef566b826aee074"
+      "sha256": "c90b7a86724e3ba1ef2e5ddbbfb51748602591ee1311b1c2cb931321382271b8"
     },
     {
       "role": "delivery_validator",

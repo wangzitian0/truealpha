@@ -136,9 +136,7 @@ class AccessContext(StrictFrozenModel):
 
     @field_validator("active_entitlement_grants")
     @classmethod
-    def validate_grants(
-        cls, value: tuple[ActiveEntitlementGrant, ...]
-    ) -> tuple[ActiveEntitlementGrant, ...]:
+    def validate_grants(cls, value: tuple[ActiveEntitlementGrant, ...]) -> tuple[ActiveEntitlementGrant, ...]:
         ids = [grant.grant_id for grant in value]
         if len(ids) != len(set(ids)):
             raise ValueError("active_entitlement_grants must not contain duplicate grant IDs")
@@ -235,9 +233,7 @@ class PublicationPolicySet(StrictFrozenModel):
 
     @field_validator("administrator_actions")
     @classmethod
-    def validate_administrator_actions(
-        cls, value: tuple[AccessAction, ...]
-    ) -> tuple[AccessAction, ...]:
+    def validate_administrator_actions(cls, value: tuple[AccessAction, ...]) -> tuple[AccessAction, ...]:
         if len(value) != len(set(value)):
             raise ValueError("administrator_actions must be unique")
         return tuple(sorted(value, key=lambda action: action.value))

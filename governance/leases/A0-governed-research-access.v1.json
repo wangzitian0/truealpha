@@ -1,12 +1,16 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:7a155276448f35200aa9e57f8c6bb916ad78a3a737e1b918344a59cf2871e1ce",
+  "lease_id": "integration-lease:5f79c40e55d3426f661745dab401ea64e32fad2f57b157b884d73ea3a4da83cb",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
-  "state": "active",
+  "state": "revoked",
   "paths": [
     "init.md",
+    "docs/architecture-decisions/A0-governed-research-access.md",
     "libs/contracts/src/truealpha_contracts/__init__.py",
+    "db/migrations/0024_access_policy_bindings.sql",
+    "db/roles.sql",
+    "db/tests/governed_research_access_contract.sql",
     "governance/gate0/README.md",
     "governance/gate0/manifest-v5.json",
     "governance/schemas/gate0-candidate-manifest.schema.json",
