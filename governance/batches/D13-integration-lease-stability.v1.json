@@ -24,7 +24,7 @@
     "custodian": null
   },
   "activation": {
-    "base_sha": "f0f1f4202a2397c07837eb68fb2fc95edefff1f7",
+    "base_sha": "21a151709a469e17d27305b023e453cc82da3cc2",
     "protocol_ref": "docs/iterative-delivery.md@same-commit",
     "requirements": [
       "the queued D13 registration is merged to main before preparation freezes the activation base, reviewer, corpus, and integration lease",
@@ -44,7 +44,7 @@
   "corpus": {
     "environment": "Local/CI git-history and lease fixtures only",
     "manifest_path": "libs/runtime/tests/fixtures/integration_lease_stability.v1.json",
-    "sha256": "1e92c5f32518b9a913328591f0a022a8f871019b9a1c431dcb55584eee534125",
+    "sha256": "aa8836e565dd026a3365be02ec9d2e5bdf221ea8e8b0b4e8a3f8880cbd07fa61",
     "required_strata": [
       "lease acquisition base equals the exact PR base",
       "lease acquisition base is an ancestor and only unrelated paths changed",

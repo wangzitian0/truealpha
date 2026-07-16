@@ -96,6 +96,53 @@
       "expected": "reject"
     },
     {
+      "name": "renewal_changes_read_only_scope",
+      "path_mutations": [
+        "read_only"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_changes_forbidden_scope",
+      "path_mutations": [
+        "forbidden"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_changes_integration_surface",
+      "path_mutations": [
+        "integration_surface"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha"
+      ],
+      "expected": "reject"
+    },
+    {
+      "name": "renewal_changes_dependencies",
+      "manifest_mutations": [
+        "dependencies"
+      ],
+      "path_mutations": [
+        "lease_manifest.sha256"
+      ],
+      "lease_mutations": [
+        "lease_id",
+        "base_sha"
+      ],
+      "expected": "reject"
+    },
+    {
       "name": "renewal_changes_owner",
       "path_mutations": [
         "lease_owner"
