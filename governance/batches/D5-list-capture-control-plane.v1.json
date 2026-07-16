@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "batch_id": "D5-list-capture-control-plane",
+  "revision": 1,
+  "issue": 205,
+  "owner_gate": 29,
+  "status": "queued",
+  "lane": "capture-platform",
+  "last_accepted_rung": null,
+  "target_rung": "E0",
+  "terminal_rung": "E4",
+  "objective": "Build one registry-driven, append-only capture control plane that schedules exact list versions, preserves every attempt, resumes partial work, and executes content-hashed bounded recapture before TOPT Staging and larger universes depend on it.",
+  "claim_ceiling": "queued E0 Local/CI implementation only; no accepted runtime handoff, source activation, default schedule, TOPT completeness, Staging operation, capacity, or data-readiness claim",
+  "capability_issues": [],
+  "closes_issues": [],
+  "informational_issues": [41, 60, 61, 67, 68, 171, 206, 207],
+  "owners": {
+    "implementation": "wangzitian0",
+    "reviewer": null,
+    "custodian": null
+  },
+  "activation": {
+    "base_sha": null,
+    "protocol_ref": "docs/iterative-delivery.md@same-commit",
+    "requirements": [
+      "queued batch registration is merged to main before corpus preparation",
+      "the preparation PR freezes the exact tiny control-plane corpus and additive migration ownership",
+      "the E0 implementation PR pins its stable activation base SHA",
+      "the accepted D4 E2 Local/CI handoff remains unchanged and permits this batch",
+      "the accepted D2 E3 data-plane evidence remains unchanged",
+      "an independent reviewer is assigned before E0 acceptance",
+      "an active integration lease covers the additive migration before it changes",
+      "issue #205 contains this manifest path and exact SHA-256",
+      "Delivery Governance CI passes offline validation and live GitHub parity"
+    ]
+  },
+  "dependencies": [
+    {
+      "class": "start",
+      "issue": 210,
+      "artifact": "accepted D4 E2 Local/CI DataHub interface",
+      "handoff_manifest": {
+        "path": "governance/handoffs/D4-datahub-interface.v1.json",
+        "sha256": "88d08625dd6fee64e1e260de0a081d8db72e7b9f7b6bcadcff8aa48adeb3e9b0"
+      },
+      "state": "accepted"
+    },
+    {
+      "class": "freeze",
+      "issue": 23,
+      "artifact": "accepted D2 E3 TOPT data-plane evidence",
+      "evidence": {
+        "path": "governance/evidence/issue-23.v1.json",
+        "sha256": "9066cc06367a42ae92f4d69e008cc411ec008705edd52068861763056af98547"
+      },
+      "batch_manifest": {
+        "path": "governance/batches/D2-mvp-medium-validation.v1.json",
+        "sha256": "e8b8c7b28a35e82dfe576f53a88fddf2fe93735cdbcc7b5a3c80ac79fdf34dcf"
+      },
+      "rung_evidence": {
+        "path": "governance/evidence/D2-mvp-medium-validation-E3.v1.json",
+        "sha256": "bd8a828b17d4cd81c87d12aa06e474f1ee883a2215a2455493d131763e5c9d66"
+      },
+      "runtime_handoff_id": "mvp-medium-validation-handoff:e6c1206786f3dbbb79171f49e34555e7fadd96d7182752aa1e45a124825587a3",
+      "producer_commit": "81159c4c53febdf1d98cd3b1ad2d158bc0502af1",
+      "state": "accepted"
+    }
+  ],
+  "later_claim_dependencies": [
+    "#60 accepted source policy, rights, cadence, and budget before any live-source or default-schedule claim",
+    "#61 accepted applicability, freshness, denominator, and SLO policy before thresholds or readiness freeze",
+    "D6-confidence-provenance consumes a stable D5 attempt and observation handoff before trusted confidence or indexed provenance claims",
+    "#171 consumes the accepted D5 E4 handoff before strengthened TOPT Staging capture claims",
+    "#206 consumes the accepted D5 E4 handoff before QQQ capacity evidence",
+    "#67 and #68 remain blocked until bounded scope, capacity, rights, and independent audit dependencies are accepted"
+  ],
+  "corpus": {
+    "environment": "Local/CI checked-in capture-control fixtures through E2; immutable TOPT development denominator at E3; no live source before separately accepted policy and authorization",
+    "manifest_path": "apps/data-engine/tests/fixtures/capture_control/manifest.v1.json",
+    "sha256": null,
+    "required_strata": [
+      "one exact immutable list with success, unchanged, unavailable, skipped-policy, and explicit-failure obligations",
+      "two overlapping immutable lists whose separate obligations share one compatible provider work item",
+      "conditional response and identical raw bytes retained as a new attempt while reusing content-addressed raw bytes",
+      "bounded retry, interruption, rate limit, terminal failure, and out-of-order outcome sequences",
+      "crash after planning, raw landing, normalization, and partial manifest persistence with deterministic resume",
+      "content-hashed recapture dry runs filtered by list, subject, source, type, partition, time, failure, freshness, parser, mapping, and confidence state",
+      "recapture overreach rejection and proof that unaffected cells are not fetched or rewritten",
+      "TOPT 20 issuers, 21 instruments, and 84 obligations with GOOG and GOOGL kept distinct"
+    ]
+  },
+  "source_ceiling": "Checked-in fixtures through E2 and immutable development inputs through E3; live network calls, credentials, provider rights, default schedules, and Staging activation require separately accepted policy and authorization.",
+  "paths": {
+    "writable": [
+      "libs/contracts/src/truealpha_contracts/capture_control.py",
+      "libs/contracts/tests/test_capture_control.py",
+      "libs/contracts/tests/fixtures/capture_control.v1.json",
+      "apps/data-engine/src/data_engine/datahub/**",
+      "apps/data-engine/tests/datahub/**",
+      "apps/data-engine/tests/fixtures/capture_control/**",
+      "apps/data-engine/scripts/run_capture_control.py",
+      "db/migrations/0023_capture_control.sql",
+      "db/tests/capture_control_contract.sql",
+      "governance/evidence/D5-list-capture-control-plane-E0.v1.json",
+      "governance/evidence/D5-list-capture-control-plane-E1.v1.json",
+      "governance/evidence/D5-list-capture-control-plane-E2.v1.json",
+      "governance/evidence/D5-list-capture-control-plane-E3.v1.json",
+      "governance/evidence/D5-list-capture-control-plane-E4.v1.json",
+      "governance/handoffs/D5-list-capture-control-plane.v1.json",
+      "governance/leases/D5-list-capture-control-plane.v1.json"
+    ],
+    "read_only": [
+      "vision.md",
+      "init.md",
+      "docs/iterative-delivery.md",
+      "governance/batches/D2-mvp-medium-validation.v1.json",
+      "governance/evidence/D2-mvp-medium-validation-E3.v1.json",
+      "governance/evidence/issue-23.v1.json",
+      "governance/batches/D4-datahub-interface.v1.json",
+      "governance/evidence/D4-datahub-interface-E2.v1.json",
+      "governance/handoffs/D4-datahub-interface.v1.json",
+      "libs/contracts/src/truealpha_contracts/datahub.py",
+      "apps/data-engine/src/data_engine/raw_store.py",
+      "apps/data-engine/src/data_engine/mvp_medium_models.py",
+      "apps/data-engine/src/data_engine/mvp_medium_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_medium_repository.py",
+      "apps/data-engine/src/data_engine/mvp_medium_snapshot.py",
+      "apps/data-engine/src/data_engine/sources/**",
+      "db/migrations/0021_mvp_medium_domains.sql"
+    ],
+    "forbidden": [
+      "AGENTS.md",
+      "init.md",
+      "vision.md",
+      "libs/contracts/src/truealpha_contracts/__init__.py",
+      "libs/contracts/src/truealpha_contracts/datahub.py",
+      "libs/factors/**",
+      "apps/data-engine/src/data_engine/__init__.py",
+      "apps/data-engine/src/data_engine/dagster_defs.py",
+      "apps/data-engine/src/data_engine/raw_store.py",
+      "apps/data-engine/src/data_engine/mvp_medium_models.py",
+      "apps/data-engine/src/data_engine/mvp_medium_pipeline.py",
+      "apps/data-engine/src/data_engine/mvp_medium_repository.py",
+      "apps/data-engine/src/data_engine/mvp_medium_snapshot.py",
+      "apps/data-engine/src/data_engine/sources/**",
+      "apps/app-web/**",
+      "apps/llm-service/**",
+      "db/roles.sql",
+      "uv.lock",
+      "pyproject.toml",
+      "Makefile"
+    ],
+    "integration_surface": [
+      "apps/data-engine/src/data_engine/datahub/__init__.py",
+      "db/migrations/0023_capture_control.sql",
+      "db/tests/capture_control_contract.sql"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": null
+  },
+  "release_activation": {
+    "allowed": false,
+    "registered": false,
+    "reason": "D5 remains isolated from root exports, global Dagster definitions, default schedules, source routes, and accepted release bindings until a separate fan-in transition is authorized."
+  },
+  "acceptance": {
+    "commands": [
+      "uv run --package truealpha-contracts python -m pytest libs/contracts/tests/test_capture_control.py -q",
+      "uv run --package truealpha-data-engine python -m pytest apps/data-engine/tests/datahub -q",
+      "uv run --package truealpha-contracts python -m ruff check libs/contracts/src/truealpha_contracts/capture_control.py libs/contracts/tests/test_capture_control.py",
+      "uv run --package truealpha-data-engine python -m ruff check apps/data-engine/src/data_engine/datahub apps/data-engine/tests/datahub",
+      "uv run --package truealpha-contracts python -m mypy",
+      "uv run --package truealpha-data-engine python -m mypy",
+      "uv run python tools/check_delivery_governance.py"
+    ],
+    "negative_controls": [
+      "mutable latest/current list, source, schedule, parser, mapping, confidence, or recapture policy coordinate",
+      "campaign, run, obligation, work-item, attempt, raw-object, observation, plan, or checkpoint identity drift",
+      "identical raw bytes erase a later attempt, observation event, or separate list obligation",
+      "duplicate obligation, non-contiguous attempt, retry after terminal outcome, or unbounded retry",
+      "missing terminal state, denominator shrink, or aggregate-ratio substitution",
+      "resume duplicates logical work, loses an attempt, or repairs history with UPDATE or DELETE",
+      "recapture execution differs from its frozen dry-run selection, broadens a predicate, or rewrites an unaffected cell",
+      "GOOG and GOOGL collapse to one instrument or TOPT differs from 20 issuers, 21 instruments, and 84 obligations",
+      "source call before scope, policy, rights, budget, and call-plan authorization",
+      "root export, global Dagster definition, default schedule, Staging route, Production route, or release binding"
+    ],
+    "output": {
+      "type": "ListCaptureControlPlaneEvidence",
+      "stable_handoff": false,
+      "state": "queued",
+      "allowed_evidence_readers": [
+        "D6-confidence-provenance preparation after D5 E2 acceptance",
+        "issue #171 TOPT Staging preparation after D5 E4 acceptance",
+        "issue #206 QQQ capacity preparation after D5 E4 acceptance"
+      ]
+    }
+  },
+  "invalidation": [
+    "identity grain, cadence semantics, terminal state, retry semantics, recapture predicate vocabulary, checkpoint semantics, or corpus change creates a new D5 revision",
+    "a D4 interface or D2 data-plane invalidation revokes dependent D5 evidence",
+    "a migration, threshold, source policy, catalog, universe, or denominator change invalidates the affected rung and every higher rung",
+    "shared export, global Dagster registration, default schedule, source activation, or release binding requires a separate integration lease and authorization",
+    "a code or policy change after E4 freeze creates a new candidate and requires fresh independent evidence"
+  ],
+  "rollback": "Revert the isolated D5 contracts, additive migration, runtime modules, tests, fixtures, evidence, handoff, and lease together; leave root exports, global Dagster definitions, source routes, schedules, release bindings, and prior append-only data untouched."
+}
