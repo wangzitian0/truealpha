@@ -1,7 +1,7 @@
 -- The LLM reads only the mart schema, via this role (init.md Section 1, rule 4).
 -- statement_timeout solves resource contention, not access control.
 -- The application layer ADDITIONALLY forces a LIMIT (1000 rows suggested) on
--- LLM-generated queries — don't rely solely on the database-side setting.
+-- typed repository queries; no consumer accepts model-generated SQL.
 
 do $$ begin
     create role mart_readonly nologin;
@@ -24,12 +24,22 @@ end $$;
 alter role app_runtime set statement_timeout = '5s';
 
 grant usage on schema app to app_runtime;
-grant select on app.publication_policies to app_runtime;
+grant select on app.publication_policies, app.publication_policy_sets,
+    app.publication_policy_entitlements, app.publication_policy_set_seals to app_runtime;
 grant select on app.private_research_objects to app_runtime;
 revoke select on app.access_audit_metadata from app_runtime;
-grant insert on app.authorization_decisions, app.access_audit_events to app_runtime;
+grant insert on app.authorization_decisions, app.authorization_decision_grants,
+    app.access_audit_events to app_runtime;
 revoke all on function app.validate_access_audit_decision_tenant() from public;
+revoke all on function app.validate_authorization_decision_policy_set() from public;
+revoke all on function app.validate_authorization_decision_grant() from public;
+revoke all on function app.validate_authorization_decision_required_grants() from public;
+revoke all on function app.validate_publication_policy_entitlement_insert() from public;
+revoke all on function app.validate_publication_policy_set_seal() from public;
 grant execute on function app.validate_access_audit_decision_tenant() to app_runtime;
+grant execute on function app.validate_authorization_decision_policy_set() to app_runtime;
+grant execute on function app.validate_authorization_decision_grant() to app_runtime;
+grant execute on function app.validate_authorization_decision_required_grants() to app_runtime;
 
 -- Audit readers receive only the administrator-filtered, non-content view.
 do $$ begin

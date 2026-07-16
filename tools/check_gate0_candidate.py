@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the immutable Gate 0 v4 candidate chain and its acceptance boundary."""
+"""Validate an immutable, versioned Gate 0 candidate and its acceptance boundary."""
 
 from __future__ import annotations
 
@@ -16,7 +16,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path("governance/gate0/manifest-v4.json")
-EXPECTED_MANIFEST_PATHS = (
+V4_FROZEN_TREE_SHA256 = "c1463ee2e735ee9895b9f6d6b746d90cda7fb34a3812d064724c907bdcbe0c8b"
+V4_FROZEN_COMMIT_SHA = "8bfcd328258e79e14977c60525769ce3302f2ea4"
+V4_FROZEN_PROOF_PATH = "governance/gate0/v4-frozen-tree-proof.v1.json"
+V4_FROZEN_PROOF_SHA256 = "cb231578a36ad68ccd8b40ea2ad5c7085b8eadfdba6e9194e263659738310627"
+V4_MANIFEST_PATHS = (
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e1_slice.py",
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e2_slice.py",
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e3_slice.py",
@@ -30,9 +34,22 @@ EXPECTED_MANIFEST_PATHS = (
     "libs/runtime/tests/test_gate0_candidate.py",
     "tools/check_gate0_candidate.py",
 )
+SUCCESSOR_MANIFEST_PATHS = (
+    *V4_MANIFEST_PATHS,
+    "libs/runtime/tests/test_delivery_governance.py",
+    "tools/check_delivery_governance.py",
+)
+EXPECTED_MANIFEST_PATHS = V4_MANIFEST_PATHS
+SUCCESSOR_BINDINGS = {
+    "authoritative_architecture": "init.md",
+    "stable_contract_export": "libs/contracts/src/truealpha_contracts/__init__.py",
+    "candidate_validator": "tools/check_gate0_candidate.py",
+    "delivery_validator": "tools/check_delivery_governance.py",
+}
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+VERSIONED_MANIFEST_RE = re.compile(r"^governance/gate0/manifest-v[0-9]+\.json$")
 COMMENT_URL_RE = re.compile(
     r"^https://github\.com/wangzitian0/truealpha/issues/(?P<issue>[0-9]+)#issuecomment-(?P<comment>[0-9]+)$"
 )
@@ -250,6 +267,15 @@ MANIFEST_FIELDS = frozenset(
         "blocking_reasons",
     }
 )
+SUCCESSOR_MANIFEST_FIELDS = MANIFEST_FIELDS | {"predecessor_manifest", "integration_bindings"}
+PREDECESSOR_MANIFEST_FIELDS = frozenset(
+    {"manifest_id", "manifest_version", "path", "sha256", "candidate_commit_sha", "candidate_tree_proof"}
+)
+FROZEN_PROOF_REFERENCE_FIELDS = frozenset({"path", "sha256"})
+FROZEN_TREE_PROOF_FIELDS = frozenset(
+    {"schema_version", "proof_id", "candidate_commit_sha", "manifest", "candidate_tree_sha256", "paths"}
+)
+INTEGRATION_BINDING_FIELDS = frozenset({"role", "path", "sha256"})
 FOUNDATION_ARTIFACT_FIELDS = frozenset({"issue", "kind", "path", "sha256", "state"})
 CANDIDATE_ARTIFACT_FIELDS = FOUNDATION_ARTIFACT_FIELDS | {"depends_on"}
 EXTERNAL_ATTESTATION_FIELDS = frozenset({"key", "issue", "target_sha256", "status", "ref"})
@@ -382,7 +408,11 @@ def candidate_payload_sha256(manifest: dict[str, Any]) -> str:
         for artifact in artifacts:
             if isinstance(artifact, dict):
                 compact.append({"issue": artifact.get("issue"), "sha256": artifact.get("sha256")})
-    return _canonical_sha256({"included_issues": manifest.get("included_issues"), "artifacts": compact})
+    payload: dict[str, Any] = {"included_issues": manifest.get("included_issues"), "artifacts": compact}
+    if manifest.get("manifest_version", 0) >= 5:
+        payload["predecessor_manifest"] = manifest.get("predecessor_manifest")
+        payload["integration_bindings"] = manifest.get("integration_bindings")
+    return _canonical_sha256(payload)
 
 
 def path_matches(path: str, pattern: str) -> bool:
@@ -417,6 +447,7 @@ def manifest_authorized_files(
             if path.is_file():
                 authorized.add(pattern)
     authorized.discard(manifest_relative)
+    authorized = {path for path in authorized if VERSIONED_MANIFEST_RE.fullmatch(path) is None}
     return tuple(sorted(authorized))
 
 
@@ -434,6 +465,52 @@ def candidate_tree_sha256(
         digest.update(len(raw).to_bytes(8, "big"))
         digest.update(raw)
     return digest.hexdigest()
+
+
+def frozen_candidate_tree_sha256(commit_sha: str, patterns: list[str] | tuple[str, ...]) -> str:
+    """Hash a historical candidate from immutable Git objects, not the current checkout."""
+    listing = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-tree", "-r", "--name-only", commit_sha],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    manifest_paths = {
+        path
+        for path in listing.stdout.splitlines()
+        if any(path_matches(path, pattern) for pattern in patterns) and VERSIONED_MANIFEST_RE.fullmatch(path) is None
+    }
+    digest = hashlib.sha256()
+    for relative_path in sorted(manifest_paths):
+        raw = subprocess.run(
+            ["git", "-C", str(ROOT), "show", f"{commit_sha}:{relative_path}"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        digest.update(relative_path.encode())
+        digest.update(b"\0")
+        digest.update(len(raw).to_bytes(8, "big"))
+        digest.update(raw)
+    return digest.hexdigest()
+
+
+def frozen_file_bytes(commit_sha: str, relative_path: str) -> bytes:
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{commit_sha}:{relative_path}"],
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def frozen_commit_available(commit_sha: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(ROOT), "cat-file", "-e", f"{commit_sha}^{{commit}}"],
+            check=False,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
 
 
 def _strict_fields(validation: Validation, value: Any, expected: frozenset[str], label: str) -> bool:
@@ -481,6 +558,55 @@ def _repo_file(validation: Validation, root: Path, relative_path: Any, label: st
         return None
     validation.require(path.is_file(), f"{label}: file does not exist: {relative_path}")
     return path if path.is_file() else None
+
+
+def _validate_frozen_tree_proof(
+    validation: Validation,
+    *,
+    root: Path,
+    reference: Any,
+    predecessor_path: str,
+    predecessor_sha: str,
+    predecessor: dict[str, Any],
+    predecessor_version: int,
+    candidate_commit: str,
+) -> dict[str, Any] | None:
+    label = "Gate 0 predecessor frozen-tree proof"
+    if not _strict_fields(validation, reference, FROZEN_PROOF_REFERENCE_FIELDS, label):
+        return None
+    assert isinstance(reference, dict)
+    proof_path = _repo_file(validation, root, reference.get("path"), label)
+    if proof_path is None:
+        return None
+    validation.require(reference.get("sha256") == _sha256_file(proof_path), f"{label}: file SHA-256 mismatch")
+    try:
+        proof = _load_json(proof_path)
+    except json.JSONDecodeError as error:
+        validation.require(False, f"{label}: invalid JSON: {error}")
+        return None
+    if not _strict_fields(validation, proof, FROZEN_TREE_PROOF_FIELDS, label):
+        return None
+    assert isinstance(proof, dict)
+    manifest_ref = proof.get("manifest")
+    _strict_fields(validation, manifest_ref, frozenset({"path", "sha256"}), f"{label} manifest")
+    validation.require(proof.get("schema_version") == 1, f"{label}: unsupported schema")
+    validation.require(
+        proof.get("proof_id") == f"gate-0-v{predecessor_version}-frozen-tree-proof-v1",
+        f"{label}: wrong identity",
+    )
+    validation.require(proof.get("candidate_commit_sha") == candidate_commit, f"{label}: wrong commit")
+    validation.require(
+        isinstance(manifest_ref, dict)
+        and manifest_ref.get("path") == predecessor_path
+        and manifest_ref.get("sha256") == predecessor_sha,
+        f"{label}: manifest identity mismatch",
+    )
+    validation.require(
+        proof.get("candidate_tree_sha256") == predecessor.get("candidate_tree_sha256"),
+        f"{label}: candidate tree mismatch",
+    )
+    validation.require(proof.get("paths") == predecessor.get("paths"), f"{label}: authorized paths mismatch")
+    return proof
 
 
 def _validate_comment_ref(
@@ -850,9 +976,13 @@ def _validate_public_goldens(validation: Validation, *, root: Path, reference: A
                         continue
                     assert isinstance(child, dict)
                     validation.require(child.get("schema_version") == 1, f"{artifact_label}: unsupported schema")
-                    validation.require(child.get("artifact_type") == expected_type, f"{artifact_label}: wrong artifact type")
+                    validation.require(
+                        child.get("artifact_type") == expected_type, f"{artifact_label}: wrong artifact type"
+                    )
                     validation.require(child.get("target") == target, f"{artifact_label}: target disagrees with case")
-                    validation.require(child.get("case_key") == case_key, f"{artifact_label}: case key disagrees with case")
+                    validation.require(
+                        child.get("case_key") == case_key, f"{artifact_label}: case key disagrees with case"
+                    )
                     validation.require(
                         isinstance(child.get(content_key), dict) and bool(child[content_key]),
                         f"{artifact_label}: content is missing",
@@ -877,10 +1007,16 @@ def _validate_candidate_identity(validation: Validation, payload: dict[str, Any]
         payload.get("artifact_type") == EXPECTED_ARTIFACT_TYPES[issue], f"issue #{issue}: wrong artifact type"
     )
     artifact_version = payload.get("artifact_version")
-    validation.require(artifact_version == "candidate-v1", f"issue #{issue}: wrong artifact version")
+    state = payload.get("state")
+    valid_version = (
+        artifact_version == "candidate-v1"
+        if state != "accepted"
+        else bool(isinstance(artifact_version, str) and re.fullmatch(r"accepted-v[1-9][0-9]*", artifact_version))
+    )
+    validation.require(valid_version, f"issue #{issue}: artifact version does not match its state")
     validation.require(payload.get("issue") == issue, f"issue #{issue}: artifact issue mismatch")
     validation.require(
-        payload.get("state") in {"candidate_unapproved", "candidate_incomplete"},
+        state in {"candidate_unapproved", "candidate_incomplete", "accepted"},
         f"issue #{issue}: invalid state",
     )
     validation.require(
@@ -1343,21 +1479,40 @@ def _validate_issue61(validation: Validation, payload: Any) -> None:
 
 
 def _validate_manifest_shape(validation: Validation, manifest: Any) -> None:
-    if not _strict_fields(validation, manifest, MANIFEST_FIELDS, "Gate 0 manifest"):
+    if not isinstance(manifest, dict):
+        validation.require(False, "Gate 0 manifest: expected an object")
         return
-    assert isinstance(manifest, dict)
+    version = manifest.get("manifest_version")
+    expected_fields = SUCCESSOR_MANIFEST_FIELDS if isinstance(version, int) and version >= 5 else MANIFEST_FIELDS
+    if not _strict_fields(validation, manifest, expected_fields, "Gate 0 manifest"):
+        return
     validation.require(manifest.get("schema_version") == 1, "Gate 0 manifest: unsupported schema")
-    validation.require(manifest.get("manifest_id") == "gate-0-batch-v4", "Gate 0 manifest: wrong manifest ID")
-    validation.require(manifest.get("manifest_version") == 4, "Gate 0 manifest: wrong manifest version")
+    validation.require(
+        isinstance(version, int) and not isinstance(version, bool) and version >= 4,
+        "Gate 0 manifest: unsupported manifest version",
+    )
+    if not isinstance(version, int) or isinstance(version, bool):
+        return
+    validation.require(
+        manifest.get("manifest_id") == f"gate-0-batch-v{version}",
+        "Gate 0 manifest: manifest ID does not match its version",
+    )
     validation.require(manifest.get("gate_issue") == 56, "Gate 0 manifest: wrong Gate issue")
     validation.require(
         manifest.get("status") in {"candidate_blocked_external_attestation", "accepted"},
         "Gate 0 manifest: invalid status",
     )
-    validation.require(
-        manifest.get("integration_branch") == "batch/gate-0-v4-semantic-data-closure",
-        "Gate 0 manifest: wrong integration branch",
-    )
+    branch = manifest.get("integration_branch")
+    if version == 4:
+        validation.require(
+            branch == "batch/gate-0-v4-semantic-data-closure",
+            "Gate 0 manifest: wrong immutable v4 integration branch",
+        )
+    else:
+        validation.require(
+            isinstance(branch, str) and branch.startswith(f"batch/gate-0-v{version}-"),
+            "Gate 0 manifest: successor integration branch does not match its version",
+        )
     base_sha = manifest.get("integration_base_sha")
     validation.require(
         isinstance(base_sha, str) and GIT_SHA_RE.fullmatch(base_sha) is not None,
@@ -1371,7 +1526,8 @@ def _validate_manifest_shape(validation: Validation, manifest: Any) -> None:
         "Gate 0 manifest: candidate payload SHA-256 mismatch",
     )
     paths = manifest.get("paths")
-    validation.require(paths == list(EXPECTED_MANIFEST_PATHS), "Gate 0 manifest: authorized path set changed")
+    expected_paths = V4_MANIFEST_PATHS if version == 4 else SUCCESSOR_MANIFEST_PATHS
+    validation.require(paths == list(expected_paths), "Gate 0 manifest: authorized path set changed")
     tree_sha = manifest.get("candidate_tree_sha256")
     validation.require(
         isinstance(tree_sha, str) and SHA256_RE.fullmatch(tree_sha) is not None,
@@ -1416,6 +1572,147 @@ def _validate_manifest_shape(validation: Validation, manifest: Any) -> None:
     )
     if isinstance(acceptance, dict):
         validation.require(_nonempty_strings(acceptance.get("commands")), "Gate 0 acceptance: commands are missing")
+
+
+def _validate_successor_manifest(
+    validation: Validation,
+    *,
+    root: Path,
+    manifest: dict[str, Any],
+) -> None:
+    version = manifest.get("manifest_version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 5:
+        return
+    predecessor_ref = manifest.get("predecessor_manifest")
+    if not _strict_fields(
+        validation,
+        predecessor_ref,
+        PREDECESSOR_MANIFEST_FIELDS,
+        "Gate 0 predecessor manifest",
+    ):
+        return
+    assert isinstance(predecessor_ref, dict)
+    predecessor_version = version - 1
+    predecessor_path = f"governance/gate0/manifest-v{predecessor_version}.json"
+    validation.require(
+        predecessor_ref.get("manifest_id") == f"gate-0-batch-v{predecessor_version}",
+        "Gate 0 predecessor: manifest ID mismatch",
+    )
+    validation.require(
+        predecessor_ref.get("manifest_version") == predecessor_version,
+        "Gate 0 predecessor: version must be contiguous",
+    )
+    validation.require(predecessor_ref.get("path") == predecessor_path, "Gate 0 predecessor: path mismatch")
+    predecessor_file = _repo_file(validation, root, predecessor_path, "Gate 0 predecessor")
+    if predecessor_file is None:
+        return
+    predecessor_sha = _sha256_file(predecessor_file)
+    validation.require(
+        predecessor_ref.get("sha256") == predecessor_sha,
+        "Gate 0 predecessor: file SHA-256 mismatch",
+    )
+    try:
+        predecessor = _load_json(predecessor_file)
+    except json.JSONDecodeError as error:
+        validation.require(False, f"Gate 0 predecessor: invalid JSON: {error}")
+        return
+    if not isinstance(predecessor, dict):
+        validation.require(False, "Gate 0 predecessor: expected an object")
+        return
+    validation.require(
+        predecessor.get("manifest_id") == predecessor_ref.get("manifest_id")
+        and predecessor.get("manifest_version") == predecessor_ref.get("manifest_version"),
+        "Gate 0 predecessor: referenced identity does not match file content",
+    )
+    candidate_commit = predecessor_ref.get("candidate_commit_sha")
+    validation.require(
+        isinstance(candidate_commit, str) and GIT_SHA_RE.fullmatch(candidate_commit) is not None,
+        "Gate 0 predecessor: invalid frozen candidate commit",
+    )
+    if isinstance(candidate_commit, str) and GIT_SHA_RE.fullmatch(candidate_commit) is not None:
+        _validate_frozen_tree_proof(
+            validation,
+            root=root,
+            reference=predecessor_ref.get("candidate_tree_proof"),
+            predecessor_path=predecessor_path,
+            predecessor_sha=predecessor_sha,
+            predecessor=predecessor,
+            predecessor_version=predecessor_version,
+            candidate_commit=candidate_commit,
+        )
+        commit_available = frozen_commit_available(candidate_commit)
+        if version > 5:
+            validation.require(
+                commit_available,
+                "Gate 0 predecessor: frozen candidate commit is unavailable",
+            )
+        if commit_available:
+            frozen_manifest = frozen_file_bytes(candidate_commit, predecessor_path)
+            frozen_tree = frozen_candidate_tree_sha256(candidate_commit, predecessor.get("paths", []))
+            validation.require(
+                _sha256_bytes(frozen_manifest) == predecessor_ref.get("sha256"),
+                "Gate 0 predecessor: frozen manifest bytes do not match the reference",
+            )
+            validation.require(
+                frozen_tree == predecessor.get("candidate_tree_sha256"),
+                "Gate 0 predecessor: frozen candidate tree does not match the manifest",
+            )
+    if version == 5:
+        validation.require(
+            candidate_commit == V4_FROZEN_COMMIT_SHA,
+            "Gate 0 v5 predecessor: wrong v4 freeze commit",
+        )
+    for field in ("gate_issue", "included_issues", "dependency_order", "merge_policy"):
+        validation.require(
+            manifest.get(field) == predecessor.get(field),
+            f"Gate 0 successor: predecessor field changed: {field}",
+        )
+    if version == 5:
+        for field in ("artifacts", "external_attestations", "blocking_reasons"):
+            validation.require(
+                manifest.get(field) == predecessor.get(field),
+                f"Gate 0 v5 successor: predecessor field changed: {field}",
+            )
+        validation.require(
+            manifest.get("status") == predecessor.get("status") == "candidate_blocked_external_attestation",
+            "Gate 0 v5 successor: external blockers must remain active",
+        )
+    elif predecessor.get("status") == "accepted":
+        validation.require(
+            False,
+            "Gate 0 successor: an accepted predecessor is terminal",
+        )
+
+    bindings = manifest.get("integration_bindings")
+    validation.require(
+        isinstance(bindings, list) and len(bindings) == len(SUCCESSOR_BINDINGS),
+        "Gate 0 successor: exact integration binding set is required",
+    )
+    if not isinstance(bindings, list):
+        return
+    by_role: dict[str, dict[str, Any]] = {}
+    for index, binding in enumerate(bindings):
+        label = f"Gate 0 integration binding[{index}]"
+        if not _strict_fields(validation, binding, INTEGRATION_BINDING_FIELDS, label):
+            continue
+        assert isinstance(binding, dict)
+        role = binding.get("role")
+        validation.require(isinstance(role, str) and role not in by_role, f"{label}: duplicate or invalid role")
+        if not isinstance(role, str) or role in by_role:
+            continue
+        by_role[role] = binding
+        expected_path = SUCCESSOR_BINDINGS.get(role)
+        validation.require(expected_path is not None, f"{label}: unknown role")
+        validation.require(binding.get("path") == expected_path, f"{label}: path mismatch")
+        if expected_path is None:
+            continue
+        bound_file = _repo_file(validation, root, expected_path, label)
+        if bound_file is not None:
+            validation.require(
+                binding.get("sha256") == _sha256_file(bound_file),
+                f"{label}: file SHA-256 mismatch",
+            )
+    validation.require(set(by_role) == set(SUCCESSOR_BINDINGS), "Gate 0 successor: integration roles changed")
 
 
 def _validate_artifacts(
@@ -1746,20 +2043,48 @@ def validate_gate0_candidate(
     _validate_manifest_shape(validation, manifest)
     if not isinstance(manifest, dict):
         return ValidationResult(tuple(validation.errors), (), False)
+    _validate_successor_manifest(validation, root=root, manifest=manifest)
+    try:
+        manifest_relative = path.relative_to(root)
+    except ValueError:
+        validation.require(False, "Gate 0 manifest must be inside the repository root")
+        return ValidationResult(tuple(validation.errors), (), False)
     patterns = manifest.get("paths")
     if isinstance(patterns, list) and all(isinstance(pattern, str) for pattern in patterns):
         try:
-            authorized_files = manifest_authorized_files(root, patterns, manifest_path=DEFAULT_MANIFEST)
+            authorized_files = manifest_authorized_files(root, patterns, manifest_path=manifest_relative)
             for pattern in patterns:
                 validation.require(
                     any(path_matches(authorized_file, pattern) for authorized_file in authorized_files),
                     f"Gate 0 manifest: authorized path pattern matches no file: {pattern!r}",
                 )
-            validation.require(
-                manifest.get("candidate_tree_sha256")
-                == candidate_tree_sha256(root, patterns, manifest_path=DEFAULT_MANIFEST),
-                "Gate 0 manifest: candidate tree SHA-256 mismatch",
-            )
+            if manifest.get("manifest_version") == 4:
+                _validate_frozen_tree_proof(
+                    validation,
+                    root=root,
+                    reference={"path": V4_FROZEN_PROOF_PATH, "sha256": V4_FROZEN_PROOF_SHA256},
+                    predecessor_path=DEFAULT_MANIFEST.as_posix(),
+                    predecessor_sha=_sha256_file(path),
+                    predecessor=manifest,
+                    predecessor_version=4,
+                    candidate_commit=V4_FROZEN_COMMIT_SHA,
+                )
+                if frozen_commit_available(V4_FROZEN_COMMIT_SHA):
+                    historical_tree = frozen_candidate_tree_sha256(V4_FROZEN_COMMIT_SHA, V4_MANIFEST_PATHS)
+                    validation.require(
+                        historical_tree == V4_FROZEN_TREE_SHA256,
+                        "Gate 0 v4 manifest: frozen Git tree identity changed",
+                    )
+                    validation.require(
+                        manifest.get("candidate_tree_sha256") == historical_tree,
+                        "Gate 0 v4 manifest: stored tree does not match its frozen Git identity",
+                    )
+            else:
+                validation.require(
+                    manifest.get("candidate_tree_sha256")
+                    == candidate_tree_sha256(root, patterns, manifest_path=manifest_relative),
+                    "Gate 0 manifest: candidate tree SHA-256 mismatch",
+                )
         except ValueError as error:
             validation.require(False, f"Gate 0 manifest: {error}")
     artifact_fetcher = comment_fetcher if check_live_comments else None
@@ -1785,12 +2110,19 @@ def validate_gate0_candidate(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--manifest", type=Path)
     parser.add_argument("--check-live-comments", action="store_true")
     parser.add_argument("--require-accepted", action="store_true")
     args = parser.parse_args()
+    manifest_path = args.manifest
+    if manifest_path is None:
+        candidates = sorted(
+            (ROOT / "governance/gate0").glob("manifest-v*.json"),
+            key=lambda path: int(path.stem.removeprefix("manifest-v")),
+        )
+        manifest_path = candidates[-1].relative_to(ROOT) if candidates else DEFAULT_MANIFEST
     result = validate_gate0_candidate(
-        args.manifest,
+        manifest_path,
         check_live_comments=args.check_live_comments,
         require_accepted=args.require_accepted,
     )

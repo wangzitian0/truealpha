@@ -1,0 +1,107 @@
+{
+  "schema_version": 2,
+  "corpus_id": "a0-governed-research-access-v2",
+  "base_corpus": {
+    "path": "libs/contracts/tests/fixtures/governed_research_access.v1.json",
+    "sha256": "ac3186bcc8cf14c0b9d7c909ca0f3148618eade175c2b469022364d3fae2498b"
+  },
+  "repair_classification": [
+    {
+      "finding": "active entitlement grant IDs were not bound to entitlement or policy identities and did not affect authorization",
+      "classification": "semantic contract gap",
+      "repair": "replace opaque grant IDs with ActiveEntitlementGrant bindings and record exact matching grant IDs on allowed decisions"
+    },
+    {
+      "finding": "SUBMIT_REGISTERED_REPLAY had no resource type or allow branch",
+      "classification": "local contract bug",
+      "repair": "add REGISTERED_REPLAY_DEFINITION and require an administrator action explicitly present in the immutable policy set"
+    },
+    {
+      "finding": "authorization decisions and audit events had no stable paired repository contract",
+      "classification": "generic toolkit gap",
+      "repair": "add deterministic content-free AccessAuditRecord and append-only AccessAuditRepository"
+    }
+  ],
+  "publication_policy_set": {
+    "publication_policy_set_id": "publication-policy-set:research:v2",
+    "content_sha256": "4cc4f0d79486130bda4de3451b56770a5c295881535602b692bbf1cda585cdfd",
+    "release_manifest_id": "release-manifest:research:v1",
+    "rules": [
+      {
+        "publication_class_id": "publication-class:standard:v1",
+        "eligible_entitlement_ids": [
+          "entitlement:research:standard:v1",
+          "entitlement:research:premium:v1"
+        ]
+      },
+      {
+        "publication_class_id": "publication-class:restricted:v1",
+        "eligible_entitlement_ids": [
+          "entitlement:research:premium:v1"
+        ]
+      }
+    ],
+    "administrator_actions": [
+      "read_audit_metadata",
+      "submit_registered_replay"
+    ]
+  },
+  "repair_cases": [
+    {
+      "case_id": "standard-grant-recorded-on-decision",
+      "principal_kind": "member",
+      "entitlement_id": "entitlement:research:standard:v1",
+      "publication_class_id": "publication-class:standard:v1",
+      "action": "read_materialized_result",
+      "expected_decision": "allow",
+      "expected_recorded_grant_count": 1
+    },
+    {
+      "case_id": "standard-grant-denied-restricted-class",
+      "principal_kind": "member",
+      "entitlement_id": "entitlement:research:standard:v1",
+      "publication_class_id": "publication-class:restricted:v1",
+      "action": "read_materialized_result",
+      "expected_decision": "deny",
+      "expected_reason": "entitlement_not_permitted",
+      "expected_recorded_grant_count": 0
+    },
+    {
+      "case_id": "premium-grant-allows-restricted-class",
+      "principal_kind": "member",
+      "entitlement_id": "entitlement:research:premium:v1",
+      "publication_class_id": "publication-class:restricted:v1",
+      "action": "read_materialized_result",
+      "expected_decision": "allow",
+      "expected_recorded_grant_count": 1
+    },
+    {
+      "case_id": "wrong-policy-grant-denied",
+      "principal_kind": "member",
+      "entitlement_id": "entitlement:research:standard:v1",
+      "grant_policy_set_id": "publication-policy-set:other:v1",
+      "publication_class_id": "publication-class:standard:v1",
+      "action": "read_materialized_result",
+      "expected_decision": "deny",
+      "expected_reason": "entitlement_not_permitted"
+    },
+    {
+      "case_id": "administrator-submits-registered-replay",
+      "principal_kind": "administrator",
+      "resource_type": "registered_replay_definition",
+      "action": "submit_registered_replay",
+      "expected_decision": "allow",
+      "expected_execution_count": 0
+    },
+    {
+      "case_id": "member-cannot-submit-registered-replay",
+      "principal_kind": "member",
+      "resource_type": "registered_replay_definition",
+      "action": "submit_registered_replay",
+      "expected_decision": "deny",
+      "expected_reason": "action_not_permitted",
+      "expected_write_count": 0,
+      "expected_execution_count": 0
+    }
+  ]
+}

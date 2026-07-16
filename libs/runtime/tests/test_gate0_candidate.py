@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -108,12 +109,303 @@ def _validate(root: Path, **kwargs):
     return gate0.validate_gate0_candidate(MANIFEST_PATH, root=root, **kwargs)
 
 
+def _create_v5_successor(root: Path) -> Path:
+    for relative in set(gate0.SUCCESSOR_MANIFEST_PATHS) - set(gate0.V4_MANIFEST_PATHS):
+        source = REPO_ROOT / relative
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    predecessor_path = root / MANIFEST_PATH
+    manifest = _load(predecessor_path)
+    manifest.update(
+        {
+            "manifest_id": "gate-0-batch-v5",
+            "manifest_version": 5,
+            "integration_branch": "batch/gate-0-v5-governed-access-successor",
+            "paths": list(gate0.SUCCESSOR_MANIFEST_PATHS),
+            "predecessor_manifest": {
+                "manifest_id": "gate-0-batch-v4",
+                "manifest_version": 4,
+                "path": MANIFEST_PATH.as_posix(),
+                "sha256": _sha256(predecessor_path),
+                "candidate_commit_sha": gate0.V4_FROZEN_COMMIT_SHA,
+                "candidate_tree_proof": {
+                    "path": gate0.V4_FROZEN_PROOF_PATH,
+                    "sha256": _sha256(root / gate0.V4_FROZEN_PROOF_PATH),
+                },
+            },
+            "integration_bindings": [
+                {"role": role, "path": path, "sha256": _sha256(root / path)}
+                for role, path in gate0.SUCCESSOR_BINDINGS.items()
+            ],
+        }
+    )
+    manifest["candidate_payload_sha256"] = gate0.candidate_payload_sha256(manifest)
+    successor_path = root / "governance/gate0/manifest-v5.json"
+    _write(successor_path, manifest)
+    manifest["candidate_tree_sha256"] = gate0.candidate_tree_sha256(
+        root,
+        manifest["paths"],
+        manifest_path=Path("governance/gate0/manifest-v5.json"),
+    )
+    _write(successor_path, manifest)
+    return successor_path
+
+
+def _create_v6_successor(root: Path) -> Path:
+    predecessor_path = _create_v5_successor(root)
+    predecessor = _load(predecessor_path)
+    proof_path = root / "governance/gate0/v5-frozen-tree-proof.v1.json"
+    proof = {
+        "schema_version": 1,
+        "proof_id": "gate-0-v5-frozen-tree-proof-v1",
+        "candidate_commit_sha": "f" * 40,
+        "manifest": {"path": "governance/gate0/manifest-v5.json", "sha256": _sha256(predecessor_path)},
+        "candidate_tree_sha256": predecessor["candidate_tree_sha256"],
+        "paths": predecessor["paths"],
+    }
+    _write(proof_path, proof)
+    manifest = _load(predecessor_path)
+    manifest.update(
+        {
+            "manifest_id": "gate-0-batch-v6",
+            "manifest_version": 6,
+            "integration_branch": "batch/gate-0-v6-attestation-progress",
+            "predecessor_manifest": {
+                "manifest_id": "gate-0-batch-v5",
+                "manifest_version": 5,
+                "path": "governance/gate0/manifest-v5.json",
+                "sha256": _sha256(predecessor_path),
+                "candidate_commit_sha": "f" * 40,
+                "candidate_tree_proof": {
+                    "path": proof_path.relative_to(root).as_posix(),
+                    "sha256": _sha256(proof_path),
+                },
+            },
+        }
+    )
+    manifest["blocking_reasons"][0] += "; successor review recorded"
+    manifest["candidate_payload_sha256"] = gate0.candidate_payload_sha256(manifest)
+    successor_path = root / "governance/gate0/manifest-v6.json"
+    _write(successor_path, manifest)
+    manifest["candidate_tree_sha256"] = gate0.candidate_tree_sha256(
+        root,
+        manifest["paths"],
+        manifest_path=successor_path.relative_to(root),
+    )
+    _write(successor_path, manifest)
+    return successor_path
+
+
+def _make_v6_predecessor_available(root: Path, monkeypatch) -> None:
+    monkeypatch.setattr(gate0, "frozen_commit_available", lambda _commit: True)
+    monkeypatch.setattr(
+        gate0,
+        "frozen_file_bytes",
+        lambda _commit, path: (root / path).read_bytes(),
+    )
+    monkeypatch.setattr(
+        gate0,
+        "frozen_candidate_tree_sha256",
+        lambda _commit, _paths: _load(root / "governance/gate0/manifest-v5.json")["candidate_tree_sha256"],
+    )
+
+
 def test_checked_in_candidate_is_valid_but_blocked(candidate_root):
     result = _validate(candidate_root)
 
     assert result.valid
     assert not result.accepted
     assert len(result.blockers) == 4
+
+
+def test_v5_successor_is_valid_and_preserves_v4(candidate_root):
+    v4_tree = gate0.candidate_tree_sha256(candidate_root, gate0.V4_MANIFEST_PATHS)
+    successor = _create_v5_successor(candidate_root)
+
+    v4_result = _validate(candidate_root)
+    v5_result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert v4_result.valid
+    assert v5_result.valid
+    assert not v5_result.accepted
+    assert gate0.candidate_tree_sha256(candidate_root, gate0.V4_MANIFEST_PATHS) == v4_tree
+
+
+def test_v5_successor_rejects_predecessor_byte_drift(candidate_root):
+    successor = _create_v5_successor(candidate_root)
+    predecessor = candidate_root / MANIFEST_PATH
+    predecessor.write_bytes(predecessor.read_bytes() + b"\n")
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert "Gate 0 predecessor: file SHA-256 mismatch" in result.errors
+
+
+def test_v5_successor_rejects_bound_integration_drift(candidate_root):
+    successor = _create_v5_successor(candidate_root)
+    architecture = candidate_root / "init.md"
+    architecture.write_bytes(architecture.read_bytes() + b"\n")
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert "Gate 0 integration binding[0]: file SHA-256 mismatch" in result.errors
+
+
+def test_v5_successor_cannot_drop_inherited_blockers(candidate_root):
+    successor = _create_v5_successor(candidate_root)
+    manifest = _load(successor)
+    manifest["blocking_reasons"] = manifest["blocking_reasons"][:-1]
+    manifest["candidate_payload_sha256"] = gate0.candidate_payload_sha256(manifest)
+    _write(successor, manifest)
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert "Gate 0 v5 successor: predecessor field changed: blocking_reasons" in result.errors
+
+
+def test_v6_successor_can_progress_blockers_under_normal_validation(candidate_root, monkeypatch):
+    successor = _create_v6_successor(candidate_root)
+    _make_v6_predecessor_available(candidate_root, monkeypatch)
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert result.valid
+    assert not result.accepted
+    assert result.blockers[0].endswith("successor review recorded")
+
+
+def test_v6_successor_rejects_an_unavailable_predecessor_commit(candidate_root, monkeypatch):
+    successor = _create_v6_successor(candidate_root)
+    monkeypatch.setattr(gate0, "frozen_commit_available", lambda _commit: False)
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert "Gate 0 predecessor: frozen candidate commit is unavailable" in result.errors
+
+
+def test_v6_successor_can_structurally_advance_to_accepted(candidate_root, monkeypatch):
+    successor = _create_v6_successor(candidate_root)
+    _make_v6_predecessor_available(candidate_root, monkeypatch)
+    manifest = _load(successor)
+    manifest["status"] = "accepted"
+    manifest["blocking_reasons"] = []
+    for artifact in manifest["artifacts"]:
+        artifact["state"] = "accepted"
+    for attestation in manifest["external_attestations"]:
+        attestation["status"] = "accepted"
+        attestation["ref"] = f"https://github.com/wangzitian0/truealpha/issues/{attestation['issue']}#issuecomment-1"
+    validation = gate0.Validation()
+
+    gate0._validate_successor_manifest(validation, root=candidate_root, manifest=manifest)
+
+    assert not any("external blockers must remain active" in error for error in validation.errors)
+    assert not any("predecessor field changed" in error for error in validation.errors)
+
+
+def test_successor_cannot_extend_an_accepted_predecessor(candidate_root, monkeypatch):
+    successor = _create_v6_successor(candidate_root)
+    _make_v6_predecessor_available(candidate_root, monkeypatch)
+    predecessor = candidate_root / "governance/gate0/manifest-v5.json"
+    predecessor_manifest = _load(predecessor)
+    predecessor_manifest["status"] = "accepted"
+    _write(predecessor, predecessor_manifest)
+    manifest = _load(successor)
+    manifest["predecessor_manifest"]["sha256"] = _sha256(predecessor)
+    proof_path = candidate_root / manifest["predecessor_manifest"]["candidate_tree_proof"]["path"]
+    proof = _load(proof_path)
+    proof["manifest"]["sha256"] = _sha256(predecessor)
+    _write(proof_path, proof)
+    manifest["predecessor_manifest"]["candidate_tree_proof"]["sha256"] = _sha256(proof_path)
+    validation = gate0.Validation()
+
+    gate0._validate_successor_manifest(validation, root=candidate_root, manifest=manifest)
+
+    assert "Gate 0 successor: an accepted predecessor is terminal" in validation.errors
+
+
+def test_v5_predecessor_binding_reconstructs_real_frozen_git_objects(candidate_root):
+    if not gate0.frozen_commit_available(gate0.V4_FROZEN_COMMIT_SHA):
+        pytest.skip("full-history Git object cross-check runs in governance CI")
+    successor = _create_v5_successor(candidate_root)
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert result.valid
+    assert (
+        gate0.frozen_candidate_tree_sha256(gate0.V4_FROZEN_COMMIT_SHA, gate0.V4_MANIFEST_PATHS)
+        == gate0.V4_FROZEN_TREE_SHA256
+    )
+    assert hashlib.sha256(
+        gate0.frozen_file_bytes(gate0.V4_FROZEN_COMMIT_SHA, MANIFEST_PATH.as_posix())
+    ).hexdigest() == _sha256(candidate_root / MANIFEST_PATH)
+
+
+def test_successor_schema_is_generic_but_keeps_v4_special_case():
+    schema = _load(REPO_ROOT / "governance/schemas/gate0-candidate-manifest.schema.json")
+
+    assert schema["properties"]["manifest_version"] == {"type": "integer", "minimum": 4}
+    manifest_id_pattern = schema["properties"]["manifest_id"]["pattern"]
+    assert manifest_id_pattern == "^gate-0-batch-v(?:[4-9]|[1-9][0-9]+)$"
+    assert re.fullmatch(manifest_id_pattern, "gate-0-batch-v6")
+    assert re.fullmatch(manifest_id_pattern, "gate-0-batch-v10")
+    assert re.fullmatch(manifest_id_pattern, "gate-0-batch-v3") is None
+    predecessor = schema["properties"]["predecessor_manifest"]["properties"]
+    assert predecessor["manifest_version"] == {"type": "integer", "minimum": 4}
+    assert schema["allOf"][0]["else"] == {"required": ["predecessor_manifest", "integration_bindings"]}
+
+
+def test_accepted_artifact_requires_a_versioned_materialization():
+    validation = gate0.Validation()
+    payload = {
+        "schema_version": 1,
+        "artifact_type": gate0.EXPECTED_ARTIFACT_TYPES[59],
+        "artifact_version": "candidate-v1",
+        "issue": 59,
+        "state": "accepted",
+    }
+
+    gate0._validate_candidate_identity(validation, payload, 59)
+
+    assert "issue #59: artifact version does not match its state" in validation.errors
+    payload["artifact_version"] = "accepted-v1"
+    accepted = gate0.Validation()
+    gate0._validate_candidate_identity(accepted, payload, 59)
+    assert not accepted.errors
+
+
+def test_v4_validation_uses_bound_proof_when_history_is_shallow(candidate_root, monkeypatch):
+    monkeypatch.setattr(gate0, "frozen_commit_available", lambda _commit: False)
+
+    result = _validate(candidate_root)
+
+    assert result.valid
+
+
+def test_v4_validation_rejects_tampered_frozen_tree_proof(candidate_root, monkeypatch):
+    monkeypatch.setattr(gate0, "frozen_commit_available", lambda _commit: False)
+    proof_path = candidate_root / gate0.V4_FROZEN_PROOF_PATH
+    proof = _load(proof_path)
+    proof["candidate_tree_sha256"] = "0" * 64
+    _write(proof_path, proof)
+
+    result = _validate(candidate_root)
+
+    assert any("frozen-tree proof: file SHA-256 mismatch" in error for error in result.errors)
+    assert any("frozen-tree proof: candidate tree mismatch" in error for error in result.errors)
+
+
+def test_v5_successor_rejects_a_tampered_freeze_commit(candidate_root):
+    successor = _create_v5_successor(candidate_root)
+    manifest = _load(successor)
+    manifest["predecessor_manifest"]["candidate_commit_sha"] = "0" * 40
+    manifest["candidate_payload_sha256"] = gate0.candidate_payload_sha256(manifest)
+    _write(successor, manifest)
+
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
+
+    assert any("frozen-tree proof: wrong commit" in error for error in result.errors)
+    assert "Gate 0 v5 predecessor: wrong v4 freeze commit" in result.errors
 
 
 def test_require_accepted_rejects_valid_blocked_candidate(candidate_root):
@@ -216,11 +508,11 @@ def test_candidate_payload_hash_cannot_be_manually_flipped(candidate_root):
 
 
 def test_candidate_tree_binds_non_artifact_authorized_files(candidate_root):
-    _refresh_chain(candidate_root)
+    successor = _create_v5_successor(candidate_root)
     architecture = candidate_root / "docs/architecture-contract-closure.md"
     architecture.write_bytes(architecture.read_bytes() + b"\n")
 
-    result = _validate(candidate_root)
+    result = gate0.validate_gate0_candidate(successor.relative_to(candidate_root), root=candidate_root)
 
     assert "Gate 0 manifest: candidate tree SHA-256 mismatch" in result.errors
 

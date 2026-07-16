@@ -3,5 +3,9 @@
   "issue": 229,
   "gate": 31,
   "terminal_evidence": "E2",
+  "accepted_evidence": {
+    "path": "governance/evidence/issue-229.v2.json",
+    "sha256": "532a7cbbe3030019b69cd4dfe0ecbbff748b19afa646de3f31883d7a711b886d"
+  },
   "artifact_edges": []
 }

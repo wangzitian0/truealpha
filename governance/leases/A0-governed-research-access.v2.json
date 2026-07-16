@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:d83b2a43af17f2d35803eb054e8ff6bf1d6f0f91458feb1ac76417851ee327d0",
+  "lease_id": "integration-lease:10acdfd43ec13ec51e122d5909f7c00193efe6bf0a203804dec17c44ed74da74",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
   "state": "revoked",
@@ -24,6 +24,6 @@
     "tools/check_gate0_candidate.py",
     "tools/check_delivery_governance.py"
   ],
-  "base_sha": "6b0226cd920cdd906820ce328b504b5e08aa4ada",
+  "base_sha": "6056db95cc6360295d58db150b1be4b0070200e5",
   "expires_at": "2026-07-30T00:00:00Z"
 }
