@@ -300,7 +300,7 @@ class PostgresToptCoreRepository:
         for row in rows:
             by_type = grouped.setdefault(row.listing_id, {})
             if row.semantic_type in by_type:
-                raise ValueError("Production run selected more than one observation for an obligation")
+                raise ValueError("Production run selected more than one observation for a listing semantic cell")
             by_type[row.semantic_type] = row
         if len(grouped) != _EXPECTED_INSTRUMENTS:
             raise ValueError("Production normalized payloads do not cover 21 listings")
