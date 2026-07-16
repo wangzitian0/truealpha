@@ -7,8 +7,8 @@
   "identity_policy": {
     "campaign_id": "campaign:d5-tiny-2026-03-31-v1",
     "list_version_ids": [
-      "list-version:topt-us-2026-03-31",
-      "list-version:topt-overlap-technology-2026-03-31"
+      "list-version:d5-primary-v1",
+      "list-version:d5-overlap-v1"
     ],
     "source_version_id": "source-version:fixture-market-v1",
     "parser_version_id": "parser-version:fixture-market-v1",
@@ -68,7 +68,7 @@
     {
       "list_version_id": "list-version:d5-primary-v1",
       "members": ["security:cusip:67066G104", "security:cusip:02079K107", "security:cusip:02079K305"],
-      "expected_outcomes": ["success", "unchanged", "unavailable", "skipped-policy", "explicit-failure"]
+      "expected_terminal_states": ["success", "unchanged", "unavailable", "skipped_by_policy", "failed"]
     },
     {
       "list_version_id": "list-version:d5-overlap-v1",
@@ -90,15 +90,21 @@
     },
     {
       "scenario_id": "rate-limit-then-success",
-      "outcomes": ["rate-limited", "success"],
+      "outcomes": ["rate_limited", "success"],
       "terminal": true,
       "expected_attempt_count": 2
     },
     {
       "scenario_id": "bounded-terminal-failure",
-      "outcomes": ["retryable-failure", "retryable-failure", "explicit-failure"],
+      "outcomes": ["transport_error", "server_error", "failed"],
       "terminal": true,
       "expected_attempt_count": 3
+    },
+    {
+      "scenario_id": "interrupted-then-success",
+      "outcomes": ["interrupted", "success"],
+      "terminal": true,
+      "expected_attempt_count": 2
     },
     {
       "scenario_id": "identical-bytes-new-attempt",
@@ -110,7 +116,7 @@
     },
     {
       "scenario_id": "out-of-order-outcome-rejected",
-      "outcomes": ["success", "retryable-failure"],
+      "outcomes": ["success", "transport_error"],
       "expected_error": "attempt_after_terminal_outcome"
     }
   ],
@@ -139,13 +145,14 @@
   "recapture_scenarios": [
     {
       "scenario_id": "bounded-multi-predicate-dry-run",
+      "selection_cutoff": "2026-04-01T00:00:00Z",
       "predicates": {
         "list_version_id": "list-version:d5-primary-v1",
         "instrument_id": "security:cusip:67066G104",
         "source_version_id": "source-version:fixture-market-v1",
         "semantic_type": "market-price",
         "partition": "2026-03-31",
-        "outcome": "explicit-failure",
+        "outcome": "failed",
         "freshness_state": "stale",
         "parser_version_id": "parser-version:fixture-market-v1",
         "mapping_version_id": "mapping-version:topt-2026-03-31-v1",
@@ -157,11 +164,13 @@
     },
     {
       "scenario_id": "empty-selection-fails-closed",
+      "selection_cutoff": "2026-04-01T00:00:00Z",
       "predicates": {"instrument_id": "security:cusip:does-not-exist"},
       "expected_error": "empty_recapture_selection"
     },
     {
       "scenario_id": "mutable-or-broad-predicate-rejected",
+      "selection_cutoff": "2026-04-01T00:00:00Z",
       "predicates": {"list_version_id": "latest", "semantic_type": "*"},
       "expected_error": "unbounded_or_mutable_recapture_predicate"
     }
