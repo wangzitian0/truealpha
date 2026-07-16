@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "standalone_routes": [
+    {
+      "name": "managed_batch_skips_before_work_key_validation",
+      "issue_action": "managed-by-batch",
+      "work_issue": "#250",
+      "work_identity": "D12-vision-issue-reconciliation:E0",
+      "expected": "skip"
+    },
+    {
+      "name": "valid_standalone_completes",
+      "issue_action": "complete-on-merge",
+      "work_issue": "#250",
+      "work_identity": "standalone-250",
+      "expected": "close-250"
+    },
+    {
+      "name": "invalid_standalone_work_key_fails_closed",
+      "issue_action": "complete-on-merge",
+      "work_issue": "#250",
+      "work_identity": "D12-vision-issue-reconciliation:E0",
+      "expected": "reject"
+    },
+    {
+      "name": "keep_open_skips_completion",
+      "issue_action": "keep-open",
+      "work_issue": "#250",
+      "work_identity": "standalone-250",
+      "expected": "skip"
+    }
+  ],
+  "batch_lifecycle": [
+    {
+      "status": "queued",
+      "expected_state": "open",
+      "expected_reason": null
+    },
+    {
+      "status": "prepared",
+      "expected_state": "open",
+      "expected_reason": null
+    },
+    {
+      "status": "active",
+      "expected_state": "open",
+      "expected_reason": null
+    },
+    {
+      "status": "done",
+      "expected_state": "closed",
+      "expected_reason": "completed"
+    },
+    {
+      "status": "cancelled",
+      "expected_state": "closed",
+      "expected_reason": "not_planned"
+    }
+  ],
+  "parity_exports": [
+    {
+      "name": "new_scope_label_not_search_indexed",
+      "authoritative_issue_has_scope_label": true,
+      "label_search_contains_issue": false,
+      "expected": "include-from-unfiltered-refetch"
+    },
+    {
+      "name": "scope_label_removed",
+      "authoritative_issue_has_scope_label": false,
+      "label_search_contains_issue": true,
+      "expected": "exclude-from-unfiltered-refetch"
+    }
+  ],
+  "concurrency": [
+    {
+      "name": "unchanged_etag_allows_patch",
+      "etag_changed_before_patch": false,
+      "expected": "patch"
+    },
+    {
+      "name": "changed_etag_never_overwrites",
+      "etag_changed_before_patch": true,
+      "expected": "retry-or-fail-visible"
+    }
+  ]
+}
