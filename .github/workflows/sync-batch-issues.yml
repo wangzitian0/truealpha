@@ -223,22 +223,28 @@ jobs:
           for issue_number, issue in issues.items():
               if desired_patch(issue_number, issue) is not None:
                   reconcile(issue_number)
+
+          refetched_pages = json.loads(
+              api(
+                  [
+                      "--paginate",
+                      "--slurp",
+                      f"repos/{repository}/issues?state=all&per_page=100",
+                  ]
+              )
+          )
+          exported_fields = ("number", "title", "state", "state_reason", "body", "labels", "milestone")
+          vision_issues = [
+              {field: issue.get(field) for field in exported_fields}
+              for page in refetched_pages
+              for issue in page
+              if "pull_request" not in issue
+              and any(label["name"] == "scope:vision" for label in issue["labels"])
+          ]
+          output_path = os.path.join(os.environ["RUNNER_TEMP"], "vision-issues.json")
+          with open(output_path, "w", encoding="utf-8") as output:
+              json.dump(vision_issues, output)
           PY
-      - name: Export reconciled Vision issues
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for attempt in 0 1 2 3; do
-            if gh api --paginate \
-              "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=100" \
-              > "$RUNNER_TEMP/all-issues.json"; then
-              break
-            fi
-            test "$attempt" -lt 3 || exit 1
-            sleep "$((2 ** attempt))"
-          done
-          jq -s '[.[][] | select(has("pull_request") | not) | select(any(.labels[]; .name == "scope:vision")) | {number, title, state, state_reason, body, labels, milestone}]' \
-            "$RUNNER_TEMP/all-issues.json" > "$RUNNER_TEMP/vision-issues.json"
       - name: Validate reconciled GitHub parity
         run: >-
           python3 tools/check_delivery_governance.py

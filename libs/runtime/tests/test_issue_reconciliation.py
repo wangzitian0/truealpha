@@ -193,7 +193,8 @@ def test_workflows_compile_and_enforce_reconciliation_contract() -> None:
     assert "time.sleep(delay)" in batch_workflow
     assert "issues?state=all&per_page=100" in batch_workflow
     assert "labels=scope" not in batch_workflow
-    assert 'select(any(.labels[]; .name == "scope:vision"))' in batch_workflow
+    assert 'any(label["name"] == "scope:vision" for label in issue["labels"])' in batch_workflow
+    assert "refetched_pages = json.loads" in batch_workflow
 
     action_index = standalone_workflow.index('fields["Issue-Action"] = action_values[0]')
     work_key_index = standalone_workflow.index('for key in ("Work-Issue", "Work-Key")')
