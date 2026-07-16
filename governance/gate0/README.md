@@ -1,3 +1,7 @@
+> **Frozen history**: the candidate-check tooling described below was removed on
+> 2026-07-17 together with the delivery-governance machinery (see `governance/README.md`).
+> This file documents how the chain worked while it was enforced.
+
 # Gate 0 Candidate Evidence
 
 `manifest-v4.json` is the immutable historical candidate that first bound the complete

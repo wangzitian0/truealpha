@@ -69,7 +69,7 @@ still prove byte drift and weakened blockers are rejected.
 
 E2 does not activate authentication routes, an external identity provider, browser or MCP
 traffic, content retention, sharing, a replay-request writer, replay execution, a release
-binding, or Production readiness. Those claims require their own manifest-backed batches
+binding, or Production readiness. Those claims require their own issues
 and deployed evidence.
 
 ## Rollback
