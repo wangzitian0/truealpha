@@ -75,6 +75,8 @@ class AttemptLedger:
             raise ValueError("attempt after terminal outcome")
         if len(self.results) != len(self.attempts):
             raise ValueError("previous attempt has no result")
+        if self.results and started_at < self.results[-1].completed_at:
+            raise ValueError("retry starts before previous result completion")
         if len(self.attempts) >= self.maximum_attempts:
             raise ValueError("maximum attempts exceeded")
         attempt = FetchAttempt(

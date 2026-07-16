@@ -9,6 +9,17 @@ insert into raw.capture_campaigns (
     repeat('a', 64), 'capture-policy:d5-tiny:v1', 'github_ci', '2026-04-01T00:00:00Z'
 );
 
+insert into raw.capture_runs (
+    run_id, campaign_id, run_sequence, schedule_policy_id, capture_scope_id, content_sha256
+) values (
+    'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    1,
+    'schedule-policy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'capture-scope:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    repeat('a', 64)
+);
+
 insert into raw.capture_list_versions (
     list_version_id, universe_id, universe_version, universe_sha256,
     effective_at, member_count, content_sha256
@@ -75,6 +86,25 @@ begin
             obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
             capture_requirement_id, partition_key, content_sha256
         ) values (
+            'capture-list-obligation:5555555555555555555555555555555555555555555555555555555555555555',
+            'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'capture-run:5555555555555555555555555555555555555555555555555555555555555555',
+            'list-version:07c5571460a288c39fb2aa22ec9ec115f44e8f510f7bfae5b76001aadd141253',
+            'listing', 'listing:xnas:goog', 'market-price:v1', '2026-03-31', repeat('5', 64)
+        );
+        raise exception 'unpersisted capture run unexpectedly succeeded';
+    exception when foreign_key_violation then null;
+    end;
+end;
+$$;
+
+do $$
+begin
+    begin
+        insert into raw.capture_obligations (
+            obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
+            capture_requirement_id, partition_key, content_sha256
+        ) values (
             'capture-list-obligation:6666666666666666666666666666666666666666666666666666666666666666',
             'capture-campaign:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'capture-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -98,6 +128,48 @@ insert into raw.capture_work_items (
     3, repeat('9', 64)
 );
 
+insert into raw.capture_obligation_work_bindings (
+    binding_id, obligation_id, work_item_id
+) values (
+    'obligation-work-binding:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'capture-work-item:9999999999999999999999999999999999999999999999999999999999999999'
+);
+
+insert into raw.capture_campaigns (
+    campaign_id, content_sha256, policy_id, environment, cutoff
+) values (
+    'capture-campaign:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    repeat('d', 64), 'capture-policy:d5-cross-campaign-negative:v1', 'github_ci', '2026-04-01T00:00:00Z'
+);
+
+insert into raw.capture_work_items (
+    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts, content_sha256
+) values (
+    'capture-work-item:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    'capture-campaign:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    'source-request:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    'schedule-policy:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    1, repeat('d', 64)
+);
+
+do $$
+begin
+    begin
+        insert into raw.capture_obligation_work_bindings (
+            binding_id, obligation_id, work_item_id
+        ) values (
+            'obligation-work-binding:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            'capture-list-obligation:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'capture-work-item:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+        );
+        raise exception 'cross-campaign binding unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'cross-campaign binding unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
+
 insert into raw.capture_attempts (
     attempt_id, work_item_id, attempt_number, started_at, content_sha256
 ) values (
@@ -112,6 +184,23 @@ insert into raw.capture_attempt_results (
     'fetch-attempt:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     '2026-04-01T00:01:01Z', 'interrupted', array['retry'], repeat('1', 64)
 );
+
+do $$
+begin
+    begin
+        insert into raw.capture_attempts (
+            attempt_id, work_item_id, attempt_number, started_at, content_sha256
+        ) values (
+            'fetch-attempt:abababababababababababababababababababababababababababababababab',
+            'capture-work-item:9999999999999999999999999999999999999999999999999999999999999999',
+            2, '2026-04-01T00:01:00Z', repeat('b', 64)
+        );
+        raise exception 'retry before prior completion unexpectedly succeeded';
+    exception when raise_exception then
+        if sqlerrm = 'retry before prior completion unexpectedly succeeded' then raise; end if;
+    end;
+end;
+$$;
 insert into raw.capture_attempts (
     attempt_id, work_item_id, attempt_number, started_at, content_sha256
 ) values (

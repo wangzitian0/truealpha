@@ -49,6 +49,18 @@ create table if not exists raw.capture_campaigns (
     created_at        timestamptz not null default now()
 );
 
+create table if not exists raw.capture_runs (
+    run_id                 text primary key check (run_id ~ '^capture-run:[0-9a-f]{64}$'),
+    campaign_id            text not null references raw.capture_campaigns(campaign_id),
+    run_sequence           integer not null check (run_sequence > 0),
+    schedule_policy_id     text not null check (schedule_policy_id ~ '^schedule-policy:[0-9a-f]{64}$'),
+    capture_scope_id       text not null check (capture_scope_id ~ '^capture-scope:[0-9a-f]{64}$'),
+    content_sha256         text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
+    created_at             timestamptz not null default now(),
+    unique (run_id, campaign_id),
+    unique (campaign_id, run_sequence)
+);
+
 create table if not exists raw.capture_list_versions (
     list_version_id        text primary key check (list_version_id ~ '^list-version:[0-9a-f]{64}$'),
     universe_id            text not null,
@@ -83,6 +95,7 @@ create table if not exists raw.capture_obligations (
     created_at             timestamptz not null default now(),
     unique (run_id, list_version_id, subject_kind, subject_id, capture_requirement_id, partition_key),
     foreign key (list_version_id) references raw.capture_list_versions(list_version_id),
+    foreign key (run_id, campaign_id) references raw.capture_runs(run_id, campaign_id),
     foreign key (list_version_id, subject_kind, subject_id)
         references raw.capture_list_version_members(list_version_id, subject_kind, subject_id)
 );
@@ -139,7 +152,7 @@ create table if not exists raw.capture_attempt_results (
 
 create table if not exists raw.capture_checkpoints (
     checkpoint_id              text primary key check (checkpoint_id ~ '^capture-checkpoint:[0-9a-f]{64}$'),
-    run_id                     text not null check (run_id ~ '^capture-run:[0-9a-f]{64}$'),
+    run_id                     text not null references raw.capture_runs(run_id),
     sequence                   integer not null check (sequence > 0),
     phase                      text not null check (phase in ('planned', 'raw_landed', 'normalized', 'manifest_persisted')),
     completed_obligation_ids   text[] not null check (
@@ -210,6 +223,30 @@ drop trigger if exists validate_obligation_list on raw.capture_obligations;
 create trigger validate_obligation_list
 before insert on raw.capture_obligations
 for each row execute function raw.validate_capture_obligation_list();
+
+create or replace function raw.validate_obligation_work_campaign()
+returns trigger language plpgsql as $$
+declare
+    obligation_campaign text;
+    work_campaign text;
+begin
+    select campaign_id into obligation_campaign
+      from raw.capture_obligations
+     where obligation_id = new.obligation_id;
+    select campaign_id into work_campaign
+      from raw.capture_work_items
+     where work_item_id = new.work_item_id;
+    if obligation_campaign is distinct from work_campaign then
+        raise exception 'obligation and work item must belong to the same capture campaign';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists validate_binding_campaign on raw.capture_obligation_work_bindings;
+create trigger validate_binding_campaign
+before insert on raw.capture_obligation_work_bindings
+for each row execute function raw.validate_obligation_work_campaign();
 
 create or replace function raw.enforce_capture_checkpoint_progress()
 returns trigger language plpgsql as $$
@@ -310,6 +347,7 @@ declare
     expected_attempt integer;
     allowed_attempts integer;
     previous_outcome text;
+    previous_completed_at timestamptz;
 begin
     select maximum_attempts
       into allowed_attempts
@@ -327,8 +365,8 @@ begin
         raise exception 'capture attempt exceeds maximum attempts';
     end if;
     if expected_attempt > 1 then
-        select result.outcome
-          into previous_outcome
+        select result.outcome, result.completed_at
+          into previous_outcome, previous_completed_at
           from raw.capture_attempts attempt
           left join raw.capture_attempt_results result using (attempt_id)
          where attempt.work_item_id = new.work_item_id
@@ -339,6 +377,9 @@ begin
         end if;
         if previous_outcome in ('success', 'unchanged', 'unavailable', 'failed') then
             raise exception 'capture attempt after terminal outcome';
+        end if;
+        if new.started_at < previous_completed_at then
+            raise exception 'capture retry starts before previous result completion';
         end if;
     end if;
     return new;
@@ -393,7 +434,7 @@ declare
     table_name text;
 begin
     foreach table_name in array array[
-        'capture_campaigns', 'capture_list_versions', 'capture_list_version_members',
+        'capture_campaigns', 'capture_runs', 'capture_list_versions', 'capture_list_version_members',
         'capture_obligations', 'capture_work_items',
         'capture_obligation_work_bindings', 'capture_attempts',
         'capture_attempt_results', 'capture_checkpoints', 'recapture_plans'

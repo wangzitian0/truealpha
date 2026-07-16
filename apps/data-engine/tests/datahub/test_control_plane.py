@@ -109,11 +109,19 @@ def test_obligation_expansion_rejects_empty_semantic_denominator() -> None:
 def test_attempts_are_contiguous_bounded_and_stop_at_terminal_outcome() -> None:
     ledger = AttemptLedger(work_item_id=f"capture-work-item:{'b' * 64}", maximum_attempts=3)
     first = ledger.start(started_at=AT)
-    ledger.finish(attempt=first, completed_at=AT, outcome=FetchAttemptOutcome.INTERRUPTED, error_code="worker_exit")
-    second = ledger.start(started_at=AT)
+    completed_at = datetime(2026, 4, 1, 0, 0, 1, tzinfo=UTC)
+    ledger.finish(
+        attempt=first,
+        completed_at=completed_at,
+        outcome=FetchAttemptOutcome.INTERRUPTED,
+        error_code="worker_exit",
+    )
+    with pytest.raises(ValueError, match="before previous result completion"):
+        ledger.start(started_at=AT)
+    second = ledger.start(started_at=completed_at)
     ledger.finish(
         attempt=second,
-        completed_at=AT,
+        completed_at=completed_at,
         outcome=FetchAttemptOutcome.SUCCESS,
         source_vintage_id=f"source-vintage:{'d' * 64}",
     )
