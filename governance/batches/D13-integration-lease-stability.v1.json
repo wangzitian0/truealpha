@@ -9,7 +9,7 @@
   "last_accepted_rung": null,
   "target_rung": "E0",
   "terminal_rung": "E0",
-  "objective": "Preserve an integration lease across unrelated main drift while rejecting any leased-path drift or non-ancestor acquisition anchor.",
+  "objective": "Preserve an unused integration lease across unrelated main drift and permit a closed corrective PR to renew only the content-addressed lease identity, base, and manifest reference without changing any authorization boundary.",
   "claim_ceiling": "Queued D13 E0 registration only: no lease-validator behavior, closed-corrective authorization, issue lifecycle, Gate 0 binding, application, data, factor, backtest, release, or Production behavior changes yet.",
   "capability_issues": [],
   "closes_issues": [],
@@ -31,6 +31,7 @@
       "a lease acquisition base must be an ancestor of the exact PR base",
       "every leased path must remain unchanged from the acquisition base through the exact PR base",
       "unrelated main drift may preserve lease identity only when owner, state, expiry, leased paths, dependencies, and authorization paths remain valid",
+      "a closed done-to-done corrective PR may renew only lease_id, base_sha, and the content-addressed lease reference when batch identity, owner, state, expiry, leased paths, and every other path authorization field remain identical to the accepted base",
       "non-ancestor anchors, leased-path drift, overlap, expiry, revocation, owner/path expansion, and malformed leases remain fail-closed"
     ]
   },
@@ -38,7 +39,7 @@
   "later_claim_dependencies": [
     "D13 E0 may unblock D12 corrective PR #304 only after exact-head acceptance; it does not itself repair or accept D12.",
     "Transferred, released, and automatic lease lifecycle states plus root-export redesign remain later #248 work.",
-    "Any broader closed-corrective predicate, application, data, factor, backtest, release, or Production change requires separate authorization."
+    "Any closed-corrective change beyond a content-addressed lease renewal with identical authorization boundaries, plus any application, data, factor, backtest, release, or Production change, requires separate authorization."
   ],
   "corpus": {
     "environment": "Local/CI git-history and lease fixtures only",
@@ -50,6 +51,8 @@
       "a leased file changed between acquisition and PR base",
       "an ancestor leased file was deleted or renamed before PR base",
       "lease acquisition base is not an ancestor or is unavailable",
+      "closed done-to-done corrective lease renewal changes only lease identity, base, and manifest reference",
+      "closed corrective lease renewal attempts to change owner, state, expiry, leased paths, or another path authorization field",
       "overlap, expiry, revoked state, owner mismatch, path expansion, and malformed lease remain rejected"
     ]
   },
@@ -112,8 +115,9 @@
     "negative_controls": [
       "accepting a non-ancestor or unavailable lease acquisition base",
       "accepting any leased-path content, deletion, rename, or mode drift between acquisition and PR base",
+      "accepting a closed corrective lease renewal that changes batch identity, owner, state, expiry, leased paths, or any path authorization field",
       "accepting overlap, expiry, revoked state, owner mismatch, path expansion, malformed identity, or stale dependency authorization",
-      "weakening closed-corrective path ownership, issue lifecycle, exact-head evidence, or review requirements",
+      "weakening closed-corrective behavior beyond the exact content-addressed lease renewal, issue lifecycle, exact-head evidence, or review requirements",
       "changing application, data, factor, backtest, release, database, consumer, or Production behavior"
     ],
     "output": {
@@ -126,8 +130,8 @@
     }
   },
   "invalidation": [
-    "Changing ancestor policy, leased-path drift detection, git object handling, lease identity, overlap, expiry, state, owner, path, dependency, or corpus semantics requires a new prepared revision before implementation.",
-    "Any attempt to modify closed-corrective ownership, application, data, factor, backtest, release, database, consumer, or Production behavior requires separate authorization."
+    "Changing ancestor policy, leased-path drift detection, git object handling, corrective lease-renewal equality, lease identity, overlap, expiry, state, owner, path, dependency, or corpus semantics requires a new prepared revision before implementation.",
+    "Any attempt to modify closed-corrective behavior beyond the exact content-addressed lease renewal, application, data, factor, backtest, release, database, consumer, or Production behavior requires separate authorization."
   ],
   "rollback": "Revert only the future D13 lease-validation predicate, tests, Gate 0 successor, evidence, and lease; do not mutate D12, historical Actions evidence, application, data, factor, backtest, release, or Production state."
 }
