@@ -4271,7 +4271,7 @@ semantic type without changing generic orchestration, snapshot, lineage, usage/r
 existing factor, or consumer code. One isolated probe factor may consume the new type to
 prove the registered projector and runner boundary.
 
-### 16.4 Gate 4: Production Validation and Graduation
+### 16.4 Gate 4: Production Strategy Validation
 
 Extend the evaluation corpus to five years/multiple regimes, reconcile critical prices
 against an independent source, validate strategy direction against a known reference,

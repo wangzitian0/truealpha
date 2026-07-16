@@ -2,9 +2,9 @@
 
 The repository currently contains Yahoo chart price bars for DDOG, DUOL, NICE,
 and SHOP. SEC and moomoo samples are not price-bar providers and must not be
-counted as independent price corroboration. No Twelve Data response bytes are
-currently captured, so `prices.source_reconciliation` remains an explicit
-blocker.
+counted as independent price corroboration. Twelve Data response bytes were captured on 2026-07-14
+(`apps/data-engine/samples/prices/twelve_data_reconciliation_20260714.json`), and
+`prices.source_reconciliation` passes the executable audit with one verified case.
 
 The reproducible protocol is recorded in
 `apps/data-engine/samples/prices/independent_reconciliation.v1.json`; the
@@ -20,6 +20,7 @@ Missing rows are failures, not denominator shrinkage.
 Confidence must not be calibrated from Yahoo's one-year/three-year overlap:
 that check only proves same-provider vintage stability. Confidence promotion
 requires independent observations, a recorded disagreement rate by field, and
-an explicit rule for missing, stale, or conflicting bars. Until then the
-fixture is intentionally `blocked_missing_independent_capture` and emits zero
-verified reconciliation cases.
+an explicit rule for missing, stale, or conflicting bars. The v1 protocol fixture
+(`independent_reconciliation.v1.json`) still records its original
+`blocked_missing_independent_capture` state as history; the executable audit is the
+current source of truth.

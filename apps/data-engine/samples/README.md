@@ -8,10 +8,10 @@ reflect the network/IP conditions the real ingestion pipeline will see).
 
 Purpose: ground schema design and data-quality profiling for `db/migrations`
 and `libs/factors` in real payloads before building the `raw.fetches` + MinIO
-ingestion pipeline (Phase -1 — see `init.md` Section 11). Not refreshed by CI;
+ingestion pipeline (Phase -1 reconnaissance; see `init.md` "Current Baseline and Next Gate"). Not refreshed by CI;
 re-run the scripts in `../scripts/` manually to recapture a new snapshot.
 
-Initial universe: DDOG, NICE, SHOP, DUOL (init.md Section 11's test names) +
+Initial universe: DDOG, NICE, SHOP, DUOL (the reconnaissance test universe) +
 QQQ and ARKK (ETF holdings-weight source check).
 
 Issue #14 adds a bounded evidence universe rather than a broad second sweep:
@@ -47,8 +47,8 @@ reconciliation remain strategy-evaluation requirements. See
   valuation trend, analyst consensus + rating summary, Morningstar report, shareholders
   overview, insider trades, dividends, short interest — plus one batched `owner_plate.json`
   covering all 4 tickers. Endpoints were chosen by reading moomoo's proto defs and SDK
-  source first (57 calls total, no repeated trial-and-error against the live API — quota
-  is capped at 2,000/month).
+  source first (57 calls total, no repeated trial-and-error against the live API — the
+  relevant endpoints use burst rate limits, not a monthly quota; see `init.md` Section 5).
 
 **The `yfinance` PyPI package gets HTTP 429 from this VPS's IP on every
 endpoint** (a real Phase -1 finding — Yahoo appears to fingerprint at the
@@ -92,7 +92,7 @@ Verified working end-to-end for all 4 tickers.
 - **NICE is a 20-F filer, not 10-K** (foreign private issuer) — any filing-type
   assumption in the ingestion pipeline must handle both forms, not hardcode `10-K`.
 
-## moomoo findings (init.md Section 11 item 6 — analyst-rating source, now resolved)
+## moomoo findings (analyst-rating source reconnaissance, now resolved)
 
 - **Path A confirmed: moomoo has real per-analyst historical ratings, not just
   current-outstanding ones.** `rating_summary`'s `analyst_rating_summary_list` embeds each
@@ -126,7 +126,8 @@ Verified working end-to-end for all 4 tickers.
   "DDOG's suppliers are AWS/GCP/Azure" directly — the LLM-extraction path
   (`libs/factors/shared/extraction.py`) is still the way to build `supplies_to` KG edges,
   not a shortcut moomoo replaces.
-- Quota spent this capture run: 57 calls (66/2,000 used this month total).
+- Ledger-recorded calls this capture run: 57 (the `api_call_ledger` is throttle and
+  audit infrastructure, not a monthly quota).
 
 ## A note on masked-looking fields
 
