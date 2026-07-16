@@ -28,9 +28,9 @@ tests prove it, review and green CI gate the merge.
    process must have completed for the exact head SHA; an empty thread list before that
    completion is not evidence of a clean review. An actionable finding without an explicit
    High, Medium, or Low severity classification in the review output blocks readiness.
-   Evaluate the unresolved budget of
-   High = 0, Medium <= 2, and Low <= 4 on the exact head immediately before merge
-   readiness is declared. A green `ci-required`, a deployable `main`, and
+   Evaluate unresolved actionable findings against the budget of High = 0, Medium <= 2,
+   and Low <= 4 on the exact head immediately before merge readiness is declared. A green
+   `ci-required`, a deployable `main`, and
    backward-compatible migrations are also required.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
