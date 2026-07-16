@@ -34,6 +34,7 @@ def expand_obligations(
         raise ValueError("obligation inputs must not contain duplicates")
     if any(member.kind is not SubjectKind.LISTING for member in list_version.members):
         raise ValueError("capture-control expansion requires listing members")
+    ordered_semantic_types = tuple(sorted(semantic_types))
     obligations = (
         ListObligation(
             run_id=run_id,
@@ -43,7 +44,7 @@ def expand_obligations(
             partition=partition,
         )
         for member in list_version.members
-        for semantic_type in sorted(semantic_types)
+        for semantic_type in ordered_semantic_types
     )
     return tuple(obligations)
 
