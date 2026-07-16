@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:f03491cdf54ec81410cd53184781b44ad9fbcee279bfa4b686d9206a65f57ec5",
+  "lease_id": "integration-lease:d83b2a43af17f2d35803eb054e8ff6bf1d6f0f91458feb1ac76417851ee327d0",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
   "state": "revoked",
@@ -11,6 +11,8 @@
     "db/migrations/0024_access_policy_bindings.sql",
     "db/roles.sql",
     "db/tests/governed_research_access_contract.sql",
+    "governance/capabilities/issue-229.v1.json",
+    "governance/vision-issue-graph.json",
     "governance/gate0/README.md",
     "governance/gate0/manifest-v5.json",
     "governance/gate0/v4-frozen-tree-proof.v1.json",
