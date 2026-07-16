@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "D11-closed-terminal-pr-metadata",
-  "revision": 2,
+  "revision": 3,
   "issue": 288,
   "owner_gate": 32,
-  "status": "prepared",
+  "status": "done",
   "lane": "orchestration-platform",
-  "last_accepted_rung": null,
+  "last_accepted_rung": "E0",
   "target_rung": "E0",
   "terminal_rung": "E0",
   "objective": "Authorize a closed Work-Issue only for an exact checker-validated capability-batch done-to-done corrective PR without weakening the default open-issue requirement.",
-  "claim_ceiling": "Prepared Local/CI corpus only: the activation base, independent reviewer, and exact allow/reject matrix are frozen. No delivery validator, test, Gate 0 candidate, issue state, or batch transition changes occur in preparation. A future accepted D11 E0 result may authorize only PR metadata for an exact terminal corrective batch advance; it cannot authorize D9, D4, D8, source, scheduler, runtime, release, database, consumer, or Production data work.",
+  "claim_ceiling": "Accepted E0 offline PR-metadata correction only: a closed Work-Issue may pass required metadata validation only for an exact owned capability-batch done-to-done corrective advance with identical valid accepted, target, terminal, issue, dependency, closure, and path/lease authorization identities. A contiguous blocked Gate 0 v7 successor preserves frozen v6 and every artifact, attestation, blocker, and readiness state. This does not accept D9, authorize a D4 handoff or D8 implementation, reopen any issue, or permit source, scheduler, runtime, release, database, consumer, or Production data work.",
   "capability_issues": [],
   "closes_issues": [],
   "informational_issues": [
@@ -44,10 +44,11 @@
   "corpus": {
     "environment": "Local/CI pull-request metadata fixtures only",
     "manifest_path": "libs/runtime/tests/fixtures/delivery_governance_closed_terminal_pr.v1.json",
-    "sha256": "63f23769a73c80a6a15b75b28b4d0dbe15785d589b14e0d08c7ca5e8bf7e79f2",
+    "sha256": "d0eeb65906c2d1412800b3b116c4c740336570cbe626c64680de46cd529ee433",
     "required_strata": [
       "an open Work-Issue remains accepted under the existing metadata rules",
       "a closed Work-Issue is accepted only for an exact owned capability-batch done-to-done corrective advance",
+      "a closed corrective candidate cannot expand writable paths, leases, dependencies, capability ownership, or issue-closure authority",
       "closed standalone, registration, preparation, active, and normal terminal-acceptance advances are rejected",
       "closed mismatched-issue, malformed-manifest, invalid-rung, and rung-changing corrective candidates are rejected",
       "Work-Key, Issue-Action, closing-keyword, changed-path, lease, lifecycle, and review controls remain mandatory"
@@ -86,9 +87,17 @@
       "uv.lock",
       "pyproject.toml"
     ],
-    "integration_surface": [],
-    "lease_owner": null,
-    "lease_manifest": null
+    "integration_surface": [
+      "tools/check_delivery_governance.py",
+      "libs/runtime/tests/test_delivery_governance.py",
+      "governance/gate0/manifest-v7.json",
+      "governance/gate0/v6-frozen-tree-proof.v1.json"
+    ],
+    "lease_owner": "wangzitian0",
+    "lease_manifest": {
+      "path": "governance/leases/D11-closed-terminal-pr-metadata.v1.json",
+      "sha256": "60916372379b1ad5c18236cdca61c68bfc1dc2acd2eda916ae627244d9e21a92"
+    }
   },
   "release_activation": {
     "allowed": false,
@@ -106,6 +115,7 @@
     "negative_controls": [
       "any closed Work-Issue outside an exact owned capability-batch done-to-done corrective advance",
       "a closed standalone, registration, preparation, active, normal terminal-acceptance, mismatched-issue, malformed, invalid-rung, or rung-changing candidate",
+      "changing owner-gate, dependency, capability, closure, writable, read-only, forbidden, integration-surface, or lease authorization in a closed corrective candidate",
       "bypassing Work-Key, Issue-Action, closing-keyword, changed-path, integration-lease, lifecycle, or review validation",
       "mutating Gate 0 v6 bytes, accepted artifacts, external attestations, blockers, or readiness while rebinding the delivery validator",
       "reopening an issue or changing D9, D4, D8, source policy, scheduler, runtime, release, database, consumer, or Production data authorization"
@@ -113,9 +123,9 @@
     "output": {
       "type": "ClosedTerminalCorrectivePrMetadataEvidence",
       "stable_handoff": false,
-      "state": "prepared",
+      "state": "accepted",
       "allowed_evidence_readers": [
-        "D11 #288 E0 implementation and review only; D9 #274 cannot consume this prepared corpus as accepted permission"
+        "D9 #274 terminal-preflight acceptance only; no D4 handoff, D8 implementation, source, runtime, release, or Production authorization"
       ]
     }
   },

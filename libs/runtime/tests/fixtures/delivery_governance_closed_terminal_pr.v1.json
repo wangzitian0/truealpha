@@ -42,6 +42,58 @@
       "expected": "allow"
     },
     {
+      "name": "closed_expanded_writable_scope",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2",
+        "paths": {
+          "writable": [
+            "governance/batches/D0.json",
+            "apps/**"
+          ],
+          "read_only": [],
+          "forbidden": [],
+          "integration_surface": [],
+          "lease_manifest": null
+        }
+      },
+      "expected": "reject"
+    },
+    {
+      "name": "closed_expanded_issue_closure_scope",
+      "issue_state": "closed",
+      "advance_kind": "capability_batch",
+      "base": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2"
+      },
+      "candidate": {
+        "issue": 210,
+        "status": "done",
+        "last_accepted_rung": "E2",
+        "target_rung": "E2",
+        "terminal_rung": "E2",
+        "capability_issues": [211],
+        "closes_issues": [211]
+      },
+      "expected": "reject"
+    },
+    {
       "name": "closed_standalone",
       "issue_state": "closed",
       "advance_kind": "standalone",

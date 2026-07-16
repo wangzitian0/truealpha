@@ -16,10 +16,17 @@ governance = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = governance
 SPEC.loader.exec_module(governance)
 E0_TRANSITION_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "delivery_governance_e0_transition.v1.json"
+CLOSED_TERMINAL_PR_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "delivery_governance_closed_terminal_pr.v1.json"
 
 
 def _e0_transition_cases():
     fixture = json.loads(E0_TRANSITION_FIXTURE_PATH.read_text(encoding="utf-8"))
+    assert fixture["schema_version"] == 1
+    return fixture["cases"]
+
+
+def _closed_terminal_pr_cases():
+    fixture = json.loads(CLOSED_TERMINAL_PR_FIXTURE_PATH.read_text(encoding="utf-8"))
     assert fixture["schema_version"] == 1
     return fixture["cases"]
 
@@ -2238,6 +2245,68 @@ def test_pull_request_metadata_accepts_standalone_issue_lifecycle():
     )
 
     assert validation.errors == []
+
+
+@pytest.mark.parametrize("case", _closed_terminal_pr_cases(), ids=lambda case: case["name"])
+def test_pull_request_metadata_closed_terminal_corrective_corpus(case):
+    issue_number = case.get("issue_number", 210)
+    if case["advance_kind"] == "standalone":
+        advance = None
+        work_key = f"standalone-{issue_number}"
+        issue_action = "keep-open"
+    else:
+        candidate = case["candidate"]
+        base = case["base"] or {}
+        authorization = {
+            "owner_gate": 29,
+            "capability_issues": [],
+            "dependencies": [],
+            "closes_issues": [],
+            "paths": {
+                "writable": ["governance/batches/D0.json"],
+                "read_only": [],
+                "forbidden": [],
+                "integration_surface": [],
+                "lease_manifest": None,
+            },
+        }
+        accepted_rung = candidate.get("last_accepted_rung") if candidate.get("status") == "done" else None
+        advance = governance.PullRequestAdvance(
+            batch_id="D0",
+            manifest_path="governance/batches/D0.json",
+            base_manifest={**authorization, **base} if base else {},
+            manifest={
+                **authorization,
+                **candidate,
+            },
+            accepted_rung=accepted_rung,
+            changed_paths=("governance/batches/D0.json",),
+        )
+        work_key = f"D0:{accepted_rung or candidate['target_rung']}"
+        issue_action = "managed-by-batch"
+
+    validation = governance.Validation()
+    issue = {
+        "number": issue_number,
+        "title": "[truealpha-bt] Exercise terminal corrective metadata",
+        "state": case["issue_state"],
+    }
+    governance.validate_pull_request_metadata(
+        validation,
+        {
+            "title": "[truealpha-bt] Exercise terminal corrective metadata",
+            "body": (f"Work-Issue: #{issue_number}\nWork-Key: {work_key}\nIssue-Action: {issue_action}"),
+        },
+        [issue],
+        advance,
+        issue,
+    )
+
+    issue_state_errors = [error for error in validation.errors if "Work-Issue" in error and "not open" in error]
+    if case["expected"] == "allow":
+        assert validation.errors == []
+    else:
+        assert issue_state_errors
 
 
 def test_pull_request_metadata_rejects_duplicate_structured_fields():
