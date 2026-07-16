@@ -150,7 +150,7 @@ class ToptMediumReplayReport:
         return result
 
 
-def _topt_list_version(corpus: Mapping[str, Any]) -> CaptureListVersion:
+def frozen_topt_list_version(corpus: Mapping[str, Any]) -> CaptureListVersion:
     denominator = corpus["topt_denominator"]
     instruments = denominator["instruments"]
     if (
@@ -371,7 +371,7 @@ def _materialize_run(
         raise ValueError("TOPT semantic denominator drift")
     if int(denominator["obligation_count"]) != _EXPECTED_OBLIGATION_COUNT:
         raise ValueError("TOPT obligation denominator drift")
-    list_version = _topt_list_version(corpus)
+    list_version = frozen_topt_list_version(corpus)
     schedule_policy, campaign, run = _capture_run(corpus, cutoff=cutoff, sequence=sequence)
     obligations = expand_obligations(
         run_id=run.run_id,
