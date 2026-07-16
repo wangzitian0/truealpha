@@ -40,7 +40,7 @@
   "corpus": {
     "environment": "Local/CI preflight fixtures and a closed terminal D4 manifest only",
     "manifest_path": "libs/runtime/tests/fixtures/agent_preflight_terminal_rerun.v1.json",
-    "sha256": "98c09345dad8879416d1ac7f5e670fafbe62c3211ec29a8461e082a32a5e7355",
+    "sha256": "4f2d2d8f914af7ce813c6e76eda7f00a1a400b807c1dd49e6d56c39b7d242387",
     "required_strata": [
       "an open standalone issue remains claimable under the default path",
       "a closed issue is rejected by default",
