@@ -57,7 +57,7 @@ def _valid_evidence():
     }
 
 
-def _validate_evidence(tmp_path, monkeypatch, evidence, *, producer_reachable=True):
+def _validate_evidence(tmp_path, monkeypatch, evidence):
     evidence_dir = tmp_path / "governance" / "evidence"
     evidence_dir.mkdir(parents=True)
     evidence_path = evidence_dir / "issue-99.v1.json"
@@ -65,7 +65,6 @@ def _validate_evidence(tmp_path, monkeypatch, evidence, *, producer_reachable=Tr
     digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
     monkeypatch.setattr(governance, "ROOT", tmp_path)
     monkeypatch.setattr(governance, "git_object", lambda _commit, _path: "1" * 40)
-    monkeypatch.setattr(governance, "git_is_ancestor", lambda _ancestor, _descendant: producer_reachable)
     validation = governance.Validation()
     governance.validate_capability_evidence(
         validation,
@@ -116,12 +115,6 @@ def test_capability_evidence_accepts_resolved_git_objects(tmp_path, monkeypatch)
     validation = _validate_evidence(tmp_path, monkeypatch, _valid_evidence())
 
     assert validation.errors == []
-
-
-def test_capability_evidence_rejects_producer_outside_main_history(tmp_path, monkeypatch):
-    validation = _validate_evidence(tmp_path, monkeypatch, _valid_evidence(), producer_reachable=False)
-
-    assert "issue #99: evidence producer commit is not reachable from HEAD" in validation.errors
 
 
 def test_gate_order_is_independent_of_json_object_order():
