@@ -12,8 +12,7 @@ SourceRegistry + SemanticTypeRegistry
                                      +-> planned requirements +-> usage/reverse quality review
 ```
 The proposal covers interface meaning, not every adapter. Implementations may land
-incrementally only from a checked-in, content-hashed capability-batch manifest and behind
-the closure tests in Section 18. No issue may claim an interface freeze merely because the
+incrementally behind the closure tests in Section 18. No issue may claim an interface freeze merely because the
 signatures are written down.
 `libs/contracts` owns data-only semantic types and ports. `libs/factors` owns every calculation,
 classification, screen, ranking, portfolio rule, and return calculation.
@@ -4291,15 +4290,14 @@ Tracked by [epic #32](https://github.com/wangzitian0/truealpha/issues/32), with
 #11, #49-#54, #66-#68 as the environment, evaluation, consumer, graduation, and final
 capture-certification tree.
 
-A gate milestone is an acceptance fan-in, not an implementation batch. A capability batch
-owns one bounded slice across a declared contiguous range of code, tiny execution, contract
-repair, medium validation, hardening/freeze, and large shadow execution; each batch PR
-advances exactly one rung. Dependencies separately block provisional implementation,
-candidate freeze, or issue/gate closure. Disjoint lanes may run concurrently after their
-exact content-hashed handoffs merge, and each rung PR may merge independently into `main`;
-no rung PR promotes an environment or implies gate completion. Shared contract
-exports, registries, migration numbering, generated artifacts, root lockfiles, and this
-architecture require one integration owner and dependency-topological merge ordering.
+A gate milestone is an acceptance fan-in, not an implementation lock. Implementation is
+conventional issue→PR work: grow evidence incrementally from fixtures and tiny corpora
+before scaling, and merge verified PRs independently into `main`; no merge promotes an
+environment or implies gate completion. Dependencies separately block provisional
+implementation, candidate freeze, or issue/gate closure. Disjoint lanes run concurrently
+against exact content-hashed handoffs; coordinate through issues before touching shared
+contract exports, registries, migration numbering, generated artifacts, root lockfiles,
+or this architecture document.
 
 Gate review and promotion still bind one exact release candidate plus the complete
 transitive evidence bundle. Lower-scale evidence cannot satisfy a higher claim: fixtures
@@ -4307,8 +4305,7 @@ prove contracts, development goldens prove candidates, sealed holdouts prove mod
 Staging canaries prove bounded operation, and natural-refresh plus independent Production
 evidence proves graduation. Semantic/PIT/schema/catalog/universe/threshold drift after a
 freeze invalidates dependent evidence and requires a new version and fresh untouched
-holdout where applicable. `AGENTS.md` is the operational contract for manifests, handoffs,
-path ownership, merge queues, acceptance ceilings, cancellation, and rollback.
+holdout where applicable. `AGENTS.md` is the operational contract for day-to-day delivery.
 Usable coverage counts only applicable outputs whose `availability_status` is available
 and fresh enough for the module SLO. `source_evidence_status` separately reports consumed
 data corroboration, while `factor_validation_status` records golden/holdout graduation;

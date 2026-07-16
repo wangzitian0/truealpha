@@ -80,6 +80,7 @@ jobs:
           # (as things to forbid), this workflow file itself, and the
           # pre-commit config whose local gate carries the same pattern.
           if git grep -InE "$PATTERN" -- . \
+              ':(exclude)AGENTS.md' \
               ':(exclude)CLAUDE.md' \
               ':(exclude)init.md' \
               ':(exclude).github/workflows/security-gate.yml' \

@@ -25,4 +25,4 @@ repos:
         entry: 'OpenSecTradeContext|OpenFutureTradeContext|OpenCryptoTradeContext|OpenHKTradeContext|OpenUSTradeContext|OpenCNTradeContext|\bplace_order\b|\bmodify_order\b|\bcancel_order\b|\bunlock_trade\b'
         # Same doc exclusions as security-gate.yml (files that legitimately
         # name these APIs as things to forbid), plus this config itself.
-        exclude: '^(CLAUDE\.md|init\.md|\.github/workflows/security-gate\.yml|\.pre-commit-config\.yaml)$'
+        exclude: '^(AGENTS\.md|CLAUDE\.md|init\.md|\.github/workflows/security-gate\.yml|\.pre-commit-config\.yaml)$'

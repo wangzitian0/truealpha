@@ -424,7 +424,7 @@ can prove graduation. Formula/source/applicability/SLO semantics and exact candi
 hashes freeze before protected evaluation; post-reveal changes require a new version and
 fresh untouched evidence. PIT rules, append-only restatements, fixed denominators,
 environment-scoped rights/budgets, row-complete capture, recovery, and human approvals
-remain mandatory at their applicable rung.
+remain mandatory at their applicable evidence scale.
 
 Gate epics still close in order as product decisions. Each gate is an issue-tracked
 milestone whose acceptance criteria live in its issue and whose evidence (captured
@@ -466,8 +466,8 @@ identity smoke cases, and the first typed corpus audit. It also confirmed SEC N-
 as the delayed ETF-holdings source and moomoo historical analyst events as a candidate
 input whose PIT public-availability and usage rights still need proof.
 
-That baseline is enough for bounded E0 code and E1 tiny discovery; it is not a release
-gate. The current earliest incomplete acceptance gate is Gate 0, the
+That baseline is enough for bounded experimental code and tiny-corpus discovery; it is
+not a release gate. The current earliest incomplete acceptance gate is Gate 0, the
 [Semantic & Data Closure epic #56](https://github.com/wangzitian0/truealpha/issues/56):
 
 1. freeze issuer/security/listing, currency, time, return, universe, and research semantics (#57 and #59);
@@ -478,10 +478,9 @@ gate. The current earliest incomplete acceptance gate is Gate 0, the
 No interface is called v1-frozen, and no sample-readiness boolean is promoted into a
 strategy or Production claim, until those issues produce their specified independent
 and executable evidence. Later milestones are ordered acceptance fan-ins, not global
-implementation locks. A lower-rung batch may start only from a checked-in, content-hashed
-manifest whose exact start dependencies and path lease are valid. Such work remains
-provisional, is excluded from the accepted `ReleaseManifest` registry/configuration
-bindings, and cannot close a higher-rung issue or gate. This permits the Gate 1 headcount
+implementation locks. Provisional lower-gate work is ordinary issue→PR work; it remains
+excluded from the accepted `ReleaseManifest` registry/configuration bindings and cannot
+close a higher gate. This permits the Gate 1 headcount
 slice (#70) and similar fixture work
 to expose defects early while preserving the blind Core holdout (#71), additive registry/
 catalog proof (#72), and independent Production capture audit (#68).
