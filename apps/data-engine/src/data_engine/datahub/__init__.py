@@ -9,6 +9,12 @@ from data_engine.datahub.hardening_replay import (
     run_topt_hardening_replay,
 )
 from data_engine.datahub.medium_replay import ToptMediumReplayReport, ToptRunSummary, run_topt_medium_replay
+from data_engine.datahub.repository import (
+    CaptureRepositoryConflictError,
+    PostgresCaptureControlRepository,
+    ToptCaptureMetaInfo,
+    ToptCaptureStatus,
+)
 from data_engine.datahub.tiny_replay import (
     FrozenRecapturePlan,
     TinyReplayReport,
@@ -23,12 +29,16 @@ from data_engine.datahub.tiny_replay import (
 
 __all__ = [
     "AttemptLedger",
+    "CaptureRepositoryConflictError",
     "FrozenRecapturePlan",
     "HardeningResourceCeilings",
     "HardeningResourceObservation",
     "HardeningScopeMetric",
+    "PostgresCaptureControlRepository",
     "TinyReplayReport",
     "ToptHardeningReplayReport",
+    "ToptCaptureMetaInfo",
+    "ToptCaptureStatus",
     "ToptMediumReplayReport",
     "ToptRunSummary",
     "build_recapture_plan",

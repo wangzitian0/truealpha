@@ -119,6 +119,14 @@ insert into raw.capture_campaigns (
     '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00',
     '[{"universe_id":"universe:topt-us-2026-03-31","universe_version":"topt-sql-contract-v1","content_sha256":"8888888888888888888888888888888888888888888888888888888888888888"}]'
 );
+insert into raw.capture_schedule_policies (
+    schedule_policy_id, content_sha256, policy_version, demanded_cadence,
+    provider_availability_cadence, freshness_max_age, retry_policy, payload
+) values (
+    'schedule-policy:6666666666666666666666666666666666666666666666666666666666666666',
+    repeat('6', 64), 'sql-contract:v1', interval '1 day',
+    'fixture-daily:v1', interval '2 days', '{}'::jsonb, '{}'::jsonb
+);
 insert into raw.capture_runs (
     run_id, campaign_id, run_sequence, schedule_policy_id, capture_scope_id, content_sha256
 ) values (
@@ -225,6 +233,18 @@ begin
         end;
     end loop;
 end $$;
+insert into raw.capture_source_requests (
+    source_request_id, content_sha256, source_registry_entry_id, source_policy_id,
+    request_fingerprint_version, canonical_request_sha256, subject_refs,
+    capture_requirement_ids, partition_key, payload
+) values (
+    'source-request:6666666666666666666666666666666666666666666666666666666666666666',
+    repeat('6', 64),
+    'source-registry-entry:6666666666666666666666666666666666666666666666666666666666666666',
+    'source-policy:sql-contract-v1', 'sql-contract-request:v1', repeat('6', 64),
+    '[{"kind":"listing","id":"listing:xnas:goog"}]'::jsonb,
+    array['market-price:v1'], '2026-03-31', '{}'::jsonb
+);
 insert into raw.capture_work_items (
     work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
     retryable_outcomes, terminal_outcomes, content_sha256, storage_envelope_sha256
@@ -345,6 +365,14 @@ insert into raw.capture_campaigns (
     '[{"universe_id":"universe:topt-us-2026-03-31","universe_version":"topt-sql-contract-v1","content_sha256":"8888888888888888888888888888888888888888888888888888888888888888"}]'
 );
 
+insert into raw.capture_schedule_policies (
+    schedule_policy_id, content_sha256, policy_version, demanded_cadence,
+    provider_availability_cadence, freshness_max_age, retry_policy, payload
+) values
+    ('schedule-policy:' || repeat('a', 64), repeat('a', 64), 'sql-contract-a:v1', interval '1 day', 'fixture-daily:v1', interval '2 days', '{}'::jsonb, '{}'::jsonb),
+    ('schedule-policy:' || repeat('d', 64), repeat('d', 64), 'sql-contract-d:v1', interval '1 day', 'fixture-daily:v1', interval '2 days', '{}'::jsonb, '{}'::jsonb),
+    ('schedule-policy:' || repeat('e', 64), repeat('e', 64), 'sql-contract-e:v1', interval '1 day', 'fixture-daily:v1', interval '2 days', '{}'::jsonb, '{}'::jsonb);
+
 insert into raw.capture_runs (
     run_id, campaign_id, run_sequence, schedule_policy_id, capture_scope_id, content_sha256
 ) values (
@@ -430,6 +458,19 @@ insert into raw.capture_obligations (
     'listing', 'listing:xnas:googl', 'market-price:v1', '2026-03-31',
     'eea906db6112e2937848249cf0cf4c31aa9af7260d2046ee08a43dcd298b9d41'
 );
+
+insert into raw.capture_source_requests (
+    source_request_id, content_sha256, source_registry_entry_id, source_policy_id,
+    request_fingerprint_version, canonical_request_sha256, subject_refs,
+    capture_requirement_ids, partition_key, payload
+)
+select
+    'source-request:' || repeat(seed, 64), repeat(seed, 64),
+    'source-registry-entry:' || repeat(seed, 64), 'source-policy:sql-contract-v1',
+    'sql-contract-request:v1', repeat(seed, 64),
+    '[{"kind":"listing","id":"listing:xnas:goog"}]'::jsonb,
+    array['market-price:v1'], '2026-03-31', '{}'::jsonb
+from unnest(array['9', 'd', 'e', 'f']) as seed;
 
 insert into raw.capture_work_items (
     work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts,
