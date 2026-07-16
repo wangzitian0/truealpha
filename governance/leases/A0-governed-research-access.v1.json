@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "lease_id": "integration-lease:37e20f9a8b46f96859b1b8b23c248868679a4c42f45727a7957497a239da451b",
+  "lease_id": "integration-lease:7a155276448f35200aa9e57f8c6bb916ad78a3a737e1b918344a59cf2871e1ce",
   "batch_id": "A0-governed-research-access",
   "owner": "wangzitian0",
-  "state": "revoked",
+  "state": "active",
   "paths": [
     "init.md",
     "libs/contracts/src/truealpha_contracts/__init__.py",

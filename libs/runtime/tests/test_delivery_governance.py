@@ -866,6 +866,41 @@ def test_pr_rejects_multiple_batch_manifests(monkeypatch):
     assert "PR must advance exactly one capability-batch manifest" in validation.errors
 
 
+def test_terminal_batch_comparison_ignores_only_owned_capability_evidence():
+    graph = {
+        "batches": {"A0": {"status": "done"}},
+        "issues": {
+            "229": {"terminal_evidence": "E2", "accepted_evidence": {"path": "owned.json"}},
+            "230": {"terminal_evidence": "E2", "accepted_evidence": {"path": "unrelated.json"}},
+        },
+    }
+
+    comparable = governance.graph_without_owned_batch_updates(
+        graph,
+        batch_id="A0",
+        manifest={"status": "done", "closes_issues": [229]},
+    )
+
+    assert "A0" not in comparable["batches"]
+    assert "accepted_evidence" not in comparable["issues"]["229"]
+    assert comparable["issues"]["230"]["accepted_evidence"] == {"path": "unrelated.json"}
+
+
+def test_nonterminal_batch_comparison_keeps_capability_evidence():
+    graph = {
+        "batches": {"A0": {"status": "active"}},
+        "issues": {"229": {"accepted_evidence": {"path": "not-yet-owned.json"}}},
+    }
+
+    comparable = governance.graph_without_owned_batch_updates(
+        graph,
+        batch_id="A0",
+        manifest={"status": "active", "closes_issues": [229]},
+    )
+
+    assert comparable["issues"]["229"]["accepted_evidence"] == {"path": "not-yet-owned.json"}
+
+
 def test_gate0_aggregate_allows_structurally_valid_blocked_candidate(tmp_path, monkeypatch):
     calls: list[dict[str, bool]] = []
     graph, base_sha, head_sha = _gate0_pr_context(tmp_path, monkeypatch, validation_calls=calls)

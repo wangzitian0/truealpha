@@ -1,8 +1,8 @@
 {
-  "handoff_id": "handoff:a0-governed-research-access:d04d5b178d1e5455607062e57a70ae154291311d8a12231cbd1e7a59c1439820",
+  "handoff_id": "handoff:a0-governed-research-access:1262e66250c1a8b8d16cda9a956cb3cfd3af9cf2bea95c41567712f59bb45838",
   "schema_version": 1,
   "revision": 1,
-  "state": "accepted",
+  "state": "produced",
   "producer": {
     "batch_id": "A0-governed-research-access",
     "issue": 230,
@@ -31,10 +31,10 @@
   ],
   "retention": "permanent while a named Local/CI consumer depends on this access contract",
   "verification": {
-    "reviewer": "copilot-pull-request-reviewer",
+    "reviewer": null,
     "evidence_sha256": "132566aa98c88ad8ad723eda9d4574aa280ecde8b1f2f63816f7fbf1d7f56536",
-    "accepted_at": "2026-07-16T06:28:42Z",
-    "attestation_ref": "https://github.com/wangzitian0/truealpha/pull/270"
+    "accepted_at": null,
+    "attestation_ref": null
   },
   "revocation": {
     "reason": null,

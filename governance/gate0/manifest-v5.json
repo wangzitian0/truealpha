@@ -8,8 +8,8 @@
   "integration_base_sha": "352c5583a785bbaaf9ab5ec1bb48ca8410d72bf5",
   "included_issues": [57, 58, 59, 60, 61],
   "dependency_order": [57, 58, 59, 60, 61],
-  "candidate_payload_sha256": "9a07927d06cca11e3f7c89f6a449504cb8312fd6c7c054af63ea0a62c39285f3",
-  "candidate_tree_sha256": "981ba87b3f5b019ad0a8ebb07b72c9085248ed8c4d107ec8dd61e25ed8dd3bcb",
+  "candidate_payload_sha256": "c7691ff7e5fba3e9acdc7049709a554927298c23b4b90de02757dad48dd2a6fd",
+  "candidate_tree_sha256": "04bf20dc0f782a42f5f1f8ceca96b060338175eddcda2e74ba8044fd44cfbdfd",
   "paths": [
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e1_slice.py",
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e2_slice.py",
@@ -180,7 +180,7 @@
     {
       "role": "delivery_validator",
       "path": "tools/check_delivery_governance.py",
-      "sha256": "539b9e5e3f8bec1f6cd6c54cf0ca746420aa8844db40ba96b1941ff4ac164688"
+      "sha256": "caceb0c1847588b69613e9c5dc506eecfb1b379c6709ea9479254f717c494263"
     }
   ]
 }

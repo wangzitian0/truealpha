@@ -1619,6 +1619,22 @@ def validate_new_batch_registration(
     )
 
 
+def graph_without_owned_batch_updates(
+    graph: dict[str, Any],
+    *,
+    batch_id: str,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    comparable = json.loads(json.dumps(graph))
+    comparable["batches"].pop(batch_id, None)
+    if manifest.get("status") == "done":
+        for issue_number in manifest.get("closes_issues", []):
+            issue = comparable.get("issues", {}).get(str(issue_number))
+            if isinstance(issue, dict):
+                issue.pop("accepted_evidence", None)
+    return comparable
+
+
 def validate_gate0_pr_advance(
     validation: Validation,
     *,
@@ -1834,10 +1850,16 @@ def validate_pr_advance(
         manifest.get("revision") == base_manifest.get("revision", 0) + 1,
         f"{batch_id}: manifest revision must increase by exactly one",
     )
-    base_graph_without_batch = json.loads(json.dumps(base_graph))
-    graph_without_batch = json.loads(json.dumps(graph))
-    base_graph_without_batch["batches"].pop(batch_id, None)
-    graph_without_batch["batches"].pop(batch_id, None)
+    base_graph_without_batch = graph_without_owned_batch_updates(
+        base_graph,
+        batch_id=batch_id,
+        manifest=manifest,
+    )
+    graph_without_batch = graph_without_owned_batch_updates(
+        graph,
+        batch_id=batch_id,
+        manifest=manifest,
+    )
     validation.require(
         base_graph_without_batch == graph_without_batch,
         f"{batch_id}: PR changed unrelated Vision graph content",

@@ -4,13 +4,13 @@
   "revision": 6,
   "issue": 230,
   "owner_gate": 31,
-  "status": "done",
+  "status": "blocked",
   "lane": "consumption",
-  "last_accepted_rung": "E2",
+  "last_accepted_rung": "E1",
   "target_rung": "E2",
   "terminal_rung": "E2",
   "objective": "Establish a governed multi-user research access boundary before MCP, reports, cards, the Web App, or chat expose personal research state.",
-  "claim_ceiling": "E2 accepted Local/CI governed-research-access contract and stable handoff only: authoritative architecture, stable package-root exports, frozen two-tenant typed/SQL evidence, deterministic authorization replay, fail-closed denial, owner RLS, administrator non-content audit metadata, append-only access histories, and a valid blocked Gate 0 v5 successor that binds immutable v4 bytes and current integration controls. No Gate 0 acceptance, authentication route, identity-provider binding, browser or MCP deployment, content retention, sharing, break-glass, report or card mutation, replay submission, factor execution, Qlib invocation, live source, Staging/Production readiness, or release activation is accepted.",
+  "claim_ceiling": "E1 remains the accepted ceiling while the implemented E2 governed-research-access contract awaits independent verification. The candidate implementation contains authoritative architecture, stable package-root exports, frozen two-tenant typed/SQL command evidence, and a valid blocked Gate 0 v5 successor that binds immutable v4 bytes and current integration controls. It does not yet grant a stable handoff and makes no Gate 0 acceptance, authentication route, identity-provider binding, browser or MCP deployment, content retention, sharing, break-glass, report or card mutation, replay submission, factor execution, Qlib invocation, live source, Staging/Production readiness, or release activation claim.",
   "capability_issues": [229],
   "closes_issues": [229],
   "informational_issues": [31, 41, 42, 43, 45, 46, 66, 224, 225, 226, 227],
@@ -75,6 +75,7 @@
       "governance/evidence/A0-governed-research-access-E0.v1.json",
       "governance/evidence/A0-governed-research-access-E1.v1.json",
       "governance/evidence/A0-governed-research-access-E2.v1.json",
+      "governance/evidence/A0-governed-research-access-E2.v2.json",
       "governance/evidence/issue-229.v1.json",
       "governance/handoffs/A0-governed-research-access.v1.json",
       "governance/capabilities/issue-229.v1.json",
@@ -132,7 +133,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/A0-governed-research-access.v1.json",
-      "sha256": "cdbb8e6a40cd2ab242955abfd4ca197aca55f816a17c274980bc0c4c11e47a8d"
+      "sha256": "06f7c61d56db8acf54aaff50ae82eefbb3045b74be05c175713160727272f02a"
     }
   },
   "release_activation": {
@@ -168,19 +169,15 @@
       "the Gate 0 v5 successor drops, weakens, or marks accepted any external blocker inherited from v4"
     ],
     "output": {
-      "type": "HandoffManifest",
-      "stable_handoff": true,
-      "state": "accepted",
-      "path": "governance/handoffs/A0-governed-research-access.v1.json",
-      "sha256": "a85ca00a6ce90a9a7c55d1eb8e30776b0dbcbb856ed57dbe3508369d364ce4b4",
-      "handoff_id": "handoff:a0-governed-research-access:d04d5b178d1e5455607062e57a70ae154291311d8a12231cbd1e7a59c1439820",
-      "allowed_consumers": [
-        "C1-stable-mart-reads",
-        "C2-typed-mcp-tools",
-        "C3-traceable-research-reports",
-        "C5-mart-backed-dashboard",
-        "C6-deferred-chat",
-        "P0-deployed-consumer-validation"
+      "type": "TinyEvidence",
+      "stable_handoff": false,
+      "state": "accepted_e1",
+      "allowed_evidence_readers": [
+        "the future #42 MCP implementation batch",
+        "the future #43 report/document implementation batch",
+        "the future #45 Web implementation batch",
+        "the future #46 chat implementation batch",
+        "the future #66 deployed-consumer validation batch"
       ],
       "retention": "E0/E1 evidence follows CI retention; the accepted E2 contract, handoff, policy identities, and audit schema are retained permanently."
     }
