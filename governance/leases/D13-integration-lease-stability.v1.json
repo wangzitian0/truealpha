@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "lease_id": "integration-lease:bc327dd85af5c220a9fd8794b4415212ed4dda8f053dc7aa3ba60344e0486116",
+  "batch_id": "D13-integration-lease-stability",
+  "owner": "wangzitian0",
+  "state": "active",
+  "paths": [
+    "tools/check_delivery_governance.py",
+    "libs/runtime/tests/test_delivery_governance.py",
+    "governance/gate0/manifest-v8.json",
+    "governance/gate0/v7-frozen-tree-proof.v1.json"
+  ],
+  "base_sha": "88dbd297c61f4cea55142e4c52d69142dfe4ed36",
+  "expires_at": "2026-07-30T00:00:00Z"
+}
