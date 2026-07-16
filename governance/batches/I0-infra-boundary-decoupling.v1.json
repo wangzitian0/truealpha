@@ -45,7 +45,7 @@
   "corpus": {
     "environment": "Local/CI checked-in repository-boundary fixture",
     "manifest_path": "libs/runtime/tests/fixtures/infra_boundary.v1.json",
-    "sha256": "4f4770eb961393f87371d377d14735d02a88ec6b2d16a8115712530174cd72d1",
+    "sha256": "e22a4eede115f828f4e76ec2308708ae0316aa816a238346c5ddca861cf57dc4",
     "required_strata": [
       "SDK v0.3.0 immutable release pin and installed distribution identity",
       "valid TrueAlpha staging DeployRequest v1 round trip",

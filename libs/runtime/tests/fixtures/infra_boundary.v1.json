@@ -2,7 +2,7 @@
   "schema_version": 1,
   "corpus_id": "i0-infra-boundary-corpus-v1",
   "batch_id": "I0-infra-boundary-decoupling",
-  "claim_ceiling": "Preparation-only repository-boundary and DeployRequest fixtures; this earns no rung, authorizes no dispatch, activates no infra2 receiver, and proves no live-environment or Production readiness.",
+  "claim_ceiling": "Repository-boundary and DeployRequest fixtures only; these bytes authorize no dispatch, activate no infra2 receiver, cause no deployment side effect, and prove no live-environment or Production readiness.",
   "sdk_binding": {
     "distribution": "infra2-sdk",
     "version": "0.3.0",
