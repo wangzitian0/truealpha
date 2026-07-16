@@ -9,7 +9,7 @@
   "included_issues": [57, 58, 59, 60, 61],
   "dependency_order": [57, 58, 59, 60, 61],
   "candidate_payload_sha256": "1b3afca933e9def4683694da80fe54f3b645665241073c4a94fe4eac73ee3ef4",
-  "candidate_tree_sha256": "8ec8518a558cd7dc751f9fc16ae50cbb5e23f64a1688ded3636abaa266a070c0",
+  "candidate_tree_sha256": "7ba10b78c15073381d566bcee5396b6198dd6a4b0886b0417963c75667ef8338",
   "paths": [
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e1_slice.py",
     "apps/data-engine/tests/batches/mvp_medium_validation/test_e2_slice.py",

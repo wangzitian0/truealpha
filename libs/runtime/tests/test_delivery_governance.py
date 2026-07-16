@@ -198,9 +198,7 @@ def _reference(root: Path, path: Path) -> dict[str, str]:
     }
 
 
-def _rung_evidence(
-    *, batch_id: str = "producer-batch", head_sha: str = "2" * 40, chunked_id: bool = False
-) -> dict:
+def _rung_evidence(*, batch_id: str = "producer-batch", head_sha: str = "2" * 40, chunked_id: bool = False) -> dict:
     content = {
         "schema_version": 1,
         "batch_id": batch_id,
