@@ -1,5 +1,153 @@
 -- D5 E0: additive, append-only storage for list capture control identities.
 
+create extension if not exists pgcrypto;
+
+create or replace function raw.canonical_json_string(value text)
+returns text language plpgsql immutable strict as $$
+declare
+    encoded text := to_jsonb(value)::text;
+    result text := '';
+    character text;
+    codepoint integer;
+    offset_codepoint integer;
+    item_index integer;
+begin
+    for item_index in 1..char_length(encoded) loop
+        character := substr(encoded, item_index, 1);
+        codepoint := ascii(character);
+        if codepoint <= 127 then
+            result := result || character;
+        elsif codepoint <= 65535 then
+            result := result || '\u' || lpad(to_hex(codepoint), 4, '0');
+        else
+            offset_codepoint := codepoint - 65536;
+            result := result || '\u' || lpad(to_hex(55296 + (offset_codepoint >> 10)), 4, '0')
+                || '\u' || lpad(to_hex(56320 + (offset_codepoint & 1023)), 4, '0');
+        end if;
+    end loop;
+    return result;
+end;
+$$;
+
+create or replace function raw.canonical_json(value jsonb)
+returns text language plpgsql immutable strict as $$
+declare
+    result text;
+begin
+    case jsonb_typeof(value)
+        when 'object' then
+            select '{' || coalesce(string_agg(raw.canonical_json_string(key) || ':' || raw.canonical_json(item), ',' order by key collate "C"), '') || '}'
+              into result
+              from jsonb_each(value) as entry(key, item);
+        when 'array' then
+            select '[' || coalesce(string_agg(raw.canonical_json(item), ',' order by ordinal), '') || ']'
+              into result
+              from jsonb_array_elements(value) with ordinality as entry(item, ordinal);
+        when 'string' then
+            result := raw.canonical_json_string(value#>>'{}');
+        else
+            result := value::text;
+    end case;
+    return result;
+end;
+$$;
+
+create or replace function raw.canonical_sha256(value jsonb)
+returns text language sql immutable strict as $$
+    select encode(digest(convert_to(raw.canonical_json(value), 'UTF8'), 'sha256'), 'hex')
+$$;
+
+create or replace function raw.canonical_timestamp(value timestamptz)
+returns text language plpgsql immutable strict as $$
+declare
+    fraction text;
+begin
+    fraction := to_char(value at time zone 'UTC', 'US');
+    return to_char(value at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS')
+        || case when fraction = '000000' then '' else '.' || fraction end || 'Z';
+end;
+$$;
+
+create or replace function raw.assert_content_address(
+    actual_id text,
+    id_prefix text,
+    identity_payload jsonb,
+    actual_content_sha256 text,
+    content_payload jsonb
+)
+returns void language plpgsql immutable strict as $$
+declare
+    expected_id text := id_prefix || ':' || raw.canonical_sha256(identity_payload);
+    expected_content text := raw.canonical_sha256(content_payload);
+begin
+    if actual_id <> expected_id then
+        raise check_violation using message = id_prefix || ' identity does not match canonical payload';
+    end if;
+    if actual_content_sha256 <> expected_content then
+        raise check_violation using message = id_prefix || ' content hash does not match canonical payload';
+    end if;
+end;
+$$;
+
+create or replace function raw.has_canonical_subjects(subjects jsonb)
+returns boolean language plpgsql immutable strict as $$
+declare
+    item jsonb;
+    previous_key text;
+    current_key text;
+begin
+    if jsonb_typeof(subjects) <> 'array' or jsonb_array_length(subjects) = 0 then
+        return false;
+    end if;
+    for item in select value from jsonb_array_elements(subjects) loop
+        if jsonb_typeof(item) <> 'object'
+           or (select count(*) from jsonb_object_keys(item)) <> 2
+           or not item ?& array['kind', 'id']
+           or jsonb_typeof(item->'kind') <> 'string'
+           or jsonb_typeof(item->'id') <> 'string' then
+            return false;
+        end if;
+        current_key := (item->>'kind') || E'\x1f' || (item->>'id');
+        if previous_key is not null and previous_key collate "C" >= current_key collate "C" then
+            return false;
+        end if;
+        previous_key := current_key;
+    end loop;
+    return true;
+end;
+$$;
+
+create or replace function raw.has_canonical_universe_refs(refs jsonb)
+returns boolean language plpgsql immutable strict as $$
+declare
+    item jsonb;
+    previous_key text;
+    current_key text;
+begin
+    if jsonb_typeof(refs) <> 'array' or jsonb_array_length(refs) = 0 then
+        return false;
+    end if;
+    for item in select value from jsonb_array_elements(refs) loop
+        if jsonb_typeof(item) <> 'object'
+           or (select count(*) from jsonb_object_keys(item)) <> 3
+           or not item ?& array['universe_id', 'universe_version', 'content_sha256']
+           or jsonb_typeof(item->'universe_id') <> 'string'
+           or jsonb_typeof(item->'universe_version') <> 'string'
+           or jsonb_typeof(item->'content_sha256') <> 'string'
+           or (item->>'content_sha256') !~ '^[0-9a-f]{64}$' then
+            return false;
+        end if;
+        current_key := (item->>'universe_id') || E'\x1f' || (item->>'universe_version')
+            || E'\x1f' || (item->>'content_sha256');
+        if previous_key is not null and previous_key collate "C" >= current_key collate "C" then
+            return false;
+        end if;
+        previous_key := current_key;
+    end loop;
+    return true;
+end;
+$$;
+
 create or replace function raw.has_canonical_obligation_ids(ids text[], allow_empty boolean)
 returns boolean language plpgsql immutable strict as $$
 declare
@@ -12,7 +160,7 @@ begin
         if ids[item_index] is null or ids[item_index] !~ '^capture-list-obligation:[0-9a-f]{64}$' then
             return false;
         end if;
-        if item_index > 1 and ids[item_index - 1] >= ids[item_index] then
+        if item_index > 1 and ids[item_index - 1] collate "C" >= ids[item_index] collate "C" then
             return false;
         end if;
     end loop;
@@ -32,7 +180,7 @@ begin
         if codes[item_index] is null or codes[item_index] !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$' then
             return false;
         end if;
-        if item_index > 1 and codes[item_index - 1] >= codes[item_index] then
+        if item_index > 1 and codes[item_index - 1] collate "C" >= codes[item_index] collate "C" then
             return false;
         end if;
     end loop;
@@ -46,6 +194,7 @@ create table if not exists raw.capture_campaigns (
     policy_id         text not null,
     environment       text not null,
     cutoff            timestamptz not null,
+    universe_refs     jsonb not null check (raw.has_canonical_universe_refs(universe_refs)),
     created_at        timestamptz not null default now()
 );
 
@@ -68,6 +217,7 @@ create table if not exists raw.capture_list_versions (
     universe_sha256        text not null check (universe_sha256 ~ '^[0-9a-f]{64}$'),
     effective_at           timestamptz not null,
     member_count           integer not null check (member_count > 0),
+    members                jsonb not null check (raw.has_canonical_subjects(members)),
     content_sha256         text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at             timestamptz not null default now()
 );
@@ -80,6 +230,13 @@ create table if not exists raw.capture_list_version_members (
     created_at             timestamptz not null default now(),
     primary key (list_version_id, member_ordinal),
     unique (list_version_id, subject_kind, subject_id)
+);
+
+create table if not exists raw.capture_campaign_list_versions (
+    campaign_id            text not null references raw.capture_campaigns(campaign_id),
+    list_version_id        text not null references raw.capture_list_versions(list_version_id),
+    created_at             timestamptz not null default now(),
+    primary key (campaign_id, list_version_id)
 );
 
 create table if not exists raw.capture_obligations (
@@ -95,6 +252,8 @@ create table if not exists raw.capture_obligations (
     created_at             timestamptz not null default now(),
     unique (run_id, list_version_id, subject_kind, subject_id, capture_requirement_id, partition_key),
     foreign key (list_version_id) references raw.capture_list_versions(list_version_id),
+    foreign key (campaign_id, list_version_id)
+        references raw.capture_campaign_list_versions(campaign_id, list_version_id),
     foreign key (run_id, campaign_id) references raw.capture_runs(run_id, campaign_id),
     foreign key (list_version_id, subject_kind, subject_id)
         references raw.capture_list_version_members(list_version_id, subject_kind, subject_id)
@@ -105,7 +264,7 @@ create table if not exists raw.capture_work_items (
     campaign_id        text not null references raw.capture_campaigns(campaign_id),
     source_request_id  text not null check (source_request_id ~ '^source-request:[0-9a-f]{64}$'),
     schedule_policy_id text not null check (schedule_policy_id ~ '^schedule-policy:[0-9a-f]{64}$'),
-    maximum_attempts   integer not null check (maximum_attempts > 0),
+    maximum_attempts   integer not null check (maximum_attempts between 1 and 20),
     content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at         timestamptz not null default now(),
     unique (campaign_id, source_request_id, schedule_policy_id)
@@ -115,6 +274,7 @@ create table if not exists raw.capture_obligation_work_bindings (
     binding_id         text primary key check (binding_id ~ '^obligation-work-binding:[0-9a-f]{64}$'),
     obligation_id      text not null references raw.capture_obligations(obligation_id),
     work_item_id       text not null references raw.capture_work_items(work_item_id),
+    content_sha256     text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at         timestamptz not null default now(),
     unique (obligation_id, work_item_id)
 );
@@ -167,6 +327,7 @@ create table if not exists raw.recapture_plans (
     plan_id                    text primary key check (plan_id ~ '^recapture-plan:[0-9a-f]{64}$'),
     selection_cutoff           timestamptz not null,
     predicate_sha256           text not null check (predicate_sha256 ~ '^[0-9a-f]{64}$'),
+    predicate                  jsonb not null check (jsonb_typeof(predicate) = 'object'),
     selected_obligation_ids    text[] not null check (
         raw.has_canonical_obligation_ids(selected_obligation_ids, false)
     ),
@@ -175,17 +336,303 @@ create table if not exists raw.recapture_plans (
     created_at                 timestamptz not null default now()
 );
 
+create or replace function raw.validate_capture_campaign_address()
+returns trigger language plpgsql as $$
+declare
+    payload jsonb;
+begin
+    payload := jsonb_build_object(
+        'campaign_policy_id', new.policy_id,
+        'environment', new.environment,
+        'cutoff', raw.canonical_timestamp(new.cutoff),
+        'universe_refs', new.universe_refs
+    );
+    perform raw.assert_content_address(
+        new.campaign_id,
+        'capture-campaign',
+        jsonb_build_object('kind', 'capture-campaign', 'identity', payload),
+        new.content_sha256,
+        payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_campaign_address
+before insert on raw.capture_campaigns
+for each row execute function raw.validate_capture_campaign_address();
+
+create or replace function raw.validate_capture_run_address()
+returns trigger language plpgsql as $$
+declare
+    payload jsonb;
+begin
+    payload := jsonb_build_object(
+        'campaign_id', new.campaign_id,
+        'run_sequence', new.run_sequence,
+        'schedule_policy_id', new.schedule_policy_id,
+        'capture_scope_id', new.capture_scope_id
+    );
+    perform raw.assert_content_address(
+        new.run_id,
+        'capture-run',
+        jsonb_build_object('kind', 'capture-run', 'identity', payload),
+        new.content_sha256,
+        payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_run_address
+before insert on raw.capture_runs
+for each row execute function raw.validate_capture_run_address();
+
+create or replace function raw.validate_capture_list_version_address()
+returns trigger language plpgsql as $$
+declare
+    payload jsonb;
+begin
+    if new.member_count <> jsonb_array_length(new.members) then
+        raise check_violation using message = 'list member count does not match canonical members';
+    end if;
+    payload := jsonb_build_object(
+        'universe', jsonb_build_object(
+            'universe_id', new.universe_id,
+            'universe_version', new.universe_version,
+            'content_sha256', new.universe_sha256
+        ),
+        'members', new.members,
+        'effective_at', raw.canonical_timestamp(new.effective_at)
+    );
+    perform raw.assert_content_address(new.list_version_id, 'list-version', payload, new.content_sha256, payload);
+    return new;
+end;
+$$;
+
+create trigger zz_validate_list_version_address
+before insert on raw.capture_list_versions
+for each row execute function raw.validate_capture_list_version_address();
+
+create or replace function raw.validate_capture_obligation_address()
+returns trigger language plpgsql as $$
+declare
+    universe_payload jsonb;
+    subject_payload jsonb;
+    obligation_identity jsonb;
+    obligation_hash text;
+    obligation_payload jsonb;
+    payload jsonb;
+begin
+    select jsonb_build_object(
+        'universe_id', universe_id,
+        'universe_version', universe_version,
+        'content_sha256', universe_sha256
+    ) into universe_payload
+      from raw.capture_list_versions
+     where list_version_id = new.list_version_id;
+    subject_payload := jsonb_build_object('kind', new.subject_kind, 'id', new.subject_id);
+    obligation_identity := jsonb_build_object(
+        'run_id', new.run_id,
+        'universe_ref', universe_payload,
+        'subject', subject_payload,
+        'capture_requirement_id', new.capture_requirement_id,
+        'partition', new.partition_key
+    );
+    obligation_hash := raw.canonical_sha256(
+        jsonb_build_object('kind', 'list-obligation', 'identity', obligation_identity)
+    );
+    obligation_payload := obligation_identity || jsonb_build_object(
+        'obligation_id', 'list-obligation:' || obligation_hash,
+        'content_sha256', raw.canonical_sha256(obligation_identity)
+    );
+    payload := jsonb_build_object(
+        'list_version_id', new.list_version_id,
+        'obligation', obligation_payload
+    );
+    perform raw.assert_content_address(
+        new.obligation_id, 'capture-list-obligation', payload, new.content_sha256, payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_obligation_address
+before insert on raw.capture_obligations
+for each row execute function raw.validate_capture_obligation_address();
+
+create or replace function raw.validate_capture_work_item_address()
+returns trigger language plpgsql as $$
+declare
+    identity_payload jsonb;
+    content_payload jsonb;
+begin
+    identity_payload := jsonb_build_object(
+        'campaign_id', new.campaign_id,
+        'source_request_id', new.source_request_id,
+        'schedule_policy_id', new.schedule_policy_id
+    );
+    -- maximum_attempts is a D5 storage-envelope field, not part of CaptureWorkItem.
+    content_payload := identity_payload || jsonb_build_object('maximum_attempts', new.maximum_attempts);
+    perform raw.assert_content_address(
+        new.work_item_id,
+        'capture-work-item',
+        jsonb_build_object('kind', 'capture-work-item', 'identity', identity_payload),
+        new.content_sha256,
+        content_payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_work_item_address
+before insert on raw.capture_work_items
+for each row execute function raw.validate_capture_work_item_address();
+
+create or replace function raw.validate_capture_binding_address()
+returns trigger language plpgsql as $$
+declare
+    payload jsonb;
+begin
+    payload := jsonb_build_object('obligation_id', new.obligation_id, 'work_item_id', new.work_item_id);
+    perform raw.assert_content_address(
+        new.binding_id,
+        'obligation-work-binding',
+        jsonb_build_object('kind', 'obligation-work-binding', 'identity', payload),
+        new.content_sha256,
+        payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_binding_address
+before insert on raw.capture_obligation_work_bindings
+for each row execute function raw.validate_capture_binding_address();
+
+create or replace function raw.validate_capture_attempt_address()
+returns trigger language plpgsql as $$
+declare
+    identity_payload jsonb;
+    content_payload jsonb;
+begin
+    identity_payload := jsonb_build_object(
+        'work_item_id', new.work_item_id,
+        'attempt_number', new.attempt_number
+    );
+    content_payload := identity_payload || jsonb_build_object('started_at', raw.canonical_timestamp(new.started_at));
+    perform raw.assert_content_address(
+        new.attempt_id,
+        'fetch-attempt',
+        jsonb_build_object('kind', 'fetch-attempt', 'identity', identity_payload),
+        new.content_sha256,
+        content_payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_attempt_address
+before insert on raw.capture_attempts
+for each row execute function raw.validate_capture_attempt_address();
+
+create or replace function raw.validate_capture_attempt_result_address()
+returns trigger language plpgsql as $$
+declare
+    identity_payload jsonb;
+    content_payload jsonb;
+begin
+    identity_payload := jsonb_build_object('attempt_id', new.attempt_id);
+    content_payload := identity_payload || jsonb_build_object(
+        'completed_at', raw.canonical_timestamp(new.completed_at),
+        'outcome', new.outcome,
+        'status_code', new.status_code,
+        'source_vintage_id', new.source_vintage_id,
+        'reused_source_vintage_id', new.reused_source_vintage_id,
+        'reason_codes', to_jsonb(new.reason_codes)
+    );
+    perform raw.assert_content_address(
+        new.attempt_result_id,
+        'fetch-attempt-result',
+        jsonb_build_object('kind', 'fetch-attempt-result', 'identity', identity_payload),
+        new.content_sha256,
+        content_payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_attempt_result_address
+before insert on raw.capture_attempt_results
+for each row execute function raw.validate_capture_attempt_result_address();
+
+create or replace function raw.validate_capture_checkpoint_address()
+returns trigger language plpgsql as $$
+declare
+    identity_payload jsonb;
+    content_payload jsonb;
+begin
+    identity_payload := jsonb_build_object('run_id', new.run_id, 'sequence', new.sequence);
+    content_payload := identity_payload || jsonb_build_object(
+        'phase', new.phase,
+        'completed_obligation_ids', to_jsonb(new.completed_obligation_ids),
+        'recorded_at', raw.canonical_timestamp(new.recorded_at)
+    );
+    perform raw.assert_content_address(
+        new.checkpoint_id, 'capture-checkpoint', identity_payload, new.content_sha256, content_payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_checkpoint_address
+before insert on raw.capture_checkpoints
+for each row execute function raw.validate_capture_checkpoint_address();
+
+create or replace function raw.validate_recapture_plan_address()
+returns trigger language plpgsql as $$
+declare
+    payload jsonb;
+begin
+    if new.predicate_sha256 <> raw.canonical_sha256(new.predicate) then
+        raise check_violation using message = 'recapture predicate hash does not match canonical payload';
+    end if;
+    payload := jsonb_build_object(
+        'selection_cutoff', raw.canonical_timestamp(new.selection_cutoff),
+        'predicate', new.predicate,
+        'selected_obligation_ids', to_jsonb(new.selected_obligation_ids),
+        'planner_version', new.planner_version
+    );
+    perform raw.assert_content_address(
+        new.plan_id,
+        'recapture-plan',
+        jsonb_build_object('kind', 'recapture-plan', 'identity', payload),
+        new.content_sha256,
+        payload
+    );
+    return new;
+end;
+$$;
+
+create trigger zz_validate_recapture_plan_address
+before insert on raw.recapture_plans
+for each row execute function raw.validate_recapture_plan_address();
+
 create or replace function raw.validate_capture_list_member()
 returns trigger language plpgsql as $$
 declare
     expected_members integer;
+    expected_member jsonb;
 begin
-    select member_count into expected_members
+    select member_count, members->(new.member_ordinal - 1) into expected_members, expected_member
       from raw.capture_list_versions
      where list_version_id = new.list_version_id
        for update;
     if new.member_ordinal > expected_members then
         raise exception 'list member ordinal exceeds frozen member count';
+    end if;
+    if expected_member is distinct from jsonb_build_object('kind', new.subject_kind, 'id', new.subject_id) then
+        raise check_violation using message = 'list member does not match canonical ordinal';
     end if;
     return new;
 end;
@@ -195,6 +642,42 @@ drop trigger if exists validate_list_member on raw.capture_list_version_members;
 create trigger validate_list_member
 before insert on raw.capture_list_version_members
 for each row execute function raw.validate_capture_list_member();
+
+create or replace function raw.validate_campaign_list_version()
+returns trigger language plpgsql as $$
+declare
+    expected_members integer;
+    persisted_members integer;
+    list_universe jsonb;
+    campaign_universes jsonb;
+begin
+    select member_count, jsonb_build_object(
+        'universe_id', universe_id,
+        'universe_version', universe_version,
+        'content_sha256', universe_sha256
+    ) into expected_members, list_universe
+      from raw.capture_list_versions
+     where list_version_id = new.list_version_id
+       for share;
+    select count(*) into persisted_members
+      from raw.capture_list_version_members
+     where list_version_id = new.list_version_id;
+    if expected_members is distinct from persisted_members then
+        raise exception 'campaign declaration requires a complete frozen list version';
+    end if;
+    select universe_refs into campaign_universes
+      from raw.capture_campaigns
+     where campaign_id = new.campaign_id;
+    if campaign_universes is null or not campaign_universes @> jsonb_build_array(list_universe) then
+        raise exception 'campaign declaration requires the list universe ref';
+    end if;
+    return new;
+end;
+$$;
+
+create trigger validate_campaign_list_version
+before insert on raw.capture_campaign_list_versions
+for each row execute function raw.validate_campaign_list_version();
 
 create or replace function raw.validate_capture_obligation_list()
 returns trigger language plpgsql as $$
@@ -254,12 +737,13 @@ declare
     previous_sequence integer;
     previous_phase text;
     previous_completed text[];
+    previous_recorded_at timestamptz;
     previous_phase_rank integer;
     new_phase_rank integer;
 begin
     perform pg_advisory_xact_lock(hashtextextended(new.run_id, 0));
-    select sequence, phase, completed_obligation_ids
-      into previous_sequence, previous_phase, previous_completed
+    select sequence, phase, completed_obligation_ids, recorded_at
+      into previous_sequence, previous_phase, previous_completed, previous_recorded_at
       from raw.capture_checkpoints
      where run_id = new.run_id
      order by sequence desc
@@ -281,6 +765,9 @@ begin
     );
     if new_phase_rank < previous_phase_rank then
         raise exception 'capture checkpoint phase cannot regress';
+    end if;
+    if new.recorded_at < previous_recorded_at then
+        raise exception 'capture checkpoint time cannot regress';
     end if;
     if not previous_completed <@ new.completed_obligation_ids then
         raise exception 'capture checkpoint obligations cannot regress';
@@ -435,6 +922,7 @@ declare
 begin
     foreach table_name in array array[
         'capture_campaigns', 'capture_runs', 'capture_list_versions', 'capture_list_version_members',
+        'capture_campaign_list_versions',
         'capture_obligations', 'capture_work_items',
         'capture_obligation_work_bindings', 'capture_attempts',
         'capture_attempt_results', 'capture_checkpoints', 'recapture_plans'

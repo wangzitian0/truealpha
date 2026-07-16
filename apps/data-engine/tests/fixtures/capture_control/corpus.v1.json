@@ -112,9 +112,21 @@
       "expected_attempt_count": 2
     },
     {
-      "scenario_id": "identical-bytes-new-attempt",
-      "outcomes": ["success", "unchanged"],
+      "scenario_id": "identical-bytes-distinct-capture-cycles",
+      "capture_cycles": [
+        {
+          "cycle_id": "initial-capture",
+          "work_item_id": "capture-work-item:1111111111111111111111111111111111111111111111111111111111111111",
+          "outcomes": ["success"]
+        },
+        {
+          "cycle_id": "scheduled-refresh",
+          "work_item_id": "capture-work-item:2222222222222222222222222222222222222222222222222222222222222222",
+          "outcomes": ["unchanged"]
+        }
+      ],
       "raw_content_sha256": "a6bf655955317bd4940ab646d9cc93fb23562c70ad469d62d97ebe01da0efbdc",
+      "expected_work_item_count": 2,
       "expected_attempt_count": 2,
       "expected_raw_object_count": 1,
       "expected_observation_event_count": 2
@@ -207,7 +219,7 @@
     "missing confidence on an observation",
     "UPDATE or DELETE of an obligation, work item, attempt, raw object, observation, plan, or checkpoint",
     "resume creates duplicate logical work",
-    "identical bytes erase a later attempt or a separate list obligation",
+    "identical bytes erase a later capture-cycle attempt or a separate list obligation",
     "recapture execution broadens or differs from its frozen dry-run selection",
     "GOOG and GOOGL collapse to one instrument",
     "source call before scope, policy, rights, budget, and call-plan authorization",

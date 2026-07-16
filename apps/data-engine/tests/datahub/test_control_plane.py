@@ -130,6 +130,33 @@ def test_attempts_are_contiguous_bounded_and_stop_at_terminal_outcome() -> None:
         ledger.start(started_at=AT)
 
 
+def test_identical_bytes_are_separate_terminal_capture_cycles() -> None:
+    corpus = json.loads(CORPUS.read_text())
+    scenario = next(
+        item for item in corpus["attempt_scenarios"] if item["scenario_id"] == "identical-bytes-distinct-capture-cycles"
+    )
+    ledgers = [
+        AttemptLedger(work_item_id=cycle["work_item_id"], maximum_attempts=1) for cycle in scenario["capture_cycles"]
+    ]
+    first_attempt = ledgers[0].start(started_at=AT)
+    ledgers[0].finish(
+        attempt=first_attempt,
+        completed_at=AT,
+        outcome=FetchAttemptOutcome.SUCCESS,
+        source_vintage_id=f"source-vintage:{'1' * 64}",
+    )
+    refresh_attempt = ledgers[1].start(started_at=AT)
+    ledgers[1].finish(
+        attempt=refresh_attempt,
+        completed_at=AT,
+        outcome=FetchAttemptOutcome.UNCHANGED,
+        reused_source_vintage_id=f"source-vintage:{'1' * 64}",
+    )
+    assert len({ledger.work_item_id for ledger in ledgers}) == scenario["expected_work_item_count"] == 2
+    assert sum(len(ledger.attempts) for ledger in ledgers) == scenario["expected_attempt_count"] == 2
+    assert all(ledger.is_terminal for ledger in ledgers)
+
+
 def test_attempt_result_cannot_be_replaced_or_duplicated() -> None:
     ledger = AttemptLedger(work_item_id=f"capture-work-item:{'c' * 64}", maximum_attempts=1)
     attempt = ledger.start(started_at=AT)
