@@ -5,7 +5,7 @@
   "fixture_kind": "frozen-declarative-control-plane-corpus",
   "source_ceiling": "Local/CI checked-in fixtures only; no network, credential, provider-rights, default-schedule, or Staging operation is authorized.",
   "identity_policy": {
-    "campaign_id": "campaign:d5-tiny-2026-03-31-v1",
+    "campaign_id": "capture-campaign:eec610ead8e495909527d113082035d1263f99300f73cf67e926cf469fc5fe9b",
     "list_version_ids": [
       "list-version:d5-primary-v1",
       "list-version:d5-overlap-v1"
@@ -158,7 +158,20 @@
         "mapping_version_id": "mapping-version:topt-2026-03-31-v1",
         "confidence_state": "unavailable"
       },
-      "expected_selected_obligation_ids": ["obligation:d5:nvda:market-price:2026-03-31"],
+      "expected_selected_obligations": [
+        {
+          "obligation_id": "list-obligation:c65d30bb08313ee3d254ae7fb1fa12e9a7e36f2a9942a005b1d9eddbf694254c",
+          "run_id": "capture-run:f31944cfb4aff8c950809718b8a6efe9750cb5eb68144a1a3dd356abdd5c5fd7",
+          "universe_ref": {
+            "universe_id": "list-version:d5-primary-v1",
+            "universe_version": "v1",
+            "content_sha256": "64e38c2b1d0c4cb7a15982756f96051a5d6f5581d66cc9fdfb0353c13bf6d5ec"
+          },
+          "subject": {"kind": "listing", "id": "listing:xnas:nvda"},
+          "capture_requirement_id": "market-price:v1",
+          "partition": "2026-03-31"
+        }
+      ],
       "execution_must_equal_dry_run": true,
       "unaffected_cells_must_not_be_fetched_or_rewritten": true
     },
