@@ -7,9 +7,10 @@ from truealpha_contracts.capture_control import (
     CaptureCheckpoint,
     CaptureListObligation,
     CaptureListVersion,
+    CaptureRecapturePlan,
     CheckpointPhase,
 )
-from truealpha_contracts.datahub import ListObligation
+from truealpha_contracts.datahub import ListObligation, RecapturePredicate
 
 SHA = "a" * 64
 AT = datetime(2026, 4, 1, tzinfo=UTC)
@@ -64,6 +65,31 @@ def test_list_version_preserves_non_utc_offset_identity() -> None:
         effective_at=datetime(2026, 4, 1, 8, tzinfo=timezone(timedelta(hours=8))),
     )
     assert version.list_version_id == ("list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef")
+
+
+def test_d5_recapture_plan_preserves_non_utc_offset_identity() -> None:
+    plan = CaptureRecapturePlan(
+        selection_cutoff=datetime(2026, 4, 1, 8, tzinfo=timezone(timedelta(hours=8))),
+        predicate=RecapturePredicate(subject_ids=("listing:xnas:goog",)),
+        selected_obligation_ids=(
+            "capture-list-obligation:261a5d6ccd4e326894c240a932c9fdb0f892bdbebfd991012c4243b0210294e6",
+        ),
+        planner_version="capture-planner:v1",
+    )
+    assert plan.plan_id == (
+        "capture-list-recapture-plan:8ed9769976a46f9ed782c34372ce36977db207c0d343381390d39faabfb3eb33"
+    )
+
+
+@pytest.mark.parametrize("planner_version", ("latest", "planner:default", "planner:stable", "planner:main"))
+def test_d5_recapture_plan_rejects_mutable_planner_versions(planner_version: str) -> None:
+    with pytest.raises(ValidationError, match="must not be mutable"):
+        CaptureRecapturePlan(
+            selection_cutoff=AT,
+            predicate=RecapturePredicate(subject_ids=("listing:xnas:goog",)),
+            selected_obligation_ids=(f"capture-list-obligation:{'b' * 64}",),
+            planner_version=planner_version,
+        )
 
 
 def test_capture_obligation_identity_preserves_list_version() -> None:

@@ -117,7 +117,10 @@ begin
            or (select count(*) from jsonb_object_keys(item)) <> 2
            or not item ?& array['kind', 'id']
            or jsonb_typeof(item->'kind') <> 'string'
-           or jsonb_typeof(item->'id') <> 'string' then
+           or jsonb_typeof(item->'id') <> 'string'
+           or item->>'kind' not in ('issuer', 'security', 'listing', 'fund', 'analyst', 'universe', 'theme')
+           or item->>'id' !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+           or lower(item->>'id') ~ '(^|[._:/@+\-])(current|head|latest)($|[._:/@+\-])' then
             return false;
         end if;
         current_key := (item->>'kind') || E'\x1f' || (item->>'id');
@@ -147,6 +150,10 @@ begin
            or jsonb_typeof(item->'universe_id') <> 'string'
            or jsonb_typeof(item->'universe_version') <> 'string'
            or jsonb_typeof(item->'content_sha256') <> 'string'
+           or item->>'universe_id' !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+           or item->>'universe_version' !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+           or lower(item->>'universe_id') ~ '(^|[._:/@+\-])(current|head|latest)($|[._:/@+\-])'
+           or lower(item->>'universe_version') ~ '(^|[._:/@+\-])(current|head|latest)($|[._:/@+\-])'
            or (item->>'content_sha256') !~ '^[0-9a-f]{64}$' then
             return false;
         end if;
@@ -156,6 +163,34 @@ begin
             return false;
         end if;
         previous_key := current_key;
+    end loop;
+    return true;
+end;
+$$;
+
+create or replace function raw.has_canonical_text_json_array(values_json jsonb, allow_empty boolean)
+returns boolean language plpgsql immutable strict as $$
+declare
+    item_json jsonb;
+    item text;
+    previous_item text;
+begin
+    if jsonb_typeof(values_json) <> 'array' then
+        return false;
+    end if;
+    if jsonb_array_length(values_json) = 0 then
+        return allow_empty;
+    end if;
+    for item_json in select value from jsonb_array_elements(values_json) loop
+        if jsonb_typeof(item_json) <> 'string' then
+            return false;
+        end if;
+        item := item_json#>>'{}';
+        if item !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+           or (previous_item is not null and previous_item collate "C" >= item collate "C") then
+            return false;
+        end if;
+        previous_item := item;
     end loop;
     return true;
 end;
@@ -204,8 +239,13 @@ $$;
 create table if not exists raw.capture_campaigns (
     campaign_id       text primary key check (campaign_id ~ '^capture-campaign:[0-9a-f]{64}$'),
     content_sha256    text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
-    policy_id         text not null,
-    environment       text not null,
+    policy_id         text not null check (
+        policy_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+        and lower(policy_id) !~ '(^|[._:/@+\-])(latest|current|default|stable|main|head)($|[._:/@+\-])'
+    ),
+    environment       text not null check (
+        environment in ('local', 'local_dev', 'local_test', 'github_ci', 'preview', 'staging', 'production')
+    ),
     cutoff            timestamptz not null,
     cutoff_canonical  text not null,
     universe_refs     jsonb not null check (raw.has_canonical_universe_refs(universe_refs)),
@@ -226,8 +266,14 @@ create table if not exists raw.capture_runs (
 
 create table if not exists raw.capture_list_versions (
     list_version_id        text primary key check (list_version_id ~ '^list-version:[0-9a-f]{64}$'),
-    universe_id            text not null,
-    universe_version       text not null,
+    universe_id            text not null check (
+        universe_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+        and lower(universe_id) !~ '(^|[._:/@+\-])(current|head|latest)($|[._:/@+\-])'
+    ),
+    universe_version       text not null check (
+        universe_version ~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+        and lower(universe_version) !~ '(^|[._:/@+\-])(current|head|latest)($|[._:/@+\-])'
+    ),
     universe_sha256        text not null check (universe_sha256 ~ '^[0-9a-f]{64}$'),
     effective_at           timestamptz not null,
     effective_at_canonical text not null,
@@ -261,8 +307,12 @@ create table if not exists raw.capture_obligations (
     list_version_id        text not null check (list_version_id ~ '^list-version:[0-9a-f]{64}$'),
     subject_kind           text not null,
     subject_id             text not null,
-    capture_requirement_id text not null,
-    partition_key          text not null,
+    capture_requirement_id text not null check (
+        capture_requirement_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+        and lower(capture_requirement_id) !~
+            '(^|[._:/@+\-])(latest|current|default|stable|main|head)($|[._:/@+\-])'
+    ),
+    partition_key          text not null check (partition_key ~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'),
     content_sha256         text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
     created_at             timestamptz not null default now(),
     unique (run_id, list_version_id, subject_kind, subject_id, capture_requirement_id, partition_key),
@@ -342,7 +392,7 @@ create table if not exists raw.capture_checkpoints (
 );
 
 create table if not exists raw.recapture_plans (
-    plan_id                    text primary key check (plan_id ~ '^recapture-plan:[0-9a-f]{64}$'),
+    plan_id                    text primary key check (plan_id ~ '^capture-list-recapture-plan:[0-9a-f]{64}$'),
     selection_cutoff           timestamptz not null,
     selection_cutoff_canonical text not null,
     predicate_sha256           text not null check (predicate_sha256 ~ '^[0-9a-f]{64}$'),
@@ -621,12 +671,80 @@ create or replace function raw.validate_recapture_plan_address()
 returns trigger language plpgsql as $$
 declare
     payload jsonb;
+    predicate_identity jsonb;
+    dimension text;
+    bounded boolean := false;
 begin
     new.selection_cutoff_canonical := raw.persisted_canonical_timestamp(
         new.selection_cutoff, new.selection_cutoff_canonical
     );
-    if new.predicate_sha256 <> raw.canonical_sha256(new.predicate) then
-        raise check_violation using message = 'recapture predicate hash does not match canonical payload';
+    if jsonb_typeof(new.predicate) <> 'object'
+       or (select count(*) from jsonb_object_keys(new.predicate)) <> 12
+       or not new.predicate ?& array[
+           'predicate_id', 'content_sha256', 'universe_refs', 'subject_ids',
+           'source_policy_ids', 'semantic_types', 'partitions', 'terminal_states',
+           'freshness_states', 'parser_versions', 'mapping_versions', 'assessment_policy_ids'
+       ]
+       or jsonb_typeof(new.predicate->'predicate_id') <> 'string'
+       or new.predicate->>'predicate_id' !~ '^recapture-predicate:[0-9a-f]{64}$'
+       or jsonb_typeof(new.predicate->'content_sha256') <> 'string'
+       or new.predicate->>'content_sha256' !~ '^[0-9a-f]{64}$'
+       or jsonb_typeof(new.predicate->'universe_refs') <> 'array'
+       or (
+           jsonb_array_length(new.predicate->'universe_refs') > 0
+           and not raw.has_canonical_universe_refs(new.predicate->'universe_refs')
+       ) then
+        raise check_violation using message = 'recapture predicate does not match the typed contract';
+    end if;
+    foreach dimension in array array[
+        'subject_ids', 'source_policy_ids', 'semantic_types', 'partitions', 'terminal_states',
+        'freshness_states', 'parser_versions', 'mapping_versions', 'assessment_policy_ids'
+    ] loop
+        if not raw.has_canonical_text_json_array(new.predicate->dimension, true) then
+            raise check_violation using message = 'recapture predicate arrays must be canonical';
+        end if;
+        if dimension = 'terminal_states' and exists (
+            select 1 from jsonb_array_elements_text(new.predicate->dimension) as state(value)
+             where value not in ('success', 'unchanged', 'unavailable', 'skipped_by_policy', 'failed')
+        ) then
+            raise check_violation using message = 'recapture terminal state is unknown';
+        end if;
+        if dimension = 'freshness_states' and exists (
+            select 1 from jsonb_array_elements_text(new.predicate->dimension) as state(value)
+             where value not in ('fresh', 'stale', 'unknown')
+        ) then
+            raise check_violation using message = 'recapture freshness state is unknown';
+        end if;
+        if dimension = any(array[
+            'source_policy_ids', 'parser_versions', 'mapping_versions', 'assessment_policy_ids'
+        ]) and exists (
+            select 1
+              from jsonb_array_elements_text(new.predicate->dimension) as coordinate(value)
+             where lower(value) ~ '(^|[._:/@+\-])(latest|current|default|stable|main|head|tip)($|[._:/@+\-])'
+        ) then
+            raise check_violation using message = 'recapture predicate version coordinates must not be mutable';
+        end if;
+        bounded := bounded or jsonb_array_length(new.predicate->dimension) > 0;
+    end loop;
+    bounded := bounded or jsonb_array_length(new.predicate->'universe_refs') > 0;
+    if not bounded then
+        raise check_violation using message = 'an unbounded recapture predicate is forbidden';
+    end if;
+    predicate_identity := new.predicate - 'predicate_id' - 'content_sha256';
+    perform raw.assert_content_address(
+        new.predicate->>'predicate_id',
+        'recapture-predicate',
+        jsonb_build_object('kind', 'recapture-predicate', 'identity', predicate_identity),
+        new.predicate->>'content_sha256',
+        predicate_identity
+    );
+    if new.predicate_sha256 <> new.predicate->>'content_sha256' then
+        raise check_violation using message = 'recapture predicate hash does not match typed content';
+    end if;
+    if new.planner_version !~ '^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$'
+       or lower(new.planner_version) ~
+           '(^|[._:/@+\-])(latest|current|default|stable|main|head|tip)($|[._:/@+\-])' then
+        raise check_violation using message = 'recapture planner version must not be mutable';
     end if;
     payload := jsonb_build_object(
         'selection_cutoff', new.selection_cutoff_canonical,
@@ -636,8 +754,8 @@ begin
     );
     perform raw.assert_content_address(
         new.plan_id,
-        'recapture-plan',
-        jsonb_build_object('kind', 'recapture-plan', 'identity', payload),
+        'capture-list-recapture-plan',
+        jsonb_build_object('kind', 'capture-list-recapture-plan', 'identity', payload),
         new.content_sha256,
         payload
     );

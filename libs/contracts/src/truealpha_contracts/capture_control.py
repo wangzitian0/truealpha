@@ -10,12 +10,25 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from truealpha_contracts import SubjectRef, UniverseRef, canonical_sha256
-from truealpha_contracts.datahub import ListObligation
+from truealpha_contracts.datahub import ListObligation, RecapturePredicate
 
 
 def _freeze(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:
     identity = model.model_dump(mode="json", include=set(identity_fields))
     expected_id = f"{prefix}:{canonical_sha256(identity)}"
+    content = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
+    expected_content = canonical_sha256(content)
+    if getattr(model, id_field) not in {"", expected_id}:
+        raise ValueError(f"{id_field} does not match canonical identity")
+    if getattr(model, "content_sha256") not in {"", expected_content}:
+        raise ValueError("content_sha256 does not match canonical content")
+    object.__setattr__(model, id_field, expected_id)
+    object.__setattr__(model, "content_sha256", expected_content)
+
+
+def _freeze_wrapped(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:
+    identity = model.model_dump(mode="json", include=set(identity_fields))
+    expected_id = f"{prefix}:{canonical_sha256({'kind': prefix, 'identity': identity})}"
     content = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
     expected_content = canonical_sha256(content)
     if getattr(model, id_field) not in {"", expected_id}:
@@ -143,5 +156,56 @@ class CaptureCheckpoint(BaseModel):
             id_field="checkpoint_id",
             prefix="capture-checkpoint",
             identity_fields=("run_id", "sequence"),
+        )
+        return self
+
+
+class CaptureRecapturePlan(BaseModel):
+    """A bounded D5 dry run over list-bound obligation identities."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    plan_id: str = Field(default="", pattern=r"^(?:|capture-list-recapture-plan:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    selection_cutoff: datetime
+    predicate: RecapturePredicate
+    selected_obligation_ids: tuple[str, ...] = Field(min_length=1)
+    planner_version: str
+
+    @field_validator("planner_version")
+    @classmethod
+    def immutable_planner_version(cls, value: str) -> str:
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]*", value) is None:
+            raise ValueError("planner_version must be a stable coordinate")
+        mutable_tokens = {"latest", "current", "default", "stable", "main", "head", "tip"}
+        if any(token in mutable_tokens for token in re.split(r"[.:/@+\-]", value.lower())):
+            raise ValueError("planner_version must not be mutable")
+        return value
+
+    @field_validator("selection_cutoff")
+    @classmethod
+    def aware_selection_cutoff(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("selection_cutoff must be timezone-aware")
+        return value
+
+    @field_validator("selected_obligation_ids")
+    @classmethod
+    def canonical_selection(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("selected_obligation_ids must not contain duplicates")
+        if any(re.fullmatch(r"capture-list-obligation:[0-9a-f]{64}", value) is None for value in values):
+            raise ValueError("selected_obligation_ids must use canonical identities")
+        return tuple(sorted(values))
+
+    @model_validator(mode="after")
+    def identify(self) -> Self:
+        if not self.predicate:
+            raise ValueError("predicate must not be empty")
+        _freeze_wrapped(
+            self,
+            id_field="plan_id",
+            prefix="capture-list-recapture-plan",
+            identity_fields=("selection_cutoff", "predicate", "selected_obligation_ids", "planner_version"),
         )
         return self

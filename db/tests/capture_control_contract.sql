@@ -11,6 +11,313 @@ do $$ begin
        <> '{"A":2,"_":4,"z":1,"\u00e4":3}' then
         raise exception 'Postgres key ordering or Unicode escaping differs from Python JSON';
     end if;
+    if raw.has_canonical_subjects('[{"kind":"company","id":"company:goog"}]')
+       or raw.has_canonical_subjects('[{"kind":"listing","id":"listing:latest"}]') then
+        raise exception 'subject validator accepted a non-contract kind or mutable ID';
+    end if;
+    if raw.has_canonical_universe_refs(
+        '[{"universe_id":"universe:current","universe_version":"v1","content_sha256":"8888888888888888888888888888888888888888888888888888888888888888"}]'
+    ) then
+        raise exception 'universe validator accepted a mutable reference';
+    end if;
+end $$;
+
+do $$
+declare
+    candidate record;
+    payload jsonb;
+begin
+    for candidate in
+        select * from (values
+            ('capture-policy:main', 'github_ci', 'mutable campaign policy'),
+            ('capture-policy:d5:v1', 'invalid_env', 'unknown campaign environment')
+        ) as candidates(policy_id, environment, description)
+    loop
+        payload := jsonb_build_object(
+            'campaign_policy_id', candidate.policy_id,
+            'environment', candidate.environment,
+            'cutoff', '2026-04-01T00:00:00Z',
+            'universe_refs', '[{"universe_id":"universe:topt-us-2026-03-31","universe_version":"topt-sql-contract-v1","content_sha256":"8888888888888888888888888888888888888888888888888888888888888888"}]'::jsonb
+        );
+        begin
+            insert into raw.capture_campaigns (
+                campaign_id, content_sha256, policy_id, environment, cutoff, universe_refs
+            ) values (
+                'capture-campaign:' || raw.canonical_sha256(
+                    jsonb_build_object('kind', 'capture-campaign', 'identity', payload)
+                ),
+                raw.canonical_sha256(payload), candidate.policy_id, candidate.environment,
+                '2026-04-01T00:00:00Z', payload->'universe_refs'
+            );
+            raise exception '% unexpectedly succeeded', candidate.description;
+        exception when check_violation then null;
+        end;
+    end loop;
+end $$;
+
+do $$
+declare
+    payload jsonb;
+begin
+    payload := jsonb_build_object(
+        'universe', jsonb_build_object(
+            'universe_id', 'universe:current',
+            'universe_version', 'topt-sql-contract-v1',
+            'content_sha256', repeat('8', 64)
+        ),
+        'members', '[{"kind":"listing","id":"listing:xnas:goog"}]'::jsonb,
+        'effective_at', '2026-04-01T00:00:00Z'
+    );
+    begin
+        insert into raw.capture_list_versions (
+            list_version_id, universe_id, universe_version, universe_sha256,
+            effective_at, member_count, members, content_sha256
+        ) values (
+            'list-version:' || raw.canonical_sha256(payload),
+            'universe:current', 'topt-sql-contract-v1', repeat('8', 64),
+            '2026-04-01T00:00:00Z', 1, payload->'members', raw.canonical_sha256(payload)
+        );
+        raise exception 'mutable list universe unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end $$;
+
+insert into raw.capture_list_versions (
+    list_version_id, universe_id, universe_version, universe_sha256,
+    effective_at, effective_at_canonical, member_count, members, content_sha256
+) values (
+    'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
+    'universe:topt-us-2026-03-31', 'topt-sql-contract-v1', repeat('8', 64),
+    '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00', 1,
+    '[{"kind":"listing","id":"listing:xnas:goog"}]',
+    '503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef'
+);
+insert into raw.capture_list_version_members (
+    list_version_id, member_ordinal, subject_kind, subject_id
+) values (
+    'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
+    1, 'listing', 'listing:xnas:goog'
+);
+
+-- One complete +08:00 chain proves every timestamp-address trigger preserves
+-- the original Pydantic representation rather than reconstructing UTC text.
+insert into raw.capture_campaigns (
+    campaign_id, content_sha256, policy_id, environment, cutoff, cutoff_canonical, universe_refs
+) values (
+    'capture-campaign:9480d69e5ddf795495b5995cfe1afb2b4b4a40899bc5122c30064e1680d471cb',
+    '5bbc9eff88ea81db2c83c97817fc9f4696a11223c443b1cd2513e88a6a88f38b',
+    'capture-policy:d5-offset:v1', 'github_ci',
+    '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00',
+    '[{"universe_id":"universe:topt-us-2026-03-31","universe_version":"topt-sql-contract-v1","content_sha256":"8888888888888888888888888888888888888888888888888888888888888888"}]'
+);
+insert into raw.capture_runs (
+    run_id, campaign_id, run_sequence, schedule_policy_id, capture_scope_id, content_sha256
+) values (
+    'capture-run:97af27541be16406f7e9a9c9c68dd945ed6890241f39e7d7b652b49c6c2c1902',
+    'capture-campaign:9480d69e5ddf795495b5995cfe1afb2b4b4a40899bc5122c30064e1680d471cb',
+    1, 'schedule-policy:6666666666666666666666666666666666666666666666666666666666666666',
+    'capture-scope:6666666666666666666666666666666666666666666666666666666666666666',
+    '9622c0d877c821782d2a412b7ceaa6c8c465dc18ff2bd647d8b42010af25fa1f'
+);
+insert into raw.capture_campaign_list_versions (campaign_id, list_version_id) values (
+    'capture-campaign:9480d69e5ddf795495b5995cfe1afb2b4b4a40899bc5122c30064e1680d471cb',
+    'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef'
+);
+insert into raw.capture_obligations (
+    obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
+    capture_requirement_id, partition_key, content_sha256
+) values (
+    'capture-list-obligation:261a5d6ccd4e326894c240a932c9fdb0f892bdbebfd991012c4243b0210294e6',
+    'capture-campaign:9480d69e5ddf795495b5995cfe1afb2b4b4a40899bc5122c30064e1680d471cb',
+    'capture-run:97af27541be16406f7e9a9c9c68dd945ed6890241f39e7d7b652b49c6c2c1902',
+    'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
+    'listing', 'listing:xnas:goog', 'market-price:v1', '2026-03-31',
+    '261a5d6ccd4e326894c240a932c9fdb0f892bdbebfd991012c4243b0210294e6'
+);
+
+do $$ begin
+    begin
+        insert into raw.recapture_plans (
+            plan_id, selection_cutoff, predicate_sha256, predicate, selected_obligation_ids,
+            planner_version, content_sha256
+        ) values (
+            'capture-list-recapture-plan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            '2026-04-01T00:00:00Z', repeat('b', 64), jsonb_build_object(
+                'predicate_id', 'recapture-predicate:' || repeat('b', 64),
+                'content_sha256', repeat('b', 64),
+                'universe_refs', '[]'::jsonb,
+                'subject_ids', '[]'::jsonb,
+                'source_policy_ids', '[]'::jsonb,
+                'semantic_types', '[]'::jsonb,
+                'partitions', '[]'::jsonb,
+                'terminal_states', '[]'::jsonb,
+                'freshness_states', '[]'::jsonb,
+                'parser_versions', '[]'::jsonb,
+                'mapping_versions', '[]'::jsonb,
+                'assessment_policy_ids', '[]'::jsonb
+            ), array['capture-list-obligation:261a5d6ccd4e326894c240a932c9fdb0f892bdbebfd991012c4243b0210294e6'],
+            'capture-planner:v1', repeat('b', 64)
+        );
+        raise exception 'unbounded typed predicate unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end $$;
+
+do $$
+declare
+    candidate record;
+    universe_payload jsonb;
+    obligation_identity jsonb;
+    obligation_payload jsonb;
+    payload jsonb;
+begin
+    universe_payload := jsonb_build_object(
+        'universe_id', 'universe:topt-us-2026-03-31',
+        'universe_version', 'topt-sql-contract-v1',
+        'content_sha256', repeat('8', 64)
+    );
+    for candidate in
+        select * from (values
+            ('market-price:latest', '2026-03-31', 'mutable capture requirement'),
+            ('market-price:v1', 'bad partition', 'malformed partition')
+        ) as candidates(requirement_id, partition_key, description)
+    loop
+        obligation_identity := jsonb_build_object(
+            'run_id', 'capture-run:97af27541be16406f7e9a9c9c68dd945ed6890241f39e7d7b652b49c6c2c1902',
+            'universe_ref', universe_payload,
+            'subject', jsonb_build_object('kind', 'listing', 'id', 'listing:xnas:goog'),
+            'capture_requirement_id', candidate.requirement_id,
+            'partition', candidate.partition_key
+        );
+        obligation_payload := obligation_identity || jsonb_build_object(
+            'obligation_id', 'list-obligation:' || raw.canonical_sha256(
+                jsonb_build_object('kind', 'list-obligation', 'identity', obligation_identity)
+            ),
+            'content_sha256', raw.canonical_sha256(obligation_identity)
+        );
+        payload := jsonb_build_object(
+            'list_version_id', 'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
+            'obligation', obligation_payload
+        );
+        begin
+            insert into raw.capture_obligations (
+                obligation_id, campaign_id, run_id, list_version_id, subject_kind, subject_id,
+                capture_requirement_id, partition_key, content_sha256
+            ) values (
+                'capture-list-obligation:' || raw.canonical_sha256(payload),
+                'capture-campaign:9480d69e5ddf795495b5995cfe1afb2b4b4a40899bc5122c30064e1680d471cb',
+                'capture-run:97af27541be16406f7e9a9c9c68dd945ed6890241f39e7d7b652b49c6c2c1902',
+                'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
+                'listing', 'listing:xnas:goog', candidate.requirement_id, candidate.partition_key,
+                raw.canonical_sha256(payload)
+            );
+            raise exception '% unexpectedly succeeded', candidate.description;
+        exception when check_violation then null;
+        end;
+    end loop;
+end $$;
+insert into raw.capture_work_items (
+    work_item_id, campaign_id, source_request_id, schedule_policy_id, maximum_attempts, content_sha256
+) values (
+    'capture-work-item:bd49b6a7ab06f9db999456b28a01a7121526a3b90de2c72fc2899ea64decadef',
+    'capture-campaign:9480d69e5ddf795495b5995cfe1afb2b4b4a40899bc5122c30064e1680d471cb',
+    'source-request:6666666666666666666666666666666666666666666666666666666666666666',
+    'schedule-policy:6666666666666666666666666666666666666666666666666666666666666666',
+    1, 'd75f4b20f0444ab4ef3361b194bfc4c9d38107e1f04887929d7a6484ffc14ee8'
+);
+insert into raw.capture_attempts (
+    attempt_id, work_item_id, attempt_number, started_at, started_at_canonical, content_sha256
+) values (
+    'fetch-attempt:c93004d370723b15c8cdd222f2c7e27d59d5e66cbc69bc4fe7d929133fd5b3fd',
+    'capture-work-item:bd49b6a7ab06f9db999456b28a01a7121526a3b90de2c72fc2899ea64decadef',
+    1, '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00',
+    '8eed8c9ab19bc80ff2934c724759ea0de51d108a3f34865b1060d97a7077d646'
+);
+insert into raw.capture_attempt_results (
+    attempt_result_id, attempt_id, completed_at, completed_at_canonical,
+    outcome, reason_codes, content_sha256
+) values (
+    'fetch-attempt-result:7a2e540af6cc61373d736bd337803bfe6e475e4a4031eed1e081bc79be575550',
+    'fetch-attempt:c93004d370723b15c8cdd222f2c7e27d59d5e66cbc69bc4fe7d929133fd5b3fd',
+    '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00',
+    'failed', array['offset_fixture'],
+    '5c3abf9f5bd78d64cc4ce0d63793b2800f1b956c1865e4de43009540269b9450'
+);
+insert into raw.capture_checkpoints (
+    checkpoint_id, run_id, sequence, phase, completed_obligation_ids,
+    recorded_at, recorded_at_canonical, content_sha256
+) values (
+    'capture-checkpoint:55ee9d997a9bd12b4a2f0aac93046cb1968b7f8d6ea95880db244178e4512742',
+    'capture-run:97af27541be16406f7e9a9c9c68dd945ed6890241f39e7d7b652b49c6c2c1902',
+    1, 'planned', array[]::text[],
+    '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00',
+    'fdf99ef5cb21045283335f14f0913ee4784941c20516de1cf0521ad28a4222e4'
+);
+insert into raw.recapture_plans (
+    plan_id, selection_cutoff, selection_cutoff_canonical, predicate_sha256, predicate,
+    selected_obligation_ids, planner_version, content_sha256
+) values (
+    'capture-list-recapture-plan:8ed9769976a46f9ed782c34372ce36977db207c0d343381390d39faabfb3eb33',
+    '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00',
+    'd2bfbc83c9f70d19249adfadbe4df9b3ddd8e3dd5eb536fca31fc22af492d0f1',
+    '{"assessment_policy_ids":[],"content_sha256":"d2bfbc83c9f70d19249adfadbe4df9b3ddd8e3dd5eb536fca31fc22af492d0f1","freshness_states":[],"mapping_versions":[],"parser_versions":[],"partitions":[],"predicate_id":"recapture-predicate:9d70275ce843f58202347c2d9d2649da1487756888b3392667fca49078e9ab6e","semantic_types":[],"source_policy_ids":[],"subject_ids":["listing:xnas:goog"],"terminal_states":[],"universe_refs":[]}',
+    array['capture-list-obligation:261a5d6ccd4e326894c240a932c9fdb0f892bdbebfd991012c4243b0210294e6'],
+    'capture-planner:v1', '2f25f2071754118842a1a37505ce1b6d0a0177f7968d1e5c0fa982d395c7f812'
+);
+
+do $$
+declare
+    candidate record;
+begin
+    for candidate in
+        select * from (values
+            ('{predicate_id}'::text[], 'null'::jsonb, 'null predicate ID'),
+            ('{semantic_types,0}'::text[], '42'::jsonb, 'non-string predicate coordinate'),
+            ('{terminal_states}'::text[], '["not_terminal"]'::jsonb, 'unknown terminal state')
+        ) as candidates(path, replacement, description)
+    loop
+        begin
+            insert into raw.recapture_plans (
+                plan_id, selection_cutoff, predicate_sha256, predicate,
+                selected_obligation_ids, planner_version, content_sha256
+            ) select
+                'capture-list-recapture-plan:' || repeat('d', 64), selection_cutoff,
+                predicate_sha256, jsonb_set(predicate, candidate.path, candidate.replacement),
+                selected_obligation_ids, planner_version, repeat('d', 64)
+              from raw.recapture_plans
+             where plan_id = 'capture-list-recapture-plan:8ed9769976a46f9ed782c34372ce36977db207c0d343381390d39faabfb3eb33';
+            raise exception '% unexpectedly succeeded', candidate.description;
+        exception when check_violation then null;
+        end;
+    end loop;
+    begin
+        insert into raw.recapture_plans (
+            plan_id, selection_cutoff, predicate_sha256, predicate,
+            selected_obligation_ids, planner_version, content_sha256
+        ) select
+            'capture-list-recapture-plan:' || repeat('e', 64), selection_cutoff,
+            predicate_sha256, predicate, selected_obligation_ids, 'bad planner', repeat('e', 64)
+          from raw.recapture_plans
+         where plan_id = 'capture-list-recapture-plan:8ed9769976a46f9ed782c34372ce36977db207c0d343381390d39faabfb3eb33';
+        raise exception 'malformed planner version unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+end $$;
+
+do $$ begin
+    begin
+        insert into raw.recapture_plans (
+            plan_id, selection_cutoff, predicate_sha256, predicate, selected_obligation_ids,
+            planner_version, content_sha256
+        ) select
+            'capture-list-recapture-plan:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            selection_cutoff, predicate_sha256, predicate, selected_obligation_ids,
+            'capture-planner:main', repeat('c', 64)
+          from raw.recapture_plans
+         where plan_id = 'capture-list-recapture-plan:8ed9769976a46f9ed782c34372ce36977db207c0d343381390d39faabfb3eb33';
+        raise exception 'mutable planner version unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
 end $$;
 
 -- These constants are generated by the Python immutable contracts. Successful
@@ -65,23 +372,6 @@ insert into raw.capture_list_version_members (
     list_version_id, member_ordinal, subject_kind, subject_id
 ) values (
     'list-version:0d312e5b25aa8a450ffefa2c039a1286a035093c3f9a7ef5dc4f47f31cd971a8',
-    1, 'listing', 'listing:xnas:goog'
-);
-
-insert into raw.capture_list_versions (
-    list_version_id, universe_id, universe_version, universe_sha256,
-    effective_at, effective_at_canonical, member_count, members, content_sha256
-) values (
-    'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
-    'universe:topt-us-2026-03-31', 'topt-sql-contract-v1', repeat('8', 64),
-    '2026-04-01T08:00:00+08:00', '2026-04-01T08:00:00+08:00', 1,
-    '[{"kind":"listing","id":"listing:xnas:goog"}]',
-    '503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef'
-);
-insert into raw.capture_list_version_members (
-    list_version_id, member_ordinal, subject_kind, subject_id
-) values (
-    'list-version:503cdf7ca54bc8f7873993cc1dd1ad6ce9105ade759640c041eb145130bff3ef',
     1, 'listing', 'listing:xnas:goog'
 );
 
@@ -442,11 +732,11 @@ insert into raw.recapture_plans (
     plan_id, selection_cutoff, predicate_sha256, predicate, selected_obligation_ids,
     planner_version, content_sha256
 ) values (
-    'recapture-plan:99ce8494b7a3141b736d902f7f438d65abfd4df1842068169246e139822d9786',
-    '2026-04-01T00:00:00Z', 'e9b4ef4e0bb955680ae03cfe54d59a6cc757f0f6367162a870589d20d86c6c21',
-    '{"instrument_ids":["listing:xnas:goog"]}',
+    'capture-list-recapture-plan:61ae610f9f6ad21f0fbdf51dd4550cc86b58575f363d33ba967868911020ce46',
+    '2026-04-01T00:00:00Z', 'd2bfbc83c9f70d19249adfadbe4df9b3ddd8e3dd5eb536fca31fc22af492d0f1',
+    '{"assessment_policy_ids":[],"content_sha256":"d2bfbc83c9f70d19249adfadbe4df9b3ddd8e3dd5eb536fca31fc22af492d0f1","freshness_states":[],"mapping_versions":[],"parser_versions":[],"partitions":[],"predicate_id":"recapture-predicate:9d70275ce843f58202347c2d9d2649da1487756888b3392667fca49078e9ab6e","semantic_types":[],"source_policy_ids":[],"subject_ids":["listing:xnas:goog"],"terminal_states":[],"universe_refs":[]}',
     array['capture-list-obligation:3970939515b9abea8e87e25bdbe7ea21f1ed3f50a0afd007005f94709fae7eac'],
-    'capture-planner:v1', 'b3c3e38569ef40f85bc8923d81ae09bfc9654e9285fb70f46ec5d84e76736c39'
+    'capture-planner:v1', '1b20a95545bb0915fb932af45defd50c5dffa848af607c14abf62d61d564b65b'
 );
 
 do $$ begin
@@ -455,8 +745,8 @@ do $$ begin
             plan_id, selection_cutoff, predicate_sha256, predicate, selected_obligation_ids,
             planner_version, content_sha256
         ) values (
-            'recapture-plan:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            '2026-04-01T00:00:00Z', repeat('a', 64), '{"instrument_ids":["listing:xnas:goog"]}',
+            'capture-list-recapture-plan:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            '2026-04-01T00:00:00Z', repeat('a', 64), '{"assessment_policy_ids":[],"content_sha256":"d2bfbc83c9f70d19249adfadbe4df9b3ddd8e3dd5eb536fca31fc22af492d0f1","freshness_states":[],"mapping_versions":[],"parser_versions":[],"partitions":[],"predicate_id":"recapture-predicate:9d70275ce843f58202347c2d9d2649da1487756888b3392667fca49078e9ab6e","semantic_types":[],"source_policy_ids":[],"subject_ids":["listing:xnas:goog"],"terminal_states":[],"universe_refs":[]}',
             array['capture-list-obligation:3970939515b9abea8e87e25bdbe7ea21f1ed3f50a0afd007005f94709fae7eac'],
             'capture-planner:v1', repeat('a', 64)
         );
@@ -476,7 +766,7 @@ end $$;
 
 do $$ declare obligation_count integer; begin
     select count(*) into obligation_count from raw.capture_obligations;
-    if obligation_count <> 2 then
+    if obligation_count <> 3 then
         raise exception 'GOOG and GOOGL obligation identities collapsed';
     end if;
 end $$;
