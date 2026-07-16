@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "batch_id": "I0-infra-boundary-decoupling",
-  "revision": 3,
+  "revision": 4,
   "issue": 201,
   "owner_gate": 32,
-  "status": "active",
+  "status": "done",
   "lane": "orchestration-platform",
-  "last_accepted_rung": "E0",
+  "last_accepted_rung": "E1",
   "target_rung": "E1",
   "terminal_rung": "E1",
   "objective": "Remove TrueAlpha's reverse source dependency on infra2 and replace it with a versioned, side-effect-free deploy-request contract boundary.",
-  "claim_ceiling": "E0 repository-boundary code and deterministic staging DeployRequest rendering only; no dispatch sender, receiver activation, deployment side effect, live-environment evidence, or Production-readiness claim",
+  "claim_ceiling": "Accepted E1 repository-boundary evidence for the immutable infra2-sdk v0.3.0 pin and deterministic staging DeployRequest rendering only; no dispatch sender, receiver activation, deployment side effect, live-environment evidence, stable handoff, release activation, or Production-readiness claim",
   "capability_issues": [
     11
   ],
@@ -45,9 +45,9 @@
   "corpus": {
     "environment": "Local/CI checked-in repository-boundary fixture",
     "manifest_path": "libs/runtime/tests/fixtures/infra_boundary.v1.json",
-    "sha256": "77b85d568747ac99ad6846d0fcdbca1788a6101a8cbc5ad57dbd7a2d758cd1f6",
+    "sha256": "e22a4eede115f828f4e76ec2308708ae0316aa816a238346c5ddca861cf57dc4",
     "required_strata": [
-      "SDK v0.1.0 immutable release pin and installed distribution identity",
+      "SDK v0.3.0 immutable release pin and installed distribution identity",
       "valid TrueAlpha staging DeployRequest v1 round trip",
       "invalid service, repository, ref, SHA, and evidence rejection",
       "production request rejection before remote evidence verification and receiver enablement",
@@ -91,7 +91,7 @@
     "lease_owner": "wangzitian0",
     "lease_manifest": {
       "path": "governance/leases/I0-infra-boundary-decoupling.v1.json",
-      "sha256": "c895b3dc631a63d291f159ca9506b81ec889718bfb9066a94c26396a4aba2ab2"
+      "sha256": "7bc3626ebc5669b1d23967fad27508cb2d4702228926639daaa8247e13fd0b42"
     }
   },
   "release_activation": {
@@ -117,7 +117,7 @@
     "output": {
       "type": "RepositoryBoundaryTinyEvidence",
       "stable_handoff": false,
-      "state": "provisional_e0",
+      "state": "accepted_e1",
       "allowed_evidence_readers": [
         "issue #11 environment implementation batches",
         "infra2 workspace-submodule integration"

@@ -13,7 +13,7 @@ exclude = ["libs/factors/qlib-runtime"]
 
 [dependency-groups]
 dev = [
-    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl",
+    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v0.3.0/infra2_sdk-0.3.0-py3-none-any.whl",
     "mypy>=1.14",
     "pandas-stubs>=2.2",
 ]

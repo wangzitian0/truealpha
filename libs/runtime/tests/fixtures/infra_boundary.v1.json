@@ -2,16 +2,16 @@
   "schema_version": 1,
   "corpus_id": "i0-infra-boundary-corpus-v1",
   "batch_id": "I0-infra-boundary-decoupling",
-  "claim_ceiling": "Preparation-only repository-boundary and DeployRequest fixtures; this earns no rung, authorizes no dispatch, activates no infra2 receiver, and proves no live-environment or Production readiness.",
+  "claim_ceiling": "Repository-boundary and DeployRequest fixtures only; these bytes authorize no dispatch, activate no infra2 receiver, cause no deployment side effect, and prove no live-environment or Production readiness.",
   "sdk_binding": {
     "distribution": "infra2-sdk",
-    "version": "0.1.0",
+    "version": "0.3.0",
     "contract_version": 1,
     "module": "infra2_sdk.deploy",
     "request_type": "DeployRequest",
-    "release_url": "https://github.com/wangzitian0/infra2-sdk/releases/tag/v0.1.0",
-    "wheel_url": "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl",
-    "wheel_sha256": "94bfdc8b13c5bdcef9ee9150eda0ec794d3b3a0b4b11d529c29d6a2a1ba32a55"
+    "release_url": "https://github.com/wangzitian0/infra2-sdk/releases/tag/v0.3.0",
+    "wheel_url": "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.3.0/infra2_sdk-0.3.0-py3-none-any.whl",
+    "wheel_sha256": "2046043be5d1072fe405851e7b5b9c9e2d0729a5ac8273552f24bd1228347c5c"
   },
   "repository_boundary": {
     "application_repository": "wangzitian0/truealpha",
