@@ -52,6 +52,7 @@ _QLIB_PROVIDER_LOCK = threading.Lock()
 class _QlibExpression(Protocol):
     def load(self, instrument: str, start_index: int, end_index: int, freq: str) -> Any: ...
 
+
 #: The one approved builtin operator registry. Any factor expression built
 #: from these six operators (Add/Div/Mean/Mul/Ref/Sub) reuses this constant
 #: rather than minting a new registry per factor.
@@ -81,8 +82,7 @@ BUILTIN_OPERATOR_REGISTRY = QlibOperatorRegistry(
             null_behavior=QlibNullBehavior.SKIP_NULL_MIN_PERIODS_ONE,
             lookback_rule=QlibLookbackRule.CHILD_PLUS_WINDOW_MINUS_ONE,
             semantic_spec=(
-                "truealpha.qlib.mean.v1|Mean|expression,positive_integer|skip_null_min_periods_one"
-                "|lookback=child+n-1"
+                "truealpha.qlib.mean.v1|Mean|expression,positive_integer|skip_null_min_periods_one|lookback=child+n-1"
             ),
         ),
         QlibOperatorDefinition(
