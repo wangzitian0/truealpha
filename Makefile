@@ -99,6 +99,7 @@ test:
 contract-conformance:
 	uv run python libs/contracts/conformance/export_issue58.py --check
 	cd apps/app-web && bun run tests/issue58-conformance.test.ts
+	cd apps/app-web && bun run tests/strategy-run-contract.test.ts
 
 check: lint typecheck test contract-conformance
 	@echo "✅ All checks passed"

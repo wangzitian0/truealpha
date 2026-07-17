@@ -395,6 +395,14 @@ from truealpha_contracts.strategy import (
     ThreeTierValuationDefinition,
     ValuationGapRule,
 )
+from truealpha_contracts.strategy_run import (
+    StrategyRunDecision,
+    StrategyRunOutcome,
+    StrategyRunReadRepository,
+    StrategyRunReport,
+    StrategyRunUnavailable,
+)
+from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 from truealpha_contracts.universe import (
     IdentityLinkSet,
     IssuerSecurityLink,
@@ -788,7 +796,13 @@ __all__ = [
     "RiskFreeInstrument",
     "RiskFreeRatePolicy",
     "SelectionRule",
+    "FixtureStrategyRunRepository",
     "StrategyEngineBinding",
+    "StrategyRunDecision",
+    "StrategyRunOutcome",
+    "StrategyRunReadRepository",
+    "StrategyRunReport",
+    "StrategyRunUnavailable",
     "ThreeTierValuationDefinition",
     "ValuationGapRule",
     "applicability_mapping_from_catalog",
