@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any, Literal, Self
@@ -437,7 +437,7 @@ def _validate_assertion_value(assertion: SampleAssertion, field: FieldSemanticEx
             raise ValueError("decimal sample assertions require a finite base-10 value")
         try:
             parsed_decimal = Decimal(str(value))
-        except Exception as error:
+        except InvalidOperation as error:
             raise ValueError("decimal sample assertions require a finite base-10 value") from error
         if not parsed_decimal.is_finite():
             raise ValueError("decimal sample assertions require a finite base-10 value")
