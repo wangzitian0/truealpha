@@ -44,7 +44,7 @@ _LATEST_RUN_SQL = """
     select strategy_run_id, corpus_sha256
     from mart.strategy_runs
     where strategy_key = %s
-    order by executed_at desc
+    order by executed_at desc, created_at desc, strategy_run_id desc
     limit 1
 """
 
@@ -54,7 +54,7 @@ _DECISIONS_SQL = """
            eligible, outcome, exclusion_reason, rank, target_weight
     from mart.strategy_decisions
     where strategy_run_id = %s
-    order by issuer_id, cutoff_at
+    order by cutoff_at, issuer_id
 """
 
 
