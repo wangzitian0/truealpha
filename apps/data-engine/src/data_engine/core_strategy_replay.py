@@ -36,6 +36,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -46,8 +47,17 @@ from factors.types import Fact
 from truealpha_contracts.metrics import METRICS
 from truealpha_contracts.strategy import LargeModelValueV0Definition, ThreeTierValuationDefinition
 
+# CANONICAL_FIXTURE_PATH (the CLI script's *output* golden preview) is a
+# repo-write concern and stays repo-root-relative; the corpus this module
+# *reads* at runtime must not be, since data_engine ships as a wheel
+# (`packages = ["src/data_engine"]`) that won't have the monorepo checked
+# out beside it -- see #357's review. It is packaged inside
+# truealpha_contracts.data instead (that package is fully included in the
+# truealpha-contracts wheel) and read back with importlib.resources, the
+# same pattern truealpha_contracts.strategy_run_fixture already uses.
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-CORPUS_PATH = REPOSITORY_ROOT / "libs/contracts/tests/fixtures/large_model_value_v0_strategy.v1.json"
+_FIXTURE_PACKAGE = "truealpha_contracts.data"
+_FIXTURE_NAME = "large_model_value_v0_strategy.v1.json"
 CORPUS_SHA256 = "0d110a3adc94500cba2bc35d5cd33a788a18bc76ef66895c5625489be6ea50e6"
 STRATEGY_ID = "large_model_value_v0"
 
@@ -112,12 +122,13 @@ class Decision:
 
 
 def _load_corpus() -> dict[str, Any]:
-    raw = CORPUS_PATH.read_bytes()
+    raw = resources.files(_FIXTURE_PACKAGE).joinpath(_FIXTURE_NAME).read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     if digest != CORPUS_SHA256:
         raise ValueError(f"corpus sha256 mismatch: expected {CORPUS_SHA256}, got {digest}")
     payload = json.loads(raw)
-    assert isinstance(payload, dict)
+    if not isinstance(payload, dict):
+        raise ValueError(f"corpus must decode to a JSON object, got {type(payload).__name__}")
     return payload
 
 
