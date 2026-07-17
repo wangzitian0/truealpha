@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal, Inexact, localcontext
 
 import pytest
 from pydantic import ValidationError
@@ -258,6 +258,83 @@ def test_decimal_tolerance_boundary_is_deterministic() -> None:
     )
 
     assert result.outcome is ReconciliationOutcome.AGREED
+
+
+def test_reconciliation_ignores_the_callers_decimal_context() -> None:
+    cell = _cell()
+    left = _assertion(
+        cell,
+        digest=SHA_A,
+        source_id="source:sec:v1",
+        origin_group_id="origin:sec:v1",
+        value=Decimal("1"),
+    )
+    right = _assertion(
+        cell,
+        digest=SHA_B,
+        source_id="source:vendor-a:v1",
+        origin_group_id="origin:vendor-a:v1",
+        value=Decimal("1.1"),
+    )
+    policy = _policy(relative_tolerance=Decimal("0.0909090909090909090909090909"))
+    expected = reconcile_source_assertions(cell=cell, assertions=(left, right), policy=policy, cutoff=CUTOFF)
+
+    with localcontext() as context:
+        context.prec = 6
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
+        assert (
+            reconcile_source_assertions(cell=cell, assertions=(left, right), policy=policy, cutoff=CUTOFF) == expected
+        )
+
+
+def test_quality_summary_ignores_the_callers_decimal_context() -> None:
+    policy = _policy()
+    rows = (
+        DataHubQualityCell(
+            cell=_cell("gross_profit"),
+            reconciliation_policy_id=policy.policy_id,
+            planned=True,
+            lineage_complete=False,
+            reason_codes=("quality.pending",),
+        ),
+        DataHubQualityCell(
+            cell=_cell("revenue"),
+            reconciliation_policy_id=policy.policy_id,
+            planned=False,
+            lineage_complete=False,
+            reason_codes=("quality.no_source_plan",),
+        ),
+        DataHubQualityCell(
+            cell=_cell("net_income"),
+            reconciliation_policy_id=policy.policy_id,
+            planned=False,
+            lineage_complete=False,
+            reason_codes=("quality.no_source_plan",),
+        ),
+    )
+
+    def build() -> VersionedDataHubQualityReport:
+        return VersionedDataHubQualityReport(
+            report_schema_version="datahub-quality-report:v1",
+            denominator=DataHubQualityDenominator(
+                service_demand_id=f"datahub-service-demand:{SHA_D}",
+                requested_cell_ids=tuple(row.cell.cell_id for row in rows),
+            ),
+            reconciliation_policies=(policy,),
+            cutoff=CUTOFF,
+            generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
+            cells=rows,
+        )
+
+    expected = build()
+    assert expected.summary is not None
+    assert expected.summary.planned_coverage == Decimal("0." + "3" * 50)
+    with localcontext() as context:
+        context.prec = 6
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
+        assert build() == expected
 
 
 def test_non_numeric_assertions_use_exact_canonical_value_hashes() -> None:

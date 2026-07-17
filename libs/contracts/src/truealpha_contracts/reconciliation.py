@@ -5,7 +5,15 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import (
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    DivisionByZero,
+    InvalidOperation,
+    Overflow,
+    localcontext,
+)
 from enum import StrEnum
 from typing import Any, Self
 
@@ -20,6 +28,19 @@ _SHA256 = r"^[0-9a-f]{64}$"
 _CONTENT_ID = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
 _STABLE_COORDINATE = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
 _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
+
+
+def _reconciliation_context() -> Context:
+    return Context(
+        prec=50,
+        rounding=ROUND_HALF_EVEN,
+        Emin=-999999,
+        Emax=999999,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[InvalidOperation, DivisionByZero, Overflow],
+    )
 
 
 def _decimal_input(value: Any) -> Any:
@@ -410,9 +431,10 @@ def _assertions_agree(left: SourceAssertion, right: SourceAssertion, policy: Rec
             and right.numeric_value is None
             and left.normalized_value_sha256 == right.normalized_value_sha256
         )
-    difference = abs(left.numeric_value - right.numeric_value)
-    scale = max(abs(left.numeric_value), abs(right.numeric_value))
-    return difference <= policy.absolute_tolerance + policy.relative_tolerance * scale
+    with localcontext(_reconciliation_context()):
+        difference = abs(left.numeric_value - right.numeric_value)
+        scale = max(abs(left.numeric_value), abs(right.numeric_value))
+        return difference <= policy.absolute_tolerance + policy.relative_tolerance * scale
 
 
 def reconcile_source_assertions(
@@ -641,7 +663,13 @@ class DataHubQualityCell(_FrozenModel):
 
 
 def _ratio(numerator: int, denominator: int) -> Decimal:
-    return Decimal(numerator) / Decimal(denominator)
+    with localcontext(_reconciliation_context()):
+        return Decimal(numerator) / Decimal(denominator)
+
+
+def _confidence_mean(values: tuple[Decimal, ...], denominator: int) -> Decimal:
+    with localcontext(_reconciliation_context()):
+        return sum(values, start=Decimal(0)) / Decimal(denominator)
 
 
 def _summarize(cells: tuple[DataHubQualityCell, ...]) -> DataHubQualitySummary:
@@ -663,12 +691,10 @@ def _summarize(cells: tuple[DataHubQualityCell, ...]) -> DataHubQualitySummary:
         for cell in cells
     )
     lineage_complete = sum(cell.lineage_complete for cell in cells)
-    confidence_sum = sum(
-        (
-            cell.reconciliation.selected_confidence_score
-            if cell.reconciliation is not None and cell.reconciliation.selected_confidence_score is not None
-            else Decimal(0)
-        )
+    confidence_values = tuple(
+        cell.reconciliation.selected_confidence_score
+        if cell.reconciliation is not None and cell.reconciliation.selected_confidence_score is not None
+        else Decimal(0)
         for cell in cells
     )
     origin_counts: Counter[str] = Counter()
@@ -690,7 +716,7 @@ def _summarize(cells: tuple[DataHubQualityCell, ...]) -> DataHubQualitySummary:
         freshness=_ratio(fresh, denominator),
         independent_reconciliation=_ratio(independently_reconciled, denominator),
         lineage_completeness=_ratio(lineage_complete, denominator),
-        denominator_mean_confidence_score=confidence_sum / Decimal(denominator),
+        denominator_mean_confidence_score=_confidence_mean(confidence_values, denominator),
         origin_composition=tuple(
             OriginGroupCount(origin_group_id=origin_group_id, cell_count=count)
             for origin_group_id, count in sorted(origin_counts.items())
