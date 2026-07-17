@@ -217,6 +217,13 @@ from truealpha_contracts.models import (
     RawIngestionEnvelope,
     RawObjectRef,
 )
+from truealpha_contracts.obligation_reason_codes import (
+    ObligationDisposition,
+    ObligationReasonCode,
+    ObligationReasonCodeRegistry,
+    ReasonCodeEntry,
+    disposition_for,
+)
 from truealpha_contracts.policy_bundle import (
     CatalogRootBinding,
     CompiledRunDemand,
@@ -602,6 +609,11 @@ __all__ = [
     "EvidenceNodeRef",
     "EvidenceRelation",
     "ProvenanceClosure",
+    "ObligationDisposition",
+    "ObligationReasonCode",
+    "ObligationReasonCodeRegistry",
+    "ReasonCodeEntry",
+    "disposition_for",
     "ExtractionInvocation",
     "ExtractionTemplate",
     "ExchangeCalendar",
