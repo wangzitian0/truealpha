@@ -9,7 +9,7 @@ Policy identity:
 `confidence-policy:e9493164ba66f91969e54a3b7c82d83e266aa0c55413110b4f2767328e0ef0a5`.
 
 Report identity:
-`confidence-calibration-report:968b6f1c8ddd783617c4f4e5655048ff6cc56b9e9623a4ec19c5c0a094d91cd3`.
+`confidence-calibration-report:d77de4934cbbb968e76a91a3ab1d6764dbcedbc3d9bff6bcd6b48b0a761c8cb6`.
 
 Regenerate the machine-readable report with:
 
@@ -47,8 +47,10 @@ confidence = S * agreement^0.35
 score_100 = 100 * confidence
 ```
 
-The policy, evidence inputs, origin-group selection, decomposition, and report
-are content-addressed. The evaluator uses `Decimal`; binary floats are rejected.
+The policy, exact evidence inputs, origin-group selection, decomposition, and
+report are content-addressed. A report validator recomputes every evaluation
+from its embedded policy and input, so a plausible but forged decomposition is
+rejected. The evaluator uses `Decimal`; binary floats are rejected.
 Freshness, availability, applicability, quality state, and reason codes remain
 separate queryable facts rather than being replaced by this scalar.
 
@@ -65,20 +67,28 @@ separate queryable facts rather than being replaced by this scalar.
 | Partial lineage (`L=0.5`) | 54.9658 | Broken provenance edges reduce trust. |
 | Missing components (`K=0.5`) | 54.9658 | Required cells remain in the denominator and are penalized. |
 | Two independent sources in conflict (`A=0.2`) | 49.1970 | Source count cannot hide material disagreement. |
-| Yahoo/Twelve Data four-symbol anchor | 74.5972 | Strong OHLC agreement, but evidence is still provisional. |
+| Yahoo/Twelve Data four-symbol anchor | 51.4702 | Aggregate agreement is high, but missing Twelve raw bytes prevent a second source contribution. |
 
 ## Empirical Boundary
 
-The checked-in Yahoo/Twelve Data comparison covers 754 common dates for DDOG,
-DUOL, NICE, and SHOP. Across OHLC and volume, 15,069 of 15,080 field checks are
-within their declared tolerance. The empirical anchor keeps reliability at the
-no-history ceiling and sets required-component completeness to `5/7` because
-adjusted close and corporate-action reconciliation are missing.
+The checked-in Yahoo/Twelve Data aggregate comparison covers 754 common dates
+for DDOG, DUOL, NICE, and SHOP. The generator derives, rather than hardcodes,
+15,069 conforming checks out of the 15,080 declared OHLCV checks. It also
+verifies the four Yahoo CSV hashes against the checked-in manifest and binds all
+artifact and provider-response hashes into the confidence input.
 
-The frozen TOPT denominator is 20 issuers. Only four have this independent
-price-source anchor, so the denominator is not shrunk to four and no Production
-calibration claim is made. The remaining 16 issuers, adjusted close, and
-corporate actions require additional independent acquisition evidence.
+The Twelve Data response hashes are recorded, but the raw response bytes are
+not checked in. Consequently `transport_integrity=0` for that origin: it remains
+visible in lineage and agreement statistics but contributes no independent
+source support. Required-component completeness is derived as `5/7` because
+adjusted close and corporate-action reconciliation are missing. This is why the
+anchor is 51.4702 rather than the previously overstated 74.5972.
+
+The frozen TOPT denominator is 20 issuers. Only four have this aggregate
+comparison evidence, and none has a replayable retained Twelve sample, so the
+denominator is not shrunk to four and no Production calibration claim is made.
+All 20 issuers, adjusted close, and corporate actions still require retained
+independent acquisition evidence.
 
 ## Review Points
 

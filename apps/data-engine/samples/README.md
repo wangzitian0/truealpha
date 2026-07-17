@@ -35,8 +35,11 @@ reconciliation remain strategy-evaluation requirements. See
 
 The first continuous-confidence sensitivity report is documented in
 `docs/confidence-calibration.md`. Its four-symbol Yahoo/Twelve Data comparison is
-an empirical anchor only; it does not shrink or calibrate the 20-issuer TOPT
-denominator and does not authorize a Production confidence threshold.
+an aggregate empirical anchor only: Yahoo CSV bytes are retained and hash
+verified, but Twelve Data raw response bytes are absent. The latter remains in
+lineage but contributes zero independent support. The anchor does not shrink or
+calibrate the 20-issuer TOPT denominator and does not authorize a Production
+confidence threshold.
 
 ## Contents
 

@@ -57,10 +57,21 @@ def test_quality_penalties_and_empirical_anchor_remain_explainable() -> None:
 
     empirical = scenarios["topt.yahoo-twelve-data-four-symbol-anchor"]
     assert empirical.evidence_class == "empirical_anchor"
-    assert empirical.evaluation.score_100 == Decimal("74.597200")
+    assert empirical.input.agreement == (Decimal(15069) / Decimal(15080)).quantize(Decimal("0.000000000001"))
+    with localcontext() as context:
+        context.prec = 50
+        assert empirical.input.required_component_completeness == Decimal(5) / Decimal(7)
+    assert empirical.evaluation.score_100 == Decimal("51.470200")
     assert {source.reliability for source in empirical.evaluation.source_scores} == {Decimal("0.800000")}
     assert "reliability.provisional-unobserved-ceiling" in empirical.evaluation.reason_codes
+    assert "evidence.raw-transport-missing" in empirical.evaluation.reason_codes
     assert "quality.required-component-penalty" in empirical.evaluation.reason_codes
+    scores_by_provider = {score.provider_id: score for score in empirical.evaluation.source_scores}
+    assert scores_by_provider["provider:yahoo-chart"].source_quality == Decimal("0.800000")
+    assert scores_by_provider["provider:twelve-data"].source_quality == Decimal("0.000000")
+    twelve = next(source for source in empirical.input.sources if source.provider_id == "provider:twelve-data")
+    assert twelve.transport_integrity == 0
+    assert len(twelve.evidence_ids) == 5
 
 
 def test_evaluation_rejects_denormalized_score_or_identity_drift() -> None:

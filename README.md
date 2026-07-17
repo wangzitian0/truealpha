@@ -35,6 +35,9 @@ Compose, GitHub CI, and infra2 may provide different backends behind it.
 
 Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
+Data-quality design and the reproducible continuous-confidence sensitivity
+report are documented in [`docs/confidence-calibration.md`](docs/confidence-calibration.md).
+
 ## Deployment
 
 Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC.

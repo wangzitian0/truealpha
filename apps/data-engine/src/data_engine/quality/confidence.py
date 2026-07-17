@@ -1,125 +1,137 @@
-"""Deterministic continuous-confidence evaluation for DataHub evidence."""
+"""Sample-bound continuous-confidence calibration for DataHub evidence."""
 
 from __future__ import annotations
 
-from collections import defaultdict
+import hashlib
+import json
+import re
 from decimal import Decimal, localcontext
+from pathlib import Path
 from typing import Literal
 
 from truealpha_contracts.confidence import (
     ConfidenceCalibrationReport,
     ConfidenceCalibrationScenario,
-    ContinuousConfidenceEvaluation,
     ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
-    OriginGroupContribution,
     SourceConfidenceEvidence,
-    SourceConfidenceScore,
+    evaluate_continuous_confidence,
 )
 
-
-def _quantize(value: Decimal, decimal_places: int) -> Decimal:
-    return value.quantize(Decimal(1).scaleb(-decimal_places))
-
-
-def _power(value: Decimal, exponent: Decimal) -> Decimal:
-    if value == 0:
-        return Decimal(0)
-    return (value.ln() * exponent).exp()
+_RECONCILIATION_REPORT = "twelve_data_reconciliation_20260714.json"
+_RECONCILIATION_MANIFEST = "independent_reconciliation.v1.json"
+_OBSERVED_FIELDS = ("close", "high", "low", "open", "volume")
+_REQUIRED_PRICE_COMPONENT_COUNT = 7
+_AGREEMENT_DECIMAL_PLACES = 12
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def evaluate_continuous_confidence(
-    policy: ContinuousConfidencePolicy,
-    evidence: ContinuousConfidenceInput,
-) -> ContinuousConfidenceEvaluation:
-    """Evaluate the versioned formula without binary floating point or source-name branching."""
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_json(path: Path) -> dict[str, object]:
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError(f"{path.name} must contain one JSON object")
+    return value
+
+
+def _sample_artifact_id(path: Path) -> str:
+    return f"sample-artifact-sha256:{_sha256(path)}"
+
+
+def _derive_price_reconciliation_anchor(
+    sample_root: Path,
+) -> tuple[Decimal, Decimal, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Derive agreement and evidence identities from checked-in artifacts."""
+
+    prices = sample_root / "prices"
+    report_path = prices / _RECONCILIATION_REPORT
+    manifest_path = prices / _RECONCILIATION_MANIFEST
+    report = _load_json(report_path)
+    manifest = _load_json(manifest_path)
+    if (
+        report.get("schema") != "truealpha.price-source-reconciliation@v1"
+        or report.get("status") != "observed_full_yahoo_window"
+        or report.get("primary_source") != "yahoo_chart"
+        or report.get("independent_source") != "twelve_data"
+    ):
+        raise ValueError("price reconciliation report has an unsupported identity or status")
+
+    primary_ids = {_sample_artifact_id(report_path), _sample_artifact_id(manifest_path)}
+    resolved_sample_root = sample_root.resolve()
+    primary_artifacts = manifest.get("primary_artifacts")
+    if not isinstance(primary_artifacts, list) or len(primary_artifacts) != 4:
+        raise ValueError("price reconciliation manifest must bind four primary artifacts")
+    for artifact in primary_artifacts:
+        if not isinstance(artifact, dict):
+            raise ValueError("primary artifact entries must be objects")
+        relative_path = artifact.get("path")
+        expected_sha256 = artifact.get("sha256")
+        if (
+            not isinstance(relative_path, str)
+            or not isinstance(expected_sha256, str)
+            or _SHA256.fullmatch(expected_sha256) is None
+        ):
+            raise ValueError("primary artifacts must declare path and sha256")
+        artifact_path = (sample_root / relative_path).resolve()
+        if not artifact_path.is_relative_to(resolved_sample_root):
+            raise ValueError(f"primary sample path escapes the sample root: {relative_path}")
+        actual_sha256 = _sha256(artifact_path)
+        if actual_sha256 != expected_sha256:
+            raise ValueError(f"primary sample hash mismatch: {relative_path}")
+        primary_ids.add(f"sample-artifact-sha256:{actual_sha256}")
+
+    observations = report.get("observations")
+    if not isinstance(observations, list) or len(observations) != 4:
+        raise ValueError("price reconciliation report must contain four observations")
+    independent_ids = {_sample_artifact_id(report_path)}
+    compared = 0
+    conforming = 0
+    subject_ids: set[str] = set()
+    for observation in observations:
+        if not isinstance(observation, dict):
+            raise ValueError("price reconciliation observations must be objects")
+        symbol = observation.get("symbol")
+        response_sha256 = observation.get("twelve_data_response_sha256")
+        common_dates = observation.get("common_dates")
+        field_stats = observation.get("field_stats")
+        if (
+            not isinstance(symbol, str)
+            or not isinstance(response_sha256, str)
+            or _SHA256.fullmatch(response_sha256) is None
+            or not isinstance(common_dates, int)
+            or common_dates <= 0
+            or not isinstance(field_stats, dict)
+            or tuple(sorted(field_stats)) != _OBSERVED_FIELDS
+        ):
+            raise ValueError("price reconciliation observation is incomplete")
+        subject_ids.add(f"ticker:{symbol}")
+        independent_ids.add(f"provider-response-sha256:{response_sha256}")
+        for field in _OBSERVED_FIELDS:
+            stats = field_stats[field]
+            if not isinstance(stats, dict):
+                raise ValueError("field reconciliation statistics must be objects")
+            count = stats.get("count")
+            within_tolerance = stats.get("within_tolerance")
+            if count != common_dates or not isinstance(within_tolerance, int) or not 0 <= within_tolerance <= count:
+                raise ValueError("field reconciliation statistics have an invalid denominator")
+            compared += count
+            conforming += within_tolerance
+    if len(subject_ids) != len(observations):
+        raise ValueError("price reconciliation subjects must be unique")
 
     with localcontext() as context:
-        context.prec = policy.calculation_precision
-        prior_total = policy.reliability_prior_success + policy.reliability_prior_failure
-        source_scores: list[SourceConfidenceScore] = []
-        grouped: dict[str, list[tuple[SourceConfidenceEvidence, Decimal]]] = defaultdict(list)
-        for source in evidence.sources:
-            observed_mass = source.successful_outcome_mass + source.failed_outcome_mass
-            reliability = (source.successful_outcome_mass + policy.reliability_prior_success) / (
-                observed_mass + prior_total
-            )
-            if observed_mass == 0:
-                reliability = min(reliability, policy.unobserved_reliability_ceiling)
-            source_quality = reliability * source.freshness * source.sample_conformance * source.transport_integrity
-            source_scores.append(
-                SourceConfidenceScore(
-                    source_evidence_id=source.source_evidence_id,
-                    provider_id=source.provider_id,
-                    origin_group_id=source.origin_group_id,
-                    reliability=_quantize(reliability, policy.output_decimal_places),
-                    source_quality=_quantize(source_quality, policy.output_decimal_places),
-                )
-            )
-            grouped[source.origin_group_id].append((source, source_quality))
-
-        origin_groups: list[OriginGroupContribution] = []
-        evidence_mass = Decimal(0)
-        for origin_group_id, candidates in grouped.items():
-            selected, selected_quality = sorted(
-                candidates,
-                key=lambda item: (-item[1], item[0].source_evidence_id),
-            )[0]
-            effective_support = selected.independence_weight * selected_quality
-            evidence_mass += effective_support
-            origin_groups.append(
-                OriginGroupContribution(
-                    origin_group_id=origin_group_id,
-                    independence_weight=selected.independence_weight,
-                    selected_source_evidence_id=selected.source_evidence_id,
-                    selected_source_quality=_quantize(selected_quality, policy.output_decimal_places),
-                    effective_support=_quantize(effective_support, policy.output_decimal_places),
-                )
-            )
-
-        source_support = Decimal(1) - (-evidence_mass).exp()
-        confidence = (
-            source_support
-            * _power(evidence.agreement, policy.agreement_exponent)
-            * _power(evidence.semantic_mapping_quality, policy.semantic_mapping_exponent)
-            * _power(evidence.lineage_completeness, policy.lineage_exponent)
-            * _power(evidence.required_component_completeness, policy.completeness_exponent)
-        )
-        confidence = _quantize(confidence, policy.output_decimal_places)
-        score_100 = _quantize(confidence * Decimal(100), policy.output_decimal_places)
-
-    reason_codes = {"confidence.evaluated"}
-    if len(grouped) == 1:
-        reason_codes.add("support.single-origin-ceiling")
-    if len(evidence.sources) > len(grouped):
-        reason_codes.add("support.same-origin-deduplicated")
-    if any(source.successful_outcome_mass + source.failed_outcome_mass == 0 for source in evidence.sources):
-        reason_codes.add("reliability.provisional-unobserved-ceiling")
-    if evidence.agreement < 1:
-        reason_codes.add("quality.source-disagreement")
-    if evidence.semantic_mapping_quality < 1:
-        reason_codes.add("quality.semantic-mapping-penalty")
-    if evidence.lineage_completeness < 1:
-        reason_codes.add("quality.lineage-penalty")
-    if evidence.required_component_completeness < 1:
-        reason_codes.add("quality.required-component-penalty")
-
-    return ContinuousConfidenceEvaluation(
-        policy_id=policy.policy_id,
-        policy_sha256=policy.content_sha256,
-        input_id=evidence.input_id,
-        input_sha256=evidence.content_sha256,
-        source_scores=tuple(source_scores),
-        origin_groups=tuple(origin_groups),
-        evidence_mass=_quantize(evidence_mass, policy.output_decimal_places),
-        source_support=_quantize(source_support, policy.output_decimal_places),
-        agreement=evidence.agreement,
-        semantic_mapping_quality=evidence.semantic_mapping_quality,
-        lineage_completeness=evidence.lineage_completeness,
-        required_component_completeness=evidence.required_component_completeness,
-        confidence=confidence,
-        score_100=score_100,
-        reason_codes=tuple(reason_codes),
+        context.prec = 50
+        agreement = (Decimal(conforming) / Decimal(compared)).quantize(Decimal(1).scaleb(-_AGREEMENT_DECIMAL_PLACES))
+        completeness = Decimal(len(_OBSERVED_FIELDS)) / Decimal(_REQUIRED_PRICE_COMPONENT_COUNT)
+    return (
+        agreement,
+        completeness,
+        tuple(sorted(primary_ids)),
+        tuple(sorted(independent_ids)),
+        tuple(sorted(subject_ids)),
     )
 
 
@@ -132,6 +144,10 @@ def _source(
     successful_outcome_mass: str = "1000",
     failed_outcome_mass: str = "0",
     freshness: str = "1",
+    sample_conformance: str = "1",
+    transport_integrity: str = "1",
+    evidence_ids: tuple[str, ...] | None = None,
+    reason_codes: tuple[str, ...] = ("sample-evidence.measured",),
 ) -> SourceConfidenceEvidence:
     return SourceConfidenceEvidence(
         provider_id=provider_id,
@@ -140,10 +156,10 @@ def _source(
         successful_outcome_mass=Decimal(successful_outcome_mass),
         failed_outcome_mass=Decimal(failed_outcome_mass),
         freshness=Decimal(freshness),
-        sample_conformance=Decimal(1),
-        transport_integrity=Decimal(1),
-        evidence_ids=(f"sample-evidence:{case_id}:{provider_id}",),
-        reason_codes=("sample-evidence.measured",),
+        sample_conformance=Decimal(sample_conformance),
+        transport_integrity=Decimal(transport_integrity),
+        evidence_ids=evidence_ids or (f"sample-evidence:{case_id}:{provider_id}",),
+        reason_codes=reason_codes,
     )
 
 
@@ -156,21 +172,18 @@ def _evaluate_case(
     semantic_mapping_quality: str = "1",
     lineage_completeness: str = "1",
     required_component_completeness: str = "1",
-) -> ContinuousConfidenceEvaluation:
-    return evaluate_continuous_confidence(
-        policy,
-        ContinuousConfidenceInput(
-            case_id=case_id,
-            sources=sources,
-            agreement=Decimal(agreement),
-            semantic_mapping_quality=Decimal(semantic_mapping_quality),
-            lineage_completeness=Decimal(lineage_completeness),
-            required_component_completeness=Decimal(required_component_completeness),
-        ),
+) -> ContinuousConfidenceInput:
+    return ContinuousConfidenceInput(
+        case_id=case_id,
+        sources=sources,
+        agreement=Decimal(agreement),
+        semantic_mapping_quality=Decimal(semantic_mapping_quality),
+        lineage_completeness=Decimal(lineage_completeness),
+        required_component_completeness=Decimal(required_component_completeness),
     )
 
 
-def build_topt_confidence_sensitivity_report() -> ConfidenceCalibrationReport:
+def build_topt_confidence_sensitivity_report(sample_root: Path | None = None) -> ConfidenceCalibrationReport:
     """Build the reviewable v0.1 report without claiming full-TOPT empirical calibration."""
 
     policy = ContinuousConfidencePolicy()
@@ -187,20 +200,22 @@ def build_topt_confidence_sensitivity_report() -> ConfidenceCalibrationReport:
         lineage_completeness: str = "1",
         required_component_completeness: str = "1",
     ) -> None:
+        confidence_input = _evaluate_case(
+            policy,
+            scenario_id,
+            sources,
+            agreement=agreement,
+            semantic_mapping_quality=semantic_mapping_quality,
+            lineage_completeness=lineage_completeness,
+            required_component_completeness=required_component_completeness,
+        )
         scenarios.append(
             ConfidenceCalibrationScenario(
                 scenario_id=scenario_id,
                 evidence_class=evidence_class,
                 expected_effect=expected_effect,
-                evaluation=_evaluate_case(
-                    policy,
-                    scenario_id,
-                    sources,
-                    agreement=agreement,
-                    semantic_mapping_quality=semantic_mapping_quality,
-                    lineage_completeness=lineage_completeness,
-                    required_component_completeness=required_component_completeness,
-                ),
+                input=confidence_input,
+                evaluation=evaluate_continuous_confidence(policy, confidence_input),
             )
         )
 
@@ -267,6 +282,10 @@ def build_topt_confidence_sensitivity_report() -> ConfidenceCalibrationReport:
         agreement="0.2",
     )
 
+    resolved_sample_root = sample_root or Path(__file__).resolve().parents[3] / "samples"
+    agreement, completeness, yahoo_evidence_ids, twelve_evidence_ids, empirical_subject_ids = (
+        _derive_price_reconciliation_anchor(resolved_sample_root)
+    )
     empirical_case = "topt.yahoo-twelve-data-four-symbol-anchor"
     add(
         empirical_case,
@@ -277,29 +296,35 @@ def build_topt_confidence_sensitivity_report() -> ConfidenceCalibrationReport:
                 "provider:yahoo-chart",
                 "origin:yahoo-chart",
                 successful_outcome_mass="0",
+                evidence_ids=yahoo_evidence_ids,
+                reason_codes=("sample.raw-bytes-retained", "sample.sha256-verified"),
             ),
             _source(
                 "empirical",
                 "provider:twelve-data",
                 "origin:twelve-data",
                 successful_outcome_mass="0",
+                transport_integrity="0",
+                evidence_ids=twelve_evidence_ids,
+                reason_codes=("sample.aggregate-only", "sample.raw-response-bytes-missing"),
             ),
         ),
         evidence_class="empirical_anchor",
-        agreement="0.999270557029",
-        required_component_completeness="0.714285714286",
+        agreement=str(agreement),
+        required_component_completeness=str(completeness),
     )
 
     return ConfidenceCalibrationReport(
         policy=policy,
         denominator_id="universe:topt-us-2026-03-31",
         denominator_size=20,
-        empirically_observed_subject_ids=("ticker:DDOG", "ticker:DUOL", "ticker:NICE", "ticker:SHOP"),
+        empirically_observed_subject_ids=empirical_subject_ids,
         scenarios=tuple(scenarios),
         limitations=(
             "Independent Yahoo/Twelve Data overlap covers four symbols, not the complete TOPT denominator.",
             "The report is sensitivity evidence and does not freeze a Production threshold.",
             "Adjusted close and corporate-action reconciliation are absent from the empirical anchor.",
+            "Twelve Data raw response bytes are absent, so that origin is lineage-only and contributes zero support.",
             "Full TOPT calibration must retain all twenty issuers and report missing second-source evidence.",
         ),
     )
