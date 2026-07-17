@@ -10,6 +10,7 @@ dependencies = [
     "truealpha-factors",
     "mcp>=1.0.0",
     "truealpha-contracts",
+    "truealpha-runtime",
 ]
 
 [dependency-groups]
@@ -22,6 +23,7 @@ dev = [
 [tool.uv.sources]
 truealpha-factors = { workspace = true }
 truealpha-contracts = { workspace = true }
+truealpha-runtime = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
