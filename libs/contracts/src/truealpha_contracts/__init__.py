@@ -412,6 +412,21 @@ from truealpha_contracts.research import (
 from truealpha_contracts.research import (
     CurrencyConversionPolicy as AnalystCurrencyConversionPolicy,
 )
+from truealpha_contracts.research_report import (
+    EvidenceTrace,
+    ReportSection,
+    ReportSectionKind,
+    ReportSubject,
+    ResearchReadPort,
+    ResearchReport,
+    ResearchReportKind,
+    ResearchReportRequest,
+    ResultValue,
+    build_research_report,
+    render_report_json,
+    render_report_markdown,
+)
+from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
 from truealpha_contracts.service_demand import (
     ConfidenceTargetBand,
     DataHubDemandIntakeReport,
@@ -930,6 +945,19 @@ __all__ = [
     "RiskFreeRatePolicy",
     "SelectionRule",
     "FixtureStrategyRunRepository",
+    "FixtureResearchReadRepository",
+    "EvidenceTrace",
+    "ReportSection",
+    "ReportSectionKind",
+    "ReportSubject",
+    "ResearchReadPort",
+    "ResearchReport",
+    "ResearchReportKind",
+    "ResearchReportRequest",
+    "ResultValue",
+    "build_research_report",
+    "render_report_json",
+    "render_report_markdown",
     "StrategyEngineBinding",
     "StrategyRunDecision",
     "StrategyRunOutcome",

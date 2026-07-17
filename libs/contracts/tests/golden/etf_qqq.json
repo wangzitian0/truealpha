@@ -1,0 +1,52 @@
+{
+  "cutoff_at": "2026-06-30T23:59:59Z",
+  "generated_from": "fixture:research_report.v1",
+  "report_id": "report:415b8ed21fd5ab8937bf538ba9f89bc7546dabbd0044c70d21e3f3c668410ccc",
+  "report_kind": "etf",
+  "schema_version": "research_report.v1",
+  "subjects": [
+    {
+      "display_name": "Invesco QQQ Trust",
+      "rank": null,
+      "sections": [
+        {
+          "availability": "unavailable",
+          "notes": [],
+          "reason_codes": [
+            "etf_virtual_company_module_not_materialized"
+          ],
+          "results": [
+            {
+              "availability": "unavailable",
+              "confidence": null,
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": null,
+              "label": "virtual_company_fundamentals",
+              "period": null,
+              "trace": null,
+              "unit": null,
+              "value": null
+            }
+          ],
+          "section_kind": "etf_virtual_company",
+          "title": "ETF virtual company",
+          "validation_status": null
+        },
+        {
+          "availability": "unavailable",
+          "notes": [],
+          "reason_codes": [
+            "etf_valuation_not_materialized"
+          ],
+          "results": [],
+          "section_kind": "valuation",
+          "title": "Valuation (three-tier P/S)",
+          "validation_status": null
+        }
+      ],
+      "subject_id": "etf:qqq"
+    }
+  ],
+  "title": "QQQ \u2014 ETF research report"
+}
