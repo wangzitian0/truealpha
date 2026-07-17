@@ -163,3 +163,47 @@ def extract_gross_profit(
     return extract_annual_metric(
         company_facts, tag="GrossProfit", metric="gross_profit", entity_id=entity_id, cutoff=cutoff
     )
+
+
+#: Priority order matters only as a tie-break preference, not a blind first
+#: match — see extract_revenue's docstring for why a fixed priority alone is
+#: unsafe here.
+_REVENUE_TAGS = ("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues")
+
+
+def extract_revenue(
+    company_facts: dict[str, Any], *, entity_id: str, cutoff: datetime
+) -> SecFinancialObservation | None:
+    """`revenue` per `truealpha_contracts.metrics.METRICS`.
+
+    Issuers use different XBRL tags for top-line revenue, and verified
+    against the sample corpus, several **stop actively filing under one tag
+    and switch to another over time**: NVDA's last
+    `RevenueFromContractWithCustomerExcludingAssessedTax` filing is dated
+    2022-03-18 (val $26.9B), while its `Revenues` tag continues through
+    2026-02-25 (val $215.9B) — a fixed tag priority would silently return
+    NVDA's four-year-stale figure. Selection instead prefers whichever
+    candidate tag has the most recently *filed* annual value.
+
+    When two candidate tags are equally current but materially disagree —
+    verified against ADM, where `Revenues` ($80.3B) and
+    `RevenueFromContractWithCustomerExcludingAssessedTax` ($25.0B) are both
+    actively filed in the same 10-K, evidently different revenue concepts
+    for a commodities-trading issuer, not the same number reported twice —
+    this returns `None` rather than guessing which one is "the" revenue.
+    An unresolved tag conflict is a real, reportable gap, not a coin flip.
+    """
+
+    observations = [
+        obs
+        for tag in _REVENUE_TAGS
+        if (obs := extract_annual_metric(company_facts, tag=tag, metric="revenue", entity_id=entity_id, cutoff=cutoff))
+        is not None
+    ]
+    if not observations:
+        return None
+    latest_knowable_at = max(obs.knowable_at for obs in observations)
+    most_recent = [obs for obs in observations if obs.knowable_at == latest_knowable_at]
+    if len({obs.value for obs in most_recent}) == 1:
+        return most_recent[0]
+    return None

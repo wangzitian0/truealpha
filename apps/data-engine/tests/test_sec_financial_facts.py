@@ -4,7 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from data_engine.sec_financial_facts import extract_gross_profit, extract_total_assets
+from data_engine.sec_financial_facts import extract_gross_profit, extract_revenue, extract_total_assets
 
 SAMPLES_DIR = Path(__file__).resolve().parents[1] / "samples" / "sec"
 
@@ -84,6 +84,40 @@ def test_selects_latest_by_filed_end_accession_value_not_first_match() -> None:
     assert observation is not None
     assert observation.fiscal_period == "FY2025"
     assert observation.value == Decimal("6643844000")
+
+
+def test_revenue_prefers_the_tag_the_issuer_actively_files_under() -> None:
+    # NVDA's RevenueFromContractWithCustomerExcludingAssessedTax data stops
+    # in 2022 ($26.9B); Revenues continues through 2026 ($215.9B). A fixed
+    # tag priority would silently return the four-year-stale figure.
+    observation = extract_revenue(_company_facts("nvda"), entity_id="issuer.nvda", cutoff=_FAR_FUTURE_CUTOFF)
+    assert observation is not None
+    assert observation.value == Decimal("215938000000")
+
+
+def test_revenue_switches_preferred_tag_per_issuer_not_a_global_priority() -> None:
+    # META is the mirror image of NVDA: Revenues is stale (last filed value
+    # is from fiscal 2017), RevenueFromContractWithCustomerExcludingAssessedTax
+    # is current. Proves selection is per-issuer recency, not "always prefer
+    # tag X".
+    observation = extract_revenue(_company_facts("meta"), entity_id="issuer.meta", cutoff=_FAR_FUTURE_CUTOFF)
+    assert observation is not None
+    assert observation.value == Decimal("200966000000")
+
+
+def test_revenue_is_none_when_equally_current_tags_disagree() -> None:
+    # ADM files both Revenues ($80.3B) and
+    # RevenueFromContractWithCustomerExcludingAssessedTax ($25.0B) in the
+    # same 10-K -- evidently different revenue concepts for a commodities
+    # issuer, not the same number twice. Neither is safe to guess.
+    observation = extract_revenue(_company_facts("adm"), entity_id="issuer.adm", cutoff=_FAR_FUTURE_CUTOFF)
+    assert observation is None
+
+
+def test_revenue_extracts_when_only_one_candidate_tag_exists() -> None:
+    observation = extract_revenue(_company_facts("shop"), entity_id="issuer.shop", cutoff=_FAR_FUTURE_CUTOFF)
+    assert observation is not None
+    assert observation.metric == "revenue"
 
 
 def test_unregistered_tag_returns_none_not_an_error() -> None:
