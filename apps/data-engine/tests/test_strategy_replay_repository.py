@@ -79,7 +79,7 @@ def test_a_different_executed_at_is_a_new_run(connection) -> None:
     assert count == 2
 
 
-def test_jpm_decision_persists_the_financial_branch_outcome(connection) -> None:
+def test_jpm_decision_persists_the_uniform_rejected_outcome(connection) -> None:
     decisions, definition = run()
     run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
     jpm = next(d for d in decisions if d.issuer_id == "issuer:jpm")
@@ -87,15 +87,19 @@ def test_jpm_decision_persists_the_financial_branch_outcome(connection) -> None:
     write_strategy_decision(connection, jpm, strategy_run_id=run_id)
 
     row = connection.execute(
-        "select capital_adjusted_labor_efficiency, exclusion_reason, eligible "
+        "select capital_adjusted_labor_efficiency, exclusion_reason, eligible, outcome "
         "from mart.strategy_decisions where strategy_run_id = %s and issuer_id = %s",
         (run_id, "issuer:jpm"),
     ).fetchone()
     assert row is not None
-    efficiency, exclusion_reason, eligible = row
+    efficiency, exclusion_reason, eligible, outcome = row
+    # Uniform v0 (2026-07-18): JPM computes a (negative) capital-adjusted level,
+    # flows through the P/S tier, and is rejected for sitting above its band --
+    # eligible, with no sector exclusion reason.
     assert efficiency is not None
-    assert exclusion_reason == "financial_valuation_not_comparable"
-    assert eligible is False
+    assert exclusion_reason is None
+    assert eligible is True
+    assert outcome == "rejected_valuation_above_tier_band"
 
 
 def test_a_forged_row_under_the_computed_id_raises_on_replay(connection) -> None:

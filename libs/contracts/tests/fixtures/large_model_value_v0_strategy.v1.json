@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Frozen large_model_value_v0 strategy definition and golden decisions for issue #21. Golden inputs are grounded in the checked-in sample corpus under apps/data-engine/samples/; every expected number is recomputed with Decimal arithmetic by the tests. Golden decisions are engineering regression anchors over a fixed research cohort, not performance claims. Tier bands, the confidence floor, and the per-cutoff 3-month T-bill rates are provisional versioned research parameters pending calibration. Decision evaluation order: missing required inputs, then the consumed-confidence floor, then factor computation with the tier-band valuation check, then ranking by descending valuation gap and top-N equal-weight selection. Financial issuers (issuer_branch=financial) take the mandatory #59 factor branch (gross_profit/headcount, no capital charge) before the confidence floor; the P/S-tier comparison is then explicitly unavailable for them (eligibility.financial_target_behavior=ineligible_financial_valuation_not_comparable) -- a named methodology gap, never a blanket sector exclusion.",
+  "notes": "Frozen large_model_value_v0 strategy definition and golden decisions for issue #21. Golden inputs are grounded in the checked-in sample corpus under apps/data-engine/samples/; every expected number is recomputed with Decimal arithmetic by the tests. Golden decisions are engineering regression anchors over a fixed research cohort, not performance claims. Tier bands, the confidence floor, and the per-cutoff 3-month T-bill rates are provisional versioned research parameters pending calibration. Decision evaluation order: missing required inputs, then the consumed-confidence floor, then the uniform capital-adjusted factor computation with the tier-band valuation check, then ranking by descending valuation gap and top-N equal-weight selection. The v0 formula is uniform across every issuer (2026-07-18 owner decision): financial issuers take the identical (gross_profit - total_assets*risk_free_rate)/headcount definition, with gross_profit supplied by the parser's financial_issuer_split pre-provision-profit proxy. There is no financial-sector branch or blanket exclusion.",
   "strategy_definition": {
     "strategy_id": "large_model_value_v0",
     "definition_version": "0.1.0",
@@ -115,8 +115,7 @@
       "confidence_semantics": "minimum_consumed_input_confidence",
       "maximum_input_age_days": 455,
       "below_floor_reason": "below_confidence_floor",
-      "stale_input_reason": "stale_required_input",
-      "financial_target_behavior": "ineligible_financial_valuation_not_comparable"
+      "stale_input_reason": "stale_required_input"
     },
     "selection": {
       "rule_id": "top_n_ranked_eligible",
@@ -146,12 +145,11 @@
       "price_basis": "unadjusted",
       "corporate_action_processing": "explicit_event_lifecycle_once",
       "adjusted_prices_affect_returns": false
-    },
-    "financial_issuers_use_financial_proxy": true
+    }
   },
   "engine_binding": {
-    "strategy_definition_id": "strategy-definition:e594bfb7ce9b61ea7c50da44795df2452479bc6f220bde2b85fb2dc094912267",
-    "strategy_definition_sha256": "e594bfb7ce9b61ea7c50da44795df2452479bc6f220bde2b85fb2dc094912267",
+    "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "execution_binding": {
       "distribution": "pyqlib",
       "version": "0.9.6",
@@ -165,8 +163,8 @@
     "operator_registry_sha256": "b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122"
   },
   "engine_binding_alternate": {
-    "strategy_definition_id": "strategy-definition:e594bfb7ce9b61ea7c50da44795df2452479bc6f220bde2b85fb2dc094912267",
-    "strategy_definition_sha256": "e594bfb7ce9b61ea7c50da44795df2452479bc6f220bde2b85fb2dc094912267",
+    "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "execution_binding": {
       "distribution": "pyqlib",
       "version": "0.9.7",
@@ -180,8 +178,8 @@
     "operator_registry_sha256": "b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122"
   },
   "golden_decision_set": {
-    "strategy_definition_id": "strategy-definition:e594bfb7ce9b61ea7c50da44795df2452479bc6f220bde2b85fb2dc094912267",
-    "strategy_definition_sha256": "e594bfb7ce9b61ea7c50da44795df2452479bc6f220bde2b85fb2dc094912267",
+    "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "risk_free_rates": [
       {
         "cutoff_at": "2026-03-31T23:59:59Z",
@@ -397,16 +395,16 @@
             "grounding": "apps/data-engine/samples/sec/JPM_CIK0000019617.json: bank pre-provision-profit proxy (metrics.py financial_issuer_split) = us-gaap:InterestIncomeExpenseNet (95443000000) + us-gaap:NoninterestIncome (87004000000) - us-gaap:NoninterestExpense (95640000000) = 86807000000, FY2025 (2025-01-01..2025-12-31), filed 2026-02-13"
           }
         ],
-        "derivation": "JPM's gross_profit input is the parser's financial_issuer_split definition for banks: pre-provision profit = net interest income + noninterest income - noninterest expense, computed from apps/data-engine/samples/sec/JPM_CIK0000019617.json us-gaap:InterestIncomeExpenseNet/NoninterestIncome/NoninterestExpense (FY2025, filed 2026-02-13) = 95443000000 + 87004000000 - 95640000000 = 86807000000. gross_profit_per_employee's mandatory #59 financial branch (issuer_branch=financial) computes financial_efficiency = gross_profit / headcount = 86807000000 / 318512 = 272539.18 with no capital-charge subtraction -- total_assets is not consumed by the financial branch (a bank's balance sheet size is the business, not deployed capital against it). The branch is computed, never blanket-skipped; strategy eligibility then excludes JPM from the P/S-tier comparison specifically, via the explicit eligibility.financial_target_behavior=ineligible_financial_valuation_not_comparable policy -> excluded financial_valuation_not_comparable.",
+        "derivation": "JPM takes the identical uniform v0 formula (2026-07-18 owner decision): capital_charge = total_assets * risk_free_rate; capital_adjusted_labor_efficiency = (gross_profit - capital_charge) / headcount, where gross_profit is the parser's financial_issuer_split pre-provision-profit proxy (95443000000 + 87004000000 - 95640000000 = 86807000000). A 4.4T balance sheet drives the capital charge above pre-provision profit, so real profit and thus labor efficiency are negative -- a valid low signal, not a special exclusion. Negative labor efficiency maps to the traditional tier (open lower bound); JPM's current P/S sits above the traditional target band upper bound (2.00), so the decision is rejected_valuation_above_tier_band exactly like any other over-valued issuer.",
         "expected": {
-          "capital_adjusted_labor_efficiency": "272539.18",
-          "tier": null,
-          "current_price_to_sales": null,
-          "target_price_to_sales": null,
-          "valuation_gap": null,
-          "eligible": false,
-          "outcome": "excluded",
-          "exclusion_reason": "financial_valuation_not_comparable",
+          "capital_adjusted_labor_efficiency": "-255372.48",
+          "tier": "traditional",
+          "current_price_to_sales": "4.3484",
+          "target_price_to_sales": "1.1500",
+          "valuation_gap": "-0.7355",
+          "eligible": true,
+          "outcome": "rejected_valuation_above_tier_band",
+          "exclusion_reason": null,
           "rank": null,
           "target_weight": null
         }
@@ -757,16 +755,16 @@
             "grounding": "apps/data-engine/samples/sec/JPM_CIK0000019617.json: bank pre-provision-profit proxy (metrics.py financial_issuer_split) = us-gaap:InterestIncomeExpenseNet (95443000000) + us-gaap:NoninterestIncome (87004000000) - us-gaap:NoninterestExpense (95640000000) = 86807000000, FY2025 (2025-01-01..2025-12-31), filed 2026-02-13"
           }
         ],
-        "derivation": "JPM's gross_profit input is the parser's financial_issuer_split definition for banks: pre-provision profit = net interest income + noninterest income - noninterest expense, computed from apps/data-engine/samples/sec/JPM_CIK0000019617.json us-gaap:InterestIncomeExpenseNet/NoninterestIncome/NoninterestExpense (FY2025, filed 2026-02-13) = 95443000000 + 87004000000 - 95640000000 = 86807000000. gross_profit_per_employee's mandatory #59 financial branch (issuer_branch=financial) computes financial_efficiency = gross_profit / headcount = 86807000000 / 318512 = 272539.18 with no capital-charge subtraction -- total_assets is not consumed by the financial branch (a bank's balance sheet size is the business, not deployed capital against it). The branch is computed, never blanket-skipped; strategy eligibility then excludes JPM from the P/S-tier comparison specifically, via the explicit eligibility.financial_target_behavior=ineligible_financial_valuation_not_comparable policy -> excluded financial_valuation_not_comparable.",
+        "derivation": "JPM takes the identical uniform v0 formula (2026-07-18 owner decision): capital_charge = total_assets * risk_free_rate; capital_adjusted_labor_efficiency = (gross_profit - capital_charge) / headcount, where gross_profit is the parser's financial_issuer_split pre-provision-profit proxy (95443000000 + 87004000000 - 95640000000 = 86807000000). A 4.4T balance sheet drives the capital charge above pre-provision profit, so real profit and thus labor efficiency are negative -- a valid low signal, not a special exclusion. Negative labor efficiency maps to the traditional tier (open lower bound); JPM's current P/S sits above the traditional target band upper bound (2.00), so the decision is rejected_valuation_above_tier_band exactly like any other over-valued issuer.",
         "expected": {
-          "capital_adjusted_labor_efficiency": "272539.18",
-          "tier": null,
-          "current_price_to_sales": null,
-          "target_price_to_sales": null,
-          "valuation_gap": null,
-          "eligible": false,
-          "outcome": "excluded",
-          "exclusion_reason": "financial_valuation_not_comparable",
+          "capital_adjusted_labor_efficiency": "-234533.86",
+          "tier": "traditional",
+          "current_price_to_sales": "4.8388",
+          "target_price_to_sales": "1.1500",
+          "valuation_gap": "-0.7623",
+          "eligible": true,
+          "outcome": "rejected_valuation_above_tier_band",
+          "exclusion_reason": null,
           "rank": null,
           "target_weight": null
         }
@@ -918,11 +916,11 @@
     ]
   },
   "expected": {
-    "strategy_definition_id": "strategy-definition:e594bfb7ce9b61ea7c50da44795df2452479bc6f220bde2b85fb2dc094912267",
-    "strategy_definition_sha256": "e594bfb7ce9b61ea7c50da44795df2452479bc6f220bde2b85fb2dc094912267",
-    "golden_decision_set_id": "golden-decision-set:f1626be90ba01c273a7096b1a1cfbf4287a6799d6be41a7b0b493273370c4b00",
-    "engine_binding_id": "strategy-engine-binding:64aff5019ad37de226056863d984d5a7f19d53b8f74c49f67d86a82e66c16abb",
-    "engine_binding_alternate_id": "strategy-engine-binding:cdb18141533083dca9825f80b024567edf5593ff8bd62369391b20fb259c7ff3"
+    "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "golden_decision_set_id": "golden-decision-set:3092840a0183abe687bd552201f75bc5f2e57f4786026287aab77028fde4ac53",
+    "engine_binding_id": "strategy-engine-binding:4f1949fffc0d42f3f99f265a2321f2b32ecc08e271f9f2c4a6ffb8c286c9d039",
+    "engine_binding_alternate_id": "strategy-engine-binding:cdde299e803e45b93d833ff80a149ceefd03336ec58889bd285dec5cea8c5120"
   },
   "negative_cases": [
     {
@@ -1041,7 +1039,7 @@
       "case_id": "excluded-without-reason",
       "target": "golden_decision_set",
       "operation": "replace",
-      "path": "decisions.2.expected.exclusion_reason",
+      "path": "decisions.1.expected.exclusion_reason",
       "value": null
     },
     {
@@ -1099,20 +1097,6 @@
       "operation": "replace",
       "path": "strategy_definition_sha256",
       "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-    },
-    {
-      "case_id": "financial-proxy-blanket-disabled",
-      "target": "strategy_definition",
-      "operation": "replace",
-      "path": "financial_issuers_use_financial_proxy",
-      "value": false
-    },
-    {
-      "case_id": "unknown-financial-target-behavior",
-      "target": "strategy_definition",
-      "operation": "replace",
-      "path": "eligibility.financial_target_behavior",
-      "value": "use_sector_default"
     },
     {
       "case_id": "missing-issuer-branch",

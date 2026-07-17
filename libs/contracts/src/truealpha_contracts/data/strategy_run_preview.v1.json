@@ -1,5 +1,5 @@
 {
-  "corpus_sha256": "24c786a1e5b16e0f3300802473a814b65d0fa84fc7489c2c01fb880309807aad",
+  "corpus_sha256": "8cdb081d887ff7754ac52a1eb02679b94a1c1c71b1eb32c606c06f5d6fe96083",
   "decisions": [
     {
       "capital_adjusted_labor_efficiency": "73313.52",
@@ -32,19 +32,19 @@
       "valuation_gap": null
     },
     {
-      "capital_adjusted_labor_efficiency": "272539.18",
+      "capital_adjusted_labor_efficiency": "-255372.48",
       "confidence": "0.90",
-      "current_price_to_sales": null,
+      "current_price_to_sales": "4.3484",
       "cutoff_at": "2026-03-31T23:59:59Z",
-      "eligible": false,
-      "exclusion_reason": "financial_valuation_not_comparable",
+      "eligible": true,
+      "exclusion_reason": null,
       "issuer_id": "issuer:jpm",
-      "outcome": "excluded",
+      "outcome": "rejected_valuation_above_tier_band",
       "rank": null,
-      "target_price_to_sales": null,
+      "target_price_to_sales": "1.1500",
       "target_weight": null,
-      "tier": null,
-      "valuation_gap": null
+      "tier": "traditional",
+      "valuation_gap": "-0.7355"
     },
     {
       "capital_adjusted_labor_efficiency": "183057.95",
@@ -107,19 +107,19 @@
       "valuation_gap": null
     },
     {
-      "capital_adjusted_labor_efficiency": "272539.18",
+      "capital_adjusted_labor_efficiency": "-234533.86",
       "confidence": "0.90",
-      "current_price_to_sales": null,
+      "current_price_to_sales": "4.8388",
       "cutoff_at": "2026-06-30T23:59:59Z",
-      "eligible": false,
-      "exclusion_reason": "financial_valuation_not_comparable",
+      "eligible": true,
+      "exclusion_reason": null,
       "issuer_id": "issuer:jpm",
-      "outcome": "excluded",
+      "outcome": "rejected_valuation_above_tier_band",
       "rank": null,
-      "target_price_to_sales": null,
+      "target_price_to_sales": "1.1500",
       "target_weight": null,
-      "tier": null,
-      "valuation_gap": null
+      "tier": "traditional",
+      "valuation_gap": "-0.7623"
     },
     {
       "capital_adjusted_labor_efficiency": "183853.62",

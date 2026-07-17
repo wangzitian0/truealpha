@@ -21,7 +21,7 @@ from truealpha_contracts.strategy import (
 )
 
 CORPUS_PATH = Path(__file__).with_name("fixtures") / "large_model_value_v0_strategy.v1.json"
-CORPUS_SHA256 = "24c786a1e5b16e0f3300802473a814b65d0fa84fc7489c2c01fb880309807aad"
+CORPUS_SHA256 = "8cdb081d887ff7754ac52a1eb02679b94a1c1c71b1eb32c606c06f5d6fe96083"
 
 _REQUIRED_INPUT_REASONS = (
     ("gross_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
@@ -160,14 +160,10 @@ def test_formula_variants_are_configuration_not_structure() -> None:
     assert labor_cost_variant.strategy_definition_id != _expected()["strategy_definition_id"]
     assert labor_cost_variant.labor_efficiency.unit.dimension is FactorDimension.DIMENSIONLESS
 
-    payload = _definition_payload()
-    labor = payload["labor_efficiency"]
-    assert isinstance(labor, dict)
-    labor["factor_version"] = "0.3.0"
-    labor["capital_charge_base"] = "average_investable_financial_assets"
-    labor["missing_capital_base_reason"] = "missing_financial_asset_base_fact"
-    financial_base_variant = _validate_definition(payload)
-    assert financial_base_variant.strategy_definition_id != labor_cost_variant.strategy_definition_id
+    # The labor-cost denominator is a legitimate future versioned variant of the
+    # one uniform schema. The former financial-asset-base variant was removed with
+    # the financial branch (2026-07-18 owner decision): there is no separate
+    # financial capital-charge base -- every issuer uses total_assets.
 
 
 def test_engine_identity_stays_outside_the_semantic_hash() -> None:
@@ -192,7 +188,7 @@ def test_corpus_negative_cases_fail_closed() -> None:
     corpus = _corpus()
     negative_cases = corpus["negative_cases"]
     assert isinstance(negative_cases, list)
-    assert len(negative_cases) == 28
+    assert len(negative_cases) == 26
     payloads = {
         "strategy_definition": _definition_payload,
         "golden_decision_set": _golden_payload,
@@ -247,15 +243,18 @@ def test_golden_corpus_covers_the_required_scenarios_with_grounded_inputs() -> N
 
     outcomes = [decision.expected.outcome for decision in golden.decisions]
     assert outcomes.count(GoldenDecisionOutcome.SELECTED) == 4
-    assert outcomes.count(GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND) == 2
-    assert outcomes.count(GoldenDecisionOutcome.EXCLUDED) == 4
+    # JPM now flows through the uniform formula at both cutoffs: negative labor
+    # efficiency -> traditional tier -> P/S above that tier's band -> rejected.
+    assert outcomes.count(GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND) == 4
+    assert outcomes.count(GoldenDecisionOutcome.EXCLUDED) == 2
 
     by_issuer = {
         issuer: {decision.expected.exclusion_reason for decision in golden.decisions if decision.issuer.id == issuer}
         for issuer in issuers
     }
     assert by_issuer["issuer:ddog"] == {ExclusionReason.BELOW_CONFIDENCE_FLOOR}
-    assert by_issuer["issuer:jpm"] == {ExclusionReason.FINANCIAL_VALUATION_NOT_COMPARABLE}
+    # JPM is no longer sector-excluded; a rejected decision carries no reason code.
+    assert by_issuer["issuer:jpm"] == {None}
 
     for decision in golden.decisions:
         for record in decision.inputs:
@@ -280,43 +279,15 @@ def test_golden_expectations_recompute_exactly_from_their_inputs() -> None:
         for decision in at_cutoff:
             inputs = {record.input_key: record for record in decision.inputs}
             expected = decision.expected
-            is_financial = decision.issuer_branch == "financial"
+            # The v0 formula is uniform: every issuer (financial or not) consumes
+            # total_assets and takes the same capital-adjusted path.
             missing = next(
-                (
-                    reason
-                    for key, reason in _REQUIRED_INPUT_REASONS
-                    if key not in inputs and not (is_financial and key == "total_assets")
-                ),
+                (reason for key, reason in _REQUIRED_INPUT_REASONS if key not in inputs),
                 None,
             )
             if missing is not None:
                 assert expected.outcome is GoldenDecisionOutcome.EXCLUDED
                 assert expected.exclusion_reason is missing
-                assert not expected.eligible
-                verified += 1
-                continue
-
-            if is_financial:
-                consumed_confidence = min(inputs["gross_profit"].confidence, inputs["headcount"].confidence)
-                if consumed_confidence < definition.eligibility.minimum_confidence:
-                    assert expected.outcome is GoldenDecisionOutcome.EXCLUDED
-                    assert expected.exclusion_reason is ExclusionReason.BELOW_CONFIDENCE_FLOOR
-                    assert not expected.eligible
-                    verified += 1
-                    continue
-
-                financial_efficiency = _quantize(
-                    inputs["gross_profit"].value / inputs["headcount"].value,
-                    definition.labor_efficiency.quantization,
-                )
-                assert expected.capital_adjusted_labor_efficiency == financial_efficiency
-                assert str(expected.capital_adjusted_labor_efficiency) == str(financial_efficiency)
-                assert expected.tier is None
-                assert expected.current_price_to_sales is None
-                assert expected.target_price_to_sales is None
-                assert expected.valuation_gap is None
-                assert expected.outcome is GoldenDecisionOutcome.EXCLUDED
-                assert expected.exclusion_reason is ExclusionReason.FINANCIAL_VALUATION_NOT_COMPARABLE
                 assert not expected.eligible
                 verified += 1
                 continue

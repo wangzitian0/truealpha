@@ -10,7 +10,7 @@ from truealpha_contracts.strategy import ThreeTierValuationDefinition
 
 _AS_OF = datetime(2026, 7, 1, tzinfo=UTC)
 _CORPUS_PATH = Path(__file__).parents[2] / "contracts" / "tests" / "fixtures" / "large_model_value_v0_strategy.v1.json"
-_CORPUS_SHA256 = "24c786a1e5b16e0f3300802473a814b65d0fa84fc7489c2c01fb880309807aad"
+_CORPUS_SHA256 = "8cdb081d887ff7754ac52a1eb02679b94a1c1c71b1eb32c606c06f5d6fe96083"
 _UNIT_FAMILY = {
     "gross_profit_per_employee": UnitFamily.PER_EMPLOYEE,
     "price_to_sales": UnitFamily.RATIO,

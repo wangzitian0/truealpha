@@ -125,16 +125,13 @@ class DecimalQuantization(_StrictFrozenModel):
 
 class ExclusionReason(StrEnum):
     """Machine-readable per-issuer exclusion codes; no blanket sector-eligibility
-    code exists. FINANCIAL_VALUATION_NOT_COMPARABLE is not an exception to that
-    rule: it is only valid *after* a financial issuer's mandatory #59 factor
-    branch (`financial_issuers_use_financial_proxy`) actually produced a real
-    capital_adjusted_labor_efficiency value -- it names a specific downstream
-    methodology gap (no approved P/S-equivalent tier mapping for financial
-    issuers yet), never a shortcut that skips computing the branch."""
+    code exists. The v0 strategy applies one uniform capital-adjusted formula to
+    every issuer (2026-07-18 owner decision), so there is no financial-sector
+    exclusion: a bank whose real profit is negative simply ranks low or, when its
+    P/S sits above its tier band, is rejected exactly like any other issuer."""
 
     MISSING_GROSS_PROFIT_FACT = "missing_gross_profit_fact"
     MISSING_TOTAL_ASSETS_FACT = "missing_total_assets_fact"
-    MISSING_FINANCIAL_ASSET_BASE_FACT = "missing_financial_asset_base_fact"
     MISSING_HEADCOUNT_DISCLOSURE = "missing_headcount_disclosure"
     MISSING_LABOR_COST_DISCLOSURE = "missing_labor_cost_disclosure"
     MISSING_REVENUE_FACT = "missing_revenue_fact"
@@ -145,7 +142,6 @@ class ExclusionReason(StrEnum):
     NONPOSITIVE_HEADCOUNT = "nonpositive_headcount"
     NONPOSITIVE_LABOR_COST = "nonpositive_labor_cost"
     NONPOSITIVE_REVENUE = "nonpositive_revenue"
-    FINANCIAL_VALUATION_NOT_COMPARABLE = "financial_valuation_not_comparable"
 
 
 class RiskFreeInstrument(StrEnum):
@@ -194,16 +190,16 @@ class LaborEfficiencyDenominator(StrEnum):
 
 class CapitalChargeBase(StrEnum):
     TOTAL_ASSETS = "total_assets"
-    AVERAGE_INVESTABLE_FINANCIAL_ASSETS = "average_investable_financial_assets"
 
 
 class CapitalAdjustedLaborEfficiencyDefinition(_StrictFrozenModel):
     """v0 core metric: (numerator - capital_charge_base * risk_free_rate) / denominator.
 
-    Variants (labor-cost denominator, financial asset base) are new versioned
-    definitions of this same schema; the reason codes and unit dimension are
-    forced to match the configured inputs so a variant cannot smuggle stale
-    semantics.
+    One uniform definition applies to every issuer (2026-07-18 owner decision);
+    there is no per-issuer branch. Variants (e.g. a labor-cost denominator) are
+    new versioned definitions of this same schema; the reason codes and unit
+    dimension are forced to match the configured inputs so a variant cannot
+    smuggle stale semantics.
     """
 
     factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
@@ -234,7 +230,6 @@ class CapitalAdjustedLaborEfficiencyDefinition(_StrictFrozenModel):
                 raise ValueError("gross-profit numerator requires the missing_gross_profit_fact reason")
         expected_capital_reason = {
             CapitalChargeBase.TOTAL_ASSETS: ExclusionReason.MISSING_TOTAL_ASSETS_FACT,
-            CapitalChargeBase.AVERAGE_INVESTABLE_FINANCIAL_ASSETS: (ExclusionReason.MISSING_FINANCIAL_ASSET_BASE_FACT),
         }[self.capital_charge_base]
         if self.missing_capital_base_reason is not expected_capital_reason:
             raise ValueError("capital-charge base and its missing-input reason code are inconsistent")
@@ -395,12 +390,6 @@ class ConfidenceEligibilityRule(_StrictFrozenModel):
     maximum_input_age_days: int = Field(ge=1, le=730)
     below_floor_reason: ExclusionReason
     stale_input_reason: ExclusionReason
-    # Only one behavior is implemented today: financial issuers compute the
-    # mandatory #59 factor branch and are then marked ineligible for the P/S
-    # tier comparison specifically (no approved financial target band exists
-    # yet). A future versioned band would be a new Literal member, not a
-    # default -- #21's "no implicit defaults" rule.
-    financial_target_behavior: Literal["ineligible_financial_valuation_not_comparable"]
 
     @field_validator("minimum_confidence", mode="before")
     @classmethod
@@ -414,10 +403,6 @@ class ConfidenceEligibilityRule(_StrictFrozenModel):
         if self.stale_input_reason is not ExclusionReason.STALE_REQUIRED_INPUT:
             raise ValueError("stale inputs must use their exact reason code")
         return self
-
-    @property
-    def financial_ineligibility_reason(self) -> ExclusionReason:
-        return ExclusionReason.FINANCIAL_VALUATION_NOT_COMPARABLE
 
 
 class SelectionRule(_StrictFrozenModel):
@@ -478,12 +463,6 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
     execution: StrategyExecutionPolicy
     transaction_cost: StrategyTransactionCostPolicy
     total_return: StrategyTotalReturnPolicy
-    # Mandatory-true, not a toggle: the #59 financial factor branch can never
-    # be blanket-disabled for the whole strategy (a schema test asserts that
-    # setting this to False is rejected). Whether any *specific* issuer takes
-    # the branch is a per-decision fact (`GoldenDecision.issuer_branch`),
-    # never a strategy-level switch.
-    financial_issuers_use_financial_proxy: Literal[True]
 
     @field_validator("definition_version")
     @classmethod
@@ -610,10 +589,11 @@ class GoldenExpectation(_StrictFrozenModel):
 class GoldenDecision(_StrictFrozenModel):
     decision_key: str = Field(pattern=_STABLE_KEY_PATTERN)
     issuer: SubjectRef
-    # Explicit per-decision classification, not inferred from the issuer or
-    # from which facts happen to be present -- the mandatory #59 branch
-    # (`gross_profit_per_employee`'s capital-charge skip) is selected by this
-    # field, never by a missing-fact fallthrough.
+    # A recorded per-decision classification of the subject. Under the uniform
+    # v0 formula (2026-07-18 owner decision) it no longer changes any arithmetic
+    # -- a financial issuer takes the identical capital-adjusted path -- but the
+    # classification stays on the golden record as a documented fact about the
+    # issuer.
     issuer_branch: Literal["non_financial", "financial"]
     cutoff_at: datetime
     inputs: tuple[GoldenInputRecord, ...] = Field(min_length=1)
