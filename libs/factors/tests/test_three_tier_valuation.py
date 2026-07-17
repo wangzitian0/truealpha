@@ -5,12 +5,16 @@ from decimal import Decimal
 from pathlib import Path
 
 from factors.composite.three_tier_valuation import three_tier_valuation
-from factors.types import FactorResult
+from factors.types import FactorResult, UnitFamily
 from truealpha_contracts.strategy import ThreeTierValuationDefinition
 
 _AS_OF = datetime(2026, 7, 1, tzinfo=UTC)
 _CORPUS_PATH = Path(__file__).parents[2] / "contracts" / "tests" / "fixtures" / "large_model_value_v0_strategy.v1.json"
 _CORPUS_SHA256 = "0d110a3adc94500cba2bc35d5cd33a788a18bc76ef66895c5625489be6ea50e6"
+_UNIT_FAMILY = {
+    "gross_profit_per_employee": UnitFamily.PER_EMPLOYEE,
+    "price_to_sales": UnitFamily.RATIO,
+}
 
 
 def _v0_definition() -> ThreeTierValuationDefinition:
@@ -27,6 +31,7 @@ def _factor_result(name: str, value: str, confidence: str, data_availability: st
         factor=name,
         entity_id="e1",
         value=Decimal(value),
+        unit_family=_UNIT_FAMILY[name],
         confidence=Decimal(confidence),
         as_of=_AS_OF,
         data_availability=data_availability,
@@ -44,6 +49,7 @@ def test_traditional_tier_valuation_gap() -> None:
 
     # traditional band: target P/S 0.30-2.00, midpoint 1.15; gap = 1.15/1.0 - 1 = 0.15
     assert result.value == Decimal("0.15")
+    assert result.unit_family == UnitFamily.RATIO
     assert result.confidence == Decimal("0.8")
     assert result.data_availability == "verified"
 

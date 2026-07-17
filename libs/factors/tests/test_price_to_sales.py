@@ -3,13 +3,25 @@ from decimal import Decimal
 
 import pytest
 from factors.base.price_to_sales import price_to_sales
-from factors.types import Fact
+from factors.types import Fact, UnitFamily
 
 _AS_OF = datetime(2026, 7, 1, tzinfo=UTC)
+_UNIT_FAMILY = {
+    "price": UnitFamily.PER_SHARE,
+    "shares_outstanding": UnitFamily.COUNT,
+    "revenue": UnitFamily.CURRENCY,
+}
 
 
 def _fact(metric: str, value: str, confidence: str = "0.9") -> Fact:
-    return Fact(entity_id="e1", metric=metric, value=Decimal(value), confidence=Decimal(confidence), as_of=_AS_OF)
+    return Fact(
+        entity_id="e1",
+        metric=metric,
+        value=Decimal(value),
+        unit_family=_UNIT_FAMILY[metric],
+        confidence=Decimal(confidence),
+        as_of=_AS_OF,
+    )
 
 
 def test_price_to_sales_ratio() -> None:
@@ -23,6 +35,7 @@ def test_price_to_sales_ratio() -> None:
 
     # market_cap = 50 * 1,000,000 = 50,000,000; P/S = 50,000,000 / 20,000,000 = 2.5
     assert result.value == Decimal("2.5")
+    assert result.unit_family == UnitFamily.RATIO
     assert result.confidence == Decimal("0.8")
     assert result.data_availability == "unverified"
     assert result.flags == []

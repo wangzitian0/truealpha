@@ -7,7 +7,7 @@ Layout (init.md Section 4):
 
 Hard constraints (init.md Section 1):
 - Factors never know data provenance, only confidence: every input is a
-  (entity_id, value, confidence, as_of) tuple.
+  (entity_id, value, unit_family, confidence, as_of) tuple.
 - Function signatures align with the eventual Dagster asset convention from Phase -1 on.
 """
 
@@ -20,6 +20,7 @@ from factors.types import (
     FactorResult,
     GrowthConvention,
     InsufficientDataError,
+    UnitFamily,
 )
 
 __all__ = [
@@ -32,5 +33,6 @@ __all__ = [
     "FactorResult",
     "GrowthConvention",
     "InsufficientDataError",
+    "UnitFamily",
     "verify_confidence_calibration_report",
 ]
