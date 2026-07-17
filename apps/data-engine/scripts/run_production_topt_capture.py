@@ -18,7 +18,7 @@ Usage (against the DATABASE_URL in settings):
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,7 +27,6 @@ from data_engine.config import settings
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
-from data_engine.datahub.production_topt.sec_financial_adapter import build_bundle, pit_concept_value
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.sources import sec, yahoo
 from factors.production_topt import GppeV0Definition
@@ -68,9 +67,9 @@ def _source_request(obligation, *, ordinal: int) -> SourceRequest:
         "partition": obligation.partition,
     }
     return SourceRequest(
-        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v2'})}",
-        source_policy_id="source-policy:production-topt-live-v2",
-        request_fingerprint_version="production-topt-live:v2",
+        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v3'})}",
+        source_policy_id="source-policy:production-topt-live-v3",
+        request_fingerprint_version="production-topt-live:v3",
         canonical_request_sha256=canonical_sha256(coordinate),
         subject_refs=(obligation.subject,),
         capture_requirement_ids=(obligation.capture_requirement_id,),
@@ -90,15 +89,41 @@ def _real_market_price(ticker: str) -> str:
     return str(Decimal(str(max(bars, key=lambda b: b.date).close)))
 
 
-_REVENUE_CONCEPTS = ("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues")
-_COGS_CONCEPTS = ("CostOfRevenue", "CostOfGoodsAndServicesSold")
+_REVENUE_CONCEPTS = ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax")
 
 
-def _first_concept(facts: dict, names: tuple[str, ...]) -> Decimal | None:
-    for name in names:
-        hit = pit_concept_value(facts, "us-gaap", name, "USD", CUTOFF_DATE)
-        if hit is not None:
-            return hit[0]
+def _annual_by_end(facts: dict, taxonomy: str, name: str, unit: str) -> dict[str, Decimal]:
+    """Eligible values keyed by period end. Flow concepts keep annual periods (>=350 days);
+    instant concepts (no start, e.g. shares) are kept as-is. Only facts filed <= cutoff."""
+    node = (facts.get("facts", {}).get(taxonomy) or {}).get(name)
+    if not node:
+        return {}
+    out: dict[str, Decimal] = {}
+    for entry in node.get("units", {}).get(unit, []):
+        filed, end, start, val = entry.get("filed"), entry.get("end"), entry.get("start"), entry.get("val")
+        if filed is None or end is None or val is None or date.fromisoformat(filed) > CUTOFF_DATE:
+            continue
+        if start is not None and (date.fromisoformat(end) - date.fromisoformat(start)).days < 350:
+            continue
+        out[end] = Decimal(str(val))
+    return out
+
+
+def _latest(by_end: dict[str, Decimal]) -> Decimal | None:
+    return by_end[max(by_end)] if by_end else None
+
+
+def _gross_profit(facts: dict) -> Decimal | None:
+    direct = _annual_by_end(facts, "us-gaap", "GrossProfit", "USD")
+    if direct:
+        return _latest(direct)
+    cogs = _annual_by_end(facts, "us-gaap", "CostOfRevenue", "USD")
+    for revenue_name in _REVENUE_CONCEPTS:
+        revenue = _annual_by_end(facts, "us-gaap", revenue_name, "USD")
+        shared = set(revenue) & set(cogs)  # same period end -> comparable
+        if shared:
+            end = max(shared)
+            return revenue[end] - cogs[end]
     return None
 
 
@@ -109,16 +134,11 @@ def _real_financial(ticker: str) -> dict[str, str | None]:
         facts = sec.fetch_company_facts(cik)
     except Exception as error:  # SEC mapping/HTTP failure: capture the cell with null values
         print(f"    (SEC unavailable for {ticker}: {type(error).__name__}); financials null")
-    bundle = None if facts is None else build_bundle(facts, CUTOFF_DATE)
-    gross = None if bundle is None else bundle.gross_profit
-    if gross is None and facts is not None:
-        # Derive gross profit = revenue - cost of revenue when it is not tagged directly.
-        revenue = _first_concept(facts, _REVENUE_CONCEPTS)
-        cogs = _first_concept(facts, _COGS_CONCEPTS)
-        if revenue is not None and cogs is not None:
-            gross = revenue - cogs
-    assets = None if bundle is None else bundle.total_assets
-    shares = None if bundle is None else bundle.shares_outstanding
+    gross = None if facts is None else _gross_profit(facts)
+    assets = None if facts is None else _latest(_annual_by_end(facts, "us-gaap", "Assets", "USD"))
+    shares = (
+        None if facts is None else _latest(_annual_by_end(facts, "us-gaap", "CommonStockSharesOutstanding", "shares"))
+    )
     return {
         "operating_branch": "non_financial",
         "currency": "USD",
@@ -149,14 +169,14 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
     list_version = frozen_topt_list_version(corpus)
     policy = CaptureSchedulePolicy(
-        policy_version="production-topt-live:v2",
+        policy_version="production-topt-live:v3",
         demanded_cadence=timedelta(days=1),
         provider_availability_cadence="manual-only:v1",
         freshness_max_age=timedelta(days=2),
         retry=replay_retry_policy(3),
     )
     campaign = CaptureCampaign(
-        campaign_policy_id="capture-policy:production-topt-live-v2",
+        campaign_policy_id="capture-policy:production-topt-live-v3",
         environment=CaptureEnvironment.PRODUCTION,
         cutoff=CUTOFF,
         universe_refs=(list_version.universe,),
@@ -165,7 +185,7 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         campaign_id=campaign.campaign_id,
         run_sequence=1,
         schedule_policy_id=policy.schedule_policy_id,
-        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v2'})}",
+        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v3'})}",
     )
     obligations = expand_obligations(
         run_id=run.run_id,
@@ -218,16 +238,16 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
         payload = _real_payload(coordinates[obligation.subject.id], semantic_type)
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": payload})
-        source_record_id = f"production-topt-live-v2:{ordinal}"
+        source_record_id = f"production-topt-live-v3:{ordinal}"
         raw_fetch_id = connection.execute(
             "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
             "byte_length, fetched_at, recorded_at, metadata) "
             "values (%s, %s, %s, %s, 'application/json', 1, %s, %s, '{}'::jsonb) returning id",
             (
-                "production-topt-live-v2",
+                "production-topt-live-v3",
                 source_record_id,
                 raw_sha256,
-                f"s3://production-topt-live-v2/{raw_sha256}",
+                f"s3://production-topt-live-v3/{raw_sha256}",
                 CUTOFF - timedelta(hours=2),
                 CUTOFF - timedelta(hours=2),
             ),
