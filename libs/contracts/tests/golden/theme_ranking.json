@@ -1,0 +1,827 @@
+{
+  "cutoff_at": "2026-06-30T23:59:59Z",
+  "generated_from": "fixture:research_report.v1",
+  "report_id": "report:e9097efdde9afde83b4d11673463f33415a429e082083ad1c707eb8b4baa6f74",
+  "report_kind": "theme_ranking",
+  "schema_version": "research_report.v1",
+  "subjects": [
+    {
+      "display_name": "issuer:adm",
+      "rank": 1,
+      "sections": [
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "outcome",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "selected"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "eligible",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "true"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "rank",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "1"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_weight",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "0.500000"
+            }
+          ],
+          "section_kind": "strategy_summary",
+          "title": "Large-model-value strategy decision",
+          "validation_status": "not_evaluated"
+        },
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "tier",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "traditional"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "current_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "0.4580"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "1.1500"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "valuation_gap",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "1.5109"
+            }
+          ],
+          "section_kind": "valuation",
+          "title": "Valuation (three-tier P/S)",
+          "validation_status": "not_evaluated"
+        }
+      ],
+      "subject_id": "issuer:adm"
+    },
+    {
+      "display_name": "issuer:nice",
+      "rank": 2,
+      "sections": [
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "outcome",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "selected"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "eligible",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "true"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "rank",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "2"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_weight",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "0.500000"
+            }
+          ],
+          "section_kind": "strategy_summary",
+          "title": "Large-model-value strategy decision",
+          "validation_status": "not_evaluated"
+        },
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "tier",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "tech"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "current_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "1.8639"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "4.2500"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "valuation_gap",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "1.2802"
+            }
+          ],
+          "section_kind": "valuation",
+          "title": "Valuation (three-tier P/S)",
+          "validation_status": "not_evaluated"
+        }
+      ],
+      "subject_id": "issuer:nice"
+    },
+    {
+      "display_name": "issuer:ddog",
+      "rank": null,
+      "sections": [
+        {
+          "availability": "low_confidence",
+          "notes": [],
+          "reason_codes": [
+            "below_confidence_floor"
+          ],
+          "results": [
+            {
+              "availability": "low_confidence",
+              "confidence": "0.65",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "outcome",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:ddog:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "excluded"
+            },
+            {
+              "availability": "low_confidence",
+              "confidence": "0.65",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "eligible",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:ddog:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "false"
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.65",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "rank",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:ddog:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.65",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_weight",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:ddog:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            }
+          ],
+          "section_kind": "strategy_summary",
+          "title": "Large-model-value strategy decision",
+          "validation_status": "not_evaluated"
+        },
+        {
+          "availability": "low_confidence",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "unavailable",
+              "confidence": "0.65",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "tier",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:ddog:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.65",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "current_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:ddog:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.65",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:ddog:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.65",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "valuation_gap",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:ddog:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            }
+          ],
+          "section_kind": "valuation",
+          "title": "Valuation (three-tier P/S)",
+          "validation_status": "not_evaluated"
+        }
+      ],
+      "subject_id": "issuer:ddog"
+    },
+    {
+      "display_name": "issuer:jpm",
+      "rank": null,
+      "sections": [
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "outcome",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:jpm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "rejected_valuation_above_tier_band"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "eligible",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:jpm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "true"
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "rank",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:jpm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_weight",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:jpm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            }
+          ],
+          "section_kind": "strategy_summary",
+          "title": "Large-model-value strategy decision",
+          "validation_status": "not_evaluated"
+        },
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "tier",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:jpm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "traditional"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "current_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:jpm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "4.8388"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:jpm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "1.1500"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "valuation_gap",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:jpm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "-0.7623"
+            }
+          ],
+          "section_kind": "valuation",
+          "title": "Valuation (three-tier P/S)",
+          "validation_status": "not_evaluated"
+        }
+      ],
+      "subject_id": "issuer:jpm"
+    },
+    {
+      "display_name": "issuer:shop",
+      "rank": null,
+      "sections": [
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.80",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "outcome",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "rejected_valuation_above_tier_band"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.80",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "eligible",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "true"
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.80",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "rank",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.80",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_weight",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            }
+          ],
+          "section_kind": "strategy_summary",
+          "title": "Large-model-value strategy decision",
+          "validation_status": "not_evaluated"
+        },
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.80",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "tier",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "large_model_native"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.80",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "current_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "12.8344"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.80",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "9.0000"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.80",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "valuation_gap",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "-0.2988"
+            }
+          ],
+          "section_kind": "valuation",
+          "title": "Valuation (three-tier P/S)",
+          "validation_status": "not_evaluated"
+        }
+      ],
+      "subject_id": "issuer:shop"
+    }
+  ],
+  "title": "Large-model-value theme ranking"
+}
