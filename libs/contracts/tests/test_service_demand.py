@@ -37,6 +37,14 @@ FIXTURE = Path(__file__).parent / "fixtures" / "datahub_service_demand.v1.json"
 AT = datetime(2026, 7, 17, tzinfo=UTC)
 
 
+def _nested_keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        return set(value).union(*(_nested_keys(item) for item in value.values()))
+    if isinstance(value, list):
+        return set().union(*(_nested_keys(item) for item in value))
+    return set()
+
+
 def _requirement() -> DataRequirement:
     return DataRequirement(
         capture_requirement_id=f"capture-requirement:{'1' * 64}",
@@ -143,7 +151,7 @@ def test_topt_service_demand_is_content_addressed_source_neutral_and_round_trips
     assert demand.quality_objective.minimum_confidence_score == Decimal("70")
     assert demand.quality_objective.minimum_independent_origin_groups == 2
     forbidden_keys = {"provider", "source", "credential", "host", "bucket", "database", "latest"}
-    assert forbidden_keys.isdisjoint(payload)
+    assert forbidden_keys.isdisjoint(_nested_keys(payload))
 
     intake = evaluate_datahub_service_demand(payload)
     assert intake.status is DemandIntakeStatus.ACCEPTED
@@ -174,6 +182,14 @@ def test_high_confidence_target_requires_two_independent_origin_groups() -> None
     payload["minimum_independent_origin_groups"] = 1
 
     with pytest.raises(ValidationError, match="at least two independent origin groups"):
+        DataQualityObjective.model_validate(payload)
+
+
+def test_quality_objective_requires_every_v1_report_dimension() -> None:
+    payload = _demand().quality_objective.model_dump(mode="json", exclude={"quality_objective_id", "content_sha256"})
+    payload["report_dimensions"].remove(QualityReportDimension.RETRIES.value)
+
+    with pytest.raises(ValidationError, match="every required dimension"):
         DataQualityObjective.model_validate(payload)
 
 

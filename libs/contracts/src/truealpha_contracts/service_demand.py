@@ -109,6 +109,23 @@ class QualityReportDimension(StrEnum):
     UNAVAILABLE_REASONS = "unavailable_reasons"
 
 
+_REQUIRED_QUALITY_REPORT_DIMENSIONS_V1 = frozenset(
+    {
+        QualityReportDimension.DENOMINATOR,
+        QualityReportDimension.TERMINAL_STATE,
+        QualityReportDimension.COVERAGE,
+        QualityReportDimension.AVAILABILITY,
+        QualityReportDimension.FRESHNESS,
+        QualityReportDimension.CONFIDENCE,
+        QualityReportDimension.SOURCE_COMPOSITION,
+        QualityReportDimension.CONFLICTS,
+        QualityReportDimension.LINEAGE,
+        QualityReportDimension.RETRIES,
+        QualityReportDimension.UNAVAILABLE_REASONS,
+    }
+)
+
+
 class DemandIntakeStatus(StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
@@ -350,8 +367,7 @@ class DataQualityObjective(_FrozenModel):
         high_bands = {ConfidenceTargetBand.HIGH, ConfidenceTargetBand.VERY_HIGH}
         if self.confidence_target_band in high_bands and self.minimum_independent_origin_groups < 2:
             raise ValueError("high confidence requires at least two independent origin groups")
-        required_dimensions = frozenset(QualityReportDimension)
-        if self.report_dimensions != required_dimensions:
+        if not _REQUIRED_QUALITY_REPORT_DIMENSIONS_V1 <= self.report_dimensions:
             raise ValueError("quality reports must retain every required dimension")
         _identify(self, id_field="quality_objective_id", prefix="quality-objective")
         return self
@@ -464,9 +480,7 @@ def _validate_assertion_value(assertion: SampleAssertion, field: FieldSemanticEx
         if not parsed_decimal.is_finite():
             raise ValueError("decimal sample assertions require a finite base-10 value")
     elif field.value_kind is FieldValueKind.INTEGER:
-        if isinstance(value, bool) or not (
-            isinstance(value, int) or (isinstance(value, str) and re.fullmatch(r"[+-]?[0-9]+", value) is not None)
-        ):
+        if not isinstance(value, str) or re.fullmatch(r"[+-]?[0-9]+", value) is None:
             raise ValueError("integer sample assertions require a base-10 integer")
     elif field.value_kind is FieldValueKind.STRING:
         if not isinstance(value, str):
