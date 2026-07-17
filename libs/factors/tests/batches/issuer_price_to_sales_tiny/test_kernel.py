@@ -398,5 +398,7 @@ def test_provenance_fields_and_default_registry_activation_are_forbidden() -> No
     with pytest.raises(ValidationError):
         IssuerPriceToSalesRequest.model_validate(payload)
 
+    # "price_to_sales" is intentionally registered as a real base factor
+    # (factors.base.price_to_sales, #24/#25 preview) once imported elsewhere;
+    # only the tiny batch's own private key must never appear here.
     assert "issuer_price_to_sales_tiny" not in FACTOR_REGISTRY
-    assert "price_to_sales" not in FACTOR_REGISTRY
