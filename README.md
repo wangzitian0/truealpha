@@ -33,7 +33,17 @@ make check          # lint + typecheck + test
 code consumes only `DATABASE_URL` and the S3-compatible `S3_*` contract; local
 Compose, GitHub CI, and infra2 may provide different backends behind it.
 
+The DataHub trust layer defines point-in-time multi-source reconciliation and a
+row-complete, versioned [data-quality report](docs/datahub-quality-report.md). The
+report preserves missing and conflicted requested cells in its denominator and is the
+machine-readable input to later mart/dashboard presentation.
+
 Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
+
+Data-quality design and the reproducible continuous-confidence sensitivity
+report are documented in [`docs/confidence-calibration.md`](docs/confidence-calibration.md).
+Its DTOs live in `libs/contracts`; the sole formula implementation and report
+verifier live in `libs/factors` and are only orchestrated by data-engine.
 
 ### Manual Production TOPT core
 
