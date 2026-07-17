@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::release requests must run from the reviewed main workflow"
+            echo "::error::release requests must run from main"
             exit 1
           fi
           if ! [[ "$VERSION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

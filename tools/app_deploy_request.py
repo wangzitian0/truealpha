@@ -121,6 +121,10 @@ def _validate_authority(raw: Mapping[str, Any]) -> None:
 
     staging_run_url = evidence.get("staging_run_url")
     reviewed_change_url = evidence.get("reviewed_change_url")
+    if staging_run_url is not None and not isinstance(staging_run_url, str):
+        raise ValueError("evidence.staging_run_url must be a string")
+    if reviewed_change_url is not None and not isinstance(reviewed_change_url, str):
+        raise ValueError("evidence.reviewed_change_url must be a string")
     if deploy_type == DeployType.PRODUCTION.value:
         if not isinstance(staging_run_url, str) or not staging_run_url:
             raise ValueError("production evidence.staging_run_url is required")

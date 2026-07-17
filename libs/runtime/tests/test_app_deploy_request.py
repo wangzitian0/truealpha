@@ -209,6 +209,16 @@ def test_required_evidence_fields_fail_closed(corpus: dict, override: dict, mess
         renderer.request_from_mapping(_merged(valid["request"], override))
 
 
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (("staging_run_url", False), ("reviewed_change_url", 0), ("staging_run_url", [])),
+)
+def test_optional_release_evidence_rejects_non_strings(corpus: dict, field_name: str, value: object) -> None:
+    valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")
+    with pytest.raises(ValueError, match=f"evidence.{field_name} must be a string"):
+        renderer.request_from_mapping(_merged(valid["request"], {"evidence": {field_name: value}}))
+
+
 def test_cli_exposes_no_authority_or_dispatch_switches(corpus: dict) -> None:
     valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")["request"]
     result = subprocess.run(
