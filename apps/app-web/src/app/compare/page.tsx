@@ -76,6 +76,16 @@ export default async function ComparePage({
               </tbody>
             </table>
           </div>
+          {state.data.page.hasMore && state.data.page.nextCursor !== null && (
+            <Link
+              href={`/compare?cursor=${encodeURIComponent(state.data.page.nextCursor)}${
+                params.cutoff ? `&cutoff=${encodeURIComponent(params.cutoff)}` : ""
+              }`}
+              className="inline-block rounded-lg border border-border bg-card px-4 py-2 text-sm text-gray-300 hover:border-accent"
+            >
+              Next page →
+            </Link>
+          )}
         </>
       )}
     </section>

@@ -131,10 +131,6 @@ export function decisionAvailability(decision: StrategyRunDecision): Availabilit
   return "available";
 }
 
-function valueAvailability(value: string | null, sectionStatus: Availability): Availability {
-  return value === null ? "unavailable" : sectionStatus;
-}
-
 function traceId(issuerId: string, cutoffAt: string, corpusSha256: string): string {
   const corpusPrefix = corpusSha256.slice(0, 12);
   const date = cutoffAt.slice(0, 10);
@@ -211,6 +207,10 @@ export class FixtureMartReadAdapter {
   }
 
   private toComparisonRow(decision: StrategyRunDecision, corpusSha256: string): ComparisonRow {
+    // The row's own availability mirrors the decision (low_confidence/excluded must stay
+    // visible even when this one field is null) — matching toRankingRow. valueAvailability
+    // is for a single value's own null-driven downgrade, not the whole row (Copilot review
+    // on #387, same class of bug fixed in research_report_fixture.py's #383).
     const status = decisionAvailability(decision);
     return {
       issuerId: decision.issuer_id,
@@ -220,7 +220,7 @@ export class FixtureMartReadAdapter {
       tier: decision.tier,
       valuationGap: decision.valuation_gap,
       confidence: decision.confidence,
-      availability: valueAvailability(decision.capital_adjusted_labor_efficiency, status),
+      availability: status,
       traceId: traceId(decision.issuer_id, decision.cutoff_at, corpusSha256),
     };
   }
