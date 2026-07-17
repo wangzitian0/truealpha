@@ -1,35 +1,69 @@
-const modules = [
-  { n: 1, name: "PEG", note: "three versioned growth conventions", gate: "Gate 2" },
-  { n: 2, name: "Gross profit / employee", note: "issuer-specific semantics", gate: "Gate 1" },
-  { n: 3, name: "Supply-chain graph", note: "confidence-gated scenario exposure", gate: "Gate 2" },
-  { n: 4, name: "Analyst backtesting", note: "PIT event eligibility and outcomes", gate: "Gate 2" },
-  { n: 5, name: "ETF virtual company", note: "delayed N-PORT holdings", gate: "Gate 2" },
-  { n: 6, name: "Pure-blood screening", note: "traceable segment classification", gate: "Gate 2" },
-  { n: 7, name: "Three-tier valuation", note: "materialized composite factor", gate: "Gate 1" },
-];
+import Link from "next/link";
+import { DashboardNav } from "@/components/dashboard-nav";
+import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
+import { loadOverview } from "@/server/dashboard";
+
+// Overview reads the mart per request (owner identity from the server-side stand-in),
+// so it must never be statically prerendered — see src/server/dashboard.ts.
+export const dynamic = "force-dynamic";
 
 export default function Home() {
+  const state = loadOverview();
+
   return (
-    <div className="space-y-8">
+    <section aria-labelledby="overview-heading" className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+        <h1 id="overview-heading" className="text-3xl font-bold tracking-tight">
+          Dashboard
+        </h1>
         <p className="mt-2 text-gray-400">
-          Reads the <code className="text-accent">mart</code> schema directly. Nothing is materialized yet;
-          Gate&nbsp;0 semantic and data closure is active.
+          Reads through the <code className="text-accent">mart</code> read adapter — no hardcoded list. Fixture-backed
+          pending #41&apos;s mart-backed read role; only the adapter changes when it lands. Each module shows its
+          materialized availability.
         </p>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {modules.map((m) => (
-          <div key={m.n} className="rounded-xl border border-border bg-card p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-500">Module {m.n}</span>
-              <span className="text-xs rounded-full border border-border px-2 py-0.5 text-gray-400">{m.gate}</span>
-            </div>
-            <h2 className="mt-2 font-semibold">{m.name}</h2>
-            <p className="mt-1 text-sm text-gray-400">{m.note}</p>
-          </div>
-        ))}
-      </div>
-    </div>
+
+      <DashboardNav />
+
+      <ReadStateNotice state={state} />
+
+      {state.kind === "ready" && (
+        <>
+          <p className="text-sm text-gray-500">
+            {state.data.latestCutoff
+              ? `Latest materialized cutoff: ${state.data.latestCutoff}.`
+              : "No materialized cutoff yet."}
+          </p>
+          <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {state.data.modules.map((module) => (
+              <li key={module.module} className="rounded-xl border border-border bg-card p-5">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-500">Module {module.module}</span>
+                  <span className="rounded-full border border-border px-2 py-0.5 text-xs text-gray-400">
+                    {module.gate}
+                  </span>
+                </div>
+                <h2 className="mt-2 font-semibold">{module.name}</h2>
+                <p className="mt-1 text-sm text-gray-400">{module.note}</p>
+                <div className="mt-3">
+                  <AvailabilityBadge status={module.availability} />
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p className="text-sm text-gray-500">
+            Explore the{" "}
+            <Link href="/rankings" className="text-accent hover:underline">
+              theme rankings
+            </Link>{" "}
+            or{" "}
+            <Link href="/compare" className="text-accent hover:underline">
+              issuer comparison
+            </Link>
+            .
+          </p>
+        </>
+      )}
+    </section>
   );
 }
