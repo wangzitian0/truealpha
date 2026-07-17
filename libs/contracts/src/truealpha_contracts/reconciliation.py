@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Self
 
@@ -25,6 +25,13 @@ _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "
 def _decimal_input(value: Any) -> Any:
     if isinstance(value, float):
         raise ValueError("binary float is forbidden; use Decimal or a base-10 string")
+    if value is not None:
+        try:
+            decimal_value = value if isinstance(value, Decimal) else Decimal(value)
+        except (InvalidOperation, TypeError, ValueError):
+            return value
+        if not decimal_value.is_finite():
+            raise ValueError("non-finite Decimal values are forbidden")
     return value
 
 
@@ -162,7 +169,7 @@ class SourceAssertion(_FrozenModel):
     normalized_value_sha256: str = Field(pattern=_SHA256)
     numeric_value: Decimal | None = None
     confidence_assessment_id: str = Field(pattern=r"^confidence-assessment:[0-9a-f]{64}$")
-    confidence_score: Decimal = Field(ge=0, le=100)
+    confidence_score: Decimal = Field(ge=0, le=1)
     lineage_node_ids: tuple[str, ...] = Field(min_length=1)
     lineage_complete: bool
 
@@ -281,7 +288,7 @@ class ReconciliationResult(_FrozenModel):
     selected_assertion_id: str | None = Field(default=None, pattern=r"^source-assertion:[0-9a-f]{64}$")
     selected_value_sha256: str | None = Field(default=None, pattern=_SHA256)
     selected_numeric_value: Decimal | None = None
-    selected_confidence_score: Decimal | None = Field(default=None, ge=0, le=100)
+    selected_confidence_score: Decimal | None = Field(default=None, ge=0, le=1)
     lineage_complete: bool
     reason_codes: tuple[str, ...] = Field(min_length=1)
 
@@ -541,7 +548,7 @@ class DataHubQualitySummary(_FrozenModel):
     freshness: Decimal = Field(ge=0, le=1)
     independent_reconciliation: Decimal = Field(ge=0, le=1)
     lineage_completeness: Decimal = Field(ge=0, le=1)
-    denominator_mean_confidence_score: Decimal = Field(ge=0, le=100)
+    denominator_mean_confidence_score: Decimal = Field(ge=0, le=1)
     origin_composition: tuple[OriginGroupCount, ...]
 
     @field_validator(

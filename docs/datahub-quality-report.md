@@ -25,8 +25,9 @@ For each requested semantic cell, DataHub performs these steps in order:
 6. Retain agreement, insufficient independent origins, conflict/abstention,
    not-yet-knowable, and unavailable as distinct outcomes.
 
-The selected assertion carries its existing continuous confidence score in `[0, 100]`.
-This module does not recalculate or override the confidence policy owned by #207.
+The selected assertion carries its existing normalized continuous confidence in
+`[0, 1]`. Presentation layers may multiply it by 100 for display, but this module
+does not recalculate or override the confidence policy owned by #207.
 Factor projection remains provenance-neutral; source and origin metadata stay in the
 runner/report boundary.
 
@@ -77,7 +78,7 @@ lineage coordinates, retry counts, unchanged-response counts, and reason codes.
   "freshness": "0.25",
   "independent_reconciliation": "0.25",
   "lineage_completeness": "0.5",
-  "denominator_mean_confidence_score": "18.75",
+  "denominator_mean_confidence_score": "0.1875",
   "origin_composition": [
     {"origin_group_id": "origin:sec:v1", "cell_count": 2},
     {"origin_group_id": "origin:vendor-a:v1", "cell_count": 2}
@@ -85,9 +86,10 @@ lineage coordinates, retry counts, unchanged-response counts, and reason codes.
 }
 ```
 
-The low aggregate score is intentional: one independently reconciled value at `75`,
-one conflict, one failed acquisition, and one unplanned cell produce `75 / 4 = 18.75`.
-The report exposes the service gap rather than averaging only successful rows.
+The low aggregate score is intentional: one independently reconciled value at `0.75`,
+one conflict, one failed acquisition, and one unplanned cell produce
+`0.75 / 4 = 0.1875`. A presentation layer may display that as 18.75/100. The report
+exposes the service gap rather than averaging only successful rows.
 
 ## Ownership Boundaries
 
