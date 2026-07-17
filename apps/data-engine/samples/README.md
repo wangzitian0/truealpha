@@ -33,6 +33,14 @@ the local-backtest boundary. Five-year coverage and primary/fallback price
 reconciliation remain strategy-evaluation requirements. See
 `docs/strategy-data-quality.md` for the gate definitions.
 
+The first continuous-confidence sensitivity report is documented in
+`docs/confidence-calibration.md`. Its four-symbol Yahoo/Twelve Data comparison is
+an aggregate empirical anchor only: Yahoo CSV bytes are retained and hash
+verified, but Twelve Data raw response bytes are absent. The latter remains in
+lineage but contributes zero independent support. The anchor does not shrink or
+calibrate the 20-issuer TOPT denominator and does not authorize a Production
+confidence threshold.
+
 ## Contents
 
 - `sec/` — SEC EDGAR company-facts JSON (`GET /api/xbrl/companyfacts/CIK##########.json`)
