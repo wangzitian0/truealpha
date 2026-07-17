@@ -9,13 +9,13 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal, DivisionByZero, InvalidOp
 from pathlib import Path
 from typing import Literal
 
+from factors.confidence import evaluate_continuous_confidence, verify_confidence_calibration_report
 from truealpha_contracts.confidence import (
     ConfidenceCalibrationReport,
     ConfidenceCalibrationScenario,
     ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
     SourceConfidenceEvidence,
-    evaluate_continuous_confidence,
 )
 
 _RECONCILIATION_REPORT = "twelve_data_reconciliation_20260714.json"
@@ -344,7 +344,7 @@ def build_topt_confidence_sensitivity_report(sample_root: Path | None = None) ->
         required_component_completeness=str(completeness),
     )
 
-    return ConfidenceCalibrationReport(
+    report = ConfidenceCalibrationReport(
         policy=policy,
         denominator_id="universe:topt-us-2026-03-31",
         denominator_size=20,
@@ -358,3 +358,4 @@ def build_topt_confidence_sensitivity_report(sample_root: Path | None = None) ->
             "Full TOPT calibration must retain all twenty issuers and report missing second-source evidence.",
         ),
     )
+    return verify_confidence_calibration_report(report)

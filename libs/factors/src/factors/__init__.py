@@ -11,6 +11,7 @@ Hard constraints (init.md Section 1):
 - Function signatures align with the eventual Dagster asset convention from Phase -1 on.
 """
 
+from factors.confidence import evaluate_continuous_confidence, verify_confidence_calibration_report
 from factors.registry import FACTOR_REGISTRY, factor
 from factors.types import (
     DataAvailability,
@@ -23,6 +24,7 @@ from factors.types import (
 
 __all__ = [
     "FACTOR_REGISTRY",
+    "evaluate_continuous_confidence",
     "factor",
     "DataAvailability",
     "Fact",
@@ -30,4 +32,5 @@ __all__ = [
     "FactorResult",
     "GrowthConvention",
     "InsufficientDataError",
+    "verify_confidence_calibration_report",
 ]

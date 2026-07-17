@@ -76,7 +76,6 @@ from truealpha_contracts.confidence import (
     OriginGroupContribution,
     SourceConfidenceEvidence,
     SourceConfidenceScore,
-    evaluate_continuous_confidence,
 )
 from truealpha_contracts.data_quality import (
     STRATEGY_DATA_REQUIREMENTS,
@@ -827,7 +826,6 @@ __all__ = [
     "evaluate_capture_manifest",
     "evaluate_catalog_policy_closure",
     "evaluate_catalog_transition",
-    "evaluate_continuous_confidence",
     "evaluate_exact_natural_refresh",
     "evaluate_source_capability_coverage",
     "evaluate_source_coverage_closure",

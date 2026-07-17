@@ -10,6 +10,7 @@ from data_engine.quality.confidence import (
     _derive_price_reconciliation_anchor,
     build_topt_confidence_sensitivity_report,
 )
+from factors.confidence import verify_confidence_calibration_report
 from pydantic import ValidationError
 from truealpha_contracts.confidence import ConfidenceCalibrationReport
 
@@ -29,7 +30,8 @@ def test_topt_sensitivity_report_is_content_addressed_and_keeps_the_denominator(
     )
     assert len(report.scenarios) == 10
     assert report.claim_ceiling == "development_sensitivity_only"
-    assert ConfidenceCalibrationReport.model_validate_json(report.model_dump_json()) == report
+    round_tripped = ConfidenceCalibrationReport.model_validate_json(report.model_dump_json())
+    assert verify_confidence_calibration_report(round_tripped) == report
     with localcontext() as context:
         context.prec = 2
         context.rounding = ROUND_UP

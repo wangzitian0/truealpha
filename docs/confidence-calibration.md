@@ -48,9 +48,11 @@ score_100 = 100 * confidence
 ```
 
 The policy, exact evidence inputs, origin-group selection, decomposition, and
-report are content-addressed. A report validator recomputes every evaluation
-from its embedded policy and input, so a plausible but forged decomposition is
-rejected. The evaluator uses `Decimal`; binary floats are rejected.
+report are content-addressed. The sole formula implementation and report
+verifier live in `libs/factors/src/factors/confidence.py`; the data-engine report
+builder must pass every embedded policy and input through that verifier, so a
+plausible but forged decomposition is rejected without placing computation in
+the contracts or application layers. The evaluator uses `Decimal`; binary floats are rejected.
 Freshness, availability, applicability, quality state, and reason codes remain
 separate queryable facts rather than being replaced by this scalar.
 

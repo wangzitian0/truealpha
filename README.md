@@ -37,6 +37,8 @@ Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
 Data-quality design and the reproducible continuous-confidence sensitivity
 report are documented in [`docs/confidence-calibration.md`](docs/confidence-calibration.md).
+Its DTOs live in `libs/contracts`; the sole formula implementation and report
+verifier live in `libs/factors` and are only orchestrated by data-engine.
 
 ## Deployment
 

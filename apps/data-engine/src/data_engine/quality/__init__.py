@@ -2,12 +2,10 @@
 
 from data_engine.quality.confidence import (
     build_topt_confidence_sensitivity_report,
-    evaluate_continuous_confidence,
 )
 from data_engine.quality.strategy_samples import audit_strategy_samples
 
 __all__ = [
     "audit_strategy_samples",
     "build_topt_confidence_sensitivity_report",
-    "evaluate_continuous_confidence",
 ]

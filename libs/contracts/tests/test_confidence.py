@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-from decimal import ROUND_HALF_EVEN, Context, Decimal
+from decimal import Decimal
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts.confidence import (
-    ConfidenceCalibrationReport,
-    ConfidenceCalibrationScenario,
     ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
     SourceConfidenceEvidence,
-    evaluate_continuous_confidence,
 )
 
 
@@ -108,67 +105,3 @@ def test_input_is_order_independent_and_one_origin_has_one_weight() -> None:
     )
     with pytest.raises(ValidationError, match="one independence weight"):
         ContinuousConfidenceInput(sources=(primary, wrong_weight), **fields)
-
-
-def test_report_recomputes_each_evaluation_from_its_exact_input() -> None:
-    policy = ContinuousConfidencePolicy()
-    confidence_input = ContinuousConfidenceInput(
-        case_id="case:recomputed",
-        sources=(_source(),),
-        agreement="1",
-        semantic_mapping_quality="1",
-        lineage_completeness="1",
-        required_component_completeness="1",
-    )
-    evaluation = evaluate_continuous_confidence(policy, confidence_input)
-    forged = type(evaluation)(
-        **{
-            **evaluation.model_dump(mode="python", exclude={"evaluation_id", "content_sha256", "source_support"}),
-            "source_support": evaluation.source_support - Decimal("0.000001"),
-        }
-    )
-    scenario = ConfidenceCalibrationScenario(
-        scenario_id=confidence_input.case_id,
-        evidence_class="sensitivity",
-        expected_effect="The report must reject a denormalized decomposition.",
-        input=confidence_input,
-        evaluation=forged,
-    )
-
-    with pytest.raises(ValidationError, match="exactly reproduce"):
-        ConfidenceCalibrationReport(
-            policy=policy,
-            denominator_id="universe:test",
-            denominator_size=1,
-            empirically_observed_subject_ids=(),
-            scenarios=(scenario,),
-            limitations=("test-only",),
-        )
-
-
-def test_score_projection_is_exact_beyond_evaluation_precision() -> None:
-    policy = ContinuousConfidencePolicy()
-    confidence_input = ContinuousConfidenceInput(
-        case_id="case:high-precision-projection",
-        sources=(_source(),),
-        agreement="1",
-        semantic_mapping_quality="1",
-        lineage_completeness="1",
-        required_component_completeness="1",
-    )
-    evaluation = evaluate_continuous_confidence(policy, confidence_input)
-    confidence = Decimal("0." + ("1234567890" * 12))
-    sign, digits, exponent = confidence.as_tuple()
-    assert isinstance(exponent, int)
-    exact_score = Decimal((sign, digits, exponent + 2))
-    rounded_score = Context(prec=100, rounding=ROUND_HALF_EVEN).multiply(confidence, Decimal(100))
-    payload = evaluation.model_dump(
-        mode="python",
-        exclude={"evaluation_id", "content_sha256", "confidence", "score_100"},
-    )
-
-    exact = type(evaluation)(**payload, confidence=confidence, score_100=exact_score)
-    assert exact.score_100 == exact_score
-    assert rounded_score != exact_score
-    with pytest.raises(ValidationError, match="exact normalized confidence projection"):
-        type(evaluation)(**payload, confidence=confidence, score_100=rounded_score)
