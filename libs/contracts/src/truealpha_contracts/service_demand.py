@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -19,6 +19,7 @@ from truealpha_contracts.usage import DataRequirement
 _SHA256 = r"^[0-9a-f]{64}$"
 _STABLE_ID = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
 _FIELD_NAME = r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$"
+_MUTABLE_VERSION_TOKENS = frozenset({"current", "default", "head", "latest", "main", "master", "stable", "tip"})
 
 
 class _FrozenModel(BaseModel):
@@ -129,6 +130,14 @@ class DemandRequester(_FrozenModel):
     requester_version: str = Field(pattern=_STABLE_ID)
     requester_definition_id: str = Field(pattern=_STABLE_ID)
     requester_definition_sha256: str = Field(pattern=_SHA256)
+
+    @field_validator("requester_version")
+    @classmethod
+    def reject_mutable_version(cls, value: str) -> str:
+        tokens = set(re.split(r"[._:/@+\-]", value.lower()))
+        if tokens & _MUTABLE_VERSION_TOKENS:
+            raise ValueError("requester_version must name an immutable version")
+        return value
 
 
 class SampleArtifact(_FrozenModel):
@@ -349,6 +358,8 @@ class DownstreamRecomputationHandoff(_FrozenModel):
 
     @model_validator(mode="after")
     def identify(self) -> Self:
+        if self.definition_id.rsplit(":", 1)[-1] != self.definition_sha256:
+            raise ValueError("recomputation definition ID and hash disagree")
         _identify(self, id_field="handoff_id", prefix="recomputation-handoff")
         return self
 
@@ -396,6 +407,9 @@ class DataHubServiceDemand(_FrozenModel):
         }
         if not asserted_fields.issubset(declared_fields):
             raise ValueError("sample assertions reference undeclared field semantics")
+        for case in self.representative_samples.cases:
+            for assertion in case.assertions:
+                _validate_assertion_value(assertion, declared_fields[(assertion.requirement_id, assertion.field_name)])
         required_fields = {coordinate for coordinate, field in declared_fields.items() if field.required}
         if not required_fields.issubset(asserted_fields):
             raise ValueError("representative samples must assert every required field")
@@ -405,6 +419,54 @@ class DataHubServiceDemand(_FrozenModel):
         object.__setattr__(self, "recomputation_handoffs", handoffs)
         _identify(self, id_field="service_demand_id", prefix="datahub-service-demand")
         return self
+
+
+def _validate_assertion_value(assertion: SampleAssertion, field: FieldSemanticExpectation) -> None:
+    if assertion.operator in {SampleAssertionOperator.PRESENT, SampleAssertionOperator.ABSENT}:
+        return
+    tolerance_operator = assertion.operator in {
+        SampleAssertionOperator.ABSOLUTE_TOLERANCE,
+        SampleAssertionOperator.RELATIVE_TOLERANCE,
+    }
+    if tolerance_operator and field.value_kind not in {FieldValueKind.DECIMAL, FieldValueKind.INTEGER}:
+        raise ValueError("tolerance assertions require a numeric declared field")
+
+    value = assertion.expected_value
+    if field.value_kind is FieldValueKind.DECIMAL:
+        if isinstance(value, bool):
+            raise ValueError("decimal sample assertions require a finite base-10 value")
+        try:
+            parsed_decimal = Decimal(str(value))
+        except Exception as error:
+            raise ValueError("decimal sample assertions require a finite base-10 value") from error
+        if not parsed_decimal.is_finite():
+            raise ValueError("decimal sample assertions require a finite base-10 value")
+    elif field.value_kind is FieldValueKind.INTEGER:
+        if isinstance(value, bool) or not (
+            isinstance(value, int) or (isinstance(value, str) and re.fullmatch(r"[+-]?[0-9]+", value) is not None)
+        ):
+            raise ValueError("integer sample assertions require a base-10 integer")
+    elif field.value_kind is FieldValueKind.STRING:
+        if not isinstance(value, str):
+            raise ValueError("string sample assertions require a string value")
+    elif field.value_kind is FieldValueKind.BOOLEAN:
+        if not isinstance(value, bool):
+            raise ValueError("boolean sample assertions require a boolean value")
+    elif field.value_kind is FieldValueKind.DATE:
+        if not isinstance(value, str):
+            raise ValueError("date sample assertions require an ISO date")
+        try:
+            if date.fromisoformat(value).isoformat() != value:
+                raise ValueError
+        except ValueError as error:
+            raise ValueError("date sample assertions require an ISO date") from error
+    elif field.value_kind is FieldValueKind.DATETIME:
+        if not isinstance(value, str):
+            raise ValueError("datetime sample assertions require an aware ISO datetime")
+        try:
+            _require_aware(datetime.fromisoformat(value), "sample assertion datetime")
+        except ValueError as error:
+            raise ValueError("datetime sample assertions require an aware ISO datetime") from error
 
 
 class DataHubDemandIntakeReport(_FrozenModel):

@@ -253,3 +253,70 @@ def test_decimal_quality_targets_reject_binary_float() -> None:
 
     with pytest.raises(ValidationError, match="binary float"):
         DataQualityObjective.model_validate(payload)
+
+
+@pytest.mark.parametrize("requester_version", ("latest", "factor:current", "release/head", "stable-v1"))
+def test_requester_rejects_mutable_versions(requester_version: str) -> None:
+    payload = _demand().requester.model_dump(mode="json")
+    payload["requester_version"] = requester_version
+
+    with pytest.raises(ValidationError, match="immutable version"):
+        DemandRequester.model_validate(payload)
+
+
+def test_recomputation_handoff_rejects_definition_hash_drift() -> None:
+    payload = _demand().recomputation_handoffs[0].model_dump(mode="json", exclude={"handoff_id", "content_sha256"})
+    payload["definition_sha256"] = "9" * 64
+
+    with pytest.raises(ValidationError, match="definition ID and hash disagree"):
+        DownstreamRecomputationHandoff.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("value_kind", "operator", "expected_value", "tolerance", "message"),
+    (
+        (FieldValueKind.DECIMAL, SampleAssertionOperator.EXACT, "not-a-number", None, "finite base-10"),
+        (FieldValueKind.STRING, SampleAssertionOperator.ABSOLUTE_TOLERANCE, "value", "0.1", "numeric"),
+        (FieldValueKind.BOOLEAN, SampleAssertionOperator.EXACT, "true", None, "boolean value"),
+        (FieldValueKind.INTEGER, SampleAssertionOperator.EXACT, "1.5", None, "base-10 integer"),
+        (FieldValueKind.DATE, SampleAssertionOperator.EXACT, "2026-02-30", None, "ISO date"),
+        (
+            FieldValueKind.DATETIME,
+            SampleAssertionOperator.EXACT,
+            "2026-07-17T00:00:00",
+            None,
+            "aware ISO datetime",
+        ),
+    ),
+)
+def test_sample_assertions_match_declared_field_kinds(
+    value_kind: FieldValueKind,
+    operator: SampleAssertionOperator,
+    expected_value: str,
+    tolerance: str | None,
+    message: str,
+) -> None:
+    payload = _demand().model_dump(mode="json")
+    payload["service_demand_id"] = ""
+    payload["content_sha256"] = ""
+    requirement = payload["requirements"][0]
+    requirement["service_requirement_id"] = ""
+    requirement["content_sha256"] = ""
+    field = requirement["fields"][0]
+    field["field_semantics_id"] = ""
+    field["content_sha256"] = ""
+    field["value_kind"] = value_kind.value
+    assertion = payload["representative_samples"]["cases"][0]["assertions"][0]
+    assertion["sample_assertion_id"] = ""
+    assertion["content_sha256"] = ""
+    assertion["operator"] = operator.value
+    assertion["expected_value"] = expected_value
+    assertion["tolerance"] = tolerance
+    case = payload["representative_samples"]["cases"][0]
+    case["sample_case_id"] = ""
+    case["content_sha256"] = ""
+    payload["representative_samples"]["sample_manifest_id"] = ""
+    payload["representative_samples"]["content_sha256"] = ""
+
+    with pytest.raises(ValidationError, match=message):
+        DataHubServiceDemand.model_validate(payload)
