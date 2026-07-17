@@ -177,6 +177,13 @@ def test_intake_rejects_missing_sample_with_stable_non_secret_reason() -> None:
     assert "financial-fact.json" not in report.model_dump_json()
 
 
+def test_intake_rejects_non_json_payload_without_raising() -> None:
+    report = evaluate_datahub_service_demand({"effective_at": AT, "non_json": Decimal("1.5")})
+
+    assert report.status is DemandIntakeStatus.REJECTED
+    assert report.reason_codes == (DemandIntakeReasonCode.CROSS_CONTRACT_INVALID,)
+
+
 def test_high_confidence_target_requires_two_independent_origin_groups() -> None:
     payload = _demand().quality_objective.model_dump(mode="json", exclude={"quality_objective_id", "content_sha256"})
     payload["minimum_independent_origin_groups"] = 1

@@ -536,7 +536,14 @@ class DataHubDemandIntakeReport(_FrozenModel):
 def evaluate_datahub_service_demand(payload: dict[str, Any]) -> DataHubDemandIntakeReport:
     """Validate an untrusted demand and return stable, non-secret-bearing reason codes."""
 
-    payload_sha256 = canonical_sha256(payload)
+    try:
+        payload_sha256 = canonical_sha256(payload)
+    except (TypeError, ValueError):
+        return DataHubDemandIntakeReport(
+            payload_sha256=canonical_sha256({"payload": "unserializable"}),
+            status=DemandIntakeStatus.REJECTED,
+            reason_codes=(DemandIntakeReasonCode.CROSS_CONTRACT_INVALID,),
+        )
     try:
         demand = DataHubServiceDemand.model_validate(payload)
     except ValidationError as error:
