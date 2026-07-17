@@ -17,8 +17,9 @@ export default function Home() {
           Dashboard
         </h1>
         <p className="mt-2 text-gray-400">
-          Reads the <code className="text-accent">mart</code> schema directly through the read adapter — no hardcoded
-          list. Each module shows its materialized availability.
+          Reads through the <code className="text-accent">mart</code> read adapter — no hardcoded list. Fixture-backed
+          pending #41&apos;s mart-backed read role; only the adapter changes when it lands. Each module shows its
+          materialized availability.
         </p>
       </div>
 

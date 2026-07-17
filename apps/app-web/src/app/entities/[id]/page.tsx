@@ -9,9 +9,19 @@ function cell(value: string | null): string {
   return value ?? "—";
 }
 
+/** Next.js already decodes the route segment; this only guards a double-encoded id.
+ * Malformed percent-encoding (e.g. `/entities/%E0`) must not 500 the route. */
+function decodeIssuerId(id: string): string {
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
+}
+
 export default async function EntityDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const issuerId = decodeURIComponent(id);
+  const issuerId = decodeIssuerId(id);
   const state = loadEntityDetail(issuerId);
 
   return (

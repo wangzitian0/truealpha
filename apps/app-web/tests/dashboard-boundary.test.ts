@@ -36,6 +36,7 @@ const code = withoutStrings.replace(/\/\/[^\n]*/g, " ");
 // intentionally allowed (string joins, negatives, and there is no metric arithmetic here);
 // multiplication, division, and modulo have no legitimate reformatting use on a metric.
 const FORBIDDEN_OPERATORS: readonly [RegExp, string][] = [
+  [/\*\*/, "exponentiation '**'"],
   [/[^*]\*[^*/]/, "multiplication '*'"],
   [/[^/*]\/[^/*]/, "division '/'"],
   [/%/, "modulo '%'"],
