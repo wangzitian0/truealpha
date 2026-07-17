@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from decimal import Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, DivisionByZero, InvalidOperation, Overflow, localcontext
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -303,14 +303,26 @@ def _power(value: Decimal, exponent: Decimal) -> Decimal:
     return (value.ln() * exponent).exp()
 
 
+def _evaluation_context(precision: int) -> Context:
+    return Context(
+        prec=precision,
+        rounding=ROUND_HALF_EVEN,
+        Emin=-999999,
+        Emax=999999,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[InvalidOperation, DivisionByZero, Overflow],
+    )
+
+
 def evaluate_continuous_confidence(
     policy: ContinuousConfidencePolicy,
     evidence: ContinuousConfidenceInput,
 ) -> ContinuousConfidenceEvaluation:
     """Evaluate the versioned formula without binary floating point or provider branching."""
 
-    with localcontext() as context:
-        context.prec = policy.calculation_precision
+    with localcontext(_evaluation_context(policy.calculation_precision)):
         prior_total = policy.reliability_prior_success + policy.reliability_prior_failure
         source_scores: list[SourceConfidenceScore] = []
         grouped: dict[str, list[tuple[SourceConfidenceEvidence, Decimal]]] = defaultdict(list)
@@ -362,6 +374,8 @@ def evaluate_continuous_confidence(
         )
         confidence = _quantize(confidence, policy.output_decimal_places)
         score_100 = _quantize(confidence * Decimal(100), policy.output_decimal_places)
+        quantized_evidence_mass = _quantize(evidence_mass, policy.output_decimal_places)
+        quantized_source_support = _quantize(source_support, policy.output_decimal_places)
 
     reason_codes = {"confidence.evaluated"}
     if len(grouped) == 1:
@@ -388,8 +402,8 @@ def evaluate_continuous_confidence(
         input_sha256=evidence.content_sha256,
         source_scores=tuple(source_scores),
         origin_groups=tuple(origin_groups),
-        evidence_mass=_quantize(evidence_mass, policy.output_decimal_places),
-        source_support=_quantize(source_support, policy.output_decimal_places),
+        evidence_mass=quantized_evidence_mass,
+        source_support=quantized_source_support,
         agreement=evidence.agreement,
         semantic_mapping_quality=evidence.semantic_mapping_quality,
         lineage_completeness=evidence.lineage_completeness,

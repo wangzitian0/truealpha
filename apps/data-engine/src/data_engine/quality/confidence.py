@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from decimal import Decimal, localcontext
+from decimal import ROUND_HALF_EVEN, Context, Decimal, DivisionByZero, InvalidOperation, Overflow, localcontext
 from pathlib import Path
 from typing import Literal
 
@@ -24,6 +24,19 @@ _OBSERVED_FIELDS = ("close", "high", "low", "open", "volume")
 _REQUIRED_PRICE_COMPONENT_COUNT = 7
 _AGREEMENT_DECIMAL_PLACES = 12
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _calibration_context() -> Context:
+    return Context(
+        prec=50,
+        rounding=ROUND_HALF_EVEN,
+        Emin=-999999,
+        Emax=999999,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[InvalidOperation, DivisionByZero, Overflow],
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -64,17 +77,29 @@ def _derive_price_reconciliation_anchor(
     primary_artifacts = manifest.get("primary_artifacts")
     if not isinstance(primary_artifacts, list) or len(primary_artifacts) != 4:
         raise ValueError("price reconciliation manifest must bind four primary artifacts")
+    primary_symbols: set[str] = set()
+    primary_paths: set[str] = set()
+    primary_hashes: set[str] = set()
     for artifact in primary_artifacts:
         if not isinstance(artifact, dict):
             raise ValueError("primary artifact entries must be objects")
+        symbol = artifact.get("symbol")
         relative_path = artifact.get("path")
         expected_sha256 = artifact.get("sha256")
         if (
-            not isinstance(relative_path, str)
+            not isinstance(symbol, str)
+            or not isinstance(relative_path, str)
             or not isinstance(expected_sha256, str)
             or _SHA256.fullmatch(expected_sha256) is None
         ):
-            raise ValueError("primary artifacts must declare path and sha256")
+            raise ValueError("primary artifacts must declare symbol, path, and sha256")
+        if symbol in primary_symbols or relative_path in primary_paths or expected_sha256 in primary_hashes:
+            raise ValueError("primary sample symbol, path, and sha256 bindings must be one-to-one")
+        if not Path(relative_path).name.startswith(f"{symbol}_prices_"):
+            raise ValueError("primary sample filename must match its declared symbol")
+        primary_symbols.add(symbol)
+        primary_paths.add(relative_path)
+        primary_hashes.add(expected_sha256)
         artifact_path = (sample_root / relative_path).resolve()
         if not artifact_path.is_relative_to(resolved_sample_root):
             raise ValueError(f"primary sample path escapes the sample root: {relative_path}")
@@ -121,9 +146,10 @@ def _derive_price_reconciliation_anchor(
             conforming += within_tolerance
     if len(subject_ids) != len(observations):
         raise ValueError("price reconciliation subjects must be unique")
+    if {subject.removeprefix("ticker:") for subject in subject_ids} != primary_symbols:
+        raise ValueError("primary sample symbols must exactly match reconciliation observations")
 
-    with localcontext() as context:
-        context.prec = 50
+    with localcontext(_calibration_context()):
         agreement = (Decimal(conforming) / Decimal(compared)).quantize(Decimal(1).scaleb(-_AGREEMENT_DECIMAL_PLACES))
         completeness = Decimal(len(_OBSERVED_FIELDS)) / Decimal(_REQUIRED_PRICE_COMPONENT_COUNT)
     return (

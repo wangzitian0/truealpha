@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from decimal import Decimal, localcontext
+import json
+import shutil
+from decimal import ROUND_UP, Decimal, Inexact, localcontext
+from pathlib import Path
 
 import pytest
-from data_engine.quality.confidence import build_topt_confidence_sensitivity_report
+from data_engine.quality.confidence import (
+    _derive_price_reconciliation_anchor,
+    build_topt_confidence_sensitivity_report,
+)
 from pydantic import ValidationError
 from truealpha_contracts.confidence import ConfidenceCalibrationReport
 
@@ -26,7 +32,33 @@ def test_topt_sensitivity_report_is_content_addressed_and_keeps_the_denominator(
     assert ConfidenceCalibrationReport.model_validate_json(report.model_dump_json()) == report
     with localcontext() as context:
         context.prec = 10
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
         assert build_topt_confidence_sensitivity_report() == report
+
+
+def test_empirical_anchor_rejects_duplicate_or_misassigned_primary_samples(tmp_path: Path) -> None:
+    source_prices = Path(__file__).resolve().parents[1] / "samples" / "prices"
+    target_prices = tmp_path / "prices"
+    shutil.copytree(source_prices, target_prices)
+    manifest_path = target_prices / "independent_reconciliation.v1.json"
+    original = json.loads(manifest_path.read_text())
+
+    duplicate = json.loads(json.dumps(original))
+    duplicate["primary_artifacts"][1]["path"] = duplicate["primary_artifacts"][0]["path"]
+    duplicate["primary_artifacts"][1]["sha256"] = duplicate["primary_artifacts"][0]["sha256"]
+    manifest_path.write_text(json.dumps(duplicate))
+    with pytest.raises(ValueError, match="one-to-one"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
+    misassigned = json.loads(json.dumps(original))
+    first = misassigned["primary_artifacts"][0]
+    second = misassigned["primary_artifacts"][1]
+    first["path"], second["path"] = second["path"], first["path"]
+    first["sha256"], second["sha256"] = second["sha256"], first["sha256"]
+    manifest_path.write_text(json.dumps(misassigned))
+    with pytest.raises(ValueError, match="filename must match"):
+        _derive_price_reconciliation_anchor(tmp_path)
 
 
 def test_independent_support_is_continuous_and_same_origin_is_deduplicated() -> None:
