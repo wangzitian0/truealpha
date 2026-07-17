@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from llm_service.mcp_server import build_mcp_server, mcp
+from mcp.shared.memory import create_connected_server_and_client_session
+from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
+
+
+class _RecordingRepository:
+    """Captures the AccessContext it was called with; returns a fixed unavailable result."""
+
+    def __init__(self) -> None:
+        self.received_contexts: list[AccessContext] = []
+
+    def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunUnavailable:
+        self.received_contexts.append(context)
+        return StrategyRunUnavailable(strategy_id=strategy_id, reason="unknown_strategy_id")
+
+
+@pytest.mark.anyio
+async def test_advertises_exactly_one_tool() -> None:
+    tools = await mcp.list_tools()
+    assert [tool.name for tool in tools] == ["strategy_run"]
+    tool = tools[0]
+    assert tool.inputSchema["required"] == ["request"]
+    assert tool.outputSchema is not None
+    assert "result" in tool.outputSchema["properties"]
+
+
+@pytest.mark.anyio
+async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture() -> None:
+    # FastMCP.call_tool's declared return type doesn't reflect that it actually
+    # returns a (content_blocks, structured_dict) tuple when structured output
+    # is enabled (verified at runtime); silence the resulting stub mismatch.
+    content_blocks, structured = await mcp.call_tool(  # type: ignore[misc]
+        "strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}
+    )
+    assert content_blocks  # non-empty text content alongside the structured result
+    # JSON-mode validation: the wire payload is JSON-native (lists), not Python tuples.
+    report = StrategyRunReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
+    assert report.strategy_id == "large_model_value_v0"
+    selected = next(d for d in report.decisions if d.issuer_id == "issuer:adm" and d.cutoff_at.month == 3)
+    assert selected.outcome.value == "selected"
+    assert str(selected.valuation_gap) == "1.6388"
+    assert selected.confidence is not None
+
+
+@pytest.mark.anyio
+async def test_unknown_strategy_returns_structured_unavailable_not_a_crash() -> None:
+    _content_blocks, structured = await mcp.call_tool(  # type: ignore[misc]
+        "strategy_run", {"request": {"strategy_id": "does_not_exist"}}
+    )
+    unavailable = StrategyRunUnavailable.model_validate(structured["result"])  # type: ignore[index]
+    assert unavailable.reason == "unknown_strategy_id"
+
+
+@pytest.mark.anyio
+async def test_context_is_derived_server_side_via_service_identity_and_not_client_supplied() -> None:
+    repository = _RecordingRepository()
+    server = build_mcp_server(repository=repository)
+    await server.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
+
+    assert len(repository.received_contexts) == 1
+    context = repository.received_contexts[0]
+    assert context.authentication_method is AuthenticationMethod.SERVICE_IDENTITY
+    assert context.principal_kind is PrincipalKind.SERVICE
+    assert context.issued_at <= datetime.now(UTC)
+    assert context.expires_at - context.issued_at <= timedelta(minutes=5)
+
+    # The tool's own input schema has no identity/role/tenant argument at all.
+    tools = await server.list_tools()
+    request_schema = tools[0].inputSchema["$defs"]["StrategyRunToolRequest"]
+    assert set(request_schema["properties"]) == {"strategy_id"}
+
+
+@pytest.mark.anyio
+async def test_claude_compatible_client_session_round_trip() -> None:
+    """A real mcp.ClientSession over in-memory transport — the same JSON-RPC
+    surface Claude Code / Claude Desktop / Codex speak, not a server-side
+    shortcut method."""
+    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+        await client.initialize()
+        tools = await client.list_tools()
+        assert [tool.name for tool in tools.tools] == ["strategy_run"]
+
+        result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
+        assert result.isError is not True
+        assert result.structuredContent is not None
+        report = StrategyRunReport.model_validate_json(json.dumps(result.structuredContent["result"]))
+        assert len(report.decisions) == 10
+        assert report.golden_mismatches == ()
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
