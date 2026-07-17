@@ -6,6 +6,7 @@ from decimal import Decimal
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
 from data_engine.datahub.production_topt.sec_financial_adapter import (
     FinancialFactsBundle,
+    HeadcountFact,
     SecFinancialFactAdapter,
     SecTarget,
     SourceUnavailableError,
@@ -128,3 +129,43 @@ def test_unknown_work_item_is_contract_violation() -> None:
     other = _work_item("7" * 64)
     adapter = SecFinancialFactAdapter({item.work_item_id: SecTarget(1, _CUTOFF)}, lambda cik, c: None)
     assert adapter.fetch(other).reason_code is ObligationReasonCode.CONTRACT_VIOLATION
+
+
+def _sec_only_bundle() -> FinancialFactsBundle:
+    return FinancialFactsBundle(
+        gross_profit=Decimal("120"),
+        total_assets=Decimal("500"),
+        shares_outstanding=Decimal("10"),
+        raw_bytes=b"{}",
+        knowable_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+
+
+def test_headcount_extractor_changes_the_normalized_identity() -> None:
+    item = _work_item("8" * 64)
+    without = SecFinancialFactAdapter({item.work_item_id: SecTarget(1, _CUTOFF)}, lambda c, cut: _sec_only_bundle())
+    fact = HeadcountFact(value=Decimal("1800"), knowable_at=datetime(2026, 3, 1, tzinfo=UTC))
+    with_hc = SecFinancialFactAdapter(
+        {item.work_item_id: SecTarget(1, _CUTOFF)},
+        lambda c, cut: _sec_only_bundle(),
+        headcount_extractor=lambda c, cut: fact,
+    )
+    r0 = without.fetch(item)
+    r1 = with_hc.fetch(item)
+    assert isinstance(r0, FetchSuccess) and isinstance(r1, FetchSuccess)
+    # Merging headcount changes the normalized observation identity and advances knowable_at.
+    assert r1.normalized_sha256 != r0.normalized_sha256
+    assert r1.transaction_time == datetime(2026, 3, 1, tzinfo=UTC)
+
+
+def test_headcount_after_cutoff_is_ignored() -> None:
+    item = _work_item("9" * 64)
+    late = HeadcountFact(value=Decimal("1"), knowable_at=datetime(2026, 4, 20, tzinfo=UTC))
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: SecTarget(1, _CUTOFF)},
+        lambda c, cut: _sec_only_bundle(),
+        headcount_extractor=lambda c, cut: late,
+    )
+    baseline = SecFinancialFactAdapter({item.work_item_id: SecTarget(1, _CUTOFF)}, lambda c, cut: _sec_only_bundle())
+    # A post-cutoff headcount is excluded, so the identity equals the no-headcount case.
+    assert adapter.fetch(item).normalized_sha256 == baseline.fetch(item).normalized_sha256
