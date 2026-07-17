@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { AccessContext, StrategyRunDecision, StrategyRunReport, StrategyRunUnavailable } from "../src/contracts/strategyRun";
 import { loadComparison, loadOverview, loadRanking } from "../src/server/dashboard";
 import { decisionAvailability, FixtureMartReadAdapter } from "../src/server/mart/research-read";
+import { paginate } from "../src/server/mart/pagination";
 
 const ADMIN_ENV_VAR = "TRUEALPHA_LOCAL_ADMIN_PRINCIPAL_ID";
 
@@ -131,6 +132,18 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
   const second = loadRanking({ limit: 2, cursor: first.data.page.nextCursor });
   assert(second.kind === "ready", `expected ready, got ${second.kind}`);
   assert(second.data.rows[0].issuerId !== first.data.rows[0].issuerId, "second page must differ from first");
+}
+
+// --- pagination: malformed/out-of-range cursors reset to page 1, never silently offset
+// or return a blank page (Copilot review on #387: Number.parseInt("2oops", 10) === 2) ---
+{
+  const items = ["a", "b", "c", "d", "e"];
+  const garbage = paginate(items, "2oops");
+  assert(garbage.items[0] === "a", `garbage cursor must reset to page 1, got ${garbage.items[0]}`);
+  const outOfRange = paginate(items, "999");
+  assert(outOfRange.items[0] === "a", `out-of-range cursor must reset to page 1, got ${outOfRange.items[0]}`);
+  const valid = paginate(items, "2");
+  assert(valid.items[0] === "c", `valid cursor should offset normally, got ${valid.items[0]}`);
 }
 
 // --- empty: a materialized run with no decisions ---

@@ -22,11 +22,15 @@ export interface Page<T> {
   info: PageInfo;
 }
 
-/** Decodes an opaque cursor to a start offset, clamping out-of-range/garbage to 0. */
-function decodeCursor(cursor: string | null): number {
-  if (cursor === null) return 0;
+/** Decodes an opaque cursor to a start offset, clamping out-of-range/garbage to 0.
+ * `total` bounds the offset so a stale/malformed cursor (e.g. a shrunk result set, or
+ * "2oops" — Number.parseInt would otherwise silently accept its leading "2") never slices
+ * from beyond the dataset and returns a confusing empty "ready" page (Copilot review on
+ * #387). Requires the cursor to be all digits, not just parseInt-parseable. */
+function decodeCursor(cursor: string | null, total: number): number {
+  if (cursor === null || !/^\d+$/.test(cursor)) return 0;
   const parsed = Number.parseInt(cursor, 10);
-  if (!Number.isInteger(parsed) || parsed < 0) return 0;
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed >= total) return 0;
   return parsed;
 }
 
@@ -38,7 +42,7 @@ function clampLimit(limit: number): number {
 /** Slices `items` into one stable page. Row order is the caller's; this never reorders. */
 export function paginate<T>(items: readonly T[], cursor: string | null, limit: number = DEFAULT_PAGE_SIZE): Page<T> {
   const size = clampLimit(limit);
-  const start = decodeCursor(cursor);
+  const start = decodeCursor(cursor, items.length);
   const end = start + size;
   const pageItems = items.slice(start, end);
   const hasMore = end < items.length;
