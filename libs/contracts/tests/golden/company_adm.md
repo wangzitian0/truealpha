@@ -1,6 +1,6 @@
 # ADM — company research report
 
-- Report ID: `report:de93d4cbb95a580533c2864856efa62570c41773e991e2f72eaaa4b6326a850d`
+- Report ID: `report:07e18ce70932f1fbf622b391b15181133a606324f82b9d71ccf8e5b1795084d1`
 - Kind: `company`
 - Cutoff: `2026-06-30T23:59:59+00:00`
 - Source: `fixture:research_report.v1`
@@ -17,7 +17,7 @@
 
 | Result | Value | Period | Availability | Confidence | Factor version | Trace |
 | --- | --- | --- | --- | --- | --- | --- |
-| capital_adjusted_labor_efficiency | 75207.29 USD | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
+| capital_adjusted_labor_efficiency | 75207.29 USD | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |
 
 ### Valuation (three-tier P/S)
 
@@ -26,10 +26,10 @@
 
 | Result | Value | Period | Availability | Confidence | Factor version | Trace |
 | --- | --- | --- | --- | --- | --- | --- |
-| tier | traditional | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
-| current_price_to_sales | 0.4580 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
-| target_price_to_sales | 1.1500 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
-| valuation_gap | 1.5109 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
+| tier | traditional | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |
+| current_price_to_sales | 0.4580 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |
+| target_price_to_sales | 1.1500 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |
+| valuation_gap | 1.5109 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |
 
 ### PEG (switchable conventions)
 
@@ -53,7 +53,7 @@
 
 | Result | Value | Period | Availability | Confidence | Factor version | Trace |
 | --- | --- | --- | --- | --- | --- | --- |
-| outcome | selected | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
-| eligible | true | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
-| rank | 1 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
-| target_weight | 0.500000 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30 |
+| outcome | selected | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |
+| eligible | true | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |
+| rank | 1 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |
+| target_weight | 0.500000 | 2026-06-30 | available | 0.90 | large_model_value_v0 | strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z |

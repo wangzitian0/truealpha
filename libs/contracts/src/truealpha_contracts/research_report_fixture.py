@@ -69,9 +69,12 @@ def _value_availability(value: str | None, section_status: AvailabilityStatus) -
 
 
 def _trace(decision: StrategyRunDecision, corpus_sha256: str) -> EvidenceTrace:
-    date = decision.cutoff_at.date().isoformat()
+    # Full cutoff_at, not just its date: truncating to a bare date would collide across
+    # multiple same-day cutoffs (Copilot review on #387; mirrored here to keep this and
+    # research-read.ts's traceId() byte-identical, per #347's parity contract).
+    cutoff = decision.cutoff_at.isoformat().replace("+00:00", "Z")
     return EvidenceTrace(
-        reference_id=f"strategy_smoke_fixture:{corpus_sha256[:12]}:{decision.issuer_id}:{date}",
+        reference_id=f"strategy_smoke_fixture:{corpus_sha256[:12]}:{decision.issuer_id}:{cutoff}",
     )
 
 
