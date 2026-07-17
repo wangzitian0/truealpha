@@ -330,7 +330,7 @@ def test_card_rejects_unknown_field() -> None:
         )
 
 
-def test_card_requires_a_naive_free_cutoff() -> None:
+def test_card_rejects_naive_cutoff() -> None:
     card = GOLDEN_CARDS["company"]()
     with pytest.raises(ValidationError):
         ResearchCard(
