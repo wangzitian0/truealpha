@@ -1,0 +1,132 @@
+{
+  "content_sha256": "b4e2a7672382933e073c1a7f6ed99841ac1fea386c7ac1bcfbec8ad6e34a9142",
+  "effective_at": "2026-07-17T00:00:00Z",
+  "quality_objective": {
+    "confidence_policy_id": "confidence-policy:3333333333333333333333333333333333333333333333333333333333333333",
+    "confidence_policy_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "confidence_target_band": "high",
+    "conflict_behavior": "report_and_abstain",
+    "content_sha256": "c817709aa3f57f6891de6cb9dd86210008cdf0b1546729f53cb800f1c78a6404",
+    "minimum_availability": "0.95",
+    "minimum_confidence_score": "70",
+    "minimum_coverage": "1",
+    "minimum_independent_origin_groups": 2,
+    "origin_group_rule": "canonical_original_source",
+    "quality_objective_id": "quality-objective:c817709aa3f57f6891de6cb9dd86210008cdf0b1546729f53cb800f1c78a6404",
+    "report_cadence": "P1D",
+    "report_dimensions": [
+      "availability",
+      "confidence",
+      "conflicts",
+      "coverage",
+      "denominator",
+      "freshness",
+      "lineage",
+      "retries",
+      "source_composition",
+      "terminal_state",
+      "unavailable_reasons"
+    ],
+    "require_complete_lineage": true
+  },
+  "recomputation_handoffs": [
+    {
+      "content_sha256": "8d7d50aa0a9145f77a96157ab4341323643a9ac028a4059515b76addfe9ed1f3",
+      "definition_id": "gppe-definition:4444444444444444444444444444444444444444444444444444444444444444",
+      "definition_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "handoff_id": "recomputation-handoff:8d7d50aa0a9145f77a96157ab4341323643a9ac028a4059515b76addfe9ed1f3",
+      "idempotency_rule": "exact_snapshot_and_definition",
+      "input_requirement_ids": [
+        "data-requirement:c038fb486cb12cb4368e381d100ea092a4dce2b39261c32cfa8cc99e977ad756"
+      ],
+      "materialization_kind": "factor-output:gppe",
+      "overlap_policy": "do_not_overlap",
+      "trigger": "on_accepted_exact_snapshot"
+    }
+  ],
+  "representative_samples": {
+    "artifacts": [
+      {
+        "artifact_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "byte_length": 128,
+        "media_type": "application/json",
+        "relative_path": "samples/topt/financial-fact.json",
+        "sample_artifact_id": "sample-artifact:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    ],
+    "cases": [
+      {
+        "assertions": [
+          {
+            "content_sha256": "5449ee14f3fcaf6a88b394c3e06571f557044e3a58f76d24f37456d36553de54",
+            "expected_value": "210000000",
+            "field_name": "gross_profit",
+            "operator": "exact",
+            "requirement_id": "data-requirement:c038fb486cb12cb4368e381d100ea092a4dce2b39261c32cfa8cc99e977ad756",
+            "sample_assertion_id": "sample-assertion:5449ee14f3fcaf6a88b394c3e06571f557044e3a58f76d24f37456d36553de54",
+            "tolerance": null
+          }
+        ],
+        "case_name": "nonfinancial-gross-profit",
+        "content_sha256": "b756af00ae911b1106bddd8d46fad1448a31beb069ac4a8eedcd970d8116c102",
+        "sample_artifact_id": "sample-artifact:2222222222222222222222222222222222222222222222222222222222222222",
+        "sample_case_id": "sample-case:b756af00ae911b1106bddd8d46fad1448a31beb069ac4a8eedcd970d8116c102"
+      }
+    ],
+    "content_sha256": "a08f6579bb3d9828c13fac50a373045a088da51412bc0729287f1e2d47f23052",
+    "sample_manifest_id": "sample-manifest:a08f6579bb3d9828c13fac50a373045a088da51412bc0729287f1e2d47f23052"
+  },
+  "requester": {
+    "kind": "factor",
+    "requester_definition_id": "gppe-definition:4444444444444444444444444444444444444444444444444444444444444444",
+    "requester_definition_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "requester_id": "factor:gross-profit-per-employee",
+    "requester_version": "production-topt-v0.1.0"
+  },
+  "requirements": [
+    {
+      "content_sha256": "319fd29f52ede565accd58e3f8889e7e4c60bc9a759866a2ae24a81893becf59",
+      "data_requirement": {
+        "cadence": "P1D",
+        "capture_requirement_id": "capture-requirement:1111111111111111111111111111111111111111111111111111111111111111",
+        "content_sha256": "c038fb486cb12cb4368e381d100ea092a4dce2b39261c32cfa8cc99e977ad756",
+        "domain": "financial_facts",
+        "level": "required",
+        "lookback": "P1Y35D",
+        "maximum_age": "P2D",
+        "metric": "gross_profit",
+        "requirement_id": "data-requirement:c038fb486cb12cb4368e381d100ea092a4dce2b39261c32cfa8cc99e977ad756",
+        "semantic_type_id": "semantic.financial-fact",
+        "subject_kinds": [
+          "issuer"
+        ],
+        "valid_period_rule_id": "fiscal-period:annual"
+      },
+      "fields": [
+        {
+          "content_sha256": "72fb2ebc04ff724c503c214de251ee3f6654dd8b681e043a7294ad8106a9725d",
+          "definition": "Revenue less cost of revenue for the reporting period.",
+          "field_name": "gross_profit",
+          "field_semantics_id": "field-semantics:72fb2ebc04ff724c503c214de251ee3f6654dd8b681e043a7294ad8106a9725d",
+          "knowable_time_rule_id": "filing-publication-time:v1",
+          "nullable": false,
+          "required": true,
+          "requirement_id": "data-requirement:c038fb486cb12cb4368e381d100ea092a4dce2b39261c32cfa8cc99e977ad756",
+          "unit": null,
+          "unit_behavior": "from_record",
+          "valid_time_behavior": "reporting_period",
+          "value_kind": "decimal"
+        }
+      ],
+      "freshness_max_age": "P2D",
+      "refresh_cadence": "P1D",
+      "service_requirement_id": "service-requirement:319fd29f52ede565accd58e3f8889e7e4c60bc9a759866a2ae24a81893becf59"
+    }
+  ],
+  "service_demand_id": "datahub-service-demand:b4e2a7672382933e073c1a7f6ed99841ac1fea386c7ac1bcfbec8ad6e34a9142",
+  "universe": {
+    "content_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "universe_id": "universe:topt-candidate-v1",
+    "universe_version": "2026-03-31-v1"
+  }
+}

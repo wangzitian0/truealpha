@@ -35,6 +35,14 @@ Compose, GitHub CI, and infra2 may provide different backends behind it.
 
 Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
+## DataHub Demand
+
+Factors, strategies, and research modules request long-lived data service through a
+content-addressed, source-neutral demand with a representative sample. See
+[`docs/datahub-service-demand.md`](docs/datahub-service-demand.md) for the contract,
+TOPT example, quality objectives, and the boundary with confidence calibration and
+`infra2-sdk`.
+
 ## Deployment
 
 Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC.
