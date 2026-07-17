@@ -291,6 +291,27 @@ class ReconciliationResult(_FrozenModel):
             raise ValueError("selected assertion, value hash, and confidence must be present together")
         if self.selected_numeric_value is not None and not selected:
             raise ValueError("selected numeric value requires a selected assertion")
+        assertion_ids = set(self.assertion_ids)
+        eligible_ids = set(self.eligible_assertion_ids)
+        future_ids = set(self.future_assertion_ids)
+        unregistered_ids = set(self.unregistered_assertion_ids)
+        representative_ids = set(self.representative_assertion_ids)
+        agreeing_ids = set(self.agreeing_assertion_ids)
+        conflicting_ids = set(self.conflicting_assertion_ids)
+        if future_ids & eligible_ids or future_ids & unregistered_ids or eligible_ids & unregistered_ids:
+            raise ValueError("future, eligible, and unregistered assertions must be disjoint")
+        if future_ids | eligible_ids | unregistered_ids != assertion_ids:
+            raise ValueError("assertion classifications must exactly cover every assertion")
+        if not representative_ids <= eligible_ids:
+            raise ValueError("representative assertions must be eligible")
+        if agreeing_ids & conflicting_ids or agreeing_ids | conflicting_ids != representative_ids:
+            raise ValueError("agreeing and conflicting assertions must partition representatives")
+        if len(self.origin_group_ids) != len(self.representative_assertion_ids):
+            raise ValueError("each representative must correspond to one independent origin group")
+        if selected and (
+            self.selected_assertion_id not in representative_ids or self.selected_assertion_id not in agreeing_ids
+        ):
+            raise ValueError("selected assertion must be an agreeing representative")
         if (
             self.outcome
             in {
@@ -301,8 +322,28 @@ class ReconciliationResult(_FrozenModel):
             and selected
         ):
             raise ValueError("abstained or unavailable reconciliation cannot select a value")
-        if self.outcome is ReconciliationOutcome.AGREED and len(self.origin_group_ids) < 2:
-            raise ValueError("agreement requires at least two independent origin groups")
+        selected_outcomes = {
+            ReconciliationOutcome.AGREED,
+            ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS,
+        }
+        if self.outcome in selected_outcomes and not selected:
+            raise ValueError("an agreed or insufficient-origin result must select an assertion")
+        if self.outcome is ReconciliationOutcome.AGREED:
+            if len(self.origin_group_ids) < 2:
+                raise ValueError("agreement requires at least two independent origin groups")
+            if conflicting_ids:
+                raise ValueError("an agreed result cannot contain conflicting assertions")
+        if self.outcome is ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS and conflicting_ids:
+            raise ValueError("an insufficient-origin result cannot contain conflicting assertions")
+        if self.outcome is ReconciliationOutcome.CONFLICT_ABSTAINED and not conflicting_ids:
+            raise ValueError("a conflict-abstained result requires conflicting assertions")
+        if self.outcome in {ReconciliationOutcome.NOT_YET_KNOWABLE, ReconciliationOutcome.UNAVAILABLE}:
+            if eligible_ids or representative_ids or self.origin_group_ids:
+                raise ValueError("an unavailable result cannot contain eligible representatives")
+        if self.outcome is ReconciliationOutcome.NOT_YET_KNOWABLE and not future_ids:
+            raise ValueError("a not-yet-knowable result requires future assertions")
+        if self.outcome is ReconciliationOutcome.UNAVAILABLE and future_ids:
+            raise ValueError("an unavailable result cannot contain future assertions")
         _freeze_content(
             self,
             id_field="result_id",
@@ -475,6 +516,7 @@ class DataHubQualityCell(_FrozenModel):
     quality_cell_id: str = Field(default="", pattern=r"^(?:|datahub-quality-cell:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     cell: ReconciliationCell
+    reconciliation_policy_id: str = Field(pattern=r"^reconciliation-policy:[0-9a-f]{64}$")
     planned: bool
     terminal_state: ObligationTerminalState | None = None
     reconciliation: ReconciliationResult | None = None
@@ -495,6 +537,7 @@ class DataHubQualityCell(_FrozenModel):
         if not self.planned and (
             self.terminal_state is not None
             or self.reconciliation is not None
+            or self.lineage_complete
             or self.attempt_count
             or self.retry_count
             or self.unchanged_response_count
@@ -504,6 +547,8 @@ class DataHubQualityCell(_FrozenModel):
             raise ValueError("retry and unchanged counts cannot exceed attempts")
         if self.reconciliation is not None and self.reconciliation.cell_id != self.cell.cell_id:
             raise ValueError("reconciliation must target the report cell")
+        if self.reconciliation is not None and self.reconciliation.policy_id != self.reconciliation_policy_id:
+            raise ValueError("reconciliation must use the cell-level field policy")
         if self.reconciliation is not None and self.lineage_complete != self.reconciliation.lineage_complete:
             raise ValueError("cell lineage completeness must match its reconciliation evidence")
         selected = self.reconciliation is not None and self.reconciliation.selected_assertion_id is not None
@@ -606,7 +651,7 @@ class VersionedDataHubQualityReport(_FrozenModel):
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     report_schema_version: str = Field(pattern=_STABLE_COORDINATE)
     service_demand_id: str = Field(pattern=_CONTENT_ID)
-    reconciliation_policy_id: str = Field(pattern=r"^reconciliation-policy:[0-9a-f]{64}$")
+    reconciliation_policy_ids: tuple[str, ...] = Field(min_length=1)
     cutoff: datetime
     generated_at: datetime
     cells: tuple[DataHubQualityCell, ...] = Field(min_length=1)
@@ -616,6 +661,14 @@ class VersionedDataHubQualityReport(_FrozenModel):
     @classmethod
     def validate_schema_version(cls, value: str) -> str:
         return _immutable_coordinate(value, "report_schema_version")
+
+    @field_validator("reconciliation_policy_ids")
+    @classmethod
+    def normalize_policy_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        values = _sorted_unique(values, "reconciliation_policy_ids")
+        if any(re.fullmatch(r"^reconciliation-policy:[0-9a-f]{64}$", value) is None for value in values):
+            raise ValueError("reconciliation_policy_ids must contain content addresses")
+        return values
 
     @field_validator("cutoff", "generated_at")
     @classmethod
@@ -627,11 +680,9 @@ class VersionedDataHubQualityReport(_FrozenModel):
         cells = tuple(sorted(self.cells, key=lambda item: item.cell.cell_id))
         if len({cell.cell.cell_id for cell in cells}) != len(cells):
             raise ValueError("quality report must contain exactly one row per requested cell")
-        if any(
-            cell.reconciliation is not None and cell.reconciliation.policy_id != self.reconciliation_policy_id
-            for cell in cells
-        ):
-            raise ValueError("every reconciliation must use the report policy")
+        cell_policy_ids = tuple(sorted({cell.reconciliation_policy_id for cell in cells}))
+        if self.reconciliation_policy_ids != cell_policy_ids:
+            raise ValueError("report policy IDs must exactly cover the cell-level field policies")
         if any(cell.reconciliation is not None and cell.reconciliation.cutoff != self.cutoff for cell in cells):
             raise ValueError("every reconciliation must use the report cutoff")
         if self.generated_at < self.cutoff:
@@ -648,7 +699,7 @@ class VersionedDataHubQualityReport(_FrozenModel):
             identity_fields=(
                 "report_schema_version",
                 "service_demand_id",
-                "reconciliation_policy_id",
+                "reconciliation_policy_ids",
                 "cutoff",
                 "cells",
             ),

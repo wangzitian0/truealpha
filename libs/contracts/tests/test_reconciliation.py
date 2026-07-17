@@ -41,10 +41,16 @@ def _policy(
     *,
     absolute_tolerance: Decimal = Decimal("0"),
     relative_tolerance: Decimal = Decimal("0"),
+    policy_version: str = "financial-fusion:v1",
+    source_priority: tuple[str, ...] = (
+        "source:sec:v1",
+        "source:vendor-a:v1",
+        "source:vendor-b:v1",
+    ),
 ) -> ReconciliationPolicy:
     return ReconciliationPolicy(
-        policy_version="financial-fusion:v1",
-        source_priority=("source:sec:v1", "source:vendor-a:v1", "source:vendor-b:v1"),
+        policy_version=policy_version,
+        source_priority=source_priority,
         absolute_tolerance=absolute_tolerance,
         relative_tolerance=relative_tolerance,
         minimum_independent_origin_groups=2,
@@ -318,6 +324,10 @@ def test_unregistered_source_is_visible_but_cannot_win() -> None:
 
 def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator() -> None:
     policy = _policy()
+    secondary_policy = _policy(
+        policy_version="headcount-fusion:v1",
+        source_priority=("source:vendor-a:v1", "source:sec:v1", "source:vendor-b:v1"),
+    )
     available_cell, _, _, available_result = _agreeing_result()
     conflict_cell = _cell("revenue")
     conflict_left = _assertion(
@@ -346,6 +356,7 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
     cells = (
         DataHubQualityCell(
             cell=available_cell,
+            reconciliation_policy_id=policy.policy_id,
             planned=True,
             terminal_state=ObligationTerminalState.SUCCESS,
             reconciliation=available_result,
@@ -356,6 +367,7 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
         ),
         DataHubQualityCell(
             cell=conflict_cell,
+            reconciliation_policy_id=policy.policy_id,
             planned=True,
             terminal_state=ObligationTerminalState.SUCCESS,
             reconciliation=conflict_result,
@@ -366,6 +378,7 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
         ),
         DataHubQualityCell(
             cell=failed_cell,
+            reconciliation_policy_id=secondary_policy.policy_id,
             planned=True,
             terminal_state=ObligationTerminalState.FAILED,
             lineage_complete=False,
@@ -375,6 +388,7 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
         ),
         DataHubQualityCell(
             cell=unplanned_cell,
+            reconciliation_policy_id=secondary_policy.policy_id,
             planned=False,
             lineage_complete=False,
             reason_codes=("quality.no_source_plan",),
@@ -384,7 +398,7 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
     report = VersionedDataHubQualityReport(
         report_schema_version="datahub-quality-report:v1",
         service_demand_id=f"datahub-service-demand:{SHA_D}",
-        reconciliation_policy_id=policy.policy_id,
+        reconciliation_policy_ids=(secondary_policy.policy_id, policy.policy_id),
         cutoff=CUTOFF,
         generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
         cells=tuple(reversed(cells)),
@@ -399,6 +413,7 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
     assert report.summary.independent_reconciliation == Decimal("0.25")
     assert report.summary.conflicted_count == 1
     assert report.summary.denominator_mean_confidence_score == Decimal("18.75")
+    assert report.reconciliation_policy_ids == tuple(sorted((policy.policy_id, secondary_policy.policy_id)))
     assert tuple(cell.cell.cell_id for cell in report.cells) == tuple(sorted(cell.cell.cell_id for cell in cells))
 
 
@@ -407,6 +422,7 @@ def test_report_rejects_a_shrunken_or_forged_summary() -> None:
     cell, _, _, result = _agreeing_result()
     quality_cell = DataHubQualityCell(
         cell=cell,
+        reconciliation_policy_id=policy.policy_id,
         planned=True,
         terminal_state=ObligationTerminalState.SUCCESS,
         reconciliation=result,
@@ -438,7 +454,7 @@ def test_report_rejects_a_shrunken_or_forged_summary() -> None:
         VersionedDataHubQualityReport(
             report_schema_version="datahub-quality-report:v1",
             service_demand_id=f"datahub-service-demand:{SHA_D}",
-            reconciliation_policy_id=policy.policy_id,
+            reconciliation_policy_ids=(policy.policy_id,),
             cutoff=CUTOFF,
             generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
             cells=(quality_cell,),
@@ -449,7 +465,7 @@ def test_report_rejects_a_shrunken_or_forged_summary() -> None:
         VersionedDataHubQualityReport(
             report_schema_version="datahub-quality-report:v1",
             service_demand_id=f"datahub-service-demand:{SHA_D}",
-            reconciliation_policy_id=policy.policy_id,
+            reconciliation_policy_ids=(policy.policy_id,),
             cutoff=CUTOFF,
             generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
             cells=(quality_cell, quality_cell),
@@ -461,6 +477,7 @@ def test_quality_cell_rejects_inconsistent_lineage_and_terminal_counters() -> No
     with pytest.raises(ValidationError, match="lineage completeness"):
         DataHubQualityCell(
             cell=cell,
+            reconciliation_policy_id=result.policy_id,
             planned=True,
             terminal_state=ObligationTerminalState.SUCCESS,
             reconciliation=result,
@@ -473,6 +490,7 @@ def test_quality_cell_rejects_inconsistent_lineage_and_terminal_counters() -> No
     with pytest.raises(ValidationError, match="unchanged response"):
         DataHubQualityCell(
             cell=cell,
+            reconciliation_policy_id=result.policy_id,
             planned=True,
             terminal_state=ObligationTerminalState.UNCHANGED,
             reconciliation=result,
@@ -482,6 +500,33 @@ def test_quality_cell_rejects_inconsistent_lineage_and_terminal_counters() -> No
             unchanged_response_count=0,
             reason_codes=("quality.unchanged",),
         )
+
+    with pytest.raises(ValidationError, match="unplanned requested cell"):
+        DataHubQualityCell(
+            cell=cell,
+            reconciliation_policy_id=result.policy_id,
+            planned=False,
+            lineage_complete=True,
+            reason_codes=("quality.no_source_plan",),
+        )
+
+
+def test_agreed_result_cannot_be_deserialized_without_a_selected_assertion() -> None:
+    _, _, _, result = _agreeing_result()
+    payload = result.model_dump()
+    payload.update(
+        {
+            "result_id": "",
+            "content_sha256": "",
+            "selected_assertion_id": None,
+            "selected_value_sha256": None,
+            "selected_numeric_value": None,
+            "selected_confidence_score": None,
+        }
+    )
+
+    with pytest.raises(ValidationError, match="must select an assertion"):
+        type(result).model_validate(payload)
 
 
 def test_binary_float_inputs_are_rejected() -> None:

@@ -13,8 +13,9 @@ For each requested semantic cell, DataHub performs these steps in order:
    their assertion IDs and a reason code in the result.
 3. Select one representative per canonical origin group. A mirror or reseller of the
    same original source does not create independent evidence.
-4. Select the primary representative by declared `source_priority`. Confidence and
-   ingestion order never arbitrate truth.
+4. Select the primary representative by the semantic cell's declared, content-addressed
+   `source_priority` policy. Different fields may bind different policies; confidence
+   and ingestion order never arbitrate truth.
 5. Compare numeric origin representatives using Decimal arithmetic:
 
    `abs(a - b) <= absolute_tolerance + relative_tolerance * max(abs(a), abs(b))`
@@ -33,7 +34,9 @@ runner/report boundary.
 
 `VersionedDataHubQualityReport.cells` contains exactly one row per requested cell,
 including unplanned, pending, failed, unavailable, unchanged, stale, and conflicted
-cells. All summary ratios use this requested-cell count as their denominator:
+cells. Every row binds its field-level reconciliation policy, and the report's policy-ID
+set must exactly cover those bindings. All summary ratios use this requested-cell count
+as their denominator:
 
 - `planned_coverage = planned_count / requested_count`
 - `terminal_coverage = terminal_count / requested_count`
