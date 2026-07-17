@@ -296,6 +296,34 @@ def test_required_field_must_be_covered_by_a_sample_assertion() -> None:
     assert DemandIntakeReasonCode.CROSS_CONTRACT_INVALID in report.reason_codes
 
 
+def test_required_field_rejects_absent_sample_assertion() -> None:
+    demand = _demand()
+    original = demand.representative_samples.cases[0].assertions[0]
+    assertion = SampleAssertion(
+        requirement_id=original.requirement_id,
+        field_name=original.field_name,
+        operator=SampleAssertionOperator.ABSENT,
+    )
+    case = demand.representative_samples.cases[0]
+    samples = RepresentativeSampleManifest(
+        artifacts=demand.representative_samples.artifacts,
+        cases=(
+            SampleCase(
+                case_name=case.case_name,
+                sample_artifact_id=case.sample_artifact_id,
+                assertions=(assertion,),
+            ),
+        ),
+    )
+    payload = demand.model_dump(mode="json")
+    payload["service_demand_id"] = ""
+    payload["content_sha256"] = ""
+    payload["representative_samples"] = samples.model_dump(mode="json")
+
+    with pytest.raises(ValidationError, match="required fields cannot use absent"):
+        DataHubServiceDemand.model_validate(payload)
+
+
 def test_decimal_quality_targets_reject_binary_float() -> None:
     payload = _demand().quality_objective.model_dump(mode="json", exclude={"quality_objective_id", "content_sha256"})
     payload["minimum_confidence_score"] = 70.0
@@ -331,6 +359,14 @@ def test_requester_rejects_mutable_versions(requester_version: str) -> None:
     payload["requester_version"] = requester_version
 
     with pytest.raises(ValidationError, match="immutable version"):
+        DemandRequester.model_validate(payload)
+
+
+def test_requester_rejects_definition_hash_drift() -> None:
+    payload = _demand().requester.model_dump(mode="json")
+    payload["requester_definition_sha256"] = "9" * 64
+
+    with pytest.raises(ValidationError, match="requester definition ID and hash disagree"):
         DemandRequester.model_validate(payload)
 
 

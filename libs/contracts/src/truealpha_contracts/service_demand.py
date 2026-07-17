@@ -156,6 +156,12 @@ class DemandRequester(_FrozenModel):
             raise ValueError("requester_version must name an immutable version")
         return value
 
+    @model_validator(mode="after")
+    def validate_definition_identity(self) -> Self:
+        if self.requester_definition_id.rsplit(":", 1)[-1] != self.requester_definition_sha256:
+            raise ValueError("requester definition ID and hash disagree")
+        return self
+
 
 class SampleArtifact(_FrozenModel):
     """Transport-neutral reference to exact sample bytes supplied with a demand."""
@@ -447,7 +453,10 @@ class DataHubServiceDemand(_FrozenModel):
             raise ValueError("sample assertions reference undeclared field semantics")
         for case in self.representative_samples.cases:
             for assertion in case.assertions:
-                _validate_assertion_value(assertion, declared_fields[(assertion.requirement_id, assertion.field_name)])
+                field = declared_fields[(assertion.requirement_id, assertion.field_name)]
+                if field.required and assertion.operator is SampleAssertionOperator.ABSENT:
+                    raise ValueError("required fields cannot use absent sample assertions")
+                _validate_assertion_value(assertion, field)
         required_fields = {coordinate for coordinate, field in declared_fields.items() if field.required}
         if not required_fields.issubset(asserted_fields):
             raise ValueError("representative samples must assert every required field")
