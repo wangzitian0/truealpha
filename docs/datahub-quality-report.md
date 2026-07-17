@@ -34,9 +34,12 @@ runner/report boundary.
 
 `VersionedDataHubQualityReport.cells` contains exactly one row per requested cell,
 including unplanned, pending, failed, unavailable, unchanged, stale, and conflicted
-cells. Every row binds its field-level reconciliation policy, and the report's policy-ID
-set must exactly cover those bindings. All summary ratios use this requested-cell count
-as their denominator:
+cells. A content-addressed `DataHubQualityDenominator` binds the accepted service-demand
+ID to the complete requested-cell ID set; report rows must match it exactly. Consumers
+pin that denominator ID, so omitting a failed cell changes the identity and fails the
+expected-demand comparison. Every row binds its field-level reconciliation policy, and
+the report bundles the exact content-addressed policies needed to validate thresholds.
+All summary ratios use this requested-cell count as their denominator:
 
 - `planned_coverage = planned_count / requested_count`
 - `terminal_coverage = terminal_count / requested_count`
@@ -47,7 +50,10 @@ as their denominator:
 - `denominator_mean_confidence_score = sum(selected confidence; otherwise 0) / requested_count`
 
 This prevents a failing collector from improving its own metrics by omitting failed or
-missing cells. `origin_composition` counts each origin at most once per requested cell.
+missing cells. Reconciliation results also retain the policy threshold and explicit
+comparison anchor, so an apparent agreement or conflict can be validated without trusting
+producer-supplied outcome labels. `origin_composition` counts each origin at most once per
+requested cell.
 
 ## Representative Report
 

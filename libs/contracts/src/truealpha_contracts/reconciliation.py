@@ -122,6 +122,33 @@ class ReconciliationCell(_FrozenModel):
         return self
 
 
+class DataHubQualityDenominator(_FrozenModel):
+    """The exact requested-cell set compiled from one accepted service demand."""
+
+    denominator_id: str = Field(default="", pattern=r"^(?:|datahub-quality-denominator:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    service_demand_id: str = Field(pattern=_CONTENT_ID)
+    requested_cell_ids: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("requested_cell_ids")
+    @classmethod
+    def normalize_cell_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        values = _sorted_unique(values, "requested_cell_ids")
+        if any(re.fullmatch(r"^reconciliation-cell:[0-9a-f]{64}$", value) is None for value in values):
+            raise ValueError("requested_cell_ids must contain reconciliation cell addresses")
+        return values
+
+    @model_validator(mode="after")
+    def identify(self) -> Self:
+        _freeze_content(
+            self,
+            id_field="denominator_id",
+            prefix="datahub-quality-denominator",
+            identity_fields=("service_demand_id", "requested_cell_ids"),
+        )
+        return self
+
+
 class SourceAssertion(_FrozenModel):
     """One normalized assertion plus its independent-origin evidence."""
 
@@ -236,6 +263,7 @@ class ReconciliationResult(_FrozenModel):
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     cell_id: str = Field(pattern=r"^reconciliation-cell:[0-9a-f]{64}$")
     policy_id: str = Field(pattern=r"^reconciliation-policy:[0-9a-f]{64}$")
+    minimum_independent_origin_groups: int = Field(ge=1)
     cutoff: datetime
     outcome: ReconciliationOutcome
     assertion_ids: tuple[str, ...]
@@ -246,6 +274,10 @@ class ReconciliationResult(_FrozenModel):
     agreeing_assertion_ids: tuple[str, ...]
     conflicting_assertion_ids: tuple[str, ...]
     origin_group_ids: tuple[str, ...]
+    comparison_anchor_assertion_id: str | None = Field(
+        default=None,
+        pattern=r"^source-assertion:[0-9a-f]{64}$",
+    )
     selected_assertion_id: str | None = Field(default=None, pattern=r"^source-assertion:[0-9a-f]{64}$")
     selected_value_sha256: str | None = Field(default=None, pattern=_SHA256)
     selected_numeric_value: Decimal | None = None
@@ -308,10 +340,17 @@ class ReconciliationResult(_FrozenModel):
             raise ValueError("agreeing and conflicting assertions must partition representatives")
         if len(self.origin_group_ids) != len(self.representative_assertion_ids):
             raise ValueError("each representative must correspond to one independent origin group")
+        anchored = self.comparison_anchor_assertion_id is not None
+        if anchored != bool(representative_ids):
+            raise ValueError("comparison anchor must be present exactly when representatives exist")
+        if anchored and self.comparison_anchor_assertion_id not in agreeing_ids:
+            raise ValueError("comparison anchor must be an agreeing representative")
         if selected and (
             self.selected_assertion_id not in representative_ids or self.selected_assertion_id not in agreeing_ids
         ):
             raise ValueError("selected assertion must be an agreeing representative")
+        if selected and self.selected_assertion_id != self.comparison_anchor_assertion_id:
+            raise ValueError("selected assertion must equal the comparison anchor")
         if (
             self.outcome
             in {
@@ -329,14 +368,18 @@ class ReconciliationResult(_FrozenModel):
         if self.outcome in selected_outcomes and not selected:
             raise ValueError("an agreed or insufficient-origin result must select an assertion")
         if self.outcome is ReconciliationOutcome.AGREED:
-            if len(self.origin_group_ids) < 2:
-                raise ValueError("agreement requires at least two independent origin groups")
+            if len(self.origin_group_ids) < self.minimum_independent_origin_groups:
+                raise ValueError("agreement does not meet the bound independent-origin threshold")
             if conflicting_ids:
                 raise ValueError("an agreed result cannot contain conflicting assertions")
-        if self.outcome is ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS and conflicting_ids:
-            raise ValueError("an insufficient-origin result cannot contain conflicting assertions")
-        if self.outcome is ReconciliationOutcome.CONFLICT_ABSTAINED and not conflicting_ids:
-            raise ValueError("a conflict-abstained result requires conflicting assertions")
+        if self.outcome is ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS:
+            if len(self.origin_group_ids) >= self.minimum_independent_origin_groups:
+                raise ValueError("an insufficient-origin result meets its bound threshold")
+            if conflicting_ids:
+                raise ValueError("an insufficient-origin result cannot contain conflicting assertions")
+        if self.outcome is ReconciliationOutcome.CONFLICT_ABSTAINED:
+            if not agreeing_ids or not conflicting_ids or len(self.origin_group_ids) < 2:
+                raise ValueError("a conflict requires an agreeing anchor and a disagreeing origin")
         if self.outcome in {ReconciliationOutcome.NOT_YET_KNOWABLE, ReconciliationOutcome.UNAVAILABLE}:
             if eligible_ids or representative_ids or self.origin_group_ids:
                 raise ValueError("an unavailable result cannot contain eligible representatives")
@@ -404,6 +447,7 @@ def reconcile_source_assertions(
         return ReconciliationResult(
             cell_id=cell.cell_id,
             policy_id=policy.policy_id,
+            minimum_independent_origin_groups=policy.minimum_independent_origin_groups,
             cutoff=cutoff,
             outcome=outcome,
             assertion_ids=tuple(item.assertion_id for item in ordered),
@@ -414,6 +458,7 @@ def reconcile_source_assertions(
             agreeing_assertion_ids=(),
             conflicting_assertion_ids=(),
             origin_group_ids=(),
+            comparison_anchor_assertion_id=None,
             lineage_complete=False,
             reason_codes=tuple(reasons),
         )
@@ -450,6 +495,7 @@ def reconcile_source_assertions(
     return ReconciliationResult(
         cell_id=cell.cell_id,
         policy_id=policy.policy_id,
+        minimum_independent_origin_groups=policy.minimum_independent_origin_groups,
         cutoff=cutoff,
         outcome=outcome,
         assertion_ids=tuple(item.assertion_id for item in ordered),
@@ -460,6 +506,7 @@ def reconcile_source_assertions(
         agreeing_assertion_ids=tuple(item.assertion_id for item in agreeing),
         conflicting_assertion_ids=tuple(item.assertion_id for item in conflicting),
         origin_group_ids=origins,
+        comparison_anchor_assertion_id=selected.assertion_id,
         selected_assertion_id=None if selected_result is None else selected_result.assertion_id,
         selected_value_sha256=(None if selected_result is None else selected_result.normalized_value_sha256),
         selected_numeric_value=None if selected_result is None else selected_result.numeric_value,
@@ -650,8 +697,8 @@ class VersionedDataHubQualityReport(_FrozenModel):
     report_id: str = Field(default="", pattern=r"^(?:|datahub-quality-report:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     report_schema_version: str = Field(pattern=_STABLE_COORDINATE)
-    service_demand_id: str = Field(pattern=_CONTENT_ID)
-    reconciliation_policy_ids: tuple[str, ...] = Field(min_length=1)
+    denominator: DataHubQualityDenominator
+    reconciliation_policies: tuple[ReconciliationPolicy, ...] = Field(min_length=1)
     cutoff: datetime
     generated_at: datetime
     cells: tuple[DataHubQualityCell, ...] = Field(min_length=1)
@@ -661,14 +708,6 @@ class VersionedDataHubQualityReport(_FrozenModel):
     @classmethod
     def validate_schema_version(cls, value: str) -> str:
         return _immutable_coordinate(value, "report_schema_version")
-
-    @field_validator("reconciliation_policy_ids")
-    @classmethod
-    def normalize_policy_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        values = _sorted_unique(values, "reconciliation_policy_ids")
-        if any(re.fullmatch(r"^reconciliation-policy:[0-9a-f]{64}$", value) is None for value in values):
-            raise ValueError("reconciliation_policy_ids must contain content addresses")
-        return values
 
     @field_validator("cutoff", "generated_at")
     @classmethod
@@ -680,17 +719,31 @@ class VersionedDataHubQualityReport(_FrozenModel):
         cells = tuple(sorted(self.cells, key=lambda item: item.cell.cell_id))
         if len({cell.cell.cell_id for cell in cells}) != len(cells):
             raise ValueError("quality report must contain exactly one row per requested cell")
-        cell_policy_ids = tuple(sorted({cell.reconciliation_policy_id for cell in cells}))
-        if self.reconciliation_policy_ids != cell_policy_ids:
-            raise ValueError("report policy IDs must exactly cover the cell-level field policies")
+        cell_ids = tuple(cell.cell.cell_id for cell in cells)
+        if cell_ids != self.denominator.requested_cell_ids:
+            raise ValueError("quality report rows must exactly match the demand denominator")
+        policies = tuple(sorted(self.reconciliation_policies, key=lambda item: item.policy_id))
+        if len({policy.policy_id for policy in policies}) != len(policies):
+            raise ValueError("reconciliation policies must not contain duplicate identities")
+        policy_by_id = {policy.policy_id: policy for policy in policies}
+        if set(policy_by_id) != {cell.reconciliation_policy_id for cell in cells}:
+            raise ValueError("report policies must exactly cover the cell-level field policies")
         if any(cell.reconciliation is not None and cell.reconciliation.cutoff != self.cutoff for cell in cells):
             raise ValueError("every reconciliation must use the report cutoff")
+        if any(
+            cell.reconciliation is not None
+            and cell.reconciliation.minimum_independent_origin_groups
+            != policy_by_id[cell.reconciliation_policy_id].minimum_independent_origin_groups
+            for cell in cells
+        ):
+            raise ValueError("reconciliation threshold must match the bundled field policy")
         if self.generated_at < self.cutoff:
             raise ValueError("quality report cannot be generated before its cutoff")
         expected_summary = _summarize(cells)
         if self.summary is not None and self.summary != expected_summary:
             raise ValueError("summary does not match the fixed report denominator")
         object.__setattr__(self, "cells", cells)
+        object.__setattr__(self, "reconciliation_policies", policies)
         object.__setattr__(self, "summary", expected_summary)
         _freeze_content(
             self,
@@ -698,8 +751,8 @@ class VersionedDataHubQualityReport(_FrozenModel):
             prefix="datahub-quality-report",
             identity_fields=(
                 "report_schema_version",
-                "service_demand_id",
-                "reconciliation_policy_ids",
+                "denominator",
+                "reconciliation_policies",
                 "cutoff",
                 "cells",
             ),

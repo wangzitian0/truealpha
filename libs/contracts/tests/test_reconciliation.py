@@ -9,6 +9,7 @@ from truealpha_contracts import SubjectKind, SubjectRef
 from truealpha_contracts.datahub import AssessmentFreshness, ObligationTerminalState
 from truealpha_contracts.reconciliation import (
     DataHubQualityCell,
+    DataHubQualityDenominator,
     DataHubQualitySummary,
     ReconciliationCell,
     ReconciliationOutcome,
@@ -47,13 +48,14 @@ def _policy(
         "source:vendor-a:v1",
         "source:vendor-b:v1",
     ),
+    minimum_independent_origin_groups: int = 2,
 ) -> ReconciliationPolicy:
     return ReconciliationPolicy(
         policy_version=policy_version,
         source_priority=source_priority,
         absolute_tolerance=absolute_tolerance,
         relative_tolerance=relative_tolerance,
-        minimum_independent_origin_groups=2,
+        minimum_independent_origin_groups=minimum_independent_origin_groups,
     )
 
 
@@ -159,6 +161,37 @@ def test_same_origin_mirror_does_not_inflate_independence() -> None:
     assert "reconciliation.same_origin_deduplicated" in result.reason_codes
 
 
+def test_outcome_uses_the_bound_independent_origin_threshold() -> None:
+    cell, primary, corroborating, _ = _agreeing_result()
+    minimum_one = reconcile_source_assertions(
+        cell=cell,
+        assertions=(primary,),
+        policy=_policy(
+            policy_version="single-origin-fusion:v1",
+            minimum_independent_origin_groups=1,
+        ),
+        cutoff=CUTOFF,
+    )
+    assert minimum_one.outcome is ReconciliationOutcome.AGREED
+    assert minimum_one.minimum_independent_origin_groups == 1
+
+    minimum_three = reconcile_source_assertions(
+        cell=cell,
+        assertions=(primary, corroborating),
+        policy=_policy(
+            policy_version="three-origin-fusion:v1",
+            minimum_independent_origin_groups=3,
+        ),
+        cutoff=CUTOFF,
+    )
+    assert minimum_three.outcome is ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS
+
+    payload = minimum_three.model_dump()
+    payload.update({"result_id": "", "content_sha256": "", "outcome": "agreed"})
+    with pytest.raises(ValidationError, match="does not meet the bound"):
+        type(minimum_three).model_validate(payload)
+
+
 def test_cross_origin_conflict_is_retained_and_abstains() -> None:
     cell = _cell()
     left = _assertion(
@@ -187,6 +220,17 @@ def test_cross_origin_conflict_is_retained_and_abstains() -> None:
     assert result.selected_assertion_id is None
     assert result.conflicting_assertion_ids == (right.assertion_id,)
     assert "reconciliation.cross_origin_conflict" in result.reason_codes
+
+    payload = result.model_dump()
+    payload.update(
+        {
+            "result_id": "",
+            "content_sha256": "",
+            "comparison_anchor_assertion_id": None,
+        }
+    )
+    with pytest.raises(ValidationError, match="comparison anchor"):
+        type(result).model_validate(payload)
 
 
 def test_decimal_tolerance_boundary_is_deterministic() -> None:
@@ -397,8 +441,11 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
 
     report = VersionedDataHubQualityReport(
         report_schema_version="datahub-quality-report:v1",
-        service_demand_id=f"datahub-service-demand:{SHA_D}",
-        reconciliation_policy_ids=(secondary_policy.policy_id, policy.policy_id),
+        denominator=DataHubQualityDenominator(
+            service_demand_id=f"datahub-service-demand:{SHA_D}",
+            requested_cell_ids=tuple(cell.cell.cell_id for cell in cells),
+        ),
+        reconciliation_policies=(secondary_policy, policy),
         cutoff=CUTOFF,
         generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
         cells=tuple(reversed(cells)),
@@ -413,7 +460,9 @@ def test_quality_report_keeps_missing_failed_and_unplanned_cells_in_denominator(
     assert report.summary.independent_reconciliation == Decimal("0.25")
     assert report.summary.conflicted_count == 1
     assert report.summary.denominator_mean_confidence_score == Decimal("18.75")
-    assert report.reconciliation_policy_ids == tuple(sorted((policy.policy_id, secondary_policy.policy_id)))
+    assert tuple(item.policy_id for item in report.reconciliation_policies) == tuple(
+        sorted((policy.policy_id, secondary_policy.policy_id))
+    )
     assert tuple(cell.cell.cell_id for cell in report.cells) == tuple(sorted(cell.cell.cell_id for cell in cells))
 
 
@@ -453,8 +502,11 @@ def test_report_rejects_a_shrunken_or_forged_summary() -> None:
     with pytest.raises(ValidationError, match="summary does not match"):
         VersionedDataHubQualityReport(
             report_schema_version="datahub-quality-report:v1",
-            service_demand_id=f"datahub-service-demand:{SHA_D}",
-            reconciliation_policy_ids=(policy.policy_id,),
+            denominator=DataHubQualityDenominator(
+                service_demand_id=f"datahub-service-demand:{SHA_D}",
+                requested_cell_ids=(quality_cell.cell.cell_id,),
+            ),
+            reconciliation_policies=(policy,),
             cutoff=CUTOFF,
             generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
             cells=(quality_cell,),
@@ -464,11 +516,58 @@ def test_report_rejects_a_shrunken_or_forged_summary() -> None:
     with pytest.raises(ValidationError, match="exactly one row"):
         VersionedDataHubQualityReport(
             report_schema_version="datahub-quality-report:v1",
-            service_demand_id=f"datahub-service-demand:{SHA_D}",
-            reconciliation_policy_ids=(policy.policy_id,),
+            denominator=DataHubQualityDenominator(
+                service_demand_id=f"datahub-service-demand:{SHA_D}",
+                requested_cell_ids=(quality_cell.cell.cell_id,),
+            ),
+            reconciliation_policies=(policy,),
             cutoff=CUTOFF,
             generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
             cells=(quality_cell, quality_cell),
+        )
+
+    omitted_cell = _cell("revenue")
+    with pytest.raises(ValidationError, match="exactly match the demand denominator"):
+        VersionedDataHubQualityReport(
+            report_schema_version="datahub-quality-report:v1",
+            denominator=DataHubQualityDenominator(
+                service_demand_id=f"datahub-service-demand:{SHA_D}",
+                requested_cell_ids=(quality_cell.cell.cell_id, omitted_cell.cell_id),
+            ),
+            reconciliation_policies=(policy,),
+            cutoff=CUTOFF,
+            generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
+            cells=(quality_cell,),
+        )
+
+    threshold_payload = result.model_dump()
+    threshold_payload.update(
+        {
+            "result_id": "",
+            "content_sha256": "",
+            "minimum_independent_origin_groups": 1,
+        }
+    )
+    mismatched_result = type(result).model_validate(threshold_payload)
+    mismatched_cell = quality_cell.model_copy(
+        update={
+            "quality_cell_id": "",
+            "content_sha256": "",
+            "reconciliation": mismatched_result,
+        }
+    )
+    mismatched_cell = DataHubQualityCell.model_validate(mismatched_cell.model_dump())
+    with pytest.raises(ValidationError, match="threshold must match"):
+        VersionedDataHubQualityReport(
+            report_schema_version="datahub-quality-report:v1",
+            denominator=DataHubQualityDenominator(
+                service_demand_id=f"datahub-service-demand:{SHA_D}",
+                requested_cell_ids=(quality_cell.cell.cell_id,),
+            ),
+            reconciliation_policies=(policy,),
+            cutoff=CUTOFF,
+            generated_at=datetime(2025, 3, 1, 1, tzinfo=UTC),
+            cells=(mismatched_cell,),
         )
 
 

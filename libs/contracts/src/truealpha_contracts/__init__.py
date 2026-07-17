@@ -265,6 +265,7 @@ from truealpha_contracts.readiness import (
 from truealpha_contracts.reconciliation import (
     ConflictBehavior,
     DataHubQualityCell,
+    DataHubQualityDenominator,
     DataHubQualitySummary,
     OriginGroupCount,
     ReconciliationCell,
@@ -507,6 +508,7 @@ __all__ = [
     "CurrencyPair",
     "DataDomain",
     "DataHubQualityCell",
+    "DataHubQualityDenominator",
     "DataHubQualitySummary",
     "DataQualityReport",
     "DataRequirement",
