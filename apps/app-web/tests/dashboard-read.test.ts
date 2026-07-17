@@ -11,9 +11,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { AccessContext, StrategyRunReport, StrategyRunUnavailable } from "../src/contracts/strategyRun";
+import type { AccessContext, StrategyRunDecision, StrategyRunReport, StrategyRunUnavailable } from "../src/contracts/strategyRun";
 import { loadComparison, loadOverview, loadRanking } from "../src/server/dashboard";
-import { FixtureMartReadAdapter } from "../src/server/mart/research-read";
+import { decisionAvailability, FixtureMartReadAdapter } from "../src/server/mart/research-read";
 
 const ADMIN_ENV_VAR = "TRUEALPHA_LOCAL_ADMIN_PRINCIPAL_ID";
 
@@ -78,11 +78,36 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
   // First two rows are the ranked members in order.
   assert(outcome.data.rows[0].issuerId === "issuer:adm" && outcome.data.rows[0].rank === 1, "adm should rank 1");
   assert(outcome.data.rows[1].issuerId === "issuer:nice" && outcome.data.rows[1].rank === 2, "nice should rank 2");
-  // Availability mapping is explicit for excluded/low-confidence subjects.
+  // Availability mapping is explicit for low-confidence subjects.
   const ddog = outcome.data.rows.find((r) => r.issuerId === "issuer:ddog");
-  const jpm = outcome.data.rows.find((r) => r.issuerId === "issuer:jpm");
   assert(ddog?.availability === "low_confidence", "ddog below confidence floor should be low_confidence");
-  assert(jpm?.availability === "excluded", "jpm financial exclusion should be excluded");
+  // #381 removed financial-issuer special-casing: jpm is now a normal rejected-but-available
+  // decision, not an exclusion. The shared fixture no longer has a naturally-occurring hard
+  // exclusion, so that mapping branch is covered directly below instead of via this fixture.
+  const jpm = outcome.data.rows.find((r) => r.issuerId === "issuer:jpm");
+  assert(jpm?.availability === "available", "jpm should no longer be an exclusion after #381");
+}
+
+// --- hard-excluded mapping is explicit, tested independently of the shared fixture ---
+{
+  const hardExcluded: StrategyRunDecision = {
+    issuer_id: "issuer:test-excluded",
+    cutoff_at: "2026-06-30T23:59:59Z",
+    outcome: "excluded",
+    eligible: false,
+    tier: null,
+    capital_adjusted_labor_efficiency: null,
+    current_price_to_sales: null,
+    target_price_to_sales: null,
+    valuation_gap: null,
+    confidence: null,
+    exclusion_reason: "valuation_inputs_unavailable",
+    rank: null,
+    target_weight: null,
+  };
+  assert(decisionAvailability(hardExcluded) === "excluded", "non-confidence-floor exclusion should map to excluded");
+  const lowConfidence: StrategyRunDecision = { ...hardExcluded, exclusion_reason: "below_confidence_floor" };
+  assert(decisionAvailability(lowConfidence) === "low_confidence", "below_confidence_floor should map to low_confidence");
 }
 
 // --- comparison reproduces the labor-efficiency fixture value exactly ---

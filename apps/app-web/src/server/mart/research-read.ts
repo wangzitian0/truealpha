@@ -120,7 +120,10 @@ const MODULE_CATALOG: readonly {
   { module: 7, name: "Three-tier valuation", note: "materialized composite factor", gate: "Gate 1", field: "tier" },
 ];
 
-function decisionAvailability(decision: StrategyRunDecision): Availability {
+/** Exported for `tests/dashboard-read.test.ts`'s fixture-independent hard-excluded case —
+ * see #370's rebase note: the shared fixture no longer contains a naturally-occurring
+ * non-confidence-floor exclusion, so that branch is tested with a synthetic decision. */
+export function decisionAvailability(decision: StrategyRunDecision): Availability {
   if (decision.outcome === "excluded") {
     if (decision.exclusion_reason === "below_confidence_floor") return "low_confidence";
     return "excluded";
