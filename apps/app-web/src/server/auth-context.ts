@@ -11,19 +11,12 @@
  * server environment variable. Never import this from a client component.
  */
 
+import type { AccessContext } from "@/contracts/strategyRun";
+
 const ADMIN_PRINCIPAL_ENV_VAR = "TRUEALPHA_LOCAL_ADMIN_PRINCIPAL_ID";
 const CONTEXT_LIFETIME_MS = 5 * 60 * 1000;
 
-export interface AccessContext {
-  contextId: string;
-  principalId: string;
-  tenantId: string;
-  sessionId: string;
-  authenticationMethod: "service_identity";
-  principalKind: "administrator";
-  issuedAt: string;
-  expiresAt: string;
-}
+export type { AccessContext };
 
 /**
  * Returns a fresh, short-lived Local/CI administrator `AccessContext`, or
@@ -43,7 +36,6 @@ export function getLocalAdminAccessContext(): AccessContext | null {
     tenantId: "tenant:truealpha",
     sessionId: `session:local-admin:${issuedAt.getTime()}`,
     authenticationMethod: "service_identity",
-    principalKind: "administrator",
     issuedAt: issuedAt.toISOString(),
     expiresAt: expiresAt.toISOString(),
   };

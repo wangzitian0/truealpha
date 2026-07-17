@@ -19,7 +19,7 @@ function assert(condition: unknown, message: string): asserts condition {
   delete process.env[ADMIN_ENV_VAR];
   let repositoryCalled = false;
   const outcome = loadStrategyRunPage("large_model_value_v0", {
-    getLatest: () => {
+    getLatest: (_strategyId, _context) => {
       repositoryCalled = true;
       throw new Error("must not be reached when denied");
     },
@@ -53,7 +53,7 @@ function assert(condition: unknown, message: string): asserts condition {
 {
   process.env[ADMIN_ENV_VAR] = "principal:test-admin";
   const outcome = loadStrategyRunPage("large_model_value_v0", {
-    getLatest: () => {
+    getLatest: (_strategyId, _context) => {
       throw new Error("simulated fixture read failure");
     },
   });

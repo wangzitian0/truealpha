@@ -8,13 +8,14 @@
 
 import {
   FixtureStrategyRunRepository,
+  type AccessContext,
   type StrategyRunReport,
   type StrategyRunUnavailable,
 } from "@/contracts/strategyRun";
 import { getLocalAdminAccessContext } from "@/server/auth-context";
 
 export interface StrategyRunReadRepositoryLike {
-  getLatest(strategyId: string): StrategyRunReport | StrategyRunUnavailable;
+  getLatest(strategyId: string, context: AccessContext): StrategyRunReport | StrategyRunUnavailable;
 }
 
 export type StrategyRunPageOutcome =
@@ -32,7 +33,7 @@ export function loadStrategyRunPage(
   if (context === null) return { kind: "denied" };
 
   try {
-    const result = repository.getLatest(strategyId);
+    const result = repository.getLatest(strategyId, context);
     if ("decisions" in result) return { kind: "ready", report: result };
     return { kind: "unavailable", detail: result };
   } catch (error) {
