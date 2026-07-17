@@ -15,6 +15,7 @@ import {
   FixtureStrategyRunRepository,
   parseStrategyRunReport,
   StrategyRunContractError,
+  type AccessContext,
   type StrategyRunReport,
 } from "../src/contracts/strategyRun";
 
@@ -22,6 +23,19 @@ const fixtureUrl = new URL(
   "../../../libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
   import.meta.url,
 );
+
+// A placeholder context: FixtureStrategyRunRepository.getLatest doesn't
+// evaluate it today (matches the Python adapter), but requires it on its
+// signature so no later authorization wiring needs another signature break.
+const testContext: AccessContext = {
+  contextId: "ctx:test",
+  principalId: "principal:test",
+  tenantId: "tenant:test",
+  sessionId: "session:test",
+  authenticationMethod: "service_identity",
+  issuedAt: new Date().toISOString(),
+  expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+};
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -48,7 +62,7 @@ assert(report.strategy_id === "large_model_value_v0", "strategy_id mismatch");
 assert(report.golden_mismatches.length === 0, "committed fixture must have zero golden mismatches");
 
 const repository = new FixtureStrategyRunRepository();
-const fromRepository = repository.getLatest("large_model_value_v0");
+const fromRepository = repository.getLatest("large_model_value_v0", testContext);
 assert("decisions" in fromRepository, "expected a StrategyRunReport from the repository");
 assert(fromRepository.decisions.length === report.decisions.length, "repository/parse decision count mismatch");
 
@@ -66,7 +80,7 @@ assert(excluded !== undefined, "expected at least one below_confidence_floor exc
 assert(excluded.eligible === false, "excluded decision must be ineligible");
 assert(excluded.confidence !== null, "excluded decision must still surface its confidence");
 
-const unavailable = repository.getLatest("does_not_exist");
+const unavailable = repository.getLatest("does_not_exist", testContext);
 assert(!("decisions" in unavailable), "expected a StrategyRunUnavailable");
 assert(unavailable.reason === "unknown_strategy_id", "expected unknown_strategy_id reason");
 
@@ -77,7 +91,7 @@ await expectRejected(
 );
 
 await expectRejected(
-  "bad cutoff",
+  "bad cutoff format",
   () =>
     parseStrategyRunReport({
       ...raw,
@@ -85,5 +99,42 @@ await expectRejected(
     }),
   /expected an aware ISO date-time/,
 );
+
+await expectRejected(
+  "calendar-invalid cutoff (regex-shaped but not a real date)",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [{ ...(raw.decisions as Record<string, unknown>[])[0], cutoff_at: "2026-99-99T99:99:99Z" }],
+    }),
+  /expected an aware ISO date-time/,
+);
+
+await expectRejected(
+  "non-finite decimal (Infinity)",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [
+        { ...(raw.decisions as Record<string, unknown>[])[0], capital_adjusted_labor_efficiency: "Infinity" },
+      ],
+    }),
+  /expected a decimal string/,
+);
+
+await expectRejected(
+  "exponential-notation decimal",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [{ ...(raw.decisions as Record<string, unknown>[])[0], capital_adjusted_labor_efficiency: "1e309" }],
+    }),
+  /expected a decimal string/,
+);
+
+// Fail-closed: repository.getLatest must never throw for a bad strategy_id,
+// only ever return a structured StrategyRunUnavailable (see #351's review).
+const stillStructured = repository.getLatest("", testContext);
+assert(!("decisions" in stillStructured), "empty strategy_id must resolve to unavailable, not throw");
 
 console.log("#347 Python/TypeScript strategy-run fixture parity passed");

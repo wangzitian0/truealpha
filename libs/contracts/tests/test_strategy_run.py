@@ -124,3 +124,45 @@ def test_fixture_repository_does_not_evaluate_context() -> None:
     repository = FixtureStrategyRunRepository()
     expired = repository.get_latest(strategy_id="large_model_value_v0", context=_context(expired=True))
     assert isinstance(expired, StrategyRunReport)
+
+
+def test_fixture_repository_fails_closed_on_missing_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing packaged fixture must not crash the caller (#351 review)."""
+    monkeypatch.setattr(
+        "truealpha_contracts.strategy_run_fixture.resources.files",
+        lambda _package: _MissingAnchor(),
+    )
+    repository = FixtureStrategyRunRepository()
+    result = repository.get_latest(strategy_id="large_model_value_v0", context=_context())
+
+    assert isinstance(result, StrategyRunUnavailable)
+    assert result.reason == "fixture_missing"
+
+
+def test_fixture_repository_fails_closed_on_corrupt_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unparsable or schema-drifted fixture bytes must not crash the caller (#351 review)."""
+    monkeypatch.setattr(
+        "truealpha_contracts.strategy_run_fixture.resources.files",
+        lambda _package: _CorruptAnchor(),
+    )
+    repository = FixtureStrategyRunRepository()
+    result = repository.get_latest(strategy_id="large_model_value_v0", context=_context())
+
+    assert isinstance(result, StrategyRunUnavailable)
+    assert result.reason == "fixture_hash_mismatch"
+
+
+class _MissingAnchor:
+    def joinpath(self, _name: str) -> _MissingAnchor:
+        return self
+
+    def read_bytes(self) -> bytes:
+        raise FileNotFoundError("fixture not packaged")
+
+
+class _CorruptAnchor:
+    def joinpath(self, _name: str) -> _CorruptAnchor:
+        return self
+
+    def read_bytes(self) -> bytes:
+        return b"{not valid json"
