@@ -52,7 +52,9 @@ def _service_access_context() -> AccessContext:
 def build_mcp_server(*, repository: StrategyRunReadRepository | None = None) -> FastMCP:
     """Builds the MCP server. A caller-supplied repository is for tests only."""
     server = FastMCP("truealpha-mcp")
-    active_repository: StrategyRunReadRepository = repository or FixtureStrategyRunRepository()
+    active_repository: StrategyRunReadRepository = (
+        repository if repository is not None else FixtureStrategyRunRepository()
+    )
 
     @server.tool(name="strategy_run", description="Read the latest large_model_value_v0 Core Strategy run.")
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
