@@ -116,8 +116,12 @@ Repository shape:
 - Moomoo access is Quote API read-only. Every trading context and every order placement,
   modification, cancellation, or trade-unlock operation is forbidden. The public
   repository's security CI must reject trading APIs rather than relying on review alone.
-- Consumers of data-engine outputs pin exact snapshot and handoff identities, never
-  `latest`.
+- Consumers of data-engine outputs read through a governed, access-controlled
+  `current_pointer` that resolves to an immutable exact run, identified by that run's
+  content hash. Pinning an exact snapshot/handoff identity for a reproducible read stays
+  supported; a bare mutable `latest` is never a read path. The pointer advances only on an
+  accepted refresh, and consumers re-pull when it advances. See
+  `docs/architecture-decisions/A1-evidence-chain-in-database.md`.
 
 ## Environments and source gotchas
 
