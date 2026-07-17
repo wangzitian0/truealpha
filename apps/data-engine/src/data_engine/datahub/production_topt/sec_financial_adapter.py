@@ -49,6 +49,23 @@ class SecTarget:
 FinancialFactsFetcher = Callable[[int, date], FinancialFactsBundle | None]
 
 
+@dataclass(frozen=True)
+class HeadcountFact:
+    """A point-in-time employee headcount extracted from filing text (#70).
+
+    Employee headcount is not a reliable XBRL concept, so it comes from the #70 extraction
+    plane (append-only, evidence-spanned) rather than company-facts. Here it enriches the
+    financial-fact record; SEC company-facts remains the primary raw source.
+    """
+
+    value: Decimal
+    knowable_at: datetime
+
+
+# (cik, cutoff) -> the extracted headcount fact, or None when no filing yields one.
+HeadcountExtractor = Callable[[int, date], HeadcountFact | None]
+
+
 class SourceUnavailableError(Exception):
     """A transient SEC failure the executor should retry."""
 
@@ -82,9 +99,16 @@ def pit_concept_value(
 class SecFinancialFactAdapter:
     """`SourceFetchPort` for financial-fact, backed by an injected company-facts fetcher."""
 
-    def __init__(self, targets: dict[str, SecTarget], fetcher: FinancialFactsFetcher) -> None:
+    def __init__(
+        self,
+        targets: dict[str, SecTarget],
+        fetcher: FinancialFactsFetcher,
+        *,
+        headcount_extractor: HeadcountExtractor | None = None,
+    ) -> None:
         self._targets = targets
         self._fetcher = fetcher
+        self._headcount_extractor = headcount_extractor
 
     def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome:
         target = self._targets.get(work_item.work_item_id)
@@ -102,6 +126,14 @@ class SecFinancialFactAdapter:
             return FetchFailure(ObligationReasonCode.FIELD_UNAVAILABLE)
         if bundle.knowable_at.date() > target.cutoff:
             return FetchFailure(ObligationReasonCode.LOOK_AHEAD_VIOLATION)
+        # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
+        headcount: Decimal | None = None
+        knowable_at = bundle.knowable_at
+        if self._headcount_extractor is not None:
+            fact = self._headcount_extractor(target.cik, target.cutoff)
+            if fact is not None and fact.knowable_at.date() <= target.cutoff:
+                headcount = fact.value
+                knowable_at = max(knowable_at, fact.knowable_at)
         raw_sha256 = hashlib.sha256(bundle.raw_bytes).hexdigest()
         normalized_sha256 = canonical_sha256(
             {
@@ -110,6 +142,7 @@ class SecFinancialFactAdapter:
                 "gross_profit": _s(bundle.gross_profit),
                 "total_assets": _s(bundle.total_assets),
                 "shares_outstanding": _s(bundle.shares_outstanding),
+                "headcount": _s(headcount),
             }
         )
         return FetchSuccess(
@@ -117,8 +150,8 @@ class SecFinancialFactAdapter:
             object_uri=f"s3://truealpha-raw/sec/companyfacts/CIK{target.cik:010d}.json",
             normalized_sha256=normalized_sha256,
             confidence=Decimal("0.95"),
-            valid_from=bundle.knowable_at.date(),
-            transaction_time=bundle.knowable_at,
+            valid_from=knowable_at.date(),
+            transaction_time=knowable_at,
         )
 
 
