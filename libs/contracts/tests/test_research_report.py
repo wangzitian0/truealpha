@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -39,8 +39,10 @@ def _context(*, expired: bool = False) -> AccessContext:
         session_id="session:test",
         authentication_method=AuthenticationMethod.SERVICE_IDENTITY,
         principal_kind=PrincipalKind.SERVICE,
-        issued_at=now.replace(year=now.year - 1) if expired else now,
-        expires_at=now.replace(year=now.year - 1) if expired else now.replace(year=now.year + 1),
+        # timedelta, not .replace(year=...): replacing into a non-leap year raises
+        # ValueError when `now` falls on Feb 29 (Copilot review on #383).
+        issued_at=now - timedelta(days=400) if expired else now,
+        expires_at=now - timedelta(days=400) if expired else now + timedelta(days=400),
     )
 
 
@@ -64,14 +66,14 @@ def _build(name: str) -> ResearchReport:
 @pytest.mark.parametrize("name", sorted(GOLDEN_CASES))
 def test_golden_json_matches(name: str) -> None:
     report = _build(name)
-    expected = (GOLDEN / f"{name}.json").read_text()
+    expected = (GOLDEN / f"{name}.json").read_text(encoding="utf-8")
     assert render_report_json(report) == expected
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN_CASES))
 def test_golden_markdown_matches(name: str) -> None:
     report = _build(name)
-    expected = (GOLDEN / f"{name}.md").read_text()
+    expected = (GOLDEN / f"{name}.md").read_text(encoding="utf-8")
     assert render_report_markdown(report) == expected
 
 
@@ -238,6 +240,8 @@ def test_builder_contains_no_arithmetic_or_computation() -> None:
         for inner in ast.walk(node):
             assert not isinstance(inner, _FORBIDDEN_BINOPS), f"{node.name} contains arithmetic {type(inner).__name__}"
             assert not isinstance(inner, ast.AugAssign), f"{node.name} contains an augmented assignment"
+            if isinstance(inner, ast.UnaryOp) and isinstance(inner.op, (ast.USub, ast.UAdd)):
+                raise AssertionError(f"{node.name} contains unary arithmetic {type(inner.op).__name__}")
             if isinstance(inner, ast.Call):
                 name = _forbidden_call_name(inner)
                 assert name is None, f"{node.name} calls forbidden computation primitive {name!r}"
