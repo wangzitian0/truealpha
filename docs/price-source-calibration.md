@@ -3,10 +3,10 @@
 The repository currently contains Yahoo chart price bars for DDOG, DUOL, NICE,
 and SHOP. SEC and moomoo samples are not price-bar providers and must not be
 counted as independent price corroboration. Twelve Data responses were observed
-on 2026-07-14 and their hashes were recorded
-(`apps/data-engine/samples/prices/twelve_data_reconciliation_20260714.json`), and
-`prices.source_reconciliation` passes the aggregate-report audit with one case;
-that audit does not replay the missing independent response bytes.
+on 2026-07-14, and their hashes were recorded in
+`apps/data-engine/samples/prices/twelve_data_reconciliation_20260714.json`.
+`prices.source_reconciliation` passes the aggregate-report audit with one case,
+but that audit does not replay the missing independent response bytes.
 
 The reproducible protocol is recorded in
 `apps/data-engine/samples/prices/independent_reconciliation.v1.json`; the
