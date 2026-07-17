@@ -65,9 +65,16 @@ def test_empirical_anchor_rejects_duplicate_or_misassigned_primary_samples(tmp_p
     manifest_path.write_text(json.dumps(original))
     report_path = target_prices / "twelve_data_reconciliation_20260714.json"
     report = json.loads(report_path.read_text())
+    original_report = json.loads(json.dumps(report))
     report["observations"][1]["twelve_data_response_sha256"] = report["observations"][0]["twelve_data_response_sha256"]
     report_path.write_text(json.dumps(report))
     with pytest.raises(ValueError, match="unique provider response hash"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
+    invalid_count = json.loads(json.dumps(original_report))
+    invalid_count["observations"][0]["field_stats"]["close"]["count"] = 754.0
+    report_path.write_text(json.dumps(invalid_count))
+    with pytest.raises(ValueError, match="invalid denominator"):
         _derive_price_reconciliation_anchor(tmp_path)
 
 

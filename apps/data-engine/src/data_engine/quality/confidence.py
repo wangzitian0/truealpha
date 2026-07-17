@@ -127,7 +127,7 @@ def _derive_price_reconciliation_anchor(
             not isinstance(symbol, str)
             or not isinstance(response_sha256, str)
             or _SHA256.fullmatch(response_sha256) is None
-            or not isinstance(common_dates, int)
+            or type(common_dates) is not int
             or common_dates <= 0
             or not isinstance(field_stats, dict)
             or tuple(sorted(field_stats)) != _OBSERVED_FIELDS
@@ -144,7 +144,9 @@ def _derive_price_reconciliation_anchor(
                 raise ValueError("field reconciliation statistics must be objects")
             count = stats.get("count")
             within_tolerance = stats.get("within_tolerance")
-            if count != common_dates or not isinstance(within_tolerance, int) or not 0 <= within_tolerance <= count:
+            if type(count) is not int or count != common_dates or type(within_tolerance) is not int:
+                raise ValueError("field reconciliation statistics have an invalid denominator")
+            if not 0 <= within_tolerance <= count:
                 raise ValueError("field reconciliation statistics have an invalid denominator")
             compared += count
             conforming += within_tolerance
