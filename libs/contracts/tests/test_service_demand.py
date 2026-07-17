@@ -220,7 +220,17 @@ def test_service_requirement_rejects_cadence_or_freshness_drift() -> None:
         )
 
 
-@pytest.mark.parametrize("relative_path", ("/tmp/sample.json", "../sample.json", "https://vendor/sample.json"))
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "/tmp/sample.json",
+        "../sample.json",
+        "./sample.json",
+        "samples//sample.json",
+        "samples/",
+        "https://vendor/sample.json",
+    ),
+)
 def test_sample_artifact_rejects_unsafe_or_transport_specific_paths(relative_path: str) -> None:
     with pytest.raises(ValidationError, match="safe relative POSIX path"):
         SampleArtifact(
@@ -228,6 +238,15 @@ def test_sample_artifact_rejects_unsafe_or_transport_specific_paths(relative_pat
             relative_path=relative_path,
             media_type="application/json",
             byte_length=1,
+        )
+
+
+def test_value_assertion_requires_an_expected_value() -> None:
+    with pytest.raises(ValidationError, match="value assertions require an expected value"):
+        SampleAssertion(
+            requirement_id="data-requirement:" + "1" * 64,
+            field_name="gross_profit",
+            operator=SampleAssertionOperator.EXACT,
         )
 
 

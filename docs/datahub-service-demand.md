@@ -17,7 +17,7 @@ An accepted request binds all of the following into one content address:
 3. Required normalized fields with definitions, value kinds, unit behavior,
    valid-time behavior, and knowable-time rules.
 4. At least one content-hashed sample artifact and expected case. Every required field
-   must have an exact, presence, absence, absolute-tolerance, or relative-tolerance
+   must have an exact, presence, absolute-tolerance, or relative-tolerance
    assertion.
 5. Coverage, availability, continuous-confidence, independent-origin, lineage,
    conflict, and quality-report objectives.

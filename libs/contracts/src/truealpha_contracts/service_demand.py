@@ -180,6 +180,7 @@ class SampleArtifact(_FrozenModel):
             value.startswith("/")
             or "\\" in value
             or "://" in value
+            or path.as_posix() != value
             or any(part in {"", ".", ".."} for part in path.parts)
         ):
             raise ValueError("sample artifact path must be a safe relative POSIX path")
@@ -232,12 +233,12 @@ class SampleAssertion(_FrozenModel):
             SampleAssertionOperator.RELATIVE_TOLERANCE,
         }
         presence_operator = self.operator in {SampleAssertionOperator.PRESENT, SampleAssertionOperator.ABSENT}
-        if tolerance_operator != (self.tolerance is not None):
-            raise ValueError("tolerance exists exactly for a tolerance assertion")
-        if presence_operator != (self.expected_value is None):
+        if presence_operator and self.expected_value is not None:
             raise ValueError("presence assertions cannot carry an expected value")
         if not presence_operator and self.expected_value is None:
             raise ValueError("value assertions require an expected value")
+        if tolerance_operator != (self.tolerance is not None):
+            raise ValueError("tolerance exists exactly for a tolerance assertion")
         _identify(self, id_field="sample_assertion_id", prefix="sample-assertion")
         return self
 
