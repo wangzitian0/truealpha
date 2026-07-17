@@ -1,0 +1,35 @@
+{
+  "card_id": "card:460a09ea01cf9be822a0f1449f571260e3725f11fe2df030412bdc02f6635090",
+  "card_kind": "etf",
+  "cutoff_at": "2026-06-30T23:59:59Z",
+  "generated_from_report_id": "report:96f40c82bd452c69f5c46c325839e6d9c71134cd41bb25d5fb0f21df43d72f55",
+  "research_risk_note": "ETF virtual-company view is delayed by public holdings-disclosure lag and is a research hypothesis, not investment advice.",
+  "schema_version": "research_card.v1",
+  "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
+  "subjects": [
+    {
+      "availability": "unavailable",
+      "causal_claim": null,
+      "claim_class": "not_applicable",
+      "display_name": "Invesco QQQ Trust",
+      "metrics": [
+        {
+          "availability": "unavailable",
+          "confidence": null,
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": null,
+          "label": "virtual_company_fundamentals",
+          "period": null,
+          "trace": null,
+          "unit": null,
+          "value": null
+        }
+      ],
+      "rank": null,
+      "subject_id": "etf:qqq"
+    }
+  ],
+  "template_version": "card_template.v1",
+  "title": "etf card: Invesco QQQ Trust"
+}

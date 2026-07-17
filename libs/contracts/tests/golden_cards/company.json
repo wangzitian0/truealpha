@@ -1,0 +1,108 @@
+{
+  "card_id": "card:6e238033d512699e3dcfe876eaa6dcdf88413cd185ac7f3442df88df63a85f4c",
+  "card_kind": "company",
+  "cutoff_at": "2026-06-30T23:59:59Z",
+  "generated_from_report_id": "report:372115f6914ca7a23f06aabf843fc9e9dad986bfdfb4e54e08178461ca1d46ed",
+  "research_risk_note": "Research hypothesis, not investment advice. Confidence reflects source evidence, not independent formula validation unless marked empirically validated.",
+  "schema_version": "research_card.v1",
+  "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
+  "subjects": [
+    {
+      "availability": "available",
+      "causal_claim": null,
+      "claim_class": "research_hypothesis",
+      "display_name": "issuer:adm",
+      "metrics": [
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "capital_adjusted_labor_efficiency",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+            "snapshot_id": null
+          },
+          "unit": "USD",
+          "value": "75207.29"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "tier",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "traditional"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "current_price_to_sales",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "0.4580"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "target_price_to_sales",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "1.1500"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "valuation_gap",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "1.5109"
+        }
+      ],
+      "rank": null,
+      "subject_id": "issuer:adm"
+    }
+  ],
+  "template_version": "card_template.v1",
+  "title": "company card: issuer:adm"
+}
