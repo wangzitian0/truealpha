@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Context, Decimal
 from typing import Any
 
 import pytest
@@ -144,3 +144,31 @@ def test_report_recomputes_each_evaluation_from_its_exact_input() -> None:
             scenarios=(scenario,),
             limitations=("test-only",),
         )
+
+
+def test_score_projection_is_exact_beyond_evaluation_precision() -> None:
+    policy = ContinuousConfidencePolicy()
+    confidence_input = ContinuousConfidenceInput(
+        case_id="case:high-precision-projection",
+        sources=(_source(),),
+        agreement="1",
+        semantic_mapping_quality="1",
+        lineage_completeness="1",
+        required_component_completeness="1",
+    )
+    evaluation = evaluate_continuous_confidence(policy, confidence_input)
+    confidence = Decimal("0." + ("1234567890" * 12))
+    sign, digits, exponent = confidence.as_tuple()
+    assert isinstance(exponent, int)
+    exact_score = Decimal((sign, digits, exponent + 2))
+    rounded_score = Context(prec=100, rounding=ROUND_HALF_EVEN).multiply(confidence, Decimal(100))
+    payload = evaluation.model_dump(
+        mode="python",
+        exclude={"evaluation_id", "content_sha256", "confidence", "score_100"},
+    )
+
+    exact = type(evaluation)(**payload, confidence=confidence, score_100=exact_score)
+    assert exact.score_100 == exact_score
+    assert rounded_score != exact_score
+    with pytest.raises(ValidationError, match="exact normalized confidence projection"):
+        type(evaluation)(**payload, confidence=confidence, score_100=rounded_score)
