@@ -310,10 +310,14 @@ def _render_value(result: ResultValue) -> str:
 def _render_metric_row(result: ResultValue) -> str:
     trace = result.trace.reference_id if result.trace is not None else "—"
     confidence = "—" if result.confidence is None else str(result.confidence)
+    period = "—" if result.period is None else result.period
+    convention = "—" if result.factor_version is None else result.factor_version
     return (
         "<tr>"
         f'<td class="label">{_html_escape(result.label)}</td>'
         f'<td class="value">{_render_value(result)}</td>'
+        f'<td class="period">{_html_escape(period)}</td>'
+        f'<td class="convention">{_html_escape(convention)}</td>'
         f'<td class="availability availability-{result.availability.value}">{result.availability.value}</td>'
         f'<td class="confidence">{_html_escape(confidence)}</td>'
         f'<td class="trace">{_html_escape(trace)}</td>'
@@ -329,7 +333,7 @@ def _render_subject(subject: CardSubject) -> str:
         else ""
     )
     rows = "".join(_render_metric_row(result) for result in subject.metrics) or (
-        '<tr><td colspan="5" class="empty">No materialized result for this card.</td></tr>'
+        '<tr><td colspan="7" class="empty">No materialized result for this card.</td></tr>'
     )
     return (
         '<section class="subject">'
@@ -337,7 +341,8 @@ def _render_subject(subject: CardSubject) -> str:
         f'<p class="claim-class claim-class-{subject.claim_class.value}">{subject.claim_class.value}</p>'
         f'<p class="availability availability-{subject.availability.value}">{subject.availability.value}</p>'
         f"{causal_html}"
-        "<table><thead><tr><th>Metric</th><th>Value</th><th>Availability</th><th>Confidence</th><th>Trace</th></tr></thead>"
+        "<table><thead><tr><th>Metric</th><th>Value</th><th>Period</th><th>Convention</th>"
+        "<th>Availability</th><th>Confidence</th><th>Trace</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
         "</section>"
     )
