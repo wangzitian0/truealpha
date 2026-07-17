@@ -43,6 +43,47 @@ content-addressed, source-neutral demand with a representative sample. See
 TOPT example, quality objectives, and the boundary with confidence calibration and
 `infra2-sdk`.
 
+### Manual Production TOPT core
+
+After an explicitly triggered Production TOPT run has completed all 84 obligations,
+freeze its exact snapshot and materialize GPPE v0 plus three-tier valuation with:
+
+```bash
+uv run --package truealpha-data-engine python \
+  apps/data-engine/scripts/materialize_production_topt_core.py \
+  --run-id capture-run:<sha256> \
+  --release-manifest-id release-manifest:<sha256> \
+  --risk-free-rate 0.05 \
+  --confirmation 'MATERIALIZE PRODUCTION TOPT CORE'
+```
+
+The command first persists the 20 issuer-level GPPE module-2 outputs, reloads those
+immutable outputs, and then persists the tier composite with an exact
+`gppe_invocation_id`/`gppe_result_id` lineage edge. It prints the immutable
+`snapshot_id` and both base/composite invocation identities. Downstream reads must
+supply the exact composite identities; no `latest` read exists:
+
+```bash
+uv run --package truealpha-data-engine python \
+  apps/data-engine/scripts/query_production_topt_datahub.py \
+  --run-id capture-run:<sha256> \
+  --read core_results \
+  --release-manifest-id release-manifest:<sha256> \
+  --universe-id universe:<id> \
+  --universe-version <version> \
+  --universe-sha256 <sha256> \
+  --snapshot-id topt-core-snapshot:<sha256> \
+  --invocation-id topt-core-invocation:<sha256>
+```
+
+Use `--read status` or `--read meta_info` with the run ID for capture progress,
+and `--read core_meta_info` with the exact core identities for issuer-level lineage
+(four cells per listing, eight for an issuer with two share classes), including the
+materialized GPPE invocation and result identities. Observation freshness in both
+snapshot and meta reads is recomputed at the run cutoff from the bound schedule
+policy; an `unchanged` reuse cannot preserve an earlier fresh classification.
+These commands are manual-only and do not register or activate a schedule.
+
 ## Deployment
 
 Deployed to the VPS through [infra2](https://github.com/wangzitian0/infra2)'s IaC.

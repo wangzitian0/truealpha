@@ -1,0 +1,154 @@
+/**
+ * Python/TypeScript parity for #347's provisional StrategyRunReadRepository.
+ *
+ * Both `truealpha_contracts.strategy_run_fixture.FixtureStrategyRunRepository`
+ * (see libs/contracts/tests/test_strategy_run.py) and
+ * `FixtureStrategyRunRepository` here read the identical checked-in fixture
+ * bytes at `libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json`.
+ * This test asserts the same field values the Python test asserts, proving
+ * both adapters agree rather than merely both parsing without error.
+ */
+
+import { readFileSync } from "node:fs";
+
+import {
+  FixtureStrategyRunRepository,
+  parseStrategyRunReport,
+  StrategyRunContractError,
+  type AccessContext,
+  type StrategyRunReport,
+} from "../src/contracts/strategyRun";
+
+const fixtureUrl = new URL(
+  "../../../libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
+  import.meta.url,
+);
+
+// A placeholder context: FixtureStrategyRunRepository.getLatest doesn't
+// evaluate it today (matches the Python adapter), but requires it on its
+// signature so no later authorization wiring needs another signature break.
+const testContext: AccessContext = {
+  contextId: "ctx:test",
+  principalId: "principal:test",
+  tenantId: "tenant:test",
+  sessionId: "session:test",
+  authenticationMethod: "service_identity",
+  issuedAt: new Date().toISOString(),
+  expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+};
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+async function expectRejected(label: string, fn: () => unknown, matcher: RegExp): Promise<void> {
+  try {
+    fn();
+  } catch (error) {
+    if (error instanceof StrategyRunContractError && matcher.test(error.message)) return;
+    throw new Error(`${label}: rejected for the wrong reason: ${String(error)}`);
+  }
+  throw new Error(`${label}: expected rejection but none occurred`);
+}
+
+const raw = JSON.parse(readFileSync(fixtureUrl, "utf8")) as Record<string, unknown>;
+
+// The committed fixture is deterministic: no wall-clock field, exactly 10 decisions.
+assert(!raw.generated_at, "committed fixture must not carry generated_at");
+assert(Array.isArray(raw.decisions) && raw.decisions.length === 10, "expected 10 committed decisions");
+
+const report: StrategyRunReport = parseStrategyRunReport(raw);
+assert(report.strategy_id === "large_model_value_v0", "strategy_id mismatch");
+assert(report.golden_mismatches.length === 0, "committed fixture must have zero golden mismatches");
+
+const repository = new FixtureStrategyRunRepository();
+const fromRepository = repository.getLatest("large_model_value_v0", testContext);
+assert("decisions" in fromRepository, "expected a StrategyRunReport from the repository");
+assert(fromRepository.decisions.length === report.decisions.length, "repository/parse decision count mismatch");
+
+const selected = report.decisions.find((d) => d.issuer_id === "issuer:adm" && d.cutoff_at.startsWith("2026-03"));
+assert(selected !== undefined, "expected issuer:adm at the March cutoff");
+assert(selected.outcome === "selected", "expected issuer:adm to be selected");
+assert(selected.tier === "traditional", "expected traditional tier");
+assert(selected.valuation_gap === "1.6388", `unexpected valuation_gap ${selected.valuation_gap}`);
+assert(selected.confidence === "0.90", `unexpected confidence ${selected.confidence}`);
+assert(selected.rank === 1, "expected rank 1");
+assert(selected.target_weight === "0.500000", `unexpected target_weight ${selected.target_weight}`);
+
+const excluded = report.decisions.find((d) => d.exclusion_reason === "below_confidence_floor");
+assert(excluded !== undefined, "expected at least one below_confidence_floor exclusion");
+assert(excluded.eligible === false, "excluded decision must be ineligible");
+assert(excluded.confidence !== null, "excluded decision must still surface its confidence");
+
+const unavailable = repository.getLatest("does_not_exist", testContext);
+assert(!("decisions" in unavailable), "expected a StrategyRunUnavailable");
+assert(unavailable.reason === "unknown_strategy_id", "expected unknown_strategy_id reason");
+
+await expectRejected(
+  "unknown field",
+  () => parseStrategyRunReport({ ...raw, extra_field: "nope" }),
+  /unknown fields/,
+);
+
+await expectRejected(
+  "bad cutoff format",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [{ ...(raw.decisions as Record<string, unknown>[])[0], cutoff_at: "not-a-date" }],
+    }),
+  /expected an aware ISO date-time/,
+);
+
+await expectRejected(
+  "calendar-invalid cutoff (regex-shaped but not a real date)",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [{ ...(raw.decisions as Record<string, unknown>[])[0], cutoff_at: "2026-99-99T99:99:99Z" }],
+    }),
+  /expected an aware ISO date-time/,
+);
+
+await expectRejected(
+  "non-finite decimal (Infinity)",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [
+        { ...(raw.decisions as Record<string, unknown>[])[0], capital_adjusted_labor_efficiency: "Infinity" },
+      ],
+    }),
+  /expected a decimal string/,
+);
+
+await expectRejected(
+  "exponential-notation decimal",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [{ ...(raw.decisions as Record<string, unknown>[])[0], capital_adjusted_labor_efficiency: "1e309" }],
+    }),
+  /expected a decimal string/,
+);
+
+// A value fractionally above 1 that Number() rounds down to exactly 1.0
+// (float64 can't represent this many significant digits) must still be
+// rejected by the [0, 1] confidence bound — a naive Number()-based bounds
+// check would let it through (see #356's review).
+await expectRejected(
+  "confidence fractionally above 1, indistinguishable from 1.0 as a float64",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [{ ...(raw.decisions as Record<string, unknown>[])[0], confidence: "1.000000000000000001" }],
+    }),
+  /decimal is outside/,
+);
+
+// Fail-closed: repository.getLatest must never throw for a bad strategy_id,
+// only ever return a structured StrategyRunUnavailable (see #351's review).
+const stillStructured = repository.getLatest("", testContext);
+assert(!("decisions" in stillStructured), "empty strategy_id must resolve to unavailable, not throw");
+
+console.log("#347 Python/TypeScript strategy-run fixture parity passed");

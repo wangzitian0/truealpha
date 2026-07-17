@@ -20,6 +20,10 @@ label, target P/S bounds, or current P/S. Callers that need those for
 reporting (e.g. the #26 preview replay) call `definition.band_for(gppe.value)`
 directly — the same cheap, deterministic lookup this function already uses —
 rather than this module inventing a richer, one-off return shape.
+
+`data_availability` is "verified" only when both consumed inputs are
+"verified" -- a composite cannot claim stronger verification than what it was
+built from, mirroring how confidence is bounded by min() of inputs.
 """
 
 from collections.abc import Sequence
@@ -29,7 +33,7 @@ from decimal import Decimal
 from truealpha_contracts.strategy import ThreeTierValuationDefinition
 
 from factors.registry import factor
-from factors.types import FactorResult
+from factors.types import DataAvailability, FactorResult, UnitFamily
 
 
 def _result(name: str, inputs: Sequence[FactorResult]) -> FactorResult | None:
@@ -52,6 +56,7 @@ def three_tier_valuation(
             factor="three_tier_valuation",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.RATIO,
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
@@ -62,6 +67,7 @@ def three_tier_valuation(
             factor="three_tier_valuation",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.RATIO,
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
@@ -74,6 +80,7 @@ def three_tier_valuation(
             factor="three_tier_valuation",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.RATIO,
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
@@ -84,12 +91,18 @@ def three_tier_valuation(
     midpoint = (band.target_ps_lower_bound + band.target_ps_upper_bound) / Decimal(2)
     valuation_gap = midpoint / current_ps - Decimal(1)
     confidence = min(gppe.confidence, price_to_sales.confidence)
+    data_availability: DataAvailability = (
+        "verified"
+        if gppe.data_availability == "verified" and price_to_sales.data_availability == "verified"
+        else "unverified"
+    )
 
     return FactorResult(
         factor="three_tier_valuation",
         entity_id=entity_id,
         value=valuation_gap,
+        unit_family=UnitFamily.RATIO,
         confidence=confidence,
         as_of=as_of,
-        data_availability="verified",
+        data_availability=data_availability,
     )
