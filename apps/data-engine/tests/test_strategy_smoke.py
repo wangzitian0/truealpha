@@ -54,18 +54,21 @@ def test_excluded_and_rejected_issuers_carry_no_rank_or_weight() -> None:
             assert decision.target_weight is None
 
 
-def test_financial_issuer_is_excluded_from_valuation_with_exact_reason() -> None:
+def test_financial_issuer_flows_through_the_uniform_formula_and_is_rejected() -> None:
     decisions, _ = RUNNER.run()
 
     jpm = [item for item in decisions if item.issuer_id == "issuer:jpm"]
     assert len(jpm) == 2
     for decision in jpm:
-        # The mandatory #59 financial branch actually computed a level —
-        # never a missing-fact fallthrough — and is excluded only from the
-        # P/S-tier comparison specifically.
+        # The v0 formula is uniform (2026-07-18 owner decision): JPM takes the
+        # identical capital-adjusted path. Its large balance sheet drives labor
+        # efficiency negative -> traditional tier -> P/S above that band, so it
+        # is rejected exactly like any other over-valued issuer, not sector-excluded.
         assert decision.capital_adjusted_labor_efficiency is not None
-        assert decision.outcome == "excluded"
-        assert decision.exclusion_reason == "financial_valuation_not_comparable"
+        assert decision.capital_adjusted_labor_efficiency < 0
+        assert decision.tier == "traditional"
+        assert decision.outcome == "rejected_valuation_above_tier_band"
+        assert decision.exclusion_reason is None
 
 
 def test_below_confidence_floor_issuer_is_excluded_despite_complete_inputs() -> None:

@@ -58,7 +58,7 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition, ThreeTierV
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _FIXTURE_PACKAGE = "truealpha_contracts.data"
 _FIXTURE_NAME = "large_model_value_v0_strategy.v1.json"
-CORPUS_SHA256 = "24c786a1e5b16e0f3300802473a814b65d0fa84fc7489c2c01fb880309807aad"
+CORPUS_SHA256 = "8cdb081d887ff7754ac52a1eb02679b94a1c1c71b1eb32c606c06f5d6fe96083"
 STRATEGY_ID = "large_model_value_v0"
 
 # The golden fixture's input_key vocabulary predates #24's real factor
@@ -159,14 +159,11 @@ def _facts_for(
     return facts
 
 
-def _missing_reason(present_keys: set[str], issuer_branch: str) -> str | None:
+def _missing_reason(present_keys: set[str]) -> str | None:
+    # The v0 formula is uniform (2026-07-18 owner decision): every issuer
+    # consumes total_assets for the capital charge, so its absence is a
+    # missing-input exclusion for financial issuers too.
     for key, reason in _MISSING_REASON_ORDER:
-        # total_assets is the non-financial capital-charge base; the
-        # financial branch (gross_profit_per_employee's mandatory #59 path)
-        # never consumes it, so its absence is not a missing-input exclusion
-        # for a financial issuer.
-        if key == "total_assets" and issuer_branch == "financial":
-            continue
         if key not in present_keys:
             return reason
     return None
@@ -186,18 +183,15 @@ def _compute_one(
     risk_free_rate: Decimal,
     tier_definition: ThreeTierValuationDefinition,
     minimum_confidence: Decimal,
-    issuer_branch: str,
 ) -> Decision:
     as_of = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
     present_keys = {record["input_key"] for record in input_records}
-    reason = _missing_reason(present_keys, issuer_branch)
+    reason = _missing_reason(present_keys)
     if reason is not None:
         return Decision(issuer_id, cutoff_at, None, None, None, None, None, False, "excluded", reason)
 
     gppe_facts = _facts_for(input_records, _GPPE_KEYS, _GPPE_KEY_MAP, issuer_id, as_of)
-    gppe_result = gross_profit_per_employee(
-        gppe_facts, entity_id=issuer_id, as_of=as_of, risk_free_rate=risk_free_rate, issuer_branch=issuer_branch
-    )
+    gppe_result = gross_profit_per_employee(gppe_facts, entity_id=issuer_id, as_of=as_of, risk_free_rate=risk_free_rate)
 
     if gppe_result.value is None:
         return Decision(
@@ -206,44 +200,10 @@ def _compute_one(
 
     labor_efficiency_q = gppe_result.value.quantize(Decimal("0.01"))
 
-    if issuer_branch == "financial":
-        # Same fixed evaluation order as the non-financial path (missing
-        # input, then the confidence floor) applies before the
-        # branch-specific outcome: the floor is not skipped just because the
-        # rest of the path is short-circuited.
-        if gppe_result.confidence < minimum_confidence:
-            return Decision(
-                issuer_id,
-                cutoff_at,
-                labor_efficiency_q,
-                None,
-                None,
-                None,
-                None,
-                False,
-                "excluded",
-                "below_confidence_floor",
-                confidence=gppe_result.confidence,
-            )
-        # Mandatory #59 branch: the level was actually computed above. What's
-        # unavailable is specifically the P/S-tier comparison — no approved
-        # target band exists for a financial issuer yet — so price_to_sales
-        # is never even attempted, matching the boundary
-        # factors.production_topt.core.compute_topt_core already draws.
-        return Decision(
-            issuer_id,
-            cutoff_at,
-            labor_efficiency_q,
-            None,
-            None,
-            None,
-            None,
-            False,
-            "excluded",
-            "financial_valuation_not_comparable",
-            confidence=gppe_result.confidence,
-        )
-
+    # The v0 formula is uniform: financial issuers take the identical P/S-tier
+    # path. A bank whose capital-adjusted labor efficiency is negative lands in
+    # the traditional tier and is rejected when its P/S sits above that band --
+    # no financial-sector short-circuit.
     ps_facts = _facts_for(input_records, _PS_KEYS, _PS_KEY_MAP, issuer_id, as_of)
     ps_result = price_to_sales(ps_facts, entity_id=issuer_id, as_of=as_of)
 
@@ -412,7 +372,6 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
                 risk_free_rate,
                 definition.tier_valuation,
                 minimum_confidence,
-                golden["issuer_branch"],
             )
         )
 

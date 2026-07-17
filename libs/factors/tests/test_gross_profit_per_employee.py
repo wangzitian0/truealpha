@@ -35,9 +35,7 @@ def test_computes_capital_adjusted_labor_efficiency():
         _fact("total_assets", "4000000"),
         _fact("employees_total", "100"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="non_financial"
-    )
+    result = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     # real_profit = 1_000_000 - 4_000_000 * 0.05 = 800_000; / 100 headcount = 8_000
     assert result.value == Decimal("8000")
     assert result.unit_family == UnitFamily.PER_EMPLOYEE
@@ -50,76 +48,49 @@ def test_missing_gross_profit_surfaces_flag_not_silent_drop():
         _fact("total_assets", "4000000"),
         _fact("employees_total", "100"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="non_financial"
-    )
+    result = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     assert result.value is None
     assert result.confidence == Decimal("0")
     assert "missing_gross_profit" in result.flags
 
 
-def test_financial_issuer_without_gross_profit_is_unavailable():
-    # gross_profit is the parser's industry-branch definition for financial
-    # issuers too (metrics.py: financial_issuer_split=True) — its absence is
-    # a real data gap, not a deferred feature.
-    facts = [
-        _fact("employees_total", "50"),
-    ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="financial"
-    )
-    assert result.value is None
-    assert "missing_gross_profit" in result.flags
-
-
-def test_financial_issuer_computes_without_capital_charge():
+def test_missing_total_assets_surfaces_flag_for_every_issuer():
+    # The capital charge is uniform: total_assets is required for banks too.
     facts = [
         _fact("gross_profit", "86807000000", entity_id="issuer.bank"),
         _fact("employees_total", "318512", entity_id="issuer.bank"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="financial"
-    )
-    # 86_807_000_000 / 318_512 = 272_539.182...; no total_assets/risk_free_rate involved.
-    assert result.value == (Decimal("86807000000") / Decimal("318512"))
-    assert result.unit_family == UnitFamily.PER_EMPLOYEE
-    assert result.confidence == Decimal("0.9")
-    assert result.flags == []
+    result = gross_profit_per_employee(facts, entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
+    assert result.value is None
+    assert "missing_total_assets" in result.flags
 
 
-def test_financial_issuer_does_not_require_total_assets():
+def test_bank_takes_the_same_capital_adjusted_formula():
+    # A financial issuer takes the identical uniform path; a large balance
+    # sheet drives real profit — and thus labor efficiency — negative, which
+    # is a valid low signal, not a special-case exclusion.
     facts = [
         _fact("gross_profit", "86807000000", entity_id="issuer.bank"),
         _fact("total_assets", "4424900000000", entity_id="issuer.bank"),
         _fact("employees_total", "318512", entity_id="issuer.bank"),
     ]
-    with_total_assets = gross_profit_per_employee(
-        facts, entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="financial"
-    )
-    without_total_assets = gross_profit_per_employee(
-        [f for f in facts if f.metric != "total_assets"],
-        entity_id="issuer.bank",
-        as_of=_AS_OF,
-        risk_free_rate=_RISK_FREE_RATE,
-        issuer_branch="financial",
-    )
-    # An extraneous total_assets fact must not change the financial branch's
-    # output — it is not consumed, so its presence or absence is irrelevant.
-    assert with_total_assets.value == without_total_assets.value
-    assert without_total_assets.flags == []
+    result = gross_profit_per_employee(facts, entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
+    real_profit = Decimal("86807000000") - Decimal("4424900000000") * _RISK_FREE_RATE
+    assert result.value == real_profit / Decimal("318512")
+    assert result.value < 0
+    assert result.unit_family == UnitFamily.PER_EMPLOYEE
+    assert result.flags == []
 
 
-def test_financial_issuer_confidence_ignores_total_assets():
+def test_confidence_includes_total_assets_for_every_issuer():
     facts = [
         _fact("gross_profit", "86807000000", entity_id="issuer.bank", confidence="0.9"),
         _fact("total_assets", "4424900000000", entity_id="issuer.bank", confidence="0.1"),
         _fact("employees_total", "318512", entity_id="issuer.bank", confidence="0.8"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="financial"
-    )
-    # min(gross_profit, employees_total) only — the low-confidence total_assets fact is unused.
-    assert result.confidence == Decimal("0.8")
+    result = gross_profit_per_employee(facts, entity_id="issuer.bank", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
+    # total_assets is now consumed uniformly, so its low confidence bounds the result.
+    assert result.confidence == Decimal("0.1")
 
 
 def test_non_positive_headcount_is_unavailable():
@@ -128,9 +99,7 @@ def test_non_positive_headcount_is_unavailable():
         _fact("total_assets", "4000000"),
         _fact("employees_total", "0"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="non_financial"
-    )
+    result = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     assert result.value is None
     assert "non_positive_employees_total" in result.flags
 
@@ -141,9 +110,7 @@ def test_fiscal_period_mismatch_is_unavailable():
         _fact("total_assets", "4000000", fiscal_period="2025-09-30"),
         _fact("employees_total", "100", fiscal_period="2025-12-31"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="non_financial"
-    )
+    result = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     assert result.value is None
     assert "fiscal_period_mismatch" in result.flags
 
@@ -154,9 +121,7 @@ def test_confidence_is_the_minimum_across_inputs():
         _fact("total_assets", "4000000", confidence="0.6"),
         _fact("employees_total", "100", confidence="0.95"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="non_financial"
-    )
+    result = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     assert result.confidence == Decimal("0.6")
 
 
@@ -166,9 +131,7 @@ def test_data_availability_never_overclaims_verified():
         _fact("total_assets", "4000000"),
         _fact("employees_total", "100"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE, issuer_branch="non_financial"
-    )
+    result = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     assert result.data_availability == "unverified"
 
 
