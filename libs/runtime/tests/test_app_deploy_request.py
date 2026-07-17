@@ -275,6 +275,10 @@ def test_release_workflow_dispatches_only_the_rendered_sdk_request() -> None:
     assert "IAC_WEBHOOK_SECRET" not in workflow
 
 
+def test_frozen_corpus_documents_stable_tag_only_policy(corpus: dict) -> None:
+    assert corpus["renderer_contract"]["allowed_version_ref_forms"] == ["vX.Y.Z"]
+
+
 def test_infra2_source_boundary_is_absent(corpus: dict) -> None:
     boundary = corpus["repository_boundary"]
     for relative_path in boundary["required_absent_paths"]:
