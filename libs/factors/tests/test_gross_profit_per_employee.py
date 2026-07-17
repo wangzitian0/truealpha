@@ -35,9 +35,7 @@ def test_computes_capital_adjusted_labor_efficiency():
         _fact("total_assets", "4000000"),
         _fact("employees_total", "100"),
     ]
-    result = gross_profit_per_employee(
-        facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE
-    )
+    result = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     # real_profit = 1_000_000 - 4_000_000 * 0.05 = 800_000; / 100 headcount = 8_000
     assert result.value == Decimal("8000")
     assert result.unit_family == UnitFamily.PER_EMPLOYEE
