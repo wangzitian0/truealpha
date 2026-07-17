@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -48,7 +48,9 @@ def _context() -> AccessContext:
         authentication_method=AuthenticationMethod.SERVICE_IDENTITY,
         principal_kind=PrincipalKind.SERVICE,
         issued_at=now,
-        expires_at=now.replace(year=now.year + 1),
+        # timedelta, not .replace(year=...): replacing into a non-leap year raises
+        # ValueError when `now` falls on Feb 29 (Copilot review on #390).
+        expires_at=now + timedelta(days=400),
     )
 
 
@@ -336,6 +338,12 @@ _BUILDER_FUNCTIONS = {
     "_default_card_title",
     "_claim_class",
 }
+# `min`/`max` are deliberately NOT forbidden: `_section_status` uses `min(sections, key=...)`
+# to select the worst already-materialized availability label by a fixed enum priority
+# order — a categorical selection over existing labels, not numeric aggregation over a
+# metric value. The forbidden set below targets numeric/decimal computation only
+# (Copilot review on #390: the PR description's "no ... aggregation primitive" wording
+# was imprecise about this distinction).
 _FORBIDDEN_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow, ast.MatMult)
 _FORBIDDEN_CALLS = {"sum", "round", "abs", "pow", "Decimal", "float", "int", "quantize"}
 _FORBIDDEN_IMPORT_MODULES = {"psycopg", "sqlalchemy"}
@@ -379,5 +387,13 @@ def test_card_module_performs_no_mart_query() -> None:
                 f"research_cards.py must not import a database driver ({module})"
             )
             imported_names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            # Plain `import x` / `import x.y as z`, not just `from x import y` — a bare
+            # `import psycopg` would otherwise bypass this scan (Copilot review on #390).
+            for alias in node.names:
+                assert not any(forbidden in alias.name for forbidden in _FORBIDDEN_IMPORT_MODULES), (
+                    f"research_cards.py must not import a database driver ({alias.name})"
+                )
+                imported_names.add(alias.asname or alias.name)
     assert "ResearchReadPort" not in imported_names, "research_cards.py must not depend on a read port/repository"
     assert "FixtureResearchReadRepository" not in imported_names
