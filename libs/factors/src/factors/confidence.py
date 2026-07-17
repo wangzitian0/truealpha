@@ -88,8 +88,10 @@ def evaluate_continuous_confidence(
             )
 
         source_support = Decimal(1) - (-evidence_mass).exp()
+        quantized_evidence_mass = _quantize(evidence_mass, policy.output_decimal_places)
+        quantized_source_support = _quantize(source_support, policy.output_decimal_places)
         confidence = (
-            source_support
+            quantized_source_support
             * _power(evidence.agreement, policy.agreement_exponent)
             * _power(evidence.semantic_mapping_quality, policy.semantic_mapping_exponent)
             * _power(evidence.lineage_completeness, policy.lineage_exponent)
@@ -97,8 +99,6 @@ def evaluate_continuous_confidence(
         )
         confidence = _quantize(confidence, policy.output_decimal_places)
         score_100 = _quantize(confidence * Decimal(100), policy.output_decimal_places)
-        quantized_evidence_mass = _quantize(evidence_mass, policy.output_decimal_places)
-        quantized_source_support = _quantize(source_support, policy.output_decimal_places)
 
     reason_codes = {"confidence.evaluated"}
     if len(grouped) == 1:

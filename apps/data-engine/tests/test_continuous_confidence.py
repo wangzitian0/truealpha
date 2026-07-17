@@ -77,6 +77,12 @@ def test_empirical_anchor_rejects_duplicate_or_misassigned_primary_samples(tmp_p
     with pytest.raises(ValueError, match="invalid denominator"):
         _derive_price_reconciliation_anchor(tmp_path)
 
+    missing_artifact = tmp_path / original["primary_artifacts"][0]["path"]
+    missing_artifact.unlink()
+    report_path.write_text(json.dumps(original_report))
+    with pytest.raises(ValueError, match=f"sample artifact is missing: {missing_artifact}"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
 
 def test_independent_support_is_continuous_and_same_origin_is_deduplicated() -> None:
     report = build_topt_confidence_sensitivity_report()
@@ -99,7 +105,7 @@ def test_quality_penalties_and_empirical_anchor_remain_explainable() -> None:
     scenarios = {scenario.scenario_id: scenario for scenario in report.scenarios}
 
     assert scenarios["topt.stale-source"].evaluation.score_100 == Decimal("39.286900")
-    assert scenarios["topt.semantic-mismatch"].evaluation.score_100 == Decimal("53.093500")
+    assert scenarios["topt.semantic-mismatch"].evaluation.score_100 == Decimal("53.093400")
     assert scenarios["topt.partial-lineage"].evaluation.score_100 == Decimal("54.965800")
     assert scenarios["topt.missing-components"].evaluation.score_100 == Decimal("54.965800")
     assert scenarios["topt.cross-source-conflict"].evaluation.score_100 == Decimal("49.197000")

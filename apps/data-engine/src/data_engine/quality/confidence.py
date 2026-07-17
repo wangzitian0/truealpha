@@ -40,7 +40,11 @@ def _calibration_context() -> Context:
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    try:
+        payload = path.read_bytes()
+    except FileNotFoundError as error:
+        raise ValueError(f"sample artifact is missing: {path}") from error
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _load_json(path: Path) -> dict[str, object]:
