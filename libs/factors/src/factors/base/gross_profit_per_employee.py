@@ -3,7 +3,7 @@
 Formula frozen by issue #59 (2026-07-17 owner decision, round 3):
 
     real_profit_v0 = gross_profit - total_assets * risk_free_rate
-    labor_efficiency_v0 = real_profit_v0 / employee_headcount
+    labor_efficiency_v0 = real_profit_v0 / employees_total
 
 v0 deliberately uses only the two rigid standardized fields #59 names for the
 capital charge (gross profit, total assets). It does not yet apply the round-2
@@ -26,6 +26,12 @@ the cross-check test, not invoked on every call (the Decimal path above is
 the fast, dependency-light source of truth; Qlib execution is the
 reproducibility proof, and the reusable engine it runs through is meant to
 carry future base factors expressible the same way).
+
+Input metric names match the canonical registry
+(`truealpha_contracts.metrics.METRICS`) so staging fusion and factor
+consumption never drift apart; `Fact` itself rejects a metric/unit_family
+combination that doesn't match that registry (see `factors.types.Fact`), so
+this function does not re-check unit compatibility.
 """
 
 from collections.abc import Sequence
@@ -41,11 +47,11 @@ from truealpha_contracts.qlib_expression import (
 
 from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY
 from factors.registry import factor
-from factors.types import Fact, FactorResult
+from factors.types import Fact, FactorResult, UnitFamily
 
 _GROSS_PROFIT = "gross_profit"
 _TOTAL_ASSETS = "total_assets"
-_EMPLOYEE_HEADCOUNT = "employee_headcount"
+_EMPLOYEES_TOTAL = "employees_total"
 
 GPPE_EXPRESSION_DEFINITION = QlibFactorExpressionDefinition(
     factor_id="factor.gross_profit_per_employee.capital_adjusted",
@@ -55,7 +61,7 @@ GPPE_EXPRESSION_DEFINITION = QlibFactorExpressionDefinition(
         QlibFeatureBinding(feature_binding_id="feature.gross_profit", qlib_field_name="gross_profit"),
         QlibFeatureBinding(feature_binding_id="feature.total_assets", qlib_field_name="total_assets"),
         QlibFeatureBinding(feature_binding_id="feature.risk_free_rate", qlib_field_name="risk_free_rate"),
-        QlibFeatureBinding(feature_binding_id="feature.employee_headcount", qlib_field_name="employee_headcount"),
+        QlibFeatureBinding(feature_binding_id="feature.employees_total", qlib_field_name="employees_total"),
     ),
     root=QlibCallNode(
         operator_id="truealpha.qlib.div.v1",
@@ -73,7 +79,7 @@ GPPE_EXPRESSION_DEFINITION = QlibFactorExpressionDefinition(
                     ),
                 ),
             ),
-            QlibFeatureNode(feature_binding_id="feature.employee_headcount"),
+            QlibFeatureNode(feature_binding_id="feature.employees_total"),
         ),
     ),
     maximum_lookback_sessions=0,
@@ -99,7 +105,7 @@ def gross_profit_per_employee(
 ) -> FactorResult:
     gross_profit = _find(facts, entity_id, _GROSS_PROFIT)
     total_assets = _find(facts, entity_id, _TOTAL_ASSETS)
-    headcount = _find(facts, entity_id, _EMPLOYEE_HEADCOUNT)
+    headcount = _find(facts, entity_id, _EMPLOYEES_TOTAL)
 
     flags: list[str] = []
     if gross_profit is None or gross_profit.value is None:
@@ -107,9 +113,9 @@ def gross_profit_per_employee(
     if total_assets is None or total_assets.value is None:
         flags.append("missing_total_assets")
     if headcount is None or headcount.value is None:
-        flags.append("missing_employee_headcount")
+        flags.append("missing_employees_total")
     elif headcount.value <= 0:
-        flags.append("non_positive_employee_headcount")
+        flags.append("non_positive_employees_total")
     if (
         not flags
         and gross_profit is not None
@@ -124,6 +130,7 @@ def gross_profit_per_employee(
             factor="gross_profit_per_employee",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.PER_EMPLOYEE,
             confidence=Decimal("0"),
             as_of=as_of,
             data_availability="unverified",
@@ -141,6 +148,7 @@ def gross_profit_per_employee(
         factor="gross_profit_per_employee",
         entity_id=entity_id,
         value=value,
+        unit_family=UnitFamily.PER_EMPLOYEE,
         confidence=confidence,
         as_of=as_of,
         data_availability="unverified",

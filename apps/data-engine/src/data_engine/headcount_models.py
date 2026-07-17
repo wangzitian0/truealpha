@@ -10,7 +10,7 @@ from enum import StrEnum
 from html.parser import HTMLParser
 from typing import Literal
 
-from factors import Fact
+from factors import Fact, UnitFamily
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import (
@@ -259,8 +259,9 @@ class HeadcountExtractionBundle(BaseModel):
             raise ValueError("unavailable headcount cannot become a usable factor input")
         return Fact(
             entity_id=self.record.draft.subject.id,
-            metric="employee_headcount",
+            metric="employees_total",
             value=Decimal(selected.value),
+            unit_family=UnitFamily.COUNT,
             confidence=self.record.confidence,
             as_of=as_of,
             fiscal_period=self.payload.valid_period_end.isoformat(),

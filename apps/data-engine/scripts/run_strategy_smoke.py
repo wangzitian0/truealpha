@@ -41,6 +41,7 @@ from factors.base.gross_profit_per_employee import gross_profit_per_employee
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation
 from factors.types import Fact
+from truealpha_contracts.metrics import METRICS
 from truealpha_contracts.strategy import LargeModelValueV0Definition, ThreeTierValuationDefinition
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -50,10 +51,14 @@ OUTPUT_JSON = "strategy_smoke.json"
 OUTPUT_MARKDOWN = "strategy_smoke.md"
 
 # The golden fixture's input_key vocabulary predates #24's real factor
-# implementations and does not match their Fact.metric names exactly.
+# implementations and does not match their Fact.metric names exactly. Targets
+# must be registered in truealpha_contracts.metrics.METRICS — Fact rejects an
+# unregistered metric or a mismatched unit_family, so this mapping cannot
+# silently drift from the canonical registry the way the pre-SSOT
+# "employee_headcount" name once did.
 _GPPE_KEYS = ("gross_profit", "total_assets", "headcount")
 _PS_KEYS = ("last_close", "shares_outstanding", "revenue")
-_GPPE_KEY_MAP = {"headcount": "employee_headcount"}
+_GPPE_KEY_MAP = {"headcount": "employees_total"}
 _PS_KEY_MAP = {"last_close": "price"}
 _MISSING_REASON_ORDER = (
     ("gross_profit", "missing_gross_profit_fact"),
@@ -126,11 +131,13 @@ def _facts_for(
         record = by_key.get(key)
         if record is None:
             continue
+        metric = key_map.get(key, key)
         facts.append(
             Fact(
                 entity_id=entity_id,
-                metric=key_map.get(key, key),
+                metric=metric,
                 value=Decimal(str(record["value"])),
+                unit_family=METRICS[metric].unit_family,
                 confidence=Decimal(str(record["confidence"])),
                 as_of=as_of,
             )

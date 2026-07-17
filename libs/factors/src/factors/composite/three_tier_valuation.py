@@ -33,7 +33,7 @@ from decimal import Decimal
 from truealpha_contracts.strategy import ThreeTierValuationDefinition
 
 from factors.registry import factor
-from factors.types import DataAvailability, FactorResult
+from factors.types import DataAvailability, FactorResult, UnitFamily
 
 
 def _result(name: str, inputs: Sequence[FactorResult]) -> FactorResult | None:
@@ -56,6 +56,7 @@ def three_tier_valuation(
             factor="three_tier_valuation",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.RATIO,
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
@@ -66,6 +67,7 @@ def three_tier_valuation(
             factor="three_tier_valuation",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.RATIO,
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
@@ -78,6 +80,7 @@ def three_tier_valuation(
             factor="three_tier_valuation",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.RATIO,
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
@@ -98,6 +101,7 @@ def three_tier_valuation(
         factor="three_tier_valuation",
         entity_id=entity_id,
         value=valuation_gap,
+        unit_family=UnitFamily.RATIO,
         confidence=confidence,
         as_of=as_of,
         data_availability=data_availability,
