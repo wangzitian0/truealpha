@@ -288,6 +288,34 @@ def test_reconciliation_ignores_the_callers_decimal_context() -> None:
         )
 
 
+def test_reconciliation_preserves_exact_high_precision_tolerance_boundaries() -> None:
+    cell = _cell()
+    left = _assertion(
+        cell,
+        digest=SHA_A,
+        source_id="source:sec:v1",
+        origin_group_id="origin:sec:v1",
+        value=Decimal("0"),
+    )
+    right_value = Decimal("1." + ("0" * 49) + "4")
+    right = _assertion(
+        cell,
+        digest=SHA_B,
+        source_id="source:vendor-a:v1",
+        origin_group_id="origin:vendor-a:v1",
+        value=right_value,
+    )
+    policy = _policy(absolute_tolerance=Decimal("1." + ("0" * 49) + "3"))
+
+    with localcontext() as context:
+        context.prec = 6
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
+        result = reconcile_source_assertions(cell=cell, assertions=(left, right), policy=policy, cutoff=CUTOFF)
+
+    assert result.outcome is ReconciliationOutcome.CONFLICT_ABSTAINED
+
+
 def test_quality_summary_ignores_the_callers_decimal_context() -> None:
     policy = _policy()
     rows = (

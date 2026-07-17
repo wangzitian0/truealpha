@@ -6,12 +6,16 @@ import re
 from collections import Counter
 from datetime import date, datetime
 from decimal import (
+    MAX_EMAX,
+    MIN_EMIN,
     ROUND_HALF_EVEN,
     Context,
     Decimal,
     DivisionByZero,
+    Inexact,
     InvalidOperation,
     Overflow,
+    Rounded,
     localcontext,
 )
 from enum import StrEnum
@@ -41,6 +45,57 @@ def _reconciliation_context() -> Context:
         flags=[],
         traps=[InvalidOperation, DivisionByZero, Overflow],
     )
+
+
+def _decimal_shape(value: Decimal) -> tuple[int, int]:
+    _, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise ValueError("exact Decimal arithmetic requires finite values")
+    return len(digits), exponent
+
+
+def _exact_context(precision: int) -> Context:
+    return Context(
+        prec=max(1, precision),
+        rounding=ROUND_HALF_EVEN,
+        Emin=MIN_EMIN,
+        Emax=MAX_EMAX,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[InvalidOperation, DivisionByZero, Overflow, Inexact, Rounded],
+    )
+
+
+def _exact_additive_context(left: Decimal, right: Decimal) -> Context:
+    left_digits, left_exponent = _decimal_shape(left)
+    right_digits, right_exponent = _decimal_shape(right)
+    common_exponent = min(left_exponent, right_exponent)
+    precision = (
+        max(
+            left_digits + left_exponent - common_exponent,
+            right_digits + right_exponent - common_exponent,
+        )
+        + 1
+    )
+    return _exact_context(precision)
+
+
+def _exact_subtract(left: Decimal, right: Decimal) -> Decimal:
+    with localcontext(_exact_additive_context(left, right)):
+        return left - right
+
+
+def _exact_add(left: Decimal, right: Decimal) -> Decimal:
+    with localcontext(_exact_additive_context(left, right)):
+        return left + right
+
+
+def _exact_multiply(left: Decimal, right: Decimal) -> Decimal:
+    left_digits, _ = _decimal_shape(left)
+    right_digits, _ = _decimal_shape(right)
+    with localcontext(_exact_context(left_digits + right_digits)):
+        return left * right
 
 
 def _decimal_input(value: Any) -> Any:
@@ -431,10 +486,11 @@ def _assertions_agree(left: SourceAssertion, right: SourceAssertion, policy: Rec
             and right.numeric_value is None
             and left.normalized_value_sha256 == right.normalized_value_sha256
         )
-    with localcontext(_reconciliation_context()):
-        difference = abs(left.numeric_value - right.numeric_value)
-        scale = max(abs(left.numeric_value), abs(right.numeric_value))
-        return difference <= policy.absolute_tolerance + policy.relative_tolerance * scale
+    difference = _exact_subtract(left.numeric_value, right.numeric_value).copy_abs()
+    scale = max(left.numeric_value.copy_abs(), right.numeric_value.copy_abs())
+    relative_bound = _exact_multiply(policy.relative_tolerance, scale)
+    tolerance_bound = _exact_add(policy.absolute_tolerance, relative_bound)
+    return difference <= tolerance_bound
 
 
 def reconcile_source_assertions(
