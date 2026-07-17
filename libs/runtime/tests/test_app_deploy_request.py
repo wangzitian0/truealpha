@@ -238,6 +238,12 @@ def test_release_workflow_dispatches_only_the_rendered_sdk_request() -> None:
     assert "merge-base --is-ancestor" in workflow
     assert '.path == ".github/workflows/ci-required.yml"' in workflow
     assert '.event == "push"' in workflow
+    assert ".merge_commit_sha == $sha" in workflow
+    assert '.base.ref == "main"' in workflow
+    assert "successful infra2 staging receiver run URL" in workflow
+    assert 'staging_title_prefix="Deploy ${service} staging ${version_ref} ${source_sha} ["' in workflow
+    assert '.path == ".github/workflows/app-deploy-request.yml"' in workflow
+    assert '.event == "repository_dispatch"' in workflow
     assert "python tools/app_deploy_request.py" in workflow
     assert "event_type: app-deploy-request" in workflow
     assert '"client_payload": $request' in workflow

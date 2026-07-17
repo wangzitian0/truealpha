@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       staging_run_url:
-        description: Required for prod; successful TrueAlpha staging sender run URL.
+        description: Required for prod; successful infra2 staging receiver run URL.
         required: false
         type: string
       reviewed_change_url:
@@ -71,6 +71,19 @@ jobs:
             echo "::error::release tag must be reachable from origin/main"
             exit 1
           fi
+          if [[ "$DEPLOY_TYPE" == "prod" ]]; then
+            if ! [[ "$REVIEWED_CHANGE_URL" =~ ^https://github.com/wangzitian0/truealpha/pull/([1-9][0-9]*)$ ]]; then
+              echo "::error::reviewed_change_url must identify a TrueAlpha pull request"
+              exit 1
+            fi
+            reviewed_pr="$(gh api "/repos/${GITHUB_REPOSITORY}/pulls/${BASH_REMATCH[1]}")"
+            jq -e --arg sha "$source_sha" \
+              '.merged_at != null and .base.ref == "main" and .merge_commit_sha == $sha' \
+              <<<"$reviewed_pr" >/dev/null || {
+                echo "::error::reviewed change must be merged to main at the release SHA"
+                exit 1
+              }
+          fi
           source_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"
           run_json="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
           jq -e \
@@ -108,15 +121,33 @@ jobs:
             echo "::error::INFRA2_PAT is required"
             exit 1
           fi
+          service="$(jq -r '.service' <<<"$REQUEST_JSON")"
+          deploy_type="$(jq -r '.deploy_type' <<<"$REQUEST_JSON")"
+          version_ref="$(jq -r '.version_ref' <<<"$REQUEST_JSON")"
+          source_sha="$(jq -r '.source_sha' <<<"$REQUEST_JSON")"
+          if [[ "$deploy_type" == "prod" ]]; then
+            staging_run_url="$(jq -r '.evidence.staging_run_url' <<<"$REQUEST_JSON")"
+            if ! [[ "$staging_run_url" =~ ^https://github.com/wangzitian0/infra2/actions/runs/([1-9][0-9]*)$ ]]; then
+              echo "::error::staging evidence must identify an infra2 receiver run"
+              exit 1
+            fi
+            staging_run="$(gh api "/repos/wangzitian0/infra2/actions/runs/${BASH_REMATCH[1]}")"
+            staging_title_prefix="Deploy ${service} staging ${version_ref} ${source_sha} ["
+            jq -e --arg prefix "$staging_title_prefix" \
+              '.conclusion == "success"
+               and .event == "repository_dispatch"
+               and .path == ".github/workflows/app-deploy-request.yml"
+               and (.display_title | startswith($prefix) and endswith("]"))' \
+              <<<"$staging_run" >/dev/null || {
+                echo "::error::staging receipt must be a successful matching infra2 deployment"
+                exit 1
+              }
+          fi
           payload="$(jq -n --arg event_type "$event_type" --argjson request "$REQUEST_JSON" \
             '{event_type: $event_type, "client_payload": $request}')"
           gh api --method POST /repos/wangzitian0/infra2/dispatches --input - <<<"$payload"
 
           request_id="$(jq -r '.request_id' <<<"$REQUEST_JSON")"
-          service="$(jq -r '.service' <<<"$REQUEST_JSON")"
-          deploy_type="$(jq -r '.deploy_type' <<<"$REQUEST_JSON")"
-          version_ref="$(jq -r '.version_ref' <<<"$REQUEST_JSON")"
-          source_sha="$(jq -r '.source_sha' <<<"$REQUEST_JSON")"
           expected_title="Deploy ${service} ${deploy_type} ${version_ref} ${source_sha} [${request_id}]"
 
           receiver_run_id=""
