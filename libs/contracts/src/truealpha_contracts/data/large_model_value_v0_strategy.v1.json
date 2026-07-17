@@ -1,0 +1,1076 @@
+{
+  "schema_version": 1,
+  "notes": "Frozen large_model_value_v0 strategy definition and golden decisions for issue #21. Golden inputs are grounded in the checked-in sample corpus under apps/data-engine/samples/; every expected number is recomputed with Decimal arithmetic by the tests. Golden decisions are engineering regression anchors over a fixed research cohort, not performance claims. Tier bands, the confidence floor, and the per-cutoff 3-month T-bill rates are provisional versioned research parameters pending calibration. Decision evaluation order: missing required inputs, then the consumed-confidence floor, then factor computation with the tier-band valuation check, then ranking by descending valuation gap and top-N equal-weight selection.",
+  "strategy_definition": {
+    "strategy_id": "large_model_value_v0",
+    "definition_version": "0.1.0",
+    "provisional_semantics": true,
+    "universe": {
+      "universe_id": "universe:sample-evidence-us",
+      "universe_version": "2026.07.12",
+      "content_sha256": "d4281c12d9c00c1508895ed77b1270e6b48e3788e5b579868beec32c1fb91205"
+    },
+    "schedule": {
+      "rule_id": "calendar_quarter_end_utc",
+      "first_cutoff_at": "2026-03-31T23:59:59Z",
+      "cutoff_inclusive": true
+    },
+    "labor_efficiency": {
+      "factor_key": "capital_adjusted_labor_efficiency",
+      "factor_version": "0.1.0",
+      "numerator": "gross_profit",
+      "capital_charge_base": "total_assets",
+      "denominator": "headcount",
+      "risk_free": {
+        "rule_id": "per_cutoff_versioned_parameter",
+        "instrument": "us_treasury_bill_3_month",
+        "rate_unit": "annualized_decimal_fraction",
+        "missing_rate_reason": "missing_risk_free_rate_parameter"
+      },
+      "formula": "(numerator-capital_charge_base*risk_free_rate)/denominator",
+      "unit": {
+        "dimension": "reporting_currency_per_employee",
+        "unit_code": "reporting_currency_per_employee"
+      },
+      "quantization": {
+        "decimal_places": 2,
+        "rounding": "half_even"
+      },
+      "missing_numerator_reason": "missing_gross_profit_fact",
+      "missing_capital_base_reason": "missing_total_assets_fact",
+      "missing_denominator_reason": "missing_headcount_disclosure",
+      "nonpositive_denominator_reason": "nonpositive_headcount"
+    },
+    "price_to_sales": {
+      "factor_key": "price_to_sales",
+      "factor_version": "0.1.0",
+      "market_value_rule": "shares_outstanding_times_last_unadjusted_close",
+      "price_rule": "last_unadjusted_close_at_or_before_cutoff",
+      "shares_rule": "latest_knowable_shares_outstanding_at_or_before_cutoff",
+      "revenue_rule": "latest_complete_fiscal_year_total_revenue",
+      "unit": {
+        "dimension": "dimensionless",
+        "unit_code": "ratio"
+      },
+      "quantization": {
+        "decimal_places": 4,
+        "rounding": "half_even"
+      },
+      "missing_market_value_reason": "missing_market_value_input",
+      "missing_revenue_reason": "missing_revenue_fact",
+      "nonpositive_revenue_reason": "nonpositive_revenue"
+    },
+    "tier_valuation": {
+      "factor_key": "three_tier_valuation",
+      "factor_version": "0.1.0",
+      "bands": [
+        {
+          "tier": "traditional",
+          "labor_efficiency_lower_bound": null,
+          "labor_efficiency_upper_bound": "100000",
+          "target_ps_lower_bound": "0.30",
+          "target_ps_upper_bound": "2.00"
+        },
+        {
+          "tier": "tech",
+          "labor_efficiency_lower_bound": "100000",
+          "labor_efficiency_upper_bound": "300000",
+          "target_ps_lower_bound": "2.50",
+          "target_ps_upper_bound": "6.00"
+        },
+        {
+          "tier": "large_model_native",
+          "labor_efficiency_lower_bound": "300000",
+          "labor_efficiency_upper_bound": null,
+          "target_ps_lower_bound": "6.00",
+          "target_ps_upper_bound": "12.00"
+        }
+      ],
+      "boundary_rule": "lower_inclusive_upper_exclusive",
+      "target_ps_selection": "band_midpoint",
+      "provisional_thresholds": true,
+      "unit": {
+        "dimension": "dimensionless",
+        "unit_code": "ratio"
+      },
+      "quantization": {
+        "decimal_places": 4,
+        "rounding": "half_even"
+      }
+    },
+    "valuation_gap": {
+      "rule_id": "target_ps_over_current_ps_minus_one",
+      "formula": "target_ps/current_ps-1",
+      "quantization": {
+        "decimal_places": 4,
+        "rounding": "half_even"
+      },
+      "above_band_outcome": "rejected_valuation_above_tier_band",
+      "ranking_direction": "descending_valuation_gap",
+      "tie_break": "ascending_issuer_id"
+    },
+    "eligibility": {
+      "rule_id": "minimum_consumed_confidence_floor",
+      "minimum_confidence": "0.70",
+      "confidence_semantics": "minimum_consumed_input_confidence",
+      "maximum_input_age_days": 455,
+      "below_floor_reason": "below_confidence_floor",
+      "stale_input_reason": "stale_required_input"
+    },
+    "selection": {
+      "rule_id": "top_n_ranked_eligible",
+      "selection_count": 2
+    },
+    "sizing": {
+      "rule_id": "equal_weight_selected",
+      "weight_formula": "1/selected_count",
+      "quantization": {
+        "decimal_places": 6,
+        "rounding": "half_even"
+      },
+      "empty_selection_behavior": "retain_all_cash"
+    },
+    "execution": {
+      "rule_id": "next_eligible_market_session_open",
+      "lag_sessions": 1,
+      "price_field": "unadjusted_open",
+      "unfilled_order_behavior": "remain_cash"
+    },
+    "transaction_cost": {
+      "rule_id": "per_side_notional_basis_points",
+      "basis_points": "5"
+    },
+    "total_return": {
+      "rule_id": "unadjusted_bars_explicit_corporate_actions",
+      "price_basis": "unadjusted",
+      "corporate_action_processing": "explicit_event_lifecycle_once",
+      "adjusted_prices_affect_returns": false
+    }
+  },
+  "engine_binding": {
+    "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "execution_binding": {
+      "distribution": "pyqlib",
+      "version": "0.9.6",
+      "release_commit": "0123456789abcdef0123456789abcdef01234567",
+      "runtime_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_lock_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "adapter_id": "truealpha.qlib-adapter",
+      "adapter_implementation_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "operator_registry_id": "qlib-operator-registry:b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122",
+    "operator_registry_sha256": "b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122"
+  },
+  "engine_binding_alternate": {
+    "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "execution_binding": {
+      "distribution": "pyqlib",
+      "version": "0.9.7",
+      "release_commit": "fedcba9876543210fedcba9876543210fedcba98",
+      "runtime_artifact_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "runtime_lock_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "adapter_id": "truealpha.qlib-adapter",
+      "adapter_implementation_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "operator_registry_id": "qlib-operator-registry:b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122",
+    "operator_registry_sha256": "b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122"
+  },
+  "golden_decision_set": {
+    "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "risk_free_rates": [
+      {
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "annualized_rate": "0.0380",
+        "provisional": true
+      },
+      {
+        "cutoff_at": "2026-06-30T23:59:59Z",
+        "annualized_rate": "0.0365",
+        "provisional": true
+      }
+    ],
+    "decisions": [
+      {
+        "decision_key": "adm-2026-03-31",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:adm"
+        },
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "gross_profit",
+            "value": "5033000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/ADM_CIK0000007084.json us-gaap:GrossProfit FY2025 (2025-01-01..2025-12-31), filed 2026-02-17"
+          },
+          {
+            "input_key": "headcount",
+            "value": "41496",
+            "unit_code": "employees",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/ADM_10K_000000708426000011.html (FY2025 10-K, filed 2026-02-17): employee table as of December 31, 2025 with grand total 41,496 (20,119 salaried + 20,679 hourly + 698 part-time)"
+          },
+          {
+            "input_key": "last_close",
+            "value": "72.69",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-03-31T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/ADM_prices_3y_20260712.csv row 2026-03-31 unadjusted Close 72.69 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "80269000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/ADM_CIK0000007084.json us-gaap:Revenues FY2025 (2025-01-01..2025-12-31), filed 2026-02-17"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "481201844",
+            "unit_code": "shares",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/ADM_CIK0000007084.json dei:EntityCommonStockSharesOutstanding = 481201844 as of 2026-02-10, filed 2026-02-17 (FY2025 10-K cover page)"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "52389000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/ADM_CIK0000007084.json us-gaap:Assets as of 2025-12-31, filed 2026-02-17"
+          }
+        ],
+        "derivation": "capital_charge = 52389000000 * 0.0380 = 1990782000.0000; adjusted_gross_profit = 5033000000 - 1990782000.0000 = 3042218000.0000; capital_adjusted_gppe = 3042218000.0000 / 41496 = 73313.52 (2dp half-even) -> traditional tier; market_value = 481201844 * 72.69 = 34978562040.36; current_ps = 34978562040.36 / 80269000000 = 0.4358 (4dp half-even); target_ps = (0.30 + 2.00) / 2 = 1.1500; valuation_gap = 1.1500 / 0.4358 - 1 = 1.6388 (4dp half-even); ranked 1 of 2 eligible by descending gap (issuer:nice gap 0.8788); top-2 selected; target_weight = 1/2 = 0.500000 (6dp half-even)",
+        "expected": {
+          "capital_adjusted_labor_efficiency": "73313.52",
+          "tier": "traditional",
+          "current_price_to_sales": "0.4358",
+          "target_price_to_sales": "1.1500",
+          "valuation_gap": "1.6388",
+          "eligible": true,
+          "outcome": "selected",
+          "exclusion_reason": null,
+          "rank": 1,
+          "target_weight": "0.500000"
+        }
+      },
+      {
+        "decision_key": "ddog-2026-03-31",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:ddog"
+        },
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "gross_profit",
+            "value": "2740201000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/DDOG_CIK0001561550.json us-gaap:GrossProfit FY2025 (2025-01-01..2025-12-31), filed 2026-02-18"
+          },
+          {
+            "input_key": "headcount",
+            "value": "8100",
+            "unit_code": "employees",
+            "confidence": "0.65",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/DDOG_10K_000162828026008819.html (FY2025 10-K, filed 2026-02-18): the filing states approximately 3,600 sales-and-marketing employees, approximately 3,900 research-and-development employees, and approximately 8,100 total employees in three separate sentences; the ambiguous total-versus-segment disclosure carries 0.65 confidence, matching apps/data-engine/samples/golden/DDOG_composite_pit_replay.json employee-count confidence"
+          },
+          {
+            "input_key": "last_close",
+            "value": "118.05",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-03-31T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/DDOG_prices_3y_20260712.csv row 2026-03-31 unadjusted Close 118.05 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "3427158000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/DDOG_CIK0001561550.json us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax FY2025 (2025-01-01..2025-12-31), filed 2026-02-18"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "347309000",
+            "unit_code": "shares",
+            "confidence": "0.80",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/DDOG_CIK0001561550.json us-gaap:WeightedAverageNumberOfSharesOutstandingBasic = 347309000 for FY2025, filed 2026-02-18; the capture carries no period-end cover-page share count for DDOG, so the FY2025 basic weighted-average share count grounds this input at reduced confidence"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "6643844000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/DDOG_CIK0001561550.json us-gaap:Assets as of 2025-12-31, filed 2026-02-18"
+          }
+        ],
+        "derivation": "all six required inputs are present; minimum consumed confidence = 0.65 (headcount: the 10-K states 3,600 sales-and-marketing, 3,900 research-and-development, and 8,100 total employees in separate sentences) < 0.70 eligibility floor -> excluded below_confidence_floor; no factor outputs are recorded for excluded issuers",
+        "expected": {
+          "capital_adjusted_labor_efficiency": null,
+          "tier": null,
+          "current_price_to_sales": null,
+          "target_price_to_sales": null,
+          "valuation_gap": null,
+          "eligible": false,
+          "outcome": "excluded",
+          "exclusion_reason": "below_confidence_floor",
+          "rank": null,
+          "target_weight": null
+        }
+      },
+      {
+        "decision_key": "jpm-2026-03-31",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:jpm"
+        },
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "headcount",
+            "value": "318512",
+            "unit_code": "employees",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-13T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/JPM_10K_000162828026008131.html (FY2025 10-K, filed 2026-02-13): 'As of December 31, 2025, JPMorganChase had 318,512 employees globally'"
+          },
+          {
+            "input_key": "last_close",
+            "value": "294.16",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-03-31T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/JPM_prices_3y_20260712.csv row 2026-03-31 unadjusted Close 294.16 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "182447000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-13T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/JPM_CIK0000019617.json us-gaap:Revenues FY2025 (2025-01-01..2025-12-31), filed 2026-02-13"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "2697032375",
+            "unit_code": "shares",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-13T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/JPM_CIK0000019617.json dei:EntityCommonStockSharesOutstanding = 2697032375 as of 2026-01-31, filed 2026-02-13 (FY2025 10-K cover page)"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "4424900000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-13T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/JPM_CIK0000019617.json us-gaap:Assets as of 2025-12-31, filed 2026-02-13"
+          }
+        ],
+        "derivation": "us-gaap:GrossProfit is absent from the JPM company-facts capture (banks present no cost-of-revenue subtotal), so the configured gross-profit numerator input is missing -> excluded missing_gross_profit_fact; the exclusion names the exact missing standardized fact and is never a sector rule",
+        "expected": {
+          "capital_adjusted_labor_efficiency": null,
+          "tier": null,
+          "current_price_to_sales": null,
+          "target_price_to_sales": null,
+          "valuation_gap": null,
+          "eligible": false,
+          "outcome": "excluded",
+          "exclusion_reason": "missing_gross_profit_fact",
+          "rank": null,
+          "target_weight": null
+        }
+      },
+      {
+        "decision_key": "nice-2026-03-31",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:nice"
+        },
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "gross_profit",
+            "value": "1956145000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/NICE_CIK0001003935.json us-gaap:GrossProfit FY2025 (2025-01-01..2025-12-31), filed 2026-02-26"
+          },
+          {
+            "input_key": "headcount",
+            "value": "9626",
+            "unit_code": "employees",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/NICE_20F_000100393526000010.html (FY2025 20-F, filed 2026-02-26): 'As of December 31, 2025, we had 9,626 employees worldwide' with a matching category table totalling 9,626; a single unambiguous disclosure, so standardized-filing confidence applies"
+          },
+          {
+            "input_key": "last_close",
+            "value": "110.26",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-03-31T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/NICE_prices_3y_20260712.csv row 2026-03-31 unadjusted Close 110.26 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "2945399000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/NICE_CIK0001003935.json us-gaap:Revenues FY2025 (2025-01-01..2025-12-31), filed 2026-02-26"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "60427562",
+            "unit_code": "shares",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/NICE_CIK0001003935.json dei:EntityCommonStockSharesOutstanding = 60427562 as of 2025-12-31, filed 2026-02-26 (FY2025 20-F cover page)"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "5106030000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/NICE_CIK0001003935.json us-gaap:Assets as of 2025-12-31, filed 2026-02-26"
+          }
+        ],
+        "derivation": "capital_charge = 5106030000 * 0.0380 = 194029140.0000; adjusted_gross_profit = 1956145000 - 194029140.0000 = 1762115860.0000; capital_adjusted_gppe = 1762115860.0000 / 9626 = 183057.95 (2dp half-even) -> tech tier; market_value = 60427562 * 110.26 = 6662742986.12; current_ps = 6662742986.12 / 2945399000 = 2.2621 (4dp half-even); target_ps = (2.50 + 6.00) / 2 = 4.2500; valuation_gap = 4.2500 / 2.2621 - 1 = 0.8788 (4dp half-even); ranked 2 of 2 eligible by descending gap (issuer:adm gap 1.6388); top-2 selected; target_weight = 1/2 = 0.500000 (6dp half-even)",
+        "expected": {
+          "capital_adjusted_labor_efficiency": "183057.95",
+          "tier": "tech",
+          "current_price_to_sales": "2.2621",
+          "target_price_to_sales": "4.2500",
+          "valuation_gap": "0.8788",
+          "eligible": true,
+          "outcome": "selected",
+          "exclusion_reason": null,
+          "rank": 2,
+          "target_weight": "0.500000"
+        }
+      },
+      {
+        "decision_key": "shop-2026-03-31",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:shop"
+        },
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "gross_profit",
+            "value": "5555000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/SHOP_CIK0001594805.json us-gaap:GrossProfit FY2025 (2025-01-01..2025-12-31), filed 2026-02-11"
+          },
+          {
+            "input_key": "headcount",
+            "value": "7600",
+            "unit_code": "employees",
+            "confidence": "0.85",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/SHOP_10K_000159480526000007.html (FY2025 10-K, filed 2026-02-11): 'As of December 31, 2025, Shopify had approximately 7,600 employees worldwide'; the issuer rounds the figure, so confidence sits slightly below an exact standardized disclosure"
+          },
+          {
+            "input_key": "last_close",
+            "value": "118.62",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-03-31T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/SHOP_prices_3y_20260712.csv row 2026-03-31 unadjusted Close 118.62 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "11556000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/SHOP_CIK0001594805.json us-gaap:Revenues FY2025 (2025-01-01..2025-12-31), filed 2026-02-11"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "1298955860",
+            "unit_code": "shares",
+            "confidence": "0.80",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/SHOP_CIK0001594805.json us-gaap:WeightedAverageNumberOfSharesOutstandingBasic = 1298955860 for FY2025, filed 2026-02-11; the capture carries no period-end cover-page share count for SHOP, so the FY2025 basic weighted-average share count grounds this input at reduced confidence"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "15189000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/SHOP_CIK0001594805.json us-gaap:Assets as of 2025-12-31, filed 2026-02-11"
+          }
+        ],
+        "derivation": "capital_charge = 15189000000 * 0.0380 = 577182000.0000; adjusted_gross_profit = 5555000000 - 577182000.0000 = 4977818000.0000; capital_adjusted_gppe = 4977818000.0000 / 7600 = 654976.05 (2dp half-even) -> large_model_native tier; market_value = 1298955860 * 118.62 = 154082144113.20; current_ps = 154082144113.20 / 11556000000 = 13.3335 (4dp half-even); target_ps = (6.00 + 12.00) / 2 = 9.0000; valuation_gap = 9.0000 / 13.3335 - 1 = -0.3250 (4dp half-even); current_ps 13.3335 exceeds the large_model_native band upper bound 12.00 -> rejected_valuation_above_tier_band",
+        "expected": {
+          "capital_adjusted_labor_efficiency": "654976.05",
+          "tier": "large_model_native",
+          "current_price_to_sales": "13.3335",
+          "target_price_to_sales": "9.0000",
+          "valuation_gap": "-0.3250",
+          "eligible": true,
+          "outcome": "rejected_valuation_above_tier_band",
+          "exclusion_reason": null,
+          "rank": null,
+          "target_weight": null
+        }
+      },
+      {
+        "decision_key": "adm-2026-06-30",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:adm"
+        },
+        "cutoff_at": "2026-06-30T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "gross_profit",
+            "value": "5033000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/ADM_CIK0000007084.json us-gaap:GrossProfit FY2025 (2025-01-01..2025-12-31), filed 2026-02-17"
+          },
+          {
+            "input_key": "headcount",
+            "value": "41496",
+            "unit_code": "employees",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/ADM_10K_000000708426000011.html (FY2025 10-K, filed 2026-02-17): employee table as of December 31, 2025 with grand total 41,496 (20,119 salaried + 20,679 hourly + 698 part-time)"
+          },
+          {
+            "input_key": "last_close",
+            "value": "76.40",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-06-30T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/ADM_prices_3y_20260712.csv row 2026-06-30 unadjusted Close 76.40 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "80269000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/ADM_CIK0000007084.json us-gaap:Revenues FY2025 (2025-01-01..2025-12-31), filed 2026-02-17"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "481201844",
+            "unit_code": "shares",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/ADM_CIK0000007084.json dei:EntityCommonStockSharesOutstanding = 481201844 as of 2026-02-10, filed 2026-02-17 (FY2025 10-K cover page)"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "52389000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-17T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/ADM_CIK0000007084.json us-gaap:Assets as of 2025-12-31, filed 2026-02-17"
+          }
+        ],
+        "derivation": "capital_charge = 52389000000 * 0.0365 = 1912198500.0000; adjusted_gross_profit = 5033000000 - 1912198500.0000 = 3120801500.0000; capital_adjusted_gppe = 3120801500.0000 / 41496 = 75207.29 (2dp half-even) -> traditional tier; market_value = 481201844 * 76.40 = 36763820881.60; current_ps = 36763820881.60 / 80269000000 = 0.4580 (4dp half-even); target_ps = (0.30 + 2.00) / 2 = 1.1500; valuation_gap = 1.1500 / 0.4580 - 1 = 1.5109 (4dp half-even); ranked 1 of 2 eligible by descending gap (issuer:nice gap 1.2802); top-2 selected; target_weight = 1/2 = 0.500000 (6dp half-even)",
+        "expected": {
+          "capital_adjusted_labor_efficiency": "75207.29",
+          "tier": "traditional",
+          "current_price_to_sales": "0.4580",
+          "target_price_to_sales": "1.1500",
+          "valuation_gap": "1.5109",
+          "eligible": true,
+          "outcome": "selected",
+          "exclusion_reason": null,
+          "rank": 1,
+          "target_weight": "0.500000"
+        }
+      },
+      {
+        "decision_key": "ddog-2026-06-30",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:ddog"
+        },
+        "cutoff_at": "2026-06-30T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "gross_profit",
+            "value": "2740201000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/DDOG_CIK0001561550.json us-gaap:GrossProfit FY2025 (2025-01-01..2025-12-31), filed 2026-02-18"
+          },
+          {
+            "input_key": "headcount",
+            "value": "8100",
+            "unit_code": "employees",
+            "confidence": "0.65",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/DDOG_10K_000162828026008819.html (FY2025 10-K, filed 2026-02-18): the filing states approximately 3,600 sales-and-marketing employees, approximately 3,900 research-and-development employees, and approximately 8,100 total employees in three separate sentences; the ambiguous total-versus-segment disclosure carries 0.65 confidence, matching apps/data-engine/samples/golden/DDOG_composite_pit_replay.json employee-count confidence"
+          },
+          {
+            "input_key": "last_close",
+            "value": "260.36",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-06-30T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/DDOG_prices_3y_20260712.csv row 2026-06-30 unadjusted Close 260.36 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "3427158000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/DDOG_CIK0001561550.json us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax FY2025 (2025-01-01..2025-12-31), filed 2026-02-18"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "347309000",
+            "unit_code": "shares",
+            "confidence": "0.80",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/DDOG_CIK0001561550.json us-gaap:WeightedAverageNumberOfSharesOutstandingBasic = 347309000 for FY2025, filed 2026-02-18; the capture carries no period-end cover-page share count for DDOG, so the FY2025 basic weighted-average share count grounds this input at reduced confidence"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "6643844000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-18T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/DDOG_CIK0001561550.json us-gaap:Assets as of 2025-12-31, filed 2026-02-18"
+          }
+        ],
+        "derivation": "all six required inputs are present; minimum consumed confidence = 0.65 (headcount: the 10-K states 3,600 sales-and-marketing, 3,900 research-and-development, and 8,100 total employees in separate sentences) < 0.70 eligibility floor -> excluded below_confidence_floor; no factor outputs are recorded for excluded issuers",
+        "expected": {
+          "capital_adjusted_labor_efficiency": null,
+          "tier": null,
+          "current_price_to_sales": null,
+          "target_price_to_sales": null,
+          "valuation_gap": null,
+          "eligible": false,
+          "outcome": "excluded",
+          "exclusion_reason": "below_confidence_floor",
+          "rank": null,
+          "target_weight": null
+        }
+      },
+      {
+        "decision_key": "jpm-2026-06-30",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:jpm"
+        },
+        "cutoff_at": "2026-06-30T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "headcount",
+            "value": "318512",
+            "unit_code": "employees",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-13T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/JPM_10K_000162828026008131.html (FY2025 10-K, filed 2026-02-13): 'As of December 31, 2025, JPMorganChase had 318,512 employees globally'"
+          },
+          {
+            "input_key": "last_close",
+            "value": "327.33",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-06-30T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/JPM_prices_3y_20260712.csv row 2026-06-30 unadjusted Close 327.33 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "182447000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-13T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/JPM_CIK0000019617.json us-gaap:Revenues FY2025 (2025-01-01..2025-12-31), filed 2026-02-13"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "2697032375",
+            "unit_code": "shares",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-13T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/JPM_CIK0000019617.json dei:EntityCommonStockSharesOutstanding = 2697032375 as of 2026-01-31, filed 2026-02-13 (FY2025 10-K cover page)"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "4424900000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-13T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/JPM_CIK0000019617.json us-gaap:Assets as of 2025-12-31, filed 2026-02-13"
+          }
+        ],
+        "derivation": "us-gaap:GrossProfit is absent from the JPM company-facts capture (banks present no cost-of-revenue subtotal), so the configured gross-profit numerator input is missing -> excluded missing_gross_profit_fact; the exclusion names the exact missing standardized fact and is never a sector rule",
+        "expected": {
+          "capital_adjusted_labor_efficiency": null,
+          "tier": null,
+          "current_price_to_sales": null,
+          "target_price_to_sales": null,
+          "valuation_gap": null,
+          "eligible": false,
+          "outcome": "excluded",
+          "exclusion_reason": "missing_gross_profit_fact",
+          "rank": null,
+          "target_weight": null
+        }
+      },
+      {
+        "decision_key": "nice-2026-06-30",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:nice"
+        },
+        "cutoff_at": "2026-06-30T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "gross_profit",
+            "value": "1956145000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/NICE_CIK0001003935.json us-gaap:GrossProfit FY2025 (2025-01-01..2025-12-31), filed 2026-02-26"
+          },
+          {
+            "input_key": "headcount",
+            "value": "9626",
+            "unit_code": "employees",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/NICE_20F_000100393526000010.html (FY2025 20-F, filed 2026-02-26): 'As of December 31, 2025, we had 9,626 employees worldwide' with a matching category table totalling 9,626; a single unambiguous disclosure, so standardized-filing confidence applies"
+          },
+          {
+            "input_key": "last_close",
+            "value": "90.85",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-06-30T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/NICE_prices_3y_20260712.csv row 2026-06-30 unadjusted Close 90.85 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "2945399000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/NICE_CIK0001003935.json us-gaap:Revenues FY2025 (2025-01-01..2025-12-31), filed 2026-02-26"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "60427562",
+            "unit_code": "shares",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/NICE_CIK0001003935.json dei:EntityCommonStockSharesOutstanding = 60427562 as of 2025-12-31, filed 2026-02-26 (FY2025 20-F cover page)"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "5106030000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-26T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/NICE_CIK0001003935.json us-gaap:Assets as of 2025-12-31, filed 2026-02-26"
+          }
+        ],
+        "derivation": "capital_charge = 5106030000 * 0.0365 = 186370095.0000; adjusted_gross_profit = 1956145000 - 186370095.0000 = 1769774905.0000; capital_adjusted_gppe = 1769774905.0000 / 9626 = 183853.62 (2dp half-even) -> tech tier; market_value = 60427562 * 90.85 = 5489844007.70; current_ps = 5489844007.70 / 2945399000 = 1.8639 (4dp half-even); target_ps = (2.50 + 6.00) / 2 = 4.2500; valuation_gap = 4.2500 / 1.8639 - 1 = 1.2802 (4dp half-even); ranked 2 of 2 eligible by descending gap (issuer:adm gap 1.5109); top-2 selected; target_weight = 1/2 = 0.500000 (6dp half-even)",
+        "expected": {
+          "capital_adjusted_labor_efficiency": "183853.62",
+          "tier": "tech",
+          "current_price_to_sales": "1.8639",
+          "target_price_to_sales": "4.2500",
+          "valuation_gap": "1.2802",
+          "eligible": true,
+          "outcome": "selected",
+          "exclusion_reason": null,
+          "rank": 2,
+          "target_weight": "0.500000"
+        }
+      },
+      {
+        "decision_key": "shop-2026-06-30",
+        "issuer": {
+          "kind": "issuer",
+          "id": "issuer:shop"
+        },
+        "cutoff_at": "2026-06-30T23:59:59Z",
+        "inputs": [
+          {
+            "input_key": "gross_profit",
+            "value": "5555000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/SHOP_CIK0001594805.json us-gaap:GrossProfit FY2025 (2025-01-01..2025-12-31), filed 2026-02-11"
+          },
+          {
+            "input_key": "headcount",
+            "value": "7600",
+            "unit_code": "employees",
+            "confidence": "0.85",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/filings/SHOP_10K_000159480526000007.html (FY2025 10-K, filed 2026-02-11): 'As of December 31, 2025, Shopify had approximately 7,600 employees worldwide'; the issuer rounds the figure, so confidence sits slightly below an exact standardized disclosure"
+          },
+          {
+            "input_key": "last_close",
+            "value": "114.18",
+            "unit_code": "usd_per_share",
+            "confidence": "0.90",
+            "knowable_at": "2026-06-30T20:00:00Z",
+            "grounding": "apps/data-engine/samples/prices/SHOP_prices_3y_20260712.csv row 2026-06-30 unadjusted Close 114.18 (immutable 2026-07-12 Yahoo chart capture)"
+          },
+          {
+            "input_key": "revenue",
+            "value": "11556000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/SHOP_CIK0001594805.json us-gaap:Revenues FY2025 (2025-01-01..2025-12-31), filed 2026-02-11"
+          },
+          {
+            "input_key": "shares_outstanding",
+            "value": "1298955860",
+            "unit_code": "shares",
+            "confidence": "0.80",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/SHOP_CIK0001594805.json us-gaap:WeightedAverageNumberOfSharesOutstandingBasic = 1298955860 for FY2025, filed 2026-02-11; the capture carries no period-end cover-page share count for SHOP, so the FY2025 basic weighted-average share count grounds this input at reduced confidence"
+          },
+          {
+            "input_key": "total_assets",
+            "value": "15189000000",
+            "unit_code": "usd",
+            "confidence": "0.90",
+            "knowable_at": "2026-02-11T00:00:00Z",
+            "grounding": "apps/data-engine/samples/sec/SHOP_CIK0001594805.json us-gaap:Assets as of 2025-12-31, filed 2026-02-11"
+          }
+        ],
+        "derivation": "capital_charge = 15189000000 * 0.0365 = 554398500.0000; adjusted_gross_profit = 5555000000 - 554398500.0000 = 5000601500.0000; capital_adjusted_gppe = 5000601500.0000 / 7600 = 657973.88 (2dp half-even) -> large_model_native tier; market_value = 1298955860 * 114.18 = 148314780094.80; current_ps = 148314780094.80 / 11556000000 = 12.8344 (4dp half-even); target_ps = (6.00 + 12.00) / 2 = 9.0000; valuation_gap = 9.0000 / 12.8344 - 1 = -0.2988 (4dp half-even); current_ps 12.8344 exceeds the large_model_native band upper bound 12.00 -> rejected_valuation_above_tier_band",
+        "expected": {
+          "capital_adjusted_labor_efficiency": "657973.88",
+          "tier": "large_model_native",
+          "current_price_to_sales": "12.8344",
+          "target_price_to_sales": "9.0000",
+          "valuation_gap": "-0.2988",
+          "eligible": true,
+          "outcome": "rejected_valuation_above_tier_band",
+          "exclusion_reason": null,
+          "rank": null,
+          "target_weight": null
+        }
+      }
+    ]
+  },
+  "expected": {
+    "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
+    "golden_decision_set_id": "golden-decision-set:937ef286f70cf38c38246cf5df69b5991cae7f0d4dea3d231a9a452c8595719d",
+    "engine_binding_id": "strategy-engine-binding:4f1949fffc0d42f3f99f265a2321f2b32ecc08e271f9f2c4a6ffb8c286c9d039",
+    "engine_binding_alternate_id": "strategy-engine-binding:cdde299e803e45b93d833ff80a149ceefd03336ec58889bd285dec5cea8c5120"
+  },
+  "negative_cases": [
+    {
+      "case_id": "unknown-selection-rule",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "selection.rule_id",
+      "value": "bottom_n_ranked_eligible"
+    },
+    {
+      "case_id": "unknown-valuation-gap-formula",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "valuation_gap.formula",
+      "value": "current_ps/target_ps-1"
+    },
+    {
+      "case_id": "out-of-range-minimum-confidence",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "eligibility.minimum_confidence",
+      "value": "1.5"
+    },
+    {
+      "case_id": "binary-float-minimum-confidence",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "eligibility.minimum_confidence",
+      "value": 0.7
+    },
+    {
+      "case_id": "zero-selection-count",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "selection.selection_count",
+      "value": 0
+    },
+    {
+      "case_id": "missing-factor-version",
+      "target": "strategy_definition",
+      "operation": "remove",
+      "path": "labor_efficiency.factor_version",
+      "value": null
+    },
+    {
+      "case_id": "mutable-factor-version",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "price_to_sales.factor_version",
+      "value": "latest"
+    },
+    {
+      "case_id": "mutable-definition-version",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "definition_version",
+      "value": "latest"
+    },
+    {
+      "case_id": "non-contiguous-tier-bands",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "tier_valuation.bands.1.labor_efficiency_lower_bound",
+      "value": "150000"
+    },
+    {
+      "case_id": "duplicate-tier-band",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "tier_valuation.bands.2.tier",
+      "value": "tech"
+    },
+    {
+      "case_id": "unbounded-tier-domain",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "tier_valuation.bands.0.labor_efficiency_lower_bound",
+      "value": "0"
+    },
+    {
+      "case_id": "non-quarter-end-schedule",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "schedule.first_cutoff_at",
+      "value": "2026-04-15T23:59:59Z"
+    },
+    {
+      "case_id": "naive-schedule-datetime",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "schedule.first_cutoff_at",
+      "value": "2026-03-31T23:59:59"
+    },
+    {
+      "case_id": "engine-identity-in-semantics",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "engine_distribution",
+      "value": "pyqlib"
+    },
+    {
+      "case_id": "wrong-denominator-reason",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "labor_efficiency.missing_denominator_reason",
+      "value": "missing_revenue_fact"
+    },
+    {
+      "case_id": "negative-transaction-cost",
+      "target": "strategy_definition",
+      "operation": "replace",
+      "path": "transaction_cost.basis_points",
+      "value": "-1"
+    },
+    {
+      "case_id": "excluded-without-reason",
+      "target": "golden_decision_set",
+      "operation": "replace",
+      "path": "decisions.2.expected.exclusion_reason",
+      "value": null
+    },
+    {
+      "case_id": "selected-without-weight",
+      "target": "golden_decision_set",
+      "operation": "replace",
+      "path": "decisions.3.expected.target_weight",
+      "value": null
+    },
+    {
+      "case_id": "duplicate-decision-key",
+      "target": "golden_decision_set",
+      "operation": "replace",
+      "path": "decisions.1.decision_key",
+      "value": "adm-2026-03-31"
+    },
+    {
+      "case_id": "non-contiguous-golden-ranks",
+      "target": "golden_decision_set",
+      "operation": "replace",
+      "path": "decisions.0.expected.rank",
+      "value": 3
+    },
+    {
+      "case_id": "blanket-sector-exclusion-code",
+      "target": "golden_decision_set",
+      "operation": "replace",
+      "path": "decisions.2.expected.exclusion_reason",
+      "value": "financial_sector_excluded"
+    },
+    {
+      "case_id": "cutoff-without-risk-free-rate",
+      "target": "golden_decision_set",
+      "operation": "replace",
+      "path": "decisions.0.cutoff_at",
+      "value": "2026-09-30T23:59:59Z"
+    },
+    {
+      "case_id": "golden-definition-hash-mismatch",
+      "target": "golden_decision_set",
+      "operation": "replace",
+      "path": "strategy_definition_sha256",
+      "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "case_id": "future-knowable-golden-input",
+      "target": "golden_decision_set",
+      "operation": "replace",
+      "path": "decisions.0.inputs.0.knowable_at",
+      "value": "2026-04-15T00:00:00Z"
+    },
+    {
+      "case_id": "engine-binding-definition-mismatch",
+      "target": "engine_binding",
+      "operation": "replace",
+      "path": "strategy_definition_sha256",
+      "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ]
+}
