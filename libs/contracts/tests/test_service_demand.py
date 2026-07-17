@@ -255,6 +255,27 @@ def test_decimal_quality_targets_reject_binary_float() -> None:
         DataQualityObjective.model_validate(payload)
 
 
+@pytest.mark.parametrize("field_name", ("minimum_coverage", "minimum_availability", "minimum_confidence_score"))
+def test_decimal_quality_targets_reject_booleans(field_name: str) -> None:
+    payload = _demand().quality_objective.model_dump(mode="json", exclude={"quality_objective_id", "content_sha256"})
+    payload[field_name] = True
+
+    with pytest.raises(ValidationError, match="cannot be booleans"):
+        DataQualityObjective.model_validate(payload)
+
+
+@pytest.mark.parametrize("tolerance", (True, "Infinity", Decimal("NaN")))
+def test_sample_tolerance_requires_a_finite_base_ten_value(tolerance: object) -> None:
+    demand = _demand()
+    assertion = demand.representative_samples.cases[0].assertions[0]
+    payload = assertion.model_dump(mode="python", exclude={"sample_assertion_id", "content_sha256"})
+    payload["operator"] = SampleAssertionOperator.ABSOLUTE_TOLERANCE
+    payload["tolerance"] = tolerance
+
+    with pytest.raises(ValidationError, match="finite base-10 value"):
+        SampleAssertion.model_validate(payload)
+
+
 @pytest.mark.parametrize("requester_version", ("latest", "factor:current", "release/head", "stable-v1"))
 def test_requester_rejects_mutable_versions(requester_version: str) -> None:
     payload = _demand().requester.model_dump(mode="json")
@@ -320,3 +341,27 @@ def test_sample_assertions_match_declared_field_kinds(
 
     with pytest.raises(ValidationError, match=message):
         DataHubServiceDemand.model_validate(payload)
+
+
+def test_datetime_sample_assertion_accepts_rfc3339_z() -> None:
+    payload = _demand().model_dump(mode="json")
+    payload["service_demand_id"] = ""
+    payload["content_sha256"] = ""
+    requirement = payload["requirements"][0]
+    requirement["service_requirement_id"] = ""
+    requirement["content_sha256"] = ""
+    field = requirement["fields"][0]
+    field["field_semantics_id"] = ""
+    field["content_sha256"] = ""
+    field["value_kind"] = FieldValueKind.DATETIME.value
+    assertion = payload["representative_samples"]["cases"][0]["assertions"][0]
+    assertion["sample_assertion_id"] = ""
+    assertion["content_sha256"] = ""
+    assertion["expected_value"] = "2026-07-17T00:00:00Z"
+    case = payload["representative_samples"]["cases"][0]
+    case["sample_case_id"] = ""
+    case["content_sha256"] = ""
+    payload["representative_samples"]["sample_manifest_id"] = ""
+    payload["representative_samples"]["content_sha256"] = ""
+
+    DataHubServiceDemand.model_validate(payload)

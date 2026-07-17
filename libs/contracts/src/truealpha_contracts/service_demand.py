@@ -180,10 +180,24 @@ class SampleAssertion(_FrozenModel):
     expected_value: str | int | bool | None = None
     tolerance: Decimal | None = Field(default=None, gt=0)
 
-    @field_validator("expected_value", "tolerance", mode="before")
+    @field_validator("expected_value", mode="before")
     @classmethod
     def reject_binary_float(cls, value: Any) -> Any:
         return _reject_float(value)
+
+    @field_validator("tolerance", mode="before")
+    @classmethod
+    def reject_invalid_tolerance(cls, value: Any) -> Any:
+        value = _reject_float(value)
+        if isinstance(value, bool):
+            raise ValueError("tolerance must be a finite base-10 value")
+        if value is not None:
+            try:
+                if not Decimal(value).is_finite():
+                    raise ValueError("tolerance must be a finite base-10 value")
+            except InvalidOperation as error:
+                raise ValueError("tolerance must be a finite base-10 value") from error
+        return value
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
@@ -313,7 +327,10 @@ class DataQualityObjective(_FrozenModel):
     @field_validator("minimum_coverage", "minimum_availability", "minimum_confidence_score", mode="before")
     @classmethod
     def reject_binary_float(cls, value: Any) -> Any:
-        return _reject_float(value)
+        value = _reject_float(value)
+        if isinstance(value, bool):
+            raise ValueError("quality objective decimals cannot be booleans")
+        return value
 
     @field_serializer("report_dimensions", when_used="json")
     def serialize_dimensions(self, values: frozenset[QualityReportDimension]) -> list[str]:
@@ -464,7 +481,8 @@ def _validate_assertion_value(assertion: SampleAssertion, field: FieldSemanticEx
         if not isinstance(value, str):
             raise ValueError("datetime sample assertions require an aware ISO datetime")
         try:
-            _require_aware(datetime.fromisoformat(value), "sample assertion datetime")
+            normalized = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+            _require_aware(datetime.fromisoformat(normalized), "sample assertion datetime")
         except ValueError as error:
             raise ValueError("datetime sample assertions require an aware ISO datetime") from error
 
