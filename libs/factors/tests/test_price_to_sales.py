@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from factors.base.price_to_sales import price_to_sales
+from factors.base.price_to_sales import PRICE_TO_SALES_EXPRESSION_DEFINITION, price_to_sales
 from factors.types import Fact, UnitFamily
 
 _AS_OF = datetime(2026, 7, 1, tzinfo=UTC)
@@ -80,3 +80,43 @@ def test_nonpositive_revenue_is_excluded_not_divided() -> None:
 
     assert result.value is None
     assert result.flags == ["nonpositive_revenue"]
+
+
+def test_qlib_expression_reproduces_the_decimal_result() -> None:
+    """Matrix-compatible cross-check: the pinned Qlib runtime must reproduce
+    the same value as the native Decimal computation above (#21 criterion 3
+    — independent oracle and Qlib adapter agree)."""
+
+    qlib = pytest.importorskip("qlib")
+    del qlib
+    from datetime import date
+
+    from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY, evaluate_expression
+    from truealpha_contracts.qlib_expression import QlibExpressionExecutionBinding
+
+    session = date(2026, 6, 30)
+    panel = {
+        "price": {"e1": (50.0,)},
+        "shares_outstanding": {"e1": (1_000_000.0,)},
+        "revenue": {"e1": (20_000_000.0,)},
+    }
+    binding = QlibExpressionExecutionBinding(
+        version="0.9.7",
+        release_commit="a" * 40,
+        runtime_artifact_sha256="b" * 64,
+        runtime_lock_sha256="c" * 64,
+        adapter_id="factors.qlib_engine.test",
+        adapter_implementation_sha256="d" * 64,
+    )
+
+    _, outputs, _ = evaluate_expression(
+        PRICE_TO_SALES_EXPRESSION_DEFINITION,
+        BUILTIN_OPERATOR_REGISTRY,
+        panel=panel,
+        instruments=("e1",),
+        sessions=(session,),
+        execution_binding=binding,
+    )
+
+    # market_cap = 50 * 1,000,000 = 50,000,000; P/S = 50,000,000 / 20,000,000 = 2.5
+    assert outputs[("e1", session)] == pytest.approx(2.5)
