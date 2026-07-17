@@ -132,9 +132,11 @@ export function decisionAvailability(decision: StrategyRunDecision): Availabilit
 }
 
 function traceId(issuerId: string, cutoffAt: string, corpusSha256: string): string {
+  // Full cutoffAt, not just its date: truncating to YYYY-MM-DD would collide across
+  // multiple same-day cutoffs (Copilot review on #387). Mirrors research_report_fixture.py's
+  // _trace() (#369/#383) so both sides stay byte-identical.
   const corpusPrefix = corpusSha256.slice(0, 12);
-  const date = cutoffAt.slice(0, 10);
-  return `strategy_smoke_fixture:${corpusPrefix}:${issuerId}:${date}`;
+  return `strategy_smoke_fixture:${corpusPrefix}:${issuerId}:${cutoffAt}`;
 }
 
 /** Orders ranked members first (ascending rank), then unranked members by issuer id. */

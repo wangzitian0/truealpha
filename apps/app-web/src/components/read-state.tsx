@@ -41,7 +41,7 @@ export function ReadStateNotice({ state }: { state: ReadState<unknown> }) {
   };
 
   const messages: Record<string, string> = {
-    denied: "Access denied. No verified owner identity for this request.",
+    denied: "Access denied. No owner identity configured for this request.",
     error: state.kind === "error" ? `Error reading the mart: ${state.message}` : "",
     unavailable: state.kind === "unavailable" ? `Unavailable: ${state.reason}` : "",
     empty: "No materialized results for this view yet.",

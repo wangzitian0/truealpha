@@ -24,8 +24,8 @@ export default async function RankingsPage({
           Theme rankings
         </h1>
         <p className="mt-2 text-sm text-gray-400">
-          Purest large-model-value names, ranked from the materialized strategy run. Values are read straight from the
-          mart — not recomputed.
+          Purest large-model-value names, ranked from the materialized strategy run through the mart read adapter —
+          fixture-backed pending #41&apos;s mart-backed read role, not recomputed here.
         </p>
       </div>
 
