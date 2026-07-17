@@ -9,9 +9,7 @@ from factors.types import FactorResult
 from truealpha_contracts.strategy import ThreeTierValuationDefinition
 
 _AS_OF = datetime(2026, 7, 1, tzinfo=UTC)
-_CORPUS_PATH = (
-    Path(__file__).parents[2] / "contracts" / "tests" / "fixtures" / "large_model_value_v0_strategy.v1.json"
-)
+_CORPUS_PATH = Path(__file__).parents[2] / "contracts" / "tests" / "fixtures" / "large_model_value_v0_strategy.v1.json"
 _CORPUS_SHA256 = "0d110a3adc94500cba2bc35d5cd33a788a18bc76ef66895c5625489be6ea50e6"
 
 
