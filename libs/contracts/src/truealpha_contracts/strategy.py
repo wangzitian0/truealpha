@@ -692,13 +692,142 @@ class GoldenDecisionSet(_StrictFrozenModel):
         raise ValueError("no risk-free rate is declared for the requested cutoff")  # pragma: no cover
 
 
+class EvaluationSplitRule(StrEnum):
+    """#71: how history is partitioned into train / validation / reserved.
+    Chronological is the only rule today -- each boundary is a single
+    cutoff, and every instant falls on exactly one side of each.
+    """
+
+    CHRONOLOGICAL_TRAIN_VALIDATION_RESERVE = "chronological_train_validation_reserve"
+
+
+class EvaluationPartition(StrEnum):
+    """The three disjoint partitions #71 requires named separately:
+    `TRAIN` (fits formulas/thresholds/parameters), `VALIDATION` (still
+    in-sample -- chooses among candidate parameter sets, never fits them),
+    and `RESERVED_OUT_OF_SAMPLE` (touched only after the strategy
+    definition is frozen)."""
+
+    TRAIN = "train"
+    VALIDATION = "validation"
+    RESERVED_OUT_OF_SAMPLE = "reserved_out_of_sample"
+
+
+class WalkForwardWindow(_StrictFrozenModel):
+    """Rolling re-evaluation cadence over the reserved window, so a single
+    lucky split cannot pass as general validity (#71's own wording)."""
+
+    window_length_days: int = Field(gt=0)
+    step_days: int = Field(gt=0)
+    minimum_history_days: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_window(self) -> Self:
+        if self.minimum_history_days < self.window_length_days:
+            raise ValueError("minimum history must cover at least one full walk-forward window")
+        if self.step_days > self.window_length_days:
+            raise ValueError("step cannot exceed window length, or evaluation windows would leave gaps")
+        return self
+
+
+class ReportedEvaluationMetric(StrEnum):
+    """What #61's dashboard surfaces per split/window. Deliberately a
+    distinct, lighter vocabulary from research.EvaluationMetric (that type's
+    known_reference_baseline/confidence_level/logical_minimum shape belongs
+    to the sealed-holdout machinery #59's 2026-07-16 decision dropped) --
+    reuses #26's existing coverage/return/drawdown/turnover definitions
+    rather than inventing new performance semantics."""
+
+    COVERAGE = "coverage"
+    ACTIVE_DECISION_RATE = "active_decision_rate"
+    RETURN = "return"
+    DRAWDOWN = "drawdown"
+    TURNOVER = "turnover"
+
+
+class CoreStrategyEvaluationProtocol(_StrictFrozenModel):
+    """#71: the standard out-of-sample evaluation protocol for the Core
+    Strategy, replacing the dropped custodian/freeze/conflict-disclosure
+    process with standard backtest discipline -- train/validation
+    separation, an out-of-sample reserve, walk-forward evaluation.
+
+    Names the train/validation split explicitly, not just an in-sample vs.
+    reserved boundary: `validation_start` marks where fitting stops and
+    candidate-selection-only validation begins, and
+    `out_of_sample_reserve_start` marks where even validation stops and the
+    reserve -- touched only after the definition is frozen -- begins. Three
+    disjoint partitions, not two, per #71's explicit acceptance criterion
+    naming "the train/validation split rule" as distinct from "the
+    out-of-sample reserve."
+
+    This defines the protocol only. Running it against real replay history
+    is separate follow-up work gated on #26 producing enough historical
+    decisions to evaluate (#71's own non-goal) -- an empty or single-run
+    replay has nothing to split.
+    """
+
+    protocol_id: str = Field(default="", pattern=r"^(?:|core-strategy-evaluation-protocol:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    protocol_version: str = Field(pattern=_VERSION_PATTERN)
+    split_rule: EvaluationSplitRule
+    validation_start: datetime
+    out_of_sample_reserve_start: datetime
+    walk_forward: WalkForwardWindow
+    reported_metrics: tuple[ReportedEvaluationMetric, ...] = Field(min_length=1)
+    not_a_profitability_claim: Literal[True]
+
+    @field_validator("protocol_version")
+    @classmethod
+    def reject_mutable_version(cls, value: str) -> str:
+        return _reject_mutable_coordinate(value, "protocol_version")
+
+    @field_validator("validation_start", "out_of_sample_reserve_start")
+    @classmethod
+    def validate_aware_boundaries(cls, value: datetime, info) -> datetime:
+        return _require_aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_and_identify(self) -> Self:
+        if self.validation_start >= self.out_of_sample_reserve_start:
+            raise ValueError("validation_start must strictly precede out_of_sample_reserve_start")
+        metrics = tuple(sorted(set(self.reported_metrics), key=lambda item: item.value))
+        if len(metrics) != len(self.reported_metrics):
+            raise ValueError("reported_metrics must not repeat an entry")
+        object.__setattr__(self, "reported_metrics", metrics)
+        _identify(self, id_field="protocol_id", prefix="core-strategy-evaluation-protocol")
+        return self
+
+    def partition_for(self, as_of: datetime) -> EvaluationPartition:
+        """Disjoint-by-construction: every `as_of` lands in exactly one of
+        three partitions -- never both, never neither. Fails closed (a
+        clear ValueError, not a raw TypeError) on a naive datetime, since
+        `>=` between naive and aware datetimes would otherwise raise an
+        inconsistent, uncontrolled error."""
+
+        as_of = _require_aware(as_of, "as_of")
+        if as_of >= self.out_of_sample_reserve_start:
+            return EvaluationPartition.RESERVED_OUT_OF_SAMPLE
+        if as_of >= self.validation_start:
+            return EvaluationPartition.VALIDATION
+        return EvaluationPartition.TRAIN
+
+    def is_reserved_out_of_sample(self, as_of: datetime) -> bool:
+        """Convenience predicate over `partition_for` for callers that only
+        care about the reserved/not-reserved boundary."""
+
+        return self.partition_for(as_of) is EvaluationPartition.RESERVED_OUT_OF_SAMPLE
+
+
 __all__ = [
     "CapitalAdjustedLaborEfficiencyDefinition",
     "CapitalChargeBase",
     "ConfidenceEligibilityRule",
+    "CoreStrategyEvaluationProtocol",
     "CutoffRiskFreeRate",
     "DecimalQuantization",
     "EqualWeightSizingRule",
+    "EvaluationPartition",
+    "EvaluationSplitRule",
     "ExclusionReason",
     "FactorDimension",
     "FactorUnitSpec",
@@ -713,10 +842,12 @@ __all__ = [
     "PriceToSalesDefinition",
     "ProvisionalTierBand",
     "QuarterlyCutoffSchedule",
+    "ReportedEvaluationMetric",
     "RiskFreeInstrument",
     "RiskFreeRatePolicy",
     "SelectionRule",
     "StrategyEngineBinding",
     "ThreeTierValuationDefinition",
     "ValuationGapRule",
+    "WalkForwardWindow",
 ]
