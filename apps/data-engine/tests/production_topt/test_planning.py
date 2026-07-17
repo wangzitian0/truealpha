@@ -8,6 +8,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contract_repository import PostgresReleaseManifestRepository
 from data_engine.datahub.production_topt import (
     PRODUCTION_CONFIRMATION,
     ManualProductionToptRequest,
@@ -205,8 +206,10 @@ def test_plan_is_exact_deterministic_and_manual_only() -> None:
 
 def test_plan_persistence_is_atomic_and_idempotent(connection) -> None:
     corpus = _corpus()
-    plan = _plan(corpus)
+    release = _release_for_corpus(corpus)
+    plan = _plan(corpus, release=release)
     recorded_at = CUTOFF + timedelta(seconds=1)
+    PostgresReleaseManifestRepository(connection).put(release)
 
     first = persist_manual_production_plan(connection, plan, recorded_at=recorded_at)
     repeated = persist_manual_production_plan(connection, plan, recorded_at=recorded_at)
@@ -219,6 +222,22 @@ def test_plan_persistence_is_atomic_and_idempotent(connection) -> None:
         "select count(*) from raw.capture_checkpoints where run_id = %s",
         (plan.run.run_id,),
     ).fetchone() == (1,)
+    assert connection.execute(
+        "select release_manifest_id from raw.production_topt_run_plans where run_id = %s",
+        (plan.run.run_id,),
+    ).fetchone() == (plan.release_manifest_id,)
+
+
+def test_plan_persistence_rejects_release_that_is_not_durable(connection) -> None:
+    plan = _plan(_corpus())
+
+    with pytest.raises(LookupError, match="release manifest is not durably persisted"):
+        persist_manual_production_plan(connection, plan, recorded_at=CUTOFF + timedelta(seconds=1))
+
+    assert connection.execute(
+        "select count(*) from raw.production_topt_run_plans where run_id = %s",
+        (plan.run.run_id,),
+    ).fetchone() == (0,)
 
 
 @pytest.mark.parametrize(
