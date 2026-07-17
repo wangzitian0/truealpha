@@ -22,14 +22,14 @@ def _v0_definition() -> ThreeTierValuationDefinition:
     return ThreeTierValuationDefinition.model_validate_json(json.dumps(corpus["strategy_definition"]["tier_valuation"]))
 
 
-def _factor_result(name: str, value: str, confidence: str) -> FactorResult:
+def _factor_result(name: str, value: str, confidence: str, data_availability: str = "verified") -> FactorResult:
     return FactorResult(
         factor=name,
         entity_id="e1",
         value=Decimal(value),
         confidence=Decimal(confidence),
         as_of=_AS_OF,
-        data_availability="verified",
+        data_availability=data_availability,
     )
 
 
@@ -120,3 +120,19 @@ def test_confidence_is_the_minimum_of_consumed_inputs() -> None:
     result = three_tier_valuation(inputs, entity_id="e1", as_of=_AS_OF, definition=definition)
 
     assert result.confidence == Decimal("0.4")
+
+
+def test_data_availability_is_verified_only_when_every_consumed_input_is() -> None:
+    """A composite cannot claim stronger verification than what it was built
+    from -- mirrors gross_profit_per_employee's own real-world "unverified"
+    default for this preview round."""
+
+    definition = _v0_definition()
+    inputs = [
+        _factor_result("gross_profit_per_employee", "50000", "0.9", data_availability="unverified"),
+        _factor_result("price_to_sales", "1.0", "0.8", data_availability="verified"),
+    ]
+
+    result = three_tier_valuation(inputs, entity_id="e1", as_of=_AS_OF, definition=definition)
+
+    assert result.data_availability == "unverified"
