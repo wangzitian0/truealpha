@@ -249,7 +249,13 @@ def test_section_rejects_unknown_field() -> None:
 
 # --- Boundary test: no factor computation leaks into the builder (#369 acceptance) ---
 
-_BUILDER_FUNCTIONS = {
+_BUILDER_ENTRY_POINT = "build_research_report"
+# Documents the expected call graph; test_builder_contains_no_arithmetic_or_computation
+# discovers the *actual* transitively-called module-level functions from
+# _BUILDER_ENTRY_POINT and scans exactly that set, so a new helper invoked by the builder
+# is always covered even if this constant is never updated (Copilot review on #383: a
+# hard-coded scan list could be silently bypassed by a new unlisted helper).
+_EXPECTED_BUILDER_FUNCTIONS = {
     "build_research_report",
     "_select_subject",
     "_select_sections",
@@ -268,22 +274,43 @@ def _forbidden_call_name(node: ast.Call) -> str | None:
     return None
 
 
+def _discover_transitively_called_functions(tree: ast.Module, entry_point: str) -> set[str]:
+    """Every module-level function transitively reachable from `entry_point` by name-based
+    calls (`foo(...)`), not `self.foo(...)`/`module.foo(...)` — those are ports/external
+    APIs, not builder helpers to scan."""
+    by_name = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    visited: set[str] = set()
+    pending = [entry_point]
+    while pending:
+        name = pending.pop()
+        if name in visited or name not in by_name:
+            continue
+        visited.add(name)
+        for inner in ast.walk(by_name[name]):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) and inner.func.id in by_name:
+                pending.append(inner.func.id)
+    return visited
+
+
 def test_builder_contains_no_arithmetic_or_computation() -> None:
-    """Statically proves `build_research_report` and its selection helpers copy values
-    through — they never do arithmetic or call a numeric/aggregation primitive."""
+    """Statically proves `build_research_report` and every helper it transitively calls
+    copy values through — they never do arithmetic or call a numeric/aggregation
+    primitive."""
     source = inspect.getsource(research_report)
     tree = ast.parse(source)
-    checked: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef) or node.name not in _BUILDER_FUNCTIONS:
-            continue
-        checked.add(node.name)
+    checked = _discover_transitively_called_functions(tree, _BUILDER_ENTRY_POINT)
+    assert checked == _EXPECTED_BUILDER_FUNCTIONS, (
+        f"builder call graph changed ({checked}); update _EXPECTED_BUILDER_FUNCTIONS after "
+        "confirming the new/removed helper does not need boundary coverage"
+    )
+    by_name = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    for name in checked:
+        node = by_name[name]
         for inner in ast.walk(node):
-            assert not isinstance(inner, _FORBIDDEN_BINOPS), f"{node.name} contains arithmetic {type(inner).__name__}"
-            assert not isinstance(inner, ast.AugAssign), f"{node.name} contains an augmented assignment"
+            assert not isinstance(inner, _FORBIDDEN_BINOPS), f"{name} contains arithmetic {type(inner).__name__}"
+            assert not isinstance(inner, ast.AugAssign), f"{name} contains an augmented assignment"
             if isinstance(inner, ast.UnaryOp) and isinstance(inner.op, (ast.USub, ast.UAdd)):
-                raise AssertionError(f"{node.name} contains unary arithmetic {type(inner.op).__name__}")
+                raise AssertionError(f"{name} contains unary arithmetic {type(inner.op).__name__}")
             if isinstance(inner, ast.Call):
-                name = _forbidden_call_name(inner)
-                assert name is None, f"{node.name} calls forbidden computation primitive {name!r}"
-    assert checked == _BUILDER_FUNCTIONS, f"boundary test did not scan every builder function: {checked}"
+                forbidden = _forbidden_call_name(inner)
+                assert forbidden is None, f"{name} calls forbidden computation primitive {forbidden!r}"
