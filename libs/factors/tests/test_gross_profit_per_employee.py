@@ -1,7 +1,11 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from factors.base.gross_profit_per_employee import gross_profit_per_employee
+import pytest
+from factors.base.gross_profit_per_employee import (
+    GPPE_EXPRESSION_DEFINITION,
+    gross_profit_per_employee,
+)
 from factors.types import Fact
 
 _AS_OF = datetime(2026, 6, 30, tzinfo=UTC)
@@ -94,3 +98,44 @@ def test_data_availability_never_overclaims_verified():
     ]
     result = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     assert result.data_availability == "unverified"
+
+
+def test_qlib_expression_reproduces_the_decimal_result():
+    """Matrix-compatible cross-check: the pinned Qlib runtime must reproduce
+    the same value as the native Decimal computation above (#26 acceptance
+    style — independent oracle and Qlib adapter agree)."""
+
+    qlib = pytest.importorskip("qlib")
+    del qlib
+    from datetime import date
+
+    from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY, evaluate_expression
+    from truealpha_contracts.qlib_expression import QlibExpressionExecutionBinding
+
+    session = date(2026, 6, 30)
+    panel = {
+        "gross_profit": {"issuer.acme": (1_000_000.0,)},
+        "total_assets": {"issuer.acme": (4_000_000.0,)},
+        "risk_free_rate": {"issuer.acme": (0.05,)},
+        "employee_headcount": {"issuer.acme": (100.0,)},
+    }
+    binding = QlibExpressionExecutionBinding(
+        version="0.9.7",
+        release_commit="a" * 40,
+        runtime_artifact_sha256="b" * 64,
+        runtime_lock_sha256="c" * 64,
+        adapter_id="factors.qlib_engine.test",
+        adapter_implementation_sha256="d" * 64,
+    )
+
+    _, outputs, _ = evaluate_expression(
+        GPPE_EXPRESSION_DEFINITION,
+        BUILTIN_OPERATOR_REGISTRY,
+        panel=panel,
+        instruments=("issuer.acme",),
+        sessions=(session,),
+        execution_binding=binding,
+    )
+
+    # real_profit = 1_000_000 - 4_000_000 * 0.05 = 800_000; / 100 headcount = 8_000
+    assert outputs[("issuer.acme", session)] == pytest.approx(8000.0)
