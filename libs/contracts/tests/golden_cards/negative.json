@@ -1,8 +1,8 @@
 {
-  "card_id": "card:025bfc4fa234933a5816412d682b0cdb04b6339ed659d46ea4a57c8e25fa5d25",
+  "card_id": "card:3acd750d7b9231030aab1f7a9936905239ee1d0ff08c2d66f5cc45437f1c48f8",
   "card_kind": "company",
   "cutoff_at": "2026-03-31T23:59:59Z",
-  "generated_from_report_id": "report:7289c2b0a7a629a82cbfbf9ab7bd7cdedf187f5996ceb3344b71274ca392fd47",
+  "generated_from_report_id": "report:8e014ca2bebcc4cea57913cee1fe8648b2cb5107f95622f9e74229dbffdabb26",
   "research_risk_note": "Research hypothesis, not investment advice. Confidence reflects source evidence, not independent formula validation unless marked empirically validated.",
   "schema_version": "research_card.v1",
   "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
@@ -24,7 +24,7 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:shop:2026-03-31",
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-03-31",
             "snapshot_id": null
           },
           "unit": "USD",
@@ -41,7 +41,7 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:shop:2026-03-31",
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-03-31",
             "snapshot_id": null
           },
           "unit": null,
@@ -58,7 +58,7 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:shop:2026-03-31",
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-03-31",
             "snapshot_id": null
           },
           "unit": null,
@@ -75,7 +75,7 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:shop:2026-03-31",
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-03-31",
             "snapshot_id": null
           },
           "unit": null,
@@ -92,7 +92,7 @@
           "trace": {
             "factor_execution_id": null,
             "materialized_output_id": null,
-            "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:shop:2026-03-31",
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:shop:2026-03-31",
             "snapshot_id": null
           },
           "unit": null,
