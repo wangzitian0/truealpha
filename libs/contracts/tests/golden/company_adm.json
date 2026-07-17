@@ -1,7 +1,7 @@
 {
   "cutoff_at": "2026-06-30T23:59:59Z",
   "generated_from": "fixture:research_report.v1",
-  "report_id": "report:1f5bc6c0c62726e4d77e95fcfc7a6d2322b81fddac8ec84f10343bacfe9dad51",
+  "report_id": "report:de93d4cbb95a580533c2864856efa62570c41773e991e2f72eaaa4b6326a850d",
   "report_kind": "company",
   "schema_version": "research_report.v1",
   "subjects": [
@@ -25,7 +25,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": "USD",
@@ -52,7 +52,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": null,
@@ -69,7 +69,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": null,
@@ -86,7 +86,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": null,
@@ -103,7 +103,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": null,
@@ -163,7 +163,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": null,
@@ -180,7 +180,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": null,
@@ -197,7 +197,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": null,
@@ -214,7 +214,7 @@
               "trace": {
                 "factor_execution_id": null,
                 "materialized_output_id": null,
-                "reference_id": "strategy_smoke_fixture:24c786a1e5b1:issuer:adm:2026-06-30",
+                "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30",
                 "snapshot_id": null
               },
               "unit": null,

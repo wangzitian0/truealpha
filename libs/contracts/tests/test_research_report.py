@@ -23,7 +23,8 @@ from truealpha_contracts.research_report import (
     render_report_json,
     render_report_markdown,
 )
-from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
+from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository, _strategy_summary_section
+from truealpha_contracts.strategy_run import StrategyRunDecision, StrategyRunOutcome
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 
 GOLDEN = Path(__file__).parent / "golden"
@@ -135,7 +136,7 @@ def test_company_values_reproduce_strategy_fixture_exactly() -> None:
     assert values["tier"] == decision.tier.value
 
 
-def test_excluded_and_low_confidence_paths_are_explicit() -> None:
+def test_low_confidence_path_is_explicit() -> None:
     report = _build("theme_ranking")
     by_id = {subject.subject_id: subject for subject in report.subjects}
 
@@ -143,9 +144,25 @@ def test_excluded_and_low_confidence_paths_are_explicit() -> None:
     assert ddog.availability is AvailabilityStatus.LOW_CONFIDENCE
     assert ddog.reason_codes == ("below_confidence_floor",)
 
-    jpm = by_id["issuer:jpm"].sections[0]
-    assert jpm.availability is AvailabilityStatus.EXCLUDED
-    assert jpm.reason_codes == ("financial_valuation_not_comparable",)
+
+def test_hard_excluded_path_is_explicit() -> None:
+    """A non-confidence-floor exclusion must render as EXCLUDED with its reason code.
+
+    #381 removed financial-issuer special-casing, so the shared strategy-run fixture no
+    longer contains a naturally-occurring hard-excluded issuer (only below_confidence_floor,
+    which maps to LOW_CONFIDENCE). Constructing the decision directly keeps this mapping
+    branch covered without depending on another lane's fixture content.
+    """
+    decision = StrategyRunDecision(
+        issuer_id="issuer:test-excluded",
+        cutoff_at=CUTOFF,
+        outcome=StrategyRunOutcome.EXCLUDED,
+        eligible=False,
+        exclusion_reason="valuation_inputs_unavailable",
+    )
+    section = _strategy_summary_section(decision, corpus_sha256="0" * 64)
+    assert section.availability is AvailabilityStatus.EXCLUDED
+    assert section.reason_codes == ("valuation_inputs_unavailable",)
 
 
 def test_ranking_is_ordered_and_reproduces_ranks() -> None:
