@@ -42,7 +42,7 @@ Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
 ## DataHub Demand
 
-Factors, strategies, and research modules request long-lived data service through a
+Factors, strategies, and research modules request a long-lived data service through a
 content-addressed, source-neutral demand with a representative sample. See
 [`docs/datahub-service-demand.md`](docs/datahub-service-demand.md) for the contract,
 TOPT example, quality objectives, and the boundary with confidence calibration and

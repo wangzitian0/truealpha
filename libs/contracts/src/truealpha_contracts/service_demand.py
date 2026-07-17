@@ -177,13 +177,16 @@ class SampleAssertion(_FrozenModel):
     requirement_id: str = Field(pattern=r"^data-requirement:[0-9a-f]{64}$")
     field_name: str = Field(pattern=_FIELD_NAME)
     operator: SampleAssertionOperator
-    expected_value: str | int | bool | None = None
+    expected_value: str | bool | None = None
     tolerance: Decimal | None = Field(default=None, gt=0)
 
     @field_validator("expected_value", mode="before")
     @classmethod
     def reject_binary_float(cls, value: Any) -> Any:
-        return _reject_float(value)
+        value = _reject_float(value)
+        if isinstance(value, int) and not isinstance(value, bool):
+            raise ValueError("sample assertion values must use a canonical string representation")
+        return value
 
     @field_validator("tolerance", mode="before")
     @classmethod
@@ -254,7 +257,9 @@ class RepresentativeSampleManifest(_FrozenModel):
         cases = _unique_sorted(self.cases, key=lambda item: item.sample_case_id, label="sample cases")
         artifact_ids = {item.sample_artifact_id for item in artifacts}
         referenced_ids = {item.sample_artifact_id for item in cases}
-        if referenced_ids != artifact_ids:
+        if not referenced_ids <= artifact_ids:
+            raise ValueError("sample cases cannot reference undeclared artifacts")
+        if not artifact_ids <= referenced_ids:
             raise ValueError("every sample artifact must be referenced by at least one case")
         object.__setattr__(self, "artifacts", artifacts)
         object.__setattr__(self, "cases", cases)

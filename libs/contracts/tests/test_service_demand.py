@@ -208,6 +208,39 @@ def test_sample_artifact_rejects_unsafe_or_transport_specific_paths(relative_pat
         )
 
 
+def test_sample_manifest_distinguishes_undeclared_and_unused_artifacts() -> None:
+    demand = _demand()
+    manifest = demand.representative_samples
+    case = manifest.cases[0]
+    undeclared_case = SampleCase(
+        case_name=case.case_name,
+        sample_artifact_id=f"sample-artifact:{'7' * 64}",
+        assertions=case.assertions,
+    )
+
+    with pytest.raises(ValidationError, match="cannot reference undeclared artifacts"):
+        RepresentativeSampleManifest(artifacts=manifest.artifacts, cases=(undeclared_case,))
+
+    unused_artifact = SampleArtifact(
+        artifact_sha256="8" * 64,
+        relative_path="samples/topt/unused.json",
+        media_type="application/json",
+        byte_length=1,
+    )
+    with pytest.raises(ValidationError, match="every sample artifact must be referenced"):
+        RepresentativeSampleManifest(artifacts=(*manifest.artifacts, unused_artifact), cases=manifest.cases)
+
+
+def test_sample_assertion_rejects_noncanonical_integer_representation() -> None:
+    demand = _demand()
+    assertion = demand.representative_samples.cases[0].assertions[0]
+    payload = assertion.model_dump(mode="python", exclude={"sample_assertion_id", "content_sha256"})
+    payload["expected_value"] = 210000000
+
+    with pytest.raises(ValidationError, match="canonical string representation"):
+        SampleAssertion.model_validate(payload)
+
+
 def test_demand_rejects_provider_or_infrastructure_fields() -> None:
     for forbidden_field in ("provider_id", "host", "bucket", "database", "latest"):
         payload = _demand().model_dump(mode="json")
