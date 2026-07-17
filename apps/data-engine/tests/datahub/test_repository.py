@@ -91,7 +91,7 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         semantic_type="market-price",
         semantic_version="market-price:v1",
         subject=obligation.subject,
-        valid_from=STARTED_AT,
+        valid_from=STARTED_AT - timedelta(days=1),
         knowable_at=STARTED_AT,
         source_vintage_id=vintage.source_vintage_id,
         parser_version="yahoo-chart-parser:v1",
@@ -149,6 +149,7 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
     assert repository.put_observation(
         obligation.obligation_id,
         observation,
+        normalized_payload={"close": "175.20"},
         confidence=Decimal("0.95"),
         freshness_state="fresh",
     )
@@ -184,10 +185,18 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         repository.put_observation(
             obligation.obligation_id,
             observation,
+            normalized_payload={"close": "175.20"},
             confidence=Decimal("0.95"),
         )
         is False
     )
+    with pytest.raises(ValueError, match="does not match the observation hash"):
+        repository.put_observation(
+            obligation.obligation_id,
+            observation,
+            normalized_payload={"close": "0"},
+            confidence=Decimal("0.95"),
+        )
     assert repository.put_obligation_result(obligation.obligation_id, obligation_result) is False
     assert repository.put_checkpoint(checkpoint) is False
 

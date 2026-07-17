@@ -9,6 +9,13 @@ from data_engine.datahub.hardening_replay import (
     run_topt_hardening_replay,
 )
 from data_engine.datahub.medium_replay import ToptMediumReplayReport, ToptRunSummary, run_topt_medium_replay
+from data_engine.datahub.production_topt.materialization import (
+    PostgresToptCoreRepository,
+    ToptCoreIdentity,
+    ToptCoreMetaInfo,
+    ToptCoreReadResult,
+    ToptCoreSnapshot,
+)
 from data_engine.datahub.repository import (
     CaptureRepositoryConflictError,
     PostgresCaptureControlRepository,
@@ -35,10 +42,15 @@ __all__ = [
     "HardeningResourceObservation",
     "HardeningScopeMetric",
     "PostgresCaptureControlRepository",
+    "PostgresToptCoreRepository",
     "TinyReplayReport",
     "ToptHardeningReplayReport",
     "ToptCaptureMetaInfo",
     "ToptCaptureStatus",
+    "ToptCoreIdentity",
+    "ToptCoreMetaInfo",
+    "ToptCoreReadResult",
+    "ToptCoreSnapshot",
     "ToptMediumReplayReport",
     "ToptRunSummary",
     "build_recapture_plan",
