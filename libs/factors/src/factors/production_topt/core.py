@@ -348,6 +348,88 @@ class ToptCoreSnapshotInput(_FrozenModel):
         return self
 
 
+class ToptGppeResult(_FrozenModel):
+    """Materialized module-2 output consumed by the tier composite."""
+
+    result_id: str = Field(default="", pattern=r"^(?:|topt-gppe-result:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    invocation_id: str = Field(pattern=r"^topt-gppe-invocation:[0-9a-f]{64}$")
+    snapshot_id: str = Field(pattern=r"^topt-core-snapshot:[0-9a-f]{64}$")
+    run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
+    release_manifest_id: str = Field(pattern=_CONTENT_ID_PATTERN)
+    universe_id: str
+    universe_version: str
+    universe_sha256: str = Field(pattern=_SHA256_PATTERN)
+    cutoff: datetime
+    issuer_id: str
+    instrument_id: str
+    listing_id: str
+    operating_branch: OperatingBranch
+    operating_metric: OperatingEfficiencyMetric
+    availability: ToptCoreAvailability
+    operating_efficiency: Decimal | None = None
+    capital_adjusted_gross_profit: Decimal | None = None
+    gppe: Decimal | None = None
+    confidence: Decimal = Field(ge=0, le=1)
+    freshness: MetricFreshness
+    reason_codes: tuple[ToptCoreReasonCode, ...] = ()
+    input_observation_ids: tuple[str, ...]
+    gppe_definition_id: str = Field(pattern=r"^gppe-definition:[0-9a-f]{64}$")
+    gppe_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("cutoff")
+    @classmethod
+    def normalize_cutoff(cls, value: datetime) -> datetime:
+        return _aware_utc(value, "cutoff")
+
+    @field_validator(
+        "operating_efficiency",
+        "capital_adjusted_gross_profit",
+        "gppe",
+        "confidence",
+        mode="before",
+    )
+    @classmethod
+    def reject_binary_float(cls, value: Any) -> Any:
+        return _decimal_input(value)
+
+    @model_validator(mode="after")
+    def validate_and_identify(self) -> Self:
+        if self.availability is ToptCoreAvailability.AVAILABLE:
+            nonfinancial = (
+                self.operating_branch is OperatingBranch.NON_FINANCIAL
+                and self.operating_metric is OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
+                and self.operating_efficiency is not None
+                and self.capital_adjusted_gross_profit is not None
+                and self.gppe is not None
+            )
+            financial = (
+                self.operating_branch is OperatingBranch.FINANCIAL
+                and self.operating_metric is OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE
+                and self.operating_efficiency is not None
+                and self.capital_adjusted_gross_profit is None
+                and self.gppe is None
+            )
+            if not (nonfinancial or financial) or self.reason_codes:
+                raise ValueError("available GPPE result carries invalid branch values")
+        elif (
+            self.operating_efficiency is not None
+            or self.capital_adjusted_gross_profit is not None
+            or self.gppe is not None
+            or not self.reason_codes
+        ):
+            raise ValueError("unavailable GPPE result carries computed values")
+        for field_name in ("operating_efficiency", "capital_adjusted_gross_profit", "gppe"):
+            value = getattr(self, field_name)
+            if value is not None:
+                if not value.is_finite():
+                    raise ValueError("GPPE result decimals must be finite")
+                object.__setattr__(self, field_name, _normalize_decimal(value))
+        object.__setattr__(self, "reason_codes", tuple(sorted(set(self.reason_codes), key=str)))
+        _identify(self, id_field="result_id", prefix="topt-gppe-result")
+        return self
+
+
 class ToptCoreResult(_FrozenModel):
     result_id: str = Field(default="", pattern=r"^(?:|topt-core-result:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
@@ -378,6 +460,8 @@ class ToptCoreResult(_FrozenModel):
     freshness: MetricFreshness
     reason_codes: tuple[ToptCoreReasonCode, ...] = ()
     input_observation_ids: tuple[str, ...]
+    gppe_invocation_id: str = Field(pattern=r"^topt-gppe-invocation:[0-9a-f]{64}$")
+    gppe_result_id: str = Field(pattern=r"^topt-gppe-result:[0-9a-f]{64}$")
     gppe_definition_id: str = Field(pattern=r"^gppe-definition:[0-9a-f]{64}$")
     gppe_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
     tier_definition_id: str = Field(pattern=r"^three-tier-definition:[0-9a-f]{64}$")
@@ -468,23 +552,28 @@ def _tier_band(value: Decimal, definition: ThreeTierV0Definition) -> TierBandDef
     raise AssertionError("validated tier definition does not cover GPPE")
 
 
-def _unavailable(
+def _snapshot_freshness(snapshot: ToptCoreSnapshotInput) -> MetricFreshness:
+    if any(cell.freshness is MetricFreshness.STALE for cell in snapshot.cell_inputs):
+        return MetricFreshness.STALE
+    if any(cell.freshness is MetricFreshness.UNKNOWN for cell in snapshot.cell_inputs):
+        return MetricFreshness.UNKNOWN
+    return MetricFreshness.FRESH
+
+
+def _unavailable_gppe(
     snapshot: ToptCoreSnapshotInput,
     *,
     invocation_id: str,
     gppe_definition: GppeV0Definition,
-    tier_definition: ThreeTierV0Definition,
     reasons: tuple[ToptCoreReasonCode, ...],
     freshness: MetricFreshness,
-    confidence: Decimal = Decimal("0"),
-    operating_efficiency: Decimal | None = None,
-) -> ToptCoreResult:
+) -> ToptGppeResult:
     operating_metric = (
         OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE
         if snapshot.operating_branch is OperatingBranch.FINANCIAL
         else OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
     )
-    return ToptCoreResult(
+    return ToptGppeResult(
         invocation_id=invocation_id,
         snapshot_id=snapshot.snapshot_id,
         run_id=snapshot.run_id,
@@ -499,29 +588,25 @@ def _unavailable(
         operating_branch=snapshot.operating_branch,
         operating_metric=operating_metric,
         availability=ToptCoreAvailability.UNAVAILABLE,
-        operating_efficiency=operating_efficiency,
-        confidence=confidence,
+        confidence=Decimal("0"),
         freshness=freshness,
         reason_codes=reasons,
         input_observation_ids=snapshot.observation_ids,
         gppe_definition_id=gppe_definition.definition_id,
         gppe_definition_sha256=gppe_definition.content_sha256,
-        tier_definition_id=tier_definition.definition_id,
-        tier_definition_sha256=tier_definition.content_sha256,
     )
 
 
-def compute_topt_core(
+def compute_topt_gppe(
     snapshot: ToptCoreSnapshotInput,
     *,
     invocation_id: str,
     gppe_definition: GppeV0Definition,
-    tier_definition: ThreeTierV0Definition,
-) -> ToptCoreResult:
-    """Compute one issuer result without source, storage, or provenance branching."""
+) -> ToptGppeResult:
+    """Compute the module-2 base output without invoking the tier composite."""
 
-    if not invocation_id.startswith("topt-core-invocation:"):
-        raise ValueError("invocation_id must be a content-addressed TOPT core invocation")
+    if not invocation_id.startswith("topt-gppe-invocation:"):
+        raise ValueError("invocation_id must be a content-addressed TOPT GPPE invocation")
     inputs = {ToptCoreReasonCode.MISSING_HEADCOUNT: snapshot.headcount}
     if snapshot.operating_branch is OperatingBranch.FINANCIAL:
         inputs[ToptCoreReasonCode.MISSING_PRE_PROVISION_PROFIT] = snapshot.pre_provision_profit
@@ -530,7 +615,6 @@ def compute_topt_core(
             {
                 ToptCoreReasonCode.MISSING_GROSS_PROFIT: snapshot.gross_profit,
                 ToptCoreReasonCode.MISSING_TOTAL_ASSETS: snapshot.total_assets,
-                ToptCoreReasonCode.MISSING_REVENUE: snapshot.revenue,
             }
         )
     reasons = tuple(
@@ -538,36 +622,16 @@ def compute_topt_core(
         for reason, metric in inputs.items()
         if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None
     )
-    if snapshot.operating_branch is OperatingBranch.NON_FINANCIAL:
-        if any(
-            component.shares_outstanding.availability is MetricAvailability.UNAVAILABLE
-            or component.shares_outstanding.value is None
-            for component in snapshot.market_value_components
-        ):
-            reasons = (*reasons, ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING)
-        if any(
-            component.market_price.availability is MetricAvailability.UNAVAILABLE
-            or component.market_price.value is None
-            for component in snapshot.market_value_components
-        ):
-            reasons = (*reasons, ToptCoreReasonCode.MISSING_MARKET_PRICE)
-    freshness = (
-        MetricFreshness.STALE
-        if any(cell.freshness is MetricFreshness.STALE for cell in snapshot.cell_inputs)
-        else MetricFreshness.UNKNOWN
-        if any(cell.freshness is MetricFreshness.UNKNOWN for cell in snapshot.cell_inputs)
-        else MetricFreshness.FRESH
-    )
+    freshness = _snapshot_freshness(snapshot)
     if freshness is MetricFreshness.STALE:
         reasons = (*reasons, ToptCoreReasonCode.STALE_INPUT)
     elif freshness is MetricFreshness.UNKNOWN:
         reasons = (*reasons, ToptCoreReasonCode.UNKNOWN_FRESHNESS)
     if reasons:
-        return _unavailable(
+        return _unavailable_gppe(
             snapshot,
             invocation_id=invocation_id,
             gppe_definition=gppe_definition,
-            tier_definition=tier_definition,
             reasons=tuple(reasons),
             freshness=freshness,
         )
@@ -577,26 +641,11 @@ def compute_topt_core(
     invalid_reasons: list[ToptCoreReasonCode] = []
     if snapshot.headcount.value <= 0:
         invalid_reasons.append(ToptCoreReasonCode.NONPOSITIVE_HEADCOUNT)
-    if snapshot.operating_branch is OperatingBranch.NON_FINANCIAL:
-        assert snapshot.revenue is not None and snapshot.revenue.value is not None
-        if snapshot.revenue.value <= 0:
-            invalid_reasons.append(ToptCoreReasonCode.NONPOSITIVE_REVENUE)
-        if any(
-            component.shares_outstanding.value is not None and component.shares_outstanding.value <= 0
-            for component in snapshot.market_value_components
-        ):
-            invalid_reasons.append(ToptCoreReasonCode.NONPOSITIVE_SHARES_OUTSTANDING)
-        if any(
-            component.market_price.value is not None and component.market_price.value <= 0
-            for component in snapshot.market_value_components
-        ):
-            invalid_reasons.append(ToptCoreReasonCode.NONPOSITIVE_MARKET_PRICE)
     if invalid_reasons:
-        return _unavailable(
+        return _unavailable_gppe(
             snapshot,
             invocation_id=invocation_id,
             gppe_definition=gppe_definition,
-            tier_definition=tier_definition,
             reasons=tuple(invalid_reasons),
             freshness=freshness,
         )
@@ -606,36 +655,35 @@ def compute_topt_core(
         assert snapshot.pre_provision_profit is not None and snapshot.pre_provision_profit.value is not None
         with localcontext(_DECIMAL_CONTEXT):
             financial_efficiency = snapshot.pre_provision_profit.value / snapshot.headcount.value
-        return _unavailable(
-            snapshot,
+        return ToptGppeResult(
             invocation_id=invocation_id,
-            gppe_definition=gppe_definition,
-            tier_definition=tier_definition,
-            reasons=(ToptCoreReasonCode.FINANCIAL_VALUATION_NOT_COMPARABLE,),
-            freshness=freshness,
-            confidence=confidence,
+            snapshot_id=snapshot.snapshot_id,
+            run_id=snapshot.run_id,
+            release_manifest_id=snapshot.release_manifest_id,
+            universe_id=snapshot.universe_id,
+            universe_version=snapshot.universe_version,
+            universe_sha256=snapshot.universe_sha256,
+            cutoff=snapshot.cutoff,
+            issuer_id=snapshot.issuer_id,
+            instrument_id=snapshot.instrument_id,
+            listing_id=snapshot.listing_id,
+            operating_branch=snapshot.operating_branch,
+            operating_metric=OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE,
+            availability=ToptCoreAvailability.AVAILABLE,
             operating_efficiency=financial_efficiency,
+            confidence=confidence,
+            freshness=freshness,
+            input_observation_ids=snapshot.observation_ids,
+            gppe_definition_id=gppe_definition.definition_id,
+            gppe_definition_sha256=gppe_definition.content_sha256,
         )
 
     assert snapshot.gross_profit is not None and snapshot.gross_profit.value is not None
     assert snapshot.total_assets is not None and snapshot.total_assets.value is not None
-    assert snapshot.revenue is not None and snapshot.revenue.value is not None
-    for component in snapshot.market_value_components:
-        assert component.market_price.value is not None
-        assert component.shares_outstanding.value is not None
     with localcontext(_DECIMAL_CONTEXT):
         capital_adjusted = snapshot.gross_profit.value - (snapshot.total_assets.value * gppe_definition.risk_free_rate)
         gppe = capital_adjusted / snapshot.headcount.value
-        market_cap = Decimal("0")
-        for component in snapshot.market_value_components:
-            assert component.market_price.value is not None
-            assert component.shares_outstanding.value is not None
-            market_cap += component.market_price.value * component.shares_outstanding.value
-        current_ps = market_cap / snapshot.revenue.value
-        band = _tier_band(gppe, tier_definition)
-        midpoint = (band.target_ps_lower + band.target_ps_upper) / Decimal("2")
-        valuation_gap = midpoint / current_ps - Decimal("1")
-    return ToptCoreResult(
+    return ToptGppeResult(
         invocation_id=invocation_id,
         snapshot_id=snapshot.snapshot_id,
         run_id=snapshot.run_id,
@@ -653,17 +701,183 @@ def compute_topt_core(
         operating_efficiency=gppe,
         capital_adjusted_gross_profit=capital_adjusted,
         gppe=gppe,
+        confidence=confidence,
+        freshness=freshness,
+        input_observation_ids=snapshot.observation_ids,
+        gppe_definition_id=gppe_definition.definition_id,
+        gppe_definition_sha256=gppe_definition.content_sha256,
+    )
+
+
+def _validate_gppe_lineage(snapshot: ToptCoreSnapshotInput, gppe_result: ToptGppeResult) -> None:
+    expected = (
+        snapshot.snapshot_id,
+        snapshot.run_id,
+        snapshot.release_manifest_id,
+        snapshot.universe_id,
+        snapshot.universe_version,
+        snapshot.universe_sha256,
+        snapshot.cutoff,
+        snapshot.issuer_id,
+        snapshot.instrument_id,
+        snapshot.listing_id,
+        snapshot.observation_ids,
+    )
+    actual = (
+        gppe_result.snapshot_id,
+        gppe_result.run_id,
+        gppe_result.release_manifest_id,
+        gppe_result.universe_id,
+        gppe_result.universe_version,
+        gppe_result.universe_sha256,
+        gppe_result.cutoff,
+        gppe_result.issuer_id,
+        gppe_result.instrument_id,
+        gppe_result.listing_id,
+        gppe_result.input_observation_ids,
+    )
+    if actual != expected:
+        raise ValueError("tier composite GPPE input does not match its exact snapshot member")
+
+
+def _unavailable_core(
+    snapshot: ToptCoreSnapshotInput,
+    gppe_result: ToptGppeResult,
+    *,
+    invocation_id: str,
+    tier_definition: ThreeTierV0Definition,
+    reasons: tuple[ToptCoreReasonCode, ...],
+    operating_efficiency: Decimal | None = None,
+) -> ToptCoreResult:
+    return ToptCoreResult(
+        invocation_id=invocation_id,
+        snapshot_id=snapshot.snapshot_id,
+        run_id=snapshot.run_id,
+        release_manifest_id=snapshot.release_manifest_id,
+        universe_id=snapshot.universe_id,
+        universe_version=snapshot.universe_version,
+        universe_sha256=snapshot.universe_sha256,
+        cutoff=snapshot.cutoff,
+        issuer_id=snapshot.issuer_id,
+        instrument_id=snapshot.instrument_id,
+        listing_id=snapshot.listing_id,
+        operating_branch=gppe_result.operating_branch,
+        operating_metric=gppe_result.operating_metric,
+        availability=ToptCoreAvailability.UNAVAILABLE,
+        operating_efficiency=operating_efficiency,
+        confidence=gppe_result.confidence,
+        freshness=gppe_result.freshness,
+        reason_codes=reasons,
+        input_observation_ids=snapshot.observation_ids,
+        gppe_invocation_id=gppe_result.invocation_id,
+        gppe_result_id=gppe_result.result_id,
+        gppe_definition_id=gppe_result.gppe_definition_id,
+        gppe_definition_sha256=gppe_result.gppe_definition_sha256,
+        tier_definition_id=tier_definition.definition_id,
+        tier_definition_sha256=tier_definition.content_sha256,
+    )
+
+
+def compute_topt_core(
+    snapshot: ToptCoreSnapshotInput,
+    gppe_result: ToptGppeResult,
+    *,
+    invocation_id: str,
+    tier_definition: ThreeTierV0Definition,
+) -> ToptCoreResult:
+    """Compute module 7 from an exact materialized module-2 result."""
+
+    if not invocation_id.startswith("topt-core-invocation:"):
+        raise ValueError("invocation_id must be a content-addressed TOPT core invocation")
+    _validate_gppe_lineage(snapshot, gppe_result)
+    if gppe_result.availability is ToptCoreAvailability.UNAVAILABLE:
+        return _unavailable_core(
+            snapshot,
+            gppe_result,
+            invocation_id=invocation_id,
+            tier_definition=tier_definition,
+            reasons=gppe_result.reason_codes,
+        )
+    if gppe_result.operating_branch is OperatingBranch.FINANCIAL:
+        return _unavailable_core(
+            snapshot,
+            gppe_result,
+            invocation_id=invocation_id,
+            tier_definition=tier_definition,
+            reasons=(ToptCoreReasonCode.FINANCIAL_VALUATION_NOT_COMPARABLE,),
+            operating_efficiency=gppe_result.operating_efficiency,
+        )
+
+    reasons: list[ToptCoreReasonCode] = []
+    if snapshot.revenue is None or snapshot.revenue.value is None:
+        reasons.append(ToptCoreReasonCode.MISSING_REVENUE)
+    elif snapshot.revenue.value <= 0:
+        reasons.append(ToptCoreReasonCode.NONPOSITIVE_REVENUE)
+    share_values = tuple(component.shares_outstanding.value for component in snapshot.market_value_components)
+    if any(value is None for value in share_values):
+        reasons.append(ToptCoreReasonCode.MISSING_SHARES_OUTSTANDING)
+    elif any(value <= 0 for value in share_values if value is not None):
+        reasons.append(ToptCoreReasonCode.NONPOSITIVE_SHARES_OUTSTANDING)
+    price_values = tuple(component.market_price.value for component in snapshot.market_value_components)
+    if any(value is None for value in price_values):
+        reasons.append(ToptCoreReasonCode.MISSING_MARKET_PRICE)
+    elif any(value <= 0 for value in price_values if value is not None):
+        reasons.append(ToptCoreReasonCode.NONPOSITIVE_MARKET_PRICE)
+    if reasons:
+        return _unavailable_core(
+            snapshot,
+            gppe_result,
+            invocation_id=invocation_id,
+            tier_definition=tier_definition,
+            reasons=tuple(reasons),
+        )
+
+    assert gppe_result.gppe is not None and gppe_result.capital_adjusted_gross_profit is not None
+    assert snapshot.revenue is not None and snapshot.revenue.value is not None
+    with localcontext(_DECIMAL_CONTEXT):
+        market_cap = sum(
+            (
+                component.market_price.value * component.shares_outstanding.value
+                for component in snapshot.market_value_components
+                if component.market_price.value is not None and component.shares_outstanding.value is not None
+            ),
+            start=Decimal("0"),
+        )
+        current_ps = market_cap / snapshot.revenue.value
+        band = _tier_band(gppe_result.gppe, tier_definition)
+        midpoint = (band.target_ps_lower + band.target_ps_upper) / Decimal("2")
+        valuation_gap = midpoint / current_ps - Decimal("1")
+    return ToptCoreResult(
+        invocation_id=invocation_id,
+        snapshot_id=snapshot.snapshot_id,
+        run_id=snapshot.run_id,
+        release_manifest_id=snapshot.release_manifest_id,
+        universe_id=snapshot.universe_id,
+        universe_version=snapshot.universe_version,
+        universe_sha256=snapshot.universe_sha256,
+        cutoff=snapshot.cutoff,
+        issuer_id=snapshot.issuer_id,
+        instrument_id=snapshot.instrument_id,
+        listing_id=snapshot.listing_id,
+        operating_branch=gppe_result.operating_branch,
+        operating_metric=gppe_result.operating_metric,
+        availability=ToptCoreAvailability.AVAILABLE,
+        operating_efficiency=gppe_result.operating_efficiency,
+        capital_adjusted_gross_profit=gppe_result.capital_adjusted_gross_profit,
+        gppe=gppe_result.gppe,
         tier=band.tier,
         target_ps_lower=band.target_ps_lower,
         target_ps_upper=band.target_ps_upper,
         target_ps_midpoint=midpoint,
         current_ps=current_ps,
         valuation_gap=valuation_gap,
-        confidence=confidence,
-        freshness=freshness,
+        confidence=min(gppe_result.confidence, *(cell.confidence for cell in snapshot.cell_inputs)),
+        freshness=gppe_result.freshness,
         input_observation_ids=snapshot.observation_ids,
-        gppe_definition_id=gppe_definition.definition_id,
-        gppe_definition_sha256=gppe_definition.content_sha256,
+        gppe_invocation_id=gppe_result.invocation_id,
+        gppe_result_id=gppe_result.result_id,
+        gppe_definition_id=gppe_result.gppe_definition_id,
+        gppe_definition_sha256=gppe_result.gppe_definition_sha256,
         tier_definition_id=tier_definition.definition_id,
         tier_definition_sha256=tier_definition.content_sha256,
     )

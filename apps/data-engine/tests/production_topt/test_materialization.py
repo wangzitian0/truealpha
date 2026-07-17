@@ -100,7 +100,11 @@ def _source_request(obligation, *, ordinal: int) -> SourceRequest:
     )
 
 
-def _seed_complete_production_run(connection):
+def _seed_complete_production_run(
+    connection,
+    *,
+    stale_unchanged_first_observation: bool = False,
+):
     corpus = json.loads(CORPUS.read_text())
     denominator = corpus["topt_denominator"]
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
@@ -206,12 +210,14 @@ def _seed_complete_production_run(connection):
         )
         ledger = AttemptLedger(work_item_id=work_item.work_item_id, retry_policy=policy.retry)
         attempt = ledger.start(started_at=CUTOFF - timedelta(hours=1))
+        unchanged = stale_unchanged_first_observation and ordinal == 0
         attempt_result = ledger.finish(
             attempt=attempt,
             completed_at=CUTOFF - timedelta(minutes=59),
-            outcome=FetchAttemptOutcome.SUCCESS,
+            outcome=FetchAttemptOutcome.UNCHANGED if unchanged else FetchAttemptOutcome.SUCCESS,
             status_code=200,
-            source_vintage_id=vintage.source_vintage_id,
+            source_vintage_id=None if unchanged else vintage.source_vintage_id,
+            reused_source_vintage_id=vintage.source_vintage_id if unchanged else None,
         )
         observation = NormalizedObservation(
             semantic_type=semantic_type,
@@ -219,7 +225,7 @@ def _seed_complete_production_run(connection):
             subject=obligation.subject,
             valid_from=CUTOFF - timedelta(days=2),
             valid_to=CUTOFF - timedelta(days=2),
-            knowable_at=CUTOFF - timedelta(minutes=58),
+            knowable_at=CUTOFF - (timedelta(days=3) if unchanged else timedelta(minutes=58)),
             source_vintage_id=vintage.source_vintage_id,
             parser_version="production-topt-integration-parser:v1",
             mapping_version="production-topt-integration-map:v1",
@@ -227,10 +233,10 @@ def _seed_complete_production_run(connection):
         )
         terminal = ListObligationResult(
             obligation_id=obligation.obligation.obligation_id,
-            terminal_state=ObligationTerminalState.SUCCESS,
+            terminal_state=(ObligationTerminalState.UNCHANGED if unchanged else ObligationTerminalState.SUCCESS),
             completed_at=CUTOFF - timedelta(minutes=57),
             final_attempt_id=attempt.attempt_id,
-            reason_codes=("success",),
+            reason_codes=("unchanged" if unchanged else "success",),
         )
         repository.put_attempt(attempt)
         repository.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id)
@@ -442,7 +448,21 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     reads = repository.results(identity)
     meta_info = repository.meta_info(identity)
     assert len(reads) == len(meta_info) == 20
+    assert all(item.gppe_invocation_id == results[0].gppe_invocation_id for item in reads)
+    assert {item.gppe_result_id for item in reads} == {item.gppe_result_id for item in results}
     assert sorted(len(item.lineage) for item in meta_info) == [4] * 19 + [8]
+    assert connection.execute("select count(*) from mart.topt_gppe_invocations").fetchone() == (1,)
+    assert connection.execute("select count(*) from mart.topt_gppe_results").fetchone() == (20,)
+    assert connection.execute(
+        """
+        select count(*)
+        from mart.topt_core_results core
+        join mart.topt_gppe_results gppe on gppe.result_id = core.gppe_result_id
+        where gppe.invocation_id = core.gppe_invocation_id
+          and gppe.snapshot_id = core.snapshot_id
+          and gppe.issuer_id = core.issuer_id
+        """
+    ).fetchone() == (20,)
     assert (
         repository.results(ToptCoreIdentity(**{**identity.__dict__, "snapshot_id": f"topt-core-snapshot:{'0' * 64}"}))
         == ()
@@ -460,6 +480,9 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (89,)
     assert connection.execute("select count(*) from staging.topt_core_snapshot_members").fetchone() == (20,)
 
+    corrupt_payload = results[0].model_dump(mode="json", exclude={"result_id", "content_sha256"})
+    corrupt_payload["gppe_result_id"] = results[1].gppe_result_id
+    corrupt_sha256 = canonical_sha256(corrupt_payload)
     with pytest.raises(psycopg.errors.CheckViolation, match="does not match its invocation"), connection.transaction():
         connection.execute(
             """
@@ -471,23 +494,31 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
                 capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
                 target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
                 confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
                 gppe_definition_id, gppe_definition_sha256,
                 tier_definition_id, tier_definition_sha256, payload
             )
             select
-                result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                %s, %s, invocation_id, snapshot_id, run_id,
                 release_manifest_id, universe_id, universe_version, universe_sha256,
                 cutoff, issuer_id, instrument_id, listing_id, operating_branch,
                 operating_metric, availability, operating_efficiency,
                 capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
                 target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                0, freshness, reason_codes, input_observation_ids,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, %s,
                 gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, payload
+                tier_definition_id, tier_definition_sha256, %s
             from mart.topt_core_results where result_id = %s
             on conflict (result_id) do nothing
             """,
-            (results[0].result_id,),
+            (
+                f"topt-core-result:{corrupt_sha256}",
+                corrupt_sha256,
+                results[1].gppe_result_id,
+                psycopg.types.json.Jsonb(corrupt_payload),
+                results[0].result_id,
+            ),
         )
 
     with pytest.raises(psycopg.errors.RaiseException, match="append-only"), connection.transaction():
@@ -495,6 +526,42 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
             "update mart.topt_core_results set confidence = 0 where result_id = %s",
             (results[0].result_id,),
         )
+
+
+def test_snapshot_recomputes_freshness_for_unchanged_observation_at_cutoff(connection) -> None:
+    (
+        _,
+        run,
+        _,
+        release_manifest_id,
+        terminal_observation_id,
+        _,
+        _,
+    ) = _seed_complete_production_run(connection, stale_unchanged_first_observation=True)
+
+    stored, projected = connection.execute(
+        """
+        select observation.freshness_state, meta.freshness_state
+        from staging.capture_normalized_observations observation
+        join mart.topt_capture_meta_info meta using (observation_id)
+        where observation.observation_id = %s
+        """,
+        (terminal_observation_id,),
+    ).fetchone()
+    assert stored == "fresh"
+    assert projected == "stale"
+
+    repository = PostgresToptCoreRepository(connection)
+    snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    selected_cells = [
+        cell for member in snapshot.members for cell in member.cell_inputs if cell.input_id == terminal_observation_id
+    ]
+    assert len(selected_cells) == 1
+    assert selected_cells[0].freshness.value == "stale"
+    results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    affected = next(result for result in results if terminal_observation_id in result.input_observation_ids)
+    assert affected.availability is ToptCoreAvailability.UNAVAILABLE
+    assert tuple(reason.value for reason in affected.reason_codes) == ("stale_input",)
 
 
 def test_snapshot_rejects_ambiguous_mapping_for_terminal_source_vintage(connection) -> None:

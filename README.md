@@ -49,8 +49,11 @@ uv run --package truealpha-data-engine python \
   --confirmation 'MATERIALIZE PRODUCTION TOPT CORE'
 ```
 
-The command prints the immutable `snapshot_id` and definition/invocation identities.
-Downstream reads must supply those exact identities; no `latest` read exists:
+The command first persists the 20 issuer-level GPPE module-2 outputs, reloads those
+immutable outputs, and then persists the tier composite with an exact
+`gppe_invocation_id`/`gppe_result_id` lineage edge. It prints the immutable
+`snapshot_id` and both base/composite invocation identities. Downstream reads must
+supply the exact composite identities; no `latest` read exists:
 
 ```bash
 uv run --package truealpha-data-engine python \
@@ -67,7 +70,10 @@ uv run --package truealpha-data-engine python \
 
 Use `--read status` or `--read meta_info` with the run ID for capture progress,
 and `--read core_meta_info` with the exact core identities for issuer-level lineage
-(four cells per listing, eight for an issuer with two share classes).
+(four cells per listing, eight for an issuer with two share classes), including the
+materialized GPPE invocation and result identities. Observation freshness in both
+snapshot and meta reads is recomputed at the run cutoff from the bound schedule
+policy; an `unchanged` reuse cannot preserve an earlier fresh classification.
 These commands are manual-only and do not register or activate a schedule.
 
 ## Deployment

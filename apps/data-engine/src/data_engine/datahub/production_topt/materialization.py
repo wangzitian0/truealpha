@@ -16,9 +16,11 @@ from factors.production_topt import (
     ToptCellQualityInput,
     ToptCoreResult,
     ToptCoreSnapshotInput,
+    ToptGppeResult,
     ToptMarketValueComponent,
     ToptMetricInput,
     compute_topt_core,
+    compute_topt_gppe,
 )
 from psycopg import Connection
 from psycopg.types.json import Jsonb
@@ -257,6 +259,8 @@ class ToptCoreReadResult:
     confidence: Decimal
     freshness: str
     reason_codes: tuple[str, ...]
+    gppe_invocation_id: str
+    gppe_result_id: str
     gppe_definition_id: str
     gppe_definition_sha256: str
     tier_definition_id: str
@@ -279,6 +283,8 @@ class ToptCoreMetaInfo:
     instrument_id: str
     listing_id: str
     input_observation_ids: tuple[str, ...]
+    gppe_invocation_id: str
+    gppe_result_id: str
     gppe_definition_id: str
     gppe_definition_sha256: str
     tier_definition_id: str
@@ -421,7 +427,10 @@ class PostgresToptCoreRepository:
                     obligation.capture_requirement_id,
                     observation.observation_id,
                     observation.confidence,
-                    observation.freshness_state,
+                    case
+                        when %s - observation.knowable_at <= policy.freshness_max_age then 'fresh'
+                        else 'stale'
+                    end as cutoff_freshness_state,
                     observation.knowable_at,
                     payload.normalized_payload,
                     count(*) over (
@@ -445,6 +454,7 @@ class PostgresToptCoreRepository:
                 join raw.capture_obligation_work_bindings binding
                   on binding.obligation_id = obligation.obligation_id
                 join raw.capture_work_items work using (work_item_id)
+                join raw.capture_schedule_policies policy using (schedule_policy_id)
                 join raw.capture_source_vintages vintage
                   on vintage.source_vintage_id = observation.source_vintage_id
                  and vintage.source_request_id = work.source_request_id
@@ -468,12 +478,12 @@ class PostgresToptCoreRepository:
             )
             select obligation_id, subject_id,
                    regexp_replace(capture_requirement_id, ':v1$', ''),
-                   observation_id, confidence, freshness_state, knowable_at,
+                   observation_id, confidence, cutoff_freshness_state, knowable_at,
                    normalized_payload, selection_count
             from selected where selection_rank = 1
             order by subject_id, capture_requirement_id
             """,
-            (run_id, cutoff),
+            (cutoff, run_id, cutoff),
         ).fetchall()
         ambiguous = [row[0] for row in rows if row[8] != 1]
         if ambiguous:
@@ -646,38 +656,91 @@ class PostgresToptCoreRepository:
         tier_definition: ThreeTierV0Definition | None = None,
     ) -> tuple[ToptCoreResult, ...]:
         tier_definition = tier_definition or ThreeTierV0Definition()
-        invocation_payload = {
+        factor_inputs = snapshot.factor_inputs()
+        gppe_invocation_payload = {
             "snapshot_id": snapshot.snapshot_id,
             "gppe_definition": gppe_definition.model_dump(mode="json"),
+        }
+        gppe_invocation_sha256 = canonical_sha256(gppe_invocation_payload)
+        gppe_invocation_id = f"topt-gppe-invocation:{gppe_invocation_sha256}"
+        gppe_results = tuple(
+            compute_topt_gppe(
+                factor_input,
+                invocation_id=gppe_invocation_id,
+                gppe_definition=gppe_definition,
+            )
+            for factor_input in factor_inputs
+        )
+        invocation_payload = {
+            "snapshot_id": snapshot.snapshot_id,
+            "gppe_invocation_id": gppe_invocation_id,
             "tier_definition": tier_definition.model_dump(mode="json"),
         }
         invocation_sha256 = canonical_sha256(invocation_payload)
         invocation_id = f"topt-core-invocation:{invocation_sha256}"
-        results = tuple(
-            compute_topt_core(
-                factor_input,
-                invocation_id=invocation_id,
-                gppe_definition=gppe_definition,
-                tier_definition=tier_definition,
-            )
-            for factor_input in snapshot.factor_inputs()
-        )
-        if len(results) != _EXPECTED_ISSUERS or len({item.issuer_id for item in results}) != _EXPECTED_ISSUERS:
-            raise ValueError("TOPT core materialization denominator drifted")
+        if len(gppe_results) != _EXPECTED_ISSUERS:
+            raise ValueError("TOPT GPPE materialization denominator drifted")
         with self._connection.transaction():
+            gppe_inserted = self._connection.execute(
+                """
+                insert into mart.topt_gppe_invocations (
+                    invocation_id, content_sha256, snapshot_id,
+                    gppe_definition_id, gppe_definition_sha256, payload
+                ) values (%s, %s, %s, %s, %s, %s)
+                on conflict (invocation_id) do nothing returning invocation_id
+                """,
+                (
+                    gppe_invocation_id,
+                    gppe_invocation_sha256,
+                    snapshot.snapshot_id,
+                    gppe_definition.definition_id,
+                    gppe_definition.content_sha256,
+                    Jsonb(gppe_invocation_payload),
+                ),
+            ).fetchone()
+            if gppe_inserted is None:
+                existing_gppe = self._connection.execute(
+                    "select content_sha256, payload from mart.topt_gppe_invocations where invocation_id = %s",
+                    (gppe_invocation_id,),
+                ).fetchone()
+                if (
+                    existing_gppe is None
+                    or existing_gppe[0] != gppe_invocation_sha256
+                    or existing_gppe[1] != gppe_invocation_payload
+                ):
+                    raise ValueError("TOPT GPPE invocation identity conflict")
+            for gppe_result in gppe_results:
+                self._put_gppe_result(gppe_result)
+            materialized_gppe_results = self._load_gppe_results(gppe_invocation_id)
+            if len(materialized_gppe_results) != _EXPECTED_ISSUERS:
+                raise ValueError("TOPT GPPE materialization did not persist the complete denominator")
+
+            results = tuple(
+                compute_topt_core(
+                    factor_input,
+                    gppe_result,
+                    invocation_id=invocation_id,
+                    tier_definition=tier_definition,
+                )
+                for factor_input, gppe_result in zip(factor_inputs, materialized_gppe_results, strict=True)
+            )
+            if len(results) != _EXPECTED_ISSUERS or len({item.issuer_id for item in results}) != _EXPECTED_ISSUERS:
+                raise ValueError("TOPT core materialization denominator drifted")
             inserted = self._connection.execute(
                 """
                 insert into mart.topt_core_invocations (
                     invocation_id, content_sha256, snapshot_id,
+                    gppe_invocation_id,
                     gppe_definition_id, gppe_definition_sha256,
                     tier_definition_id, tier_definition_sha256, payload
-                ) values (%s, %s, %s, %s, %s, %s, %s, %s)
+                ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 on conflict (invocation_id) do nothing returning invocation_id
                 """,
                 (
                     invocation_id,
                     invocation_sha256,
                     snapshot.snapshot_id,
+                    gppe_invocation_id,
                     gppe_definition.definition_id,
                     gppe_definition.content_sha256,
                     tier_definition.definition_id,
@@ -696,6 +759,81 @@ class PostgresToptCoreRepository:
                 self._put_result(result)
         return results
 
+    def _load_gppe_results(self, invocation_id: str) -> tuple[ToptGppeResult, ...]:
+        rows = self._connection.execute(
+            """
+            select result_id, content_sha256, payload
+            from mart.topt_gppe_results
+            where invocation_id = %s
+            order by issuer_id
+            """,
+            (invocation_id,),
+        ).fetchall()
+        return tuple(
+            ToptGppeResult.model_validate(
+                {
+                    **row[2],
+                    "result_id": row[0],
+                    "content_sha256": row[1],
+                }
+            )
+            for row in rows
+        )
+
+    def _put_gppe_result(self, result: ToptGppeResult) -> None:
+        payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
+        inserted = self._connection.execute(
+            """
+            insert into mart.topt_gppe_results (
+                result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, confidence, freshness,
+                reason_codes, input_observation_ids,
+                gppe_definition_id, gppe_definition_sha256, payload
+            ) values (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            ) on conflict (result_id) do nothing returning result_id
+            """,
+            (
+                result.result_id,
+                result.content_sha256,
+                result.invocation_id,
+                result.snapshot_id,
+                result.run_id,
+                result.release_manifest_id,
+                result.universe_id,
+                result.universe_version,
+                result.universe_sha256,
+                result.cutoff,
+                result.issuer_id,
+                result.instrument_id,
+                result.listing_id,
+                result.operating_branch.value,
+                result.operating_metric.value,
+                result.availability.value,
+                result.operating_efficiency,
+                result.capital_adjusted_gross_profit,
+                result.gppe,
+                result.confidence,
+                result.freshness.value,
+                [item.value for item in result.reason_codes],
+                list(result.input_observation_ids),
+                result.gppe_definition_id,
+                result.gppe_definition_sha256,
+                Jsonb(payload),
+            ),
+        ).fetchone()
+        if inserted is None:
+            existing = self._connection.execute(
+                "select content_sha256, payload from mart.topt_gppe_results where result_id = %s",
+                (result.result_id,),
+            ).fetchone()
+            if existing is None or existing[0] != result.content_sha256 or existing[1] != payload:
+                raise ValueError("TOPT GPPE result identity conflict")
+
     def _put_result(self, result: ToptCoreResult) -> None:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
         inserted = self._connection.execute(
@@ -708,12 +846,13 @@ class PostgresToptCoreRepository:
                 capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
                 target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
                 confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
                 gppe_definition_id, gppe_definition_sha256,
                 tier_definition_id, tier_definition_sha256, payload
             ) values (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s
             ) on conflict (result_id) do nothing returning result_id
             """,
             (
@@ -746,6 +885,8 @@ class PostgresToptCoreRepository:
                 result.freshness.value,
                 [item.value for item in result.reason_codes],
                 list(result.input_observation_ids),
+                result.gppe_invocation_id,
+                result.gppe_result_id,
                 result.gppe_definition_id,
                 result.gppe_definition_sha256,
                 result.tier_definition_id,
@@ -782,6 +923,7 @@ class PostgresToptCoreRepository:
                    availability, operating_efficiency, capital_adjusted_gross_profit,
                    gppe, tier, target_ps_lower, target_ps_upper, target_ps_midpoint,
                    current_ps, valuation_gap, confidence, freshness, reason_codes,
+                   gppe_invocation_id, gppe_result_id,
                    gppe_definition_id, gppe_definition_sha256,
                    tier_definition_id, tier_definition_sha256, created_at
             from mart.topt_core_result_read
@@ -831,11 +973,13 @@ class PostgresToptCoreRepository:
                 confidence=row[24],
                 freshness=row[25],
                 reason_codes=tuple(row[26]),
-                gppe_definition_id=row[27],
-                gppe_definition_sha256=row[28],
-                tier_definition_id=row[29],
-                tier_definition_sha256=row[30],
-                created_at=row[31],
+                gppe_invocation_id=row[27],
+                gppe_result_id=row[28],
+                gppe_definition_id=row[29],
+                gppe_definition_sha256=row[30],
+                tier_definition_id=row[31],
+                tier_definition_sha256=row[32],
+                created_at=row[33],
             )
             for row in rows
         )
@@ -853,6 +997,7 @@ class PostgresToptCoreRepository:
             select result_id, invocation_id, snapshot_id, run_id, release_manifest_id,
                    universe_id, universe_version, universe_sha256, cutoff, issuer_id,
                    instrument_id, listing_id, input_observation_ids,
+                   gppe_invocation_id, gppe_result_id,
                    gppe_definition_id, gppe_definition_sha256,
                    tier_definition_id, tier_definition_sha256,
                    confidence, freshness, created_at, lineage
@@ -889,14 +1034,16 @@ class PostgresToptCoreRepository:
                 instrument_id=row[10],
                 listing_id=row[11],
                 input_observation_ids=tuple(row[12]),
-                gppe_definition_id=row[13],
-                gppe_definition_sha256=row[14],
-                tier_definition_id=row[15],
-                tier_definition_sha256=row[16],
-                confidence=row[17],
-                freshness=row[18],
-                created_at=row[19],
-                lineage=tuple(row[20]),
+                gppe_invocation_id=row[13],
+                gppe_result_id=row[14],
+                gppe_definition_id=row[15],
+                gppe_definition_sha256=row[16],
+                tier_definition_id=row[17],
+                tier_definition_sha256=row[18],
+                confidence=row[19],
+                freshness=row[20],
+                created_at=row[21],
+                lineage=tuple(row[22]),
             )
             for row in rows
         )

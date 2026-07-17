@@ -18,6 +18,7 @@ from factors.production_topt import (
     ToptMarketValueComponent,
     ToptMetricInput,
     compute_topt_core,
+    compute_topt_gppe,
 )
 from pydantic import ValidationError
 from truealpha_contracts.research import ValuationTier
@@ -108,10 +109,15 @@ def _snapshot(**overrides: object) -> ToptCoreSnapshotInput:
 
 
 def _compute(snapshot: ToptCoreSnapshotInput):
+    gppe_result = compute_topt_gppe(
+        snapshot,
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+    )
     return compute_topt_core(
         snapshot,
+        gppe_result,
         invocation_id=f"topt-core-invocation:{'e' * 64}",
-        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
         tier_definition=ThreeTierV0Definition(),
     )
 
@@ -140,6 +146,7 @@ def test_available_result_uses_owner_selected_formula_and_all_cell_confidence() 
     assert result.valuation_gap == Decimal("1.25")
     assert result.confidence == Decimal("0.6")
     assert result.reason_codes == ()
+    assert result.gppe_result_id.startswith("topt-gppe-result:")
 
 
 @pytest.mark.parametrize(
@@ -159,10 +166,10 @@ def test_tier_boundaries_are_lower_inclusive(adjusted_gross_profit: str, expecte
 
 
 @pytest.mark.parametrize(
-    ("field", "metric", "value", "expected_reason"),
+    ("field", "metric", "value", "expected_reason", "expected_confidence"),
     (
-        ("headcount", "headcount", None, ToptCoreReasonCode.MISSING_HEADCOUNT),
-        ("revenue", "revenue", "0", ToptCoreReasonCode.NONPOSITIVE_REVENUE),
+        ("headcount", "headcount", None, ToptCoreReasonCode.MISSING_HEADCOUNT, Decimal("0")),
+        ("revenue", "revenue", "0", ToptCoreReasonCode.NONPOSITIVE_REVENUE, Decimal("0.9")),
     ),
 )
 def test_invalid_input_is_explicitly_unavailable(
@@ -170,11 +177,12 @@ def test_invalid_input_is_explicitly_unavailable(
     metric: str,
     value: str | None,
     expected_reason: ToptCoreReasonCode,
+    expected_confidence: Decimal,
 ) -> None:
     result = _compute(_snapshot(**{field: _metric(metric, value)}))
 
     assert result.availability is ToptCoreAvailability.UNAVAILABLE
-    assert result.confidence == 0
+    assert result.confidence == expected_confidence
     assert result.reason_codes == (expected_reason,)
     assert result.gppe is None
 
@@ -233,6 +241,24 @@ def test_financial_branch_uses_pre_provision_profit_without_nonfinancial_valuati
     assert result.operating_efficiency == Decimal("800000")
     assert result.gppe is result.tier is result.current_ps is None
     assert result.reason_codes == (ToptCoreReasonCode.FINANCIAL_VALUATION_NOT_COMPARABLE,)
+
+
+def test_tier_composite_rejects_gppe_from_another_snapshot_member() -> None:
+    snapshot = _snapshot()
+    other_member = _snapshot(issuer_id="issuer:other")
+    gppe_result = compute_topt_gppe(
+        other_member,
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+    )
+
+    with pytest.raises(ValueError, match="does not match its exact snapshot member"):
+        compute_topt_core(
+            snapshot,
+            gppe_result,
+            invocation_id=f"topt-core-invocation:{'e' * 64}",
+            tier_definition=ThreeTierV0Definition(),
+        )
 
 
 def test_definitions_are_content_addressed_and_reject_binary_floats() -> None:

@@ -212,19 +212,147 @@ begin
     end loop;
 end $$;
 
+create table if not exists mart.topt_gppe_invocations (
+    invocation_id                   text primary key
+        check (invocation_id ~ '^topt-gppe-invocation:[0-9a-f]{64}$'),
+    content_sha256                  text not null unique check (content_sha256 ~ '^[0-9a-f]{64}$'),
+    snapshot_id                     text not null references staging.topt_core_snapshots(snapshot_id),
+    gppe_definition_id              text not null check (gppe_definition_id ~ '^gppe-definition:[0-9a-f]{64}$'),
+    gppe_definition_sha256          text not null check (gppe_definition_sha256 ~ '^[0-9a-f]{64}$'),
+    payload                         jsonb not null check (jsonb_typeof(payload) = 'object'),
+    created_at                      timestamptz not null default clock_timestamp(),
+    unique (snapshot_id, gppe_definition_id),
+    check (split_part(invocation_id, ':', 2) = content_sha256),
+    check (raw.canonical_sha256(payload) = content_sha256)
+);
+
+create table if not exists mart.topt_gppe_results (
+    result_id                       text primary key check (result_id ~ '^topt-gppe-result:[0-9a-f]{64}$'),
+    content_sha256                  text not null unique check (content_sha256 ~ '^[0-9a-f]{64}$'),
+    invocation_id                   text not null references mart.topt_gppe_invocations(invocation_id),
+    snapshot_id                     text not null references staging.topt_core_snapshots(snapshot_id),
+    run_id                          text not null references raw.capture_runs(run_id),
+    release_manifest_id             text not null,
+    universe_id                     text not null,
+    universe_version                text not null,
+    universe_sha256                 text not null check (universe_sha256 ~ '^[0-9a-f]{64}$'),
+    cutoff                          timestamptz not null,
+    issuer_id                       text not null,
+    instrument_id                   text not null,
+    listing_id                      text not null,
+    operating_branch                text not null check (operating_branch in ('non_financial', 'financial')),
+    operating_metric                text not null
+        check (operating_metric in ('capital_adjusted_gppe', 'pre_provision_profit_per_employee')),
+    availability                    text not null check (availability in ('available', 'unavailable')),
+    operating_efficiency            numeric,
+    capital_adjusted_gross_profit   numeric,
+    gppe                            numeric,
+    confidence                      numeric not null check (confidence between 0 and 1),
+    freshness                       text not null check (freshness in ('fresh', 'stale', 'unknown')),
+    reason_codes                    text[] not null,
+    input_observation_ids           text[] not null
+        check (cardinality(input_observation_ids) >= 4 and cardinality(input_observation_ids) % 4 = 0),
+    gppe_definition_id              text not null,
+    gppe_definition_sha256          text not null check (gppe_definition_sha256 ~ '^[0-9a-f]{64}$'),
+    payload                         jsonb not null check (jsonb_typeof(payload) = 'object'),
+    created_at                      timestamptz not null default clock_timestamp(),
+    unique (invocation_id, issuer_id),
+    check (split_part(result_id, ':', 2) = content_sha256),
+    check (
+        (availability = 'available' and cardinality(reason_codes) = 0 and operating_efficiency is not null and (
+            (operating_branch = 'non_financial' and operating_metric = 'capital_adjusted_gppe'
+                and capital_adjusted_gross_profit is not null and gppe is not null)
+            or
+            (operating_branch = 'financial' and operating_metric = 'pre_provision_profit_per_employee'
+                and capital_adjusted_gross_profit is null and gppe is null)
+        ))
+        or
+        (availability = 'unavailable' and cardinality(reason_codes) > 0
+            and operating_efficiency is null and capital_adjusted_gross_profit is null and gppe is null)
+    )
+);
+
+create or replace function mart.validate_topt_gppe_result()
+returns trigger language plpgsql as $$
+declare
+    invocation mart.topt_gppe_invocations%rowtype;
+    snapshot staging.topt_core_snapshots%rowtype;
+    member staging.topt_core_snapshot_members%rowtype;
+begin
+    select * into invocation from mart.topt_gppe_invocations where invocation_id = new.invocation_id;
+    select * into snapshot from staging.topt_core_snapshots where snapshot_id = new.snapshot_id;
+    select * into member from staging.topt_core_snapshot_members
+     where snapshot_id = new.snapshot_id and issuer_id = new.issuer_id;
+    if invocation.invocation_id is null or snapshot.snapshot_id is null or member.snapshot_id is null
+       or invocation.snapshot_id <> new.snapshot_id
+       or invocation.gppe_definition_id <> new.gppe_definition_id
+       or invocation.gppe_definition_sha256 <> new.gppe_definition_sha256
+       or snapshot.run_id <> new.run_id or snapshot.release_manifest_id <> new.release_manifest_id
+       or snapshot.universe_id <> new.universe_id or snapshot.universe_version <> new.universe_version
+       or snapshot.universe_sha256 <> new.universe_sha256 or snapshot.cutoff <> new.cutoff
+       or member.instrument_id <> new.instrument_id or member.listing_id <> new.listing_id
+       or member.observation_ids <> new.input_observation_ids
+       or (select count(*) from jsonb_object_keys(new.payload)) <> 23
+       or not (new.payload ?& array[
+           'invocation_id', 'snapshot_id', 'run_id', 'release_manifest_id',
+           'universe_id', 'universe_version', 'universe_sha256', 'cutoff',
+           'issuer_id', 'instrument_id', 'listing_id', 'operating_branch',
+           'operating_metric', 'availability', 'operating_efficiency',
+           'capital_adjusted_gross_profit', 'gppe', 'confidence', 'freshness',
+           'reason_codes', 'input_observation_ids', 'gppe_definition_id',
+           'gppe_definition_sha256'
+       ])
+       or new.payload->>'invocation_id' is distinct from new.invocation_id
+       or new.payload->>'snapshot_id' is distinct from new.snapshot_id
+       or new.payload->>'run_id' is distinct from new.run_id
+       or new.payload->>'release_manifest_id' is distinct from new.release_manifest_id
+       or new.payload->>'universe_id' is distinct from new.universe_id
+       or new.payload->>'universe_version' is distinct from new.universe_version
+       or new.payload->>'universe_sha256' is distinct from new.universe_sha256
+       or (new.payload->>'cutoff')::timestamptz is distinct from new.cutoff
+       or new.payload->>'issuer_id' is distinct from new.issuer_id
+       or new.payload->>'instrument_id' is distinct from new.instrument_id
+       or new.payload->>'listing_id' is distinct from new.listing_id
+       or new.payload->>'operating_branch' is distinct from new.operating_branch
+       or new.payload->>'operating_metric' is distinct from new.operating_metric
+       or new.payload->>'availability' is distinct from new.availability
+       or (new.payload->>'operating_efficiency')::numeric is distinct from new.operating_efficiency
+       or (new.payload->>'capital_adjusted_gross_profit')::numeric is distinct from new.capital_adjusted_gross_profit
+       or (new.payload->>'gppe')::numeric is distinct from new.gppe
+       or (new.payload->>'confidence')::numeric is distinct from new.confidence
+       or new.payload->>'freshness' is distinct from new.freshness
+       or array(select jsonb_array_elements_text(new.payload->'reason_codes'))
+            is distinct from new.reason_codes
+       or array(select jsonb_array_elements_text(new.payload->'input_observation_ids'))
+            is distinct from new.input_observation_ids
+       or new.payload->>'gppe_definition_id' is distinct from new.gppe_definition_id
+       or new.payload->>'gppe_definition_sha256' is distinct from new.gppe_definition_sha256
+       or raw.canonical_sha256(new.payload) <> new.content_sha256 then
+        raise check_violation using message = 'TOPT GPPE result does not match its invocation or content';
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists validate_gppe_result on mart.topt_gppe_results;
+create trigger validate_gppe_result before insert on mart.topt_gppe_results
+for each row execute function mart.validate_topt_gppe_result();
+
 create table if not exists mart.topt_core_invocations (
     invocation_id                   text primary key
         check (invocation_id ~ '^topt-core-invocation:[0-9a-f]{64}$'),
     content_sha256                  text not null unique check (content_sha256 ~ '^[0-9a-f]{64}$'),
     snapshot_id                     text not null references staging.topt_core_snapshots(snapshot_id),
+    gppe_invocation_id              text not null references mart.topt_gppe_invocations(invocation_id),
     gppe_definition_id              text not null check (gppe_definition_id ~ '^gppe-definition:[0-9a-f]{64}$'),
     gppe_definition_sha256          text not null check (gppe_definition_sha256 ~ '^[0-9a-f]{64}$'),
     tier_definition_id              text not null check (tier_definition_id ~ '^three-tier-definition:[0-9a-f]{64}$'),
     tier_definition_sha256          text not null check (tier_definition_sha256 ~ '^[0-9a-f]{64}$'),
     payload                         jsonb not null check (jsonb_typeof(payload) = 'object'),
     created_at                      timestamptz not null default clock_timestamp(),
-    unique (snapshot_id, gppe_definition_id, tier_definition_id),
-    check (split_part(invocation_id, ':', 2) = content_sha256)
+    unique (snapshot_id, gppe_invocation_id, tier_definition_id),
+    check (split_part(invocation_id, ':', 2) = content_sha256),
+    check (raw.canonical_sha256(payload) = content_sha256)
 );
 
 create table if not exists mart.topt_core_results (
@@ -260,6 +388,8 @@ create table if not exists mart.topt_core_results (
     reason_codes                    text[] not null,
     input_observation_ids           text[] not null
         check (cardinality(input_observation_ids) >= 4 and cardinality(input_observation_ids) % 4 = 0),
+    gppe_invocation_id              text not null references mart.topt_gppe_invocations(invocation_id),
+    gppe_result_id                  text not null references mart.topt_gppe_results(result_id),
     gppe_definition_id              text not null,
     gppe_definition_sha256          text not null check (gppe_definition_sha256 ~ '^[0-9a-f]{64}$'),
     tier_definition_id              text not null,
@@ -291,10 +421,12 @@ create or replace function mart.validate_topt_core_result()
 returns trigger language plpgsql as $$
 declare
     invocation mart.topt_core_invocations%rowtype;
+    gppe_result mart.topt_gppe_results%rowtype;
     snapshot staging.topt_core_snapshots%rowtype;
     member staging.topt_core_snapshot_members%rowtype;
 begin
     select * into invocation from mart.topt_core_invocations where invocation_id = new.invocation_id;
+    select * into gppe_result from mart.topt_gppe_results where result_id = new.gppe_result_id;
     select * into snapshot from staging.topt_core_snapshots where snapshot_id = new.snapshot_id;
     select * into member
       from staging.topt_core_snapshot_members
@@ -303,6 +435,29 @@ begin
        or snapshot.snapshot_id is null
        or member.snapshot_id is null
        or invocation.snapshot_id <> new.snapshot_id
+       or invocation.gppe_invocation_id <> new.gppe_invocation_id
+       or gppe_result.result_id is null
+       or gppe_result.invocation_id <> new.gppe_invocation_id
+       or gppe_result.snapshot_id <> new.snapshot_id
+       or gppe_result.issuer_id <> new.issuer_id
+       or gppe_result.gppe_definition_id <> new.gppe_definition_id
+       or gppe_result.gppe_definition_sha256 <> new.gppe_definition_sha256
+       or gppe_result.operating_branch <> new.operating_branch
+       or gppe_result.operating_metric <> new.operating_metric
+       or gppe_result.input_observation_ids <> new.input_observation_ids
+       or gppe_result.confidence <> new.confidence
+       or gppe_result.freshness <> new.freshness
+       or (gppe_result.availability = 'unavailable' and (
+           new.availability <> 'unavailable'
+           or gppe_result.reason_codes <> new.reason_codes
+       ))
+       or (new.operating_efficiency is not null
+           and gppe_result.operating_efficiency is distinct from new.operating_efficiency)
+       or (new.availability = 'available' and (
+           gppe_result.availability <> 'available'
+           or gppe_result.capital_adjusted_gross_profit is distinct from new.capital_adjusted_gross_profit
+           or gppe_result.gppe is distinct from new.gppe
+       ))
        or invocation.gppe_definition_id <> new.gppe_definition_id
        or invocation.gppe_definition_sha256 <> new.gppe_definition_sha256
        or invocation.tier_definition_id <> new.tier_definition_id
@@ -316,7 +471,7 @@ begin
        or member.instrument_id <> new.instrument_id
        or member.listing_id <> new.listing_id
        or member.observation_ids <> new.input_observation_ids
-       or (select count(*) from jsonb_object_keys(new.payload)) <> 31
+       or (select count(*) from jsonb_object_keys(new.payload)) <> 33
        or not (new.payload ?& array[
            'invocation_id', 'snapshot_id', 'run_id', 'release_manifest_id',
            'universe_id', 'universe_version', 'universe_sha256', 'cutoff',
@@ -325,6 +480,7 @@ begin
            'capital_adjusted_gross_profit', 'gppe', 'tier', 'target_ps_lower',
            'target_ps_upper', 'target_ps_midpoint', 'current_ps', 'valuation_gap',
            'confidence', 'freshness', 'reason_codes', 'input_observation_ids',
+           'gppe_invocation_id', 'gppe_result_id',
            'gppe_definition_id', 'gppe_definition_sha256',
            'tier_definition_id', 'tier_definition_sha256'
        ])
@@ -358,6 +514,8 @@ begin
             is distinct from new.reason_codes
        or array(select jsonb_array_elements_text(new.payload->'input_observation_ids'))
             is distinct from new.input_observation_ids
+       or new.payload->>'gppe_invocation_id' is distinct from new.gppe_invocation_id
+       or new.payload->>'gppe_result_id' is distinct from new.gppe_result_id
        or new.payload->>'gppe_definition_id' is distinct from new.gppe_definition_id
        or new.payload->>'gppe_definition_sha256' is distinct from new.gppe_definition_sha256
        or new.payload->>'tier_definition_id' is distinct from new.tier_definition_id
@@ -379,6 +537,8 @@ declare
     target regclass;
 begin
     foreach target in array array[
+        'mart.topt_gppe_invocations'::regclass,
+        'mart.topt_gppe_results'::regclass,
         'mart.topt_core_invocations'::regclass,
         'mart.topt_core_results'::regclass
     ] loop
@@ -420,6 +580,8 @@ select
     result.confidence,
     result.freshness,
     result.reason_codes,
+    result.gppe_invocation_id,
+    result.gppe_result_id,
     result.gppe_definition_id,
     result.gppe_definition_sha256,
     result.tier_definition_id,
@@ -442,6 +604,8 @@ select
     result.instrument_id,
     result.listing_id,
     result.input_observation_ids,
+    result.gppe_invocation_id,
+    result.gppe_result_id,
     result.gppe_definition_id,
     result.gppe_definition_sha256,
     result.tier_definition_id,
@@ -465,15 +629,28 @@ join lateral (
             'mapping_version', observation.mapping_version,
             'normalized_payload_sha256', observation.normalized_payload_sha256,
             'confidence', observation.confidence,
-            'freshness', observation.freshness_state,
+            'freshness', case
+                when result.cutoff - observation.knowable_at <= policy.freshness_max_age then 'fresh'
+                else 'stale'
+            end,
             'knowable_at', observation.knowable_at,
             'recorded_at', observation.recorded_at
         ) order by observation.observation_id
     ) as items
     from unnest(result.input_observation_ids) selected(observation_id)
     join staging.capture_normalized_observations observation using (observation_id)
+    join staging.capture_observation_obligations usage using (observation_id)
+    join raw.capture_obligations obligation
+      on obligation.obligation_id = usage.capture_obligation_id
+     and obligation.run_id = result.run_id
+    join raw.capture_obligation_work_bindings binding
+      on binding.obligation_id = obligation.obligation_id
+    join raw.capture_work_items work using (work_item_id)
+    join raw.capture_schedule_policies policy using (schedule_policy_id)
     join raw.capture_source_vintages vintage using (source_vintage_id)
-    join raw.capture_source_requests request using (source_request_id)
+    join raw.capture_source_requests request
+      on request.source_request_id = vintage.source_request_id
+     and request.source_request_id = work.source_request_id
 ) lineage on true;
 
 create or replace view mart.topt_capture_meta_info as
@@ -500,7 +677,11 @@ select
     observation.parser_version,
     observation.mapping_version,
     observation.confidence,
-    observation.freshness_state,
+    case
+        when observation.observation_id is null then null
+        when campaign.cutoff - observation.knowable_at <= policy.freshness_max_age then 'fresh'
+        else 'stale'
+    end as freshness_state,
     observation.knowable_at,
     observation.recorded_at
 from raw.capture_obligations obligation
@@ -508,6 +689,7 @@ join raw.capture_campaigns campaign using (campaign_id)
 left join raw.capture_obligation_work_bindings binding
     on binding.obligation_id = obligation.obligation_id
 left join raw.capture_work_items work using (work_item_id)
+left join raw.capture_schedule_policies policy using (schedule_policy_id)
 left join raw.capture_source_requests request using (source_request_id)
 left join raw.capture_obligation_results result
     on result.capture_obligation_id = obligation.obligation_id

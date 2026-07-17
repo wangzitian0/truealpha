@@ -44,6 +44,7 @@ def main() -> int:
         "available_count": sum(item.availability.value == "available" for item in results),
         "unavailable_count": sum(item.availability.value == "unavailable" for item in results),
         "invocation_id": results[0].invocation_id,
+        "gppe_invocation_id": results[0].gppe_invocation_id,
         "gppe_definition_id": results[0].gppe_definition_id,
         "tier_definition_id": results[0].tier_definition_id,
     }
