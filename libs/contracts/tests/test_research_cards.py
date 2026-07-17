@@ -120,14 +120,14 @@ GOLDEN_CARDS = {
 @pytest.mark.parametrize("name", sorted(GOLDEN_CARDS))
 def test_golden_json_matches(name: str) -> None:
     card = GOLDEN_CARDS[name]()
-    expected = (GOLDEN / f"{name}.json").read_text()
+    expected = (GOLDEN / f"{name}.json").read_text(encoding="utf-8")
     assert render_card_json(card) == expected
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN_CARDS))
 def test_golden_html_matches(name: str) -> None:
     card = GOLDEN_CARDS[name]()
-    expected = (GOLDEN / f"{name}.html").read_text()
+    expected = (GOLDEN / f"{name}.html").read_text(encoding="utf-8")
     assert render_card_html(card) == expected
 
 
