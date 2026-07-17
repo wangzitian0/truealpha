@@ -14,6 +14,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const CUTOFF_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -199,9 +200,18 @@ export function parseStrategyRunReport(value: unknown): StrategyRunReport {
   };
 }
 
-const FIXTURE_URL = new URL(
-  "../../../../libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
-  import.meta.url,
+// Resolved from process.cwd(), not import.meta.url: Next.js's webpack RSC
+// bundling substitutes a URL implementation that node:fs's readFileSync does
+// not recognize as `instanceof URL` (verified — both a raw URL and
+// fileURLToPath(url) throw ERR_INVALID_ARG_TYPE at request time, though both
+// work fine under a bare `bun run` or `tsc`). Every invocation of this
+// package (bun test, `next dev`/`build`/`start`) runs with cwd == apps/app-web
+// (see the Makefile), so this stays stable across both.
+const FIXTURE_PATH = join(
+  process.cwd(),
+  "..",
+  "..",
+  "libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
 );
 
 /**
@@ -210,7 +220,7 @@ const FIXTURE_URL = new URL(
  */
 export class FixtureStrategyRunRepository {
   getLatest(strategyId: string): StrategyRunReport | StrategyRunUnavailable {
-    const raw = JSON.parse(readFileSync(FIXTURE_URL, "utf8")) as unknown;
+    const raw = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as unknown;
     const report = parseStrategyRunReport(raw);
     if (strategyId !== report.strategy_id) {
       return { strategy_id: strategyId, reason: "unknown_strategy_id" };
