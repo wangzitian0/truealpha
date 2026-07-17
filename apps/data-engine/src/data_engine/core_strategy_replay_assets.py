@@ -12,14 +12,21 @@ swap the resource for a real repository later without changing the asset's
 shape).
 """
 
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, cast
+
 import dagster as dg
 from dagster import AssetExecutionContext
+from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 from data_engine.core_strategy_replay import CORPUS_SHA256, Decision, run
+from data_engine.strategy_replay_repository import write_replay
 
 CORE_STRATEGY_REPLAY_ASSET_NAME = "core_strategy_replay_preview"
+CORE_STRATEGY_REPLAY_MART_ASSET_NAME = "core_strategy_replay_mart"
 
 
 @dg.asset(
@@ -51,8 +58,61 @@ def materialize_core_strategy_replay_preview(
     )
 
 
+@dataclass(frozen=True)
+class CoreStrategyReplayMartResource:
+    """Explicit `executed_at`, never `datetime.now()` -- a replay materialized
+    twice against the same fixture must be able to reproduce the exact same
+    `strategy_run_id` (see `strategy_replay_repository.write_replay`)."""
+
+    connection: Connection[Any]
+    executed_at: datetime
+
+
+@dg.asset(
+    name=CORE_STRATEGY_REPLAY_MART_ASSET_NAME,
+    group_name="core_strategy_replay",
+    deps=[CORE_STRATEGY_REPLAY_ASSET_NAME],
+    ins={"replay": dg.AssetIn(CORE_STRATEGY_REPLAY_ASSET_NAME)},
+    required_resource_keys={"core_strategy_replay_mart_runner"},
+    description=(
+        "Persist the replay preview's decisions into mart.strategy_runs/strategy_decisions "
+        "(db/migrations/0027_core_strategy_replay_mart.sql). Still 'preview' claim_ceiling -- "
+        "see strategy_replay_repository's own docstring for what this does and does not claim."
+    ),
+)
+def materialize_core_strategy_replay_mart(
+    context: AssetExecutionContext,
+    replay: tuple[list[Decision], LargeModelValueV0Definition],
+) -> dg.Output[str]:
+    decisions, definition = replay
+    runner = cast(CoreStrategyReplayMartResource, context.resources.core_strategy_replay_mart_runner)
+    run_id, decision_ids = write_replay(runner.connection, decisions, definition, executed_at=runner.executed_at)
+    context.log.info(f"Persisted {run_id} with {len(decision_ids)} decisions")
+    return dg.Output(
+        run_id,
+        metadata={
+            "strategy_run_id": run_id,
+            "decision_count": len(decision_ids),
+        },
+    )
+
+
 CORE_STRATEGY_REPLAY_ASSETS = (materialize_core_strategy_replay_preview,)
+CORE_STRATEGY_REPLAY_MART_ASSETS = (materialize_core_strategy_replay_preview, materialize_core_strategy_replay_mart)
 
 
 def build_core_strategy_replay_definitions() -> dg.Definitions:
     return dg.Definitions(assets=list(CORE_STRATEGY_REPLAY_ASSETS))
+
+
+def build_core_strategy_replay_mart_definitions(
+    *, connection: Connection[Any], executed_at: datetime
+) -> dg.Definitions:
+    return dg.Definitions(
+        assets=list(CORE_STRATEGY_REPLAY_MART_ASSETS),
+        resources={
+            "core_strategy_replay_mart_runner": cast(
+                Any, CoreStrategyReplayMartResource(connection=connection, executed_at=executed_at)
+            )
+        },
+    )
