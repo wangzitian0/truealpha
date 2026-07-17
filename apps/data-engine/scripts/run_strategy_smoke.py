@@ -41,6 +41,7 @@ from factors.base.gross_profit_per_employee import gross_profit_per_employee
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation
 from factors.types import Fact
+from truealpha_contracts.metrics import METRICS
 from truealpha_contracts.strategy import LargeModelValueV0Definition, ThreeTierValuationDefinition
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -48,12 +49,23 @@ CORPUS_PATH = REPOSITORY_ROOT / "libs/contracts/tests/fixtures/large_model_value
 CORPUS_SHA256 = "0d110a3adc94500cba2bc35d5cd33a788a18bc76ef66895c5625489be6ea50e6"
 OUTPUT_JSON = "strategy_smoke.json"
 OUTPUT_MARKDOWN = "strategy_smoke.md"
+STRATEGY_ID = "large_model_value_v0"
+# Checked-in, deterministic mirror of a clean run — see #347. This is the
+# fixture `truealpha_contracts.strategy_run_fixture.FixtureStrategyRunRepository`
+# (and its TypeScript port under apps/app-web/src/contracts) reads at runtime.
+# It excludes `generated_at` so its bytes are stable across regenerations, and
+# it is only refreshed when this script reproduces the golden fixture exactly.
+CANONICAL_FIXTURE_PATH = REPOSITORY_ROOT / "libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json"
 
 # The golden fixture's input_key vocabulary predates #24's real factor
-# implementations and does not match their Fact.metric names exactly.
+# implementations and does not match their Fact.metric names exactly. Targets
+# must be registered in truealpha_contracts.metrics.METRICS — Fact rejects an
+# unregistered metric or a mismatched unit_family, so this mapping cannot
+# silently drift from the canonical registry the way the pre-SSOT
+# "employee_headcount" name once did.
 _GPPE_KEYS = ("gross_profit", "total_assets", "headcount")
 _PS_KEYS = ("last_close", "shares_outstanding", "revenue")
-_GPPE_KEY_MAP = {"headcount": "employee_headcount"}
+_GPPE_KEY_MAP = {"headcount": "employees_total"}
 _PS_KEY_MAP = {"last_close": "price"}
 _MISSING_REASON_ORDER = (
     ("gross_profit", "missing_gross_profit_fact"),
@@ -79,6 +91,7 @@ class Decision:
     exclusion_reason: str | None
     rank: int | None = None
     target_weight: Decimal | None = None
+    confidence: Decimal | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -100,6 +113,7 @@ class Decision:
             "exclusion_reason": self.exclusion_reason,
             "rank": self.rank,
             "target_weight": str(self.target_weight) if self.target_weight is not None else None,
+            "confidence": str(self.confidence) if self.confidence is not None else None,
         }
 
 
@@ -126,11 +140,13 @@ def _facts_for(
         record = by_key.get(key)
         if record is None:
             continue
+        metric = key_map.get(key, key)
         facts.append(
             Fact(
                 entity_id=entity_id,
-                metric=key_map.get(key, key),
+                metric=metric,
                 value=Decimal(str(record["value"])),
+                unit_family=METRICS[metric].unit_family,
                 confidence=Decimal(str(record["confidence"])),
                 as_of=as_of,
             )
@@ -199,6 +215,7 @@ def _compute_one(
             False,
             "excluded",
             "unavailable_required_input",
+            confidence=tier_result.confidence,
         )
 
     if tier_result.confidence < minimum_confidence:
@@ -213,6 +230,7 @@ def _compute_one(
             False,
             "excluded",
             "below_confidence_floor",
+            confidence=tier_result.confidence,
         )
 
     band = tier_definition.band_for(labor_efficiency_q)
@@ -231,6 +249,7 @@ def _compute_one(
             True,
             "rejected_valuation_above_tier_band",
             None,
+            confidence=tier_result.confidence,
         )
 
     return Decision(
@@ -244,6 +263,7 @@ def _compute_one(
         True,
         "ranked_beyond_selection_count",  # provisional; ranking below may promote to "selected"
         None,
+        confidence=tier_result.confidence,
     )
 
 
@@ -274,6 +294,7 @@ def _rank_and_select(decisions: list[Decision], selection_count: int) -> list[De
                         None,
                         rank=index,
                         target_weight=weight,
+                        confidence=item.confidence,
                     )
                 )
             else:
@@ -291,6 +312,7 @@ def _rank_and_select(decisions: list[Decision], selection_count: int) -> list[De
                         None,
                         rank=index,
                         target_weight=None,
+                        confidence=item.confidence,
                     )
                 )
         resolved.extend(other)
@@ -393,7 +415,24 @@ def main() -> int:
             print(f"  - {mismatch}")
         return 1
 
+    CANONICAL_FIXTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CANONICAL_FIXTURE_PATH.write_text(
+        json.dumps(
+            {
+                "strategy_id": STRATEGY_ID,
+                "source": "strategy_smoke_fixture",
+                "corpus_sha256": CORPUS_SHA256,
+                "decisions": [d.to_json() for d in decisions],
+                "golden_mismatches": [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
     print(f"OK: all {len(decisions)} decisions reproduced the golden fixture exactly.")
+    print(f"Canonical fixture refreshed at {CANONICAL_FIXTURE_PATH.relative_to(REPOSITORY_ROOT)}")
     return 0
 
 

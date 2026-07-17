@@ -34,6 +34,9 @@ class UnitFamily(StrEnum):
     COUNT = "count"
     RATIO = "ratio"
     PER_SHARE = "per_share"
+    PER_EMPLOYEE = "per_employee"
+    PERCENTAGE = "percentage"
+    TIME_YEARS = "time_years"
 
 
 class MetricSpec(BaseModel):
@@ -110,6 +113,18 @@ _SPECS = (
         unit_family=UnitFamily.COUNT,
         source_priority=(DataSource.SEC, DataSource.MOOMOO),
         description="Total headcount; SEC rows come from filing-text extraction and carry its confidence.",
+    ),
+    MetricSpec(
+        name="total_assets",
+        unit_family=UnitFamily.CURRENCY,
+        source_priority=(DataSource.SEC,),
+        description="Total assets from the balance sheet; the #59 v0 GPPE capital-charge base.",
+    ),
+    MetricSpec(
+        name="price",
+        unit_family=UnitFamily.PER_SHARE,
+        source_priority=(DataSource.YAHOO, DataSource.TWELVE_DATA, DataSource.MOOMOO),
+        description="Unadjusted close price (module 6 price-to-sales market-value input).",
     ),
 )
 

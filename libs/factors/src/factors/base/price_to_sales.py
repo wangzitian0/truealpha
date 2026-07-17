@@ -23,7 +23,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from factors.registry import factor
-from factors.types import Fact, FactorResult
+from factors.types import Fact, FactorResult, UnitFamily
 
 _REQUIRED_METRICS = ("price", "shares_outstanding", "revenue")
 
@@ -68,6 +68,7 @@ def price_to_sales(
             factor="price_to_sales",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.RATIO,
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
@@ -82,6 +83,7 @@ def price_to_sales(
             factor="price_to_sales",
             entity_id=entity_id,
             value=None,
+            unit_family=UnitFamily.RATIO,
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
@@ -95,6 +97,7 @@ def price_to_sales(
         factor="price_to_sales",
         entity_id=entity_id,
         value=value,
+        unit_family=UnitFamily.RATIO,
         confidence=confidence,
         as_of=as_of,
         data_availability="unverified",
