@@ -66,6 +66,9 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
+# Local script output (e.g. `make strategy-smoke`)
+.local/
+
 # Scrapy stuff:
 .scrapy
 
