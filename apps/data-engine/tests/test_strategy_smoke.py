@@ -54,14 +54,18 @@ def test_excluded_and_rejected_issuers_carry_no_rank_or_weight() -> None:
             assert decision.target_weight is None
 
 
-def test_missing_gross_profit_issuer_is_excluded_with_exact_reason() -> None:
+def test_financial_issuer_is_excluded_from_valuation_with_exact_reason() -> None:
     decisions, _ = RUNNER.run()
 
     jpm = [item for item in decisions if item.issuer_id == "issuer:jpm"]
     assert len(jpm) == 2
     for decision in jpm:
+        # The mandatory #59 financial branch actually computed a level —
+        # never a missing-fact fallthrough — and is excluded only from the
+        # P/S-tier comparison specifically.
+        assert decision.capital_adjusted_labor_efficiency is not None
         assert decision.outcome == "excluded"
-        assert decision.exclusion_reason == "missing_gross_profit_fact"
+        assert decision.exclusion_reason == "financial_valuation_not_comparable"
 
 
 def test_below_confidence_floor_issuer_is_excluded_despite_complete_inputs() -> None:

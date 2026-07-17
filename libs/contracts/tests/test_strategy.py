@@ -21,7 +21,7 @@ from truealpha_contracts.strategy import (
 )
 
 CORPUS_PATH = Path(__file__).with_name("fixtures") / "large_model_value_v0_strategy.v1.json"
-CORPUS_SHA256 = "0d110a3adc94500cba2bc35d5cd33a788a18bc76ef66895c5625489be6ea50e6"
+CORPUS_SHA256 = "24c786a1e5b16e0f3300802473a814b65d0fa84fc7489c2c01fb880309807aad"
 
 _REQUIRED_INPUT_REASONS = (
     ("gross_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
@@ -192,7 +192,7 @@ def test_corpus_negative_cases_fail_closed() -> None:
     corpus = _corpus()
     negative_cases = corpus["negative_cases"]
     assert isinstance(negative_cases, list)
-    assert len(negative_cases) == 25
+    assert len(negative_cases) == 28
     payloads = {
         "strategy_definition": _definition_payload,
         "golden_decision_set": _golden_payload,
@@ -255,7 +255,7 @@ def test_golden_corpus_covers_the_required_scenarios_with_grounded_inputs() -> N
         for issuer in issuers
     }
     assert by_issuer["issuer:ddog"] == {ExclusionReason.BELOW_CONFIDENCE_FLOOR}
-    assert by_issuer["issuer:jpm"] == {ExclusionReason.MISSING_GROSS_PROFIT_FACT}
+    assert by_issuer["issuer:jpm"] == {ExclusionReason.FINANCIAL_VALUATION_NOT_COMPARABLE}
 
     for decision in golden.decisions:
         for record in decision.inputs:
@@ -280,13 +280,47 @@ def test_golden_expectations_recompute_exactly_from_their_inputs() -> None:
         for decision in at_cutoff:
             inputs = {record.input_key: record for record in decision.inputs}
             expected = decision.expected
-            missing = next((reason for key, reason in _REQUIRED_INPUT_REASONS if key not in inputs), None)
+            is_financial = decision.issuer_branch == "financial"
+            missing = next(
+                (
+                    reason
+                    for key, reason in _REQUIRED_INPUT_REASONS
+                    if key not in inputs and not (is_financial and key == "total_assets")
+                ),
+                None,
+            )
             if missing is not None:
                 assert expected.outcome is GoldenDecisionOutcome.EXCLUDED
                 assert expected.exclusion_reason is missing
                 assert not expected.eligible
                 verified += 1
                 continue
+
+            if is_financial:
+                consumed_confidence = min(inputs["gross_profit"].confidence, inputs["headcount"].confidence)
+                if consumed_confidence < definition.eligibility.minimum_confidence:
+                    assert expected.outcome is GoldenDecisionOutcome.EXCLUDED
+                    assert expected.exclusion_reason is ExclusionReason.BELOW_CONFIDENCE_FLOOR
+                    assert not expected.eligible
+                    verified += 1
+                    continue
+
+                financial_efficiency = _quantize(
+                    inputs["gross_profit"].value / inputs["headcount"].value,
+                    definition.labor_efficiency.quantization,
+                )
+                assert expected.capital_adjusted_labor_efficiency == financial_efficiency
+                assert str(expected.capital_adjusted_labor_efficiency) == str(financial_efficiency)
+                assert expected.tier is None
+                assert expected.current_price_to_sales is None
+                assert expected.target_price_to_sales is None
+                assert expected.valuation_gap is None
+                assert expected.outcome is GoldenDecisionOutcome.EXCLUDED
+                assert expected.exclusion_reason is ExclusionReason.FINANCIAL_VALUATION_NOT_COMPARABLE
+                assert not expected.eligible
+                verified += 1
+                continue
+
             consumed_confidence = min(record.confidence for record in inputs.values())
             if consumed_confidence < definition.eligibility.minimum_confidence:
                 assert expected.outcome is GoldenDecisionOutcome.EXCLUDED

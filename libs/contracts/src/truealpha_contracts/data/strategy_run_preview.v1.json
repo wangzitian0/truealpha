@@ -1,5 +1,5 @@
 {
-  "corpus_sha256": "0d110a3adc94500cba2bc35d5cd33a788a18bc76ef66895c5625489be6ea50e6",
+  "corpus_sha256": "24c786a1e5b16e0f3300802473a814b65d0fa84fc7489c2c01fb880309807aad",
   "decisions": [
     {
       "capital_adjusted_labor_efficiency": "73313.52",
@@ -32,12 +32,12 @@
       "valuation_gap": null
     },
     {
-      "capital_adjusted_labor_efficiency": null,
-      "confidence": null,
+      "capital_adjusted_labor_efficiency": "272539.18",
+      "confidence": "0.90",
       "current_price_to_sales": null,
       "cutoff_at": "2026-03-31T23:59:59Z",
       "eligible": false,
-      "exclusion_reason": "missing_gross_profit_fact",
+      "exclusion_reason": "financial_valuation_not_comparable",
       "issuer_id": "issuer:jpm",
       "outcome": "excluded",
       "rank": null,
@@ -107,12 +107,12 @@
       "valuation_gap": null
     },
     {
-      "capital_adjusted_labor_efficiency": null,
-      "confidence": null,
+      "capital_adjusted_labor_efficiency": "272539.18",
+      "confidence": "0.90",
       "current_price_to_sales": null,
       "cutoff_at": "2026-06-30T23:59:59Z",
       "eligible": false,
-      "exclusion_reason": "missing_gross_profit_fact",
+      "exclusion_reason": "financial_valuation_not_comparable",
       "issuer_id": "issuer:jpm",
       "outcome": "excluded",
       "rank": null,
