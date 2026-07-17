@@ -73,7 +73,9 @@ def test_a_different_executed_at_is_a_new_run(connection) -> None:
     second_run_id, _ = write_replay(connection, decisions, definition, executed_at=_EXECUTED_AT.replace(hour=13))
 
     assert first_run_id != second_run_id
-    count = connection.execute("select count(*) from mart.strategy_runs").fetchone()[0]
+    count = connection.execute(
+        "select count(*) from mart.strategy_runs where strategy_run_id in (%s, %s)", (first_run_id, second_run_id)
+    ).fetchone()[0]
     assert count == 2
 
 

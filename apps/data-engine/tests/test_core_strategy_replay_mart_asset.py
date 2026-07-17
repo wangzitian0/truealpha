@@ -80,5 +80,7 @@ def test_repeated_materialization_reuses_the_same_run_id(connection) -> None:
     second_run_id = second.output_for_node(CORE_STRATEGY_REPLAY_MART_ASSET_NAME)
     assert first_run_id == second_run_id
 
-    count = connection.execute("select count(*) from mart.strategy_runs").fetchone()[0]
+    count = connection.execute(
+        "select count(*) from mart.strategy_runs where strategy_run_id = %s", (first_run_id,)
+    ).fetchone()[0]
     assert count == 1
