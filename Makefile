@@ -1,4 +1,4 @@
-.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit lint format typecheck test contract-conformance check clean
+.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit strategy-smoke lint format typecheck test contract-conformance check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -17,6 +17,7 @@ help:
 	@echo "  make sample       Phase -1: pull SEC company-facts samples"
 	@echo "  make sample-evidence Capture the bounded issue #14 public evidence set"
 	@echo "  make sample-audit Check fixture readiness for tooling and backtests"
+	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo ""
 	@echo "Quality:"
 	@echo "  make check        lint + typecheck + test"
@@ -76,6 +77,9 @@ sample-evidence:
 
 sample-audit:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/audit_strategy_samples.py
+
+strategy-smoke:
+	uv run --package truealpha-data-engine python apps/data-engine/scripts/run_strategy_smoke.py --output-dir .local/strategy-smoke
 
 lint:
 	uv run ruff check apps libs
