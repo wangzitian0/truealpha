@@ -4,10 +4,12 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from llm_service.mcp_server import build_mcp_server, mcp
+from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
 from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
+from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
+from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 
 
 class _RecordingRepository:
@@ -98,3 +100,14 @@ async def test_claude_compatible_client_session_round_trip() -> None:
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+def test_default_repository_is_fixture_backed_unless_explicitly_flipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#361: the shipped default must stay `fixture` until #26 lands a real writer."""
+    from llm_service import mcp_server
+
+    monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "fixture")
+    assert isinstance(_default_repository(), FixtureStrategyRunRepository)
+
+    monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "mart")
+    assert isinstance(_default_repository(), PostgresStrategyRunRepository)

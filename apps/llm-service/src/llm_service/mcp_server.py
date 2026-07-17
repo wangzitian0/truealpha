@@ -22,6 +22,9 @@ from pydantic import BaseModel, ConfigDict
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.strategy_run import StrategyRunReadRepository, StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
+from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+
+from llm_service.config import settings
 
 _SERVICE_PRINCIPAL_ID = "principal:llm-service-mcp"
 _SERVICE_TENANT_ID = "tenant:truealpha"
@@ -49,12 +52,19 @@ def _service_access_context() -> AccessContext:
     )
 
 
+def _default_repository() -> StrategyRunReadRepository:
+    """#361: `settings.strategy_run_backend` selects the fixture or the real
+    mart-backed repository; defaults to `fixture` (see that setting's own
+    docstring for why flipping it isn't safe until #26 lands a writer)."""
+    if settings.strategy_run_backend == "mart":
+        return PostgresStrategyRunRepository(database_url=settings.database_url)
+    return FixtureStrategyRunRepository()
+
+
 def build_mcp_server(*, repository: StrategyRunReadRepository | None = None) -> FastMCP:
     """Builds the MCP server. A caller-supplied repository is for tests only."""
     server = FastMCP("truealpha-mcp")
-    active_repository: StrategyRunReadRepository = (
-        repository if repository is not None else FixtureStrategyRunRepository()
-    )
+    active_repository: StrategyRunReadRepository = repository if repository is not None else _default_repository()
 
     @server.tool(name="strategy_run", description="Read the latest large_model_value_v0 Core Strategy run.")
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:

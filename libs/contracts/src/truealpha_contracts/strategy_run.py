@@ -77,10 +77,10 @@ class StrategyRunDecision(_StrictFrozenModel):
 
 
 class StrategyRunReport(_StrictFrozenModel):
-    """A provisional strategy-run result, sourced from a checked-in fixture, not mart."""
+    """A provisional strategy-run result, sourced from a checked-in fixture or `mart` (#361)."""
 
     strategy_id: Literal["large_model_value_v0"]
-    source: Literal["strategy_smoke_fixture"] = "strategy_smoke_fixture"
+    source: Literal["strategy_smoke_fixture", "mart"] = "strategy_smoke_fixture"
     corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
     decisions: tuple[StrategyRunDecision, ...]
     golden_mismatches: tuple[str, ...] = ()
@@ -88,7 +88,15 @@ class StrategyRunReport(_StrictFrozenModel):
 
 class StrategyRunUnavailable(_StrictFrozenModel):
     strategy_id: str = Field(min_length=1)
-    reason: Literal["unknown_strategy_id", "fixture_missing", "fixture_hash_mismatch"]
+    reason: Literal[
+        "unknown_strategy_id",
+        "fixture_missing",
+        "fixture_hash_mismatch",
+        # #361: the Postgres-backed repository's fail-closed outcomes.
+        "no_runs_recorded",
+        "database_unavailable",
+        "schema_mismatch",
+    ]
 
 
 class StrategyRunReadRepository(Protocol):

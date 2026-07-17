@@ -2029,6 +2029,7 @@ name = "truealpha-contracts"
 version = "0.1.0"
 source = { editable = "libs/contracts" }
 dependencies = [
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
 ]
 
@@ -2039,7 +2040,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.7.0" }]
+requires-dist = [
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
+    { name = "pydantic", specifier = ">=2.7.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2125,6 +2129,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "truealpha-contracts" },
     { name = "truealpha-factors" },
+    { name = "truealpha-runtime" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -2142,6 +2147,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "truealpha-contracts", editable = "libs/contracts" },
     { name = "truealpha-factors", editable = "libs/factors" },
+    { name = "truealpha-runtime", editable = "libs/runtime" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 
