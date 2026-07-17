@@ -63,12 +63,12 @@ def test_edge_is_content_identified_and_deterministic() -> None:
 
 
 def test_supersedes_requires_same_kind() -> None:
-    restated = _node(EvidenceNodeKind.NORMALIZED_OBSERVATION, _H2,
-                     supersedes=_ref(EvidenceNodeKind.NORMALIZED_OBSERVATION, _H1))
+    restated = _node(
+        EvidenceNodeKind.NORMALIZED_OBSERVATION, _H2, supersedes=_ref(EvidenceNodeKind.NORMALIZED_OBSERVATION, _H1)
+    )
     assert restated.supersedes is not None
     with pytest.raises(ValidationError):
-        _node(EvidenceNodeKind.NORMALIZED_OBSERVATION, _H2,
-              supersedes=_ref(EvidenceNodeKind.CAPTURE_RUN, _H1))
+        _node(EvidenceNodeKind.NORMALIZED_OBSERVATION, _H2, supersedes=_ref(EvidenceNodeKind.CAPTURE_RUN, _H1))
 
 
 def test_pointer_resolves_to_a_run_and_advances_forward() -> None:
@@ -80,20 +80,23 @@ def test_pointer_resolves_to_a_run_and_advances_forward() -> None:
     )
     run1 = _ref(EvidenceNodeKind.CAPTURE_RUN, _H1)
     run2 = _ref(EvidenceNodeKind.CAPTURE_RUN, _H2)
-    head = CurrentPointer(key=key, target_run=run1, sequence=0,
-                          advanced_at=datetime(2026, 4, 1, tzinfo=UTC))
+    head = CurrentPointer(key=key, target_run=run1, sequence=0, advanced_at=datetime(2026, 4, 1, tzinfo=UTC))
     assert head.pointer_id.startswith("current-pointer:")
-    advanced = CurrentPointer(key=key, target_run=run2, sequence=1, previous_run=run1,
-                              advanced_at=datetime(2026, 4, 2, tzinfo=UTC))
+    advanced = CurrentPointer(
+        key=key, target_run=run2, sequence=1, previous_run=run1, advanced_at=datetime(2026, 4, 2, tzinfo=UTC)
+    )
     assert advanced.target_run == run2
     # A non-run target is rejected.
     with pytest.raises(ValidationError):
-        CurrentPointer(key=key, target_run=_ref(EvidenceNodeKind.MATERIALIZED_RESULT, _H3),
-                       sequence=0, advanced_at=datetime(2026, 4, 1, tzinfo=UTC))
+        CurrentPointer(
+            key=key,
+            target_run=_ref(EvidenceNodeKind.MATERIALIZED_RESULT, _H3),
+            sequence=0,
+            advanced_at=datetime(2026, 4, 1, tzinfo=UTC),
+        )
     # A later advance must name the previous run it supersedes.
     with pytest.raises(ValidationError):
-        CurrentPointer(key=key, target_run=run2, sequence=2,
-                       advanced_at=datetime(2026, 4, 3, tzinfo=UTC))
+        CurrentPointer(key=key, target_run=run2, sequence=2, advanced_at=datetime(2026, 4, 3, tzinfo=UTC))
 
 
 def test_pointer_key_rejects_mutable_version_tokens() -> None:
@@ -122,7 +125,9 @@ def test_closure_requires_root_and_connected_edges() -> None:
 
 def test_ports_are_runtime_checkable_protocols() -> None:
     class _Reader:
-        def resolve_pointer(self, key): return None
+        def resolve_pointer(self, key):
+            return None
+
         def closure(self, root, *, reverse=False, max_nodes=1000): ...
 
     class _Writer:

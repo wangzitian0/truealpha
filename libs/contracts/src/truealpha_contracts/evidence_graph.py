@@ -262,9 +262,7 @@ class EvidenceGraphReader(Protocol):
 
     def resolve_pointer(self, key: CurrentPointerKey) -> CurrentPointer | None: ...
 
-    def closure(
-        self, root: EvidenceNodeRef, *, reverse: bool = False, max_nodes: int = 1000
-    ) -> ProvenanceClosure: ...
+    def closure(self, root: EvidenceNodeRef, *, reverse: bool = False, max_nodes: int = 1000) -> ProvenanceClosure: ...
 
 
 @runtime_checkable
