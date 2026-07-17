@@ -9,7 +9,7 @@ from typing import Any, Literal, cast
 
 import dagster as dg
 from dagster import AssetExecutionContext
-from factors import Fact
+from factors import Fact, UnitFamily
 from psycopg import Connection
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts import RawObjectStore
@@ -91,8 +91,9 @@ class CoreHeadcountFactorInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     entity_id: str = Field(pattern=r"^issuer\.[a-z0-9]+$")
-    metric: Literal["employee_headcount"] = "employee_headcount"
+    metric: Literal["employees_total"] = "employees_total"
     value: Decimal = Field(gt=0)
+    unit_family: Literal[UnitFamily.COUNT] = UnitFamily.COUNT
     confidence: Decimal = Field(ge=0, le=1)
     as_of: datetime
     fiscal_period: str = Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
