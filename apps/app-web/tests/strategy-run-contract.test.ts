@@ -132,6 +132,20 @@ await expectRejected(
   /expected a decimal string/,
 );
 
+// A value fractionally above 1 that Number() rounds down to exactly 1.0
+// (float64 can't represent this many significant digits) must still be
+// rejected by the [0, 1] confidence bound — a naive Number()-based bounds
+// check would let it through (see #356's review).
+await expectRejected(
+  "confidence fractionally above 1, indistinguishable from 1.0 as a float64",
+  () =>
+    parseStrategyRunReport({
+      ...raw,
+      decisions: [{ ...(raw.decisions as Record<string, unknown>[])[0], confidence: "1.000000000000000001" }],
+    }),
+  /decimal is outside/,
+);
+
 // Fail-closed: repository.getLatest must never throw for a bad strategy_id,
 // only ever return a structured StrategyRunUnavailable (see #351's review).
 const stillStructured = repository.getLatest("", testContext);

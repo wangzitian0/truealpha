@@ -64,7 +64,10 @@ class FixtureStrategyRunRepository:
         del context  # reserved for a future authorization decision; unused today
         try:
             raw = resources.files(_FIXTURE_PACKAGE).joinpath(_FIXTURE_NAME).read_bytes()
-        except FileNotFoundError:
+        except (FileNotFoundError, ModuleNotFoundError):
+            # ModuleNotFoundError covers a mis-packaged install where the
+            # truealpha_contracts.data package itself is absent, not just
+            # the fixture file inside it.
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="fixture_missing")
 
         try:

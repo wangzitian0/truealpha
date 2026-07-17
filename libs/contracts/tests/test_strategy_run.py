@@ -139,6 +139,20 @@ def test_fixture_repository_fails_closed_on_missing_fixture(monkeypatch: pytest.
     assert result.reason == "fixture_missing"
 
 
+def test_fixture_repository_fails_closed_on_missing_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mis-packaged install (data package itself absent) must not crash the caller (#356 review)."""
+
+    def _raise_module_not_found(_package: str) -> object:
+        raise ModuleNotFoundError("truealpha_contracts.data")
+
+    monkeypatch.setattr("truealpha_contracts.strategy_run_fixture.resources.files", _raise_module_not_found)
+    repository = FixtureStrategyRunRepository()
+    result = repository.get_latest(strategy_id="large_model_value_v0", context=_context())
+
+    assert isinstance(result, StrategyRunUnavailable)
+    assert result.reason == "fixture_missing"
+
+
 def test_fixture_repository_fails_closed_on_corrupt_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unparsable or schema-drifted fixture bytes must not crash the caller (#351 review)."""
     monkeypatch.setattr(

@@ -105,16 +105,48 @@ function assertExactKeys(value: Record<string, unknown>, expected: readonly stri
   if (missing.length > 0) fail(path, `missing fields: ${missing.sort().join(", ")}`);
 }
 
+/**
+ * Compares two finite decimal-string tokens (as matched by DECIMAL_PATTERN)
+ * without going through `Number()`, so an arbitrarily precise value near a
+ * bound (e.g. "1.000000000000000001") can't round to exactly the bound and
+ * slip past a strict comparison (see #356's review).
+ */
+function compareDecimalStrings(a: string, b: string): number {
+  const parse = (token: string) => {
+    const negative = token.startsWith("-");
+    const unsigned = token.replace(/^[+-]/, "");
+    const [integerPart = "", fractionalPart = ""] = unsigned.split(".");
+    return {
+      negative,
+      integerPart: integerPart.replace(/^0+(?=\d)/, "") || "0",
+      fractionalPart: fractionalPart.replace(/0+$/, ""),
+    };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  if (left.negative !== right.negative) return left.negative ? -1 : 1;
+  const sign = left.negative ? -1 : 1;
+  if (left.integerPart.length !== right.integerPart.length) {
+    return sign * (left.integerPart.length - right.integerPart.length);
+  }
+  if (left.integerPart !== right.integerPart) return sign * (left.integerPart < right.integerPart ? -1 : 1);
+  const width = Math.max(left.fractionalPart.length, right.fractionalPart.length);
+  const leftFraction = left.fractionalPart.padEnd(width, "0");
+  const rightFraction = right.fractionalPart.padEnd(width, "0");
+  if (leftFraction === rightFraction) return 0;
+  return sign * (leftFraction < rightFraction ? -1 : 1);
+}
+
 function asDecimalString(value: unknown, path: string, bounds?: readonly [number, number]): string | null {
   if (value === null) return null;
   if (typeof value !== "string" || !DECIMAL_PATTERN.test(value)) {
     fail(path, "expected a decimal string");
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) fail(path, "expected a finite decimal string");
   if (bounds) {
     const [min, max] = bounds;
-    if (parsed < min || parsed > max) fail(path, `decimal is outside [${min}, ${max}]`);
+    if (compareDecimalStrings(value, String(min)) < 0 || compareDecimalStrings(value, String(max)) > 0) {
+      fail(path, `decimal is outside [${min}, ${max}]`);
+    }
   }
   return value;
 }
