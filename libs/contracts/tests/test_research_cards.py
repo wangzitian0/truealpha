@@ -272,6 +272,45 @@ def test_claim_class_reflects_validation_status_not_invented() -> None:
     assert card.subjects[0].claim_class is ClaimClass.EMPIRICALLY_VALIDATED
 
 
+def test_claim_class_is_most_conservative_across_multiple_sections() -> None:
+    """A COMPANY card pulls both OPERATING_EFFICIENCY and VALUATION (#372's _CARD_SECTIONS).
+    If they disagree on validation_status, the card must take the most conservative one
+    (REJECTED > NOT_EVALUATED > ACCEPTED), never the status of whichever section happens to
+    tie-break first by availability (Copilot review on #390). Both sections share the same
+    AVAILABLE status here specifically to defeat the old first-occurrence tie-break and
+    isolate the validation-status aggregation from the availability aggregation."""
+    mixed_report = ResearchReport.assemble(
+        report_kind=ResearchReportKind.COMPANY,
+        title="Mixed-validation report",
+        cutoff_at=CUTOFF,
+        generated_from="fixture:test",
+        subjects=(
+            ReportSubject(
+                subject_id="issuer:mixed",
+                display_name="issuer:mixed",
+                sections=(
+                    ReportSection(
+                        section_kind=ReportSectionKind.OPERATING_EFFICIENCY,
+                        title="Operating efficiency",
+                        availability=AvailabilityStatus.AVAILABLE,
+                        validation_status=FactorValidationStatus.ACCEPTED,
+                        results=(),
+                    ),
+                    ReportSection(
+                        section_kind=ReportSectionKind.VALUATION,
+                        title="Valuation",
+                        availability=AvailabilityStatus.AVAILABLE,
+                        validation_status=FactorValidationStatus.REJECTED,
+                        results=(),
+                    ),
+                ),
+            ),
+        ),
+    )
+    card = build_card(mixed_report, CardKind.COMPANY)
+    assert card.subjects[0].claim_class is ClaimClass.REJECTED_DO_NOT_USE
+
+
 def test_ranking_card_preserves_rank_order() -> None:
     card = GOLDEN_CARDS["ranking"]()
     ranks = [(s.subject_id, s.rank) for s in card.subjects]

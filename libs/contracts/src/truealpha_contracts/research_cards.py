@@ -191,12 +191,18 @@ def _select_metrics(
 def _section_status(
     sections: tuple[ReportSection, ...], wanted: tuple[ReportSectionKind, ...]
 ) -> tuple[AvailabilityStatus, FactorValidationStatus | None]:
+    """Worst availability and most-conservative validation status, computed independently
+    across every matched section — not read off whichever section happens to be worst by
+    availability. A card pulling multiple sections (e.g. COMPANY: OPERATING_EFFICIENCY +
+    VALUATION) must not claim EMPIRICALLY_VALIDATED unless every contributing section is;
+    reading validation_status off a single "worst" section could misclassify claim_class
+    by availability-tie section order (Copilot review on #390)."""
     matched = [section for section in sections if section.section_kind in wanted]
     if not matched:
         return AvailabilityStatus.UNAVAILABLE, None
     # A card is only as available as its least-available contributing section; ties on the
     # enum's declared order are broken by first occurrence (deterministic, no arithmetic).
-    priority = (
+    availability_priority = (
         AvailabilityStatus.ERROR,
         AvailabilityStatus.UNAVAILABLE,
         AvailabilityStatus.EXCLUDED,
@@ -204,8 +210,25 @@ def _section_status(
         AvailabilityStatus.STALE,
         AvailabilityStatus.AVAILABLE,
     )
-    worst = min(matched, key=lambda section: priority.index(section.availability))
-    return worst.availability, worst.validation_status
+    worst_availability = min(
+        matched, key=lambda section: availability_priority.index(section.availability)
+    ).availability
+
+    # Most conservative validation status across every matched section: REJECTED beats
+    # NOT_EVALUATED beats ACCEPTED. A section with no validation_status is ignored unless
+    # every matched section has none, matching the original all-None -> None/NOT_APPLICABLE
+    # behavior (never silently upgrades a card to empirically validated).
+    statuses = [section.validation_status for section in matched if section.validation_status is not None]
+    if not statuses:
+        worst_validation = None
+    elif FactorValidationStatus.REJECTED in statuses:
+        worst_validation = FactorValidationStatus.REJECTED
+    elif FactorValidationStatus.NOT_EVALUATED in statuses:
+        worst_validation = FactorValidationStatus.NOT_EVALUATED
+    else:
+        worst_validation = FactorValidationStatus.ACCEPTED
+
+    return worst_availability, worst_validation
 
 
 def _card_subject(
