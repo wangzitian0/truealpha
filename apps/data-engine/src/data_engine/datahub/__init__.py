@@ -1,6 +1,7 @@
 """Isolated DataHub control-plane implementation."""
 
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations
+from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.hardening_replay import (
     HardeningResourceCeilings,
     HardeningResourceObservation,
@@ -37,6 +38,7 @@ from data_engine.datahub.tiny_replay import (
 __all__ = [
     "AttemptLedger",
     "CaptureRepositoryConflictError",
+    "PostgresEvidenceGraphRepository",
     "FrozenRecapturePlan",
     "HardeningResourceCeilings",
     "HardeningResourceObservation",
