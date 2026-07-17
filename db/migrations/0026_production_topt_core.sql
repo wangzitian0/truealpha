@@ -504,6 +504,7 @@ select
     observation.knowable_at,
     observation.recorded_at
 from raw.capture_obligations obligation
+join raw.capture_campaigns campaign using (campaign_id)
 left join raw.capture_obligation_work_bindings binding
     on binding.obligation_id = obligation.obligation_id
 left join raw.capture_work_items work using (work_item_id)
@@ -518,10 +519,29 @@ left join lateral (
     where attempt.work_item_id = work.work_item_id
 ) attempts on true
 left join lateral (
-    select candidate.*
-    from staging.capture_observation_obligations usage
-    join staging.capture_normalized_observations candidate using (observation_id)
-    where usage.capture_obligation_id = obligation.obligation_id
-    order by candidate.recorded_at desc, candidate.observation_id desc
-    limit 1
+    select selected.*
+    from (
+        select candidate.*, count(*) over () as selection_count
+        from staging.capture_observation_obligations usage
+        join staging.capture_normalized_observations candidate using (observation_id)
+        join raw.capture_source_vintages vintage
+          on vintage.source_vintage_id = candidate.source_vintage_id
+         and vintage.source_request_id = work.source_request_id
+        where usage.capture_obligation_id = obligation.obligation_id
+          and candidate.source_vintage_id = coalesce(
+              final_attempt_result.source_vintage_id,
+              final_attempt_result.reused_source_vintage_id
+          )
+          and candidate.subject_kind = obligation.subject_kind
+          and candidate.subject_id = obligation.subject_id
+          and candidate.semantic_type = regexp_replace(obligation.capture_requirement_id, ':v1$', '')
+          and obligation.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          and (candidate.valid_from at time zone 'UTC')::date <= obligation.partition_key::date
+          and (
+              candidate.valid_to is null
+              or (candidate.valid_to at time zone 'UTC')::date >= obligation.partition_key::date
+          )
+          and candidate.knowable_at <= campaign.cutoff
+    ) selected
+    where selected.selection_count = 1
 ) observation on true;

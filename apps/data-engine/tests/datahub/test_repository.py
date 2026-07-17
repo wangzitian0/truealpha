@@ -91,7 +91,7 @@ def test_repository_persists_and_reads_terminal_capture_chain(connection) -> Non
         semantic_type="market-price",
         semantic_version="market-price:v1",
         subject=obligation.subject,
-        valid_from=STARTED_AT,
+        valid_from=STARTED_AT - timedelta(days=1),
         knowable_at=STARTED_AT,
         source_vintage_id=vintage.source_vintage_id,
         parser_version="yahoo-chart-parser:v1",

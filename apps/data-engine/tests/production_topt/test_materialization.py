@@ -136,6 +136,9 @@ def _seed_complete_production_run(connection):
     repository.put_list_version(list_version)
     repository.bind_campaign_list(campaign.campaign_id, list_version.list_version_id)
     repository.put_run(run)
+    terminal_observation_id = None
+    unselected_same_request_observation_ids = None
+    foreign_observation_id = None
 
     release_payload = {"kind": "production-topt-integration-release"}
     release_sha256 = canonical_sha256(release_payload)
@@ -242,6 +245,7 @@ def _seed_complete_production_run(connection):
         repository.put_obligation_result(obligation.obligation_id, terminal)
 
         if ordinal == 0:
+            terminal_observation_id = observation.observation_id
             future_valid = NormalizedObservation(
                 semantic_type=semantic_type,
                 semantic_version=obligation.capture_requirement_id,
@@ -261,6 +265,69 @@ def _seed_complete_production_run(connection):
                 freshness_state="fresh",
             )
 
+            tied_observations = []
+            for suffix in ("a", "b"):
+                tied_vintage = SourceVintage(
+                    source_request_id=request.source_request_id,
+                    source_record_id=f"{source_record_id}-tie-{suffix}",
+                    source_published_at=CUTOFF - timedelta(hours=2),
+                    raw_object_id=f"raw-object:{raw_sha256}",
+                )
+                repository.put_source_vintage(tied_vintage, raw_fetch_id=raw_fetch_id)
+                tied_observations.append(
+                    NormalizedObservation(
+                        semantic_type=semantic_type,
+                        semantic_version=obligation.capture_requirement_id,
+                        subject=obligation.subject,
+                        valid_from=CUTOFF - timedelta(days=2),
+                        valid_to=CUTOFF - timedelta(days=2),
+                        knowable_at=CUTOFF - timedelta(minutes=30),
+                        source_vintage_id=tied_vintage.source_vintage_id,
+                        parser_version="production-topt-integration-parser:v1",
+                        mapping_version="production-topt-integration-map:v1",
+                        normalized_payload_sha256=canonical_sha256(normalized_payload),
+                    )
+                )
+            for tied_observation in tied_observations:
+                repository.put_observation(
+                    obligation.obligation_id,
+                    tied_observation,
+                    normalized_payload=normalized_payload,
+                    confidence=Decimal("0.9"),
+                    freshness_state="fresh",
+                )
+            unselected_same_request_observation_ids = tuple(item.observation_id for item in tied_observations)
+
+            foreign_request = _source_request(obligation, ordinal=1000)
+            repository.put_source_request(foreign_request)
+            foreign_vintage = SourceVintage(
+                source_request_id=foreign_request.source_request_id,
+                source_record_id=f"{source_record_id}-foreign",
+                source_published_at=CUTOFF - timedelta(hours=2),
+                raw_object_id=f"raw-object:{raw_sha256}",
+            )
+            repository.put_source_vintage(foreign_vintage, raw_fetch_id=raw_fetch_id)
+            foreign_observation = NormalizedObservation(
+                semantic_type=semantic_type,
+                semantic_version=obligation.capture_requirement_id,
+                subject=obligation.subject,
+                valid_from=CUTOFF - timedelta(days=2),
+                valid_to=CUTOFF - timedelta(days=2),
+                knowable_at=CUTOFF - timedelta(minutes=10),
+                source_vintage_id=foreign_vintage.source_vintage_id,
+                parser_version="production-topt-integration-parser:v1",
+                mapping_version="production-topt-integration-map:v1",
+                normalized_payload_sha256=canonical_sha256(normalized_payload),
+            )
+            foreign_observation_id = foreign_observation.observation_id
+            repository.put_observation(
+                obligation.obligation_id,
+                foreign_observation,
+                normalized_payload=normalized_payload,
+                confidence=Decimal("1"),
+                freshness_state="fresh",
+            )
+
     connection.execute(
         """
         insert into staging.contract_objects (
@@ -270,15 +337,51 @@ def _seed_complete_production_run(connection):
         """,
         (release_manifest_id, release_sha256, psycopg.types.json.Jsonb(release_payload)),
     )
-    return repository, run, list_version, release_manifest_id
+    assert terminal_observation_id is not None
+    assert unselected_same_request_observation_ids is not None
+    assert foreign_observation_id is not None
+    return (
+        repository,
+        run,
+        list_version,
+        release_manifest_id,
+        terminal_observation_id,
+        unselected_same_request_observation_ids,
+        foreign_observation_id,
+    )
 
 
 def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(connection) -> None:
-    capture_repository, run, list_version, release_manifest_id = _seed_complete_production_run(connection)
+    (
+        capture_repository,
+        run,
+        list_version,
+        release_manifest_id,
+        terminal_observation_id,
+        unselected_same_request_observation_ids,
+        foreign_observation_id,
+    ) = _seed_complete_production_run(connection)
     assert capture_repository.status(run.run_id).complete
 
     repository = PostgresToptCoreRepository(connection)
     snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    selected_observation_ids = {
+        observation_id for member in snapshot.members for observation_id in member.observation_ids
+    }
+    assert terminal_observation_id in selected_observation_ids
+    assert selected_observation_ids.isdisjoint(unselected_same_request_observation_ids)
+    assert foreign_observation_id not in selected_observation_ids
+    assert connection.execute(
+        """
+        select observation_id from mart.topt_capture_meta_info
+        where observation_id in (%s, %s, %s, %s)
+        """,
+        (
+            terminal_observation_id,
+            *unselected_same_request_observation_ids,
+            foreign_observation_id,
+        ),
+    ).fetchall() == [(terminal_observation_id,)]
 
     base_payload, obligation_id, normalized_payload = connection.execute(
         """
@@ -354,7 +457,7 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert len(different) == 20
     assert different[0].invocation_id != identity.invocation_id
     assert repository.results(identity) == reads
-    assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (86,)
+    assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (89,)
     assert connection.execute("select count(*) from staging.topt_core_snapshot_members").fetchone() == (20,)
 
     with pytest.raises(psycopg.errors.CheckViolation, match="does not match its invocation"), connection.transaction():
@@ -392,6 +495,55 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
             "update mart.topt_core_results set confidence = 0 where result_id = %s",
             (results[0].result_id,),
         )
+
+
+def test_snapshot_rejects_ambiguous_mapping_for_terminal_source_vintage(connection) -> None:
+    (
+        capture_repository,
+        run,
+        _,
+        release_manifest_id,
+        terminal_observation_id,
+        _,
+        _,
+    ) = _seed_complete_production_run(connection)
+    observation_payload, obligation_id, normalized_payload = connection.execute(
+        """
+        select observation.payload, observation.capture_obligation_id, payload.normalized_payload
+        from staging.capture_normalized_observations observation
+        join staging.capture_observation_payloads payload using (observation_id)
+        where observation.observation_id = %s
+        """,
+        (terminal_observation_id,),
+    ).fetchone()
+    ambiguous_observation = NormalizedObservation.model_validate(
+        {
+            **observation_payload,
+            "observation_id": "",
+            "content_sha256": "",
+            "mapping_version": "production-topt-integration-map:v2",
+        }
+    )
+    capture_repository.put_observation(
+        obligation_id,
+        ambiguous_observation,
+        normalized_payload=normalized_payload,
+        confidence=Decimal("0.9"),
+        freshness_state="fresh",
+    )
+
+    with pytest.raises(ValueError, match="does not resolve exactly one normalized observation"):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=run.run_id,
+            release_manifest_id=release_manifest_id,
+        )
+    assert connection.execute(
+        """
+        select observation_id from mart.topt_capture_meta_info
+        where run_id = %s and obligation_id = %s
+        """,
+        (run.run_id, obligation_id),
+    ).fetchall() == [(None,)]
 
 
 def test_snapshot_rejects_unknown_run(connection) -> None:

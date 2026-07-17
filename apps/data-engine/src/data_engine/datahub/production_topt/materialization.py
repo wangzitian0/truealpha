@@ -424,21 +424,40 @@ class PostgresToptCoreRepository:
                     observation.freshness_state,
                     observation.knowable_at,
                     payload.normalized_payload,
+                    count(*) over (
+                        partition by obligation.obligation_id
+                    ) as selection_count,
                     row_number() over (
                         partition by obligation.obligation_id
                         order by observation.knowable_at desc,
-                                 observation.recorded_at desc,
                                  observation.observation_id desc
                     ) as selection_rank
                 from raw.capture_obligations obligation
                 join raw.capture_obligation_results terminal
                   on terminal.capture_obligation_id = obligation.obligation_id
                  and terminal.terminal_state in ('success', 'unchanged')
+                join raw.capture_attempt_results terminal_attempt
+                  on terminal_attempt.attempt_id = terminal.final_attempt_id
                 join staging.capture_observation_obligations usage
                   on usage.capture_obligation_id = obligation.obligation_id
                 join staging.capture_normalized_observations observation using (observation_id)
                 join staging.capture_observation_payloads payload using (observation_id)
+                join raw.capture_obligation_work_bindings binding
+                  on binding.obligation_id = obligation.obligation_id
+                join raw.capture_work_items work using (work_item_id)
+                join raw.capture_source_vintages vintage
+                  on vintage.source_vintage_id = observation.source_vintage_id
+                 and vintage.source_request_id = work.source_request_id
                 where obligation.run_id = %s
+                  and observation.source_vintage_id = coalesce(
+                      terminal_attempt.source_vintage_id,
+                      terminal_attempt.reused_source_vintage_id
+                  )
+                  and observation.subject_kind = obligation.subject_kind
+                  and observation.subject_id = obligation.subject_id
+                  and observation.semantic_type = regexp_replace(
+                      obligation.capture_requirement_id, ':v1$', ''
+                  )
                   and obligation.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
                   and (observation.valid_from at time zone 'UTC')::date <= obligation.partition_key::date
                   and (
@@ -450,12 +469,18 @@ class PostgresToptCoreRepository:
             select obligation_id, subject_id,
                    regexp_replace(capture_requirement_id, ':v1$', ''),
                    observation_id, confidence, freshness_state, knowable_at,
-                   normalized_payload
+                   normalized_payload, selection_count
             from selected where selection_rank = 1
             order by subject_id, capture_requirement_id
             """,
             (run_id, cutoff),
         ).fetchall()
+        ambiguous = [row[0] for row in rows if row[8] != 1]
+        if ambiguous:
+            raise ValueError(
+                "Production terminal source vintage does not resolve exactly one "
+                f"normalized observation for obligations: {', '.join(ambiguous)}"
+            )
         return tuple(
             _ObservationRow(
                 obligation_id=row[0],
