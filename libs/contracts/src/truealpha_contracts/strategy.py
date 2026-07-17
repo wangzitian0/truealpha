@@ -124,7 +124,13 @@ class DecimalQuantization(_StrictFrozenModel):
 
 
 class ExclusionReason(StrEnum):
-    """Machine-readable per-issuer exclusion codes; no sector-level code exists."""
+    """Machine-readable per-issuer exclusion codes; no blanket sector-eligibility
+    code exists. FINANCIAL_VALUATION_NOT_COMPARABLE is not an exception to that
+    rule: it is only valid *after* a financial issuer's mandatory #59 factor
+    branch (`financial_issuers_use_financial_proxy`) actually produced a real
+    capital_adjusted_labor_efficiency value -- it names a specific downstream
+    methodology gap (no approved P/S-equivalent tier mapping for financial
+    issuers yet), never a shortcut that skips computing the branch."""
 
     MISSING_GROSS_PROFIT_FACT = "missing_gross_profit_fact"
     MISSING_TOTAL_ASSETS_FACT = "missing_total_assets_fact"
@@ -139,6 +145,7 @@ class ExclusionReason(StrEnum):
     NONPOSITIVE_HEADCOUNT = "nonpositive_headcount"
     NONPOSITIVE_LABOR_COST = "nonpositive_labor_cost"
     NONPOSITIVE_REVENUE = "nonpositive_revenue"
+    FINANCIAL_VALUATION_NOT_COMPARABLE = "financial_valuation_not_comparable"
 
 
 class RiskFreeInstrument(StrEnum):
@@ -388,6 +395,12 @@ class ConfidenceEligibilityRule(_StrictFrozenModel):
     maximum_input_age_days: int = Field(ge=1, le=730)
     below_floor_reason: ExclusionReason
     stale_input_reason: ExclusionReason
+    # Only one behavior is implemented today: financial issuers compute the
+    # mandatory #59 factor branch and are then marked ineligible for the P/S
+    # tier comparison specifically (no approved financial target band exists
+    # yet). A future versioned band would be a new Literal member, not a
+    # default -- #21's "no implicit defaults" rule.
+    financial_target_behavior: Literal["ineligible_financial_valuation_not_comparable"]
 
     @field_validator("minimum_confidence", mode="before")
     @classmethod
@@ -401,6 +414,10 @@ class ConfidenceEligibilityRule(_StrictFrozenModel):
         if self.stale_input_reason is not ExclusionReason.STALE_REQUIRED_INPUT:
             raise ValueError("stale inputs must use their exact reason code")
         return self
+
+    @property
+    def financial_ineligibility_reason(self) -> ExclusionReason:
+        return ExclusionReason.FINANCIAL_VALUATION_NOT_COMPARABLE
 
 
 class SelectionRule(_StrictFrozenModel):
@@ -461,6 +478,12 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
     execution: StrategyExecutionPolicy
     transaction_cost: StrategyTransactionCostPolicy
     total_return: StrategyTotalReturnPolicy
+    # Mandatory-true, not a toggle: the #59 financial factor branch can never
+    # be blanket-disabled for the whole strategy (a schema test asserts that
+    # setting this to False is rejected). Whether any *specific* issuer takes
+    # the branch is a per-decision fact (`GoldenDecision.issuer_branch`),
+    # never a strategy-level switch.
+    financial_issuers_use_financial_proxy: Literal[True]
 
     @field_validator("definition_version")
     @classmethod
@@ -587,6 +610,11 @@ class GoldenExpectation(_StrictFrozenModel):
 class GoldenDecision(_StrictFrozenModel):
     decision_key: str = Field(pattern=_STABLE_KEY_PATTERN)
     issuer: SubjectRef
+    # Explicit per-decision classification, not inferred from the issuer or
+    # from which facts happen to be present -- the mandatory #59 branch
+    # (`gross_profit_per_employee`'s capital-charge skip) is selected by this
+    # field, never by a missing-fact fallthrough.
+    issuer_branch: Literal["non_financial", "financial"]
     cutoff_at: datetime
     inputs: tuple[GoldenInputRecord, ...] = Field(min_length=1)
     derivation: str = Field(min_length=1)
