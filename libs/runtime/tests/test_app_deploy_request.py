@@ -174,6 +174,13 @@ def test_version_ref_requires_a_string(corpus: dict, version_ref: object) -> Non
         renderer.request_from_mapping(_merged(valid["request"], {"version_ref": version_ref}))
 
 
+@pytest.mark.parametrize("deploy_type", (None, True, 1, []))
+def test_deploy_type_rejects_non_strings(corpus: dict, deploy_type: object) -> None:
+    valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")
+    with pytest.raises(ValueError, match="deploy_type must be"):
+        renderer.request_from_mapping(_merged(valid["request"], {"deploy_type": deploy_type}))
+
+
 @pytest.mark.parametrize("source_sha", [None, True, "A" * 40, "a" * 39, "a" * 41])
 def test_source_sha_requires_lowercase_commit_identity(corpus: dict, source_sha: object) -> None:
     valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")

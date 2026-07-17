@@ -89,7 +89,7 @@ def _validate_authority(raw: Mapping[str, Any]) -> None:
         raise ValueError("operation must be deploy")
 
     deploy_type = raw.get("deploy_type")
-    if deploy_type not in _SUPPORTED_DEPLOY_TYPES:
+    if not isinstance(deploy_type, str) or deploy_type not in _SUPPORTED_DEPLOY_TYPES:
         raise ValueError("deploy_type must be preview/tag, staging, or prod")
 
     version_ref = raw.get("version_ref")
