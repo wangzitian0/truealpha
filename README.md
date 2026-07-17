@@ -40,6 +40,14 @@ machine-readable input to later mart/dashboard presentation.
 
 Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
 
+## DataHub Demand
+
+Factors, strategies, and research modules request a long-lived data service through a
+content-addressed, source-neutral demand with a representative sample. See
+[`docs/datahub-service-demand.md`](docs/datahub-service-demand.md) for the contract,
+TOPT example, quality objectives, and the boundary with confidence calibration and
+`infra2-sdk`.
+
 Data-quality design and the reproducible continuous-confidence sensitivity
 report are documented in [`docs/confidence-calibration.md`](docs/confidence-calibration.md).
 Its DTOs live in `libs/contracts`; the sole formula implementation and report
