@@ -247,6 +247,7 @@ def test_release_workflow_dispatches_only_the_rendered_sdk_request() -> None:
     assert 'staging_title_prefix="Deploy ${service} staging ${version_ref} ${source_sha} ["' in workflow
     assert '.path == ".github/workflows/app-deploy-request.yml"' in workflow
     assert '.event == "repository_dispatch"' in workflow
+    assert "timeout-minutes: 50" in workflow
     assert "python tools/app_deploy_request.py" in workflow
     assert "event_type: app-deploy-request" in workflow
     assert '"client_payload": $request' in workflow
