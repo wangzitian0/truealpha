@@ -18,6 +18,24 @@ import { join } from "node:path";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const CUTOFF_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+// Signed, finite decimal digits only — explicitly excludes "Infinity", "NaN",
+// exponential notation ("1e309"), and other Number()-coercible-but-not-decimal
+// tokens (see #351's review).
+const DECIMAL_PATTERN = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
+
+/** Structural mirror of `truealpha_contracts.access.AccessContext` — see #347.
+ * Fields are intentionally untyped-narrow (plain `string`) so any concrete
+ * caller-side context (e.g. apps/app-web/src/server/auth-context.ts's
+ * Local-only stand-in) is structurally assignable here without a cast. */
+export interface AccessContext {
+  contextId: string;
+  principalId: string;
+  tenantId: string;
+  sessionId: string;
+  authenticationMethod: string;
+  issuedAt: string;
+  expiresAt: string;
+}
 
 export const STRATEGY_RUN_OUTCOMES = [
   "selected",
@@ -87,15 +105,48 @@ function assertExactKeys(value: Record<string, unknown>, expected: readonly stri
   if (missing.length > 0) fail(path, `missing fields: ${missing.sort().join(", ")}`);
 }
 
+/**
+ * Compares two finite decimal-string tokens (as matched by DECIMAL_PATTERN)
+ * without going through `Number()`, so an arbitrarily precise value near a
+ * bound (e.g. "1.000000000000000001") can't round to exactly the bound and
+ * slip past a strict comparison (see #356's review).
+ */
+function compareDecimalStrings(a: string, b: string): number {
+  const parse = (token: string) => {
+    const negative = token.startsWith("-");
+    const unsigned = token.replace(/^[+-]/, "");
+    const [integerPart = "", fractionalPart = ""] = unsigned.split(".");
+    return {
+      negative,
+      integerPart: integerPart.replace(/^0+(?=\d)/, "") || "0",
+      fractionalPart: fractionalPart.replace(/0+$/, ""),
+    };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  if (left.negative !== right.negative) return left.negative ? -1 : 1;
+  const sign = left.negative ? -1 : 1;
+  if (left.integerPart.length !== right.integerPart.length) {
+    return sign * (left.integerPart.length - right.integerPart.length);
+  }
+  if (left.integerPart !== right.integerPart) return sign * (left.integerPart < right.integerPart ? -1 : 1);
+  const width = Math.max(left.fractionalPart.length, right.fractionalPart.length);
+  const leftFraction = left.fractionalPart.padEnd(width, "0");
+  const rightFraction = right.fractionalPart.padEnd(width, "0");
+  if (leftFraction === rightFraction) return 0;
+  return sign * (leftFraction < rightFraction ? -1 : 1);
+}
+
 function asDecimalString(value: unknown, path: string, bounds?: readonly [number, number]): string | null {
   if (value === null) return null;
-  if (typeof value !== "string" || value.trim() === "" || Number.isNaN(Number(value))) {
+  if (typeof value !== "string" || !DECIMAL_PATTERN.test(value)) {
     fail(path, "expected a decimal string");
   }
   if (bounds) {
     const [min, max] = bounds;
-    const parsed = Number(value);
-    if (parsed < min || parsed > max) fail(path, `decimal is outside [${min}, ${max}]`);
+    if (compareDecimalStrings(value, String(min)) < 0 || compareDecimalStrings(value, String(max)) > 0) {
+      fail(path, `decimal is outside [${min}, ${max}]`);
+    }
   }
   return value;
 }
@@ -126,7 +177,7 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
   if (typeof issuerId !== "string" || issuerId.length === 0) fail(`${path}.issuer_id`, "expected a non-empty string");
 
   const cutoffAt = object.cutoff_at;
-  if (typeof cutoffAt !== "string" || !CUTOFF_PATTERN.test(cutoffAt)) {
+  if (typeof cutoffAt !== "string" || !CUTOFF_PATTERN.test(cutoffAt) || Number.isNaN(Date.parse(cutoffAt))) {
     fail(`${path}.cutoff_at`, "expected an aware ISO date-time");
   }
 
@@ -219,9 +270,28 @@ const FIXTURE_PATH = join(
  * Mirrors `truealpha_contracts.strategy_run_fixture.FixtureStrategyRunRepository`.
  */
 export class FixtureStrategyRunRepository {
-  getLatest(strategyId: string): StrategyRunReport | StrategyRunUnavailable {
-    const raw = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as unknown;
-    const report = parseStrategyRunReport(raw);
+  /** `context` is reserved for a future authorization decision; unused today. */
+  getLatest(strategyId: string, _context: AccessContext): StrategyRunReport | StrategyRunUnavailable {
+    let raw: string;
+    try {
+      raw = readFileSync(FIXTURE_PATH, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { strategy_id: strategyId, reason: "fixture_missing" };
+      }
+      throw error;
+    }
+
+    let report: StrategyRunReport;
+    try {
+      report = parseStrategyRunReport(JSON.parse(raw));
+    } catch (error) {
+      if (error instanceof StrategyRunContractError || error instanceof SyntaxError) {
+        return { strategy_id: strategyId, reason: "fixture_hash_mismatch" };
+      }
+      throw error;
+    }
+
     if (strategyId !== report.strategy_id) {
       return { strategy_id: strategyId, reason: "unknown_strategy_id" };
     }
