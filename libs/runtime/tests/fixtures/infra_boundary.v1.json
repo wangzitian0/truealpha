@@ -38,9 +38,7 @@
     "deploy_type": "staging",
     "source_repository": "wangzitian0/truealpha",
     "allowed_version_ref_forms": [
-      "main",
-      "vX.Y.Z",
-      "7-to-40-character hexadecimal commit SHA"
+      "vX.Y.Z"
     ],
     "canonical_json": "UTF-8, sorted object keys, compact separators, ASCII escaping, newline terminated",
     "network_access": false,
@@ -89,7 +87,7 @@
       "override": {
         "version_ref": "feature/unsafe"
       },
-      "error": "unrecognized deploy ref"
+      "error": "version_ref must be a stable vX.Y.Z tag"
     },
     {
       "id": "invalid-source-sha",
