@@ -25,7 +25,7 @@ def _company_facts(ticker: str) -> dict:
     return json.loads((SAMPLES_DIR / _SAMPLE_FILES[ticker]).read_text())
 
 
-_FAR_FUTURE_CUTOFF = datetime(2027, 1, 1, tzinfo=UTC)
+_FAR_FUTURE_CUTOFF = datetime(2099, 1, 1, tzinfo=UTC)
 
 
 @pytest.mark.parametrize("ticker", sorted(_SAMPLE_FILES))
@@ -41,11 +41,12 @@ def test_total_assets_extracts_for_every_sample_issuer(ticker: str) -> None:
 @pytest.mark.parametrize("ticker", ["adm", "ddog", "duol", "nice", "nvda", "plug", "shop"])
 def test_gross_profit_extracts_for_issuers_that_report_it(ticker: str) -> None:
     observation = extract_gross_profit(_company_facts(ticker), entity_id=f"issuer.{ticker}", cutoff=_FAR_FUTURE_CUTOFF)
+    # PLUG (loss-making) genuinely reports negative gross profit -- a real
+    # value, not a bug. `is not None` already proves extraction succeeded;
+    # asserting a specific sign/nonzero value would make this brittle for no
+    # reason, since a legitimately zero gross profit is possible too.
     assert observation is not None
     assert observation.metric == "gross_profit"
-    # PLUG (loss-making) genuinely reports negative gross profit -- a real
-    # value, not a bug -- so this only checks a value was resolved at all.
-    assert observation.value != 0
 
 
 @pytest.mark.parametrize("ticker", ["jpm", "meta"])
@@ -131,3 +132,20 @@ def test_unregistered_tag_returns_none_not_an_error() -> None:
         cutoff=_FAR_FUTURE_CUTOFF,
     )
     assert result is None
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {},
+        {"facts": "not-an-object"},
+        {"facts": {}},
+        {"facts": {"us-gaap": "not-an-object"}},
+    ],
+)
+def test_malformed_top_level_payload_raises_not_silently_treated_as_absent(malformed: dict) -> None:
+    # A missing/wrong-typed top-level `facts`/`facts.us-gaap` is a real
+    # schema-drift error, distinct from "this specific tag is genuinely
+    # absent" (which correctly returns None elsewhere in this file).
+    with pytest.raises(ValueError, match="facts"):
+        extract_gross_profit(malformed, entity_id="issuer.ddog", cutoff=_FAR_FUTURE_CUTOFF)

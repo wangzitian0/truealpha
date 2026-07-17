@@ -64,10 +64,28 @@ class SecFinancialObservation(BaseModel):
 
 
 def _annual_usd_rows(company_facts: dict[str, Any], tag: str) -> list[dict[str, Any]]:
-    try:
-        rows = company_facts["facts"]["us-gaap"][tag]["units"]["USD"]
-    except KeyError:
+    """Only a genuinely absent `tag` (or a tag with no USD-denominated units)
+    is treated as "no data" and returns `[]`. A malformed top-level payload
+    (missing/wrong-typed `facts`/`facts.us-gaap`) raises instead of silently
+    behaving as if every tag were merely absent."""
+
+    facts = company_facts.get("facts")
+    if not isinstance(facts, dict):
+        raise ValueError("company-facts payload is missing a valid top-level 'facts' object")
+    us_gaap = facts.get("us-gaap")
+    if not isinstance(us_gaap, dict):
+        raise ValueError("company-facts payload is missing a valid 'facts.us-gaap' object")
+    tag_entry = us_gaap.get(tag)
+    if tag_entry is None:
         return []
+    if not isinstance(tag_entry, dict):
+        raise ValueError(f"company-facts schema drifted for tag {tag!r}: expected an object")
+    units = tag_entry.get("units")
+    if units is None:
+        return []
+    if not isinstance(units, dict):
+        raise ValueError(f"company-facts schema drifted for tag {tag!r}: 'units' must be an object")
+    rows = units.get("USD", [])
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise ValueError(f"company-facts schema drifted for tag {tag!r}: USD units must be a list of objects")
     return rows
@@ -101,16 +119,16 @@ def extract_annual_metric(
     """
 
     rows = _annual_usd_rows(company_facts, tag)
-    candidates = [
-        row
-        for row in rows
-        if row.get("form") in _ANNUAL_REPORT_FORMS
-        and row.get("fp") == "FY"
-        and date.fromisoformat(row["filed"]) <= cutoff.date()
-    ]
-    if not candidates:
-        return None
     try:
+        candidates = [
+            row
+            for row in rows
+            if row.get("form") in _ANNUAL_REPORT_FORMS
+            and row.get("fp") == "FY"
+            and date.fromisoformat(row["filed"]) <= cutoff.date()
+        ]
+        if not candidates:
+            return None
         selected = max(
             candidates,
             key=lambda row: (
