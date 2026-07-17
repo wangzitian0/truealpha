@@ -433,7 +433,7 @@ class QuarterlyCutoffSchedule(_StrictFrozenModel):
             raise ValueError("quarterly cutoffs must use the last calendar day of the quarter")
         if (canonical.hour, canonical.minute, canonical.second, canonical.microsecond) != (23, 59, 59, 0):
             raise ValueError("quarterly cutoffs must close the day at 23:59:59 UTC")
-        return value
+        return canonical
 
 
 class LargeModelValueV0Definition(_StrictFrozenModel):
