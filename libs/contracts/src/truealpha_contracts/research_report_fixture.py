@@ -100,10 +100,14 @@ def _result(
 def _operating_efficiency_section(decision: StrategyRunDecision, corpus_sha256: str) -> ReportSection:
     value = _decimal_str(decision.capital_adjusted_labor_efficiency)
     status = _decision_availability(decision)
+    # The section's own availability mirrors the decision (LOW_CONFIDENCE/EXCLUDED must
+    # stay visible even when this one field is null) — matching every other section
+    # builder here. A null value's own downgrade to UNAVAILABLE happens per-result inside
+    # _result()/_value_availability, not at the section level (Copilot review on #383).
     return ReportSection(
         section_kind=ReportSectionKind.OPERATING_EFFICIENCY,
         title="Operating efficiency (capital-adjusted labor efficiency)",
-        availability=_value_availability(value, status),
+        availability=status,
         validation_status=FactorValidationStatus.NOT_EVALUATED,
         results=(
             _result(

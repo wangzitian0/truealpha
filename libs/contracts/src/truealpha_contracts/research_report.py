@@ -269,10 +269,12 @@ def build_research_report(
 
 
 def render_report_json(report: ResearchReport) -> str:
-    """Renders the canonical JSON form: sorted keys, stable separators, trailing newline.
-
-    The JSON is the content the `report_id` hashes over (plus the id itself), so two runs
-    that produce equal read models produce byte-identical JSON.
+    """Renders the canonical, pretty-printed JSON form: sorted keys, 2-space indent,
+    trailing newline. Same field content as `report_id`'s hash input, but not the same
+    bytes — `report_id` hashes `canonical_sha256`'s compact, unindented serialization
+    (see `ResearchReport.assemble`), not this indented form. Two runs over equal read
+    models produce byte-identical output from this renderer either way, since both
+    serializations are deterministic functions of the same content.
     """
     payload = report.model_dump(mode="json")
     return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=True) + "\n"

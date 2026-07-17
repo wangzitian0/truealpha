@@ -23,7 +23,11 @@ from truealpha_contracts.research_report import (
     render_report_json,
     render_report_markdown,
 )
-from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository, _strategy_summary_section
+from truealpha_contracts.research_report_fixture import (
+    FixtureResearchReadRepository,
+    _operating_efficiency_section,
+    _strategy_summary_section,
+)
 from truealpha_contracts.strategy_run import StrategyRunDecision, StrategyRunOutcome
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 
@@ -163,6 +167,26 @@ def test_hard_excluded_path_is_explicit() -> None:
     section = _strategy_summary_section(decision, corpus_sha256="0" * 64)
     assert section.availability is AvailabilityStatus.EXCLUDED
     assert section.reason_codes == ("valuation_inputs_unavailable",)
+
+
+def test_operating_efficiency_section_preserves_low_confidence_when_value_is_null() -> None:
+    """The section's own availability must mirror the decision, not collapse to
+    UNAVAILABLE just because this one field happens to be null (Copilot review on #383):
+    a below-confidence-floor issuer with an unmaterialized labor-efficiency value must
+    still surface as LOW_CONFIDENCE, not the more generic/less informative UNAVAILABLE."""
+    decision = StrategyRunDecision(
+        issuer_id="issuer:test-low-confidence-null-value",
+        cutoff_at=CUTOFF,
+        outcome=StrategyRunOutcome.EXCLUDED,
+        eligible=False,
+        exclusion_reason="below_confidence_floor",
+        confidence=Decimal("0.5"),
+        capital_adjusted_labor_efficiency=None,
+    )
+    section = _operating_efficiency_section(decision, corpus_sha256="0" * 64)
+    assert section.availability is AvailabilityStatus.LOW_CONFIDENCE
+    # The individual result's own value-availability still correctly reflects the null field.
+    assert section.results[0].availability is AvailabilityStatus.UNAVAILABLE
 
 
 def test_ranking_is_ordered_and_reproduces_ranks() -> None:
