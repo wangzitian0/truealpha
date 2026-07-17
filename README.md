@@ -48,6 +48,11 @@ content-addressed, source-neutral demand with a representative sample. See
 TOPT example, quality objectives, and the boundary with confidence calibration and
 `infra2-sdk`.
 
+Data-quality design and the reproducible continuous-confidence sensitivity
+report are documented in [`docs/confidence-calibration.md`](docs/confidence-calibration.md).
+Its DTOs live in `libs/contracts`; the sole formula implementation and report
+verifier live in `libs/factors` and are only orchestrated by data-engine.
+
 ### Manual Production TOPT core
 
 After an explicitly triggered Production TOPT run has completed all 84 obligations,

@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import json
+import shutil
+from decimal import ROUND_UP, Decimal, Inexact, localcontext
+from pathlib import Path
+
+import pytest
+from data_engine.quality.confidence import (
+    _derive_price_reconciliation_anchor,
+    build_topt_confidence_sensitivity_report,
+)
+from factors.confidence import verify_confidence_calibration_report
+from pydantic import ValidationError
+from truealpha_contracts.confidence import ConfidenceCalibrationReport
+
+
+def test_topt_sensitivity_report_is_content_addressed_and_keeps_the_denominator() -> None:
+    report = build_topt_confidence_sensitivity_report()
+    repeated = build_topt_confidence_sensitivity_report()
+
+    assert report == repeated
+    assert report.report_id == "confidence-calibration-report:" + report.content_sha256
+    assert report.denominator_size == 20
+    assert report.empirically_observed_subject_ids == (
+        "ticker:DDOG",
+        "ticker:DUOL",
+        "ticker:NICE",
+        "ticker:SHOP",
+    )
+    assert len(report.scenarios) == 10
+    assert report.claim_ceiling == "development_sensitivity_only"
+    round_tripped = ConfidenceCalibrationReport.model_validate_json(report.model_dump_json())
+    assert verify_confidence_calibration_report(round_tripped) == report
+    with localcontext() as context:
+        context.prec = 2
+        context.rounding = ROUND_UP
+        context.traps[Inexact] = True
+        assert build_topt_confidence_sensitivity_report() == report
+
+
+def test_empirical_anchor_rejects_duplicate_or_misassigned_primary_samples(tmp_path: Path) -> None:
+    source_prices = Path(__file__).resolve().parents[1] / "samples" / "prices"
+    target_prices = tmp_path / "prices"
+    shutil.copytree(source_prices, target_prices)
+    manifest_path = target_prices / "independent_reconciliation.v1.json"
+    original = json.loads(manifest_path.read_text())
+
+    duplicate = json.loads(json.dumps(original))
+    duplicate["primary_artifacts"][1]["path"] = duplicate["primary_artifacts"][0]["path"]
+    duplicate["primary_artifacts"][1]["sha256"] = duplicate["primary_artifacts"][0]["sha256"]
+    manifest_path.write_text(json.dumps(duplicate))
+    with pytest.raises(ValueError, match="one-to-one"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
+    misassigned = json.loads(json.dumps(original))
+    first = misassigned["primary_artifacts"][0]
+    second = misassigned["primary_artifacts"][1]
+    first["path"], second["path"] = second["path"], first["path"]
+    first["sha256"], second["sha256"] = second["sha256"], first["sha256"]
+    manifest_path.write_text(json.dumps(misassigned))
+    with pytest.raises(ValueError, match="filename must match"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
+    manifest_path.write_text(json.dumps(original))
+    report_path = target_prices / "twelve_data_reconciliation_20260714.json"
+    report = json.loads(report_path.read_text())
+    original_report = json.loads(json.dumps(report))
+    report["observations"][1]["twelve_data_response_sha256"] = report["observations"][0]["twelve_data_response_sha256"]
+    report_path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="unique provider response hash"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
+    invalid_count = json.loads(json.dumps(original_report))
+    invalid_count["observations"][0]["field_stats"]["close"]["count"] = 754.0
+    report_path.write_text(json.dumps(invalid_count))
+    with pytest.raises(ValueError, match="invalid denominator"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
+    missing_artifact = tmp_path / original["primary_artifacts"][0]["path"]
+    missing_artifact.unlink()
+    report_path.write_text(json.dumps(original_report))
+    with pytest.raises(ValueError, match=f"sample artifact is missing: {missing_artifact}"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
+
+def test_independent_support_is_continuous_and_same_origin_is_deduplicated() -> None:
+    report = build_topt_confidence_sensitivity_report()
+    scores = {scenario.scenario_id: scenario.evaluation.score_100 for scenario in report.scenarios}
+
+    assert scores["topt.single-independent-source"] == Decimal("63.139100")
+    assert scores["topt.same-origin-duplicate"] == scores["topt.single-independent-source"]
+    assert scores["topt.two-independent-agreeing"] == Decimal("86.412800")
+    assert scores["topt.three-independent-agreeing"] == Decimal("94.991600")
+    assert (
+        scores["topt.single-independent-source"]
+        < scores["topt.two-independent-agreeing"]
+        < scores["topt.three-independent-agreeing"]
+        < Decimal("100")
+    )
+
+
+def test_quality_penalties_and_empirical_anchor_remain_explainable() -> None:
+    report = build_topt_confidence_sensitivity_report()
+    scenarios = {scenario.scenario_id: scenario for scenario in report.scenarios}
+
+    assert scenarios["topt.stale-source"].evaluation.score_100 == Decimal("39.286900")
+    assert scenarios["topt.semantic-mismatch"].evaluation.score_100 == Decimal("53.093400")
+    assert scenarios["topt.partial-lineage"].evaluation.score_100 == Decimal("54.965800")
+    assert scenarios["topt.missing-components"].evaluation.score_100 == Decimal("54.965800")
+    assert scenarios["topt.cross-source-conflict"].evaluation.score_100 == Decimal("49.197000")
+
+    empirical = scenarios["topt.yahoo-twelve-data-four-symbol-anchor"]
+    assert empirical.evidence_class == "empirical_anchor"
+    assert empirical.input.agreement == (Decimal(15069) / Decimal(15080)).quantize(Decimal("0.000000000001"))
+    with localcontext() as context:
+        context.prec = 50
+        assert empirical.input.required_component_completeness == Decimal(5) / Decimal(7)
+    assert empirical.evaluation.score_100 == Decimal("51.470200")
+    assert {source.reliability for source in empirical.evaluation.source_scores} == {Decimal("0.800000")}
+    assert "reliability.provisional-unobserved-ceiling" in empirical.evaluation.reason_codes
+    assert "evidence.raw-transport-missing" in empirical.evaluation.reason_codes
+    assert "quality.required-component-penalty" in empirical.evaluation.reason_codes
+    scores_by_provider = {score.provider_id: score for score in empirical.evaluation.source_scores}
+    assert scores_by_provider["provider:yahoo-chart"].source_quality == Decimal("0.800000")
+    assert scores_by_provider["provider:twelve-data"].source_quality == Decimal("0.000000")
+    twelve = next(source for source in empirical.input.sources if source.provider_id == "provider:twelve-data")
+    assert twelve.transport_integrity == 0
+    assert len(twelve.evidence_ids) == 5
+
+
+def test_evaluation_rejects_denormalized_score_or_identity_drift() -> None:
+    evaluation = build_topt_confidence_sensitivity_report().scenarios[0].evaluation
+    payload = evaluation.model_dump(mode="python", exclude={"evaluation_id", "content_sha256"})
+
+    with pytest.raises(ValidationError, match="exact normalized confidence projection"):
+        type(evaluation)(**{**payload, "score_100": evaluation.score_100 + Decimal("0.000001")})
+    with pytest.raises(ValidationError, match="policy identity and hash"):
+        type(evaluation)(**{**payload, "policy_sha256": "0" * 64})
