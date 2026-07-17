@@ -30,6 +30,7 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
   group: truealpha-release-${{ inputs.deploy_type }}-${{ inputs.version_ref }}
@@ -66,6 +67,10 @@ jobs:
             exit 1
           fi
           request_id="truealpha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if ! git rev-parse --verify --quiet "refs/tags/${VERSION_REF}^{commit}" >/dev/null; then
+            echo "::error::version_ref must identify an existing commit tag"
+            exit 1
+          fi
           source_sha="$(git rev-list -n 1 "refs/tags/${VERSION_REF}^{commit}")"
           if ! git merge-base --is-ancestor "$source_sha" origin/main; then
             echo "::error::release tag must be reachable from origin/main"

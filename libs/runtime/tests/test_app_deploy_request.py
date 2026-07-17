@@ -234,7 +234,10 @@ def test_release_workflow_dispatches_only_the_rendered_sdk_request() -> None:
 
     assert "workflow_dispatch:" in workflow
     assert "options: [preview/tag, staging, prod]" in workflow
+    assert "pull-requests: read" in workflow
     assert 'GITHUB_REF" != "refs/heads/main"' in workflow
+    assert 'rev-parse --verify --quiet "refs/tags/${VERSION_REF}^{commit}"' in workflow
+    assert "version_ref must identify an existing commit tag" in workflow
     assert "merge-base --is-ancestor" in workflow
     assert '.path == ".github/workflows/ci-required.yml"' in workflow
     assert '.event == "push"' in workflow
