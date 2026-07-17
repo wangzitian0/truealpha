@@ -12,6 +12,10 @@ issuer. Single-listing, reporting-currency-only issuers get a correct number
 from this module; dual-class issuers need the richer S5-style aggregation,
 which is real future work once factor inputs carry per-component structure
 (tracked alongside the Gate-1 execution-spine migration, not attempted here).
+
+`data_availability` is "unverified" even on success, matching
+`gross_profit_per_employee`'s deliberate choice: neither factor is fed by an
+accepted capture/snapshot pipeline yet in this preview round.
 """
 
 from collections.abc import Sequence
@@ -30,6 +34,17 @@ _MISSING_REASON = {
 }
 
 
+def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
+    # Facts already reflect one PIT-resolved vintage per metric; a factor never
+    # re-selects among candidates (init.md Section 6) — take the sole match.
+    # Mirrors gross_profit_per_employee._find: source fusion never silently
+    # picks the most recently supplied row (CLAUDE.md architecture red line).
+    matches = [f for f in facts if f.entity_id == entity_id and f.metric == metric]
+    if len(matches) > 1:
+        raise ValueError(f"{entity_id}: multiple PIT-resolved facts for metric {metric!r}")
+    return matches[0] if matches else None
+
+
 @factor("price_to_sales", kind="base", module=6)
 def price_to_sales(
     facts: Sequence[Fact],
@@ -37,12 +52,18 @@ def price_to_sales(
     entity_id: str,
     as_of: datetime,
 ) -> FactorResult:
-    by_metric = {fact.metric: fact for fact in facts if fact.entity_id == entity_id}
-    missing = [
-        metric for metric in _REQUIRED_METRICS if by_metric.get(metric) is None or by_metric[metric].value is None
-    ]
-    if missing:
-        flags = sorted({_MISSING_REASON[metric] for metric in missing})
+    price_fact = _find(facts, entity_id, "price")
+    shares_fact = _find(facts, entity_id, "shares_outstanding")
+    revenue_fact = _find(facts, entity_id, "revenue")
+
+    flags: list[str] = []
+    if price_fact is None or price_fact.value is None:
+        flags.append(_MISSING_REASON["price"])
+    if shares_fact is None or shares_fact.value is None:
+        flags.append(_MISSING_REASON["shares_outstanding"])
+    if revenue_fact is None or revenue_fact.value is None:
+        flags.append(_MISSING_REASON["revenue"])
+    if flags:
         return FactorResult(
             factor="price_to_sales",
             entity_id=entity_id,
@@ -50,12 +71,13 @@ def price_to_sales(
             confidence=Decimal(0),
             as_of=as_of,
             data_availability="unverified",
-            flags=flags,
+            flags=sorted(set(flags)),
         )
 
-    revenue = by_metric["revenue"].value
-    assert revenue is not None
-    if revenue <= 0:
+    assert price_fact is not None and shares_fact is not None and revenue_fact is not None
+    assert price_fact.value is not None and shares_fact.value is not None and revenue_fact.value is not None
+
+    if revenue_fact.value <= 0:
         return FactorResult(
             factor="price_to_sales",
             entity_id=entity_id,
@@ -66,19 +88,14 @@ def price_to_sales(
             flags=["nonpositive_revenue"],
         )
 
-    price = by_metric["price"].value
-    shares_outstanding = by_metric["shares_outstanding"].value
-    assert price is not None
-    assert shares_outstanding is not None
-
-    market_cap = price * shares_outstanding
-    value = market_cap / revenue
-    confidence = min(by_metric[metric].confidence for metric in _REQUIRED_METRICS)
+    market_cap = price_fact.value * shares_fact.value
+    value = market_cap / revenue_fact.value
+    confidence = min(price_fact.confidence, shares_fact.confidence, revenue_fact.confidence)
     return FactorResult(
         factor="price_to_sales",
         entity_id=entity_id,
         value=value,
         confidence=confidence,
         as_of=as_of,
-        data_availability="verified",
+        data_availability="unverified",
     )
