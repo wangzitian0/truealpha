@@ -58,6 +58,22 @@ def test_confidence_contracts_reject_binary_float_inputs() -> None:
         )
 
 
+@pytest.mark.parametrize("value", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
+def test_confidence_contracts_reject_non_finite_decimals(value: Decimal) -> None:
+    with pytest.raises(ValidationError, match="non-finite Decimal"):
+        ContinuousConfidencePolicy(reliability_prior_success=value)
+    with pytest.raises(ValidationError, match="non-finite Decimal"):
+        SourceConfidenceEvidence(
+            **{
+                **_source().model_dump(
+                    mode="python",
+                    exclude={"source_evidence_id", "content_sha256", "successful_outcome_mass"},
+                ),
+                "successful_outcome_mass": value,
+            }
+        )
+
+
 def test_input_is_order_independent_and_one_origin_has_one_weight() -> None:
     primary = _source()
     mirror = SourceConfidenceEvidence(

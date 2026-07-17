@@ -18,6 +18,13 @@ _STABLE_COORDINATE = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
 def _reject_binary_float(value: Any) -> Any:
     if isinstance(value, float):
         raise ValueError("binary float is forbidden; use Decimal or a base-10 string")
+    if value is not None:
+        try:
+            decimal_value = value if isinstance(value, Decimal) else Decimal(value)
+        except (InvalidOperation, TypeError, ValueError):
+            return value
+        if not decimal_value.is_finite():
+            raise ValueError("non-finite Decimal values are forbidden")
     return value
 
 
@@ -281,8 +288,9 @@ class ContinuousConfidenceEvaluation(BaseModel):
             raise ValueError("policy identity and hash must agree")
         if self.input_id != f"confidence-input:{self.input_sha256}":
             raise ValueError("input identity and hash must agree")
-        if self.score_100 != self.confidence * Decimal(100):
-            raise ValueError("score_100 must be the exact normalized confidence projection")
+        with localcontext(_evaluation_context(100)):
+            if self.score_100 != self.confidence * Decimal(100):
+                raise ValueError("score_100 must be the exact normalized confidence projection")
         object.__setattr__(self, "source_scores", source_scores)
         object.__setattr__(self, "origin_groups", origin_groups)
         _freeze_content_addressed(

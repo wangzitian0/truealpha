@@ -31,7 +31,7 @@ def test_topt_sensitivity_report_is_content_addressed_and_keeps_the_denominator(
     assert report.claim_ceiling == "development_sensitivity_only"
     assert ConfidenceCalibrationReport.model_validate_json(report.model_dump_json()) == report
     with localcontext() as context:
-        context.prec = 10
+        context.prec = 2
         context.rounding = ROUND_UP
         context.traps[Inexact] = True
         assert build_topt_confidence_sensitivity_report() == report
@@ -58,6 +58,14 @@ def test_empirical_anchor_rejects_duplicate_or_misassigned_primary_samples(tmp_p
     first["sha256"], second["sha256"] = second["sha256"], first["sha256"]
     manifest_path.write_text(json.dumps(misassigned))
     with pytest.raises(ValueError, match="filename must match"):
+        _derive_price_reconciliation_anchor(tmp_path)
+
+    manifest_path.write_text(json.dumps(original))
+    report_path = target_prices / "twelve_data_reconciliation_20260714.json"
+    report = json.loads(report_path.read_text())
+    report["observations"][1]["twelve_data_response_sha256"] = report["observations"][0]["twelve_data_response_sha256"]
+    report_path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="unique provider response hash"):
         _derive_price_reconciliation_anchor(tmp_path)
 
 

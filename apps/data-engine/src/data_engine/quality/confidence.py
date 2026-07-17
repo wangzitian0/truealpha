@@ -115,6 +115,7 @@ def _derive_price_reconciliation_anchor(
     compared = 0
     conforming = 0
     subject_ids: set[str] = set()
+    response_hashes: set[str] = set()
     for observation in observations:
         if not isinstance(observation, dict):
             raise ValueError("price reconciliation observations must be objects")
@@ -132,6 +133,9 @@ def _derive_price_reconciliation_anchor(
             or tuple(sorted(field_stats)) != _OBSERVED_FIELDS
         ):
             raise ValueError("price reconciliation observation is incomplete")
+        if response_sha256 in response_hashes:
+            raise ValueError("each reconciliation subject must bind one unique provider response hash")
+        response_hashes.add(response_sha256)
         subject_ids.add(f"ticker:{symbol}")
         independent_ids.add(f"provider-response-sha256:{response_sha256}")
         for field in _OBSERVED_FIELDS:
