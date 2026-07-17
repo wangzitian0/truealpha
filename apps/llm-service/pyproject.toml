@@ -8,6 +8,8 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "pydantic-settings>=2.2.0",
     "truealpha-factors",
+    "mcp>=1.0.0",
+    "truealpha-contracts",
 ]
 
 [dependency-groups]
@@ -19,6 +21,7 @@ dev = [
 
 [tool.uv.sources]
 truealpha-factors = { workspace = true }
+truealpha-contracts = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
