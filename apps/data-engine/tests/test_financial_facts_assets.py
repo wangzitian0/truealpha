@@ -81,7 +81,10 @@ def test_materialization_lands_every_sample_issuer(connection) -> None:
     for metrics in written.values():
         assert "total_assets" in metrics
 
-    row_count = connection.execute("select count(*) from staging.financial_facts").fetchone()[0]
+    row_count = connection.execute(
+        "select count(*) from staging.financial_facts where unified_id = any(%s)",
+        ([f"issuer.{ticker}" for ticker in written],),
+    ).fetchone()[0]
     assert row_count == sum(len(metrics) for metrics in written.values())
 
 
