@@ -194,7 +194,6 @@ def _source(
 
 
 def _evaluate_case(
-    policy: ContinuousConfidencePolicy,
     case_id: str,
     sources: tuple[SourceConfidenceEvidence, ...],
     *,
@@ -231,7 +230,6 @@ def build_topt_confidence_sensitivity_report(sample_root: Path | None = None) ->
         required_component_completeness: str = "1",
     ) -> None:
         confidence_input = _evaluate_case(
-            policy,
             scenario_id,
             sources,
             agreement=agreement,
