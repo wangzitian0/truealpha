@@ -1,0 +1,40 @@
+{
+  "card_id": "card:64f5ec03274b43c8db2c9d3bc6e9fe755a2c92ab1a9c667540125bcb338e546f",
+  "card_kind": "company",
+  "cutoff_at": "2026-06-30T23:59:59Z",
+  "generated_from_report_id": "report:244cbab90e998844e1877af7db0563ff26ba5684c55166e24e9df32fb4f897fe",
+  "research_risk_note": "Research hypothesis, not investment advice. Confidence reflects source evidence, not independent formula validation unless marked empirically validated.",
+  "schema_version": "research_card.v1",
+  "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
+  "subjects": [
+    {
+      "availability": "available",
+      "causal_claim": null,
+      "claim_class": "research_hypothesis",
+      "display_name": "A Very Long Illustrative Multinational Conglomerate Holdings Public Limited Company",
+      "metrics": [
+        {
+          "availability": "available",
+          "confidence": "0.75",
+          "currency": "EUR",
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "current_price_to_sales",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "fixture:long-name:2026-06-30",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "12.3456"
+        }
+      ],
+      "rank": null,
+      "subject_id": "issuer:long-name-example-conglomerate-holdings-plc"
+    }
+  ],
+  "template_version": "card_template.v1",
+  "title": "company card: A Very Long Illustrative Multinational Conglomerate Holdings Public Limited Company"
+}

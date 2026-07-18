@@ -1,0 +1,22 @@
+{
+  "card_id": "card:1d305e2e2c43b49bc419df682f74d5a2df5970f87d093e3cd356ae9185ee3a56",
+  "card_kind": "company",
+  "cutoff_at": "2026-06-30T23:59:59Z",
+  "generated_from_report_id": "report:10de74e087e78b791e3160616a94f153aa8c26ef53e913b9abd310592717931e",
+  "research_risk_note": "Research hypothesis, not investment advice. Confidence reflects source evidence, not independent formula validation unless marked empirically validated.",
+  "schema_version": "research_card.v1",
+  "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
+  "subjects": [
+    {
+      "availability": "unavailable",
+      "causal_claim": null,
+      "claim_class": "not_applicable",
+      "display_name": "issuer:not_in_universe",
+      "metrics": [],
+      "rank": null,
+      "subject_id": "issuer:not_in_universe"
+    }
+  ],
+  "template_version": "card_template.v1",
+  "title": "company card: issuer:not_in_universe"
+}

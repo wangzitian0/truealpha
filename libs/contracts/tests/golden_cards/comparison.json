@@ -1,0 +1,169 @@
+{
+  "card_id": "card:846438c72f8d76e6f4d4f6e60b01b486ef7b5ebf60a898f85a41dfa17368300a",
+  "card_kind": "comparison",
+  "cutoff_at": "2026-06-30T23:59:59Z",
+  "generated_from_report_id": "report:f5a345c753166f4c47f8893e3760eb21bb2644b2e9e3b8cdf6d22700b8b47564",
+  "research_risk_note": "Side-by-side comparison of independently materialized results at one cutoff; no cross-issuer metric is computed for this card.",
+  "schema_version": "research_card.v1",
+  "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
+  "subjects": [
+    {
+      "availability": "available",
+      "causal_claim": null,
+      "claim_class": "research_hypothesis",
+      "display_name": "issuer:adm",
+      "metrics": [
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "tier",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "traditional"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "current_price_to_sales",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "0.4580"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "target_price_to_sales",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "1.1500"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "valuation_gap",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:adm:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "1.5109"
+        }
+      ],
+      "rank": null,
+      "subject_id": "issuer:adm"
+    },
+    {
+      "availability": "available",
+      "causal_claim": null,
+      "claim_class": "research_hypothesis",
+      "display_name": "issuer:nice",
+      "metrics": [
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "tier",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "tech"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "current_price_to_sales",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "1.8639"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "target_price_to_sales",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "4.2500"
+        },
+        {
+          "availability": "available",
+          "confidence": "0.90",
+          "currency": null,
+          "cutoff_at": "2026-06-30T23:59:59Z",
+          "factor_version": "large_model_value_v0",
+          "label": "valuation_gap",
+          "period": "2026-06-30",
+          "trace": {
+            "factor_execution_id": null,
+            "materialized_output_id": null,
+            "reference_id": "strategy_smoke_fixture:8cdb081d887f:issuer:nice:2026-06-30T23:59:59Z",
+            "snapshot_id": null
+          },
+          "unit": null,
+          "value": "1.2802"
+        }
+      ],
+      "rank": null,
+      "subject_id": "issuer:nice"
+    }
+  ],
+  "template_version": "card_template.v1",
+  "title": "comparison card: issuer:adm, issuer:nice"
+}

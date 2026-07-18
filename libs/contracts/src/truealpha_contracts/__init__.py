@@ -412,6 +412,15 @@ from truealpha_contracts.research import (
 from truealpha_contracts.research import (
     CurrencyConversionPolicy as AnalystCurrencyConversionPolicy,
 )
+from truealpha_contracts.research_cards import (
+    CardKind,
+    CardSubject,
+    ClaimClass,
+    ResearchCard,
+    build_card,
+    render_card_html,
+    render_card_json,
+)
 from truealpha_contracts.research_report import (
     EvidenceTrace,
     ReportSection,
@@ -946,6 +955,13 @@ __all__ = [
     "SelectionRule",
     "FixtureStrategyRunRepository",
     "FixtureResearchReadRepository",
+    "CardKind",
+    "CardSubject",
+    "ClaimClass",
+    "ResearchCard",
+    "build_card",
+    "render_card_html",
+    "render_card_json",
     "EvidenceTrace",
     "ReportSection",
     "ReportSectionKind",
