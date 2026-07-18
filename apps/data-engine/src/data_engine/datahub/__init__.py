@@ -34,11 +34,13 @@ from data_engine.datahub.tiny_replay import (
     run_tiny_replay,
     select_recapture,
 )
+from data_engine.datahub.topt_read import PostgresToptReadRepository
 
 __all__ = [
     "AttemptLedger",
     "CaptureRepositoryConflictError",
     "PostgresEvidenceGraphRepository",
+    "PostgresToptReadRepository",
     "FrozenRecapturePlan",
     "HardeningResourceCeilings",
     "HardeningResourceObservation",
