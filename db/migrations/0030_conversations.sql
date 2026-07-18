@@ -184,7 +184,6 @@ where c.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
 )
 group by c.tenant_id, c.conversation_id, c.owner_principal_id, c.created_at;
 
-grant select, insert on app.conversations, app.conversation_messages, app.research_gap_requests to app_runtime;
-grant select, insert, update (redeemed_at) on app.clarification_tokens to app_runtime;
-revoke select on app.conversation_audit_metadata from app_runtime;
-grant select on app.conversation_audit_metadata to app_audit_reader;
+-- Grants to app_runtime/app_audit_reader live in db/roles.sql, not here:
+-- migrations run before roles.sql creates those roles (see #396, and the
+-- identical fix for 0029/principal_credentials).
