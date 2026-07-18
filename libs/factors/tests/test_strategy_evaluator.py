@@ -127,3 +127,31 @@ def test_rank_and_select_tie_breaks_by_ascending_issuer_id() -> None:
     }
     assert resolved["issuer:alpha"].rank == 1
     assert resolved["issuer:zeta"].rank == 2
+
+
+def test_in_band_issuer_is_not_rejected_above_band() -> None:
+    # Invariant guarding the #393 regression: an issuer whose P/S sits between its
+    # tier-band midpoint and upper bound must NOT be rejected — rejection is only
+    # above the upper bound. (The frozen golden never exercises this window, which
+    # is exactly why the midpoint-vs-upper divergence went unnoticed.)
+    issuer = IssuerInput(
+        issuer_id="issuer:inband",
+        records={
+            "gross_profit": (Decimal("200000"), Decimal("0.9")),  # -> tech-tier labor efficiency 200000
+            "total_assets": (Decimal("0"), Decimal("0.9")),
+            "headcount": (Decimal("1"), Decimal("0.9")),
+            "revenue": (Decimal("1"), Decimal("0.9")),
+            "shares_outstanding": (Decimal("5"), Decimal("0.9")),  # -> current P/S = 5.0
+            "last_close": (Decimal("1"), Decimal("0.9")),
+        },
+    )
+    cutoff = datetime.fromisoformat("2026-06-30T23:59:59+00:00")
+    [decision] = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=cutoff, risk_free_rate=Decimal("0"))
+
+    # tech band [2.50, 6.00], midpoint 4.25: current P/S 5.0 is above the midpoint
+    # (negative gap) but below the upper bound -> eligible and ranked, not rejected.
+    assert decision.tier == "tech"
+    assert decision.current_price_to_sales == Decimal("5.0000")
+    assert decision.valuation_gap is not None and decision.valuation_gap < 0
+    assert decision.outcome is not GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
+    assert decision.eligible

@@ -105,3 +105,23 @@ def test_render_markdown_names_the_strategy_and_a_known_issuer() -> None:
 
     assert "large_model_value_v0" in markdown
     assert "issuer:adm" in markdown
+
+
+def test_replay_delegates_the_decision_algorithm_to_the_evaluator() -> None:
+    # #393 L4 guard: the strategy decision algorithm (factor orchestration,
+    # tier-band reject threshold, ranking, selection) lives only in
+    # factors.composite.strategy_evaluator. The replay must delegate to it and
+    # never re-derive that logic itself — re-implementing it is exactly the
+    # duplication that let the replay and the golden oracle diverge.
+    source = (REPOSITORY_ROOT / "apps/data-engine/src/data_engine/core_strategy_replay.py").read_text()
+    assert "strategy_evaluator" in source, "replay must delegate to the single-source evaluator"
+    forbidden = (
+        "gross_profit_per_employee",
+        "price_to_sales(",
+        "three_tier_valuation(",
+        "target_ps_upper_bound",
+        "rejected_valuation_above_tier_band",
+        "selection_count",
+    )
+    offenders = [token for token in forbidden if token in source]
+    assert not offenders, f"decision logic re-implemented in the replay instead of delegating: {offenders}"

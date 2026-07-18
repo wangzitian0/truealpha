@@ -2,11 +2,12 @@
 
 This reproduces the ten hand-verified golden decisions (5 issuers x 2
 cutoffs) from `libs/contracts/tests/fixtures/large_model_value_v0_strategy.v1.json`
-by calling the real registered factors -- `gross_profit_per_employee` (#24),
-`price_to_sales` (#24), and `three_tier_valuation` (#25) -- and assembling
-their outputs into eligibility, ranking, selection, and sizing per the
-strategy definition's own versioned rules (confidence floor, top-N select,
-equal weight).
+by projecting the golden corpus into `factors.composite.strategy_evaluator`
+inputs and mapping its decisions onto the mart `Decision` dataclass. The whole
+decision algorithm -- factor orchestration, eligibility, the tier-band verdict,
+ranking, selection, weighting, and the definition-sourced quantization -- lives
+once in that evaluator, so this replay can no longer diverge from the #21 golden
+oracle the way it did before #393.
 
 This is explicitly a **preview**, not #26's full acceptance evidence:
 - Facts come from the hand-verified golden corpus, not a live capture/
@@ -15,11 +16,6 @@ This is explicitly a **preview**, not #26's full acceptance evidence:
 - There is no BacktestDataGateway, DecisionSnapshot/ReplayEventStream, or
   persisted StrategyRun/Trade/PortfolioValuation record. Those remain real,
   tracked gaps toward #26's full acceptance.
-- Quantization (labor-efficiency/P-S/valuation-gap decimal places) is
-  applied here, at assembly time, rather than inside the individual factor
-  functions -- the factors return exact unrounded Decimal arithmetic; a
-  future real runner is expected to apply the strategy definition's
-  quantization rules at the same assembly point this module does.
 
 `run()` is the pure, side-effect-free entry point both the CLI script
 (`apps/data-engine/scripts/run_strategy_smoke.py`) and the Dagster asset
