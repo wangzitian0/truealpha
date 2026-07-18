@@ -27,7 +27,6 @@ from data_engine.core_strategy_replay import (
     Decision,
     _compare_against_golden,
     _load_corpus,
-    _rank_and_select,
     render_markdown,
     run,
 )
@@ -39,7 +38,6 @@ __all__ = [
     "Decision",
     "_compare_against_golden",
     "_load_corpus",
-    "_rank_and_select",
     "render_markdown",
     "run",
     "main",

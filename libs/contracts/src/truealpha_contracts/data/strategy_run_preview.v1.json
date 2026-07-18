@@ -17,7 +17,7 @@
       "valuation_gap": "1.6388"
     },
     {
-      "capital_adjusted_labor_efficiency": "307127.77",
+      "capital_adjusted_labor_efficiency": null,
       "confidence": "0.65",
       "current_price_to_sales": null,
       "cutoff_at": "2026-03-31T23:59:59Z",
@@ -92,7 +92,7 @@
       "valuation_gap": "1.5109"
     },
     {
-      "capital_adjusted_labor_efficiency": "308358.11",
+      "capital_adjusted_labor_efficiency": null,
       "confidence": "0.65",
       "current_price_to_sales": null,
       "cutoff_at": "2026-06-30T23:59:59Z",
