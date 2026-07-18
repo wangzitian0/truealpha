@@ -265,7 +265,14 @@ def _compute_one(
     midpoint_q = ((band.target_ps_lower_bound + band.target_ps_upper_bound) / Decimal(2)).quantize(Decimal("0.0001"))
     valuation_gap_q = tier_result.value.quantize(Decimal("0.0001"))
 
-    if valuation_gap_q < 0:
+    # #393 L0: "above tier band" means the P/S sits above the tier's *upper
+    # bound*, matching the #21 golden oracle (test_strategy.py). The prior
+    # `valuation_gap_q < 0` test rejected at the band *midpoint*, which is
+    # stricter than the spec and diverges for any issuer priced between its
+    # band midpoint and upper bound. Behaviour-preserving on the current
+    # corpus (every rejected golden issuer is also above its upper bound); the
+    # negative gap is still reported for ranking.
+    if current_ps_q > band.target_ps_upper_bound:
         return Decision(
             issuer_id,
             cutoff_at,
