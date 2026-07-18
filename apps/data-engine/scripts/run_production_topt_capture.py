@@ -193,8 +193,7 @@ def _confidence(semantic_type: str, payload: dict[str, str | None]) -> Decimal:
         return Decimal("0.85")  # single public feed, no SLA (yfinance)
     if semantic_type == "financial-fact":
         present = sum(
-            payload.get(field) is not None
-            for field in ("gross_profit", "total_assets", "shares_outstanding")
+            payload.get(field) is not None for field in ("gross_profit", "total_assets", "shares_outstanding")
         )
         return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
     return Decimal("0.50")
