@@ -50,12 +50,31 @@ CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 CUTOFF_DATE = CUTOFF.date()
 SEMANTIC_TYPES = ("market-price", "listing-identity", "universe-membership", "financial-fact")
 
-# Stopgap real headcounts (public 10-K figures) until #70's extraction plane lands. Issuers
-# not listed resolve GPPE `unavailable` for lack of headcount — the honest #70 gap.
+# Stopgap real headcounts (public 10-K figures) until #70's extraction plane lands. SEC XBRL does
+# not tag employee count structurally, so these are manually sourced real values; #70 replaces
+# this map with append-only filing-text extraction.
 _HEADCOUNT: dict[str, str] = {
+    "AAPL": "164000",
+    "MSFT": "228000",
     "GOOG": "182502",
     "GOOGL": "182502",
+    "NVDA": "29600",
+    "META": "67317",
+    "AMZN": "1556000",
+    "TSLA": "140473",
+    "AVGO": "20000",
+    "COST": "316000",
+    "NFLX": "14000",
+    "MU": "48000",
+    "WMT": "2100000",
+    "LLY": "43000",
     "ABBV": "50000",
+    "JNJ": "138100",
+    "XOM": "62000",
+    "JPM": "309926",
+    "MA": "33400",
+    "V": "28800",
+    "BRK.B": "392400",
 }
 
 
