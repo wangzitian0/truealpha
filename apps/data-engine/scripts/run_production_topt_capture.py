@@ -86,9 +86,9 @@ def _source_request(obligation, *, ordinal: int) -> SourceRequest:
         "partition": obligation.partition,
     }
     return SourceRequest(
-        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v3'})}",
-        source_policy_id="source-policy:production-topt-live-v3",
-        request_fingerprint_version="production-topt-live:v3",
+        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v5'})}",
+        source_policy_id="source-policy:production-topt-live-v5",
+        request_fingerprint_version="production-topt-live:v5",
         canonical_request_sha256=canonical_sha256(coordinate),
         subject_refs=(obligation.subject,),
         capture_requirement_ids=(obligation.capture_requirement_id,),
@@ -182,20 +182,38 @@ def _real_payload(coordinates: tuple[str, str, str, str], semantic_type: str) ->
     raise AssertionError(semantic_type)
 
 
+def _confidence(semantic_type: str, payload: dict[str, str | None]) -> Decimal:
+    """Per-source-class confidence (retires the static 0.9, #207/#404): release-derived
+    identities are exact; a single public price feed carries no SLA; SEC financials grade by
+    field completeness. This is a v0 source-class prior until the calibrated formula (#337)
+    is wired into the capture path."""
+    if semantic_type in {"listing-identity", "universe-membership"}:
+        return Decimal("1.0")  # exact projection of the frozen release
+    if semantic_type == "market-price":
+        return Decimal("0.85")  # single public feed, no SLA (yfinance)
+    if semantic_type == "financial-fact":
+        present = sum(
+            payload.get(field) is not None
+            for field in ("gross_profit", "total_assets", "shares_outstanding")
+        )
+        return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
+    return Decimal("0.50")
+
+
 def _capture(connection: psycopg.Connection) -> tuple[str, str]:
     corpus = json.loads(CORPUS.read_text())
     denominator = corpus["topt_denominator"]
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
     list_version = frozen_topt_list_version(corpus)
     policy = CaptureSchedulePolicy(
-        policy_version="production-topt-live:v3",
+        policy_version="production-topt-live:v5",
         demanded_cadence=timedelta(days=1),
         provider_availability_cadence="manual-only:v1",
         freshness_max_age=timedelta(days=2),
         retry=replay_retry_policy(3),
     )
     campaign = CaptureCampaign(
-        campaign_policy_id="capture-policy:production-topt-live-v3",
+        campaign_policy_id="capture-policy:production-topt-live-v5",
         environment=CaptureEnvironment.PRODUCTION,
         cutoff=CUTOFF,
         universe_refs=(list_version.universe,),
@@ -204,7 +222,7 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         campaign_id=campaign.campaign_id,
         run_sequence=1,
         schedule_policy_id=policy.schedule_policy_id,
-        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v3'})}",
+        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v5'})}",
     )
     obligations = expand_obligations(
         run_id=run.run_id,
@@ -257,16 +275,16 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
         payload = _real_payload(coordinates[obligation.subject.id], semantic_type)
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": payload})
-        source_record_id = f"production-topt-live-v3:{ordinal}"
+        source_record_id = f"production-topt-live-v5:{ordinal}"
         raw_fetch_id = connection.execute(
             "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
             "byte_length, fetched_at, recorded_at, metadata) "
             "values (%s, %s, %s, %s, 'application/json', 1, %s, %s, '{}'::jsonb) returning id",
             (
-                "production-topt-live-v3",
+                "production-topt-live-v5",
                 source_record_id,
                 raw_sha256,
-                f"s3://production-topt-live-v3/{raw_sha256}",
+                f"s3://production-topt-live-v5/{raw_sha256}",
                 CUTOFF - timedelta(hours=2),
                 CUTOFF - timedelta(hours=2),
             ),
@@ -312,7 +330,7 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
             obligation.obligation_id,
             observation,
             normalized_payload=payload,
-            confidence=Decimal("0.9"),
+            confidence=_confidence(semantic_type, payload),
             freshness_state="fresh",
         )
         repo.put_obligation_result(obligation.obligation_id, terminal)
