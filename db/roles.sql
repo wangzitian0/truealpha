@@ -41,6 +41,13 @@ grant execute on function app.validate_authorization_decision_policy_set() to ap
 grant execute on function app.validate_authorization_decision_grant() to app_runtime;
 grant execute on function app.validate_authorization_decision_required_grants() to app_runtime;
 
+-- Login front door (#368, migration 0029). Login itself runs before any
+-- tenant/principal GUC is set (it is what *establishes* that context), so
+-- these are plain schema-level grants, not RLS-scoped. principal_credentials
+-- carries no research content, so it needs no RLS policy of its own.
+grant select, insert, update on app.principal_credentials to app_runtime;
+grant select on app.principals, app.tenants to app_runtime;
+
 -- Audit readers receive only the administrator-filtered, non-content view.
 do $$ begin
     create role app_audit_reader nologin;
