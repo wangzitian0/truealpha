@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { DashboardNav } from "@/components/dashboard-nav";
+import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadComparison } from "@/server/dashboard";
+import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
@@ -14,8 +15,10 @@ export default async function ComparePage({
 }: {
   searchParams: Promise<{ cursor?: string; cutoff?: string }>;
 }) {
+  const principal = await getServerPrincipal();
+  if (!principal) redirect("/login?from=%2Fresearch%2Fcompare");
   const params = await searchParams;
-  const state = loadComparison({ cutoffAt: params.cutoff, cursor: params.cursor ?? null });
+  const state = loadComparison(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
 
   return (
     <section aria-labelledby="compare-heading" className="space-y-6">
@@ -28,8 +31,6 @@ export default async function ComparePage({
           cross-issuer metric is computed here.
         </p>
       </div>
-
-      <DashboardNav />
 
       <ReadStateNotice state={state} />
 
@@ -57,7 +58,7 @@ export default async function ComparePage({
                   <tr key={row.issuerId} className="border-t border-border">
                     <th scope="row" className="px-4 py-3 font-medium">
                       <Link
-                        href={`/entities/${encodeURIComponent(row.issuerId)}`}
+                        href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
                         className="text-accent hover:underline"
                       >
                         {row.issuerId}
@@ -78,7 +79,7 @@ export default async function ComparePage({
           </div>
           {state.data.page.hasMore && state.data.page.nextCursor !== null && (
             <Link
-              href={`/compare?cursor=${encodeURIComponent(state.data.page.nextCursor)}${
+              href={`/research/compare?cursor=${encodeURIComponent(state.data.page.nextCursor)}${
                 params.cutoff ? `&cutoff=${encodeURIComponent(params.cutoff)}` : ""
               }`}
               className="inline-block rounded-lg border border-border bg-card px-4 py-2 text-sm text-gray-300 hover:border-accent"

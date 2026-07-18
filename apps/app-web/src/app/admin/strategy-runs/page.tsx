@@ -1,4 +1,5 @@
 import { loadStrategyRunPage } from "@/server/admin-strategy-runs";
+import { getServerPrincipal } from "@/server/auth/request-context";
 import type { StrategyRunDecision, StrategyRunOutcome } from "@/contracts/strategyRun";
 
 const STRATEGY_ID = "large_model_value_v0";
@@ -19,8 +20,9 @@ function cell(value: string | null): string {
   return value ?? "—";
 }
 
-export default function StrategyRunsPage() {
-  const outcome = loadStrategyRunPage(STRATEGY_ID);
+export default async function StrategyRunsPage() {
+  const principal = await getServerPrincipal();
+  const outcome = loadStrategyRunPage(principal, STRATEGY_ID);
 
   if (outcome.kind === "denied") {
     return (
