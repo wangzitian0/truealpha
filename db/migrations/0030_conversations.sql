@@ -7,7 +7,14 @@ create table if not exists app.conversations (
     conversation_id    text primary key check (length(conversation_id) > 0),
     tenant_id          text not null references app.tenants (tenant_id),
     owner_principal_id text not null references app.principals (principal_id),
-    created_at         timestamptz not null default now()
+    created_at         timestamptz not null default now(),
+    -- Referenced by every child table's composite FK below, so a child row
+    -- is only insertable when its (conversation_id, tenant_id,
+    -- owner_principal_id) triple matches an actual conversation the same
+    -- owner holds — not merely an existing conversation_id belonging to
+    -- someone else. RLS alone can't provide this: it only checks the child
+    -- row's own tenant/owner columns, not what the FK target belongs to.
+    unique (conversation_id, tenant_id, owner_principal_id)
 );
 
 alter table app.conversations enable row level security;
@@ -27,7 +34,7 @@ create policy conversations_owner_isolation on app.conversations
 
 create table if not exists app.conversation_messages (
     message_id         text primary key check (length(message_id) > 0),
-    conversation_id     text not null references app.conversations (conversation_id),
+    conversation_id     text not null,
     tenant_id           text not null references app.tenants (tenant_id),
     owner_principal_id  text not null references app.principals (principal_id),
     role                text not null check (role in ('user', 'assistant')),
@@ -41,7 +48,13 @@ create table if not exists app.conversation_messages (
         'result', 'clarification_required', 'unavailable', 'unsupported',
         'denied', 'rate_limited', 'invalid'
     )),
-    created_at          timestamptz not null default now()
+    created_at          timestamptz not null default now(),
+    -- Owner-scoped, not just conversation_id -> conversations.conversation_id:
+    -- a single-column FK would let a message reference another owner's
+    -- conversation while itself passing RLS's own-row check.
+    foreign key (conversation_id, tenant_id, owner_principal_id)
+        references app.conversations (conversation_id, tenant_id, owner_principal_id),
+    unique (message_id, tenant_id, owner_principal_id)
 );
 
 create index if not exists idx_conversation_messages_conversation
@@ -70,17 +83,24 @@ for each row execute function app.reject_mutation();
 
 create table if not exists app.clarification_tokens (
     token_id                text primary key check (length(token_id) > 0),
-    conversation_id          text not null references app.conversations (conversation_id),
+    conversation_id          text not null,
     tenant_id                text not null references app.tenants (tenant_id),
     owner_principal_id       text not null references app.principals (principal_id),
-    originating_message_id   text not null references app.conversation_messages (message_id),
+    originating_message_id   text not null,
     requested_fields         text[] not null check (array_length(requested_fields, 1) > 0),
     candidate_choices        text[] not null default array[]::text[],
     expires_at               timestamptz not null,
     redeemed_at              timestamptz,
     created_at               timestamptz not null default now(),
     check (expires_at > created_at),
-    check (redeemed_at is null or redeemed_at >= created_at)
+    check (redeemed_at is null or redeemed_at >= created_at),
+    -- Owner-scoped composite FKs (see conversation_messages above): without
+    -- these, a token could bind to another owner's conversation/message,
+    -- turning token creation/redemption into a cross-owner existence probe.
+    foreign key (conversation_id, tenant_id, owner_principal_id)
+        references app.conversations (conversation_id, tenant_id, owner_principal_id),
+    foreign key (originating_message_id, tenant_id, owner_principal_id)
+        references app.conversation_messages (message_id, tenant_id, owner_principal_id)
 );
 
 alter table app.clarification_tokens enable row level security;
@@ -131,9 +151,14 @@ create table if not exists app.research_gap_requests (
     gap_request_id      text primary key check (length(gap_request_id) > 0),
     tenant_id            text not null references app.tenants (tenant_id),
     owner_principal_id   text not null references app.principals (principal_id),
-    conversation_id      text references app.conversations (conversation_id),
+    -- Nullable (a gap request need not cite a conversation), but when set,
+    -- owner-scoped like every other composite FK here: a null conversation_id
+    -- makes Postgres skip the FK check entirely, so this stays optional.
+    conversation_id      text,
     prompt_text          text not null check (length(prompt_text) > 0),
-    created_at           timestamptz not null default now()
+    created_at           timestamptz not null default now(),
+    foreign key (conversation_id, tenant_id, owner_principal_id)
+        references app.conversations (conversation_id, tenant_id, owner_principal_id)
 );
 
 alter table app.research_gap_requests enable row level security;

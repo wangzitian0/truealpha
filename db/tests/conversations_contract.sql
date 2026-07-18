@@ -137,7 +137,10 @@ begin
 end;
 $$;
 
-reset role;
+-- Deliberately no `reset role` here: clarification tokens and gap requests
+-- below stay under app_runtime + alice's GUCs, so these sections exercise
+-- the real owner-scoped RLS surface the web repository relies on, not
+-- superuser behavior that would trivially pass regardless of policy.
 
 -- --- clarification tokens: single redemption, no other field mutable ---
 insert into app.clarification_tokens (
@@ -177,6 +180,11 @@ begin
         update app.clarification_tokens set requested_fields = array['convention'] where token_id = 'token:alpha:1';
         raise exception 'mutating a field other than redeemed_at unexpectedly succeeded';
     exception
+        -- Two independent layers can block this, and either is acceptable:
+        -- app_runtime's column-scoped grant (redeemed_at only) denies it before
+        -- the trigger ever runs; a role with broader UPDATE would still be
+        -- caught by trg_clarification_tokens_guard_update's field-tamper check.
+        when insufficient_privilege then null;
         when raise_exception then
             if sqlerrm = 'mutating a field other than redeemed_at unexpectedly succeeded' then raise; end if;
             if sqlerrm <> 'clarification_tokens: only redeemed_at may change after creation' then raise; end if;
@@ -194,6 +202,10 @@ begin
         update app.research_gap_requests set prompt_text = 'edited' where gap_request_id = 'gap:alpha:1';
         raise exception 'gap request update unexpectedly succeeded';
     exception
+        -- app_runtime has no UPDATE grant at all on this table (fully
+        -- append-only), so this is denied at the privilege layer before
+        -- trg_research_gap_requests_append_only would even run.
+        when insufficient_privilege then null;
         when raise_exception then
             if sqlerrm = 'gap request update unexpectedly succeeded' then raise; end if;
     end;
