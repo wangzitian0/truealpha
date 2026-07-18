@@ -15,9 +15,13 @@ alter table mart.topt_gppe_results
     drop constraint topt_gppe_results_operating_metric_check,
     drop constraint topt_gppe_results_check1;
 
+-- NOT VALID: enforce the uniform v0.2.0 shape on all NEW writes while grandfathering
+-- any existing v0.1.0 rows (financial rows carrying the retired
+-- pre_provision_profit_per_employee metric) as a prior append-only vintage. The mart
+-- is append-only, so no UPDATE re-checks the old rows.
 alter table mart.topt_gppe_results
     add constraint topt_gppe_results_operating_metric_check
-        check (operating_metric = 'capital_adjusted_gppe'),
+        check (operating_metric = 'capital_adjusted_gppe') not valid,
     add constraint topt_gppe_results_uniform_values_check
         check (
             (availability = 'available' and cardinality(reason_codes) = 0
@@ -28,7 +32,7 @@ alter table mart.topt_gppe_results
             (availability = 'unavailable' and cardinality(reason_codes) > 0
                 and operating_efficiency is null and capital_adjusted_gross_profit is null
                 and gppe is null)
-        );
+        ) not valid;
 
 alter table mart.topt_core_results
     drop constraint topt_core_results_operating_metric_check,
@@ -36,7 +40,7 @@ alter table mart.topt_core_results
 
 alter table mart.topt_core_results
     add constraint topt_core_results_operating_metric_check
-        check (operating_metric = 'capital_adjusted_gppe'),
+        check (operating_metric = 'capital_adjusted_gppe') not valid,
     add constraint topt_core_results_uniform_values_check
         check (
             (availability = 'available'
@@ -50,4 +54,4 @@ alter table mart.topt_core_results
                 and tier is null and target_ps_lower is null and target_ps_upper is null
                 and target_ps_midpoint is null and current_ps is null and valuation_gap is null
                 and operating_efficiency is null and cardinality(reason_codes) > 0)
-        );
+        ) not valid;
