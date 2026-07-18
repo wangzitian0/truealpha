@@ -202,17 +202,17 @@ def _section_status(
         return AvailabilityStatus.UNAVAILABLE, None
     # A card is only as available as its least-available contributing section; ties on the
     # enum's declared order are broken by first occurrence (deterministic, no arithmetic).
-    availability_priority = (
-        AvailabilityStatus.ERROR,
-        AvailabilityStatus.UNAVAILABLE,
-        AvailabilityStatus.EXCLUDED,
-        AvailabilityStatus.LOW_CONFIDENCE,
-        AvailabilityStatus.STALE,
-        AvailabilityStatus.AVAILABLE,
-    )
-    worst_availability = min(
-        matched, key=lambda section: availability_priority.index(section.availability)
-    ).availability
+    # A dict, not tuple.index(...) inside the min() key: avoids a repeated linear scan of
+    # the priority order for every matched section (Copilot review on #390).
+    availability_rank = {
+        AvailabilityStatus.ERROR: 0,
+        AvailabilityStatus.UNAVAILABLE: 1,
+        AvailabilityStatus.EXCLUDED: 2,
+        AvailabilityStatus.LOW_CONFIDENCE: 3,
+        AvailabilityStatus.STALE: 4,
+        AvailabilityStatus.AVAILABLE: 5,
+    }
+    worst_availability = min(matched, key=lambda section: availability_rank[section.availability]).availability
 
     # Most conservative validation status across every matched section: REJECTED beats
     # NOT_EVALUATED beats ACCEPTED. A section with no validation_status is ignored unless
