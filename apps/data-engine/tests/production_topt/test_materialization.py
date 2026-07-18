@@ -66,14 +66,18 @@ def _normalized_payload(
         return {**identity, "currency": "USD", "close": "40"}
     if semantic_type == "financial-fact":
         financial = ticker == "JPM"
+        # #394 convergence: total_assets + revenue are captured for every issuer
+        # (the SEC financial-fact adapter provides them), so a financial issuer now
+        # takes the uniform capital-adjusted path -- gross_profit stays None for a
+        # bank (it reports pre-provision profit as its industry-branch numerator).
         return {
             **identity,
             "operating_branch": "financial" if financial else "non_financial",
             "currency": "USD",
             "gross_profit": None if financial else "210000000",
-            "total_assets": None if financial else "200000000",
+            "total_assets": "200000000",
             "headcount": "100",
-            "revenue": None if financial else "100000000",
+            "revenue": "100000000",
             "shares_outstanding": "10000000",
             "pre_provision_profit": "80000000" if financial else None,
         }
@@ -428,14 +432,20 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert repeated == results
     assert len(results) == 20
     assert len({item.issuer_id for item in results}) == 20
-    assert sum(item.availability is ToptCoreAvailability.AVAILABLE for item in results) == 19
-    assert {item.gppe for item in results if item.gppe is not None} == {Decimal("2000000")}
+    assert sum(item.availability is ToptCoreAvailability.AVAILABLE for item in results) == 20
+    assert {item.gppe for item in results if item.gppe is not None} == {Decimal("2000000"), Decimal("700000")}
     alphabet = next(item for item in results if item.issuer_id == "issuer:lei:5493006MHB84DD0ZWV18")
     assert alphabet.current_ps == Decimal("8")
     financial = next(item for item in results if item.issuer_id == "issuer:lei:8I5DZWZKVSZI1NUHU748")
-    assert financial.availability is ToptCoreAvailability.UNAVAILABLE
-    assert financial.operating_efficiency == Decimal("800000")
-    assert tuple(item.value for item in financial.reason_codes) == ("financial_valuation_not_comparable",)
+    # #394: the financial issuer now takes the uniform capital-adjusted path and flows
+    # through the tier / P-S valuation like every other issuer -- no not-comparable
+    # short-circuit. (80_000_000 - 200_000_000*0.05)/100 = 700_000, not 80M/100.
+    assert financial.availability is ToptCoreAvailability.AVAILABLE
+    assert financial.gppe == Decimal("700000")
+    assert financial.operating_efficiency == Decimal("700000")
+    assert financial.tier is not None
+    assert financial.current_ps is not None
+    assert financial.reason_codes == ()
     identity = ToptCoreIdentity(
         run_id=run.run_id,
         release_manifest_id=release_manifest_id,

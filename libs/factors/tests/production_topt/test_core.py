@@ -225,22 +225,41 @@ def test_current_ps_aggregates_all_share_classes_once_per_issuer() -> None:
     assert result.input_observation_ids == observation_ids
 
 
-def test_financial_branch_uses_pre_provision_profit_without_nonfinancial_valuation() -> None:
+def test_financial_issuer_takes_the_uniform_capital_adjusted_path() -> None:
+    # #394 convergence: a financial issuer uses the same
+    # (numerator - total_assets*rf)/headcount capital charge (numerator =
+    # pre-provision profit for financials) and flows through the tier / P-S path --
+    # no pre_provision/headcount short-circuit, no FINANCIAL_VALUATION_NOT_COMPARABLE.
+    result = _compute(
+        _snapshot(
+            operating_branch=OperatingBranch.FINANCIAL,
+            gross_profit=None,
+            pre_provision_profit=_metric("pre_provision_profit", "80000000"),
+        )
+    )
+
+    assert result.availability is ToptCoreAvailability.AVAILABLE
+    assert result.operating_metric is OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
+    # (80_000_000 - 200_000_000 * 0.05) / 100 = 700_000, not 80_000_000/100 = 800_000
+    assert result.gppe == Decimal("700000")
+    assert result.operating_efficiency == Decimal("700000")
+    assert result.tier is not None
+    assert result.current_ps is not None
+
+
+def test_financial_issuer_without_total_assets_is_unavailable() -> None:
+    # total_assets is required uniformly now -- the capital charge applies to banks too.
     result = _compute(
         _snapshot(
             operating_branch=OperatingBranch.FINANCIAL,
             gross_profit=None,
             total_assets=None,
-            revenue=None,
             pre_provision_profit=_metric("pre_provision_profit", "80000000"),
         )
     )
 
     assert result.availability is ToptCoreAvailability.UNAVAILABLE
-    assert result.operating_metric is OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE
-    assert result.operating_efficiency == Decimal("800000")
-    assert result.gppe is result.tier is result.current_ps is None
-    assert result.reason_codes == (ToptCoreReasonCode.FINANCIAL_VALUATION_NOT_COMPARABLE,)
+    assert ToptCoreReasonCode.MISSING_TOTAL_ASSETS in result.reason_codes
 
 
 def test_tier_composite_rejects_gppe_from_another_snapshot_member() -> None:
@@ -293,3 +312,57 @@ def test_snapshot_rejects_malformed_observation_identity() -> None:
 
     with pytest.raises(ValidationError, match="normalized observation identities"):
         _snapshot(observation_ids=malformed)
+
+
+def test_topt_gppe_equals_the_base_factor_for_identical_inputs() -> None:
+    # #394 cross-path equivalence: production_topt computes the same labor
+    # efficiency as the base factors.base.gross_profit_per_employee for identical
+    # inputs -- non-financial (gross_profit numerator) and financial (pre-provision
+    # numerator, the bank's industry-branch gross-profit proxy).
+    from factors.base.gross_profit_per_employee import gross_profit_per_employee
+    from factors.types import Fact, UnitFamily
+
+    rf = Decimal("0.05")
+
+    def base_gppe(numerator: str, total_assets: str, headcount: str) -> Decimal:
+        facts = [
+            Fact(
+                entity_id="issuer:x",
+                metric="gross_profit",
+                value=Decimal(numerator),
+                unit_family=UnitFamily.CURRENCY,
+                confidence=Decimal("0.9"),
+                as_of=CUTOFF,
+            ),
+            Fact(
+                entity_id="issuer:x",
+                metric="total_assets",
+                value=Decimal(total_assets),
+                unit_family=UnitFamily.CURRENCY,
+                confidence=Decimal("0.9"),
+                as_of=CUTOFF,
+            ),
+            Fact(
+                entity_id="issuer:x",
+                metric="employees_total",
+                value=Decimal(headcount),
+                unit_family=UnitFamily.COUNT,
+                confidence=Decimal("0.9"),
+                as_of=CUTOFF,
+            ),
+        ]
+        value = gross_profit_per_employee(facts, entity_id="issuer:x", as_of=CUTOFF, risk_free_rate=rf).value
+        assert value is not None
+        return value
+
+    non_financial = _compute(_snapshot()).gppe
+    assert non_financial == base_gppe("210000000", "200000000", "100") == Decimal("2000000")
+
+    financial = _compute(
+        _snapshot(
+            operating_branch=OperatingBranch.FINANCIAL,
+            gross_profit=None,
+            pre_provision_profit=_metric("pre_provision_profit", "80000000"),
+        )
+    ).gppe
+    assert financial == base_gppe("80000000", "200000000", "100") == Decimal("700000")
