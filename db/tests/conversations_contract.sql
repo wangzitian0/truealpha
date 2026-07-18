@@ -61,10 +61,10 @@ insert into app.conversation_messages (
     message_id, conversation_id, tenant_id, owner_principal_id, role, content, outcome, created_at
 ) values (
     'message:alpha:alice-1', 'conversation:alpha:alice-1', 'tenant:alpha', 'principal:alpha:alice',
-    'user', 'what is ADM PEG trend', 'result', now()
+    'assistant', 'ADM PEG trend is improving', 'result', now()
 ), (
     'message:beta:bob-1', 'conversation:beta:bob-1', 'tenant:beta', 'principal:beta:bob',
-    'user', 'a question only bob asked', 'result', now()
+    'assistant', 'an answer only bob received', 'result', now()
 );
 
 -- --- append-only: no edit, no delete ---
@@ -231,6 +231,24 @@ begin
 end;
 $$;
 
+-- An alpha administrator setting truealpha.tenant_id to beta's tenant must not
+-- be able to read beta's audit projection: the view's own administrator check
+-- must verify the reader's row belongs to the *requested* tenant, not merely
+-- that some row for that principal_id is kind='administrator' somewhere.
+select set_config('truealpha.tenant_id', 'tenant:beta', true);
+
+do $$
+declare
+    audit_rows integer;
+begin
+    select count(*) into audit_rows from app.conversation_audit_metadata;
+    if audit_rows <> 0 then
+        raise exception 'an alpha administrator switching the tenant GUC to beta must not read beta''s audit projection, saw %', audit_rows;
+    end if;
+end;
+$$;
+
+select set_config('truealpha.tenant_id', 'tenant:alpha', true);
 select set_config('truealpha.principal_id', 'principal:alpha:alice', true);
 
 do $$

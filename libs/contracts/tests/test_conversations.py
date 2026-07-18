@@ -55,13 +55,13 @@ def test_conversation_message_carries_a_typed_outcome() -> None:
         conversation_id="conversation:alice-1",
         tenant_id="tenant:truealpha",
         owner_principal_id="principal:alice",
-        role=MessageRole.USER,
-        content="what's ADM's PEG trend?",
+        role=MessageRole.ASSISTANT,
+        content="ADM's PEG trend is improving.",
         outcome=ConversationOutcome.RESULT,
         created_at=_NOW,
     )
     assert message.outcome is ConversationOutcome.RESULT
-    assert message.role is MessageRole.USER
+    assert message.role is MessageRole.ASSISTANT
 
 
 def test_conversation_message_outcome_defaults_to_none_for_a_user_prompt() -> None:

@@ -254,6 +254,9 @@ export class PostgresConversationsRepository implements ConversationsRepository 
     if (requestedFields.length === 0) {
       throw new Error("requestedFields must not be empty");
     }
+    if (!Number.isInteger(expiresInMinutes) || expiresInMinutes <= 0) {
+      throw new Error("expiresInMinutes must be a positive integer");
+    }
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
       async (client) => {

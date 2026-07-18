@@ -205,6 +205,7 @@ where c.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
     select 1
     from app.principals as reader
     where reader.principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+      and reader.tenant_id = c.tenant_id
       and reader.principal_kind = 'administrator'
 )
 group by c.tenant_id, c.conversation_id, c.owner_principal_id, c.created_at;
