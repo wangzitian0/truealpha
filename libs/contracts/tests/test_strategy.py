@@ -2,15 +2,13 @@ import copy
 import hashlib
 import json
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts.research import TargetPsSelection
 from truealpha_contracts.strategy import (
     ConfidenceEligibilityRule,
-    DecimalQuantization,
     ExclusionReason,
     FactorDimension,
     GoldenDecisionOutcome,
@@ -20,17 +18,13 @@ from truealpha_contracts.strategy import (
     StrategyEngineBinding,
 )
 
+# The end-to-end recompute of these golden decisions now lives in
+# factors.tests.test_strategy_evaluator, which runs the single-source
+# `strategy_evaluator` both this golden and the #26 replay consume (#393). This
+# module keeps the schema-, identity-, and negative-case contract tests.
+
 CORPUS_PATH = Path(__file__).with_name("fixtures") / "large_model_value_v0_strategy.v1.json"
 CORPUS_SHA256 = "8cdb081d887ff7754ac52a1eb02679b94a1c1c71b1eb32c606c06f5d6fe96083"
-
-_REQUIRED_INPUT_REASONS = (
-    ("gross_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
-    ("total_assets", ExclusionReason.MISSING_TOTAL_ASSETS_FACT),
-    ("headcount", ExclusionReason.MISSING_HEADCOUNT_DISCLOSURE),
-    ("revenue", ExclusionReason.MISSING_REVENUE_FACT),
-    ("shares_outstanding", ExclusionReason.MISSING_MARKET_VALUE_INPUT),
-    ("last_close", ExclusionReason.MISSING_MARKET_VALUE_INPUT),
-)
 
 
 def _corpus() -> dict[str, object]:
@@ -98,11 +92,6 @@ def _apply_corpus_mutation(payload: dict[str, object], case: dict[str, object]) 
             target[key] = case["value"]
     else:  # pragma: no cover - the frozen corpus contains only object/list paths
         raise AssertionError(f"mutation path does not resolve to a container: {case['path']}")
-
-
-def _quantize(value: Decimal, quantization: DecimalQuantization) -> Decimal:
-    assert quantization.rounding == "half_even"
-    return value.quantize(Decimal(1).scaleb(-quantization.decimal_places), ROUND_HALF_EVEN)
 
 
 def test_frozen_corpus_pins_one_canonical_strategy_identity() -> None:
@@ -264,87 +253,3 @@ def test_golden_corpus_covers_the_required_scenarios_with_grounded_inputs() -> N
     assert definition.labor_efficiency.unit.dimension is FactorDimension.REPORTING_CURRENCY_PER_EMPLOYEE
     assert definition.price_to_sales.unit.dimension is FactorDimension.DIMENSIONLESS
     assert definition.tier_valuation.unit.dimension is FactorDimension.DIMENSIONLESS
-
-
-def test_golden_expectations_recompute_exactly_from_their_inputs() -> None:
-    definition = _definition()
-    golden = _golden()
-    assert definition.tier_valuation.target_ps_selection is TargetPsSelection.BAND_MIDPOINT
-    verified = 0
-    for rate in golden.risk_free_rates:
-        at_cutoff = [decision for decision in golden.decisions if decision.cutoff_at == rate.cutoff_at]
-        assert len(at_cutoff) == 5
-        gaps: dict[str, Decimal] = {}
-        decisions_by_issuer = {decision.issuer.id: decision for decision in at_cutoff}
-        for decision in at_cutoff:
-            inputs = {record.input_key: record for record in decision.inputs}
-            expected = decision.expected
-            # The v0 formula is uniform: every issuer (financial or not) consumes
-            # total_assets and takes the same capital-adjusted path.
-            missing = next(
-                (reason for key, reason in _REQUIRED_INPUT_REASONS if key not in inputs),
-                None,
-            )
-            if missing is not None:
-                assert expected.outcome is GoldenDecisionOutcome.EXCLUDED
-                assert expected.exclusion_reason is missing
-                assert not expected.eligible
-                verified += 1
-                continue
-
-            consumed_confidence = min(record.confidence for record in inputs.values())
-            if consumed_confidence < definition.eligibility.minimum_confidence:
-                assert expected.outcome is GoldenDecisionOutcome.EXCLUDED
-                assert expected.exclusion_reason is ExclusionReason.BELOW_CONFIDENCE_FLOOR
-                assert not expected.eligible
-                verified += 1
-                continue
-
-            capital_charge = inputs["total_assets"].value * rate.annualized_rate
-            labor_efficiency = _quantize(
-                (inputs["gross_profit"].value - capital_charge) / inputs["headcount"].value,
-                definition.labor_efficiency.quantization,
-            )
-            band = definition.tier_valuation.band_for(labor_efficiency)
-            current_ps = _quantize(
-                inputs["shares_outstanding"].value * inputs["last_close"].value / inputs["revenue"].value,
-                definition.price_to_sales.quantization,
-            )
-            target_ps = _quantize(
-                (band.target_ps_lower_bound + band.target_ps_upper_bound) / 2,
-                definition.tier_valuation.quantization,
-            )
-            valuation_gap = _quantize(target_ps / current_ps - 1, definition.valuation_gap.quantization)
-
-            assert expected.capital_adjusted_labor_efficiency == labor_efficiency
-            assert str(expected.capital_adjusted_labor_efficiency) == str(labor_efficiency)
-            assert expected.tier is band.tier
-            assert expected.current_price_to_sales == current_ps
-            assert str(expected.current_price_to_sales) == str(current_ps)
-            assert expected.target_price_to_sales == target_ps
-            assert str(expected.target_price_to_sales) == str(target_ps)
-            assert expected.valuation_gap == valuation_gap
-            assert str(expected.valuation_gap) == str(valuation_gap)
-            assert expected.eligible
-
-            if current_ps > band.target_ps_upper_bound:
-                assert expected.outcome is GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
-                verified += 1
-                continue
-            gaps[decision.issuer.id] = valuation_gap
-
-        ranked = sorted(gaps, key=lambda issuer_id: (-gaps[issuer_id], issuer_id))
-        selected_count = min(len(ranked), definition.selection.selection_count)
-        assert selected_count > 0
-        target_weight = _quantize(Decimal(1) / Decimal(selected_count), definition.sizing.quantization)
-        for position, issuer_id in enumerate(ranked, start=1):
-            expected = decisions_by_issuer[issuer_id].expected
-            assert expected.rank == position
-            if position <= selected_count:
-                assert expected.outcome is GoldenDecisionOutcome.SELECTED
-                assert expected.target_weight == target_weight
-                assert str(expected.target_weight) == str(target_weight)
-            else:  # pragma: no cover - the frozen corpus selects every ranked issuer
-                assert expected.outcome is GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT
-            verified += 1
-    assert verified == 10

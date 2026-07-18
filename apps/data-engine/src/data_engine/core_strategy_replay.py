@@ -40,12 +40,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from factors.base.gross_profit_per_employee import gross_profit_per_employee
-from factors.base.price_to_sales import price_to_sales
-from factors.composite.three_tier_valuation import three_tier_valuation
-from factors.types import Fact
-from truealpha_contracts.metrics import METRICS
-from truealpha_contracts.strategy import LargeModelValueV0Definition, ThreeTierValuationDefinition
+from factors.composite.strategy_evaluator import EvaluatedDecision, IssuerInput, evaluate_cutoff
+from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 # CANONICAL_FIXTURE_PATH (the CLI script's *output* golden preview) is a
 # repo-write concern and stays repo-root-relative; the corpus this module
@@ -60,25 +56,6 @@ _FIXTURE_PACKAGE = "truealpha_contracts.data"
 _FIXTURE_NAME = "large_model_value_v0_strategy.v1.json"
 CORPUS_SHA256 = "8cdb081d887ff7754ac52a1eb02679b94a1c1c71b1eb32c606c06f5d6fe96083"
 STRATEGY_ID = "large_model_value_v0"
-
-# The golden fixture's input_key vocabulary predates #24's real factor
-# implementations and does not match their Fact.metric names exactly. Targets
-# must be registered in truealpha_contracts.metrics.METRICS — Fact rejects an
-# unregistered metric or a mismatched unit_family, so this mapping cannot
-# silently drift from the canonical registry the way the pre-SSOT
-# "employee_headcount" name once did.
-_GPPE_KEYS = ("gross_profit", "total_assets", "headcount")
-_PS_KEYS = ("last_close", "shares_outstanding", "revenue")
-_GPPE_KEY_MAP = {"headcount": "employees_total"}
-_PS_KEY_MAP = {"last_close": "price"}
-_MISSING_REASON_ORDER = (
-    ("gross_profit", "missing_gross_profit_fact"),
-    ("total_assets", "missing_total_assets_fact"),
-    ("headcount", "missing_headcount_disclosure"),
-    ("revenue", "missing_revenue_fact"),
-    ("shares_outstanding", "missing_market_value_input"),
-    ("last_close", "missing_market_value_input"),
-)
 
 
 @dataclass(frozen=True)
@@ -132,43 +109,6 @@ def _load_corpus() -> dict[str, Any]:
     return payload
 
 
-def _facts_for(
-    input_records: list[dict[str, Any]],
-    keys: tuple[str, ...],
-    key_map: dict[str, str],
-    entity_id: str,
-    as_of: datetime,
-) -> list[Fact]:
-    by_key = {record["input_key"]: record for record in input_records}
-    facts = []
-    for key in keys:
-        record = by_key.get(key)
-        if record is None:
-            continue
-        metric = key_map.get(key, key)
-        facts.append(
-            Fact(
-                entity_id=entity_id,
-                metric=metric,
-                value=Decimal(str(record["value"])),
-                unit_family=METRICS[metric].unit_family,
-                confidence=Decimal(str(record["confidence"])),
-                as_of=as_of,
-            )
-        )
-    return facts
-
-
-def _missing_reason(present_keys: set[str]) -> str | None:
-    # The v0 formula is uniform (2026-07-18 owner decision): every issuer
-    # consumes total_assets for the capital charge, so its absence is a
-    # missing-input exclusion for financial issuers too.
-    for key, reason in _MISSING_REASON_ORDER:
-        if key not in present_keys:
-            return reason
-    return None
-
-
 def _risk_free_rate(definition_rates: list[dict[str, Any]], cutoff_at: str) -> Decimal:
     for rate in definition_rates:
         if rate["cutoff_at"] == cutoff_at:
@@ -176,213 +116,56 @@ def _risk_free_rate(definition_rates: list[dict[str, Any]], cutoff_at: str) -> D
     raise ValueError(f"no risk-free rate declared for cutoff {cutoff_at}")
 
 
-def _compute_one(
-    issuer_id: str,
-    cutoff_at: str,
-    input_records: list[dict[str, Any]],
-    risk_free_rate: Decimal,
-    tier_definition: ThreeTierValuationDefinition,
-    minimum_confidence: Decimal,
-) -> Decision:
-    as_of = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
-    present_keys = {record["input_key"] for record in input_records}
-    reason = _missing_reason(present_keys)
-    if reason is not None:
-        return Decision(issuer_id, cutoff_at, None, None, None, None, None, False, "excluded", reason)
-
-    gppe_facts = _facts_for(input_records, _GPPE_KEYS, _GPPE_KEY_MAP, issuer_id, as_of)
-    gppe_result = gross_profit_per_employee(gppe_facts, entity_id=issuer_id, as_of=as_of, risk_free_rate=risk_free_rate)
-
-    if gppe_result.value is None:
-        return Decision(
-            issuer_id, cutoff_at, None, None, None, None, None, False, "excluded", "unavailable_required_input"
-        )
-
-    labor_efficiency_q = gppe_result.value.quantize(Decimal("0.01"))
-
-    # The v0 formula is uniform: financial issuers take the identical P/S-tier
-    # path. A bank whose capital-adjusted labor efficiency is negative lands in
-    # the traditional tier and is rejected when its P/S sits above that band --
-    # no financial-sector short-circuit.
-    ps_facts = _facts_for(input_records, _PS_KEYS, _PS_KEY_MAP, issuer_id, as_of)
-    ps_result = price_to_sales(ps_facts, entity_id=issuer_id, as_of=as_of)
-
-    if ps_result.value is None:
-        return Decision(
-            issuer_id,
-            cutoff_at,
-            labor_efficiency_q,
-            None,
-            None,
-            None,
-            None,
-            False,
-            "excluded",
-            "unavailable_required_input",
-        )
-
-    current_ps_q = ps_result.value.quantize(Decimal("0.0001"))
-    tier_result = three_tier_valuation(
-        [
-            gppe_result.model_copy(update={"value": labor_efficiency_q}),
-            ps_result.model_copy(update={"value": current_ps_q}),
-        ],
-        entity_id=issuer_id,
-        as_of=as_of,
-        definition=tier_definition,
-    )
-    if tier_result.value is None:
-        return Decision(
-            issuer_id,
-            cutoff_at,
-            labor_efficiency_q,
-            None,
-            current_ps_q,
-            None,
-            None,
-            False,
-            "excluded",
-            "unavailable_required_input",
-            confidence=tier_result.confidence,
-        )
-
-    if tier_result.confidence < minimum_confidence:
-        return Decision(
-            issuer_id,
-            cutoff_at,
-            labor_efficiency_q,
-            None,
-            None,
-            None,
-            None,
-            False,
-            "excluded",
-            "below_confidence_floor",
-            confidence=tier_result.confidence,
-        )
-
-    band = tier_definition.band_for(labor_efficiency_q)
-    midpoint_q = ((band.target_ps_lower_bound + band.target_ps_upper_bound) / Decimal(2)).quantize(Decimal("0.0001"))
-    valuation_gap_q = tier_result.value.quantize(Decimal("0.0001"))
-
-    # #393 L0: "above tier band" means the P/S sits above the tier's *upper
-    # bound*, matching the #21 golden oracle (test_strategy.py). The prior
-    # `valuation_gap_q < 0` test rejected at the band *midpoint*, which is
-    # stricter than the spec and diverges for any issuer priced between its
-    # band midpoint and upper bound. Behaviour-preserving on the current
-    # corpus (every rejected golden issuer is also above its upper bound); the
-    # negative gap is still reported for ranking.
-    if current_ps_q > band.target_ps_upper_bound:
-        return Decision(
-            issuer_id,
-            cutoff_at,
-            labor_efficiency_q,
-            band.tier.value,
-            current_ps_q,
-            midpoint_q,
-            valuation_gap_q,
-            True,
-            "rejected_valuation_above_tier_band",
-            None,
-            confidence=tier_result.confidence,
-        )
-
+def _to_decision(evaluated: EvaluatedDecision, cutoff_at: str) -> Decision:
     return Decision(
-        issuer_id,
+        evaluated.issuer_id,
         cutoff_at,
-        labor_efficiency_q,
-        band.tier.value,
-        current_ps_q,
-        midpoint_q,
-        valuation_gap_q,
-        True,
-        "ranked_beyond_selection_count",  # provisional; ranking below may promote to "selected"
-        None,
-        confidence=tier_result.confidence,
+        evaluated.capital_adjusted_labor_efficiency,
+        evaluated.tier,
+        evaluated.current_price_to_sales,
+        evaluated.target_price_to_sales,
+        evaluated.valuation_gap,
+        evaluated.eligible,
+        evaluated.outcome.value,
+        None if evaluated.exclusion_reason is None else evaluated.exclusion_reason.value,
+        rank=evaluated.rank,
+        target_weight=evaluated.target_weight,
+        confidence=evaluated.confidence,
     )
-
-
-def _ranking_key(item: Decision) -> tuple[Decimal, str]:
-    assert item.valuation_gap is not None, "ranked_beyond_selection_count decisions always carry a valuation_gap"
-    return (-item.valuation_gap, item.issuer_id)
-
-
-def _rank_and_select(decisions: list[Decision], selection_count: int) -> list[Decision]:
-    by_cutoff: dict[str, list[Decision]] = {}
-    for decision in decisions:
-        by_cutoff.setdefault(decision.cutoff_at, []).append(decision)
-
-    resolved: list[Decision] = []
-    for cutoff_at, group in by_cutoff.items():
-        rankable = [item for item in group if item.outcome == "ranked_beyond_selection_count"]
-        other = [item for item in group if item.outcome != "ranked_beyond_selection_count"]
-        rankable.sort(key=_ranking_key)
-        for index, item in enumerate(rankable, start=1):
-            if index <= selection_count:
-                weight = (Decimal(1) / Decimal(selection_count)).quantize(Decimal("0.000001"))
-                resolved.append(
-                    Decision(
-                        item.issuer_id,
-                        item.cutoff_at,
-                        item.capital_adjusted_labor_efficiency,
-                        item.tier,
-                        item.current_price_to_sales,
-                        item.target_price_to_sales,
-                        item.valuation_gap,
-                        True,
-                        "selected",
-                        None,
-                        rank=index,
-                        target_weight=weight,
-                        confidence=item.confidence,
-                    )
-                )
-            else:
-                resolved.append(
-                    Decision(
-                        item.issuer_id,
-                        item.cutoff_at,
-                        item.capital_adjusted_labor_efficiency,
-                        item.tier,
-                        item.current_price_to_sales,
-                        item.target_price_to_sales,
-                        item.valuation_gap,
-                        True,
-                        "ranked_beyond_selection_count",
-                        None,
-                        rank=index,
-                        target_weight=None,
-                        confidence=item.confidence,
-                    )
-                )
-        resolved.extend(other)
-    resolved.sort(key=lambda item: (item.cutoff_at, item.issuer_id))
-    return resolved
 
 
 def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
     corpus = _load_corpus()
     definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
-    minimum_confidence = definition.eligibility.minimum_confidence
-    selection_count = definition.selection.selection_count
+    rates = corpus["golden_decision_set"]["risk_free_rates"]
 
-    decisions: list[Decision] = []
+    by_cutoff: dict[str, list[dict[str, Any]]] = {}
     for golden in corpus["golden_decision_set"]["decisions"]:
-        issuer_id = golden["issuer"]["id"]
-        cutoff_at = golden["cutoff_at"]
-        risk_free_rate = _risk_free_rate(corpus["golden_decision_set"]["risk_free_rates"], cutoff_at)
-        decisions.append(
-            _compute_one(
-                issuer_id,
-                cutoff_at,
-                golden["inputs"],
-                risk_free_rate,
-                definition.tier_valuation,
-                minimum_confidence,
-            )
-        )
+        by_cutoff.setdefault(golden["cutoff_at"], []).append(golden)
 
-    return _rank_and_select(decisions, selection_count), definition
+    # The per-issuer + ranking/selection algorithm lives once in
+    # factors.composite.strategy_evaluator; the replay only projects the golden
+    # corpus into its inputs and maps the evaluator's decisions onto the mart
+    # Decision dataclass (#393).
+    decisions: list[Decision] = []
+    for cutoff_at, group in by_cutoff.items():
+        as_of = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
+        risk_free_rate = _risk_free_rate(rates, cutoff_at)
+        issuers = [
+            IssuerInput(
+                issuer_id=item["issuer"]["id"],
+                records={
+                    record["input_key"]: (Decimal(str(record["value"])), Decimal(str(record["confidence"])))
+                    for record in item["inputs"]
+                },
+            )
+            for item in group
+        ]
+        evaluated = evaluate_cutoff(issuers, definition=definition, cutoff_at=as_of, risk_free_rate=risk_free_rate)
+        decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
+
+    decisions.sort(key=lambda item: (item.cutoff_at, item.issuer_id))
+    return decisions, definition
 
 
 def _compare_against_golden(decisions: list[Decision], corpus: dict[str, Any]) -> list[str]:

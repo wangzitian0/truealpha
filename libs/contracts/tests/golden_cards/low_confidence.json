@@ -1,8 +1,8 @@
 {
-  "card_id": "card:aeb8ad0a4d2fdbee9073bf6614c23e7d84e2fa24b42914234f2c30d2dc5cd0fa",
+  "card_id": "card:9b7d3265618a6c97573ee6e3798f5ea748fa46f69ecbffb93e15c37b9e94bc34",
   "card_kind": "company",
   "cutoff_at": "2026-06-30T23:59:59Z",
-  "generated_from_report_id": "report:f02656c093fd60b2975c39f0d24059db068acf53f35f29f372612bf8912b0fa6",
+  "generated_from_report_id": "report:ae301336c926a38d8e7b06bb7a0897c4e143719744701186c64f6604edea0ab3",
   "research_risk_note": "Research hypothesis, not investment advice. Confidence reflects source evidence, not independent formula validation unless marked empirically validated.",
   "schema_version": "research_card.v1",
   "source_attribution": "TrueAlpha research \u2014 traceable to a materialized factor output; see the compact trace id.",
@@ -14,7 +14,7 @@
       "display_name": "issuer:ddog",
       "metrics": [
         {
-          "availability": "low_confidence",
+          "availability": "unavailable",
           "confidence": "0.65",
           "currency": null,
           "cutoff_at": "2026-06-30T23:59:59Z",
@@ -28,7 +28,7 @@
             "snapshot_id": null
           },
           "unit": "USD",
-          "value": "308358.11"
+          "value": null
         },
         {
           "availability": "unavailable",
