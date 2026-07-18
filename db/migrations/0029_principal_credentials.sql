@@ -35,10 +35,6 @@ create trigger trg_principal_credentials_touch
 before update on app.principal_credentials
 for each row execute function app.touch_principal_credentials_updated_at();
 
--- app_runtime (0022) is the trusted server-side role app-web's backend
--- connects as. Login itself runs before any tenant/principal GUC is set (it
--- is what *establishes* that context), so these grants are plain
--- schema-level selects/writes, not RLS-scoped. principal_credentials carries
--- no research content, so it needs no RLS policy of its own.
-grant select, insert, update on app.principal_credentials to app_runtime;
-grant select on app.principals, app.tenants to app_runtime;
+-- Grants to app_runtime live in db/roles.sql (that role is created there,
+-- not here — this file runs before it in the migration order), not in this
+-- migration file.

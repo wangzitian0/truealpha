@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/api-fetch";
+import { apiFetch } from "@/client/api-fetch";
 
 type Status = "checking" | "authenticated" | "unauthenticated";
 
