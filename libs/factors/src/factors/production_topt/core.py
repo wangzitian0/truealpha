@@ -1,4 +1,25 @@
-"""Pure, versioned GPPE v0 and three-tier computation for Production TOPT."""
+"""Pure, versioned GPPE v0 and three-tier computation for Production TOPT.
+
+**This is a distinct, frozen `production-topt-v0.1.0` definition — NOT the uniform
+`large_model_value_v0` base (#394).** It deliberately differs from the base
+`gross_profit_per_employee` / `three_tier_valuation` in `factors.base` /
+`factors.composite`:
+
+- Financial issuers here use `financial_formula = pre_provision_profit / headcount`
+  with **no capital charge**, and `OperatingBranch.FINANCIAL` results are marked
+  `FINANCIAL_VALUATION_NOT_COMPARABLE`. The base v0 (2026-07-18 owner decision,
+  #381) instead applies one uniform `(gross_profit - total_assets*rf)/headcount`
+  to every issuer, so for the same financial issuer the two definitions return
+  materially different numbers (e.g. JPM +272,539 here vs -255,372 in the base).
+- The tier bands differ too (traditional upper 1,000,000 vs the base's 100,000;
+  target P/S 3-4 vs 0.30-2.00).
+
+The two are separately content-addressed and write disjoint mart namespaces
+(`mart.topt_*` vs `mart.strategy_*`), so there is no row-level collision — but do
+not treat them as the same "GPPE v0 / three-tier" definition. Uniformising this
+path onto the base decision is deferred cross-lane work (`production-topt-v0.2.0`
+with tier recalibration; #27/#271), tracked in #394.
+"""
 
 from __future__ import annotations
 
