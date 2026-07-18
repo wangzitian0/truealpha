@@ -24,13 +24,42 @@ class _RecordingRepository:
 
 
 @pytest.mark.anyio
-async def test_advertises_exactly_one_tool() -> None:
+async def test_advertises_the_expected_tools() -> None:
     tools = await mcp.list_tools()
-    assert [tool.name for tool in tools] == ["strategy_run"]
-    tool = tools[0]
-    assert tool.inputSchema["required"] == ["request"]
-    assert tool.outputSchema is not None
-    assert "result" in tool.outputSchema["properties"]
+    assert sorted(tool.name for tool in tools) == ["strategy_run", "topt_gppe"]
+    strategy_tool = next(t for t in tools if t.name == "strategy_run")
+    assert strategy_tool.inputSchema["required"] == ["request"]
+    assert strategy_tool.outputSchema is not None
+    assert "result" in strategy_tool.outputSchema["properties"]
+
+
+@pytest.mark.anyio
+async def test_topt_gppe_reads_the_mart_repository_not_a_fixture() -> None:
+    from truealpha_contracts.topt_read import ToptGppeCell, ToptGppeReport
+
+    class _FakeTopt:
+        def latest(self, *, limit: int = 100) -> ToptGppeReport:
+            return ToptGppeReport(
+                run_id="capture-run:" + "a" * 64,
+                requested_count=84,
+                available_count=1,
+                cells=(
+                    ToptGppeCell(
+                        listing_id="listing:xnas:goog",
+                        availability="available",
+                        gppe="1153614.48",
+                        confidence="0.85",
+                    ),
+                ),
+                quality={"denominator_mean_confidence": "0.9171"},
+            )
+
+    server = build_mcp_server(repository=FixtureStrategyRunRepository(), topt_repository=_FakeTopt())
+    content_blocks, structured = await server.call_tool("topt_gppe", {})  # type: ignore[misc]
+    report = ToptGppeReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
+    assert report.available_count == 1
+    assert report.cells[0].listing_id == "listing:xnas:goog"
+    assert report.cells[0].gppe == "1153614.48"
 
 
 @pytest.mark.anyio
@@ -87,7 +116,7 @@ async def test_claude_compatible_client_session_round_trip() -> None:
     async with create_connected_server_and_client_session(mcp._mcp_server) as client:
         await client.initialize()
         tools = await client.list_tools()
-        assert [tool.name for tool in tools.tools] == ["strategy_run"]
+        assert sorted(tool.name for tool in tools.tools) == ["strategy_run", "topt_gppe"]
 
         result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
         assert result.isError is not True

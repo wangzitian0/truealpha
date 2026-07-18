@@ -23,6 +23,11 @@ from truealpha_contracts.access import AccessContext, AuthenticationMethod, Prin
 from truealpha_contracts.strategy_run import StrategyRunReadRepository, StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+from truealpha_contracts.topt_read import (
+    PostgresToptGppeRepository,
+    ToptGppeReport,
+    ToptGppeUnavailable,
+)
 
 from llm_service.config import settings
 
@@ -61,14 +66,30 @@ def _default_repository() -> StrategyRunReadRepository:
     return FixtureStrategyRunRepository()
 
 
-def build_mcp_server(*, repository: StrategyRunReadRepository | None = None) -> FastMCP:
-    """Builds the MCP server. A caller-supplied repository is for tests only."""
+def build_mcp_server(
+    *,
+    repository: StrategyRunReadRepository | None = None,
+    topt_repository: PostgresToptGppeRepository | None = None,
+) -> FastMCP:
+    """Builds the MCP server. Caller-supplied repositories are for tests only."""
     server = FastMCP("truealpha-mcp")
     active_repository: StrategyRunReadRepository = repository if repository is not None else _default_repository()
+    active_topt = (
+        topt_repository
+        if topt_repository is not None
+        else PostgresToptGppeRepository(database_url=settings.database_url)
+    )
 
     @server.tool(name="strategy_run", description="Read the latest large_model_value_v0 Core Strategy run.")
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
         return active_repository.get_latest(strategy_id=request.strategy_id, context=_service_access_context())
+
+    @server.tool(
+        name="topt_gppe",
+        description="Read the current production TOPT gross-profit-per-employee results and quality report from mart.",
+    )
+    def topt_gppe() -> ToptGppeReport | ToptGppeUnavailable:
+        return active_topt.latest()
 
     return server
 

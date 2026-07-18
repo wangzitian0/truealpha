@@ -508,6 +508,12 @@ from truealpha_contracts.strategy_run import (
     StrategyRunUnavailable,
 )
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
+from truealpha_contracts.topt_read import (
+    PostgresToptGppeRepository,
+    ToptGppeCell,
+    ToptGppeReport,
+    ToptGppeUnavailable,
+)
 from truealpha_contracts.universe import (
     IdentityLinkSet,
     IssuerSecurityLink,
@@ -993,6 +999,10 @@ __all__ = [
     "StrategyRunOutcome",
     "StrategyRunReadRepository",
     "StrategyRunReport",
+    "PostgresToptGppeRepository",
+    "ToptGppeCell",
+    "ToptGppeReport",
+    "ToptGppeUnavailable",
     "StrategyRunUnavailable",
     "ThreeTierValuationDefinition",
     "ValuationGapRule",
