@@ -26,18 +26,25 @@ export interface SessionConfig {
   secret: Uint8Array;
 }
 
-/** Derives `AccessContext` only from a verified session cookie. Returns
- * `null` (deny) for a missing/invalid/expired token, a principal no longer
- * resolvable in `app.principals`, or a token whose `tenantId` claim
- * disagrees with the current `app.principals` row — the database is the
- * authority on tenant membership, not the JWT's own (possibly stale) claim.
- * This is identity derivation only; it makes no authorization decision —
- * every repository operation still re-authorizes through #229. */
-export async function getSessionAccessContext(
+export interface SessionPrincipal {
+  context: AccessContext;
+  principalKind: ResolvedPrincipal["principalKind"];
+}
+
+/** Derives `AccessContext` + `principalKind` only from a verified session
+ * cookie. Returns `null` (deny) for a missing/invalid/expired token, a
+ * principal no longer resolvable in `app.principals`, or a token whose
+ * `tenantId` claim disagrees with the current `app.principals` row — the
+ * database is the authority on tenant membership, not the JWT's own
+ * (possibly stale) claim. This is identity derivation only; it makes no
+ * authorization decision — every repository operation still re-authorizes
+ * through #229. `principalKind` is what #371's route groups gate on
+ * (administrator vs member), never a client-supplied field. */
+export async function getSessionPrincipal(
   cookieValue: string | undefined,
   lookup: PrincipalLookup,
   config: SessionConfig,
-): Promise<AccessContext | null> {
+): Promise<SessionPrincipal | null> {
   if (!cookieValue) return null;
 
   const verified = await verifySessionToken(cookieValue, config.secret);
@@ -48,14 +55,28 @@ export async function getSessionAccessContext(
   if (principal.tenantId !== verified.tenantId) return null;
 
   return {
-    contextId: `ctx:session:${verified.sub}:${verified.issuedAt.getTime()}`,
-    principalId: principal.principalId,
-    tenantId: principal.tenantId,
-    sessionId: `session:${verified.sub}:${verified.issuedAt.getTime()}`,
-    authenticationMethod: "password",
-    issuedAt: verified.issuedAt.toISOString(),
-    expiresAt: verified.expiresAt.toISOString(),
+    context: {
+      contextId: `ctx:session:${verified.sub}:${verified.issuedAt.getTime()}`,
+      principalId: principal.principalId,
+      tenantId: principal.tenantId,
+      sessionId: `session:${verified.sub}:${verified.issuedAt.getTime()}`,
+      authenticationMethod: "password",
+      issuedAt: verified.issuedAt.toISOString(),
+      expiresAt: verified.expiresAt.toISOString(),
+    },
+    principalKind: principal.principalKind,
   };
+}
+
+/** Thin wrapper over `getSessionPrincipal` for callers that only need
+ * identity, not role (e.g. #368's `/api/auth/me`). */
+export async function getSessionAccessContext(
+  cookieValue: string | undefined,
+  lookup: PrincipalLookup,
+  config: SessionConfig,
+): Promise<AccessContext | null> {
+  const resolved = await getSessionPrincipal(cookieValue, lookup, config);
+  return resolved ? resolved.context : null;
 }
 
 /** Reads `principal_kind` + `tenant_id` from `app.principals`. Must be

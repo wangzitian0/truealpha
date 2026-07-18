@@ -108,6 +108,8 @@ contract-conformance:
 	cd apps/app-web && bun run tests/auth-login.test.ts
 	cd apps/app-web && bun run tests/auth-rate-limit.test.ts
 	cd apps/app-web && bun run tests/auth-config.test.ts
+	cd apps/app-web && bun run tests/auth-session-principal.test.ts
+	cd apps/app-web && bun run tests/route-group-boundary.test.ts
 
 check: lint typecheck test contract-conformance
 	@echo "✅ All checks passed"

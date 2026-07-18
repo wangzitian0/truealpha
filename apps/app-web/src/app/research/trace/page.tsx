@@ -1,6 +1,7 @@
-import { DashboardNav } from "@/components/dashboard-nav";
+import { redirect } from "next/navigation";
 import { ReadStateNotice } from "@/components/read-state";
 import { loadTrace } from "@/server/dashboard";
+import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
@@ -9,10 +10,12 @@ export default async function TracePage({
 }: {
   searchParams: Promise<{ issuer?: string; cutoff?: string }>;
 }) {
+  const principal = await getServerPrincipal();
+  if (!principal) redirect("/login?from=%2Fresearch%2Ftrace");
   const params = await searchParams;
   const issuer = params.issuer ?? "";
   const cutoff = params.cutoff ?? "";
-  const state = issuer && cutoff ? loadTrace(issuer, cutoff) : ({ kind: "empty" } as const);
+  const state = issuer && cutoff ? loadTrace(principal.context, issuer, cutoff) : ({ kind: "empty" } as const);
 
   return (
     <section aria-labelledby="trace-heading" className="space-y-6">
@@ -25,8 +28,6 @@ export default async function TracePage({
           default.
         </p>
       </div>
-
-      <DashboardNav />
 
       <ReadStateNotice state={state} />
 

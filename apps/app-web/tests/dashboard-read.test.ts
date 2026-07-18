@@ -1,11 +1,11 @@
 /**
- * #370: research dashboard loaders + mart read adapter.
+ * #370/#371: research dashboard loaders + mart read adapter.
  *
- * Run standalone (`bun run tests/dashboard-read.test.ts`), not through Next.js, so it
- * controls process.env directly without a live server. Proves typed states
- * (denied/ready/empty/unavailable/error/pagination), that reads derive AccessContext from
- * the server stand-in (never client input), and that ranking/comparison reproduce the MCP
- * strategy-run fixture values exactly.
+ * Run standalone (`bun run tests/dashboard-read.test.ts`), not through Next.js. Proves
+ * typed states (denied/ready/empty/unavailable/error/pagination), that a `null` context is
+ * always denied before the adapter is touched (#371: callers pass an already-resolved
+ * session `AccessContext`, this module never derives one itself), and that
+ * ranking/comparison reproduce the MCP strategy-run fixture values exactly.
  */
 
 import { readFileSync } from "node:fs";
@@ -16,11 +16,19 @@ import { loadComparison, loadOverview, loadRanking } from "../src/server/dashboa
 import { decisionAvailability, FixtureMartReadAdapter } from "../src/server/mart/research-read";
 import { paginate } from "../src/server/mart/pagination";
 
-const ADMIN_ENV_VAR = "TRUEALPHA_LOCAL_ADMIN_PRINCIPAL_ID";
-
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
+
+const TEST_CONTEXT: AccessContext = {
+  contextId: "ctx:test",
+  principalId: "principal:test-owner",
+  tenantId: "tenant:truealpha",
+  sessionId: "session:test",
+  authenticationMethod: "password",
+  issuedAt: "2026-01-01T00:00:00Z",
+  expiresAt: "2026-01-01T01:00:00Z",
+};
 
 const FIXTURE = JSON.parse(
   readFileSync(join(process.cwd(), "..", "..", "libs/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json"), "utf8"),
@@ -34,9 +42,8 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
   return { getLatest: (_id: string, _ctx: AccessContext) => result };
 }
 
-// --- denied: absent owner identity, and the adapter must never be read ---
+// --- denied: null context (no verified session), and the adapter must never be read ---
 {
-  delete process.env[ADMIN_ENV_VAR];
   let adapterTouched = false;
   const throwingAdapter = new FixtureMartReadAdapter({
     getLatest: () => {
@@ -44,15 +51,14 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
       throw new Error("must not be reached when denied");
     },
   });
-  const outcome = loadOverview(throwingAdapter);
+  const outcome = loadOverview(null, throwingAdapter);
   assert(outcome.kind === "denied", `expected denied, got ${outcome.kind}`);
   assert(!adapterTouched, "adapter must not be read before authorization");
 }
 
-// --- ready: owner present, real fixture-backed adapter, module availability from mart ---
+// --- ready: verified context present, real fixture-backed adapter, module availability from mart ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-owner";
-  const outcome = loadOverview();
+  const outcome = loadOverview(TEST_CONTEXT);
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   assert(outcome.data.modules.length === 7, `expected 7 modules, got ${outcome.data.modules.length}`);
   const gppe = outcome.data.modules.find((m) => m.module === 2);
@@ -66,8 +72,7 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
 
 // --- ranking reproduces the MCP fixture values exactly ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-owner";
-  const outcome = loadRanking();
+  const outcome = loadRanking(TEST_CONTEXT);
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   const adm = outcome.data.rows.find((r) => r.issuerId === "issuer:adm");
   const expected = FIXTURE.decisions.find((d) => d.issuer_id === "issuer:adm" && d.cutoff_at === "2026-06-30T23:59:59Z");
@@ -113,8 +118,7 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
 
 // --- comparison reproduces the labor-efficiency fixture value exactly ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-owner";
-  const outcome = loadComparison();
+  const outcome = loadComparison(TEST_CONTEXT);
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   const adm = outcome.data.rows.find((r) => r.issuerId === "issuer:adm");
   const expected = FIXTURE.decisions.find((d) => d.issuer_id === "issuer:adm" && d.cutoff_at === "2026-06-30T23:59:59Z");
@@ -123,13 +127,12 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
 
 // --- pagination: bounded page size with a stable cursor ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-owner";
-  const first = loadRanking({ limit: 2 });
+  const first = loadRanking(TEST_CONTEXT, { limit: 2 });
   assert(first.kind === "ready", `expected ready, got ${first.kind}`);
   assert(first.data.rows.length === 2, `expected 2 rows, got ${first.data.rows.length}`);
   assert(first.data.page.total === 5, `expected 5 total, got ${first.data.page.total}`);
   assert(first.data.page.hasMore && first.data.page.nextCursor === "2", "expected more pages with cursor 2");
-  const second = loadRanking({ limit: 2, cursor: first.data.page.nextCursor });
+  const second = loadRanking(TEST_CONTEXT, { limit: 2, cursor: first.data.page.nextCursor });
   assert(second.kind === "ready", `expected ready, got ${second.kind}`);
   assert(second.data.rows[0].issuerId !== first.data.rows[0].issuerId, "second page must differ from first");
 }
@@ -148,32 +151,28 @@ function repositoryReturning(result: StrategyRunReport | StrategyRunUnavailable)
 
 // --- empty: a materialized run with no decisions ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-owner";
-  const outcome = loadRanking({}, new FixtureMartReadAdapter(repositoryReturning(emptyReport())));
+  const outcome = loadRanking(TEST_CONTEXT, {}, new FixtureMartReadAdapter(repositoryReturning(emptyReport())));
   assert(outcome.kind === "empty", `expected empty, got ${outcome.kind}`);
 }
 
 // --- unavailable: the read repository fails closed ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-owner";
   const unavailable: StrategyRunUnavailable = { strategy_id: "large_model_value_v0", reason: "fixture_missing" };
-  const outcome = loadOverview(new FixtureMartReadAdapter(repositoryReturning(unavailable)));
+  const outcome = loadOverview(TEST_CONTEXT, new FixtureMartReadAdapter(repositoryReturning(unavailable)));
   assert(outcome.kind === "unavailable", `expected unavailable, got ${outcome.kind}`);
   assert(outcome.reason === "fixture_missing", `unexpected reason ${outcome.reason}`);
 }
 
 // --- error: an unexpected read failure is caught, not propagated ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-owner";
   const boom = new FixtureMartReadAdapter({
     getLatest: () => {
       throw new Error("simulated read failure");
     },
   });
-  const outcome = loadOverview(boom);
+  const outcome = loadOverview(TEST_CONTEXT, boom);
   assert(outcome.kind === "error", `expected error, got ${outcome.kind}`);
   assert(outcome.message.includes("simulated read failure"), `unexpected message ${outcome.message}`);
 }
 
-delete process.env[ADMIN_ENV_VAR];
-console.log("#370 dashboard read loaders + adapter states passed");
+console.log("#370/#371 dashboard read loaders + adapter states passed");

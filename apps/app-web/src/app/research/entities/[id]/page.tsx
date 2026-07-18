@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { DashboardNav } from "@/components/dashboard-nav";
+import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadEntityDetail } from "@/server/dashboard";
+import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +21,11 @@ function decodeIssuerId(id: string): string {
 }
 
 export default async function EntityDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const principal = await getServerPrincipal();
+  if (!principal) redirect("/login?from=%2Fresearch%2Fentities");
   const { id } = await params;
   const issuerId = decodeIssuerId(id);
-  const state = loadEntityDetail(issuerId);
+  const state = loadEntityDetail(principal.context, issuerId);
 
   return (
     <section aria-labelledby="entity-heading" className="space-y-6">
@@ -34,8 +37,6 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
           Materialized operating efficiency, valuation, and traceability across cutoffs.
         </p>
       </div>
-
-      <DashboardNav />
 
       <ReadStateNotice state={state} />
 
@@ -71,7 +72,7 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
                   </td>
                   <td className="px-4 py-3">
                     <Link
-                      href={`/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
+                      href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
                       className="font-mono text-xs text-gray-400 hover:text-accent"
                     >
                       {row.traceId}

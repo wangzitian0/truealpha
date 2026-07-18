@@ -1,24 +1,37 @@
 /**
- * #349: /admin/strategy-runs server loader — denial, ready, and error outcomes.
+ * #349/#371: /admin/strategy-runs server loader — denial, ready, and error
+ * outcomes. #371 adds the role check: a verified session that is not
+ * `principal_kind='administrator'` must be denied exactly like no session
+ * at all — administrator routing is driven by principal_kind, never by
+ * merely being logged in (#368 acceptance criterion).
  *
- * Run standalone (`bun run tests/admin-strategy-runs.test.ts`), not through
- * Next.js, so it controls process.env directly without a live server.
+ * Run standalone (`bun run tests/admin-strategy-runs.test.ts`), not through Next.js.
  */
 
-import { loadStrategyRunPage } from "../src/server/admin-strategy-runs";
-import type { StrategyRunReport, StrategyRunUnavailable } from "../src/contracts/strategyRun";
-
-const ADMIN_ENV_VAR = "TRUEALPHA_LOCAL_ADMIN_PRINCIPAL_ID";
+import { loadStrategyRunPage, type StrategyRunPrincipal } from "../src/server/admin-strategy-runs";
+import type { AccessContext, StrategyRunReport, StrategyRunUnavailable } from "../src/contracts/strategyRun";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-// --- denied: absent principal, and the repository must never be called ---
+const TEST_CONTEXT: AccessContext = {
+  contextId: "ctx:test",
+  principalId: "principal:test-admin",
+  tenantId: "tenant:truealpha",
+  sessionId: "session:test",
+  authenticationMethod: "password",
+  issuedAt: "2026-01-01T00:00:00Z",
+  expiresAt: "2026-01-01T01:00:00Z",
+};
+
+const ADMIN_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principalKind: "administrator" };
+const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principalKind: "member" };
+
+// --- denied: no session at all, and the repository must never be called ---
 {
-  delete process.env[ADMIN_ENV_VAR];
   let repositoryCalled = false;
-  const outcome = loadStrategyRunPage("large_model_value_v0", {
+  const outcome = loadStrategyRunPage(null, "large_model_value_v0", {
     getLatest: (_strategyId, _context) => {
       repositoryCalled = true;
       throw new Error("must not be reached when denied");
@@ -28,10 +41,22 @@ function assert(condition: unknown, message: string): asserts condition {
   assert(!repositoryCalled, "repository must not be called before authorization");
 }
 
-// --- ready: principal present, repository returns a report ---
+// --- denied: a verified session that is NOT an administrator, repository never called ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-admin";
-  const outcome = loadStrategyRunPage("large_model_value_v0");
+  let repositoryCalled = false;
+  const outcome = loadStrategyRunPage(MEMBER_PRINCIPAL, "large_model_value_v0", {
+    getLatest: (_strategyId, _context) => {
+      repositoryCalled = true;
+      throw new Error("must not be reached when a member is denied admin access");
+    },
+  });
+  assert(outcome.kind === "denied", `expected a non-administrator to be denied, got ${outcome.kind}`);
+  assert(!repositoryCalled, "repository must not be called for a non-administrator");
+}
+
+// --- ready: administrator principal present, repository returns a report ---
+{
+  const outcome = loadStrategyRunPage(ADMIN_PRINCIPAL, "large_model_value_v0");
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   const report: StrategyRunReport = outcome.report;
   assert(report.decisions.length === 10, `expected 10 decisions, got ${report.decisions.length}`);
@@ -40,10 +65,9 @@ function assert(condition: unknown, message: string): asserts condition {
   assert(selected.outcome === "selected", "expected selected outcome");
 }
 
-// --- unavailable: principal present, unknown strategy_id ---
+// --- unavailable: administrator present, unknown strategy_id ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-admin";
-  const outcome = loadStrategyRunPage("does_not_exist");
+  const outcome = loadStrategyRunPage(ADMIN_PRINCIPAL, "does_not_exist");
   assert(outcome.kind === "unavailable", `expected unavailable, got ${outcome.kind}`);
   const detail: StrategyRunUnavailable = outcome.detail;
   assert(detail.reason === "unknown_strategy_id", `unexpected reason ${detail.reason}`);
@@ -51,8 +75,7 @@ function assert(condition: unknown, message: string): asserts condition {
 
 // --- error: repository throws, loader must not propagate the exception ---
 {
-  process.env[ADMIN_ENV_VAR] = "principal:test-admin";
-  const outcome = loadStrategyRunPage("large_model_value_v0", {
+  const outcome = loadStrategyRunPage(ADMIN_PRINCIPAL, "large_model_value_v0", {
     getLatest: (_strategyId, _context) => {
       throw new Error("simulated fixture read failure");
     },
@@ -61,5 +84,4 @@ function assert(condition: unknown, message: string): asserts condition {
   assert(outcome.message.includes("simulated fixture read failure"), `unexpected message: ${outcome.message}`);
 }
 
-delete process.env[ADMIN_ENV_VAR];
-console.log("#349 admin-strategy-runs loader outcomes passed");
+console.log("#349/#371 admin-strategy-runs loader outcomes passed");

@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { DashboardNav } from "@/components/dashboard-nav";
+import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadRanking } from "@/server/dashboard";
+import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
@@ -14,8 +15,10 @@ export default async function RankingsPage({
 }: {
   searchParams: Promise<{ cursor?: string; cutoff?: string }>;
 }) {
+  const principal = await getServerPrincipal();
+  if (!principal) redirect("/login?from=%2Fresearch%2Frankings");
   const params = await searchParams;
-  const state = loadRanking({ cutoffAt: params.cutoff, cursor: params.cursor ?? null });
+  const state = loadRanking(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
 
   return (
     <section aria-labelledby="rankings-heading" className="space-y-6">
@@ -28,8 +31,6 @@ export default async function RankingsPage({
           fixture-backed pending #41&apos;s mart-backed read role, not recomputed here.
         </p>
       </div>
-
-      <DashboardNav />
 
       <ReadStateNotice state={state} />
 
@@ -59,7 +60,7 @@ export default async function RankingsPage({
                     <td className="px-4 py-3">{row.rank ?? "—"}</td>
                     <th scope="row" className="px-4 py-3 font-medium">
                       <Link
-                        href={`/entities/${encodeURIComponent(row.issuerId)}`}
+                        href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
                         className="text-accent hover:underline"
                       >
                         {row.issuerId}
@@ -74,7 +75,7 @@ export default async function RankingsPage({
                     </td>
                     <td className="px-4 py-3">
                       <Link
-                        href={`/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
+                        href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
                         className="font-mono text-xs text-gray-400 hover:text-accent"
                       >
                         {row.traceId}
@@ -87,7 +88,7 @@ export default async function RankingsPage({
           </div>
           {state.data.page.hasMore && state.data.page.nextCursor !== null && (
             <Link
-              href={`/rankings?cursor=${encodeURIComponent(state.data.page.nextCursor)}${
+              href={`/research/rankings?cursor=${encodeURIComponent(state.data.page.nextCursor)}${
                 params.cutoff ? `&cutoff=${encodeURIComponent(params.cutoff)}` : ""
               }`}
               className="inline-block rounded-lg border border-border bg-card px-4 py-2 text-sm text-gray-300 hover:border-accent"
