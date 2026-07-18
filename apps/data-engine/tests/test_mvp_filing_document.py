@@ -81,14 +81,22 @@ class MemoryRawObjectStore:
 
 @pytest.fixture
 def connection():
+    # autocommit=False + rollback keeps each test hermetic: rows never commit,
+    # so sibling tests cannot leak content-identical raw.fetches vintages that
+    # the content-addressed dedup would collapse onto (see #367). The two
+    # execute_in_process idempotency runs below share this one connection, so
+    # the first run's uncommitted writes are still visible to the second.
     try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=True)
+        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
-    with active:
+    try:
         yield active
+    finally:
+        active.rollback()
+        active.close()
 
 
 def test_dagster_e0_is_idempotent_and_matches_postgres_snapshot(connection) -> None:
@@ -600,7 +608,9 @@ def test_missing_confidence_lineage_and_mutation_are_rejected(connection) -> Non
         exclude={"normalized_record_id", "content_sha256", "mapping_version"},
     )
     drifted = NormalizedRecordRef(**drifted_values, mapping_version="missing-lineage:1.0.0")
-    with pytest.raises(psycopg.errors.ForeignKeyViolation, match="does not exist"):
+    # savepoints (connection.transaction()) so each expected DB error rolls back
+    # to its savepoint instead of aborting the outer non-autocommit transaction.
+    with pytest.raises(psycopg.errors.ForeignKeyViolation, match="does not exist"), connection.transaction():
         PostgresFilingDocumentRepository(connection).put(
             drifted,
             pipeline.payloads[0],
@@ -613,7 +623,7 @@ def test_missing_confidence_lineage_and_mutation_are_rejected(connection) -> Non
         "update staging.filing_documents set confidence = 0.5 where normalized_record_id = %s",
         "delete from staging.filing_documents where normalized_record_id = %s",
     ):
-        with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+        with pytest.raises(psycopg.errors.RaiseException, match="append-only"), connection.transaction():
             connection.execute(statement, (original.normalized_record_id,))
 
 

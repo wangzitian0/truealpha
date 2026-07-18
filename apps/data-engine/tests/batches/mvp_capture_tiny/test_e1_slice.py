@@ -39,14 +39,20 @@ REPOSITORY_ROOT = next(
 
 @pytest.fixture
 def connection():
+    # autocommit=False + rollback keeps each test hermetic (#367): rows never
+    # commit, so sibling tests cannot leak content-identical raw.fetches vintages
+    # that the content-addressed dedup would collapse onto.
     try:
-        active_connection = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=True)
+        active_connection = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
-    with active_connection:
+    try:
         yield active_connection
+    finally:
+        active_connection.rollback()
+        active_connection.close()
 
 
 def test_dagster_executes_all_terminal_e1_cases(connection):
@@ -233,12 +239,15 @@ def test_ephemeral_repository_rejects_update_and_delete(connection):
     repository = EphemeralPostgresRecordRepository(connection)
     assert repository.put(base.record)
 
-    with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+    # connection.transaction() opens a savepoint so the expected trigger error
+    # rolls back to it instead of aborting the whole (now non-autocommit) test
+    # transaction — the same idiom the already-isolated test files use.
+    with pytest.raises(psycopg.errors.RaiseException, match="append-only"), connection.transaction():
         connection.execute(
             "update mvp_capture_tiny_normalized_records set subject_id = %s",
             ("issuer.changed",),
         )
-    with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+    with pytest.raises(psycopg.errors.RaiseException, match="append-only"), connection.transaction():
         connection.execute("delete from mvp_capture_tiny_normalized_records")
 
 

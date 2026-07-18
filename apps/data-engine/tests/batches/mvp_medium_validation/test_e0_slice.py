@@ -81,14 +81,20 @@ class MemoryRawObjectStore:
 
 @pytest.fixture
 def connection():
+    # autocommit=False + rollback keeps each test hermetic (#367): rows never
+    # commit, so sibling tests cannot leak content-identical raw.fetches vintages
+    # that the content-addressed dedup would collapse onto.
     try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=True)
+        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
-    with active:
+    try:
         yield active
+    finally:
+        active.rollback()
+        active.close()
 
 
 def _changed_artifact():

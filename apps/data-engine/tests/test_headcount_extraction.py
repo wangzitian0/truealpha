@@ -115,14 +115,20 @@ class ExplodingHeadcountExtractor:
 
 @pytest.fixture
 def connection():
+    # autocommit=False + rollback keeps each test hermetic (#367): rows never
+    # commit, so sibling tests cannot leak content-identical raw.fetches vintages
+    # that the content-addressed dedup would collapse onto.
     try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=True)
+        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
-    with active:
+    try:
         yield active
+    finally:
+        active.rollback()
+        active.close()
 
 
 def _corpus() -> dict:
@@ -432,7 +438,9 @@ def test_headcount_tables_and_normalized_vintages_are_append_only(connection) ->
         ),
     )
     for statement, identity in statements:
-        with pytest.raises(psycopg.errors.RaiseException, match="append-only"):
+        # savepoint so the expected trigger error rolls back to it without
+        # aborting the outer (non-autocommit) test transaction.
+        with pytest.raises(psycopg.errors.RaiseException, match="append-only"), connection.transaction():
             connection.execute(statement, (identity,))
 
 
