@@ -1,24 +1,19 @@
 """Pure, versioned GPPE v0 and three-tier computation for Production TOPT.
 
-**This is a distinct, frozen `production-topt-v0.1.0` definition — NOT the uniform
-`large_model_value_v0` base (#394).** It deliberately differs from the base
-`gross_profit_per_employee` / `three_tier_valuation` in `factors.base` /
-`factors.composite`:
+**Converged onto the base `large_model_value_v0` semantics (#394, `production-topt-v0.2.0`).**
+GPPE is one uniform capital-adjusted formula for every issuer —
+`(numerator - total_assets*risk_free_rate)/headcount`, where the numerator is the
+parser's industry-branch profit (pre-provision profit for financial issuers, gross
+profit otherwise) — identical to `factors.base.gross_profit_per_employee`. The
+v0.1.0 financial short-circuit (`pre_provision_profit/headcount` with no capital
+charge, then `FINANCIAL_VALUATION_NOT_COMPARABLE`) is retired; financial issuers now
+flow through the same tier / P-S valuation path as every other issuer.
 
-- Financial issuers here use `financial_formula = pre_provision_profit / headcount`
-  with **no capital charge**, and `OperatingBranch.FINANCIAL` results are marked
-  `FINANCIAL_VALUATION_NOT_COMPARABLE`. The base v0 (2026-07-18 owner decision,
-  #381) instead applies one uniform `(gross_profit - total_assets*rf)/headcount`
-  to every issuer, so for the same financial issuer the two definitions return
-  materially different numbers (e.g. JPM +272,539 here vs -255,372 in the base).
-- The tier bands differ too (traditional upper 1,000,000 vs the base's 100,000;
-  target P/S 3-4 vs 0.30-2.00).
-
-The two are separately content-addressed and write disjoint mart namespaces
-(`mart.topt_*` vs `mart.strategy_*`), so there is no row-level collision — but do
-not treat them as the same "GPPE v0 / three-tier" definition. Uniformising this
-path onto the base decision is deferred cross-lane work (`production-topt-v0.2.0`
-with tier recalibration; #27/#271), tracked in #394.
+The tier-band parameters here remain TOPT's own calibration and are versioned with
+the `production-topt-*` coordinates; aligning them to the base bands, if desired, is
+a separate parameter change. This module still writes the `mart.topt_*` namespace
+(disjoint from the base replay's `mart.strategy_*`); the v0.1.0 rows stay as an
+append-only prior vintage.
 """
 
 from __future__ import annotations
@@ -97,7 +92,6 @@ class OperatingBranch(StrEnum):
 
 class OperatingEfficiencyMetric(StrEnum):
     CAPITAL_ADJUSTED_GPPE = "capital_adjusted_gppe"
-    PRE_PROVISION_PROFIT_PER_EMPLOYEE = "pre_provision_profit_per_employee"
 
 
 class ToptCoreReasonCode(StrEnum):
@@ -114,7 +108,6 @@ class ToptCoreReasonCode(StrEnum):
     NONPOSITIVE_MARKET_PRICE = "nonpositive_market_price"
     STALE_INPUT = "stale_input"
     UNKNOWN_FRESHNESS = "unknown_freshness"
-    FINANCIAL_VALUATION_NOT_COMPARABLE = "financial_valuation_not_comparable"
 
 
 class ToptMetricInput(_FrozenModel):
@@ -185,16 +178,22 @@ class ToptMarketValueComponent(_FrozenModel):
 
 
 class GppeV0Definition(_FrozenModel):
-    """Owner-selected v0 capital-adjusted labor-efficiency definition."""
+    """v0.2.0 uniform capital-adjusted labor-efficiency definition.
+
+    Converged onto the base `large_model_value_v0` (#394): one formula for every
+    issuer, `(numerator - total_assets*risk_free_rate)/headcount`, where the
+    numerator is the parser's industry-branch profit (pre-provision profit for
+    financial issuers, gross profit otherwise). v0.1.0's financial short-circuit
+    (`pre_provision_profit/headcount`, no capital charge) is retired.
+    """
 
     definition_id: str = Field(default="", pattern=r"^(?:|gppe-definition:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     factor_id: Literal["gross_profit_per_employee"] = "gross_profit_per_employee"
-    factor_version: Literal["production-topt-v0.1.0"] = "production-topt-v0.1.0"
-    formula: Literal["(gross_profit-total_assets*risk_free_rate)/headcount"] = (
-        "(gross_profit-total_assets*risk_free_rate)/headcount"
+    factor_version: Literal["production-topt-v0.2.0"] = "production-topt-v0.2.0"
+    formula: Literal["(numerator-total_assets*risk_free_rate)/headcount"] = (
+        "(numerator-total_assets*risk_free_rate)/headcount"
     )
-    financial_formula: Literal["pre_provision_profit/headcount"] = "pre_provision_profit/headcount"
     risk_free_benchmark: Literal["3m-us-tbill"] = "3m-us-tbill"
     risk_free_rate: Decimal = Field(ge=0, le=1)
     output_unit: Literal["reporting_currency_per_employee"] = "reporting_currency_per_employee"
@@ -247,7 +246,7 @@ class ThreeTierV0Definition(_FrozenModel):
     definition_id: str = Field(default="", pattern=r"^(?:|three-tier-definition:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     factor_id: Literal["three_tier_valuation"] = "three_tier_valuation"
-    factor_version: Literal["production-topt-v0.1.0"] = "production-topt-v0.1.0"
+    factor_version: Literal["production-topt-v0.2.0"] = "production-topt-v0.2.0"
     boundary_rule: Literal["lower_inclusive_upper_exclusive"] = "lower_inclusive_upper_exclusive"
     valuation_gap_formula: Literal["target_ps_midpoint/current_ps-1"] = "target_ps_midpoint/current_ps-1"
     bands: tuple[TierBandDefinition, TierBandDefinition, TierBandDefinition] = (
@@ -417,22 +416,14 @@ class ToptGppeResult(_FrozenModel):
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
         if self.availability is ToptCoreAvailability.AVAILABLE:
-            nonfinancial = (
-                self.operating_branch is OperatingBranch.NON_FINANCIAL
-                and self.operating_metric is OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
+            valid = (
+                self.operating_metric is OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
                 and self.operating_efficiency is not None
                 and self.capital_adjusted_gross_profit is not None
                 and self.gppe is not None
             )
-            financial = (
-                self.operating_branch is OperatingBranch.FINANCIAL
-                and self.operating_metric is OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE
-                and self.operating_efficiency is not None
-                and self.capital_adjusted_gross_profit is None
-                and self.gppe is None
-            )
-            if not (nonfinancial or financial) or self.reason_codes:
-                raise ValueError("available GPPE result carries invalid branch values")
+            if not valid or self.reason_codes:
+                raise ValueError("available GPPE result carries invalid values")
         elif (
             self.operating_efficiency is not None
             or self.capital_adjusted_gross_profit is not None
@@ -522,8 +513,7 @@ class ToptCoreResult(_FrozenModel):
         )
         if self.availability is ToptCoreAvailability.AVAILABLE:
             if (
-                self.operating_branch is not OperatingBranch.NON_FINANCIAL
-                or self.operating_metric is not OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
+                self.operating_metric is not OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
                 or self.operating_efficiency is None
                 or any(value is None for value in numeric_values)
                 or self.tier is None
@@ -531,17 +521,11 @@ class ToptCoreResult(_FrozenModel):
             ):
                 raise ValueError("available TOPT core result requires all values and no reason codes")
         else:
-            financial_efficiency_only = (
-                self.operating_branch is OperatingBranch.FINANCIAL
-                and self.operating_metric is OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE
-                and self.operating_efficiency is not None
-                and ToptCoreReasonCode.FINANCIAL_VALUATION_NOT_COMPARABLE in self.reason_codes
-            )
             if (
                 any(value is not None for value in numeric_values)
                 or self.tier is not None
                 or not self.reason_codes
-                or (self.operating_efficiency is not None and not financial_efficiency_only)
+                or self.operating_efficiency is not None
             ):
                 raise ValueError("unavailable TOPT core result carries invalid computed values")
         for field_name in (
@@ -589,11 +573,7 @@ def _unavailable_gppe(
     reasons: tuple[ToptCoreReasonCode, ...],
     freshness: MetricFreshness,
 ) -> ToptGppeResult:
-    operating_metric = (
-        OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE
-        if snapshot.operating_branch is OperatingBranch.FINANCIAL
-        else OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
-    )
+    operating_metric = OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
     return ToptGppeResult(
         invocation_id=invocation_id,
         snapshot_id=snapshot.snapshot_id,
@@ -628,16 +608,14 @@ def compute_topt_gppe(
 
     if not invocation_id.startswith("topt-gppe-invocation:"):
         raise ValueError("invocation_id must be a content-addressed TOPT GPPE invocation")
-    inputs = {ToptCoreReasonCode.MISSING_HEADCOUNT: snapshot.headcount}
+    inputs = {
+        ToptCoreReasonCode.MISSING_HEADCOUNT: snapshot.headcount,
+        ToptCoreReasonCode.MISSING_TOTAL_ASSETS: snapshot.total_assets,
+    }
     if snapshot.operating_branch is OperatingBranch.FINANCIAL:
         inputs[ToptCoreReasonCode.MISSING_PRE_PROVISION_PROFIT] = snapshot.pre_provision_profit
     else:
-        inputs.update(
-            {
-                ToptCoreReasonCode.MISSING_GROSS_PROFIT: snapshot.gross_profit,
-                ToptCoreReasonCode.MISSING_TOTAL_ASSETS: snapshot.total_assets,
-            }
-        )
+        inputs[ToptCoreReasonCode.MISSING_GROSS_PROFIT] = snapshot.gross_profit
     reasons = tuple(
         reason
         for reason, metric in inputs.items()
@@ -672,37 +650,21 @@ def compute_topt_gppe(
         )
 
     confidence = min(cell.confidence for cell in snapshot.cell_inputs)
+    assert snapshot.total_assets is not None and snapshot.total_assets.value is not None
+    # Uniform capital-adjusted formula for every issuer (#394 convergence onto the
+    # base large_model_value_v0 definition): the numerator is the parser's
+    # industry-branch profit -- pre-provision profit for financials, gross profit
+    # otherwise -- and the same total_assets * risk_free_rate capital charge is
+    # subtracted for both. No financial short-circuit; financials flow through the
+    # same tier/P-S path.
     if snapshot.operating_branch is OperatingBranch.FINANCIAL:
         assert snapshot.pre_provision_profit is not None and snapshot.pre_provision_profit.value is not None
-        with localcontext(_DECIMAL_CONTEXT):
-            financial_efficiency = snapshot.pre_provision_profit.value / snapshot.headcount.value
-        return ToptGppeResult(
-            invocation_id=invocation_id,
-            snapshot_id=snapshot.snapshot_id,
-            run_id=snapshot.run_id,
-            release_manifest_id=snapshot.release_manifest_id,
-            universe_id=snapshot.universe_id,
-            universe_version=snapshot.universe_version,
-            universe_sha256=snapshot.universe_sha256,
-            cutoff=snapshot.cutoff,
-            issuer_id=snapshot.issuer_id,
-            instrument_id=snapshot.instrument_id,
-            listing_id=snapshot.listing_id,
-            operating_branch=snapshot.operating_branch,
-            operating_metric=OperatingEfficiencyMetric.PRE_PROVISION_PROFIT_PER_EMPLOYEE,
-            availability=ToptCoreAvailability.AVAILABLE,
-            operating_efficiency=financial_efficiency,
-            confidence=confidence,
-            freshness=freshness,
-            input_observation_ids=snapshot.observation_ids,
-            gppe_definition_id=gppe_definition.definition_id,
-            gppe_definition_sha256=gppe_definition.content_sha256,
-        )
-
-    assert snapshot.gross_profit is not None and snapshot.gross_profit.value is not None
-    assert snapshot.total_assets is not None and snapshot.total_assets.value is not None
+        numerator = snapshot.pre_provision_profit.value
+    else:
+        assert snapshot.gross_profit is not None and snapshot.gross_profit.value is not None
+        numerator = snapshot.gross_profit.value
     with localcontext(_DECIMAL_CONTEXT):
-        capital_adjusted = snapshot.gross_profit.value - (snapshot.total_assets.value * gppe_definition.risk_free_rate)
+        capital_adjusted = numerator - (snapshot.total_assets.value * gppe_definition.risk_free_rate)
         gppe = capital_adjusted / snapshot.headcount.value
     return ToptGppeResult(
         invocation_id=invocation_id,
@@ -819,16 +781,6 @@ def compute_topt_core(
             tier_definition=tier_definition,
             reasons=gppe_result.reason_codes,
         )
-    if gppe_result.operating_branch is OperatingBranch.FINANCIAL:
-        return _unavailable_core(
-            snapshot,
-            gppe_result,
-            invocation_id=invocation_id,
-            tier_definition=tier_definition,
-            reasons=(ToptCoreReasonCode.FINANCIAL_VALUATION_NOT_COMPARABLE,),
-            operating_efficiency=gppe_result.operating_efficiency,
-        )
-
     reasons: list[ToptCoreReasonCode] = []
     if snapshot.revenue is None or snapshot.revenue.value is None:
         reasons.append(ToptCoreReasonCode.MISSING_REVENUE)
