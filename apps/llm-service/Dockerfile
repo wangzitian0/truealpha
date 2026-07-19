@@ -21,5 +21,17 @@ FROM python:3.12-slim-bookworm AS runtime
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
+# psql: apply_migrations.sh below shells out to it (same `-v ON_ERROR_STOP=1 -f`
+# semantics as Makefile's db-migrate target and ci-db.yml — proven, not reinvented).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+# Schema DDL is app-owned (db/migrations/*.sql + db/roles.sql, idempotent) but has no
+# in-container runner elsewhere yet (#428) — bake it into this image so a boot can apply
+# it via $DATABASE_URL, whether that points at a preview's ephemeral DB or the real
+# staging/prod truealpha-postgres.
+COPY db/migrations ./db/migrations
+COPY db/roles.sql ./db/roles.sql
+COPY db/apply_migrations.sh ./db/apply_migrations.sh
 EXPOSE 8000
-CMD ["uvicorn", "llm_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "./db/apply_migrations.sh && exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000"]
