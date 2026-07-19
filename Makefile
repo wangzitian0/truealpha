@@ -98,19 +98,11 @@ test:
 
 contract-conformance:
 	uv run python libs/contracts/conformance/export_issue58.py --check
-	cd apps/app-web && bun run tests/issue58-conformance.test.ts
-	cd apps/app-web && bun run tests/strategy-run-contract.test.ts
-	cd apps/app-web && bun run tests/admin-strategy-runs.test.ts
-	cd apps/app-web && bun run tests/mart-strategy-run-repository.test.ts
-	cd apps/app-web && bun run tests/dashboard-read.test.ts
-	cd apps/app-web && bun run tests/dashboard-boundary.test.ts
-	cd apps/app-web && bun run tests/auth-security.test.ts
-	cd apps/app-web && bun run tests/auth-session.test.ts
-	cd apps/app-web && bun run tests/auth-login.test.ts
-	cd apps/app-web && bun run tests/auth-rate-limit.test.ts
-	cd apps/app-web && bun run tests/auth-config.test.ts
-	cd apps/app-web && bun run tests/auth-session-principal.test.ts
-	cd apps/app-web && bun run tests/route-group-boundary.test.ts
+	# Runs every apps/app-web/tests/*.test.ts file, mirroring ci-web.yml (#373 found a
+	# hardcoded list here had silently stopped running 5 of them: conversations/documents
+	# validation, and now #433's topt tests — a hardcoded list drifts every time a test
+	# file is added and this line isn't touched; the glob can't drift).
+	cd apps/app-web && set -euo pipefail; for f in tests/*.test.ts; do echo "== $$f"; bun run "$$f"; done
 
 check: lint typecheck test contract-conformance
 	@echo "✅ All checks passed"
