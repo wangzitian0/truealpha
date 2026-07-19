@@ -51,6 +51,11 @@ create table if not exists app.research_document_revisions (
     foreign key (document_id, tenant_id, owner_principal_id)
         references app.research_documents (document_id, tenant_id, owner_principal_id),
     unique (revision_id, tenant_id, owner_principal_id),
+    -- Lets a download ticket's FK below pin BOTH document_id and
+    -- revision_id together against one real revision row, so a ticket can
+    -- never be created for a (document_id, revision_id) pair that doesn't
+    -- actually correspond to the same revision.
+    unique (revision_id, document_id, tenant_id, owner_principal_id),
     unique (object_key)
 );
 
@@ -130,8 +135,14 @@ create table if not exists app.research_document_download_tickets (
     check (redeemed_at is null or redeemed_at >= created_at),
     foreign key (document_id, tenant_id, owner_principal_id)
         references app.research_documents (document_id, tenant_id, owner_principal_id),
-    foreign key (revision_id, tenant_id, owner_principal_id)
-        references app.research_document_revisions (revision_id, tenant_id, owner_principal_id)
+    -- Pins revision_id AND document_id together against one real revision
+    -- row (the 4-column unique constraint above) — not two independent
+    -- FKs — so a ticket can never redeem a revision that belongs to a
+    -- different document than the one it names, which would otherwise let
+    -- a tombstone on the *named* document fail to protect the *actual*
+    -- revision being redeemed (or vice versa).
+    foreign key (revision_id, document_id, tenant_id, owner_principal_id)
+        references app.research_document_revisions (revision_id, document_id, tenant_id, owner_principal_id)
 );
 
 alter table app.research_document_download_tickets enable row level security;

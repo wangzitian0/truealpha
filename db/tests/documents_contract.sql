@@ -234,6 +234,35 @@ begin
 end;
 $$;
 
+-- a ticket cannot pair a real document_id with a real revision_id that
+-- belongs to a DIFFERENT document, even when both are owned by the same
+-- caller — the composite FK on (revision_id, document_id, tenant_id,
+-- owner_principal_id) must catch this, not just two independent FKs.
+insert into app.research_document_revisions (
+    revision_id, document_id, tenant_id, owner_principal_id,
+    source_artifact_id, artifact_sha256, artifact_byte_length, artifact_content_type, object_key, created_at
+) values (
+    'revision:alpha:alice-2', 'document:alpha:alice-2', 'tenant:alpha', 'principal:alpha:alice',
+    'report:' || repeat('e', 64), repeat('e', 64), 512, 'application/json',
+    'documents/tenant:alpha/alice/revision:alpha:alice-2', now()
+);
+
+do $$
+begin
+    begin
+        insert into app.research_document_download_tickets (
+            ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at
+        ) values (
+            'ticket:alpha:mismatched', 'document:alpha:alice-2', 'revision:alpha:alice-1',
+            'tenant:alpha', 'principal:alpha:alice', now() + interval '10 minutes'
+        );
+        raise exception 'a ticket pairing document:alpha:alice-2 with a different document''s revision unexpectedly succeeded';
+    exception
+        when foreign_key_violation then null; -- expected: revision_id does not belong to document_id
+    end;
+end;
+$$;
+
 -- --- download tickets: single redemption, no other field mutable ---
 insert into app.research_document_download_tickets (
     ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at, created_at

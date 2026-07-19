@@ -72,9 +72,12 @@ async function bodyToBuffer(body: unknown): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** Content-addressed store: identical bytes always resolve to the same key,
- * so a re-render that produces byte-identical output is a no-op write —
- * `head_object` before `put_object`, exactly like the Python adapter. */
+/** Content-addressed store, scoped per owner (the key includes
+ * `ownerPrincipalId`, so this is per-owner dedup, not global — two owners
+ * uploading byte-identical content each get their own key). A re-render
+ * that produces byte-identical output for the *same* owner is a no-op
+ * write — `head_object` before `put_object`, exactly like the Python
+ * adapter. */
 export async function storeDocumentArtifact(
   ownerPrincipalId: string,
   bytes: Buffer,
