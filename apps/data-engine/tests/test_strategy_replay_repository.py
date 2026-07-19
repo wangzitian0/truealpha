@@ -125,3 +125,21 @@ def test_a_forged_row_under_the_computed_id_raises_on_replay(connection) -> None
 
     with pytest.raises(ValueError, match="identity conflict"):
         write_strategy_decision(connection, jpm, strategy_run_id=run_id)
+
+
+def test_snapshot_id_is_persisted_and_distinguishes_the_run(connection) -> None:
+    # #395: a run bound to a PIT strategy-snapshot persists it and gets a distinct
+    # identity from the fixture/preview run (which leaves snapshot_id null).
+    _, definition = run()
+    snapshot_id = f"strategy-snapshot:{'a' * 64}"
+
+    with_snapshot = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id)
+    without_snapshot = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+
+    assert with_snapshot != without_snapshot
+    assert connection.execute(
+        "select snapshot_id from mart.strategy_runs where strategy_run_id = %s", (with_snapshot,)
+    ).fetchone() == (snapshot_id,)
+    assert connection.execute(
+        "select snapshot_id from mart.strategy_runs where strategy_run_id = %s", (without_snapshot,)
+    ).fetchone() == (None,)
