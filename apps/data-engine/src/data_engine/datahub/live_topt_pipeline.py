@@ -68,7 +68,22 @@ from data_engine.sources import sec, yahoo
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import write_replay
 
-CORPUS = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "capture_control" / "corpus.v1.json"
+
+def _corpus_path() -> Path:
+    """The frozen universe corpus. In a source checkout it sits next to the package;
+    in the deployed image the package lives in site-packages while the repo tree is
+    copied to /app, so resolve through the known candidates instead of assuming one."""
+    candidates = (
+        Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "capture_control" / "corpus.v1.json",
+        Path("/app/apps/data-engine/tests/fixtures/capture_control/corpus.v1.json"),
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(f"capture-control corpus not found in: {[str(c) for c in candidates]}")
+
+
+CORPUS = _corpus_path()
 SEMANTIC_TYPES = ("market-price", "listing-identity", "universe-membership", "financial-fact")
 PRIMARY_PARSER_VERSION = "production-topt-live-parser:v1"
 

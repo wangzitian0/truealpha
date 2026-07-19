@@ -30,13 +30,21 @@ class PostgresToptReadRepository:
         """
         row = self._connection.execute(
             """
-            select s.run_id
-            from mart.topt_capture_status s
-            join mart.datahub_quality_report q on q.run_id = s.run_id
-            where s.environment = 'production' and s.complete
-            order by q.created_at desc, q.report_id desc limit 1
+            select target_run_id from mart.current_pointer_head
+            where environment = 'production' and factor_id = 'gross_profit_per_employee'
+            order by advanced_at desc limit 1
             """
         ).fetchone()
+        if row is None:  # fallback: no pointer advanced yet (#378)
+            row = self._connection.execute(
+                """
+                select s.run_id
+                from mart.topt_capture_status s
+                join mart.datahub_quality_report q on q.run_id = s.run_id
+                where s.environment = 'production' and s.complete
+                order by q.created_at desc, q.report_id desc limit 1
+                """
+            ).fetchone()
         return None if row is None else row[0]
 
     def gppe_results(self, run_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
