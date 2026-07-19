@@ -28,7 +28,7 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
   if (!principal) redirect("/login?from=%2Fresearch%2Fentities");
   const { id } = await params;
   const issuerId = decodeIssuerId(id);
-  const state = loadEntityDetail(principal.context, issuerId);
+  const state = await loadEntityDetail(principal.context, issuerId);
 
   return (
     <section aria-labelledby="entity-heading" className="space-y-6">

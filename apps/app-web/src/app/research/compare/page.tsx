@@ -18,7 +18,7 @@ export default async function ComparePage({
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Fcompare");
   const params = await searchParams;
-  const state = loadComparison(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
+  const state = await loadComparison(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
 
   return (
     <section aria-labelledby="compare-heading" className="space-y-6">

@@ -15,7 +15,7 @@ export default async function TracePage({
   const params = await searchParams;
   const issuer = params.issuer ?? "";
   const cutoff = params.cutoff ?? "";
-  const state = issuer && cutoff ? loadTrace(principal.context, issuer, cutoff) : ({ kind: "empty" } as const);
+  const state = issuer && cutoff ? await loadTrace(principal.context, issuer, cutoff) : ({ kind: "empty" } as const);
 
   return (
     <section aria-labelledby="trace-heading" className="space-y-6">

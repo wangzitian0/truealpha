@@ -18,7 +18,7 @@ export default async function RankingsPage({
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Frankings");
   const params = await searchParams;
-  const state = loadRanking(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
+  const state = await loadRanking(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
 
   return (
     <section aria-labelledby="rankings-heading" className="space-y-6">
@@ -27,8 +27,8 @@ export default async function RankingsPage({
           Theme rankings
         </h1>
         <p className="mt-2 text-sm text-gray-400">
-          Purest large-model-value names, ranked from the materialized strategy run through the mart read adapter —
-          fixture-backed pending #41&apos;s mart-backed read role, not recomputed here.
+          Purest large-model-value names, ranked from the materialized strategy run through the mart read adapter
+          (#370), not recomputed here.
         </p>
       </div>
 

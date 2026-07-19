@@ -58,4 +58,27 @@ for (const relativePath of ADAPTER_PATHS) {
   assert(!/from\s+["'][^"']*decimal/i.test(rawSource), `${relativePath} must not import a decimal library`);
 }
 
-console.log(`#370/#433 dashboard boundary scan passed (no cross-factor computation in ${ADAPTER_PATHS.length} mart adapters)`);
+// #370: the whole point of this issue is that a deployed route must never fall back to
+// the fixture. A behavioral test can't safely tell "hit real mart, got no rows" apart from
+// "silently read the fixture" without depending on live database contents, so this checks
+// the wiring statically instead: research-read.ts's bare constructor default must
+// instantiate MartStrategyRunRepository, and FixtureStrategyRunRepository must not appear
+// as a bare default anywhere in that file (it stays reachable only through explicit test
+// injection, which callers pass as a constructor argument, not by relying on the module's
+// default). This check is specific to that one file/class — read separately from the
+// generic ADAPTER_PATHS loop above rather than reusing its loop-scoped `withoutBlockComments`,
+// which after the loop holds whichever adapter path ran last, not necessarily this one.
+{
+  const researchReadSource = readFileSync(join(process.cwd(), "src/server/mart/research-read.ts"), "utf8");
+  const withoutComments = researchReadSource.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  assert(
+    /repository\s*\?\?\s*new MartStrategyRunRepository\(\)/.test(withoutComments),
+    "StrategyRunReadAdapter's bare default must be MartStrategyRunRepository, not the fixture",
+  );
+  assert(
+    !/new FixtureStrategyRunRepository\(\)/.test(withoutComments),
+    "the fixture repository must not appear as a bare default in the mart read adapter",
+  );
+}
+
+console.log(`#370/#433 dashboard boundary scan passed (no cross-factor computation in ${ADAPTER_PATHS.length} mart adapters; mart-backed default)`);
