@@ -59,3 +59,28 @@ for (const relativePath of ADAPTER_PATHS) {
 }
 
 console.log(`#370/#433 dashboard boundary scan passed (no cross-factor computation in ${ADAPTER_PATHS.length} mart adapters)`);
+
+// --- #370 appended acceptance / #429 P3: the /research loaders' bare default is the
+// mart-backed adapter; the fixture stays reachable only through explicit test injection.
+// A live-DB behavioral test cannot distinguish "real mart, legitimately empty" from
+// "silently fell back to the fixture" without depending on ambient database content,
+// so the wiring is checked statically instead. ---
+{
+  const loaders = readFileSync(join(process.cwd(), "src/server/dashboard.ts"), "utf8");
+  assert(
+    loaders.includes("adapter: MartAdapterLike = new MartResearchReadAdapter()"),
+    "dashboard.ts loaders must default to the mart-backed adapter",
+  );
+  assert(
+    !loaders.includes("FixtureMartReadAdapter") && !loaders.includes("FixtureStrategyRunRepository"),
+    "dashboard.ts must not reference the fixture adapter/repository (tests only)",
+  );
+
+  const adapterSource = readFileSync(join(process.cwd(), "src/server/mart/research-read.ts"), "utf8");
+  assert(
+    adapterSource.includes("this.repository = repository ?? new MartStrategyRunRepository()"),
+    "MartResearchReadAdapter's bare default must be MartStrategyRunRepository (mart_readonly)",
+  );
+
+  console.log("#370 default wiring scan passed (/research loaders default to the mart-backed adapter)");
+}

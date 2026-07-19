@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export default async function ResearchOverviewPage() {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch");
-  const state = loadOverview(principal.context);
+  const state = await loadOverview(principal.context);
 
   return (
     <section aria-labelledby="overview-heading" className="space-y-8">
@@ -18,9 +18,8 @@ export default async function ResearchOverviewPage() {
           Dashboard
         </h1>
         <p className="mt-2 text-gray-400">
-          Reads through the <code className="text-accent">mart</code> read adapter — no hardcoded list. Fixture-backed
-          pending #41&apos;s mart-backed read role; only the adapter changes when it lands. Each module shows its
-          materialized availability.
+          Reads the governed head strategy run from the <code className="text-accent">mart</code> under the read-only
+          role — no hardcoded list. Each module shows its materialized availability.
         </p>
       </div>
 
@@ -32,6 +31,14 @@ export default async function ResearchOverviewPage() {
             {state.data.latestCutoff
               ? `Latest materialized cutoff: ${state.data.latestCutoff}.`
               : "No materialized cutoff yet."}
+          </p>
+          {/* The run identity this page rendered — compare it one-to-one with the MCP
+              strategy_run tool output (#370 appended acceptance criterion 3). */}
+          <p className="text-sm text-gray-500">
+            Strategy run{" "}
+            <code className="text-accent">{state.data.run.strategyRunId ?? "(no run id recorded)"}</code>
+            {state.data.run.executedAt ? ` executed ${state.data.run.executedAt}` : ""} — source{" "}
+            <code>{state.data.run.source}</code>, corpus <code>{state.data.run.corpusSha256.slice(0, 12)}</code>.
           </p>
           <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {state.data.modules.map((module) => (

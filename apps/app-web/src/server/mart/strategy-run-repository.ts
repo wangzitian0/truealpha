@@ -33,7 +33,7 @@ import {
 import { withMartReadonly } from "./db";
 
 const LATEST_RUN_SQL = `
-  select strategy_run_id, corpus_sha256
+  select strategy_run_id, corpus_sha256, executed_at
   from mart.strategy_runs
   where strategy_key = $1
   order by executed_at desc, created_at desc, strategy_run_id desc
@@ -106,11 +106,20 @@ function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
   };
 }
 
+/** The shared report enriched with the mart run row's identity, so consumers (the
+ * `/research` overview, #370's appended acceptance) can display exactly which governed
+ * run they rendered and compare it with the MCP `strategy_run` tool output. The fixture
+ * repository has no run row, hence a separate widened type rather than a contract change. */
+export type MartStrategyRunReport = StrategyRunReport & {
+  strategy_run_id: string | null;
+  executed_at: string | null;
+};
+
 export class MartStrategyRunRepository {
   async getLatest(
     strategyId: string,
     _context: AccessContext,
-  ): Promise<StrategyRunReport | StrategyRunUnavailable> {
+  ): Promise<MartStrategyRunReport | StrategyRunUnavailable> {
     let runRow: Record<string, unknown> | undefined;
     let decisionRows: Record<string, unknown>[];
     try {
@@ -133,11 +142,19 @@ export class MartStrategyRunRepository {
       return { strategy_id: strategyId, reason: "schema_mismatch" };
     }
 
+    const executedAtRaw = runRow.executed_at;
     try {
       return {
         strategy_id: "large_model_value_v0",
         source: "mart",
         corpus_sha256: corpusSha256,
+        strategy_run_id: typeof runRow.strategy_run_id === "string" ? runRow.strategy_run_id : null,
+        executed_at:
+          executedAtRaw instanceof Date
+            ? executedAtRaw.toISOString()
+            : typeof executedAtRaw === "string"
+              ? executedAtRaw
+              : null,
         decisions: decisionRows.map(decisionFromRow),
         golden_mismatches: [],
       };

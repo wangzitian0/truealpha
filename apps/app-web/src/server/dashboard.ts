@@ -10,18 +10,25 @@
  * context is `denied`; the mart adapter is not touched before authorization.
  * Reads go straight to the mart adapter, never through FastAPI.
  *
+ * The production default is `MartResearchReadAdapter` — the real
+ * `mart.strategy_runs`/`strategy_decisions` head run under `mart_readonly`
+ * (#370's appended acceptance / #429 P3). Adapter injection is for tests only
+ * (the fixture-backed adapter); `tests/dashboard-boundary.test.ts` statically
+ * enforces that no fixture default sneaks back in.
+ *
  * These return fully-resolved typed states. `loading` exists in the union for a future
- * streaming/suspense boundary; the current synchronous fixture read never returns it.
+ * streaming/suspense boundary; the resolved-promise loaders never return it.
  */
 
 import type { AccessContext } from "@/contracts/strategyRun";
 import {
-  FixtureMartReadAdapter,
+  MartResearchReadAdapter,
   MartReadUnavailable,
   type ComparisonRow,
   type EntityDetail,
   type ModuleOverviewRow,
   type RankingRow,
+  type RunIdentity,
   type TraceView,
 } from "@/server/mart/research-read";
 import { paginate, type PageInfo } from "@/server/mart/pagination";
@@ -38,6 +45,9 @@ export type ReadState<T> =
 export interface OverviewData {
   modules: readonly ModuleOverviewRow[];
   latestCutoff: string | null;
+  /** Which governed run this overview rendered — comparable one-to-one with the
+   * MCP `strategy_run` tool output (#370's appended acceptance criterion 3). */
+  run: RunIdentity;
 }
 
 export interface RankingData {
@@ -52,24 +62,30 @@ export interface ComparisonData {
   page: PageInfo;
 }
 
-/** Adapter injection is for tests only; production callers omit it. */
+/** Adapter injection is for tests only; production callers omit it. Methods may
+ * return either plain values (the fixture adapter) or promises (the mart adapter). */
 export interface MartAdapterLike {
-  overview: FixtureMartReadAdapter["overview"];
-  latestCutoff: FixtureMartReadAdapter["latestCutoff"];
-  ranking: FixtureMartReadAdapter["ranking"];
-  comparison: FixtureMartReadAdapter["comparison"];
-  entityDetail: FixtureMartReadAdapter["entityDetail"];
-  traceView: FixtureMartReadAdapter["traceView"];
+  overview(context: AccessContext): ModuleOverviewRow[] | Promise<ModuleOverviewRow[]>;
+  latestCutoff(context: AccessContext): string | null | Promise<string | null>;
+  runIdentity(context: AccessContext): RunIdentity | Promise<RunIdentity>;
+  ranking(context: AccessContext, cutoffAt?: string): RankingRow[] | Promise<RankingRow[]>;
+  comparison(context: AccessContext, cutoffAt?: string): ComparisonRow[] | Promise<ComparisonRow[]>;
+  entityDetail(context: AccessContext, issuerId: string): EntityDetail | null | Promise<EntityDetail | null>;
+  traceView(
+    context: AccessContext,
+    issuerId: string,
+    cutoffAt: string,
+  ): TraceView | null | Promise<TraceView | null>;
 }
 
-function guard<T>(
+async function guard<T>(
   context: AccessContext | null,
-  run: (adapter: MartAdapterLike, context: AccessContext) => ReadState<T>,
+  run: (adapter: MartAdapterLike, context: AccessContext) => Promise<ReadState<T>>,
   adapter: MartAdapterLike,
-): ReadState<T> {
+): Promise<ReadState<T>> {
   if (context === null) return { kind: "denied" };
   try {
-    return run(adapter, context);
+    return await run(adapter, context);
   } catch (error) {
     if (error instanceof MartReadUnavailable) return { kind: "unavailable", reason: error.reason };
     return { kind: "error", message: error instanceof Error ? error.message : String(error) };
@@ -78,24 +94,25 @@ function guard<T>(
 
 export function loadOverview(
   context: AccessContext | null,
-  adapter: MartAdapterLike = new FixtureMartReadAdapter(),
-): ReadState<OverviewData> {
-  return guard<OverviewData>(context, (mart, ctx) => {
-    const modules = mart.overview(ctx);
-    const latestCutoff = mart.latestCutoff(ctx);
-    return { kind: "ready", data: { modules, latestCutoff } };
+  adapter: MartAdapterLike = new MartResearchReadAdapter(),
+): Promise<ReadState<OverviewData>> {
+  return guard<OverviewData>(context, async (mart, ctx) => {
+    const modules = await mart.overview(ctx);
+    const latestCutoff = await mart.latestCutoff(ctx);
+    const run = await mart.runIdentity(ctx);
+    return { kind: "ready", data: { modules, latestCutoff, run } };
   }, adapter);
 }
 
 export function loadRanking(
   context: AccessContext | null,
   params: { cutoffAt?: string; cursor?: string | null; limit?: number } = {},
-  adapter: MartAdapterLike = new FixtureMartReadAdapter(),
-): ReadState<RankingData> {
-  return guard<RankingData>(context, (mart, ctx) => {
-    const cutoffAt = params.cutoffAt ?? mart.latestCutoff(ctx);
+  adapter: MartAdapterLike = new MartResearchReadAdapter(),
+): Promise<ReadState<RankingData>> {
+  return guard<RankingData>(context, async (mart, ctx) => {
+    const cutoffAt = params.cutoffAt ?? (await mart.latestCutoff(ctx));
     if (cutoffAt === null) return { kind: "empty" };
-    const rows = mart.ranking(ctx, cutoffAt);
+    const rows = await mart.ranking(ctx, cutoffAt);
     if (rows.length === 0) return { kind: "empty" };
     const page = paginate(rows, params.cursor ?? null, params.limit);
     return { kind: "ready", data: { cutoffAt, rows: page.items, page: page.info } };
@@ -105,12 +122,12 @@ export function loadRanking(
 export function loadComparison(
   context: AccessContext | null,
   params: { cutoffAt?: string; cursor?: string | null; limit?: number } = {},
-  adapter: MartAdapterLike = new FixtureMartReadAdapter(),
-): ReadState<ComparisonData> {
-  return guard<ComparisonData>(context, (mart, ctx) => {
-    const cutoffAt = params.cutoffAt ?? mart.latestCutoff(ctx);
+  adapter: MartAdapterLike = new MartResearchReadAdapter(),
+): Promise<ReadState<ComparisonData>> {
+  return guard<ComparisonData>(context, async (mart, ctx) => {
+    const cutoffAt = params.cutoffAt ?? (await mart.latestCutoff(ctx));
     if (cutoffAt === null) return { kind: "empty" };
-    const rows = mart.comparison(ctx, cutoffAt);
+    const rows = await mart.comparison(ctx, cutoffAt);
     if (rows.length === 0) return { kind: "empty" };
     const page = paginate(rows, params.cursor ?? null, params.limit);
     return { kind: "ready", data: { cutoffAt, rows: page.items, page: page.info } };
@@ -120,10 +137,10 @@ export function loadComparison(
 export function loadEntityDetail(
   context: AccessContext | null,
   issuerId: string,
-  adapter: MartAdapterLike = new FixtureMartReadAdapter(),
-): ReadState<EntityDetail> {
-  return guard<EntityDetail>(context, (mart, ctx) => {
-    const detail = mart.entityDetail(ctx, issuerId);
+  adapter: MartAdapterLike = new MartResearchReadAdapter(),
+): Promise<ReadState<EntityDetail>> {
+  return guard<EntityDetail>(context, async (mart, ctx) => {
+    const detail = await mart.entityDetail(ctx, issuerId);
     if (detail === null) return { kind: "empty" };
     return { kind: "ready", data: detail };
   }, adapter);
@@ -133,10 +150,10 @@ export function loadTrace(
   context: AccessContext | null,
   issuerId: string,
   cutoffAt: string,
-  adapter: MartAdapterLike = new FixtureMartReadAdapter(),
-): ReadState<TraceView> {
-  return guard<TraceView>(context, (mart, ctx) => {
-    const trace = mart.traceView(ctx, issuerId, cutoffAt);
+  adapter: MartAdapterLike = new MartResearchReadAdapter(),
+): Promise<ReadState<TraceView>> {
+  return guard<TraceView>(context, async (mart, ctx) => {
+    const trace = await mart.traceView(ctx, issuerId, cutoffAt);
     if (trace === null) return { kind: "empty" };
     return { kind: "ready", data: trace };
   }, adapter);
