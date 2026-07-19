@@ -91,6 +91,7 @@ function fixtureAdapter(): StrategyRunReadAdapter {
   // #370 AC 3 (PR #440): fixture-backed reports carry no run id and honestly render null,
   // rather than fabricating one — this had no test coverage before this review pass.
   assert(outcome.data.run.strategyRunId === null, "fixture-backed reports must not fabricate a run id");
+  assert(outcome.data.run.executedAt === null, "fixture-backed reports must not fabricate an executedAt either");
   assert(outcome.data.run.source === "strategy_smoke_fixture", `unexpected source ${outcome.data.run.source}`);
 }
 
