@@ -115,6 +115,39 @@ function fakeRunner(
   console.log("#433 topt-gppe-repository empty-quality path passed");
 }
 
+// --- schema mismatch: a malformed cell row fails closed instead of silently stringifying
+// null/undefined into the literal words "null"/"undefined" (Copilot review on #437) ---
+{
+  const runner = fakeRunner((sql) => {
+    if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("topt_gppe_results")) return { rows: [{ listing_id: null, availability: "available", gppe: null, confidence: null }] };
+    if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
+    throw new Error(`unexpected query: ${sql}`);
+  }, []);
+
+  const result = await new MartToptGppeRepository(runner).latest();
+  assert(!("cells" in result), "a malformed cell row must not silently produce a report");
+  assert(result.reason.includes("listing_id is not a string"), `unexpected reason: ${result.reason}`);
+
+  console.log("#433 topt-gppe-repository schema-mismatch (cell) path passed");
+}
+
+// --- schema mismatch: a non-object quality payload fails closed ---
+{
+  const runner = fakeRunner((sql) => {
+    if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("topt_gppe_results")) return { rows: [] };
+    if (sql.includes("datahub_quality_report where run_id")) return { rows: [{ payload: "not-an-object" }] };
+    throw new Error(`unexpected query: ${sql}`);
+  }, []);
+
+  const result = await new MartToptGppeRepository(runner).latest();
+  assert(!("cells" in result), "a non-object quality payload must not silently produce a report");
+  assert(result.reason.includes("quality report payload is not a JSON object"), `unexpected reason: ${result.reason}`);
+
+  console.log("#433 topt-gppe-repository schema-mismatch (quality) path passed");
+}
+
 // --- limit validation: rejected before the client is ever touched ---
 {
   let clientTouched = false;

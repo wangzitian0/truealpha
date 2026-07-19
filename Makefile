@@ -102,7 +102,9 @@ contract-conformance:
 	# hardcoded list here had silently stopped running 5 of them: conversations/documents
 	# validation, and now #433's topt tests — a hardcoded list drifts every time a test
 	# file is added and this line isn't touched; the glob can't drift).
-	cd apps/app-web && set -euo pipefail; for f in tests/*.test.ts; do echo "== $$f"; bun run "$$f"; done
+	# -eu only (no pipefail): make's default shell is /bin/sh (dash on most Linux, no
+	# `-o pipefail` support), and this loop has no pipe to protect anyway (Copilot review).
+	cd apps/app-web && set -eu; for f in tests/*.test.ts; do echo "== $$f"; bun run "$$f"; done
 
 check: lint typecheck test contract-conformance
 	@echo "✅ All checks passed"

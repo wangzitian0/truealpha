@@ -49,13 +49,37 @@ const QUALITY_SQL = `
 // `observation_count = 84` invariant enforced on staging.topt_core_snapshots.
 const REQUESTED_COUNT = 84;
 
+class SchemaMismatchError extends Error {}
+
+/** Fails closed on an unexpected row shape instead of `String(...)` coercing it — a bare
+ * `String(null)`/`String(undefined)` would silently produce the *string* "null"/"undefined"
+ * rather than surfacing the mismatch (Copilot review on #437). */
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== "string") throw new SchemaMismatchError(`${field} is not a string`);
+  return value;
+}
+
+function optionalString(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  return requireString(value, field);
+}
+
 function cellFromRow(row: Record<string, unknown>): ToptGppeCell {
   return {
-    listing_id: String(row.listing_id),
-    availability: String(row.availability),
-    gppe: row.gppe === null ? null : String(row.gppe),
-    confidence: row.confidence === null ? null : String(row.confidence),
+    listing_id: requireString(row.listing_id, "listing_id"),
+    availability: requireString(row.availability, "availability"),
+    gppe: optionalString(row.gppe, "gppe"),
+    confidence: optionalString(row.confidence, "confidence"),
   };
+}
+
+function qualityFromRow(row: Record<string, unknown> | undefined): Record<string, unknown> | null {
+  if (row === undefined) return null;
+  const payload = row.payload;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new SchemaMismatchError("quality report payload is not a JSON object");
+  }
+  return payload as Record<string, unknown>;
 }
 
 export class MartToptGppeRepository {
@@ -76,21 +100,27 @@ export class MartToptGppeRepository {
       if (head.rows.length === 0) {
         return { reason: "no accepted (quality-reported) production TOPT run" };
       }
-      const runId = String(head.rows[0].run_id);
 
-      const [cellRows, qualityRows] = await Promise.all([
-        client.query(CELLS_SQL, [runId, limit]),
-        client.query(QUALITY_SQL, [runId]),
-      ]);
+      try {
+        const runId = requireString(head.rows[0].run_id, "run_id");
 
-      const cells = cellRows.rows.map(cellFromRow);
-      return {
-        run_id: runId,
-        requested_count: REQUESTED_COUNT,
-        available_count: cells.filter((cell) => cell.availability === "available").length,
-        cells,
-        quality: qualityRows.rows.length > 0 ? (qualityRows.rows[0].payload as Record<string, unknown>) : null,
-      };
+        const [cellRows, qualityRows] = await Promise.all([
+          client.query(CELLS_SQL, [runId, limit]),
+          client.query(QUALITY_SQL, [runId]),
+        ]);
+
+        const cells = cellRows.rows.map(cellFromRow);
+        return {
+          run_id: runId,
+          requested_count: REQUESTED_COUNT,
+          available_count: cells.filter((cell) => cell.availability === "available").length,
+          cells,
+          quality: qualityFromRow(qualityRows.rows[0]),
+        };
+      } catch (error) {
+        if (error instanceof SchemaMismatchError) return { reason: `schema_mismatch: ${error.message}` };
+        throw error;
+      }
     });
   }
 }
