@@ -142,6 +142,22 @@ async function run() {
     "a same-length-different-metadata object already at the content-addressed key must be treated as a collision",
   );
 
+  const originalDocumentsPrefix = process.env.S3_DOCUMENTS_PREFIX;
+  try {
+    // S3_RAW_PREFIX defaults to "raw" (see .env.example); setting the
+    // documents prefix to the same value would defeat the isolation the
+    // getDocumentArtifact prefix guard is supposed to provide.
+    delete process.env.S3_RAW_PREFIX;
+    process.env.S3_DOCUMENTS_PREFIX = "raw";
+    await assertThrows(
+      () => storeDocumentArtifact("principal:carol", Buffer.from("x"), "text/plain"),
+      "S3_DOCUMENTS_PREFIX equal to S3_RAW_PREFIX must be rejected, not silently accepted",
+    );
+  } finally {
+    if (originalDocumentsPrefix === undefined) delete process.env.S3_DOCUMENTS_PREFIX;
+    else process.env.S3_DOCUMENTS_PREFIX = originalDocumentsPrefix;
+  }
+
   __setTestClient(null);
 
   const originalTimeout = process.env.S3_CONNECT_TIMEOUT_SECONDS;

@@ -89,7 +89,17 @@ export function bucket(): string {
 }
 
 function documentsPrefix(): string {
-  return env("S3_DOCUMENTS_PREFIX", "documents");
+  const prefix = env("S3_DOCUMENTS_PREFIX", "documents");
+  const rawPrefix = env("S3_RAW_PREFIX", "raw");
+  // The prefix guard in getDocumentArtifact only isolates the raw-capture
+  // namespace if the two prefixes are actually distinct — a misconfigured
+  // deployment setting them equal would silently defeat that isolation.
+  if (prefix === rawPrefix) {
+    throw new DocumentStorageError(
+      `S3_DOCUMENTS_PREFIX must not equal S3_RAW_PREFIX (both are "${prefix}")`,
+    );
+  }
+  return prefix;
 }
 
 async function bodyToBuffer(body: unknown): Promise<Buffer> {
