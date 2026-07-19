@@ -137,6 +137,9 @@ export async function getDocumentArtifact(ref: DocumentObjectRef): Promise<Buffe
     throw new DocumentStorageError(`empty response body for ${ref.key}`);
   }
   const bytes = await bodyToBuffer(responseBody);
+  if (bytes.length !== ref.byteLength) {
+    throw new DocumentStorageError(`byte length mismatch for ${ref.key}: expected ${ref.byteLength}, got ${bytes.length}`);
+  }
   if (createHash("sha256").update(bytes).digest("hex") !== ref.sha256) {
     throw new DocumentStorageError(`checksum mismatch for ${ref.key}`);
   }

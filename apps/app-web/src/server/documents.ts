@@ -203,6 +203,14 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
     context: AccessContext,
     revision: NewDocumentRevisionInput,
   ): Promise<{ document: ResearchDocument; revision: ResearchDocumentRevision }> {
+    // No existence check possible here (createDocument always mints a new
+    // document_id), so if the transaction below fails for an unrelated
+    // reason, this object is orphaned in S3 with no cleanup path. Accepted
+    // for this slice: content-addressed dedup means a retry with the same
+    // bytes is a no-op write, not a growing leak, and the object carries no
+    // ownership/RLS exposure on its own (object_key is never read back
+    // without a matching, RLS-checked revision row). A real GC pass is out
+    // of scope here — see #373's non-goals.
     const objectRef = await storeDocumentArtifact(context.principalId, revision.bytes, revision.contentType);
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
@@ -278,12 +286,18 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
           return rowToTombstone(inserted.rows[0]);
         }
         // ON CONFLICT fired: a tombstone for this document_id already
-        // exists. `unique (document_id)` is not owner-scoped, so this can
-        // be another owner's tombstone on their own document_id — RLS then
-        // hides that row from this caller's SELECT. Treat that identically
-        // to "not found" rather than crashing on an empty result; only a
-        // caller re-tombstoning their *own* already-deleted document sees
-        // the (idempotent) existing row.
+        // exists. `unique (document_id)` alone is the conflict target, and
+        // Postgres resolves ON CONFLICT DO NOTHING by skipping the row
+        // before it is ever inserted — which means the composite FK
+        // (an AFTER INSERT trigger on the *inserted* row) never runs for
+        // it. So a forged tenant/owner in this INSERT's own values does
+        // NOT get rejected by the FK here: it can be genuinely another
+        // owner's tombstone on their own document_id, which RLS then
+        // correctly hides from this caller's follow-up SELECT (verified
+        // empirically against Postgres 16 — this is not a hypothetical).
+        // Treat that identically to "not found" rather than crashing on an
+        // empty result; only a caller re-tombstoning their *own*
+        // already-deleted document sees the (idempotent) existing row.
         const existing = await client.query<{ tombstone_id: string; document_id: string; created_at: Date }>(
           `select tombstone_id, document_id, created_at
            from app.research_document_tombstones
