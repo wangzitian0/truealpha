@@ -1,11 +1,8 @@
-"""#396: runs db/tests/conversations_contract.sql against a live Postgres.
+"""#373: runs db/tests/documents_contract.sql against a live Postgres.
 
-Mirrors apps/data-engine/tests/datahub/test_evidence_graph_repository.py's
-`test_db_contract_executes` pattern: the contract SQL is the source of
-truth for RLS/append-only/single-redemption behavior; this test exists so
-it actually executes in CI rather than sitting unreferenced (unlike
-db/tests/governed_research_access_contract.sql, which nothing currently
-runs — see the PR discussion on #396).
+Mirrors test_conversations_db_contract.py's pattern for #396: the contract
+SQL is the source of truth for RLS/composite-FK/append-only/single-
+redemption behavior; this test exists so it actually executes in CI.
 """
 
 from __future__ import annotations
@@ -17,7 +14,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-_CONTRACT_SQL = Path(__file__).resolve().parents[3] / "db" / "tests" / "conversations_contract.sql"
+_CONTRACT_SQL = Path(__file__).resolve().parents[3] / "db" / "tests" / "documents_contract.sql"
 _DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 
 
@@ -39,7 +36,7 @@ def database_url() -> str:
     return url
 
 
-def test_conversations_db_contract_executes(database_url: str) -> None:
+def test_documents_db_contract_executes(database_url: str) -> None:
     assert _CONTRACT_SQL.exists(), f"missing contract SQL at {_CONTRACT_SQL}"
     completed = subprocess.run(
         ["psql", "--no-password", database_url, "-v", "ON_ERROR_STOP=1", "-f", str(_CONTRACT_SQL)],
