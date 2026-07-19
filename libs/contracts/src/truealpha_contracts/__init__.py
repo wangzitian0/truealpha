@@ -99,6 +99,7 @@ from truealpha_contracts.data_quality import (
     StrategyDataRequirement,
 )
 from truealpha_contracts.documents import (
+    CreatedDocument,
     DocumentCursor,
     DocumentDownloadTicket,
     DocumentListQuery,
@@ -599,6 +600,7 @@ __all__ = [
     "CatalogPolicyClosureReport",
     "CatalogTargetKind",
     "ClarificationToken",
+    "CreatedDocument",
     "ComponentKey",
     "ComparisonCriterion",
     "ComparisonObservation",

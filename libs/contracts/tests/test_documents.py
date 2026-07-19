@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts.documents import (
+    CreatedDocument,
     DocumentCursor,
     DocumentDownloadTicket,
     DocumentListQuery,
@@ -242,3 +243,12 @@ def test_new_document_revision_accepts_consistent_bytes() -> None:
         artifact_bytes=payload,
     )
     assert revision.artifact_byte_length == len(payload)
+
+
+def test_created_document_carries_the_first_revision() -> None:
+    """create_document's return shape mirrors the TS adapter's
+    { document, revision } — the caller gets the revision they just created,
+    not just the bare document root."""
+    created = CreatedDocument(document=_document(), revision=_revision())
+    assert created.document.document_id == "document:alice-1"
+    assert created.revision.document_id == "document:alice-1"

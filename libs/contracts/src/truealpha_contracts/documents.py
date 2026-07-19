@@ -210,6 +210,15 @@ class NewDocumentRevision(StrictFrozenModel):
             raise ValueError("artifact_sha256 must equal sha256(artifact_bytes)")
 
 
+class CreatedDocument(StrictFrozenModel):
+    """`create_document`'s return shape: the new root plus its first
+    revision — mirrors the TypeScript adapter's `{ document, revision }`
+    exactly, rather than dropping the revision the caller just created."""
+
+    document: ResearchDocument
+    revision: ResearchDocumentRevision
+
+
 @runtime_checkable
 class OwnedDocumentService(Protocol):
     """Cross-language repository port. `apps/app-web/src/server/documents.ts`
@@ -223,7 +232,7 @@ class OwnedDocumentService(Protocol):
 
     def list_revisions(self, context: AccessContext, document_id: str) -> tuple[ResearchDocumentRevision, ...]: ...
 
-    def create_document(self, context: AccessContext, revision: NewDocumentRevision) -> ResearchDocument: ...
+    def create_document(self, context: AccessContext, revision: NewDocumentRevision) -> CreatedDocument: ...
 
     def append_revision(
         self, context: AccessContext, document_id: str, revision: NewDocumentRevision
