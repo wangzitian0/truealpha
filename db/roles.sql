@@ -56,6 +56,15 @@ grant select, insert on app.conversations, app.conversation_messages, app.resear
 grant select, insert, update (redeemed_at) on app.clarification_tokens to app_runtime;
 revoke select on app.conversation_audit_metadata from app_runtime;
 
+-- Document lifecycle (#373, migration 0031). Same RLS-scoped shape as
+-- conversations above. Revisions and tombstones are fully append-only (no
+-- UPDATE grant at all); tickets get the same redeemed_at-only column grant
+-- as clarification_tokens.
+grant select, insert on app.research_documents, app.research_document_revisions,
+    app.research_document_tombstones to app_runtime;
+grant select, insert, update (redeemed_at) on app.research_document_download_tickets to app_runtime;
+revoke select on app.document_audit_metadata from app_runtime;
+
 -- Audit readers receive only the administrator-filtered, non-content view.
 do $$ begin
     create role app_audit_reader nologin;
@@ -67,3 +76,4 @@ alter role app_audit_reader set statement_timeout = '5s';
 grant usage on schema app to app_audit_reader;
 grant select on app.access_audit_metadata to app_audit_reader;
 grant select on app.conversation_audit_metadata to app_audit_reader;
+grant select on app.document_audit_metadata to app_audit_reader;
