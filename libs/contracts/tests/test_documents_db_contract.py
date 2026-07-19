@@ -39,7 +39,7 @@ def database_url() -> str:
 def test_documents_db_contract_executes(database_url: str) -> None:
     assert _CONTRACT_SQL.exists(), f"missing contract SQL at {_CONTRACT_SQL}"
     completed = subprocess.run(
-        ["psql", database_url, "-v", "ON_ERROR_STOP=1", "-f", str(_CONTRACT_SQL)],
+        ["psql", "--no-password", database_url, "-v", "ON_ERROR_STOP=1", "-f", str(_CONTRACT_SQL)],
         check=False,
         capture_output=True,
         text=True,

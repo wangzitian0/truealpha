@@ -9,7 +9,7 @@
  * Run standalone: `bun run tests/documents-validation.test.ts`.
  */
 
-import { assertPositiveInteger } from "../src/server/documents";
+import { assertPositiveInteger, parseBeforeCursor } from "../src/server/documents";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -26,6 +26,20 @@ function run() {
       threw = true;
     }
     assert(threw, `non-positive/non-integer input ${JSON.stringify(bad)} must throw`);
+  }
+
+  assert(parseBeforeCursor(undefined) === null, "an absent cursor must parse to null");
+  const parsed = parseBeforeCursor("2026-07-18T00:00:00.000Z");
+  assert(parsed instanceof Date && parsed.toISOString() === "2026-07-18T00:00:00.000Z", "a valid ISO cursor must parse");
+
+  for (const bad of ["not-a-date", "", "2026-13-99"]) {
+    let threw = false;
+    try {
+      parseBeforeCursor(bad);
+    } catch {
+      threw = true;
+    }
+    assert(threw, `malformed cursor ${JSON.stringify(bad)} must throw`);
   }
 
   console.log("documents-validation.test.ts: all assertions passed");

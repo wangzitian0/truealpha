@@ -122,7 +122,7 @@ def test_tombstone_round_trips() -> None:
 
 
 def test_download_ticket_requires_expiry_after_creation() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError, match="expires_at must be after created_at"):
         DocumentDownloadTicket(
             ticket_id="ticket:1",
             document_id="document:alice-1",

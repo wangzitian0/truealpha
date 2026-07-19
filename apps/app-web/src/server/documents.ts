@@ -101,6 +101,18 @@ export function assertPositiveInteger(value: number, fieldName: string): number 
   return value;
 }
 
+/** Rejects a malformed cursor before it ever reaches `$1::timestamptz` — an
+ * invalid string there would surface as a raw Postgres cast error instead
+ * of a clear, deterministic one here. */
+export function parseBeforeCursor(before: string | undefined): Date | null {
+  if (before === undefined) return null;
+  const parsed = new Date(before);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("before must be a valid ISO datetime");
+  }
+  return parsed;
+}
+
 export interface DocumentsRepository {
   listDocuments(context: AccessContext, query: DocumentListQuery): Promise<DocumentPage>;
   getDocument(context: AccessContext, documentId: string): Promise<ResearchDocument | null>;
@@ -129,6 +141,7 @@ export interface DocumentsRepository {
 export class PostgresDocumentsRepository implements DocumentsRepository {
   async listDocuments(context: AccessContext, query: DocumentListQuery): Promise<DocumentPage> {
     const limit = Math.min(Math.max(1, query.limit ?? DEFAULT_LIST_LIMIT), MAX_LIST_LIMIT);
+    const before = parseBeforeCursor(query.before);
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
       async (client) => {
@@ -146,7 +159,7 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
            and ($1::timestamptz is null or d.created_at < $1)
            order by d.created_at desc
            limit $2`,
-          [query.before ?? null, limit],
+          [before, limit],
         );
         const documents = result.rows.map(rowToDocument);
         const nextBefore = documents.length === limit ? documents[documents.length - 1].createdAt : null;
