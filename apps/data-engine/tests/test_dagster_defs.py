@@ -80,3 +80,18 @@ def test_fixture_canary_stays_buildable_and_explicitly_named() -> None:
     fixture_defs = fixture_canary_definitions()
     assert fixture_defs.get_job_def(CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME) is not None
     assert "fixture" in CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME
+
+
+def test_packaged_corpus_matches_the_tests_fixture_byte_for_byte() -> None:
+    # The deployed image has only site-packages, so the live pipeline reads the
+    # corpus from package data. This pins the packaged copy to the canonical
+    # tests fixture so the two can never drift.
+    import hashlib
+    from importlib import resources
+    from pathlib import Path
+
+    packaged = resources.files("data_engine.datahub.data").joinpath("corpus.v1.json").read_bytes()
+    fixture = (
+        Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "capture_control" / "corpus.v1.json"
+    ).read_bytes()
+    assert hashlib.sha256(packaged).hexdigest() == hashlib.sha256(fixture).hexdigest()

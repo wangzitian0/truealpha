@@ -36,7 +36,6 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -69,21 +68,16 @@ from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import write_replay
 
 
-def _corpus_path() -> Path:
-    """The frozen universe corpus. In a source checkout it sits next to the package;
-    in the deployed image the package lives in site-packages while the repo tree is
-    copied to /app, so resolve through the known candidates instead of assuming one."""
-    candidates = (
-        Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "capture_control" / "corpus.v1.json",
-        Path("/app/apps/data-engine/tests/fixtures/capture_control/corpus.v1.json"),
-    )
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"capture-control corpus not found in: {[str(c) for c in candidates]}")
+def _load_capture_corpus() -> dict:
+    """The frozen capture-control universe corpus, loaded from PACKAGE data so the
+    deployed image (site-packages only, no repo tree) can read it. Lazy: importing
+    this module must never touch the filesystem (Definitions load hermetically)."""
+    from importlib import resources
+
+    raw = resources.files("data_engine.datahub.data").joinpath("corpus.v1.json").read_bytes()
+    return json.loads(raw)
 
 
-CORPUS = _corpus_path()
 SEMANTIC_TYPES = ("market-price", "listing-identity", "universe-membership", "financial-fact")
 PRIMARY_PARSER_VERSION = "production-topt-live-parser:v1"
 
@@ -410,7 +404,7 @@ class LiveToptCapture:
 
     def capture(self, connection: psycopg.Connection[Any]) -> tuple[str, str]:
         """Capture all 84 obligations from real sources; returns (run_id, release_manifest_id)."""
-        corpus = json.loads(CORPUS.read_text())
+        corpus = _load_capture_corpus()
         denominator = corpus["topt_denominator"]
         coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
         # The frozen universe partition cell this run's observations assert values for.
