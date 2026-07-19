@@ -13,16 +13,26 @@ export const dynamic = "force-dynamic";
 
 const repository = new PostgresDocumentsRepository();
 
+/** Next.js does not decode a dynamic route segment for us — the id here is
+ * still percent-encoded (colons in document_id round-trip through
+ * encodeURIComponent on the list page's link), so every lookup would
+ * otherwise 404 for any id containing a reserved URI character. Malformed
+ * percent-encoding (e.g. `/library/%E0`) must not 500 the route — same
+ * guard as research/entities/[id]. */
+function decodeDocumentId(id: string): string {
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
+}
+
 export default async function DocumentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Flibrary");
 
   const { id } = await params;
-  // Next.js does not decode a dynamic route segment for us — the id here
-  // is still percent-encoded (colons in document_id round-trip through
-  // encodeURIComponent on the list page's link), so every lookup would
-  // otherwise 404 for any id containing a reserved URI character.
-  const document = await repository.getDocument(principal.context, decodeURIComponent(id));
+  const document = await repository.getDocument(principal.context, decodeDocumentId(id));
   if (!document) notFound();
 
   const revisions = await repository.listRevisions(principal.context, document.documentId);
