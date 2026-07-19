@@ -147,12 +147,14 @@ def write_replay(
     definition: LargeModelValueV0Definition,
     *,
     executed_at: datetime,
+    snapshot_id: str | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Persist one full replay: one `strategy_runs` row, one `strategy_decisions`
     row per decision. Idempotent -- replaying identical decisions against the
-    same definition and executed_at reproduces the same run/decision IDs."""
+    same definition and executed_at reproduces the same run/decision IDs.
+    ``snapshot_id`` binds the run to the exact captured PIT inputs (#395)."""
 
-    run_id = write_strategy_run(connection, definition, executed_at=executed_at)
+    run_id = write_strategy_run(connection, definition, executed_at=executed_at, snapshot_id=snapshot_id)
     decision_ids = tuple(
         write_strategy_decision(connection, decision, strategy_run_id=run_id) for decision in decisions
     )
