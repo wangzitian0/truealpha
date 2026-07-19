@@ -26,5 +26,8 @@ fi
 
 for migration in "$db_dir"/migrations/*.sql "$db_dir"/roles.sql; do
     echo "== $migration"
-    psql "$DATABASE_URL" --set ON_ERROR_STOP=1 --file "$migration"
+    # --no-password: a DSN with missing/wrong credentials must fail fast, not hang the
+    # container on an interactive password prompt (same guard libs/contracts' db-contract
+    # test runners already use for the identical psql-against-DATABASE_URL pattern).
+    psql --no-password "$DATABASE_URL" --set ON_ERROR_STOP=1 --file "$migration"
 done
