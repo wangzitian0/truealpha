@@ -88,6 +88,28 @@ function fixtureAdapter(): StrategyRunReadAdapter {
   assert(tier?.availability === "available", "module 7 (tier) should be materialized/available");
   assert(peg?.availability === "unavailable", "module 1 (PEG) is not materialized yet");
   assert(outcome.data.latestCutoff === "2026-06-30T23:59:59Z", `unexpected latest cutoff ${outcome.data.latestCutoff}`);
+  // #370 AC 3 (PR #440): fixture-backed reports carry no run id and honestly render null,
+  // rather than fabricating one — this had no test coverage before this review pass.
+  assert(outcome.data.run.strategyRunId === null, "fixture-backed reports must not fabricate a run id");
+  assert(outcome.data.run.executedAt === null, "fixture-backed reports must not fabricate an executedAt either");
+  assert(outcome.data.run.source === "strategy_smoke_fixture", `unexpected source ${outcome.data.run.source}`);
+}
+
+// --- run identity surfaces the mart row's strategy_run_id/executed_at when the repository
+// provides them (MartStrategyRunRepository's actual shape), proving the overview page can
+// render the same governed run the MCP strategy_run tool serves (#370 AC 3, PR #440) ---
+{
+  const martShapedReport = {
+    ...emptyReport(),
+    source: "mart" as const,
+    strategy_run_id: "strategy-run:" + "e".repeat(64),
+    executed_at: "2026-07-19T06:32:15.541Z",
+  };
+  const outcome = await loadOverview(TEST_CONTEXT, new StrategyRunReadAdapter({ getLatest: async () => martShapedReport }));
+  assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
+  assert(outcome.data.run.strategyRunId === martShapedReport.strategy_run_id, "run id must surface from a mart-shaped report");
+  assert(outcome.data.run.executedAt === "2026-07-19T06:32:15.541Z", "executed_at must surface verbatim");
+  assert(outcome.data.run.source === "mart", "source must reflect the mart-shaped report");
 }
 
 // --- one loader call reads the report at most once per context, even though it calls more
