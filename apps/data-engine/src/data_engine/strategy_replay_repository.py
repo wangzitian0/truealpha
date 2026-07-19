@@ -39,8 +39,10 @@ from data_engine.core_strategy_replay import CORPUS_SHA256, Decision
 CLAIM_CEILING = "preview"
 
 
-def _run_payload(definition: LargeModelValueV0Definition, *, executed_at: datetime) -> dict[str, Any]:
-    return {
+def _run_payload(
+    definition: LargeModelValueV0Definition, *, executed_at: datetime, snapshot_id: str | None = None
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "strategy_key": definition.strategy_id,
         "strategy_version": definition.definition_version,
         "definition_content_sha256": definition.content_sha256,
@@ -48,20 +50,29 @@ def _run_payload(definition: LargeModelValueV0Definition, *, executed_at: dateti
         "claim_ceiling": CLAIM_CEILING,
         "executed_at": executed_at.isoformat(),
     }
+    # Included only when set so existing fixture/preview runs keep their identity;
+    # a run bound to a PIT snapshot gets a distinct run id (#395).
+    if snapshot_id is not None:
+        payload["snapshot_id"] = snapshot_id
+    return payload
 
 
 def write_strategy_run(
-    connection: Connection[Any], definition: LargeModelValueV0Definition, *, executed_at: datetime
+    connection: Connection[Any],
+    definition: LargeModelValueV0Definition,
+    *,
+    executed_at: datetime,
+    snapshot_id: str | None = None,
 ) -> str:
-    payload = _run_payload(definition, executed_at=executed_at)
+    payload = _run_payload(definition, executed_at=executed_at, snapshot_id=snapshot_id)
     content_sha256 = canonical_sha256(payload)
     run_id = f"strategy-run:{content_sha256}"
     inserted = connection.execute(
         """
         insert into mart.strategy_runs (
             strategy_run_id, content_sha256, strategy_key, strategy_version,
-            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s)
+            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at, snapshot_id
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         on conflict (strategy_run_id) do nothing
         returning strategy_run_id
         """,
@@ -74,6 +85,7 @@ def write_strategy_run(
             CORPUS_SHA256,
             CLAIM_CEILING,
             executed_at,
+            snapshot_id,
         ),
     ).fetchone()
     if inserted is not None:
