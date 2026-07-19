@@ -18,8 +18,13 @@ const repository = new PostgresDocumentsRepository();
 export async function createNoteDocumentAction(formData: FormData): Promise<void> {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Flibrary");
-  const content = String(formData.get("content") ?? "");
-  if (content.trim().length === 0) return;
+  const rawContent = formData.get("content");
+  // The form only ever submits a text field, but formData.get's return type
+  // is string | File | null — coercing a File via String(...) would silently
+  // store "[object File]" instead of rejecting it.
+  if (typeof rawContent !== "string") return;
+  const content = rawContent.trim();
+  if (content.length === 0) return;
   const { document } = await repository.createDocument(principal.context, {
     sourceArtifactId: `note:${randomUUID()}`,
     bytes: Buffer.from(content, "utf-8"),

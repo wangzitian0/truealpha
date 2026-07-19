@@ -40,6 +40,7 @@ export default async function LibraryPage() {
           type="text"
           name="content"
           required
+          aria-label="Quick note"
           placeholder="Quick note…"
           className="flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm"
         />
