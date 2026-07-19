@@ -163,15 +163,28 @@ export interface StrategyRunRepositoryLike {
  */
 export class StrategyRunReadAdapter {
   private readonly repository: StrategyRunRepositoryLike;
+  // A single loader call (e.g. loadOverview) reads the same context through more than one
+  // public method here (overview() + latestCutoff(), or latestCutoff() + ranking()) on one
+  // adapter instance. With a real mart read behind report(), that used to mean a redundant
+  // Postgres round trip per request (harmless against the old in-memory fixture read, real
+  // cost against Postgres — Copilot review on #438). Keyed by contextId, not unconditional,
+  // since nothing stops a caller from reusing one instance across two different contexts.
+  private readonly reportCache = new Map<string, Promise<StrategyRunReport>>();
 
   constructor(repository?: StrategyRunRepositoryLike) {
     this.repository = repository ?? new MartStrategyRunRepository();
   }
 
-  private async report(context: AccessContext): Promise<StrategyRunReport> {
-    const result = await this.repository.getLatest(DASHBOARD_STRATEGY_ID, context);
-    if (!("decisions" in result)) throw new MartReadUnavailable(result.reason);
-    return result;
+  private report(context: AccessContext): Promise<StrategyRunReport> {
+    const cached = this.reportCache.get(context.contextId);
+    if (cached !== undefined) return cached;
+    const promise = (async () => {
+      const result = await this.repository.getLatest(DASHBOARD_STRATEGY_ID, context);
+      if (!("decisions" in result)) throw new MartReadUnavailable(result.reason);
+      return result;
+    })();
+    this.reportCache.set(context.contextId, promise);
+    return promise;
   }
 
   async latestCutoff(context: AccessContext): Promise<string | null> {

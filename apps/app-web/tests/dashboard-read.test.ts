@@ -90,6 +90,22 @@ function fixtureAdapter(): StrategyRunReadAdapter {
   assert(outcome.data.latestCutoff === "2026-06-30T23:59:59Z", `unexpected latest cutoff ${outcome.data.latestCutoff}`);
 }
 
+// --- one loader call reads the report at most once per context, even though it calls more
+// than one adapter method (overview() + latestCutoff()) — a real mart read makes a redundant
+// round trip real cost, not just a harmless double fixture read (Copilot review on #438) ---
+{
+  let getLatestCalls = 0;
+  const countingAdapter = new StrategyRunReadAdapter({
+    getLatest: (id, ctx) => {
+      getLatestCalls += 1;
+      return new FixtureStrategyRunRepository().getLatest(id, ctx);
+    },
+  });
+  const outcome = await loadOverview(TEST_CONTEXT, countingAdapter);
+  assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
+  assert(getLatestCalls === 1, `expected exactly 1 underlying read, got ${getLatestCalls}`);
+}
+
 // --- ranking reproduces the MCP fixture values exactly ---
 {
   const outcome = await loadRanking(TEST_CONTEXT, {}, fixtureAdapter());
