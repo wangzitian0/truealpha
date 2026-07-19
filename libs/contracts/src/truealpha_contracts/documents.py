@@ -145,27 +145,37 @@ class DocumentDownloadTicket(StrictFrozenModel):
             raise ValueError("expires_at must be after created_at")
 
 
+class DocumentCursor(StrictFrozenModel):
+    """Keyset pagination cursor. `created_at` alone is not unique — two
+    documents can share a timestamp — so `document_id` breaks the tie;
+    without it, a page boundary landing on a shared `created_at` could skip
+    or repeat rows. Mirrors the TypeScript adapter's cursor shape exactly."""
+
+    created_at: datetime
+    document_id: str
+
+    @field_validator("created_at")
+    @classmethod
+    def _validate_created_at(cls, value: datetime) -> datetime:
+        return _require_aware(value, "created_at")
+
+    @field_validator("document_id")
+    @classmethod
+    def _validate_document_id(cls, value: str) -> str:
+        return _stable_id(value, "document_id")
+
+
 class DocumentListQuery(StrictFrozenModel):
     """Cursor pagination over an owner's documents, newest first. `before` is
-    exclusive: pass the previous page's oldest `created_at` to continue."""
+    exclusive: pass the previous page's last row's cursor to continue."""
 
     limit: int = Field(default=50, ge=1, le=200)
-    before: datetime | None = None
-
-    @field_validator("before")
-    @classmethod
-    def _validate_before(cls, value: datetime | None) -> datetime | None:
-        return None if value is None else _require_aware(value, "before")
+    before: DocumentCursor | None = None
 
 
 class DocumentPage(StrictFrozenModel):
     documents: tuple[ResearchDocument, ...] = ()
-    next_before: datetime | None = None
-
-    @field_validator("next_before")
-    @classmethod
-    def _validate_next_before(cls, value: datetime | None) -> datetime | None:
-        return None if value is None else _require_aware(value, "next_before")
+    next_before: DocumentCursor | None = None
 
 
 class NewDocumentRevision(StrictFrozenModel):

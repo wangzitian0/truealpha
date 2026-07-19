@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 from truealpha_contracts.documents import (
+    DocumentCursor,
     DocumentDownloadTicket,
     DocumentListQuery,
     DocumentPage,
@@ -160,9 +161,22 @@ def test_document_list_query_defaults() -> None:
     assert query.before is None
 
 
-def test_document_list_query_rejects_naive_before() -> None:
+def test_document_list_query_rejects_naive_cursor_created_at() -> None:
     with pytest.raises(ValidationError):
-        DocumentListQuery(before=datetime(2026, 7, 18))  # noqa: DTZ001 - the point under test
+        DocumentListQuery(
+            before=DocumentCursor(created_at=datetime(2026, 7, 18), document_id="document:1"),  # noqa: DTZ001
+        )
+
+
+def test_document_list_query_accepts_valid_cursor() -> None:
+    query = DocumentListQuery(before=DocumentCursor(created_at=_NOW, document_id="document:1"))
+    assert query.before is not None
+    assert query.before.document_id == "document:1"
+
+
+def test_document_cursor_rejects_unstable_document_id() -> None:
+    with pytest.raises(ValidationError):
+        DocumentCursor(created_at=_NOW, document_id="not stable")
 
 
 def test_document_page_defaults_empty() -> None:

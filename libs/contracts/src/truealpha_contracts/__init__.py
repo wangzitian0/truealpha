@@ -99,6 +99,7 @@ from truealpha_contracts.data_quality import (
     StrategyDataRequirement,
 )
 from truealpha_contracts.documents import (
+    DocumentCursor,
     DocumentDownloadTicket,
     DocumentListQuery,
     DocumentPage,
@@ -638,6 +639,7 @@ __all__ = [
     "DemandRequester",
     "DemandRequesterKind",
     "DependencyTemplate",
+    "DocumentCursor",
     "DocumentDownloadTicket",
     "DocumentListQuery",
     "DocumentPage",

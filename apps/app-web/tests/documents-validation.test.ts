@@ -9,7 +9,7 @@
  * Run standalone: `bun run tests/documents-validation.test.ts`.
  */
 
-import { assertNonEmptyText, assertPositiveInteger, parseBeforeCursor } from "../src/server/documents";
+import { assertNonEmptyText, assertPositiveInteger, assertStableId, parseBeforeCursor } from "../src/server/documents";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -61,6 +61,18 @@ function run() {
       threw = true;
     }
     assert(threw, `empty/whitespace-only input ${JSON.stringify(bad)} must throw`);
+  }
+
+  assert(assertStableId("report:abc123", "sourceArtifactId") === "report:abc123", "a stable id must pass through");
+
+  for (const bad of ["not stable", "!leading-bang", " leading-space"]) {
+    let threw = false;
+    try {
+      assertStableId(bad, "sourceArtifactId");
+    } catch {
+      threw = true;
+    }
+    assert(threw, `unstable id ${JSON.stringify(bad)} must throw`);
   }
 
   console.log("documents-validation.test.ts: all assertions passed");

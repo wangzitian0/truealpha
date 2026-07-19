@@ -122,10 +122,23 @@ export function assertNonEmptyText(value: string, fieldName: string): string {
   return trimmed;
 }
 
+// Mirrors truealpha_contracts.documents._ID_PATTERN exactly — sourceArtifactId
+// is a caller-supplied stable lineage identifier (a #369/#372 report_id/
+// card_id), so the TS adapter must reject the same inputs the Python DTO
+// would, or the two sides silently disagree about what's a valid id.
+const STABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
+
+export function assertStableId(value: string, fieldName: string): string {
+  if (!STABLE_ID_PATTERN.test(value)) {
+    throw new Error(`${fieldName} must be a stable identifier`);
+  }
+  return value;
+}
+
 function validateNewRevision(revision: NewDocumentRevisionInput): NewDocumentRevisionInput {
   return {
     ...revision,
-    sourceArtifactId: assertNonEmptyText(revision.sourceArtifactId, "sourceArtifactId"),
+    sourceArtifactId: assertStableId(assertNonEmptyText(revision.sourceArtifactId, "sourceArtifactId"), "sourceArtifactId"),
     contentType: assertNonEmptyText(revision.contentType, "contentType"),
   };
 }
