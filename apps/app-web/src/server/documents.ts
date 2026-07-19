@@ -348,17 +348,16 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
           return rowToTombstone(inserted.rows[0]);
         }
         // ON CONFLICT fired: a tombstone for this document_id already
-        // exists. `unique (document_id)` alone is the conflict target, and
-        // Postgres's ON CONFLICT DO NOTHING skips the row before the
-        // composite FK constraint is ever checked against it — so a forged
-        // tenant/owner in this INSERT's own values does NOT get rejected
-        // by the FK here: it can be genuinely another owner's tombstone on
-        // their own document_id, which RLS then correctly hides from this
-        // caller's follow-up SELECT (verified empirically against
-        // Postgres 16 — this is not a hypothetical).
-        // Treat that identically to "not found" rather than crashing on an
-        // empty result; only a caller re-tombstoning their *own*
-        // already-deleted document sees the (idempotent) existing row.
+        // exists, but that row is not guaranteed to be this caller's own —
+        // ON CONFLICT DO NOTHING resolves purely on document_id and skips
+        // FK enforcement for the skipped row (see db/tests/documents_contract.sql's
+        // "bob's forged tombstone on alice's document" case for a
+        // reproduced proof). The SELECT below is scoped by this caller's
+        // own RLS, so it correctly returns nothing when the existing row
+        // belongs to someone else; treat that identically to "not found"
+        // rather than crashing on an empty result. Only a caller
+        // re-tombstoning their *own* already-deleted document sees the
+        // (idempotent) existing row.
         const existing = await client.query<{ tombstone_id: string; document_id: string; created_at: Date }>(
           `select tombstone_id, document_id, created_at
            from app.research_document_tombstones

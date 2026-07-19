@@ -196,6 +196,43 @@ begin
 end;
 $$;
 
+-- The proof behind documents.ts's tombstoneDocument ON CONFLICT handling:
+-- bob (tenant:beta), who has no relationship to alice's document at all,
+-- attempts to tombstone 'document:alpha:alice-1' (already tombstoned above)
+-- naming HIS OWN tenant/owner in the row. If Postgres checked the composite
+-- FK before resolving ON CONFLICT, this would fail with foreign_key_violation
+-- (bob's tenant/owner never matches that document's real owner). It doesn't:
+-- ON CONFLICT DO NOTHING fires purely on document_id and skips the row
+-- before its FK is ever checked, so this returns 0 rows with NO error —
+-- and bob's own RLS-scoped SELECT afterward correctly sees nothing.
+set local role app_runtime;
+select set_config('truealpha.tenant_id', 'tenant:beta', true);
+select set_config('truealpha.principal_id', 'principal:beta:bob', true);
+
+do $$
+declare
+    conflict_rows integer;
+    bob_visible_rows integer;
+begin
+    insert into app.research_document_tombstones (tombstone_id, document_id, tenant_id, owner_principal_id)
+        values ('tombstone:beta:bob-forged', 'document:alpha:alice-1', 'tenant:beta', 'principal:beta:bob')
+        on conflict (document_id) do nothing;
+    get diagnostics conflict_rows = row_count;
+    if conflict_rows <> 0 then
+        raise exception 'bob''s forged tombstone on alice''s document unexpectedly inserted a row';
+    end if;
+
+    select count(*) into bob_visible_rows from app.research_document_tombstones
+        where document_id = 'document:alpha:alice-1';
+    if bob_visible_rows <> 0 then
+        raise exception 'bob must not see alice''s tombstone row through his own RLS context';
+    end if;
+end;
+$$;
+
+select set_config('truealpha.tenant_id', 'tenant:alpha', true);
+select set_config('truealpha.principal_id', 'principal:alpha:alice', true);
+
 -- The app layer's guarded INSERT...SELECT...WHERE NOT EXISTS(tombstone)
 -- pattern (documents.ts's insertRevision/issueDownloadTicket) must reject
 -- writes against a tombstoned document — reproduce that exact pattern here
