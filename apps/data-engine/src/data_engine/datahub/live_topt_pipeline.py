@@ -321,12 +321,14 @@ class LiveToptCapture:
         )
 
     def _insert_fetch(self, connection: psycopg.Connection[Any], *, source: str, record_id: str, sha256: str) -> int:
-        """Idempotent raw.fetches landing: a retried tick reuses the existing row."""
+        """Idempotent raw.fetches landing on the table's (source, source_record_id,
+        payload_sha256) unique key: a retried tick with unchanged bytes reuses the
+        existing row; changed source bytes land a NEW append-only vintage row."""
         row = connection.execute(
             "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
             "byte_length, fetched_at, recorded_at, metadata) "
             "values (%s, %s, %s, %s, 'application/json', 1, %s, %s, '{}'::jsonb) "
-            "on conflict (source, source_record_id) do nothing returning id",
+            "on conflict (source, source_record_id, payload_sha256) do nothing returning id",
             (
                 source,
                 record_id,
@@ -339,7 +341,8 @@ class LiveToptCapture:
         if row is not None:
             return row[0]
         return connection.execute(
-            "select id from raw.fetches where source = %s and source_record_id = %s", (source, record_id)
+            "select id from raw.fetches where source = %s and source_record_id = %s and payload_sha256 = %s",
+            (source, record_id, sha256),
         ).fetchone()[0]
 
     def _write_second_price_source(self, connection, repo, obligation, coordinates, *, ordinal: int, price: str):
@@ -371,8 +374,8 @@ class LiveToptCapture:
             semantic_type="market-price",
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
-            valid_from=self._cutoff - timedelta(days=2),
-            valid_to=self._cutoff - timedelta(days=2),
+            valid_from=self._partition_start,
+            valid_to=None,
             knowable_at=self._cutoff - timedelta(minutes=58),
             source_vintage_id=vintage.source_vintage_id,
             parser_version="twelve-data-parser:v1",
@@ -393,6 +396,12 @@ class LiveToptCapture:
         corpus = json.loads(CORPUS.read_text())
         denominator = corpus["topt_denominator"]
         coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
+        # The frozen universe partition cell this run's observations assert values for.
+        # valid_from anchors here (with open valid_to): the materializer selects
+        # observations whose valid period covers the partition date, at any cutoff.
+        self._partition_start = datetime.combine(
+            date.fromisoformat(str(denominator["report_date"])), datetime.min.time(), tzinfo=UTC
+        )
         list_version = frozen_topt_list_version(corpus)
         policy = CaptureSchedulePolicy(
             policy_version=f"production-topt-{self._version}",
@@ -486,8 +495,8 @@ class LiveToptCapture:
                 semantic_type=semantic_type,
                 semantic_version=obligation.capture_requirement_id,
                 subject=obligation.subject,
-                valid_from=self._cutoff - timedelta(days=2),
-                valid_to=self._cutoff - timedelta(days=2),
+                valid_from=self._partition_start,
+                valid_to=None,
                 knowable_at=self._cutoff - timedelta(minutes=58),
                 source_vintage_id=vintage.source_vintage_id,
                 parser_version=PRIMARY_PARSER_VERSION,
