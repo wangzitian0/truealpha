@@ -152,6 +152,12 @@ export async function getDocumentArtifact(ref: DocumentObjectRef): Promise<Buffe
   if (ref.bucket !== bucket()) {
     throw new DocumentStorageError(`object belongs to unexpected bucket ${ref.bucket}`);
   }
+  // Same bucket also holds the raw-capture pipeline's objects under a
+  // different prefix (S3_RAW_PREFIX) — this exported function must never
+  // become a path to reading those, even given an otherwise well-formed ref.
+  if (!ref.key.startsWith(`${documentsPrefix()}/`)) {
+    throw new DocumentStorageError(`object key ${ref.key} is outside the documents prefix`);
+  }
   const s3 = getClient();
   let responseBody: unknown;
   try {

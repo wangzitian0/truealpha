@@ -115,6 +115,11 @@ async function run() {
     "a ref naming an unexpected bucket must be rejected without calling S3 at all",
   );
 
+  await assertThrows(
+    () => getDocumentArtifact({ ...ref, key: "raw/some-source/aa/aaaa" }),
+    "a ref pointing outside the documents prefix (e.g. the raw-capture prefix) must be rejected",
+  );
+
   // Seed a same-length, different-content object directly at the key a
   // fresh write would compute, with metadata sha256 left stale — simulates
   // corruption/tampering at rest that a content-length-only check would miss.
