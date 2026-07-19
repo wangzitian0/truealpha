@@ -34,4 +34,4 @@ COPY db/migrations ./db/migrations
 COPY db/roles.sql ./db/roles.sql
 COPY db/apply_migrations.sh ./db/apply_migrations.sh
 EXPOSE 8000
-CMD ["sh", "-c", "./db/apply_migrations.sh && exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "sh ./db/apply_migrations.sh && exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000"]
