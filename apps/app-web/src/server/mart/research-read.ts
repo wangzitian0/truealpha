@@ -25,6 +25,13 @@ export type Availability = "available" | "unavailable" | "stale" | "excluded" | 
 /** The strategy run whose materialized decisions back the current dashboard surfaces. */
 export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
 
+export interface RunIdentity {
+  strategyRunId: string | null;
+  executedAt: string | null;
+  source: string;
+  corpusPrefix: string;
+}
+
 export interface ModuleOverviewRow {
   module: number;
   name: string;
@@ -185,6 +192,22 @@ export class StrategyRunReadAdapter {
     })();
     this.reportCache.set(context.contextId, promise);
     return promise;
+  }
+
+  /** The governed run identity the dashboard renders (#370 appended AC 3):
+   * comparable 1:1 with the MCP strategy_run tool's head run. Fixture-backed
+   * reports carry no run id and honestly render null. */
+  async runIdentity(context: AccessContext): Promise<RunIdentity> {
+    const report = (await this.report(context)) as StrategyRunReport & {
+      strategy_run_id?: string;
+      executed_at?: string;
+    };
+    return {
+      strategyRunId: report.strategy_run_id ?? null,
+      executedAt: report.executed_at ?? null,
+      source: report.source,
+      corpusPrefix: report.corpus_sha256.slice(0, 12),
+    };
   }
 
   async latestCutoff(context: AccessContext): Promise<string | null> {

@@ -32,8 +32,14 @@ import {
 
 import { withMartReadonly } from "./db";
 
+/** The shared contract report plus the mart row's run identity (#370 AC 3). */
+export type MartStrategyRunReport = StrategyRunReport & {
+  strategy_run_id: string;
+  executed_at: string;
+};
+
 const LATEST_RUN_SQL = `
-  select strategy_run_id, corpus_sha256
+  select strategy_run_id, corpus_sha256, executed_at
   from mart.strategy_runs
   where strategy_key = $1
   order by executed_at desc, created_at desc, strategy_run_id desc
@@ -110,7 +116,7 @@ export class MartStrategyRunRepository {
   async getLatest(
     strategyId: string,
     _context: AccessContext,
-  ): Promise<StrategyRunReport | StrategyRunUnavailable> {
+  ): Promise<MartStrategyRunReport | StrategyRunUnavailable> {
     let runRow: Record<string, unknown> | undefined;
     let decisionRows: Record<string, unknown>[];
     try {
@@ -140,6 +146,10 @@ export class MartStrategyRunRepository {
         corpus_sha256: corpusSha256,
         decisions: decisionRows.map(decisionFromRow),
         golden_mismatches: [],
+        // Run identity for the overview (#370 appended AC 3): lets the page prove it
+        // renders the same governed run the MCP strategy_run tool serves.
+        strategy_run_id: String(runRow.strategy_run_id),
+        executed_at: runRow.executed_at instanceof Date ? runRow.executed_at.toISOString() : String(runRow.executed_at),
       };
     } catch (error) {
       if (error instanceof SchemaMismatchError) {

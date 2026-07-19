@@ -28,6 +28,9 @@ export default async function ResearchOverviewPage() {
       {state.kind === "ready" && (
         <>
           <p className="text-sm text-gray-500">
+            {state.data.run.strategyRunId
+              ? `Run ${state.data.run.strategyRunId} · executed ${state.data.run.executedAt ?? "unknown"} · source ${state.data.run.source}. `
+              : `Source ${state.data.run.source} (no persisted run id). `}
             {state.data.latestCutoff
               ? `Latest materialized cutoff: ${state.data.latestCutoff}.`
               : "No materialized cutoff yet."}

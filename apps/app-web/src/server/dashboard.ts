@@ -23,6 +23,7 @@ import {
   type ModuleOverviewRow,
   type RankingRow,
   type TraceView,
+  type RunIdentity,
 } from "@/server/mart/research-read";
 import { paginate, type PageInfo } from "@/server/mart/pagination";
 
@@ -38,6 +39,7 @@ export type ReadState<T> =
 export interface OverviewData {
   modules: readonly ModuleOverviewRow[];
   latestCutoff: string | null;
+  run: RunIdentity;
 }
 
 export interface RankingData {
@@ -56,6 +58,7 @@ export interface ComparisonData {
  * mart-backed default (#370: never the fixture on a deployed route). */
 export interface MartAdapterLike {
   overview: StrategyRunReadAdapter["overview"];
+  runIdentity: StrategyRunReadAdapter["runIdentity"];
   latestCutoff: StrategyRunReadAdapter["latestCutoff"];
   ranking: StrategyRunReadAdapter["ranking"];
   comparison: StrategyRunReadAdapter["comparison"];
@@ -84,7 +87,8 @@ export async function loadOverview(
   return guard<OverviewData>(context, async (mart, ctx) => {
     const modules = await mart.overview(ctx);
     const latestCutoff = await mart.latestCutoff(ctx);
-    return { kind: "ready", data: { modules, latestCutoff } };
+    const run = await mart.runIdentity(ctx);
+    return { kind: "ready", data: { modules, latestCutoff, run } };
   }, adapter);
 }
 
