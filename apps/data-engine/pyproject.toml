@@ -5,6 +5,15 @@ description = "Ingestion: source adapters into Postgres raw schema. Phase -1: lo
 requires-python = ">=3.12"
 dependencies = [
     "dagster==1.13.12",
+    # The deployed webserver role (`dagster-webserver -m data_engine.dagster_defs`,
+    # infra2 20.data_engine/compose.yaml) needs the UI package; pinned to the same
+    # version as dagster so the daemon and webserver load identical code.
+    "dagster-webserver==1.13.12",
+    # dagster.yaml stores run/event/schedule metadata in the `dagster` Postgres
+    # schema (DagsterPostgresStorage); the daemon fails to start without it. The
+    # Dagster integration libs use the 0.(N+16).x scheme, so core 1.13.12 pairs
+    # with 0.29.12.
+    "dagster-postgres==0.29.12",
     "httpx>=0.27.0",
     "moomoo-api>=10.8.6808",
     "pandas>=2.0.0",
