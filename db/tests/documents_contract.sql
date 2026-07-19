@@ -247,6 +247,18 @@ insert into app.research_document_revisions (
     'documents/tenant:alpha/alice/revision:alpha:alice-2', now()
 );
 
+-- Two distinct revisions of two distinct documents may legitimately share
+-- one object_key: the store is content-addressed and deduplicates by
+-- design, so no schema-level uniqueness should ever reject this.
+insert into app.research_document_revisions (
+    revision_id, document_id, tenant_id, owner_principal_id,
+    source_artifact_id, artifact_sha256, artifact_byte_length, artifact_content_type, object_key, created_at
+) values (
+    'revision:alpha:alice-3', 'document:alpha:alice-2', 'tenant:alpha', 'principal:alpha:alice',
+    'report:' || repeat('a', 64), repeat('a', 64), 1024, 'application/json',
+    'documents/tenant:alpha/alice/revision:alpha:alice-1', now()
+);
+
 do $$
 begin
     begin

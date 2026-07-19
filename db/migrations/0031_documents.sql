@@ -55,8 +55,13 @@ create table if not exists app.research_document_revisions (
     -- revision_id together against one real revision row, so a ticket can
     -- never be created for a (document_id, revision_id) pair that doesn't
     -- actually correspond to the same revision.
-    unique (revision_id, document_id, tenant_id, owner_principal_id),
-    unique (object_key)
+    unique (revision_id, document_id, tenant_id, owner_principal_id)
+    -- Deliberately no unique(object_key): the store is content-addressed
+    -- and deduplicates by design (object-store.ts's head-before-put), so
+    -- two different revisions — even across different documents for the
+    -- same owner — legitimately share one physical object when their bytes
+    -- are identical. A uniqueness constraint here would reject exactly the
+    -- dedup case it's supposed to allow.
 );
 
 create index if not exists idx_research_document_revisions_document

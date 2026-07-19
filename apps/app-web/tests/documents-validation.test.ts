@@ -29,10 +29,18 @@ function run() {
   }
 
   assert(parseBeforeCursor(undefined) === null, "an absent cursor must parse to null");
-  const parsed = parseBeforeCursor("2026-07-18T00:00:00.000Z");
-  assert(parsed instanceof Date && parsed.toISOString() === "2026-07-18T00:00:00.000Z", "a valid ISO cursor must parse");
+  const parsed = parseBeforeCursor({ createdAt: "2026-07-18T00:00:00.000Z", documentId: "document:1" });
+  assert(
+    parsed !== null && parsed.createdAt.toISOString() === "2026-07-18T00:00:00.000Z" && parsed.documentId === "document:1",
+    "a valid cursor must parse",
+  );
 
-  for (const bad of ["not-a-date", "", "2026-13-99"]) {
+  for (const bad of [
+    { createdAt: "not-a-date", documentId: "document:1" },
+    { createdAt: "", documentId: "document:1" },
+    { createdAt: "2026-13-99", documentId: "document:1" },
+    { createdAt: "2026-07-18T00:00:00.000Z", documentId: "" },
+  ]) {
     let threw = false;
     try {
       parseBeforeCursor(bad);

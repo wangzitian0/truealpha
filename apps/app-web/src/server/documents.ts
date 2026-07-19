@@ -62,15 +62,24 @@ export interface NewDocumentRevisionInput {
   contentType: string;
 }
 
+/** Keyset cursor: `created_at` alone is not unique (two documents can share
+ * a timestamp), so `documentId` breaks the tie — without it, pagination
+ * could skip or repeat rows whenever a page boundary lands on a shared
+ * `created_at`. */
+export interface DocumentCursor {
+  createdAt: string;
+  documentId: string;
+}
+
 export interface DocumentListQuery {
   limit?: number;
-  /** Exclusive cursor: pass the previous page's oldest `createdAt` to continue. */
-  before?: string;
+  /** Exclusive cursor: pass the previous page's last row's cursor to continue. */
+  before?: DocumentCursor;
 }
 
 export interface DocumentPage {
   documents: ResearchDocument[];
-  nextBefore: string | null;
+  nextBefore: DocumentCursor | null;
 }
 
 const DEFAULT_LIST_LIMIT = 50;
@@ -104,13 +113,16 @@ export function assertPositiveInteger(value: number, fieldName: string): number 
 /** Rejects a malformed cursor before it ever reaches `$1::timestamptz` — an
  * invalid string there would surface as a raw Postgres cast error instead
  * of a clear, deterministic one here. */
-export function parseBeforeCursor(before: string | undefined): Date | null {
+export function parseBeforeCursor(before: DocumentCursor | undefined): { createdAt: Date; documentId: string } | null {
   if (before === undefined) return null;
-  const parsed = new Date(before);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new Error("before must be a valid ISO datetime");
+  const createdAt = new Date(before.createdAt);
+  if (Number.isNaN(createdAt.getTime())) {
+    throw new Error("before.createdAt must be a valid ISO datetime");
   }
-  return parsed;
+  if (before.documentId.length === 0) {
+    throw new Error("before.documentId must not be empty");
+  }
+  return { createdAt, documentId: before.documentId };
 }
 
 export interface DocumentsRepository {
@@ -156,13 +168,17 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
            where not exists (
              select 1 from app.research_document_tombstones t where t.document_id = d.document_id
            )
-           and ($1::timestamptz is null or d.created_at < $1)
-           order by d.created_at desc
-           limit $2`,
-          [before, limit],
+           and (
+             $1::timestamptz is null
+             or (d.created_at, d.document_id) < ($1::timestamptz, $2)
+           )
+           order by d.created_at desc, d.document_id desc
+           limit $3`,
+          [before?.createdAt ?? null, before?.documentId ?? null, limit],
         );
         const documents = result.rows.map(rowToDocument);
-        const nextBefore = documents.length === limit ? documents[documents.length - 1].createdAt : null;
+        const last = documents[documents.length - 1];
+        const nextBefore = documents.length === limit && last ? { createdAt: last.createdAt, documentId: last.documentId } : null;
         return { documents, nextBefore };
       },
     );
@@ -374,7 +390,10 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
   }
 
   async redeemDownloadTicket(context: AccessContext, ticketId: string): Promise<Buffer | null> {
-    return withOwnerScopedRuntime(
+    // The S3 read happens AFTER this transaction commits and releases the
+    // ticket row lock — holding a DB transaction open across network I/O
+    // would needlessly extend lock contention under load.
+    const objectRef = await withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
       async (client) => {
         // Re-authorized at redemption: expiry, single-use, and a
@@ -409,15 +428,17 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
         const revisionRow = revisionResult.rows[0];
         if (!revisionRow) return null;
 
-        return getDocumentArtifact({
+        return {
           bucket: process.env.S3_BUCKET ?? "truealpha-raw",
           key: revisionRow.object_key,
           sha256: revisionRow.artifact_sha256,
           byteLength: Number(revisionRow.artifact_byte_length),
           contentType: revisionRow.artifact_content_type,
-        });
+        };
       },
     );
+    if (!objectRef) return null;
+    return getDocumentArtifact(objectRef);
   }
 }
 
