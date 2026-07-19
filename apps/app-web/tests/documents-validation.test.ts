@@ -15,6 +15,7 @@ import {
   assertStableId,
   clampListLimit,
   parseBeforeCursor,
+  parseByteLength,
 } from "../src/server/documents";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -104,6 +105,19 @@ function run() {
       threw = true;
     }
     assert(threw, `non-finite/non-integer limit ${JSON.stringify(bad)} must throw`);
+  }
+
+  assert(parseByteLength("1024") === 1024, "a valid byte length string must parse");
+  assert(parseByteLength("0") === 0, "zero is a valid byte length");
+
+  for (const bad of ["not-a-number", "-1", "1.5", "NaN", "Infinity", String(Number.MAX_SAFE_INTEGER + 1)]) {
+    let threw = false;
+    try {
+      parseByteLength(bad);
+    } catch {
+      threw = true;
+    }
+    assert(threw, `invalid byte length string ${JSON.stringify(bad)} must throw`);
   }
 
   console.log("documents-validation.test.ts: all assertions passed");

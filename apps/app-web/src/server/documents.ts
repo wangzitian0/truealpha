@@ -502,7 +502,7 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
           bucket: bucket(),
           key: revisionRow.object_key,
           sha256: revisionRow.artifact_sha256,
-          byteLength: Number(revisionRow.artifact_byte_length),
+          byteLength: parseByteLength(revisionRow.artifact_byte_length),
           contentType: revisionRow.artifact_content_type,
         };
       },
@@ -523,6 +523,18 @@ interface RevisionRow {
   artifact_byte_length: string;
   artifact_content_type: string;
   created_at: Date;
+}
+
+/** Number(...) alone would silently turn a corrupted/malformed value into
+ * NaN, Infinity, or an unsafe integer rather than failing — this fails
+ * closed instead, since a byte length feeds directly into the checksum-
+ * verified read path in object-store.ts. */
+export function parseByteLength(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`artifact_byte_length is not a safe non-negative integer: ${value}`);
+  }
+  return parsed;
 }
 
 /** Thrown for a missing, foreign, or tombstoned document/ticket — the same
@@ -606,7 +618,7 @@ function rowToRevision(row: RevisionRow): ResearchDocumentRevision {
     ownerPrincipalId: row.owner_principal_id,
     sourceArtifactId: row.source_artifact_id,
     artifactSha256: row.artifact_sha256,
-    artifactByteLength: Number(row.artifact_byte_length),
+    artifactByteLength: parseByteLength(row.artifact_byte_length),
     artifactContentType: row.artifact_content_type,
     createdAt: row.created_at.toISOString(),
   };
