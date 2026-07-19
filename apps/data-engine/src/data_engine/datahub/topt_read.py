@@ -20,12 +20,21 @@ class PostgresToptReadRepository:
         self._connection = connection
 
     def current_run_id(self) -> str | None:
-        """The current (latest by cutoff) complete production TOPT run — the governed head."""
+        """The current governed head: the most recently ACCEPTED complete production run.
+
+        run_id is a content hash, so `order by run_id` picks the lexically-largest hash, not
+        the newest run — that silently served a stale run. Gate on the quality report (the
+        per-run acceptance artifact) and take the most recently accepted run. The A1
+        `mart.current_pointer` is the eventual governed head; routing live capture into that
+        evidence-graph plane so the pointer can advance is the #405 consolidation follow-up.
+        """
         row = self._connection.execute(
             """
-            select run_id from mart.topt_capture_status
-            where environment = 'production' and complete
-            order by cutoff desc, run_id desc limit 1
+            select s.run_id
+            from mart.topt_capture_status s
+            join mart.datahub_quality_report q on q.run_id = s.run_id
+            where s.environment = 'production' and s.complete
+            order by q.created_at desc, q.report_id desc limit 1
             """
         ).fetchone()
         return None if row is None else row[0]

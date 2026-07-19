@@ -50,6 +50,16 @@ def test_quality_report_read(connection) -> None:
         assert "denominator_mean_confidence" in report
 
 
+def test_current_head_is_acceptance_gated(connection) -> None:
+    # The governed head is resolved by joining the quality report, so any run it returns
+    # must carry an accepted quality report — never a captured-but-unreported run.
+    repo = PostgresToptReadRepository(connection)
+    run_id = repo.current_run_id()
+    if run_id is None:
+        pytest.skip("no accepted production TOPT run in this DB")
+    assert repo.quality_report(run_id) is not None
+
+
 def test_limit_is_bounded(connection) -> None:
     repo = PostgresToptReadRepository(connection)
     with pytest.raises(ValueError, match="limit must be between"):

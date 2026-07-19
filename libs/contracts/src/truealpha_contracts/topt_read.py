@@ -49,15 +49,23 @@ class PostgresToptGppeRepository:
         if not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
         with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+            # Resolve the governed head. run_id is a content hash, so `order by run_id` picks
+            # the lexically-largest hash, not the newest run — it silently served a stale run.
+            # Interim: gate on the quality report, the per-run acceptance artifact, and take the
+            # most recently accepted run. The A1 `mart.current_pointer` is the eventual governed
+            # head, but it can only reference runs registered in the evidence-graph plane; routing
+            # live capture through that plane is tracked as the #405 consolidation follow-up.
             head = conn.execute(
                 """
-                select run_id from mart.topt_capture_status
-                where environment = 'production' and complete
-                order by cutoff desc, run_id desc limit 1
+                select s.run_id
+                from mart.topt_capture_status s
+                join mart.datahub_quality_report q on q.run_id = s.run_id
+                where s.environment = 'production' and s.complete
+                order by q.created_at desc, q.report_id desc limit 1
                 """
             ).fetchone()
             if head is None:
-                return ToptGppeUnavailable(reason="no complete production TOPT run")
+                return ToptGppeUnavailable(reason="no accepted (quality-reported) production TOPT run")
             run_id = head["run_id"]
             rows = conn.execute(
                 """
