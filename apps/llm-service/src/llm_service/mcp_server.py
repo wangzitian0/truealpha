@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.strategy_run import StrategyRunReadRepository, StrategyRunReport, StrategyRunUnavailable
@@ -72,7 +73,20 @@ def build_mcp_server(
     topt_repository: PostgresToptGppeRepository | None = None,
 ) -> FastMCP:
     """Builds the MCP server. Caller-supplied repositories are for tests only."""
-    server = FastMCP("truealpha-mcp")
+    # `streamable_http_path="/"`: main.py mounts this app at "/mcp"; FastMCP's own
+    # default streamable path is also "/mcp", which double-nested the real endpoint at
+    # "/mcp/mcp". Serving at the mount root keeps it a single "/mcp".
+    # transport_security: see Settings.mcp_dns_rebinding_protection for why host pinning
+    # is off by default for this service-identity-only surface behind Traefik.
+    server = FastMCP(
+        "truealpha-mcp",
+        streamable_http_path="/",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=settings.mcp_dns_rebinding_protection,
+            allowed_hosts=settings.mcp_allowed_hosts,
+            allowed_origins=settings.mcp_allowed_origins,
+        ),
+    )
     active_repository: StrategyRunReadRepository = repository if repository is not None else _default_repository()
     active_topt = (
         topt_repository
