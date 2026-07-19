@@ -230,10 +230,28 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
     documentId: string,
     revision: NewDocumentRevisionInput,
   ): Promise<ResearchDocumentRevision> {
-    const objectRef = await storeDocumentArtifact(context.principalId, revision.bytes, revision.contentType);
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
-      (client) => insertRevision(client, context, documentId, revision, objectRef),
+      async (client) => {
+        // Check under RLS *before* writing to S3, so a typo'd/foreign/
+        // already-tombstoned document_id fails without ever storing bytes
+        // (fails-closed re-checked again by insertRevision's own guard,
+        // which is the actual race-proof authority — this is a cheap
+        // up-front rejection, not a substitute for it).
+        const exists = await client.query(
+          `select 1 from app.research_documents d
+           where d.document_id = $1
+             and not exists (
+               select 1 from app.research_document_tombstones t where t.document_id = d.document_id
+             )`,
+          [documentId],
+        );
+        if (exists.rowCount === 0) {
+          throw new DocumentNotFoundError();
+        }
+        const objectRef = await storeDocumentArtifact(context.principalId, revision.bytes, revision.contentType);
+        return insertRevision(client, context, documentId, revision, objectRef);
+      },
     );
   }
 
@@ -241,24 +259,40 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
       async (client) => {
-        const inserted = await client.query<{ tombstone_id: string; document_id: string; created_at: Date }>(
-          `insert into app.research_document_tombstones (tombstone_id, document_id, tenant_id, owner_principal_id)
-           values ($1, $2, $3, $4)
-           on conflict (document_id) do nothing
-           returning tombstone_id, document_id, created_at`,
-          [tombstoneIdOf(), documentId, context.tenantId, context.principalId],
-        );
+        let inserted: { rows: { tombstone_id: string; document_id: string; created_at: Date }[] };
+        try {
+          inserted = await client.query<{ tombstone_id: string; document_id: string; created_at: Date }>(
+            `insert into app.research_document_tombstones (tombstone_id, document_id, tenant_id, owner_principal_id)
+             values ($1, $2, $3, $4)
+             on conflict (document_id) do nothing
+             returning tombstone_id, document_id, created_at`,
+            [tombstoneIdOf(), documentId, context.tenantId, context.principalId],
+          );
+        } catch (error) {
+          // A genuinely nonexistent document_id fails the owner-scoped
+          // composite FK before ON CONFLICT is even considered.
+          if (isForeignKeyViolation(error)) throw new DocumentNotFoundError();
+          throw error;
+        }
         if (inserted.rows[0]) {
           return rowToTombstone(inserted.rows[0]);
         }
-        // Already tombstoned: idempotent — return the existing row rather
-        // than erroring, since "delete a document twice" has one outcome.
+        // ON CONFLICT fired: a tombstone for this document_id already
+        // exists. `unique (document_id)` is not owner-scoped, so this can
+        // be another owner's tombstone on their own document_id — RLS then
+        // hides that row from this caller's SELECT. Treat that identically
+        // to "not found" rather than crashing on an empty result; only a
+        // caller re-tombstoning their *own* already-deleted document sees
+        // the (idempotent) existing row.
         const existing = await client.query<{ tombstone_id: string; document_id: string; created_at: Date }>(
           `select tombstone_id, document_id, created_at
            from app.research_document_tombstones
            where document_id = $1`,
           [documentId],
         );
+        if (!existing.rows[0]) {
+          throw new DocumentNotFoundError();
+        }
         return rowToTombstone(existing.rows[0]);
       },
     );
@@ -274,19 +308,34 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
       async (client) => {
-        const result = await client.query<{
-          ticket_id: string;
-          document_id: string;
-          revision_id: string;
-          expires_at: Date;
-        }>(
-          `insert into app.research_document_download_tickets
-             (ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at)
-           values ($1, $2, $3, $4, $5, now() + make_interval(mins => $6))
-           returning ticket_id, document_id, revision_id, expires_at`,
-          [ticketIdOf(), documentId, revisionId, context.tenantId, context.principalId, expiresInMinutes],
-        );
+        // Fails closed for a tombstoned document: a ticket issued after
+        // deletion could never be redeemed anyway (redeemDownloadTicket
+        // checks the same condition), so don't create the row at all.
+        let result: { rows: { ticket_id: string; document_id: string; revision_id: string; expires_at: Date }[] };
+        try {
+          result = await client.query<{
+            ticket_id: string;
+            document_id: string;
+            revision_id: string;
+            expires_at: Date;
+          }>(
+            `insert into app.research_document_download_tickets
+               (ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at)
+             select $1, $2, $3, $4, $5, now() + make_interval(mins => $6)
+             where not exists (
+               select 1 from app.research_document_tombstones t where t.document_id = $2
+             )
+             returning ticket_id, document_id, revision_id, expires_at`,
+            [ticketIdOf(), documentId, revisionId, context.tenantId, context.principalId, expiresInMinutes],
+          );
+        } catch (error) {
+          if (isForeignKeyViolation(error)) throw new DocumentNotFoundError();
+          throw error;
+        }
         const row = result.rows[0];
+        if (!row) {
+          throw new DocumentNotFoundError();
+        }
         return {
           ticketId: row.ticket_id,
           documentId: row.document_id,
@@ -357,6 +406,20 @@ interface RevisionRow {
   created_at: Date;
 }
 
+/** Thrown for a missing, foreign, or tombstoned document/ticket — the same
+ * outward shape regardless of which, so nothing enumerates which case it was. */
+export class DocumentNotFoundError extends Error {
+  constructor() {
+    super("document not found");
+  }
+}
+
+const POSTGRES_FOREIGN_KEY_VIOLATION = "23503";
+
+function isForeignKeyViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: string }).code === POSTGRES_FOREIGN_KEY_VIOLATION;
+}
+
 async function insertRevision(
   client: { query: <T>(text: string, params: unknown[]) => Promise<{ rows: T[] }> },
   context: AccessContext,
@@ -365,25 +428,40 @@ async function insertRevision(
   objectRef: { key: string; sha256: string; byteLength: number; contentType: string },
 ): Promise<ResearchDocumentRevision> {
   const revisionId = revisionIdOf();
-  const result = await client.query<RevisionRow>(
-    `insert into app.research_document_revisions
-       (revision_id, document_id, tenant_id, owner_principal_id, source_artifact_id,
-        artifact_sha256, artifact_byte_length, artifact_content_type, object_key)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     returning revision_id, document_id, tenant_id, owner_principal_id, source_artifact_id,
-               artifact_sha256, artifact_byte_length, artifact_content_type, created_at`,
-    [
-      revisionId,
-      documentId,
-      context.tenantId,
-      context.principalId,
-      revision.sourceArtifactId,
-      objectRef.sha256,
-      objectRef.byteLength,
-      objectRef.contentType,
-      objectRef.key,
-    ],
-  );
+  let result: { rows: RevisionRow[] };
+  try {
+    result = await client.query<RevisionRow>(
+      // INSERT ... SELECT (not VALUES) so a WHERE guard can fail the write
+      // closed for a tombstoned document — the race-proof backstop behind
+      // appendRevision's own up-front existence check.
+      `insert into app.research_document_revisions
+         (revision_id, document_id, tenant_id, owner_principal_id, source_artifact_id,
+          artifact_sha256, artifact_byte_length, artifact_content_type, object_key)
+       select $1, $2, $3, $4, $5, $6, $7, $8, $9
+       where not exists (
+         select 1 from app.research_document_tombstones t where t.document_id = $2
+       )
+       returning revision_id, document_id, tenant_id, owner_principal_id, source_artifact_id,
+                 artifact_sha256, artifact_byte_length, artifact_content_type, created_at`,
+      [
+        revisionId,
+        documentId,
+        context.tenantId,
+        context.principalId,
+        revision.sourceArtifactId,
+        objectRef.sha256,
+        objectRef.byteLength,
+        objectRef.contentType,
+        objectRef.key,
+      ],
+    );
+  } catch (error) {
+    if (isForeignKeyViolation(error)) throw new DocumentNotFoundError();
+    throw error;
+  }
+  if (!result.rows[0]) {
+    throw new DocumentNotFoundError();
+  }
   return rowToRevision(result.rows[0]);
 }
 

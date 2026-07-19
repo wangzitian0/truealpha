@@ -126,13 +126,17 @@ export async function getDocumentArtifact(ref: DocumentObjectRef): Promise<Buffe
     throw new DocumentStorageError(`object belongs to unexpected bucket ${ref.bucket}`);
   }
   const s3 = getClient();
-  let bytes: Buffer;
+  let responseBody: unknown;
   try {
     const response = await s3.send(new GetObjectCommand({ Bucket: ref.bucket, Key: ref.key }));
-    bytes = await bodyToBuffer(response.Body);
+    responseBody = response.Body;
   } catch (error) {
     throw new DocumentStorageError(`cannot read ${ref.key}: ${String(error)}`);
   }
+  if (!responseBody) {
+    throw new DocumentStorageError(`empty response body for ${ref.key}`);
+  }
+  const bytes = await bodyToBuffer(responseBody);
   if (createHash("sha256").update(bytes).digest("hex") !== ref.sha256) {
     throw new DocumentStorageError(`checksum mismatch for ${ref.key}`);
   }

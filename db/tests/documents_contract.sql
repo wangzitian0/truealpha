@@ -196,6 +196,44 @@ begin
 end;
 $$;
 
+-- The app layer's guarded INSERT...SELECT...WHERE NOT EXISTS(tombstone)
+-- pattern (documents.ts's insertRevision/issueDownloadTicket) must reject
+-- writes against a tombstoned document — reproduce that exact pattern here
+-- so a future schema change can't silently break it without this failing.
+do $$
+declare
+    revision_rows integer;
+    ticket_rows integer;
+begin
+    insert into app.research_document_revisions (
+        revision_id, document_id, tenant_id, owner_principal_id,
+        source_artifact_id, artifact_sha256, artifact_byte_length, artifact_content_type, object_key
+    )
+    select 'revision:alpha:after-tombstone', 'document:alpha:alice-1', 'tenant:alpha', 'principal:alpha:alice',
+           'report:' || repeat('d', 64), repeat('d', 64), 1, 'application/json', 'documents/after-tombstone'
+    where not exists (
+        select 1 from app.research_document_tombstones t where t.document_id = 'document:alpha:alice-1'
+    );
+    get diagnostics revision_rows = row_count;
+    if revision_rows <> 0 then
+        raise exception 'appending a revision to a tombstoned document unexpectedly succeeded';
+    end if;
+
+    insert into app.research_document_download_tickets (
+        ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at
+    )
+    select 'ticket:alpha:after-tombstone', 'document:alpha:alice-1', 'revision:alpha:alice-1',
+           'tenant:alpha', 'principal:alpha:alice', now() + interval '10 minutes'
+    where not exists (
+        select 1 from app.research_document_tombstones t where t.document_id = 'document:alpha:alice-1'
+    );
+    get diagnostics ticket_rows = row_count;
+    if ticket_rows <> 0 then
+        raise exception 'issuing a download ticket for a tombstoned document unexpectedly succeeded';
+    end if;
+end;
+$$;
+
 -- --- download tickets: single redemption, no other field mutable ---
 insert into app.research_document_download_tickets (
     ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at, created_at
