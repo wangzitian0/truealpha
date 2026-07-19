@@ -15,5 +15,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun run tests/issue58-conformance.test.ts
+      # Runs every tests/*.test.ts file, not just one hardcoded name — #373
+      # found that only issue58-conformance.test.ts was ever invoked here,
+      # so the other 13 (auth, conversations, documents, dashboard, route-group
+      # boundary scans, etc.) silently never ran in CI despite passing locally.
+      - run: |
+          set -euo pipefail
+          for f in tests/*.test.ts; do
+            echo "== $f"
+            bun run "$f"
+          done
       - run: bun run build
