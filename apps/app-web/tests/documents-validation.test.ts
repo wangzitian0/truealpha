@@ -9,7 +9,7 @@
  * Run standalone: `bun run tests/documents-validation.test.ts`.
  */
 
-import { assertPositiveInteger, parseBeforeCursor } from "../src/server/documents";
+import { assertNonEmptyText, assertPositiveInteger, parseBeforeCursor } from "../src/server/documents";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -48,6 +48,19 @@ function run() {
       threw = true;
     }
     assert(threw, `malformed cursor ${JSON.stringify(bad)} must throw`);
+  }
+
+  assert(assertNonEmptyText("hello", "sourceArtifactId") === "hello", "a non-empty string must pass through");
+  assert(assertNonEmptyText("  padded  ", "sourceArtifactId") === "padded", "surrounding whitespace must be trimmed");
+
+  for (const bad of ["", "   ", "\n\t"]) {
+    let threw = false;
+    try {
+      assertNonEmptyText(bad, "sourceArtifactId");
+    } catch {
+      threw = true;
+    }
+    assert(threw, `empty/whitespace-only input ${JSON.stringify(bad)} must throw`);
   }
 
   console.log("documents-validation.test.ts: all assertions passed");

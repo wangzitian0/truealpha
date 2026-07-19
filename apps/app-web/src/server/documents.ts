@@ -110,6 +110,26 @@ export function assertPositiveInteger(value: number, fieldName: string): number 
   return value;
 }
 
+/** Rejects an empty/whitespace-only field before it ever reaches S3 or the
+ * DB's own `length(...) > 0` CHECK — otherwise a blank `sourceArtifactId`/
+ * `contentType` would still get written to object storage before the
+ * (inevitable) DB insert failure, leaving an avoidable orphaned object. */
+export function assertNonEmptyText(value: string, fieldName: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${fieldName} must not be empty`);
+  }
+  return trimmed;
+}
+
+function validateNewRevision(revision: NewDocumentRevisionInput): NewDocumentRevisionInput {
+  return {
+    ...revision,
+    sourceArtifactId: assertNonEmptyText(revision.sourceArtifactId, "sourceArtifactId"),
+    contentType: assertNonEmptyText(revision.contentType, "contentType"),
+  };
+}
+
 /** Rejects a malformed cursor before it ever reaches `$1::timestamptz` — an
  * invalid string there would surface as a raw Postgres cast error instead
  * of a clear, deterministic one here. */
@@ -220,7 +240,7 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
              and not exists (
                select 1 from app.research_document_tombstones t where t.document_id = r.document_id
              )
-           order by r.created_at asc`,
+           order by r.created_at asc, r.revision_id asc`,
           [documentId],
         );
         return result.rows.map(rowToRevision);
@@ -240,7 +260,8 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
     // ownership/RLS exposure on its own (object_key is never read back
     // without a matching, RLS-checked revision row). A real GC pass is out
     // of scope here — see #373's non-goals.
-    const objectRef = await storeDocumentArtifact(context.principalId, revision.bytes, revision.contentType);
+    const validated = validateNewRevision(revision);
+    const objectRef = await storeDocumentArtifact(context.principalId, validated.bytes, validated.contentType);
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
       async (client) => {
@@ -256,7 +277,7 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
            returning document_id, tenant_id, owner_principal_id, created_at`,
           [documentId, context.tenantId, context.principalId],
         );
-        const revisionRow = await insertRevision(client, context, documentId, revision, objectRef);
+        const revisionRow = await insertRevision(client, context, documentId, validated, objectRef);
         return { document: rowToDocument(documentResult.rows[0]), revision: revisionRow };
       },
     );
@@ -286,8 +307,9 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
         if (exists.rowCount === 0) {
           throw new DocumentNotFoundError();
         }
-        const objectRef = await storeDocumentArtifact(context.principalId, revision.bytes, revision.contentType);
-        return insertRevision(client, context, documentId, revision, objectRef);
+        const validated = validateNewRevision(revision);
+        const objectRef = await storeDocumentArtifact(context.principalId, validated.bytes, validated.contentType);
+        return insertRevision(client, context, documentId, validated, objectRef);
       },
     );
   }
