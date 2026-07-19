@@ -18,6 +18,10 @@ Usage (against the DATABASE_URL in settings):
 from __future__ import annotations
 
 import json
+import os
+import time
+import urllib.parse
+import urllib.request
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -86,9 +90,39 @@ def _source_request(obligation, *, ordinal: int) -> SourceRequest:
         "partition": obligation.partition,
     }
     return SourceRequest(
-        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v7'})}",
-        source_policy_id="source-policy:production-topt-live-v7",
-        request_fingerprint_version="production-topt-live:v7",
+        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v8'})}",
+        source_policy_id="source-policy:production-topt-live-v8",
+        request_fingerprint_version="production-topt-live:v8",
+        canonical_request_sha256=canonical_sha256(coordinate),
+        subject_refs=(obligation.subject,),
+        capture_requirement_ids=(obligation.capture_requirement_id,),
+        partition=obligation.partition,
+    )
+
+
+# Version stamped onto the second (Twelve Data) price source. Keep it bumped alongside the
+# `production-topt-live:vN` primary version so re-runs get fresh raw.fetches lineage.
+_RECON_VERSION = "v8"
+
+
+def _second_source_request(obligation, *, ordinal: int) -> SourceRequest:
+    """A DISTINCT source request for the Twelve Data price origin. Its content-addressed
+    source_request_id differs from the primary Yahoo request, so the quality report counts
+    two independent origins for the cell (#344). The materializer ignores it: its snapshot
+    query binds only the obligation's work-item/terminal-attempt source vintage."""
+    coordinate = {
+        "ordinal": ordinal,
+        "subject": obligation.subject.model_dump(mode="json"),
+        "requirement": obligation.capture_requirement_id,
+        "partition": obligation.partition,
+        "origin": "twelve_data",
+    }
+    return SourceRequest(
+        source_registry_entry_id=(
+            f"source-registry-entry:{canonical_sha256({'source': f'twelve-data-reconciliation:{_RECON_VERSION}'})}"
+        ),
+        source_policy_id=f"source-policy:twelve-data-reconciliation-{_RECON_VERSION}",
+        request_fingerprint_version=f"twelve-data-reconciliation:{_RECON_VERSION}",
         canonical_request_sha256=canonical_sha256(coordinate),
         subject_refs=(obligation.subject,),
         capture_requirement_ids=(obligation.capture_requirement_id,),
@@ -106,6 +140,48 @@ def _real_market_price(ticker: str) -> str:
     if not bars:
         raise RuntimeError(f"no Yahoo close at/before {CUTOFF_DATE} for {ticker}")
     return str(Decimal(str(max(bars, key=lambda b: b.date).close)))
+
+
+# A genuinely independent second price origin (Twelve Data, init.md's documented primary)
+# for market-price reconciliation (#344). The key is read from the environment (rendered
+# from Vault `secret/truealpha/<env>/market-data`); when absent, market-price cells simply
+# stay single-source and independent_reconciliation reflects that honestly.
+_TWELVE_KEY = os.environ.get("TWELVE_DATA_API_KEY", "")
+_TWELVE_CACHE: dict[str, str | None] = {}
+
+
+def _twelve_data_price(ticker: str) -> str | None:
+    """Twelve Data close at/before the cutoff, or None if unavailable. Memoized and
+    throttled to stay under the free tier's 8-requests/minute limit."""
+    if not _TWELVE_KEY:
+        return None
+    if ticker in _TWELVE_CACHE:
+        return _TWELVE_CACHE[ticker]
+    query = urllib.parse.urlencode(
+        {
+            "symbol": ticker,
+            "interval": "1day",
+            "start_date": str(CUTOFF_DATE - timedelta(days=10)),
+            "end_date": str(CUTOFF_DATE),
+            "outputsize": "12",
+            "apikey": _TWELVE_KEY,
+        }
+    )
+    price: str | None = None
+    try:
+        with urllib.request.urlopen(f"https://api.twelvedata.com/time_series?{query}", timeout=20) as resp:
+            body = json.loads(resp.read().decode())
+        for row in body.get("values") or []:  # newest-first; first close at/before the cutoff
+            if row.get("datetime", "")[:10] <= str(CUTOFF_DATE) and row.get("close"):
+                price = str(Decimal(str(row["close"])))
+                break
+        if price is None:
+            print(f"    (Twelve Data returned no usable close for {ticker}: {body.get('message', body.get('status'))})")
+    except Exception as error:
+        print(f"    (Twelve Data unavailable for {ticker}: {type(error).__name__}); single-source")
+    _TWELVE_CACHE[ticker] = price
+    time.sleep(8)  # free tier ceiling is 8 requests/minute
+    return price
 
 
 _REVENUE_CONCEPTS = ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax")
@@ -231,20 +307,79 @@ def _confidence(semantic_type: str, payload: dict[str, str | None]) -> Decimal:
     return Decimal("0.50")
 
 
+def _write_second_price_source(connection, repo, obligation, coordinates, *, ordinal: int, price: str) -> None:
+    """Persist the Twelve Data price as a supplementary observation on a market-price
+    obligation: a distinct source request + fetch + vintage + observation linked to the same
+    obligation, so the quality report counts two independent origins. Not part of the 84-cell
+    snapshot -- the materializer binds only the work-item/terminal-attempt source vintage."""
+    issuer_id, instrument_id, listing_id, _ticker = coordinates[obligation.subject.id]
+    request = _second_source_request(obligation, ordinal=ordinal)
+    repo.put_source_request(request)
+    payload: dict[str, str | None] = {
+        "issuer_id": issuer_id,
+        "instrument_id": instrument_id,
+        "listing_id": listing_id,
+        "price": price,
+        "currency": "USD",
+        "origin": "twelve_data",
+    }
+    raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": payload, "origin": "twelve_data"})
+    source_record_id = f"twelve-data-recon-{_RECON_VERSION}:{ordinal}"
+    raw_fetch_id = connection.execute(
+        "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
+        "byte_length, fetched_at, recorded_at, metadata) "
+        "values (%s, %s, %s, %s, 'application/json', 1, %s, %s, '{}'::jsonb) returning id",
+        (
+            f"twelve-data-recon-{_RECON_VERSION}",
+            source_record_id,
+            raw_sha256,
+            f"s3://twelve-data-recon-{_RECON_VERSION}/{raw_sha256}",
+            CUTOFF - timedelta(hours=2),
+            CUTOFF - timedelta(hours=2),
+        ),
+    ).fetchone()[0]
+    vintage = SourceVintage(
+        source_request_id=request.source_request_id,
+        source_record_id=source_record_id,
+        source_published_at=CUTOFF - timedelta(hours=2),
+        raw_object_id=f"raw-object:{raw_sha256}",
+    )
+    observation = NormalizedObservation(
+        semantic_type="market-price",
+        semantic_version=obligation.capture_requirement_id,
+        subject=obligation.subject,
+        valid_from=CUTOFF - timedelta(days=2),
+        valid_to=CUTOFF - timedelta(days=2),
+        knowable_at=CUTOFF - timedelta(minutes=58),
+        source_vintage_id=vintage.source_vintage_id,
+        parser_version="twelve-data-parser:v1",
+        mapping_version="twelve-data-map:v1",
+        normalized_payload_sha256=canonical_sha256(payload),
+    )
+    repo.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id)
+    repo.put_observation(
+        obligation.obligation_id,
+        observation,
+        normalized_payload=payload,
+        confidence=_confidence("market-price", payload),
+        freshness_state="fresh",
+    )
+
+
 def _capture(connection: psycopg.Connection) -> tuple[str, str]:
     corpus = json.loads(CORPUS.read_text())
     denominator = corpus["topt_denominator"]
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
     list_version = frozen_topt_list_version(corpus)
     policy = CaptureSchedulePolicy(
-        policy_version="production-topt-live:v7",
+        policy_version="production-topt-live:v8",
         demanded_cadence=timedelta(days=1),
         provider_availability_cadence="manual-only:v1",
         freshness_max_age=timedelta(days=2),
         retry=replay_retry_policy(3),
     )
     campaign = CaptureCampaign(
-        campaign_policy_id="capture-policy:production-topt-live-v7",
+        campaign_policy_id="capture-policy:production-topt-live-v8",
         environment=CaptureEnvironment.PRODUCTION,
         cutoff=CUTOFF,
         universe_refs=(list_version.universe,),
@@ -253,7 +388,7 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         campaign_id=campaign.campaign_id,
         run_sequence=1,
         schedule_policy_id=policy.schedule_policy_id,
-        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v7'})}",
+        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v8'})}",
     )
     obligations = expand_obligations(
         run_id=run.run_id,
@@ -306,16 +441,16 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
         payload = _real_payload(coordinates[obligation.subject.id], semantic_type)
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": payload})
-        source_record_id = f"production-topt-live-v7:{ordinal}"
+        source_record_id = f"production-topt-live-v8:{ordinal}"
         raw_fetch_id = connection.execute(
             "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
             "byte_length, fetched_at, recorded_at, metadata) "
             "values (%s, %s, %s, %s, 'application/json', 1, %s, %s, '{}'::jsonb) returning id",
             (
-                "production-topt-live-v7",
+                "production-topt-live-v8",
                 source_record_id,
                 raw_sha256,
-                f"s3://production-topt-live-v7/{raw_sha256}",
+                f"s3://production-topt-live-v8/{raw_sha256}",
                 CUTOFF - timedelta(hours=2),
                 CUTOFF - timedelta(hours=2),
             ),
@@ -365,6 +500,12 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
             freshness_state="fresh",
         )
         repo.put_obligation_result(obligation.obligation_id, terminal)
+        if semantic_type == "market-price":
+            second_price = _twelve_data_price(coordinates[obligation.subject.id][3])
+            if second_price is not None:
+                _write_second_price_source(
+                    connection, repo, obligation, coordinates, ordinal=ordinal, price=second_price
+                )
         print(f"  captured {ordinal + 1}/84  {semantic_type:22} {coordinates[obligation.subject.id][3]}")
 
     return run.run_id, release_manifest_id
