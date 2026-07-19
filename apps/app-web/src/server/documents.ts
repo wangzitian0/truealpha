@@ -2,12 +2,14 @@
  * #373: owner-scoped research document lifecycle — the TypeScript adapter
  * over migration 0031's `app.research_documents`/`research_document_revisions`/
  * `research_document_tombstones`/`research_document_download_tickets`.
- * Structurally mirrors `truealpha_contracts.documents` (Python)'s
- * `OwnedDocumentService` port; this file performs no rendering and no
- * authorization decision — it persists an already-rendered #369/#372
- * artifact's bytes as an opaque, content-addressed revision, same boundary
- * #396's conversations adapter holds for conversation storage (init.md
- * Section 1, rule 2).
+ * Implements `truealpha_contracts.documents` (Python)'s `OwnedDocumentService`
+ * port at the method-signature level (same operations, same parameters);
+ * individual DTOs are not field-for-field identical (e.g. `DocumentTombstone`/
+ * `DocumentDownloadTicket` here carry fewer fields than their Python
+ * counterparts). This file performs no rendering and no authorization
+ * decision — it persists an already-rendered #369/#372 artifact's bytes as
+ * an opaque, content-addressed revision, same boundary #396's conversations
+ * adapter holds for conversation storage (init.md Section 1, rule 2).
  *
  * Every method requires an `AccessContext` and reads/writes only through
  * `withOwnerScopedRuntime` (db.ts), so RLS — not this file — is what
@@ -482,7 +484,10 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
         const revisionResult = await client.query<{
           object_key: string;
           artifact_sha256: string;
-          artifact_byte_length: number;
+          // node-postgres returns int8/bigint columns as strings by default
+          // (no custom type parser is registered here) — typing this as
+          // `number` would be a lie that lets a future edit skip Number(...).
+          artifact_byte_length: string;
           artifact_content_type: string;
         }>(
           `select object_key, artifact_sha256, artifact_byte_length, artifact_content_type
@@ -514,7 +519,8 @@ interface RevisionRow {
   owner_principal_id: string;
   source_artifact_id: string;
   artifact_sha256: string;
-  artifact_byte_length: number;
+  // Same node-postgres bigint-as-string caveat as revisionResult above.
+  artifact_byte_length: string;
   artifact_content_type: string;
   created_at: Date;
 }
