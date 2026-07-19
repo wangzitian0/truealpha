@@ -55,15 +55,26 @@ class PostgresToptGppeRepository:
             # most recently accepted run. The A1 `mart.current_pointer` is the eventual governed
             # head, but it can only reference runs registered in the evidence-graph plane; routing
             # live capture through that plane is tracked as the #405 consolidation follow-up.
+            # #378: the governed head is mart.current_pointer_head (ADR A1). The
+            # acceptance-gated ORDER BY remains only as a fallback for databases
+            # where no pointer has been advanced yet.
             head = conn.execute(
                 """
-                select s.run_id
-                from mart.topt_capture_status s
-                join mart.datahub_quality_report q on q.run_id = s.run_id
-                where s.environment = 'production' and s.complete
-                order by q.created_at desc, q.report_id desc limit 1
+                select target_run_id from mart.current_pointer_head
+                where environment = 'production' and factor_id = 'gross_profit_per_employee'
+                order by advanced_at desc limit 1
                 """
             ).fetchone()
+            if head is None:
+                head = conn.execute(
+                    """
+                    select s.run_id
+                    from mart.topt_capture_status s
+                    join mart.datahub_quality_report q on q.run_id = s.run_id
+                    where s.environment = 'production' and s.complete
+                    order by q.created_at desc, q.report_id desc limit 1
+                    """
+                ).fetchone()
             if head is None:
                 return ToptGppeUnavailable(reason="no accepted (quality-reported) production TOPT run")
             run_id = head["run_id"]
