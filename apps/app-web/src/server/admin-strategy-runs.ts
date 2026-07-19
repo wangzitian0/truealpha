@@ -1,9 +1,11 @@
 /**
- * Server-only route loader for /admin/strategy-runs — see #349/#371.
+ * Server-only route loader for /admin/strategy-runs — see #349/#371/#362.
  *
  * Re-authorizes on every call (never trusts a cached decision), then reads
- * exclusively through #347's `FixtureStrategyRunRepository`. No App code
- * here queries Postgres directly or calls FastAPI for data display.
+ * through the real `mart` schema (`MartStrategyRunRepository`, via the
+ * `mart_readonly` role) — #362 retired the checked-in fixture as the shipped
+ * consumer path. No App code here queries raw/staging or calls FastAPI for
+ * data display.
  *
  * #371: takes an already-resolved `StrategyRunPrincipal | null` (this
  * module never derives identity itself — same pattern as `dashboard.ts`).
@@ -13,10 +15,10 @@
  */
 
 import type { AccessContext, StrategyRunReport, StrategyRunUnavailable } from "@/contracts/strategyRun";
-import { FixtureStrategyRunRepository } from "@/contracts/strategyRun";
+import { MartStrategyRunRepository } from "@/server/mart/strategy-run-repository";
 
 export interface StrategyRunReadRepositoryLike {
-  getLatest(strategyId: string, context: AccessContext): StrategyRunReport | StrategyRunUnavailable;
+  getLatest(strategyId: string, context: AccessContext): Promise<StrategyRunReport | StrategyRunUnavailable>;
 }
 
 export interface StrategyRunPrincipal {
@@ -31,17 +33,17 @@ export type StrategyRunPageOutcome =
   | { kind: "error"; message: string };
 
 /** `repository` is an injection point for tests only; production code omits it. */
-export function loadStrategyRunPage(
+export async function loadStrategyRunPage(
   principal: StrategyRunPrincipal | null,
   strategyId: string,
-  repository: StrategyRunReadRepositoryLike = new FixtureStrategyRunRepository(),
-): StrategyRunPageOutcome {
+  repository: StrategyRunReadRepositoryLike = new MartStrategyRunRepository(),
+): Promise<StrategyRunPageOutcome> {
   if (principal === null || principal.principalKind !== "administrator") {
     return { kind: "denied" };
   }
 
   try {
-    const result = repository.getLatest(strategyId, principal.context);
+    const result = await repository.getLatest(strategyId, principal.context);
     if ("decisions" in result) return { kind: "ready", report: result };
     return { kind: "unavailable", detail: result };
   } catch (error) {

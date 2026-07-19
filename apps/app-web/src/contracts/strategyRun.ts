@@ -66,7 +66,10 @@ export interface StrategyRunDecision {
 
 export interface StrategyRunReport {
   strategy_id: "large_model_value_v0";
-  source: "strategy_smoke_fixture";
+  // `strategy_smoke_fixture` is the checked-in preview; `mart` is the real
+  // read from mart.strategy_runs/strategy_decisions (#362). Both carry the same
+  // decision shape, so the admin page renders either.
+  source: "strategy_smoke_fixture" | "mart";
   corpus_sha256: string;
   decisions: readonly StrategyRunDecision[];
   golden_mismatches: readonly string[];
@@ -74,7 +77,16 @@ export interface StrategyRunReport {
 
 export interface StrategyRunUnavailable {
   strategy_id: string;
-  reason: "unknown_strategy_id" | "fixture_missing" | "fixture_hash_mismatch";
+  // The first three are fixture-path reasons; the last three mirror the Python
+  // PostgresStrategyRunRepository so the App and MCP mart reads are semantically
+  // identical (#362).
+  reason:
+    | "unknown_strategy_id"
+    | "fixture_missing"
+    | "fixture_hash_mismatch"
+    | "no_runs_recorded"
+    | "database_unavailable"
+    | "schema_mismatch";
 }
 
 export class StrategyRunContractError extends Error {

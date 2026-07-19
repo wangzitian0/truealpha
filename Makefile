@@ -101,6 +101,7 @@ contract-conformance:
 	cd apps/app-web && bun run tests/issue58-conformance.test.ts
 	cd apps/app-web && bun run tests/strategy-run-contract.test.ts
 	cd apps/app-web && bun run tests/admin-strategy-runs.test.ts
+	cd apps/app-web && bun run tests/mart-strategy-run-repository.test.ts
 	cd apps/app-web && bun run tests/dashboard-read.test.ts
 	cd apps/app-web && bun run tests/dashboard-boundary.test.ts
 	cd apps/app-web && bun run tests/auth-security.test.ts

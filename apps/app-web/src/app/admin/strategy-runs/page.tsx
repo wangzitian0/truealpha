@@ -22,7 +22,7 @@ function cell(value: string | null): string {
 
 export default async function StrategyRunsPage() {
   const principal = await getServerPrincipal();
-  const outcome = loadStrategyRunPage(principal, STRATEGY_ID);
+  const outcome = await loadStrategyRunPage(principal, STRATEGY_ID);
 
   if (outcome.kind === "denied") {
     return (
