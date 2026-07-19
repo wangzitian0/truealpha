@@ -1,12 +1,14 @@
 """The MCP endpoint — see #348.
 
-Registers exactly one read-only tool, `strategy_run`, over #347's provisional
-`StrategyRunReadRepository`. This is narrower than #42's eventual five-tool
-surface (factor history, entity comparison, ranking, output explanation,
-strategy run) over all seven modules' `ResearchQueryService`; it proves the
-MCP transport/registration path on the smallest useful surface first. See
-#348's "Relationship to the formal consumption epic" for why this does not
-claim #42's acceptance criteria.
+Registers three read-only tools: `strategy_run` (#347's provisional
+`StrategyRunReadRepository`), `topt_gppe` (#405/#433's TOPT GPPE + quality
+read), and `research_report` (#369's deterministic report assembler). This is
+narrower than #42's eventual five-tool surface (factor history, entity
+comparison, ranking, output explanation, strategy run) over all seven
+modules' `ResearchQueryService`; it proves the MCP transport/registration
+path on the smallest useful surface first. See #348's "Relationship to the
+formal consumption epic" for why this does not claim #42's acceptance
+criteria.
 
 No browser session exists for MCP callers today, so `AccessContext` is
 derived server-side via `AuthenticationMethod.SERVICE_IDENTITY` rather than
@@ -21,6 +23,16 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_contracts.research_report import (
+    ReportSectionKind,
+    ResearchReadPort,
+    ResearchReport,
+    ResearchReportKind,
+    ResearchReportRequest,
+    build_research_report,
+)
+from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
+from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.strategy_run import StrategyRunReadRepository, StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
@@ -43,6 +55,22 @@ class StrategyRunToolRequest(BaseModel):
     strategy_id: str
 
 
+class ResearchReportToolRequest(BaseModel):
+    # No strict=True (unlike StrategyRunToolRequest, whose sole field is already a bare
+    # str): this model's enum/tuple/datetime fields need normal Pydantic coercion from the
+    # JSON-shaped tool-call arguments (a JSON string into ResearchReportKind/datetime, a
+    # JSON array into a tuple) — strict mode rejects those as wrong-type instances outright
+    # rather than coercing them, verified empirically against a real MCP tool call.
+    model_config = ConfigDict(extra="forbid")
+
+    report_kind: ResearchReportKind
+    target_entity_ids: tuple[str, ...]
+    cutoff_at: datetime
+    section_kinds: tuple[ReportSectionKind, ...] = ()
+    strategy_id: str | None = None
+    title: str | None = None
+
+
 def _service_access_context() -> AccessContext:
     """A fresh, short-lived SERVICE_IDENTITY context; never derived from client input."""
     issued_at = datetime.now(UTC)
@@ -59,18 +87,29 @@ def _service_access_context() -> AccessContext:
 
 
 def _default_repository() -> StrategyRunReadRepository:
-    """#361: `settings.strategy_run_backend` selects the fixture or the real
-    mart-backed repository; defaults to `fixture` (see that setting's own
-    docstring for why flipping it isn't safe until #26 lands a writer)."""
+    """#362: `settings.strategy_run_backend` selects the fixture or the real
+    mart-backed repository; now defaults to `mart` (a real writer populates it
+    via #414/#417) — `fixture` remains selectable for tests/offline previews."""
     if settings.strategy_run_backend == "mart":
         return PostgresStrategyRunRepository(database_url=settings.database_url)
     return FixtureStrategyRunRepository()
+
+
+def _default_research_report_repository() -> ResearchReadPort:
+    """#369: mirrors `_default_repository`'s `strategy_run_backend` flag exactly, since
+    `MartResearchReadRepository`/`FixtureResearchReadRepository` wrap the same underlying
+    strategy-run data source this flag already governs — both tools flip to real mart
+    reads together, not independently."""
+    if settings.strategy_run_backend == "mart":
+        return MartResearchReadRepository(database_url=settings.database_url)
+    return FixtureResearchReadRepository()
 
 
 def build_mcp_server(
     *,
     repository: StrategyRunReadRepository | None = None,
     topt_repository: PostgresToptGppeRepository | None = None,
+    research_repository: ResearchReadPort | None = None,
 ) -> FastMCP:
     """Builds the MCP server. Caller-supplied repositories are for tests only."""
     # `streamable_http_path="/"`: main.py mounts this app at "/mcp"; FastMCP's own
@@ -93,6 +132,9 @@ def build_mcp_server(
         if topt_repository is not None
         else PostgresToptGppeRepository(database_url=settings.database_url)
     )
+    active_research: ResearchReadPort = (
+        research_repository if research_repository is not None else _default_research_report_repository()
+    )
 
     @server.tool(name="strategy_run", description="Read the latest large_model_value_v0 Core Strategy run.")
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
@@ -104,6 +146,24 @@ def build_mcp_server(
     )
     def topt_gppe() -> ToptGppeReport | ToptGppeUnavailable:
         return active_topt.latest()
+
+    @server.tool(
+        name="research_report",
+        description=(
+            "Assemble a deterministic research report (company, ETF, or theme ranking) by selecting "
+            "already-materialized sections and trace links over mart outputs. Computes no new metric."
+        ),
+    )
+    def research_report(request: ResearchReportToolRequest) -> ResearchReport:
+        report_request = ResearchReportRequest(
+            report_kind=request.report_kind,
+            target_entity_ids=request.target_entity_ids,
+            cutoff_at=request.cutoff_at,
+            section_kinds=request.section_kinds,
+            strategy_id=request.strategy_id,
+            title=request.title,
+        )
+        return build_research_report(report_request, active_research, context=_service_access_context())
 
     return server
 
