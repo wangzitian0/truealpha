@@ -15,12 +15,25 @@ export const dynamic = "force-dynamic";
 
 const repository = new PostgresConversationsRepository();
 
+/** Next.js does not decode a dynamic route segment for us — the id here is
+ * still percent-encoded (conversation_id contains colons, encoded via
+ * encodeURIComponent on the list page's link), so every lookup would
+ * otherwise 404 for any real conversation_id. Malformed percent-encoding
+ * must not 500 the route — same guard as research/entities/[id]. */
+function decodeConversationId(id: string): string {
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
+}
+
 export default async function ConversationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Fconversations");
 
   const { id } = await params;
-  const conversation = await repository.getConversation(principal.context, id);
+  const conversation = await repository.getConversation(principal.context, decodeConversationId(id));
   if (!conversation) notFound();
 
   const messages = await repository.listMessages(principal.context, conversation.conversationId);
