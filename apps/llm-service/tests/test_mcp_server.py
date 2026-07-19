@@ -139,6 +139,17 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+def test_streamable_transport_is_reachable_behind_a_proxy() -> None:
+    """The MCP is mounted at /mcp and served behind Traefik. Regression guard:
+    (1) streamable path is the mount root '/' so the endpoint is a single '/mcp',
+    not the double-nested '/mcp/mcp'; (2) DNS-rebinding host pinning is off by
+    default so a non-localhost Host does not get rejected with 421 (see #405)."""
+    server = build_mcp_server(repository=_RecordingRepository())
+    assert server.settings.streamable_http_path == "/"
+    assert server.settings.transport_security is not None
+    assert server.settings.transport_security.enable_dns_rebinding_protection is False
+
+
 def test_default_repository_is_mart_backed_with_fixture_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
     """#362: the shipped default is now `mart` (a real writer populates it via #414/#417);
     `fixture` remains selectable for tests/offline previews."""
