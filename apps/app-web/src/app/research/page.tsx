@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export default async function ResearchOverviewPage() {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch");
-  const state = loadOverview(principal.context);
+  const state = await loadOverview(principal.context);
 
   return (
     <section aria-labelledby="overview-heading" className="space-y-8">
@@ -18,9 +18,8 @@ export default async function ResearchOverviewPage() {
           Dashboard
         </h1>
         <p className="mt-2 text-gray-400">
-          Reads through the <code className="text-accent">mart</code> read adapter — no hardcoded list. Fixture-backed
-          pending #41&apos;s mart-backed read role; only the adapter changes when it lands. Each module shows its
-          materialized availability.
+          Reads through the <code className="text-accent">mart</code> read adapter — no hardcoded list, no fixture
+          (#370). Each module shows its materialized availability from the governed strategy run.
         </p>
       </div>
 

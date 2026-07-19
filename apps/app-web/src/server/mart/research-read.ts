@@ -2,28 +2,23 @@
  * TypeScript mart read adapter for the research dashboard — see #370.
  *
  * Conforms to the provisional read models the App and MCP already share (`#347`'s
- * `strategyRun.ts`), pending #41's stable seven-module `ResearchReadRepository`. It reads
- * the same checked-in strategy-run fixture bytes the MCP tool reads, so the App reproduces
- * the MCP comparison/ranking values exactly. When #41 lands a mart-backed read role, only
- * this adapter changes — the loaders, states, and pages are untouched.
+ * `strategyRun.ts`), pending #41's stable seven-module `ResearchReadRepository`. Defaults
+ * to `MartStrategyRunRepository` (real `mart.strategy_runs`/`strategy_decisions` reads via
+ * `mart_readonly`, #362) so the App reproduces the MCP comparison/ranking values exactly
+ * for the same governed run. `FixtureStrategyRunRepository` is an injection point for
+ * tests only — production callers never construct this class with it (#429/AGENTS.md
+ * rule 6: fixtures live in tests, never on a deployed route).
  *
  * Boundary: this module performs NO cross-factor computation. It selects, labels, sorts,
  * and copies already-materialized values through byte-exact. It never joins two factors or
  * two time points into a new metric (init.md Section 1, rule 2). A boundary scan in
  * `tests/dashboard-boundary.test.ts` statically forbids metric arithmetic here.
  *
- * `FixtureStrategyRunRepository` does filesystem I/O — server-only. Never import this from
- * a client component.
+ * Server-only; never import into a client component.
  */
 
-import {
-  FixtureStrategyRunRepository,
-  type AccessContext,
-  type StrategyRunDecision,
-  type StrategyRunOutcome,
-  type StrategyRunReport,
-  type StrategyRunUnavailable,
-} from "@/contracts/strategyRun";
+import type { AccessContext, StrategyRunDecision, StrategyRunOutcome, StrategyRunReport, StrategyRunUnavailable } from "@/contracts/strategyRun";
+import { MartStrategyRunRepository } from "./strategy-run-repository";
 
 export type Availability = "available" | "unavailable" | "stale" | "excluded" | "low_confidence" | "error";
 
@@ -131,12 +126,14 @@ export function decisionAvailability(decision: StrategyRunDecision): Availabilit
   return "available";
 }
 
-function traceId(issuerId: string, cutoffAt: string, corpusSha256: string): string {
+function traceId(source: string, issuerId: string, cutoffAt: string, corpusSha256: string): string {
   // Full cutoffAt, not just its date: truncating to YYYY-MM-DD would collide across
-  // multiple same-day cutoffs (Copilot review on #387). Mirrors research_report_fixture.py's
-  // _trace() (#369/#383) so both sides stay byte-identical.
+  // multiple same-day cutoffs (Copilot review on #387). `source` (not a hardcoded
+  // "strategy_smoke_fixture" literal, #370) mirrors research_report_fixture.py's
+  // _trace() (#369/#383) so both sides stay byte-identical, and stays honest once this
+  // adapter's default is mart-backed instead of fixture-backed.
   const corpusPrefix = corpusSha256.slice(0, 12);
-  return `strategy_smoke_fixture:${corpusPrefix}:${issuerId}:${cutoffAt}`;
+  return `${source}:${corpusPrefix}:${issuerId}:${cutoffAt}`;
 }
 
 /** Orders ranked members first (ascending rank), then unranked members by issuer id. */
@@ -149,34 +146,42 @@ function rankingOrder(a: StrategyRunDecision, b: StrategyRunDecision): number {
   return a.issuer_id < b.issuer_id ? -1 : 1;
 }
 
+/** `getLatest` may return synchronously (the fixture repository, tests only) or
+ * asynchronously (`MartStrategyRunRepository`, the production default) — `report()`
+ * always `await`s, which is a no-op on an already-resolved value. */
+export interface StrategyRunRepositoryLike {
+  getLatest(
+    strategyId: string,
+    context: AccessContext,
+  ): StrategyRunReport | StrategyRunUnavailable | Promise<StrategyRunReport | StrategyRunUnavailable>;
+}
+
 /**
  * Reads dashboard views from the materialized strategy run. Every read takes a
  * server-derived `AccessContext`; it is never accepted from client input. The context is
  * reserved for a future authorization decision (mirrors the provisional repositories).
  */
-export class FixtureMartReadAdapter {
-  private readonly repository: { getLatest(strategyId: string, context: AccessContext): StrategyRunReport | StrategyRunUnavailable };
+export class StrategyRunReadAdapter {
+  private readonly repository: StrategyRunRepositoryLike;
 
-  constructor(repository?: {
-    getLatest(strategyId: string, context: AccessContext): StrategyRunReport | StrategyRunUnavailable;
-  }) {
-    this.repository = repository ?? new FixtureStrategyRunRepository();
+  constructor(repository?: StrategyRunRepositoryLike) {
+    this.repository = repository ?? new MartStrategyRunRepository();
   }
 
-  private report(context: AccessContext): StrategyRunReport {
-    const result = this.repository.getLatest(DASHBOARD_STRATEGY_ID, context);
+  private async report(context: AccessContext): Promise<StrategyRunReport> {
+    const result = await this.repository.getLatest(DASHBOARD_STRATEGY_ID, context);
     if (!("decisions" in result)) throw new MartReadUnavailable(result.reason);
     return result;
   }
 
-  latestCutoff(context: AccessContext): string | null {
-    const cutoffs = this.report(context).decisions.map((decision) => decision.cutoff_at);
+  async latestCutoff(context: AccessContext): Promise<string | null> {
+    const cutoffs = (await this.report(context)).decisions.map((decision) => decision.cutoff_at);
     if (cutoffs.length === 0) return null;
     return cutoffs.slice().sort().reverse()[0];
   }
 
-  overview(context: AccessContext): ModuleOverviewRow[] {
-    const decisions = this.report(context).decisions;
+  async overview(context: AccessContext): Promise<ModuleOverviewRow[]> {
+    const decisions = (await this.report(context)).decisions;
     return MODULE_CATALOG.map((entry) => {
       const materialized =
         entry.field !== null && decisions.some((decision) => decision[entry.field as keyof StrategyRunDecision] !== null);
@@ -190,7 +195,7 @@ export class FixtureMartReadAdapter {
     });
   }
 
-  private toRankingRow(decision: StrategyRunDecision, corpusSha256: string): RankingRow {
+  private toRankingRow(decision: StrategyRunDecision, source: string, corpusSha256: string): RankingRow {
     const status = decisionAvailability(decision);
     return {
       rank: decision.rank,
@@ -204,11 +209,11 @@ export class FixtureMartReadAdapter {
       targetWeight: decision.target_weight,
       confidence: decision.confidence,
       availability: status,
-      traceId: traceId(decision.issuer_id, decision.cutoff_at, corpusSha256),
+      traceId: traceId(source, decision.issuer_id, decision.cutoff_at, corpusSha256),
     };
   }
 
-  private toComparisonRow(decision: StrategyRunDecision, corpusSha256: string): ComparisonRow {
+  private toComparisonRow(decision: StrategyRunDecision, source: string, corpusSha256: string): ComparisonRow {
     // The row's own availability mirrors the decision (low_confidence/excluded must stay
     // visible even when this one field is null) — matching toRankingRow. valueAvailability
     // is for a single value's own null-driven downgrade, not the whole row (Copilot review
@@ -223,45 +228,45 @@ export class FixtureMartReadAdapter {
       valuationGap: decision.valuation_gap,
       confidence: decision.confidence,
       availability: status,
-      traceId: traceId(decision.issuer_id, decision.cutoff_at, corpusSha256),
+      traceId: traceId(source, decision.issuer_id, decision.cutoff_at, corpusSha256),
     };
   }
 
-  ranking(context: AccessContext, cutoffAt?: string): RankingRow[] {
-    const report = this.report(context);
-    const cutoff = cutoffAt ?? this.latestCutoff(context);
+  async ranking(context: AccessContext, cutoffAt?: string): Promise<RankingRow[]> {
+    const report = await this.report(context);
+    const cutoff = cutoffAt ?? (await this.latestCutoff(context));
     if (cutoff === null) return [];
     const decisions = report.decisions.filter((decision) => decision.cutoff_at === cutoff);
     const ordered = decisions.slice().sort(rankingOrder);
-    return ordered.map((decision) => this.toRankingRow(decision, report.corpus_sha256));
+    return ordered.map((decision) => this.toRankingRow(decision, report.source, report.corpus_sha256));
   }
 
-  comparison(context: AccessContext, cutoffAt?: string): ComparisonRow[] {
-    const report = this.report(context);
-    const cutoff = cutoffAt ?? this.latestCutoff(context);
+  async comparison(context: AccessContext, cutoffAt?: string): Promise<ComparisonRow[]> {
+    const report = await this.report(context);
+    const cutoff = cutoffAt ?? (await this.latestCutoff(context));
     if (cutoff === null) return [];
     const decisions = report.decisions.filter((decision) => decision.cutoff_at === cutoff);
     const ordered = decisions.slice().sort((a, b) => (a.issuer_id < b.issuer_id ? -1 : a.issuer_id > b.issuer_id ? 1 : 0));
-    return ordered.map((decision) => this.toComparisonRow(decision, report.corpus_sha256));
+    return ordered.map((decision) => this.toComparisonRow(decision, report.source, report.corpus_sha256));
   }
 
-  entityDetail(context: AccessContext, issuerId: string): EntityDetail | null {
-    const report = this.report(context);
+  async entityDetail(context: AccessContext, issuerId: string): Promise<EntityDetail | null> {
+    const report = await this.report(context);
     const rows = report.decisions
       .filter((decision) => decision.issuer_id === issuerId)
       .slice()
       .sort((a, b) => (a.cutoff_at < b.cutoff_at ? -1 : a.cutoff_at > b.cutoff_at ? 1 : 0))
-      .map((decision) => this.toComparisonRow(decision, report.corpus_sha256));
+      .map((decision) => this.toComparisonRow(decision, report.source, report.corpus_sha256));
     if (rows.length === 0) return null;
     return { issuerId, rows };
   }
 
-  traceView(context: AccessContext, issuerId: string, cutoffAt: string): TraceView | null {
-    const report = this.report(context);
+  async traceView(context: AccessContext, issuerId: string, cutoffAt: string): Promise<TraceView | null> {
+    const report = await this.report(context);
     const decision = report.decisions.find((d) => d.issuer_id === issuerId && d.cutoff_at === cutoffAt);
     if (decision === undefined) return null;
     return {
-      traceId: traceId(issuerId, cutoffAt, report.corpus_sha256),
+      traceId: traceId(report.source, issuerId, cutoffAt, report.corpus_sha256),
       strategyId: report.strategy_id,
       source: report.source,
       issuerId,
