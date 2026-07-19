@@ -12,7 +12,7 @@ the authoritative doc) → [`CLAUDE.md`](CLAUDE.md) (working rules).
 ```
 apps/data-engine    Python  ingestion into immutable raw objects + Postgres lineage/staging
 apps/llm-service    Python  FastAPI: MCP endpoint (priority) + /chat (Tier 3)
-apps/app-web        TS/Bun  Next.js — reads the mart schema directly, no API hop
+apps/app-web        TS/Bun  Next.js — reads mart via the mart_readonly role, no API hop (strategy runs live; seven-module dashboard read pending #41)
 libs/contracts      Python  point-in-time DTOs + repository/storage/backtest ports
 libs/factors        Python  the ONLY place computation logic lives (base / composite / shared)
 libs/runtime        Python  runtime env/dependencies + Postgres/KG/S3 adapters and probes

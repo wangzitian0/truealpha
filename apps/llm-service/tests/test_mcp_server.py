@@ -64,10 +64,14 @@ async def test_topt_gppe_reads_the_mart_repository_not_a_fixture() -> None:
 
 @pytest.mark.anyio
 async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture() -> None:
+    # The shipped default is now the mart read (#362); this test pins the fixture
+    # oracle explicitly, so build a fixture-backed server rather than the
+    # module-level `mcp`.
+    server = build_mcp_server(repository=FixtureStrategyRunRepository())
     # FastMCP.call_tool's declared return type doesn't reflect that it actually
     # returns a (content_blocks, structured_dict) tuple when structured output
     # is enabled (verified at runtime); silence the resulting stub mismatch.
-    content_blocks, structured = await mcp.call_tool(  # type: ignore[misc]
+    content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}
     )
     assert content_blocks  # non-empty text content alongside the structured result
@@ -82,7 +86,8 @@ async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture(
 
 @pytest.mark.anyio
 async def test_unknown_strategy_returns_structured_unavailable_not_a_crash() -> None:
-    _content_blocks, structured = await mcp.call_tool(  # type: ignore[misc]
+    server = build_mcp_server(repository=FixtureStrategyRunRepository())
+    _content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "strategy_run", {"request": {"strategy_id": "does_not_exist"}}
     )
     unavailable = StrategyRunUnavailable.model_validate(structured["result"])  # type: ignore[index]
@@ -113,7 +118,10 @@ async def test_claude_compatible_client_session_round_trip() -> None:
     """A real mcp.ClientSession over in-memory transport — the same JSON-RPC
     surface Claude Code / Claude Desktop / Codex speak, not a server-side
     shortcut method."""
-    async with create_connected_server_and_client_session(mcp._mcp_server) as client:
+    # Fixture-backed (the shipped default is now the mart read, #362) so the
+    # round-trip asserts against the 10 golden decisions.
+    server = build_mcp_server(repository=FixtureStrategyRunRepository())
+    async with create_connected_server_and_client_session(server._mcp_server) as client:
         await client.initialize()
         tools = await client.list_tools()
         assert sorted(tool.name for tool in tools.tools) == ["strategy_run", "topt_gppe"]
@@ -131,9 +139,13 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def test_default_repository_is_fixture_backed_unless_explicitly_flipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#361: the shipped default must stay `fixture` until #26 lands a real writer."""
+def test_default_repository_is_mart_backed_with_fixture_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#362: the shipped default is now `mart` (a real writer populates it via #414/#417);
+    `fixture` remains selectable for tests/offline previews."""
     from llm_service import mcp_server
+
+    # The shipped default, with no override, is the real mart read.
+    assert isinstance(_default_repository(), PostgresStrategyRunRepository)
 
     monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "fixture")
     assert isinstance(_default_repository(), FixtureStrategyRunRepository)

@@ -8,12 +8,30 @@
  * Run standalone (`bun run tests/admin-strategy-runs.test.ts`), not through Next.js.
  */
 
-import { loadStrategyRunPage, type StrategyRunPrincipal } from "../src/server/admin-strategy-runs";
-import type { AccessContext, StrategyRunReport, StrategyRunUnavailable } from "../src/contracts/strategyRun";
+import {
+  loadStrategyRunPage,
+  type StrategyRunPrincipal,
+  type StrategyRunReadRepositoryLike,
+} from "../src/server/admin-strategy-runs";
+import {
+  FixtureStrategyRunRepository,
+  type AccessContext,
+  type StrategyRunReport,
+  type StrategyRunUnavailable,
+} from "../src/contracts/strategyRun";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
+
+// The shipped default is now the async mart read (#362); these outcome tests pin
+// the fixture oracle explicitly through an async adapter over the sync fixture,
+// so they stay hermetic (no live Postgres) while still asserting the 10 golden
+// decisions. The mart adapter itself is proven against a real DB in
+// tests/mart-strategy-run-repository.test.ts.
+const fixtureRepository: StrategyRunReadRepositoryLike = {
+  getLatest: async (strategyId, context) => new FixtureStrategyRunRepository().getLatest(strategyId, context),
+};
 
 const TEST_CONTEXT: AccessContext = {
   contextId: "ctx:test",
@@ -31,7 +49,7 @@ const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principa
 // --- denied: no session at all, and the repository must never be called ---
 {
   let repositoryCalled = false;
-  const outcome = loadStrategyRunPage(null, "large_model_value_v0", {
+  const outcome = await loadStrategyRunPage(null, "large_model_value_v0", {
     getLatest: (_strategyId, _context) => {
       repositoryCalled = true;
       throw new Error("must not be reached when denied");
@@ -44,7 +62,7 @@ const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principa
 // --- denied: a verified session that is NOT an administrator, repository never called ---
 {
   let repositoryCalled = false;
-  const outcome = loadStrategyRunPage(MEMBER_PRINCIPAL, "large_model_value_v0", {
+  const outcome = await loadStrategyRunPage(MEMBER_PRINCIPAL, "large_model_value_v0", {
     getLatest: (_strategyId, _context) => {
       repositoryCalled = true;
       throw new Error("must not be reached when a member is denied admin access");
@@ -56,7 +74,7 @@ const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principa
 
 // --- ready: administrator principal present, repository returns a report ---
 {
-  const outcome = loadStrategyRunPage(ADMIN_PRINCIPAL, "large_model_value_v0");
+  const outcome = await loadStrategyRunPage(ADMIN_PRINCIPAL, "large_model_value_v0", fixtureRepository);
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   const report: StrategyRunReport = outcome.report;
   assert(report.decisions.length === 10, `expected 10 decisions, got ${report.decisions.length}`);
@@ -67,7 +85,7 @@ const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principa
 
 // --- unavailable: administrator present, unknown strategy_id ---
 {
-  const outcome = loadStrategyRunPage(ADMIN_PRINCIPAL, "does_not_exist");
+  const outcome = await loadStrategyRunPage(ADMIN_PRINCIPAL, "does_not_exist", fixtureRepository);
   assert(outcome.kind === "unavailable", `expected unavailable, got ${outcome.kind}`);
   const detail: StrategyRunUnavailable = outcome.detail;
   assert(detail.reason === "unknown_strategy_id", `unexpected reason ${detail.reason}`);
@@ -75,7 +93,7 @@ const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principa
 
 // --- error: repository throws, loader must not propagate the exception ---
 {
-  const outcome = loadStrategyRunPage(ADMIN_PRINCIPAL, "large_model_value_v0", {
+  const outcome = await loadStrategyRunPage(ADMIN_PRINCIPAL, "large_model_value_v0", {
     getLatest: (_strategyId, _context) => {
       throw new Error("simulated fixture read failure");
     },
