@@ -31,7 +31,12 @@ from truealpha_contracts.research_report import (
     ResearchReportRequest,
     ResultValue,
 )
-from truealpha_contracts.strategy_run import StrategyRunDecision, StrategyRunOutcome, StrategyRunReport
+from truealpha_contracts.strategy_run import (
+    StrategyRunDecision,
+    StrategyRunOutcome,
+    StrategyRunReadRepository,
+    StrategyRunReport,
+)
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 
 _DEFAULT_STRATEGY_ID = "large_model_value_v0"
@@ -68,13 +73,15 @@ def _value_availability(value: str | None, section_status: AvailabilityStatus) -
     return section_status if value is not None else AvailabilityStatus.UNAVAILABLE
 
 
-def _trace(decision: StrategyRunDecision, corpus_sha256: str) -> EvidenceTrace:
+def _trace(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> EvidenceTrace:
     # Full cutoff_at, not just its date: truncating to a bare date would collide across
     # multiple same-day cutoffs (Copilot review on #387; mirrored here to keep this and
-    # research-read.ts's traceId() byte-identical, per #347's parity contract).
+    # research-read.ts's traceId() byte-identical, per #347's parity contract). `source`
+    # (the strategy report's own StrategyRunReport.source, not a hardcoded literal — #369)
+    # so a mart-backed report's trace does not misrepresent itself as fixture-derived.
     cutoff = decision.cutoff_at.isoformat().replace("+00:00", "Z")
     return EvidenceTrace(
-        reference_id=f"strategy_smoke_fixture:{corpus_sha256[:12]}:{decision.issuer_id}:{cutoff}",
+        reference_id=f"{source}:{corpus_sha256[:12]}:{decision.issuer_id}:{cutoff}",
     )
 
 
@@ -84,6 +91,7 @@ def _result(
     value: str | None,
     decision: StrategyRunDecision,
     section_status: AvailabilityStatus,
+    source: str,
     corpus_sha256: str,
     unit: str | None = None,
 ) -> ResultValue:
@@ -96,11 +104,11 @@ def _result(
         availability=_value_availability(value, section_status),
         confidence=decision.confidence,
         factor_version=_STRATEGY_FACTOR_VERSION,
-        trace=_trace(decision, corpus_sha256),
+        trace=_trace(decision, source, corpus_sha256),
     )
 
 
-def _operating_efficiency_section(decision: StrategyRunDecision, corpus_sha256: str) -> ReportSection:
+def _operating_efficiency_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
     value = _decimal_str(decision.capital_adjusted_labor_efficiency)
     status = _decision_availability(decision)
     # The section's own availability mirrors the decision (LOW_CONFIDENCE/EXCLUDED must
@@ -118,6 +126,7 @@ def _operating_efficiency_section(decision: StrategyRunDecision, corpus_sha256: 
                 value=value,
                 decision=decision,
                 section_status=status,
+                source=source,
                 corpus_sha256=corpus_sha256,
                 unit="USD",
             ),
@@ -125,7 +134,7 @@ def _operating_efficiency_section(decision: StrategyRunDecision, corpus_sha256: 
     )
 
 
-def _valuation_section(decision: StrategyRunDecision, corpus_sha256: str) -> ReportSection:
+def _valuation_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
     status = _decision_availability(decision)
     tier_value = decision.tier.value if decision.tier is not None else None
     results = (
@@ -134,6 +143,7 @@ def _valuation_section(decision: StrategyRunDecision, corpus_sha256: str) -> Rep
             value=tier_value,
             decision=decision,
             section_status=status,
+            source=source,
             corpus_sha256=corpus_sha256,
         ),
         _result(
@@ -141,6 +151,7 @@ def _valuation_section(decision: StrategyRunDecision, corpus_sha256: str) -> Rep
             value=_decimal_str(decision.current_price_to_sales),
             decision=decision,
             section_status=status,
+            source=source,
             corpus_sha256=corpus_sha256,
         ),
         _result(
@@ -148,6 +159,7 @@ def _valuation_section(decision: StrategyRunDecision, corpus_sha256: str) -> Rep
             value=_decimal_str(decision.target_price_to_sales),
             decision=decision,
             section_status=status,
+            source=source,
             corpus_sha256=corpus_sha256,
         ),
         _result(
@@ -155,6 +167,7 @@ def _valuation_section(decision: StrategyRunDecision, corpus_sha256: str) -> Rep
             value=_decimal_str(decision.valuation_gap),
             decision=decision,
             section_status=status,
+            source=source,
             corpus_sha256=corpus_sha256,
         ),
     )
@@ -167,7 +180,7 @@ def _valuation_section(decision: StrategyRunDecision, corpus_sha256: str) -> Rep
     )
 
 
-def _strategy_summary_section(decision: StrategyRunDecision, corpus_sha256: str) -> ReportSection:
+def _strategy_summary_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
     status = _decision_availability(decision)
     reason_codes = (decision.exclusion_reason,) if decision.exclusion_reason is not None else ()
     results = (
@@ -176,6 +189,7 @@ def _strategy_summary_section(decision: StrategyRunDecision, corpus_sha256: str)
             value=decision.outcome.value,
             decision=decision,
             section_status=status,
+            source=source,
             corpus_sha256=corpus_sha256,
         ),
         _result(
@@ -183,6 +197,7 @@ def _strategy_summary_section(decision: StrategyRunDecision, corpus_sha256: str)
             value=str(decision.eligible).lower(),
             decision=decision,
             section_status=status,
+            source=source,
             corpus_sha256=corpus_sha256,
         ),
         _result(
@@ -190,6 +205,7 @@ def _strategy_summary_section(decision: StrategyRunDecision, corpus_sha256: str)
             value=None if decision.rank is None else str(decision.rank),
             decision=decision,
             section_status=status,
+            source=source,
             corpus_sha256=corpus_sha256,
         ),
         _result(
@@ -197,6 +213,7 @@ def _strategy_summary_section(decision: StrategyRunDecision, corpus_sha256: str)
             value=_decimal_str(decision.target_weight),
             decision=decision,
             section_status=status,
+            source=source,
             corpus_sha256=corpus_sha256,
         ),
     )
@@ -219,15 +236,15 @@ def _unmaterialized_section(section_kind: ReportSectionKind, title: str, reason:
     )
 
 
-def _company_subject(decision: StrategyRunDecision, corpus_sha256: str) -> ReportSubject:
+def _company_subject(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSubject:
     sections = [
-        _operating_efficiency_section(decision, corpus_sha256),
-        _valuation_section(decision, corpus_sha256),
+        _operating_efficiency_section(decision, source, corpus_sha256),
+        _valuation_section(decision, source, corpus_sha256),
         *[
             _unmaterialized_section(section_kind, title, reason)
             for section_kind, title, reason in _UNMATERIALIZED_COMPANY_SECTIONS
         ],
-        _strategy_summary_section(decision, corpus_sha256),
+        _strategy_summary_section(decision, source, corpus_sha256),
     ]
     return ReportSubject(
         subject_id=decision.issuer_id,
@@ -236,14 +253,14 @@ def _company_subject(decision: StrategyRunDecision, corpus_sha256: str) -> Repor
     )
 
 
-def _ranking_subject(decision: StrategyRunDecision, corpus_sha256: str) -> ReportSubject:
+def _ranking_subject(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSubject:
     return ReportSubject(
         subject_id=decision.issuer_id,
         display_name=decision.issuer_id,
         rank=decision.rank,
         sections=(
-            _strategy_summary_section(decision, corpus_sha256),
-            _valuation_section(decision, corpus_sha256),
+            _strategy_summary_section(decision, source, corpus_sha256),
+            _valuation_section(decision, source, corpus_sha256),
         ),
     )
 
@@ -293,11 +310,16 @@ def _ranking_sort_key(decision: StrategyRunDecision) -> tuple[int, int, str]:
 
 
 class FixtureResearchReadRepository:
-    """Reproduces already-materialized research sections from the strategy-run fixture."""
+    """Reproduces already-materialized research sections from the strategy-run fixture.
+
+    `strategy_repository` is typed to the shared `StrategyRunReadRepository` protocol
+    (not narrowed to the fixture) so `research_report_mart.MartResearchReadRepository`
+    can subclass this and inject a `PostgresStrategyRunRepository` instead, reusing this
+    class's ETF/missing-subject/ranking-vs-company orchestration entirely (#369)."""
 
     provenance_label = "fixture:research_report.v1"
 
-    def __init__(self, *, strategy_repository: FixtureStrategyRunRepository | None = None) -> None:
+    def __init__(self, *, strategy_repository: StrategyRunReadRepository | None = None) -> None:
         self._strategy_repository = (
             strategy_repository if strategy_repository is not None else FixtureStrategyRunRepository()
         )
@@ -325,7 +347,7 @@ class FixtureResearchReadRepository:
 
         if request.report_kind is ResearchReportKind.THEME_RANKING:
             ordered = sorted(decisions, key=_ranking_sort_key)
-            return tuple(_ranking_subject(decision, report.corpus_sha256) for decision in ordered)
+            return tuple(_ranking_subject(decision, report.source, report.corpus_sha256) for decision in ordered)
 
         by_issuer = {decision.issuer_id: decision for decision in decisions}
         subjects: list[ReportSubject] = []
@@ -334,5 +356,5 @@ class FixtureResearchReadRepository:
             if decision is None:
                 subjects.append(_missing_subject(entity_id, "subject_not_in_strategy_run"))
             else:
-                subjects.append(_company_subject(decision, report.corpus_sha256))
+                subjects.append(_company_subject(decision, report.source, report.corpus_sha256))
         return tuple(subjects)

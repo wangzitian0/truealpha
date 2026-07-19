@@ -164,7 +164,7 @@ def test_hard_excluded_path_is_explicit() -> None:
         eligible=False,
         exclusion_reason="valuation_inputs_unavailable",
     )
-    section = _strategy_summary_section(decision, corpus_sha256="0" * 64)
+    section = _strategy_summary_section(decision, source="strategy_smoke_fixture", corpus_sha256="0" * 64)
     assert section.availability is AvailabilityStatus.EXCLUDED
     assert section.reason_codes == ("valuation_inputs_unavailable",)
 
@@ -183,7 +183,7 @@ def test_operating_efficiency_section_preserves_low_confidence_when_value_is_nul
         confidence=Decimal("0.5"),
         capital_adjusted_labor_efficiency=None,
     )
-    section = _operating_efficiency_section(decision, corpus_sha256="0" * 64)
+    section = _operating_efficiency_section(decision, source="strategy_smoke_fixture", corpus_sha256="0" * 64)
     assert section.availability is AvailabilityStatus.LOW_CONFIDENCE
     # The individual result's own value-availability still correctly reflects the null field.
     assert section.results[0].availability is AvailabilityStatus.UNAVAILABLE

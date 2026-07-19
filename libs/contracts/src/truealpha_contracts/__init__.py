@@ -456,6 +456,7 @@ from truealpha_contracts.research_report import (
     render_report_markdown,
 )
 from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
+from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.service_demand import (
     ConfidenceTargetBand,
     DataHubDemandIntakeReport,
@@ -997,6 +998,7 @@ __all__ = [
     "SelectionRule",
     "FixtureStrategyRunRepository",
     "FixtureResearchReadRepository",
+    "MartResearchReadRepository",
     "CardKind",
     "CardSubject",
     "ClaimClass",

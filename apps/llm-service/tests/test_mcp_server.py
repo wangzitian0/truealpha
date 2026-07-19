@@ -7,6 +7,7 @@ import pytest
 from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
 from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_contracts.research_report import ResearchReport
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
@@ -26,7 +27,7 @@ class _RecordingRepository:
 @pytest.mark.anyio
 async def test_advertises_the_expected_tools() -> None:
     tools = await mcp.list_tools()
-    assert sorted(tool.name for tool in tools) == ["strategy_run", "topt_gppe"]
+    assert sorted(tool.name for tool in tools) == ["research_report", "strategy_run", "topt_gppe"]
     strategy_tool = next(t for t in tools if t.name == "strategy_run")
     assert strategy_tool.inputSchema["required"] == ["request"]
     assert strategy_tool.outputSchema is not None
@@ -60,6 +61,54 @@ async def test_topt_gppe_reads_the_mart_repository_not_a_fixture() -> None:
     assert report.available_count == 1
     assert report.cells[0].listing_id == "listing:xnas:goog"
     assert report.cells[0].gppe == "1153614.48"
+
+
+@pytest.mark.anyio
+async def test_research_report_reads_through_the_injected_repository() -> None:
+    """#369: the tool assembles over whatever ResearchReadPort it's given — proving the
+    deployed path invokes build_research_report at all, independent of #26's writer."""
+    from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
+
+    server = build_mcp_server(
+        repository=FixtureStrategyRunRepository(), research_repository=FixtureResearchReadRepository()
+    )
+    content_blocks, structured = await server.call_tool(  # type: ignore[misc]
+        "research_report",
+        {
+            "request": {
+                "report_kind": "company",
+                "target_entity_ids": ["issuer:adm"],
+                "cutoff_at": "2026-06-30T23:59:59Z",
+            }
+        },
+    )
+    assert content_blocks
+    # Unlike strategy_run/topt_gppe (Report | Unavailable unions, wrapped under a
+    # top-level "result" key), a tool whose return type is a single concrete BaseModel
+    # gets its own fields flattened directly into `structured` — verified empirically.
+    # JSON-mode validation (not model_validate on the raw dict): ResearchReport is a
+    # strict model, and only JSON-mode coerces a wire string into datetime/enum/tuple.
+    report = ResearchReport.model_validate_json(json.dumps(structured))
+    assert report.report_id.startswith("report:")
+    assert report.generated_from == "fixture:research_report.v1"
+    assert report.subjects[0].subject_id == "issuer:adm"
+
+
+def test_default_research_report_repository_is_mart_backed_with_fixture_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#369: mirrors test_default_repository_is_mart_backed_with_fixture_opt_out — the
+    research-report reader flips with the same strategy_run_backend flag."""
+    from llm_service import mcp_server
+    from llm_service.mcp_server import _default_research_report_repository
+    from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
+    from truealpha_contracts.research_report_mart import MartResearchReadRepository
+
+    monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "fixture")
+    assert isinstance(_default_research_report_repository(), FixtureResearchReadRepository)
+
+    monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "mart")
+    assert isinstance(_default_research_report_repository(), MartResearchReadRepository)
 
 
 @pytest.mark.anyio
@@ -124,7 +173,7 @@ async def test_claude_compatible_client_session_round_trip() -> None:
     async with create_connected_server_and_client_session(server._mcp_server) as client:
         await client.initialize()
         tools = await client.list_tools()
-        assert sorted(tool.name for tool in tools.tools) == ["strategy_run", "topt_gppe"]
+        assert sorted(tool.name for tool in tools.tools) == ["research_report", "strategy_run", "topt_gppe"]
 
         result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
         assert result.isError is not True
