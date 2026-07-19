@@ -15,6 +15,6 @@ jobs:
       - run: uv sync --project libs/factors/qlib-runtime --all-groups --frozen
       - name: Run the pinned Qlib runtime tests without optional skips
         run: >-
-          uv run --project libs/factors/qlib-runtime pytest
+          uv run --project libs/factors/qlib-runtime --frozen pytest
           libs/factors/tests/batches/issuer_strategy_selection_tiny
           libs/factors/tests/batches/qlib_expression_contract_tiny -q
