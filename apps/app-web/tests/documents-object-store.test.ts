@@ -10,7 +10,13 @@
 
 import { createHash } from "node:crypto";
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3ServiceException } from "@aws-sdk/client-s3";
-import { __setTestClient, DocumentStorageError, getDocumentArtifact, storeDocumentArtifact } from "../src/server/documents/object-store";
+import {
+  __setTestClient,
+  DocumentStorageError,
+  envPositiveSeconds,
+  getDocumentArtifact,
+  storeDocumentArtifact,
+} from "../src/server/documents/object-store";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -137,6 +143,27 @@ async function run() {
   );
 
   __setTestClient(null);
+
+  const originalTimeout = process.env.S3_CONNECT_TIMEOUT_SECONDS;
+  try {
+    delete process.env.S3_CONNECT_TIMEOUT_SECONDS;
+    assert(envPositiveSeconds("S3_CONNECT_TIMEOUT_SECONDS", 5) === 5, "an unset timeout must fall back to the default");
+
+    process.env.S3_CONNECT_TIMEOUT_SECONDS = "10";
+    assert(envPositiveSeconds("S3_CONNECT_TIMEOUT_SECONDS", 5) === 10, "a valid positive timeout must be used as-is");
+
+    for (const bad of ["not-a-number", "0", "-3", "NaN", "Infinity"]) {
+      process.env.S3_CONNECT_TIMEOUT_SECONDS = bad;
+      assert(
+        envPositiveSeconds("S3_CONNECT_TIMEOUT_SECONDS", 5) === 5,
+        `a non-finite/non-positive timeout ${JSON.stringify(bad)} must fall back to the default, not become NaN`,
+      );
+    }
+  } finally {
+    if (originalTimeout === undefined) delete process.env.S3_CONNECT_TIMEOUT_SECONDS;
+    else process.env.S3_CONNECT_TIMEOUT_SECONDS = originalTimeout;
+  }
+
   console.log("documents-object-store.test.ts: all assertions passed");
 }
 

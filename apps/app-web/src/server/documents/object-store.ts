@@ -41,6 +41,14 @@ function env(name: string, fallback: string): string {
   return value === undefined || value === "" ? fallback : value;
 }
 
+/** A non-numeric S3_CONNECT_TIMEOUT_SECONDS must fall back to the default,
+ * not silently produce a NaN timeout (which NodeHttpHandler would treat as
+ * "no timeout" — the opposite of what this setting exists to guarantee). */
+export function envPositiveSeconds(name: string, fallbackSeconds: number): number {
+  const raw = Number(env(name, String(fallbackSeconds)));
+  return Number.isFinite(raw) && raw > 0 ? raw : fallbackSeconds;
+}
+
 let client: S3Client | null = null;
 let testClientOverride: Pick<S3Client, "send"> | null = null;
 
@@ -58,7 +66,7 @@ function getClient(): S3Client {
     // Mirrors S3_CONNECT_TIMEOUT_SECONDS's role in the Python
     // S3RawObjectStore adapter — without an explicit timeout here, a
     // stalled S3/MinIO call could hang a server request indefinitely.
-    const timeoutMs = Number(env("S3_CONNECT_TIMEOUT_SECONDS", "5")) * 1000;
+    const timeoutMs = envPositiveSeconds("S3_CONNECT_TIMEOUT_SECONDS", 5) * 1000;
     client = new S3Client({
       endpoint: env("S3_ENDPOINT", "http://localhost:9000"),
       region: env("S3_REGION", "us-east-1"),
