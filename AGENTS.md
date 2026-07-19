@@ -43,6 +43,16 @@ tests prove it, review and green CI gate the merge.
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
    Records live under `governance/` (see its README); they document what happened and are
    never a merge gate.
+6. **Closed means deployed, real, and evidenced.** A product issue closes only when its
+   capability is invoked by a deployed path — reachable from the Dagster composition root
+   (`dagster_defs.py`) or a deployed service/App entrypoint — on real captured data, with
+   evidence posted on the issue: the deployed call site plus real-data output (SQL rows or
+   an HTTP response). Fixture data lives in tests only; fixture assets are named
+   `*_fixture` and are never scheduled or reachable from a deployed route. Code that
+   merely exists is not done: wire it into the deployed path or explicitly demote it on
+   the issue. Honest partial scope stays open with a scope note instead of closing.
+   (vision.md: fixture-only tools or code existence are not completion evidence;
+   drift audit #429, invariants I1–I4; root #434.)
 
 At the start of a task and after context compaction: re-read the user's latest
 instruction, run the checkpoint commands above, and note (issue number, branch, files you
