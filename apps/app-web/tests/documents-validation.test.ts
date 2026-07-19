@@ -29,6 +29,7 @@ function run() {
   }
 
   assert(parseBeforeCursor(undefined) === null, "an absent cursor must parse to null");
+  assert(parseBeforeCursor(null) === null, "a null cursor must parse to null");
   const parsed = parseBeforeCursor({ createdAt: "2026-07-18T00:00:00.000Z", documentId: "document:1" });
   assert(
     parsed !== null && parsed.createdAt.toISOString() === "2026-07-18T00:00:00.000Z" && parsed.documentId === "document:1",

@@ -74,7 +74,7 @@ export interface DocumentCursor {
 export interface DocumentListQuery {
   limit?: number;
   /** Exclusive cursor: pass the previous page's last row's cursor to continue. */
-  before?: DocumentCursor;
+  before?: DocumentCursor | null;
 }
 
 export interface DocumentPage {
@@ -160,8 +160,13 @@ const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:
 /** Rejects a malformed cursor before it ever reaches `$1::timestamptz` — an
  * invalid string there would surface as a raw Postgres cast error instead
  * of a clear, deterministic one here. */
-export function parseBeforeCursor(before: DocumentCursor | undefined): { createdAt: Date; documentId: string } | null {
-  if (before === undefined) return null;
+export function parseBeforeCursor(
+  before: DocumentCursor | null | undefined,
+): { createdAt: Date; documentId: string } | null {
+  // Loose check: a JSON round-trip of an optional field commonly produces
+  // `null`, not `undefined` — treating only the latter as absent would
+  // throw a TypeError on `before.createdAt` for the equally-valid null case.
+  if (before === undefined || before === null) return null;
   if (!ISO_DATE_TIME_PATTERN.test(before.createdAt)) {
     throw new Error("before.createdAt must be a valid ISO datetime");
   }

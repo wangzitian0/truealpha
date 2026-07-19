@@ -50,7 +50,10 @@ create table if not exists app.research_document_revisions (
     created_at            timestamptz not null default now(),
     foreign key (document_id, tenant_id, owner_principal_id)
         references app.research_documents (document_id, tenant_id, owner_principal_id),
-    unique (revision_id, tenant_id, owner_principal_id),
+    -- No separate unique(revision_id, tenant_id, owner_principal_id): with
+    -- revision_id already the primary key, any tuple containing it is
+    -- trivially unique, so only the 4-column constraint below (which is
+    -- what the download ticket's FK actually needs) is worth the index.
     -- Lets a download ticket's FK below pin BOTH document_id and
     -- revision_id together against one real revision row, so a ticket can
     -- never be created for a (document_id, revision_id) pair that doesn't
