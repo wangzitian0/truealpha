@@ -86,9 +86,9 @@ def _source_request(obligation, *, ordinal: int) -> SourceRequest:
         "partition": obligation.partition,
     }
     return SourceRequest(
-        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v5'})}",
-        source_policy_id="source-policy:production-topt-live-v5",
-        request_fingerprint_version="production-topt-live:v5",
+        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v6'})}",
+        source_policy_id="source-policy:production-topt-live-v6",
+        request_fingerprint_version="production-topt-live:v6",
         canonical_request_sha256=canonical_sha256(coordinate),
         subject_refs=(obligation.subject,),
         capture_requirement_ids=(obligation.capture_requirement_id,),
@@ -109,6 +109,11 @@ def _real_market_price(ticker: str) -> str:
 
 
 _REVENUE_CONCEPTS = ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax")
+# SEC XBRL heterogeneity: issuers report cost-of-revenue under different us-gaap tags
+# (pharma uses CostOfGoodsAndServicesSold, not CostOfRevenue). Try each in priority order.
+# Issuers with no cost-of-revenue concept at all (banks, payment networks, insurers,
+# integrated energy) are a structurally different operating branch (#59), not a mapping gap.
+_COGS_CONCEPTS = ("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices")
 
 
 def _annual_by_end(facts: dict, taxonomy: str, name: str, unit: str) -> dict[str, Decimal]:
@@ -136,13 +141,16 @@ def _gross_profit(facts: dict) -> Decimal | None:
     direct = _annual_by_end(facts, "us-gaap", "GrossProfit", "USD")
     if direct:
         return _latest(direct)
-    cogs = _annual_by_end(facts, "us-gaap", "CostOfRevenue", "USD")
-    for revenue_name in _REVENUE_CONCEPTS:
-        revenue = _annual_by_end(facts, "us-gaap", revenue_name, "USD")
-        shared = set(revenue) & set(cogs)  # same period end -> comparable
-        if shared:
-            end = max(shared)
-            return revenue[end] - cogs[end]
+    for cogs_name in _COGS_CONCEPTS:
+        cogs = _annual_by_end(facts, "us-gaap", cogs_name, "USD")
+        if not cogs:
+            continue
+        for revenue_name in _REVENUE_CONCEPTS:
+            revenue = _annual_by_end(facts, "us-gaap", revenue_name, "USD")
+            shared = set(revenue) & set(cogs)  # same period end -> comparable
+            if shared:
+                end = max(shared)
+                return revenue[end] - cogs[end]
     return None
 
 
@@ -205,14 +213,14 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
     list_version = frozen_topt_list_version(corpus)
     policy = CaptureSchedulePolicy(
-        policy_version="production-topt-live:v5",
+        policy_version="production-topt-live:v6",
         demanded_cadence=timedelta(days=1),
         provider_availability_cadence="manual-only:v1",
         freshness_max_age=timedelta(days=2),
         retry=replay_retry_policy(3),
     )
     campaign = CaptureCampaign(
-        campaign_policy_id="capture-policy:production-topt-live-v5",
+        campaign_policy_id="capture-policy:production-topt-live-v6",
         environment=CaptureEnvironment.PRODUCTION,
         cutoff=CUTOFF,
         universe_refs=(list_version.universe,),
@@ -221,7 +229,7 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         campaign_id=campaign.campaign_id,
         run_sequence=1,
         schedule_policy_id=policy.schedule_policy_id,
-        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v5'})}",
+        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v6'})}",
     )
     obligations = expand_obligations(
         run_id=run.run_id,
@@ -274,16 +282,16 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
         payload = _real_payload(coordinates[obligation.subject.id], semantic_type)
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": payload})
-        source_record_id = f"production-topt-live-v5:{ordinal}"
+        source_record_id = f"production-topt-live-v6:{ordinal}"
         raw_fetch_id = connection.execute(
             "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
             "byte_length, fetched_at, recorded_at, metadata) "
             "values (%s, %s, %s, %s, 'application/json', 1, %s, %s, '{}'::jsonb) returning id",
             (
-                "production-topt-live-v5",
+                "production-topt-live-v6",
                 source_record_id,
                 raw_sha256,
-                f"s3://production-topt-live-v5/{raw_sha256}",
+                f"s3://production-topt-live-v6/{raw_sha256}",
                 CUTOFF - timedelta(hours=2),
                 CUTOFF - timedelta(hours=2),
             ),
