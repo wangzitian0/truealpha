@@ -20,7 +20,7 @@
 import { randomUUID } from "node:crypto";
 import type { AccessContext } from "@/contracts/strategyRun";
 import { withOwnerScopedRuntime } from "@/server/auth/db";
-import { getDocumentArtifact, storeDocumentArtifact } from "@/server/documents/object-store";
+import { bucket, getDocumentArtifact, storeDocumentArtifact } from "@/server/documents/object-store";
 
 export interface ResearchDocument {
   documentId: string;
@@ -460,7 +460,7 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
         if (!revisionRow) return null;
 
         return {
-          bucket: process.env.S3_BUCKET ?? "truealpha-raw",
+          bucket: bucket(),
           key: revisionRow.object_key,
           sha256: revisionRow.artifact_sha256,
           byteLength: Number(revisionRow.artifact_byte_length),

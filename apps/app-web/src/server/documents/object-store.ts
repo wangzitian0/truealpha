@@ -36,7 +36,8 @@ export interface DocumentObjectRef {
 export class DocumentStorageError extends Error {}
 
 function env(name: string, fallback: string): string {
-  return process.env[name] ?? fallback;
+  const value = process.env[name];
+  return value === undefined || value === "" ? fallback : value;
 }
 
 let client: S3Client | null = null;
@@ -56,7 +57,7 @@ function getClient(): S3Client {
   return client;
 }
 
-function bucket(): string {
+export function bucket(): string {
   return env("S3_BUCKET", "truealpha-raw");
 }
 
