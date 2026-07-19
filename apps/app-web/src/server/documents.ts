@@ -143,11 +143,19 @@ function validateNewRevision(revision: NewDocumentRevisionInput): NewDocumentRev
   };
 }
 
+// `new Date(...)` alone accepts non-ISO/date-only/implementation-dependent
+// strings, which contradicts the explicit ISO date-time check the rest of
+// the codebase uses (e.g. contracts/strategyRun.ts's CUTOFF_PATTERN).
+const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
 /** Rejects a malformed cursor before it ever reaches `$1::timestamptz` — an
  * invalid string there would surface as a raw Postgres cast error instead
  * of a clear, deterministic one here. */
 export function parseBeforeCursor(before: DocumentCursor | undefined): { createdAt: Date; documentId: string } | null {
   if (before === undefined) return null;
+  if (!ISO_DATE_TIME_PATTERN.test(before.createdAt)) {
+    throw new Error("before.createdAt must be a valid ISO datetime");
+  }
   const createdAt = new Date(before.createdAt);
   if (Number.isNaN(createdAt.getTime())) {
     throw new Error("before.createdAt must be a valid ISO datetime");
