@@ -11,6 +11,10 @@ useDefault = true
 
 [allowlist]
 description = "Content-addressed governance evidence identifiers are not credentials"
+# Match on the whole LINE: the default regexTarget is the captured secret group,
+# which for these records is an arbitrary hash fragment the id-prefix regex can
+# never see (some ids even carry \u escapes or colon-joined segments).
+regexTarget = "line"
 regexes = [
-  '''rung-evidence:[A-Za-z0-9._-]+:[0-9a-f]{64}''',
+  '''rung-evidence:''',
 ]
