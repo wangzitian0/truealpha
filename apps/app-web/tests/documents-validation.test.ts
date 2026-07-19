@@ -9,7 +9,13 @@
  * Run standalone: `bun run tests/documents-validation.test.ts`.
  */
 
-import { assertNonEmptyText, assertPositiveInteger, assertStableId, parseBeforeCursor } from "../src/server/documents";
+import {
+  assertNonEmptyText,
+  assertPositiveInteger,
+  assertStableId,
+  clampListLimit,
+  parseBeforeCursor,
+} from "../src/server/documents";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -83,6 +89,21 @@ function run() {
       threw = true;
     }
     assert(threw, `unstable id ${JSON.stringify(bad)} must throw`);
+  }
+
+  assert(clampListLimit(undefined) === 50, "an absent limit must default to 50");
+  assert(clampListLimit(10) === 10, "an in-range limit must pass through");
+  assert(clampListLimit(0) === 1, "a too-small limit must clamp up to 1");
+  assert(clampListLimit(1000) === 200, "a too-large limit must clamp down to 200");
+
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5]) {
+    let threw = false;
+    try {
+      clampListLimit(bad);
+    } catch {
+      threw = true;
+    }
+    assert(threw, `non-finite/non-integer limit ${JSON.stringify(bad)} must throw`);
   }
 
   console.log("documents-validation.test.ts: all assertions passed");

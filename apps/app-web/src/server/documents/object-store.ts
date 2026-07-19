@@ -41,8 +41,18 @@ function env(name: string, fallback: string): string {
 }
 
 let client: S3Client | null = null;
+let testClientOverride: Pick<S3Client, "send"> | null = null;
+
+/** Test-only injection point (documents-object-store.test.ts): lets a unit
+ * test exercise the dedup/collision/checksum logic against a fake client
+ * without a live MinIO, which this repo has no way to run in CI/sandboxed
+ * environments today. Never called from production code. */
+export function __setTestClient(overrideClient: Pick<S3Client, "send"> | null): void {
+  testClientOverride = overrideClient;
+}
 
 function getClient(): S3Client {
+  if (testClientOverride) return testClientOverride as S3Client;
   if (!client) {
     client = new S3Client({
       endpoint: env("S3_ENDPOINT", "http://localhost:9000"),

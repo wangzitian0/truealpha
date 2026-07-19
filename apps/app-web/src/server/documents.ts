@@ -85,6 +85,16 @@ export interface DocumentPage {
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
 
+/** Validates before clamping — a NaN/Infinity/non-integer `limit` would
+ * otherwise survive Math.min/Math.max as NaN and reach `limit $N` in SQL. */
+export function clampListLimit(limit: number | undefined): number {
+  if (limit === undefined) return DEFAULT_LIST_LIMIT;
+  if (!Number.isFinite(limit) || !Number.isInteger(limit)) {
+    throw new Error("limit must be a finite integer");
+  }
+  return Math.min(Math.max(1, limit), MAX_LIST_LIMIT);
+}
+
 function documentIdOf(): string {
   return `document:${randomUUID()}`;
 }
@@ -207,7 +217,7 @@ export interface DocumentsRepository {
 
 export class PostgresDocumentsRepository implements DocumentsRepository {
   async listDocuments(context: AccessContext, query: DocumentListQuery): Promise<DocumentPage> {
-    const limit = Math.min(Math.max(1, query.limit ?? DEFAULT_LIST_LIMIT), MAX_LIST_LIMIT);
+    const limit = clampListLimit(query.limit);
     const before = parseBeforeCursor(query.before);
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
