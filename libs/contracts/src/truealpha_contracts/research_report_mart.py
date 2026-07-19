@@ -22,8 +22,11 @@ from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunReposit
 
 class MartResearchReadRepository(FixtureResearchReadRepository):
     """Reads already-materialized research sections from `mart.strategy_runs`/
-    `strategy_decisions` via `PostgresStrategyRunRepository` (#362) — the same reader
-    `/admin/strategy-runs` and, since #370, the App's `/research/*` dashboard use.
+    `strategy_decisions` via `PostgresStrategyRunRepository` (#362) — the same tables
+    `/admin/strategy-runs` and, since #370, the App's `/research/*` dashboard read,
+    though the App is TypeScript and reads through its own independent
+    `apps/app-web/src/server/mart/strategy-run-repository.ts`, not this Python class
+    (Copilot review on #441: avoid implying a code-sharing relationship that isn't real).
 
     `libs/contracts` classes take their database URL as an explicit argument rather than
     reading an environment variable themselves (`PostgresStrategyRunRepository` follows
