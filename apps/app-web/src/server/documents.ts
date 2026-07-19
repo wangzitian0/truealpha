@@ -138,7 +138,10 @@ export function assertStableId(value: string, fieldName: string): string {
 function validateNewRevision(revision: NewDocumentRevisionInput): NewDocumentRevisionInput {
   return {
     ...revision,
-    sourceArtifactId: assertStableId(assertNonEmptyText(revision.sourceArtifactId, "sourceArtifactId"), "sourceArtifactId"),
+    // No trim here: a stable identifier with leading/trailing whitespace
+    // should be REJECTED, not silently normalized — trimming first could
+    // accept an input the Python DTOs' _stable_id would reject outright.
+    sourceArtifactId: assertStableId(revision.sourceArtifactId, "sourceArtifactId"),
     contentType: assertNonEmptyText(revision.contentType, "contentType"),
   };
 }
@@ -160,7 +163,9 @@ export function parseBeforeCursor(before: DocumentCursor | undefined): { created
   if (Number.isNaN(createdAt.getTime())) {
     throw new Error("before.createdAt must be a valid ISO datetime");
   }
-  const documentId = assertStableId(assertNonEmptyText(before.documentId, "before.documentId"), "before.documentId");
+  // Same reasoning as validateNewRevision: no trim before validating a
+  // stable identifier.
+  const documentId = assertStableId(before.documentId, "before.documentId");
   return { createdAt, documentId };
 }
 
