@@ -88,15 +88,22 @@ export function bucket(): string {
   return env("S3_BUCKET", "truealpha-raw");
 }
 
+function normalizedPrefix(raw: string): string {
+  return raw.replace(/^\/+|\/+$/g, "");
+}
+
 function documentsPrefix(): string {
-  const prefix = env("S3_DOCUMENTS_PREFIX", "documents");
-  const rawPrefix = env("S3_RAW_PREFIX", "raw");
+  const prefix = normalizedPrefix(env("S3_DOCUMENTS_PREFIX", "documents"));
+  const rawPrefix = normalizedPrefix(env("S3_RAW_PREFIX", "raw"));
   // The prefix guard in getDocumentArtifact only isolates the raw-capture
-  // namespace if the two prefixes are actually distinct — a misconfigured
-  // deployment setting them equal would silently defeat that isolation.
-  if (prefix === rawPrefix) {
+  // namespace if the two prefixes are genuinely distinct path segments —
+  // an exact-string check alone would miss e.g. "raw/" (leading/trailing
+  // slashes) or one prefix nesting inside the other ("raw/documents").
+  // Comparing with a trailing "/" catches both: equality AND nesting in
+  // either direction.
+  if (prefix.length === 0 || `${prefix}/`.startsWith(`${rawPrefix}/`) || `${rawPrefix}/`.startsWith(`${prefix}/`)) {
     throw new DocumentStorageError(
-      `S3_DOCUMENTS_PREFIX must not equal S3_RAW_PREFIX (both are "${prefix}")`,
+      `S3_DOCUMENTS_PREFIX ("${prefix}") must be a distinct, non-empty path segment from S3_RAW_PREFIX ("${rawPrefix}")`,
     );
   }
   return prefix;

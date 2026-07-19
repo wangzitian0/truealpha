@@ -144,14 +144,25 @@ async function run() {
 
   const originalDocumentsPrefix = process.env.S3_DOCUMENTS_PREFIX;
   try {
-    // S3_RAW_PREFIX defaults to "raw" (see .env.example); setting the
-    // documents prefix to the same value would defeat the isolation the
-    // getDocumentArtifact prefix guard is supposed to provide.
+    // S3_RAW_PREFIX defaults to "raw" (see .env.example); each of these
+    // must be rejected, not just an exact string match, since the
+    // isolation getDocumentArtifact's prefix guard provides depends on the
+    // two prefixes never sharing a path segment in either direction.
     delete process.env.S3_RAW_PREFIX;
-    process.env.S3_DOCUMENTS_PREFIX = "raw";
+    for (const bad of ["raw", "raw/", "/raw", "raw/documents"]) {
+      process.env.S3_DOCUMENTS_PREFIX = bad;
+      await assertThrows(
+        () => storeDocumentArtifact("principal:carol", Buffer.from("x"), "text/plain"),
+        `S3_DOCUMENTS_PREFIX=${JSON.stringify(bad)} colliding with S3_RAW_PREFIX must be rejected, not silently accepted`,
+      );
+    }
+    // "" alone falls back to the default via env()'s blank-is-unset rule,
+    // so use a prefix that normalizes to empty (all slashes) to actually
+    // exercise the empty-after-normalization branch.
+    process.env.S3_DOCUMENTS_PREFIX = "///";
     await assertThrows(
       () => storeDocumentArtifact("principal:carol", Buffer.from("x"), "text/plain"),
-      "S3_DOCUMENTS_PREFIX equal to S3_RAW_PREFIX must be rejected, not silently accepted",
+      "an S3_DOCUMENTS_PREFIX that normalizes to empty must be rejected",
     );
   } finally {
     if (originalDocumentsPrefix === undefined) delete process.env.S3_DOCUMENTS_PREFIX;
