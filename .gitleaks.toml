@@ -1,0 +1,16 @@
+# Gitleaks config (secret-scan CI + the #315 full-history recovery dispatch).
+#
+# The default ruleset flags governance evidence identifiers like
+# "rung-evidence:<capability>:<sha256>" as generic api-keys. Those are
+# content-addressed record IDs, not credentials. Allowlist exactly that shape;
+# everything else keeps the default rules (CLAUDE.md red line: scanning is a
+# backstop, never permission).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Content-addressed governance evidence identifiers are not credentials"
+regexes = [
+  '''rung-evidence:[A-Za-z0-9._-]+:[0-9a-f]{64}''',
+]
