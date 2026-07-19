@@ -115,6 +115,7 @@ services:
       S3_BUCKET: ${S3_BUCKET:-truealpha-raw}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_DOCUMENTS_PREFIX: ${S3_DOCUMENTS_PREFIX:-documents}
+      S3_CONNECT_TIMEOUT_SECONDS: ${S3_CONNECT_TIMEOUT_SECONDS:-5}
     depends_on:
       postgres:
         condition: service_healthy

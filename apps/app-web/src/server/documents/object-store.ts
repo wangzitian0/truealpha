@@ -24,6 +24,7 @@ import {
   S3Client,
   S3ServiceException,
 } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 
 export interface DocumentObjectRef {
   bucket: string;
@@ -54,6 +55,10 @@ export function __setTestClient(overrideClient: Pick<S3Client, "send"> | null): 
 function getClient(): S3Client {
   if (testClientOverride) return testClientOverride as S3Client;
   if (!client) {
+    // Mirrors S3_CONNECT_TIMEOUT_SECONDS's role in the Python
+    // S3RawObjectStore adapter — without an explicit timeout here, a
+    // stalled S3/MinIO call could hang a server request indefinitely.
+    const timeoutMs = Number(env("S3_CONNECT_TIMEOUT_SECONDS", "5")) * 1000;
     client = new S3Client({
       endpoint: env("S3_ENDPOINT", "http://localhost:9000"),
       region: env("S3_REGION", "us-east-1"),
@@ -62,6 +67,10 @@ function getClient(): S3Client {
         accessKeyId: env("S3_ACCESS_KEY", "minio"),
         secretAccessKey: env("S3_SECRET_KEY", "minio_local_secret"),
       },
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: timeoutMs,
+        socketTimeout: timeoutMs,
+      }),
     });
   }
   return client;
