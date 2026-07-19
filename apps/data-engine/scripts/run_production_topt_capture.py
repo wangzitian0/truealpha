@@ -86,9 +86,9 @@ def _source_request(obligation, *, ordinal: int) -> SourceRequest:
         "partition": obligation.partition,
     }
     return SourceRequest(
-        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v6'})}",
-        source_policy_id="source-policy:production-topt-live-v6",
-        request_fingerprint_version="production-topt-live:v6",
+        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': 'production-topt-live:v7'})}",
+        source_policy_id="source-policy:production-topt-live-v7",
+        request_fingerprint_version="production-topt-live:v7",
         canonical_request_sha256=canonical_sha256(coordinate),
         subject_refs=(obligation.subject,),
         capture_requirement_ids=(obligation.capture_requirement_id,),
@@ -154,6 +154,28 @@ def _gross_profit(facts: dict) -> Decimal | None:
     return None
 
 
+def _pre_provision_profit(facts: dict) -> Decimal | None:
+    """Pre-provision net revenue for a bank: total net revenue minus noninterest expense,
+    before the provision for credit losses. This is the FINANCIAL-branch numerator."""
+    revenue = _annual_by_end(facts, "us-gaap", "RevenuesNetOfInterestExpense", "USD")
+    if not revenue:
+        revenue = _annual_by_end(facts, "us-gaap", "Revenues", "USD")
+    expense = _annual_by_end(facts, "us-gaap", "NoninterestExpense", "USD")
+    shared = set(revenue) & set(expense)  # same period end -> comparable
+    if shared:
+        end = max(shared)
+        return revenue[end] - expense[end]
+    return None
+
+
+# Bank issuers whose operating efficiency uses pre-provision net revenue, not gross profit
+# (the frozen v0.1.0 FINANCIAL branch: (pre_provision_profit - total_assets*rfr)/headcount).
+# JPM is the one TOPT bank. V/MA (payment networks), BRK.B (insurer/conglomerate), and XOM
+# (integrated energy) are also non-gross-profit issuers but do NOT report pre-provision profit;
+# they need service/insurance/energy branches the v0.1.0 definition does not yet model (#59).
+_FINANCIAL_BRANCH_TICKERS = frozenset({"JPM"})
+
+
 def _real_financial(ticker: str) -> dict[str, str | None]:
     facts: dict | None = None
     try:
@@ -161,20 +183,22 @@ def _real_financial(ticker: str) -> dict[str, str | None]:
         facts = sec.fetch_company_facts(cik)
     except Exception as error:  # SEC mapping/HTTP failure: capture the cell with null values
         print(f"    (SEC unavailable for {ticker}: {type(error).__name__}); financials null")
-    gross = None if facts is None else _gross_profit(facts)
+    is_financial = ticker in _FINANCIAL_BRANCH_TICKERS
     assets = None if facts is None else _latest(_annual_by_end(facts, "us-gaap", "Assets", "USD"))
     shares = (
         None if facts is None else _latest(_annual_by_end(facts, "us-gaap", "CommonStockSharesOutstanding", "shares"))
     )
+    gross = None if (facts is None or is_financial) else _gross_profit(facts)
+    ppnr = _pre_provision_profit(facts) if (facts is not None and is_financial) else None
     return {
-        "operating_branch": "non_financial",
+        "operating_branch": "financial" if is_financial else "non_financial",
         "currency": "USD",
         "gross_profit": None if gross is None else str(gross),
         "total_assets": None if assets is None else str(assets),
         "headcount": _HEADCOUNT.get(ticker),
         "revenue": None,
         "shares_outstanding": None if shares is None else str(shares),
-        "pre_provision_profit": None,
+        "pre_provision_profit": None if ppnr is None else str(ppnr),
     }
 
 
@@ -213,14 +237,14 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
     list_version = frozen_topt_list_version(corpus)
     policy = CaptureSchedulePolicy(
-        policy_version="production-topt-live:v6",
+        policy_version="production-topt-live:v7",
         demanded_cadence=timedelta(days=1),
         provider_availability_cadence="manual-only:v1",
         freshness_max_age=timedelta(days=2),
         retry=replay_retry_policy(3),
     )
     campaign = CaptureCampaign(
-        campaign_policy_id="capture-policy:production-topt-live-v6",
+        campaign_policy_id="capture-policy:production-topt-live-v7",
         environment=CaptureEnvironment.PRODUCTION,
         cutoff=CUTOFF,
         universe_refs=(list_version.universe,),
@@ -229,7 +253,7 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         campaign_id=campaign.campaign_id,
         run_sequence=1,
         schedule_policy_id=policy.schedule_policy_id,
-        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v6'})}",
+        capture_scope_id=f"capture-scope:{canonical_sha256({'scope': 'production-topt-live:v7'})}",
     )
     obligations = expand_obligations(
         run_id=run.run_id,
@@ -282,16 +306,16 @@ def _capture(connection: psycopg.Connection) -> tuple[str, str]:
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
         payload = _real_payload(coordinates[obligation.subject.id], semantic_type)
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": payload})
-        source_record_id = f"production-topt-live-v6:{ordinal}"
+        source_record_id = f"production-topt-live-v7:{ordinal}"
         raw_fetch_id = connection.execute(
             "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
             "byte_length, fetched_at, recorded_at, metadata) "
             "values (%s, %s, %s, %s, 'application/json', 1, %s, %s, '{}'::jsonb) returning id",
             (
-                "production-topt-live-v6",
+                "production-topt-live-v7",
                 source_record_id,
                 raw_sha256,
-                f"s3://production-topt-live-v6/{raw_sha256}",
+                f"s3://production-topt-live-v7/{raw_sha256}",
                 CUTOFF - timedelta(hours=2),
                 CUTOFF - timedelta(hours=2),
             ),
