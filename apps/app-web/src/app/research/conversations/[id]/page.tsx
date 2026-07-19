@@ -20,7 +20,11 @@ export default async function ConversationDetailPage({ params }: { params: Promi
   if (!principal) redirect("/login?from=%2Fresearch%2Fconversations");
 
   const { id } = await params;
-  const conversation = await repository.getConversation(principal.context, id);
+  // Next.js does not decode a dynamic route segment for us — the id here
+  // is still percent-encoded (conversation_id contains colons, encoded via
+  // encodeURIComponent on the list page's link), so every lookup would
+  // otherwise 404 for any real conversation_id.
+  const conversation = await repository.getConversation(principal.context, decodeURIComponent(id));
   if (!conversation) notFound();
 
   const messages = await repository.listMessages(principal.context, conversation.conversationId);
