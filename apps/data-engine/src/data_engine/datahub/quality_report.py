@@ -23,7 +23,6 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 from truealpha_contracts import canonical_sha256
-from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_contracts.reconciliation import (
     ReconciliationCell,
     ReconciliationOutcome,
@@ -31,6 +30,7 @@ from truealpha_contracts.reconciliation import (
     SourceAssertion,
     reconcile_source_assertions,
 )
+from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 # Declared fusion policy for the dual-origin market-price cells (init.md rule 12):
 # yahoo-chart is the pinned primary, twelve-data the independent second origin; a
