@@ -1,0 +1,32 @@
+# Dagster instance config for the deployed Staging/Production daemon + webserver
+# (infra2 truealpha/truealpha/20.data_engine/compose.yaml). DAGSTER_HOME points
+# here (an image path, /opt/dagster) rather than the mounted data volume so this
+# file is not shadowed by the empty /var/lib/dagster mount at runtime.
+#
+# Run/event/schedule storage all resolve to the environment's Postgres `dagster`
+# schema through DAGSTER_POSTGRES_URL, which the entrypoint derives from
+# DATABASE_URL as `${DATABASE_URL}?options=-csearch_path%3Ddagster`. Persisting
+# schedule state in Postgres is what makes the daemon the single durable
+# recurring-run authority (#27), rather than ephemeral per-container state.
+storage:
+  postgres:
+    postgres_url:
+      env: DAGSTER_POSTGRES_URL
+
+# Compute logs and other run artifacts land on the persistent data volume the
+# compose mounts at /var/lib/dagster (${DATA_PATH}), so they survive redeploys.
+local_artifact_storage:
+  module: dagster.core.storage.root
+  class: LocalArtifactStorage
+  config:
+    base_dir: /var/lib/dagster
+
+compute_logs:
+  module: dagster.core.storage.local_compute_log_manager
+  class: LocalComputeLogManager
+  config:
+    base_dir: /var/lib/dagster/compute_logs
+
+# No anonymous phone-home from a bounded, isolated canary stack.
+telemetry:
+  enabled: false
