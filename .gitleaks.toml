@@ -18,3 +18,11 @@ regexTarget = "line"
 regexes = [
   '''rung-evidence:''',
 ]
+# governance/ holds append-only, content-hashed delivery records (capability
+# rungs, handoffs, evidence). Their id fields (handoff:, evidence:, rung-*:)
+# are hash identifiers by construction and trip the generic-api-key rule one
+# prefix at a time. The tree never carries credentials (CLAUDE.md red line +
+# review); allowlist the path instead of chasing each id prefix.
+paths = [
+  '''governance/.*''',
+]
