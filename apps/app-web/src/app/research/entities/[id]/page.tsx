@@ -10,8 +10,11 @@ function cell(value: string | null): string {
   return value ?? "—";
 }
 
-/** Next.js already decodes the route segment; this only guards a double-encoded id.
- * Malformed percent-encoding (e.g. `/entities/%E0`) must not 500 the route. */
+/** Next.js does NOT decode a dynamic route segment for us here (verified
+ * live against this app's Next.js version — see #373/#424's PR discussion):
+ * an encodeURIComponent'd link leaves the raw percent-encoded string in
+ * params.id. Malformed percent-encoding (e.g. `/entities/%E0`) must not
+ * 500 the route. */
 function decodeIssuerId(id: string): string {
   try {
     return decodeURIComponent(id);
