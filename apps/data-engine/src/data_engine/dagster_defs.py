@@ -31,6 +31,7 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
+from data_engine.datahub.a1_evidence import register_run_evidence
 from data_engine.datahub.live_topt_pipeline import (
     live_version_for,
     run_live_topt_pipeline,
@@ -66,6 +67,12 @@ def run_topt_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfi
         strategy_run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
             connection, cutoff=cutoff, executed_at=cutoff, risk_free_rate=Decimal("0.05")
         )
+        # #378: register the run on the A1 evidence plane and advance the governed
+        # pointer inside the same transaction, so consumers resolve THIS run through
+        # mart.current_pointer_head the moment the tick commits.
+        pointer_sequence = register_run_evidence(
+            connection, run_id=pipeline.run_id, release_manifest_id=pipeline.release_manifest_id
+        )
         connection.commit()
 
     context.log.info(
@@ -83,6 +90,7 @@ def run_topt_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfi
             "strategy_run_id": strategy_run_id,
             "decision_count": decision_count,
             "snapshot_id": snapshot_id,
+            "pointer_sequence": pointer_sequence,
         }
     )
     return pipeline.run_id
