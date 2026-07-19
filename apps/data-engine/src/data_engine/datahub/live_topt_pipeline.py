@@ -340,10 +340,12 @@ class LiveToptCapture:
         ).fetchone()
         if row is not None:
             return row[0]
-        return connection.execute(
+        existing = connection.execute(
             "select id from raw.fetches where source = %s and source_record_id = %s and payload_sha256 = %s",
             (source, record_id, sha256),
-        ).fetchone()[0]
+        ).fetchone()
+        assert existing is not None  # the conflicting row exists by definition
+        return existing[0]
 
     def _write_second_price_source(self, connection, repo, obligation, coordinates, *, ordinal: int, price: str):
         """Persist the Twelve Data price as a supplementary observation (distinct

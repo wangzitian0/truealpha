@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 from truealpha_contracts import canonical_sha256
 
 
@@ -102,6 +103,6 @@ def persist(conn: psycopg.Connection[Any], report: dict[str, Any]) -> str:
         insert into mart.datahub_quality_report (report_id, content_sha256, run_id, requested_count, payload)
         values (%s, %s, %s, %s, %s) on conflict (report_id) do nothing
         """,
-        (report_id, content_sha256, report["run_id"], report["requested_count"], psycopg.types.json.Jsonb(report)),
+        (report_id, content_sha256, report["run_id"], report["requested_count"], Jsonb(report)),
     )
     return report_id

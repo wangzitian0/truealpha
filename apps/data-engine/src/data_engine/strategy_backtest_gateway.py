@@ -60,7 +60,7 @@ class StrategyBacktestGateway:
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
 
-    def _rows_for_cutoff(self, cutoff_at: str) -> list[tuple[str, str, Any, Any]]:
+    def _rows_for_cutoff(self, cutoff_at: str | datetime) -> list[tuple[str, str, Any, Any]]:
         # Latest vintage per (issuer, input_key) at the cutoff -- a restatement lands a
         # new row and supersedes by recorded_at, never overwriting the prior one.
         return self._connection.execute(
@@ -73,13 +73,13 @@ class StrategyBacktestGateway:
             (cutoff_at,),
         ).fetchall()
 
-    def issuer_inputs(self, cutoff_at: str) -> list[IssuerInput]:
+    def issuer_inputs(self, cutoff_at: str | datetime) -> list[IssuerInput]:
         by_issuer: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
         for issuer_id, input_key, value, confidence in self._rows_for_cutoff(cutoff_at):
             by_issuer.setdefault(issuer_id, {})[input_key] = (Decimal(str(value)), Decimal(str(confidence)))
         return [IssuerInput(issuer_id=issuer_id, records=records) for issuer_id, records in sorted(by_issuer.items())]
 
-    def snapshot_id(self, cutoff_at: str) -> str:
+    def snapshot_id(self, cutoff_at: str | datetime) -> str:
         payload = sorted(
             (issuer_id, input_key, str(value), str(confidence))
             for issuer_id, input_key, value, confidence in self._rows_for_cutoff(cutoff_at)
