@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 
 import pytest
@@ -205,3 +206,39 @@ def test_new_document_revision_rejects_non_hex_sha256() -> None:
             artifact_content_type="application/json",
             artifact_bytes=b"{}",
         )
+
+
+def test_new_document_revision_rejects_byte_length_mismatch() -> None:
+    payload = b"{}"
+    with pytest.raises(ValueError, match="artifact_byte_length must equal"):
+        NewDocumentRevision(
+            source_artifact_id="report:" + _SHA256,
+            artifact_sha256=hashlib.sha256(payload).hexdigest(),
+            artifact_byte_length=len(payload) + 1,
+            artifact_content_type="application/json",
+            artifact_bytes=payload,
+        )
+
+
+def test_new_document_revision_rejects_sha256_mismatch() -> None:
+    payload = b"{}"
+    with pytest.raises(ValueError, match="artifact_sha256 must equal"):
+        NewDocumentRevision(
+            source_artifact_id="report:" + _SHA256,
+            artifact_sha256=_SHA256,
+            artifact_byte_length=len(payload),
+            artifact_content_type="application/json",
+            artifact_bytes=payload,
+        )
+
+
+def test_new_document_revision_accepts_consistent_bytes() -> None:
+    payload = b'{"gppe": 1.5}'
+    revision = NewDocumentRevision(
+        source_artifact_id="report:" + _SHA256,
+        artifact_sha256=hashlib.sha256(payload).hexdigest(),
+        artifact_byte_length=len(payload),
+        artifact_content_type="application/json",
+        artifact_bytes=payload,
+    )
+    assert revision.artifact_byte_length == len(payload)

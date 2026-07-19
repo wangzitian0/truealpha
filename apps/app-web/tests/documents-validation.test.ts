@@ -40,6 +40,7 @@ function run() {
     { createdAt: "", documentId: "document:1" },
     { createdAt: "2026-13-99", documentId: "document:1" },
     { createdAt: "2026-07-18T00:00:00.000Z", documentId: "" },
+    { createdAt: "2026-07-18T00:00:00.000Z", documentId: "not stable" },
   ]) {
     let threw = false;
     try {

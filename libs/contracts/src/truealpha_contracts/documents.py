@@ -14,6 +14,7 @@ one frozen/extra-forbid base directly.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -201,6 +202,12 @@ class NewDocumentRevision(StrictFrozenModel):
         if _SHA256_PATTERN.fullmatch(value) is None:
             raise ValueError("artifact_sha256 must be a lowercase hex sha256 digest")
         return value
+
+    def model_post_init(self, _context: object) -> None:
+        if self.artifact_byte_length != len(self.artifact_bytes):
+            raise ValueError("artifact_byte_length must equal len(artifact_bytes)")
+        if self.artifact_sha256 != hashlib.sha256(self.artifact_bytes).hexdigest():
+            raise ValueError("artifact_sha256 must equal sha256(artifact_bytes)")
 
 
 @runtime_checkable

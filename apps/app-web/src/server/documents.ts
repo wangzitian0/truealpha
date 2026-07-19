@@ -152,10 +152,8 @@ export function parseBeforeCursor(before: DocumentCursor | undefined): { created
   if (Number.isNaN(createdAt.getTime())) {
     throw new Error("before.createdAt must be a valid ISO datetime");
   }
-  if (before.documentId.length === 0) {
-    throw new Error("before.documentId must not be empty");
-  }
-  return { createdAt, documentId: before.documentId };
+  const documentId = assertStableId(assertNonEmptyText(before.documentId, "before.documentId"), "before.documentId");
+  return { createdAt, documentId };
 }
 
 export interface DocumentsRepository {
@@ -351,14 +349,13 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
         }
         // ON CONFLICT fired: a tombstone for this document_id already
         // exists. `unique (document_id)` alone is the conflict target, and
-        // Postgres resolves ON CONFLICT DO NOTHING by skipping the row
-        // before it is ever inserted — which means the composite FK
-        // (an AFTER INSERT trigger on the *inserted* row) never runs for
-        // it. So a forged tenant/owner in this INSERT's own values does
-        // NOT get rejected by the FK here: it can be genuinely another
-        // owner's tombstone on their own document_id, which RLS then
-        // correctly hides from this caller's follow-up SELECT (verified
-        // empirically against Postgres 16 — this is not a hypothetical).
+        // Postgres's ON CONFLICT DO NOTHING skips the row before the
+        // composite FK constraint is ever checked against it — so a forged
+        // tenant/owner in this INSERT's own values does NOT get rejected
+        // by the FK here: it can be genuinely another owner's tombstone on
+        // their own document_id, which RLS then correctly hides from this
+        // caller's follow-up SELECT (verified empirically against
+        // Postgres 16 — this is not a hypothetical).
         // Treat that identically to "not found" rather than crashing on an
         // empty result; only a caller re-tombstoning their *own*
         // already-deleted document sees the (idempotent) existing row.

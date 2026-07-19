@@ -91,7 +91,11 @@ export async function storeDocumentArtifact(
   try {
     const head = await s3.send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
     exists = true;
-    if (head.ContentLength !== bytes.length) {
+    // Length alone doesn't rule out a same-length collision at this key —
+    // also compare the digest we stamped into Metadata on the original
+    // write, so a mismatch (corruption/tampering at rest) is caught here
+    // rather than silently treated as "already stored".
+    if (head.ContentLength !== bytes.length || head.Metadata?.sha256 !== digest) {
       throw new DocumentStorageError(`content-address collision for ${key}`);
     }
   } catch (error) {
