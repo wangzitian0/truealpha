@@ -122,15 +122,21 @@ export function assertNonEmptyText(value: string, fieldName: string): string {
   return trimmed;
 }
 
-// Mirrors truealpha_contracts.documents._ID_PATTERN exactly — sourceArtifactId
+// Mirrors truealpha_contracts.access._stable_coordinate exactly (the same
+// function documents.py's _stable_id now delegates to) — sourceArtifactId
 // is a caller-supplied stable lineage identifier (a #369/#372 report_id/
 // card_id), so the TS adapter must reject the same inputs the Python DTO
 // would, or the two sides silently disagree about what's a valid id.
 const STABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
+const MUTABLE_TOKENS = new Set(["latest", "current", "default", "head"]);
 
 export function assertStableId(value: string, fieldName: string): string {
   if (!STABLE_ID_PATTERN.test(value)) {
     throw new Error(`${fieldName} must be a stable identifier`);
+  }
+  const tokens = value.toLowerCase().split(/[._:/@+-]/).filter((token) => token.length > 0);
+  if (tokens.some((token) => MUTABLE_TOKENS.has(token))) {
+    throw new Error(`${fieldName} must name an immutable version`);
   }
   return value;
 }

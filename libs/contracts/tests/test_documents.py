@@ -198,6 +198,22 @@ def test_new_document_revision_rejects_unstable_source_artifact_id() -> None:
         )
 
 
+@pytest.mark.parametrize("mutable_id", ["report:latest", "report:current", "card:default", "report:head"])
+def test_new_document_revision_rejects_mutable_source_artifact_id(mutable_id: str) -> None:
+    """source_artifact_id claims content-addressed/immutable lineage — a
+    mutable-pointer token like "latest" contradicts that, exactly as
+    truealpha_contracts.access._stable_coordinate already enforces
+    elsewhere."""
+    with pytest.raises(ValidationError):
+        NewDocumentRevision(
+            source_artifact_id=mutable_id,
+            artifact_sha256=_SHA256,
+            artifact_byte_length=10,
+            artifact_content_type="application/json",
+            artifact_bytes=b"{}",
+        )
+
+
 def test_new_document_revision_rejects_non_hex_sha256() -> None:
     with pytest.raises(ValidationError):
         NewDocumentRevision(

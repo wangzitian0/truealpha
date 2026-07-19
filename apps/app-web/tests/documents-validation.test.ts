@@ -66,7 +66,15 @@ function run() {
 
   assert(assertStableId("report:abc123", "sourceArtifactId") === "report:abc123", "a stable id must pass through");
 
-  for (const bad of ["not stable", "!leading-bang", " leading-space"]) {
+  for (const bad of [
+    "not stable",
+    "!leading-bang",
+    " leading-space",
+    "report:latest",
+    "report:current",
+    "card:default",
+    "report:head",
+  ]) {
     let threw = false;
     try {
       assertStableId(bad, "sourceArtifactId");

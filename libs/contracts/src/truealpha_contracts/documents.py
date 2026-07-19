@@ -21,17 +21,16 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import Field, field_validator
 
-from truealpha_contracts.access import AccessContext, StrictFrozenModel
+from truealpha_contracts.access import AccessContext, StrictFrozenModel, _stable_coordinate
 from truealpha_contracts.models import _require_aware
 
-_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
-
-def _stable_id(value: str, field_name: str) -> str:
-    if _ID_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"{field_name} must be a stable identifier")
-    return value
+# Reuses access._stable_coordinate rather than a locally-reimplemented
+# pattern: a bare character-set check would accept "report:latest" as a
+# "stable" source_artifact_id, contradicting the content-addressed,
+# immutable-lineage semantics every ID in this module claims to have.
+_stable_id = _stable_coordinate
 
 
 class ResearchDocument(StrictFrozenModel):
