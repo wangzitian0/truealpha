@@ -60,7 +60,7 @@ class PostgresToptGppeRepository:
             # where no pointer has been advanced yet.
             head = conn.execute(
                 """
-                select target_run_id from mart.current_pointer_head
+                select target_run_id as run_id from mart.current_pointer_head
                 where environment = 'production' and factor_id = 'gross_profit_per_employee'
                 order by advanced_at desc limit 1
                 """
