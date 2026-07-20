@@ -144,7 +144,19 @@ create trigger trg_access_audit_events_validate_tenant
 before insert on app.access_audit_events
 for each row execute function app.validate_access_audit_decision_tenant();
 
-create or replace view app.access_audit_metadata
+-- drop first, not create-or-replace (#455): 0024 later widens this view with
+-- additional trailing columns, which `create or replace view` cannot undo on a
+-- second full-chain run -- Postgres rejects a `create or replace view` that would
+-- remove existing columns ("cannot drop columns from view"), aborting the whole
+-- apply_migrations.sh pass (ON_ERROR_STOP=1) before it ever reaches 0024's
+-- redefinition. db/apply_migrations.sh re-applies every migration on every
+-- container boot, so this fired on every restart after the first, crash-looping
+-- the container. Drop-then-create has no such column-compatibility restriction;
+-- 0024 (which always runs after 0022) redefines the view again immediately after,
+-- and db/roles.sql (which always runs last) re-grants it, so the final state is
+-- unaffected -- only the momentary mid-migration shape changes.
+drop view if exists app.access_audit_metadata;
+create view app.access_audit_metadata
 with (security_barrier = true)
 as
 select

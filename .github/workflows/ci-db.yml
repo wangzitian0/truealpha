@@ -33,6 +33,23 @@ jobs:
             echo "== $f"
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
           done
+      # apply_migrations.sh's own header comment states every migration file "is
+      # itself written to be safe to re-run" -- db/apply_migrations.sh re-applies the
+      # full chain on EVERY container boot (staging/prod/preview), not just the first.
+      # A single fresh-DB pass never exercises that invariant, and #455 shipped a
+      # migration that silently broke it (a plain `drop constraint` with no IF
+      # EXISTS, fine on the first run, ON_ERROR_STOP-fatal on every run after) --
+      # crash-looping llm-service on both staging and production for days before
+      # anyone noticed, because nothing tested a second pass. Re-running the exact
+      # same loop here catches that class of regression before merge.
+      - name: Re-apply migrations and roles (idempotency)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in db/migrations/*.sql db/roles.sql; do
+            echo "== $f (2nd pass)"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done
       - name: Assert runtime persistence contract
         env:
           PGPASSWORD: postgres
