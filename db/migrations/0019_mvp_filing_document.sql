@@ -103,29 +103,6 @@ create index if not exists idx_normalized_records_registry_snapshot
         transaction_time desc
     );
 
--- #457: an older-shaped staging.filing_documents (id bigint PK, filing_period,
--- document_name, document_sha256, source_url, source — predating this migration,
--- from a since-consolidated earlier iteration) already exists on staging/production.
--- `create table if not exists` below is a no-op against it, so this migration later
--- fails at `create index ... report_period does not exist`. Nothing in the current
--- app reads/writes the old shape (apps/data-engine/src/data_engine/mvp_repository.py
--- already targets report_period/content_sha256/normalized_record_id only) — drop it
--- exactly once, idempotently: once the table is in the new shape this is a no-op
--- forever after, matching the rest of this migration's idempotent style.
-do $$
-begin
-    if exists (
-        select 1 from information_schema.tables
-        where table_schema = 'staging' and table_name = 'filing_documents'
-    ) and not exists (
-        select 1 from information_schema.columns
-        where table_schema = 'staging' and table_name = 'filing_documents'
-          and column_name = 'report_period'
-    ) then
-        drop table staging.filing_documents cascade;
-    end if;
-end $$;
-
 create table if not exists staging.filing_documents (
     normalized_record_id text primary key
         references staging.normalized_records(normalized_record_id),
