@@ -1,9 +1,12 @@
 """The MCP endpoint — see #348.
 
-Registers three read-only tools: `strategy_run` (#347's provisional
+Registers four read-only tools: `strategy_run` (#347's provisional
 `StrategyRunReadRepository`), `topt_gppe` (#405/#433's TOPT GPPE + quality
-read), and `research_report` (#369's deterministic report assembler). This is
-narrower than #42's eventual five-tool surface (factor history, entity
+read), `research_report` (#369's deterministic report assembler), and
+`research_card` (#372's deterministic card renderer — a pure transform over a
+freshly-built `research_report`; gives the renderer its first deployed
+consumer, closing #434 track C's "renderer gains a deployed consumer" gap).
+This is narrower than #42's eventual five-tool surface (factor history, entity
 comparison, ranking, output explanation, strategy run) over all seven
 modules' `ResearchQueryService`; it proves the MCP transport/registration
 path on the smallest useful surface first. See #348's "Relationship to the
@@ -23,6 +26,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_contracts.research_cards import CardKind, ResearchCard, build_card
 from truealpha_contracts.research_report import (
     ReportSectionKind,
     ResearchReadPort,
@@ -69,6 +73,15 @@ class ResearchReportToolRequest(BaseModel):
     section_kinds: tuple[ReportSectionKind, ...] = ()
     strategy_id: str | None = None
     title: str | None = None
+
+
+class ResearchCardToolRequest(ResearchReportToolRequest):
+    """The report request this card is built from, plus the card's own kind. `build_card`
+    (#372) takes an already-assembled `ResearchReport` and nothing else, so this tool
+    assembles one internally via the exact same path `research_report` uses, then renders
+    it — never queries mart directly and computes no new metric of its own."""
+
+    card_kind: CardKind
 
 
 def _service_access_context() -> AccessContext:
@@ -164,6 +177,27 @@ def build_mcp_server(
             title=request.title,
         )
         return build_research_report(report_request, active_research, context=_service_access_context())
+
+    @server.tool(
+        name="research_card",
+        description=(
+            "Render a versioned research card (company, comparison, ranking, ETF, "
+            "supply-chain, or strategy-summary) from a freshly-assembled research report. "
+            "Pure transform over the report: computes no new metric, ranking, or "
+            "classification, and queries nothing beyond the report it builds first."
+        ),
+    )
+    def research_card(request: ResearchCardToolRequest) -> ResearchCard:
+        report_request = ResearchReportRequest(
+            report_kind=request.report_kind,
+            target_entity_ids=request.target_entity_ids,
+            cutoff_at=request.cutoff_at,
+            section_kinds=request.section_kinds,
+            strategy_id=request.strategy_id,
+            title=request.title,
+        )
+        report = build_research_report(report_request, active_research, context=_service_access_context())
+        return build_card(report, request.card_kind, title=request.title)
 
     return server
 
