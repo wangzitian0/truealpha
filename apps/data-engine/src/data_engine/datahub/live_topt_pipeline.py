@@ -282,8 +282,16 @@ class LiveToptCapture:
             else self._latest(self._annual_by_end(facts, "us-gaap", "CommonStockSharesOutstanding", "shares"))
         )
         revenue = None if facts is None else self._revenue(facts)
-        gross = None if (facts is None or is_financial) else self._gross_profit(facts)
         ppnr = self._pre_provision_profit(facts) if (facts is not None and is_financial) else None
+        # large_model_value_v0 applies one uniform capital-adjusted formula to every
+        # issuer, financial branch included (2026-07-18 owner decision; see
+        # truealpha_contracts.strategy.ExclusionReason's docstring and the golden
+        # fixture's `financial_issuer_split` grounding for JPM). A financial issuer's
+        # gross_profit is the pre-provision-profit proxy, not reported gross profit —
+        # without this, every financial-branch issuer lands here with gross_profit=None
+        # and the evaluator silently excludes it as missing_gross_profit_fact instead
+        # of scoring it through the tier-band path like any other issuer.
+        gross = ppnr if is_financial else (None if facts is None else self._gross_profit(facts))
         return {
             "operating_branch": "financial" if is_financial else "non_financial",
             "currency": "USD",
