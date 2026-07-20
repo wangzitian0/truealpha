@@ -11,9 +11,18 @@
 -- Existing v0.1.0 rows remain (append-only prior vintage). New v0.2.0 rows use the
 -- uniform shape below.
 
+-- IF EXISTS on every clause (#455): db/apply_migrations.sh re-applies every migration
+-- file on every container boot, and a plain `drop constraint` (no IF EXISTS) is not
+-- idempotent -- topt_gppe_results_check1 is Postgres's auto-generated name for the
+-- pre-#394 unnamed inline check dropped below; it exists only on the FIRST run, so an
+-- unguarded re-run fails with "constraint ... does not exist" and (ON_ERROR_STOP=1)
+-- aborts the whole migration pass, crash-looping the container. Also drops
+-- *_uniform_values_check up front so the ADD CONSTRAINT below (no native IF NOT
+-- EXISTS in Postgres) is itself safe to repeat.
 alter table mart.topt_gppe_results
-    drop constraint topt_gppe_results_operating_metric_check,
-    drop constraint topt_gppe_results_check1;
+    drop constraint if exists topt_gppe_results_operating_metric_check,
+    drop constraint if exists topt_gppe_results_check1,
+    drop constraint if exists topt_gppe_results_uniform_values_check;
 
 -- NOT VALID: enforce the uniform v0.2.0 shape on all NEW writes while grandfathering
 -- any existing v0.1.0 rows (financial rows carrying the retired
@@ -35,8 +44,9 @@ alter table mart.topt_gppe_results
         ) not valid;
 
 alter table mart.topt_core_results
-    drop constraint topt_core_results_operating_metric_check,
-    drop constraint topt_core_results_check1;
+    drop constraint if exists topt_core_results_operating_metric_check,
+    drop constraint if exists topt_core_results_check1,
+    drop constraint if exists topt_core_results_uniform_values_check;
 
 alter table mart.topt_core_results
     add constraint topt_core_results_operating_metric_check
