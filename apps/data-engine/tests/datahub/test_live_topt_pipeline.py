@@ -33,16 +33,12 @@ _JPM_FACTS: dict[str, Any] = {
         "us-gaap": {
             "RevenuesNetOfInterestExpense": {
                 "units": {
-                    "USD": [
-                        {"filed": "2026-02-13", "start": "2025-01-01", "end": "2025-12-31", "val": 130000000000}
-                    ]
+                    "USD": [{"filed": "2026-02-13", "start": "2025-01-01", "end": "2025-12-31", "val": 130000000000}]
                 }
             },
             "NoninterestExpense": {
                 "units": {
-                    "USD": [
-                        {"filed": "2026-02-13", "start": "2025-01-01", "end": "2025-12-31", "val": 95640000000}
-                    ]
+                    "USD": [{"filed": "2026-02-13", "start": "2025-01-01", "end": "2025-12-31", "val": 95640000000}]
                 }
             },
         }
@@ -54,7 +50,9 @@ _AAPL_FACTS: dict[str, Any] = {
     "facts": {
         "us-gaap": {
             "GrossProfit": {
-                "units": {"USD": [{"filed": "2026-02-01", "start": "2025-01-01", "end": "2025-12-31", "val": 180000000000}]}
+                "units": {
+                    "USD": [{"filed": "2026-02-01", "start": "2025-01-01", "end": "2025-12-31", "val": 180000000000}]
+                }
             }
         }
     }
