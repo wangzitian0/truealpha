@@ -77,3 +77,36 @@ grant usage on schema app to app_audit_reader;
 grant select on app.access_audit_metadata to app_audit_reader;
 grant select on app.conversation_audit_metadata to app_audit_reader;
 grant select on app.document_audit_metadata to app_audit_reader;
+
+-- Scoped runtime login for app-web + llm-service (#432). Today both containers'
+-- DATABASE_URL is the postgres superuser -- a compromised or buggy query has DDL-level
+-- access, not just this grant set. This role is Stage A of the fix: it exists and its
+-- password stays current, but nothing points at it yet (DATABASE_URL is unchanged) --
+-- switching DATABASE_URL to it is a deliberate, separate cutover. Migrations keep using
+-- the superuser via MIGRATIONS_DATABASE_URL (db/apply_migrations.sh), never this role.
+do $$ begin
+    create role app_service_login login;
+exception when duplicate_object then null;
+end $$;
+
+alter role app_service_login set statement_timeout = '5s';
+grant mart_readonly to app_service_login;
+grant app_runtime to app_service_login;
+
+-- Password is provisioned out-of-band via Vault (APP_SERVICE_DB_PASSWORD, rendered by
+-- infra2's secrets.ctmpl into the same env apply_migrations.sh runs with) and applied
+-- here so a Vault-side rotation takes effect on the next migration run without a manual
+-- psql step. `\if :{?app_service_db_password}` is true only when the CALLER passed
+-- `-v app_service_db_password=...` at all -- docker-init.sh, the Makefile's db-migrate,
+-- and CI never do, so this block is a complete no-op for local/CI, which don't
+-- provision or use this role; only apply_migrations.sh (staging/prod/preview) sets it.
+-- The ALTER ROLE is built via \gexec rather than a dollar-quoted DO block: psql does
+-- NOT interpolate `:'var'` inside `$$...$$` bodies (verified empirically -- it sends
+-- the literal `:'...'` text and Postgres's parser rejects it), so the substitution has
+-- to happen in a plain top-level statement instead. generate_password() (libs/env.py)
+-- emits ascii-letters/digits only, so no quoting/escaping edge cases reach the %L
+-- literal psql produces.
+\if :{?app_service_db_password}
+select format('alter role app_service_login password %L', nullif(:'app_service_db_password', ''))
+  where nullif(:'app_service_db_password', '') is not null \gexec
+\endif
