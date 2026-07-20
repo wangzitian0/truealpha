@@ -22,13 +22,13 @@
     "runtime_project_path": "libs/factors/qlib-runtime/pyproject.toml",
     "runtime_project_sha256": "2798224979aedffaacc5e31a6d5e571e0856b353debfa216ae8d32fdc0a0bf23",
     "runtime_lock_path": "libs/factors/qlib-runtime/uv.lock",
-    "runtime_lock_sha256": "24068139dbc0e18e73e73f416d4a51695daf0fcffe067e69c3fddfcf7316c6d0",
+    "runtime_lock_sha256": "bd15aa78073f2dd4565a65e32d2942b2def399928897fc48036db9aefd1ffd9c",
     "selection_adapter_path": "libs/factors/src/factors/batches/issuer_strategy_selection_tiny/kernel.py",
-    "selection_adapter_sha256": "1c27d629231c6c4ae69d552c9158fe2a544b11f22437c69c4fe35274aeaed099",
+    "selection_adapter_sha256": "9c7bc27fb5089de9725416afdbf3aa79393ef90d3a34357728e5cafb5eefbb8f",
     "expression_compiler_path": "libs/factors/src/factors/batches/qlib_expression_contract_tiny/compiler.py",
-    "expression_compiler_sha256": "92cfc7ed5f85f7ac372d74e9809a13675c5cad3743bd9bd631ddbe178f384906",
+    "expression_compiler_sha256": "e43e2443a2d9e7b49460700bb7f96eb0295deb742e67135074ae10cf01141ace",
     "expression_fixture_path": "libs/contracts/tests/fixtures/qlib_expression.v1.json",
-    "expression_fixture_sha256": "dc1076517908739577bee2b1782e75c106200b0f8eb3594826135788bdebdace"
+    "expression_fixture_sha256": "db836233a6ce6d71127acbe575fc2aee729dc996c0b6bb13465a8a3604235b8c"
   },
   "source_artifacts": {
     "DDOG": {

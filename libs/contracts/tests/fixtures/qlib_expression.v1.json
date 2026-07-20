@@ -22,7 +22,7 @@
     "runtime_project_path": "libs/factors/qlib-runtime/pyproject.toml",
     "runtime_project_sha256": "2798224979aedffaacc5e31a6d5e571e0856b353debfa216ae8d32fdc0a0bf23",
     "runtime_lock_path": "libs/factors/qlib-runtime/uv.lock",
-    "runtime_lock_sha256": "24068139dbc0e18e73e73f416d4a51695daf0fcffe067e69c3fddfcf7316c6d0",
+    "runtime_lock_sha256": "bd15aa78073f2dd4565a65e32d2942b2def399928897fc48036db9aefd1ffd9c",
     "qlib_expression_source": "qlib/data/data.py@da920b7f954f48ab1bb64117c976710de198373e",
     "expression_input": "compiler_output_only"
   },

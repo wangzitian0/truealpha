@@ -23,7 +23,7 @@ from truealpha_contracts.qlib_expression import (
 )
 
 CORPUS_PATH = Path(__file__).with_name("fixtures") / "qlib_expression.v1.json"
-CORPUS_SHA256 = "dc1076517908739577bee2b1782e75c106200b0f8eb3594826135788bdebdace"
+CORPUS_SHA256 = "db836233a6ce6d71127acbe575fc2aee729dc996c0b6bb13465a8a3604235b8c"
 
 
 def _corpus() -> dict[str, object]:
