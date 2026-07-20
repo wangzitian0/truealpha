@@ -45,11 +45,14 @@ function fakeRunner(
   return async <T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> => fn(client);
 }
 
-// --- ready: head resolves, two cells (one available, one unavailable), a quality report ---
+// --- ready via the governed pointer: head resolves from current_pointer_head, two cells
+// (one available, one unavailable), a quality report; the acceptance-gated fallback must
+// never be queried once the pointer resolves (#434 P4 follow-up) ---
 {
   const calls: Call[] = [];
   const runner = fakeRunner((sql) => {
-    if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("topt_capture_status")) throw new Error("must not fall back once the pointer resolves");
     if (sql.includes("topt_gppe_results")) {
       return {
         rows: [
@@ -79,13 +82,37 @@ function fakeRunner(
   const qualityCall = calls.find((c) => c.sql.includes("datahub_quality_report where run_id"));
   assert(qualityCall !== undefined && qualityCall.params?.[0] === RUN_ID, "quality query is bound to the resolved run_id");
 
-  console.log("#433 topt-gppe-repository ready path passed");
+  console.log("#433 topt-gppe-repository governed-pointer ready path passed");
 }
 
-// --- unavailable: no accepted (quality-reported) production run; cells/quality never queried ---
+// --- ready via the acceptance-gated fallback: pointer empty (no advance yet), falls back
+// to topt_capture_status + datahub_quality_report, exactly as before #378 wires the pointer ---
 {
   const calls: Call[] = [];
   const runner = fakeRunner((sql) => {
+    if (sql.includes("current_pointer_head")) return { rows: [] };
+    if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("topt_gppe_results")) {
+      return { rows: [{ listing_id: "listing:aaa", availability: "available", gppe: "1500000.00", confidence: "0.90" }] };
+    }
+    if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
+    throw new Error(`unexpected query: ${sql}`);
+  }, calls);
+
+  const result = await new MartToptGppeRepository(runner).latest();
+  assert("cells" in result, `expected a report, got unavailable: ${JSON.stringify(result)}`);
+  assert(result.run_id === RUN_ID, "run_id must round-trip from the fallback head query");
+  assert(calls.some((c) => c.sql.includes("current_pointer_head")), "must try the pointer first");
+
+  console.log("#434 topt-gppe-repository acceptance-fallback ready path passed");
+}
+
+// --- unavailable: neither the pointer nor the acceptance-gated fallback resolves; cells/quality
+// never queried ---
+{
+  const calls: Call[] = [];
+  const runner = fakeRunner((sql) => {
+    if (sql.includes("current_pointer_head")) return { rows: [] };
     if (sql.includes("topt_capture_status")) return { rows: [] };
     throw new Error(`must not query further when no head is resolved: ${sql}`);
   }, calls);
@@ -93,7 +120,7 @@ function fakeRunner(
   const result = await new MartToptGppeRepository(runner).latest();
   assert(!("cells" in result), "expected unavailable when no head resolves");
   assert(result.reason.includes("no accepted"), `unexpected reason: ${result.reason}`);
-  assert(calls.length === 1, `expected exactly one query (the head), got ${calls.length}`);
+  assert(calls.length === 2, `expected exactly two queries (pointer, then fallback), got ${calls.length}`);
 
   console.log("#433 topt-gppe-repository no-accepted-run path passed");
 }
@@ -101,7 +128,7 @@ function fakeRunner(
 // --- empty quality report: cells present, no quality row for that run ---
 {
   const runner = fakeRunner((sql) => {
-    if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
     if (sql.includes("topt_gppe_results")) return { rows: [] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
     throw new Error(`unexpected query: ${sql}`);
@@ -119,7 +146,7 @@ function fakeRunner(
 // null/undefined into the literal words "null"/"undefined" (Copilot review on #437) ---
 {
   const runner = fakeRunner((sql) => {
-    if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
     if (sql.includes("topt_gppe_results")) return { rows: [{ listing_id: null, availability: "available", gppe: null, confidence: null }] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
     throw new Error(`unexpected query: ${sql}`);
@@ -135,7 +162,7 @@ function fakeRunner(
 // --- schema mismatch: a non-object quality payload fails closed ---
 {
   const runner = fakeRunner((sql) => {
-    if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
     if (sql.includes("topt_gppe_results")) return { rows: [] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [{ payload: "not-an-object" }] };
     throw new Error(`unexpected query: ${sql}`);

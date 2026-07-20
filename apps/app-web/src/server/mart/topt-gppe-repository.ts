@@ -5,11 +5,13 @@
  * MCP resolve the same governed head and return the same values; when that source
  * changes, mirror the change here too.
  *
- * Head resolution deliberately does NOT use `mart.current_pointer` (#378: the
- * evidence-graph plane is not yet wired into the capture path, so the pointer is
- * empty). It reads `mart.topt_capture_status` (a view over the raw capture-control
- * tables — no fixture involved) joined to the most recently accepted
- * `datahub_quality_report`, exactly as the Python interim comment describes.
+ * #434 P4 follow-up: head resolution now mirrors the Python two-step resolver —
+ * `mart.current_pointer_head` (the ADR-A1 governed head; #378 wires the evidence
+ * graph that advances it) first, falling back to the acceptance-gated
+ * `topt_capture_status`/`datahub_quality_report` join only when no pointer has
+ * advanced yet for this (environment, factor_id). Previously this always used the
+ * fallback query, so the App and MCP could silently resolve different governed
+ * heads once the pointer started advancing.
  *
  * Server-only; never import into a client component.
  */
@@ -23,7 +25,13 @@ export interface MartClientLike {
   query(sql: string, params?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
 }
 
-const HEAD_SQL = `
+const POINTER_HEAD_SQL = `
+  select target_run_id as run_id from mart.current_pointer_head
+  where environment = 'production' and factor_id = 'gross_profit_per_employee'
+  order by advanced_at desc limit 1
+`;
+
+const ACCEPTANCE_FALLBACK_HEAD_SQL = `
   select s.run_id
   from mart.topt_capture_status s
   join mart.datahub_quality_report q on q.run_id = s.run_id
@@ -96,7 +104,10 @@ export class MartToptGppeRepository {
     }
 
     return this.runWithClient(async (client) => {
-      const head = await client.query(HEAD_SQL);
+      let head = await client.query(POINTER_HEAD_SQL);
+      if (head.rows.length === 0) {
+        head = await client.query(ACCEPTANCE_FALLBACK_HEAD_SQL);
+      }
       if (head.rows.length === 0) {
         return { reason: "no accepted (quality-reported) production TOPT run" };
       }
