@@ -202,7 +202,12 @@ async def test_claude_compatible_client_session_round_trip() -> None:
     async with create_connected_server_and_client_session(server._mcp_server) as client:
         await client.initialize()
         tools = await client.list_tools()
-        assert sorted(tool.name for tool in tools.tools) == ["research_card", "research_report", "strategy_run", "topt_gppe"]
+        assert sorted(tool.name for tool in tools.tools) == [
+            "research_card",
+            "research_report",
+            "strategy_run",
+            "topt_gppe",
+        ]
 
         result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
         assert result.isError is not True
