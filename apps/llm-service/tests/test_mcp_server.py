@@ -7,6 +7,7 @@ import pytest
 from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
 from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_contracts.research_cards import ResearchCard
 from truealpha_contracts.research_report import ResearchReport
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
@@ -27,7 +28,7 @@ class _RecordingRepository:
 @pytest.mark.anyio
 async def test_advertises_the_expected_tools() -> None:
     tools = await mcp.list_tools()
-    assert sorted(tool.name for tool in tools) == ["research_report", "strategy_run", "topt_gppe"]
+    assert sorted(tool.name for tool in tools) == ["research_card", "research_report", "strategy_run", "topt_gppe"]
     strategy_tool = next(t for t in tools if t.name == "strategy_run")
     assert strategy_tool.inputSchema["required"] == ["request"]
     assert strategy_tool.outputSchema is not None
@@ -92,6 +93,34 @@ async def test_research_report_reads_through_the_injected_repository() -> None:
     assert report.report_id.startswith("report:")
     assert report.generated_from == "fixture:research_report.v1"
     assert report.subjects[0].subject_id == "issuer:adm"
+
+
+@pytest.mark.anyio
+async def test_research_card_renders_from_a_freshly_built_report() -> None:
+    """#372/#434 track C: research_card is the renderer's first deployed consumer --
+    proves the deployed path invokes build_card at all over a real ResearchReport."""
+    from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
+
+    server = build_mcp_server(
+        repository=FixtureStrategyRunRepository(), research_repository=FixtureResearchReadRepository()
+    )
+    content_blocks, structured = await server.call_tool(  # type: ignore[misc]
+        "research_card",
+        {
+            "request": {
+                "report_kind": "company",
+                "target_entity_ids": ["issuer:adm"],
+                "cutoff_at": "2026-06-30T23:59:59Z",
+                "card_kind": "company",
+            }
+        },
+    )
+    assert content_blocks
+    # Same flattened-fields shape as research_report (single concrete BaseModel return).
+    card = ResearchCard.model_validate_json(json.dumps(structured))
+    assert card.card_id.startswith("card:")
+    assert card.card_kind.value == "company"
+    assert card.generated_from_report_id.startswith("report:")
 
 
 def test_default_research_report_repository_is_mart_backed_with_fixture_opt_out(
@@ -173,7 +202,12 @@ async def test_claude_compatible_client_session_round_trip() -> None:
     async with create_connected_server_and_client_session(server._mcp_server) as client:
         await client.initialize()
         tools = await client.list_tools()
-        assert sorted(tool.name for tool in tools.tools) == ["research_report", "strategy_run", "topt_gppe"]
+        assert sorted(tool.name for tool in tools.tools) == [
+            "research_card",
+            "research_report",
+            "strategy_run",
+            "topt_gppe",
+        ]
 
         result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
         assert result.isError is not True
