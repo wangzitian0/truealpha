@@ -43,7 +43,7 @@ class _FakeConnection:
     def execute(self, sql: str, params: Any = None) -> _FakeCursor:
         return _FakeCursor(self._responder(sql, params))
 
-    def __enter__(self) -> "_FakeConnection":
+    def __enter__(self) -> _FakeConnection:
         return self
 
     def __exit__(self, *exc: object) -> bool:
