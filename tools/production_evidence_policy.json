@@ -1,0 +1,16 @@
+{
+  "contract_version": 1,
+  "service": "truealpha/app",
+  "source": {
+    "workflow_path": ".github/workflows/ci-required.yml",
+    "event": "push",
+    "display_title_template": "Release Images {version_ref}"
+  },
+  "staging": {
+    "workflow_path": ".github/workflows/deploy-release.yml",
+    "event": "workflow_dispatch",
+    "display_title_template": "Deploy staging {version_ref}",
+    "require_head_sha": false
+  },
+  "review_base_ref": "main"
+}

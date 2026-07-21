@@ -15,7 +15,15 @@ SERVICE = "truealpha/app"
 SOURCE_REPOSITORY = "wangzitian0/truealpha"
 CONTRACT_VERSION = 1
 _SOURCE_RUN_PATH_RE = re.compile(r"\A/wangzitian0/truealpha/actions/runs/([1-9][0-9]*)\Z")
-_STAGING_RUN_PATH_RE = re.compile(r"\A/wangzitian0/infra2/actions/runs/([1-9][0-9]*)\Z")
+# infra2#571 blocker 2: this used to require an INFRA2 receiver-run URL, while
+# infra2's verify_production_evidence requires the app's OWN staging run (a
+# receiver run is never workflow_dispatch-triggered, so that check was
+# unsatisfiable by construction) — the two sides of the pipeline contradicted each
+# other and prod releases failed in both directions. infra2's expectation is the
+# correct one: staging evidence is truealpha's own "Deploy staging" run (which
+# itself polls the infra2 receiver to completion before succeeding), as declared in
+# tools/production_evidence_policy.json (#464).
+_STAGING_RUN_PATH_RE = re.compile(r"\A/wangzitian0/truealpha/actions/runs/([1-9][0-9]*)\Z")
 _REVIEW_PATH_RE = re.compile(r"\A/wangzitian0/truealpha/pull/([1-9][0-9]*)\Z")
 _SOURCE_SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _SEMVER_TAG_RE = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
@@ -133,7 +141,7 @@ def _validate_authority(raw: Mapping[str, Any]) -> None:
         _github_path_match(
             staging_run_url,
             _STAGING_RUN_PATH_RE,
-            "staging_run_url must point to the infra2 receiver run",
+            "staging_run_url must point to this repo's own Deploy staging run",
         )
         _github_path_match(
             reviewed_change_url,

@@ -1,5 +1,12 @@
 name: ci-required
 
+# A release-tag push must produce the deterministic display_title declared in
+# tools/production_evidence_policy.json ("Release Images {version_ref}") — infra2's
+# production-evidence verification matches on it (#464 / infra2#576). Non-tag runs
+# render an empty run-name, which GitHub replaces with the default title (the head
+# commit message / PR title), so day-to-day runs are unchanged.
+run-name: ${{ github.ref_type == 'tag' && format('Release Images {0}', github.ref_name) || '' }}
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
