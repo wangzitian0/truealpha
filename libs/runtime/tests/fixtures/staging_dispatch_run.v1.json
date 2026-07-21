@@ -1,0 +1,15 @@
+{
+  "id": 29726062965,
+  "name": "Deploy staging v0.0.6",
+  "display_title": "Deploy staging v0.0.6",
+  "run_number": 12,
+  "event": "workflow_dispatch",
+  "status": "completed",
+  "conclusion": "success",
+  "workflow_id": 315322214,
+  "head_branch": "main",
+  "head_sha": "15c42728d30036f19e5fabb909038454539d3daf",
+  "path": ".github/workflows/deploy-release.yml",
+  "created_at": "2026-07-20T07:54:04Z",
+  "html_url": "https://github.com/wangzitian0/truealpha/actions/runs/29726062965"
+}

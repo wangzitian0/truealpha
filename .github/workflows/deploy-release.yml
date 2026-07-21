@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       staging_run_url:
-        description: Required for prod; successful infra2 staging receiver run URL.
+        description: Required for prod; this repo's own successful "Deploy staging <tag>" run URL.
         required: false
         type: string
       reviewed_change_url:
@@ -131,20 +131,29 @@ jobs:
           version_ref="$(jq -r '.version_ref' <<<"$REQUEST_JSON")"
           source_sha="$(jq -r '.source_sha' <<<"$REQUEST_JSON")"
           if [[ "$deploy_type" == "prod" ]]; then
+            # infra2#571 blocker 2: this check used to require an INFRA2 receiver-run
+            # URL while infra2's verify_production_evidence requires OUR OWN staging
+            # run — the two sides contradicted each other and prod failed in both
+            # directions. infra2's expectation is correct by construction (a receiver
+            # run is repository_dispatch-triggered, never workflow_dispatch): staging
+            # evidence is this workflow's own successful "Deploy staging <tag>" run,
+            # which itself polled the infra2 receiver to completion before
+            # succeeding. The expectations asserted here (path/event/title) are the
+            # SAME facts tools/production_evidence_policy.json declares (#464).
             staging_run_url="$(jq -r '.evidence.staging_run_url' <<<"$REQUEST_JSON")"
-            if ! [[ "$staging_run_url" =~ ^https://github.com/wangzitian0/infra2/actions/runs/([1-9][0-9]*)$ ]]; then
-              echo "::error::staging evidence must identify an infra2 receiver run"
+            if ! [[ "$staging_run_url" =~ ^https://github.com/wangzitian0/truealpha/actions/runs/([1-9][0-9]*)$ ]]; then
+              echo "::error::staging evidence must identify this repo's own Deploy staging run"
               exit 1
             fi
-            staging_run="$(gh api "/repos/wangzitian0/infra2/actions/runs/${BASH_REMATCH[1]}")"
-            staging_title_prefix="Deploy ${service} staging ${version_ref} ${source_sha} ["
-            jq -e --arg prefix "$staging_title_prefix" \
+            staging_run="$(gh api "/repos/wangzitian0/truealpha/actions/runs/${BASH_REMATCH[1]}")"
+            expected_staging_title="Deploy staging ${version_ref}"
+            jq -e --arg title "$expected_staging_title" \
               '.conclusion == "success"
-               and .event == "repository_dispatch"
-               and .path == ".github/workflows/app-deploy-request.yml"
-               and (.display_title | startswith($prefix) and endswith("]"))' \
+               and .event == "workflow_dispatch"
+               and .path == ".github/workflows/deploy-release.yml"
+               and .display_title == $title' \
               <<<"$staging_run" >/dev/null || {
-                echo "::error::staging receipt must be a successful matching infra2 deployment"
+                echo "::error::staging receipt must be this repo's successful 'Deploy staging ${version_ref}' run"
                 exit 1
               }
           fi

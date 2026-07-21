@@ -83,7 +83,7 @@ def test_production_request_requires_exact_evidence(corpus: dict) -> None:
         {
             "deploy_type": "prod",
             "evidence": {
-                "staging_run_url": "https://github.com/wangzitian0/infra2/actions/runs/23456789",
+                "staging_run_url": "https://github.com/wangzitian0/truealpha/actions/runs/23456789",
                 "reviewed_change_url": "https://github.com/wangzitian0/truealpha/pull/330",
             },
         },
@@ -116,8 +116,11 @@ def test_release_request_requires_stable_semver_tag(corpus: dict, version_ref: s
         ({"staging_run_url": ""}, "production evidence.staging_run_url is required"),
         ({"reviewed_change_url": ""}, "production evidence.reviewed_change_url is required"),
         (
-            {"staging_run_url": "https://github.com/wangzitian0/truealpha/actions/runs/2"},
-            "staging_run_url must point to the infra2 receiver run",
+            # infra2#571 blocker 2: an infra2 receiver-run URL is exactly what this
+            # check used to REQUIRE — it now fails closed, matching infra2's
+            # verify_production_evidence (which needs this repo's own staging run).
+            {"staging_run_url": "https://github.com/wangzitian0/infra2/actions/runs/2"},
+            "staging_run_url must point to this repo's own Deploy staging run",
         ),
         (
             {"reviewed_change_url": "https://github.com/wangzitian0/truealpha/issues/330"},
@@ -132,7 +135,7 @@ def test_production_evidence_fails_closed(corpus: dict, evidence_override: dict,
         {
             "deploy_type": "prod",
             "evidence": {
-                "staging_run_url": "https://github.com/wangzitian0/infra2/actions/runs/23456789",
+                "staging_run_url": "https://github.com/wangzitian0/truealpha/actions/runs/23456789",
                 "reviewed_change_url": "https://github.com/wangzitian0/truealpha/pull/330",
                 **evidence_override,
             },
@@ -260,10 +263,14 @@ def test_release_workflow_dispatches_only_the_rendered_sdk_request() -> None:
     assert '.event == "push"' in workflow
     assert ".merge_commit_sha == $sha" in workflow
     assert '.base.ref == "main"' in workflow
-    assert "successful infra2 staging receiver run URL" in workflow
-    assert 'staging_title_prefix="Deploy ${service} staging ${version_ref} ${source_sha} ["' in workflow
-    assert '.path == ".github/workflows/app-deploy-request.yml"' in workflow
-    assert '.event == "repository_dispatch"' in workflow
+    # infra2#571 blocker 2 (fixed): staging evidence is this repo's OWN "Deploy
+    # staging" run — matching what infra2's verify_production_evidence and
+    # tools/production_evidence_policy.json declare — never an infra2 receiver run.
+    assert 'this repo\'s own successful "Deploy staging <tag>" run URL' in workflow
+    assert 'expected_staging_title="Deploy staging ${version_ref}"' in workflow
+    assert '.path == ".github/workflows/deploy-release.yml"' in workflow
+    assert '.event == "workflow_dispatch"' in workflow
+    assert "wangzitian0/infra2/actions/runs/([1-9][0-9]*)" not in workflow
     assert "timeout-minutes: 50" in workflow
     assert "python tools/app_deploy_request.py" in workflow
     assert "event_type: app-deploy-request" in workflow
