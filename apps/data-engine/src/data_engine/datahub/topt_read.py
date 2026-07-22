@@ -1,9 +1,16 @@
-"""Governed mart read for downstream consumers (#405 / #41 / #362).
+"""Data-engine-internal governed mart read (#405 / #41 / #362).
 
 The first Postgres-backed read that returns the materialized TOPT results and the run's quality
 report from `mart` WITHOUT the caller hand-carrying a 7-part identity tuple: it resolves the
-current head run and reads the typed mart rows. This is the read App/MCP use instead of the
-`FixtureStrategyRunRepository` fixture. Reads only `mart`; never `raw`/`staging`.
+current head run and reads the typed mart rows. Reads only `mart`; never `raw`/`staging`.
+
+NOT what App/MCP use for this: that's `truealpha_contracts.topt_read.PostgresToptGppeRepository`
+(a separate, independently-maintained implementation of the same governed-head resolution --
+see truealpha#462 for the drift/consistency risk that split creates). This module exists for
+data-engine's own internal reads; an earlier version of this docstring claimed App/MCP used it,
+which was never true of the deployed path and misled reviewers into thinking this module's real
+test coverage (apps/data-engine/tests/datahub/test_topt_read.py) covered the class MCP actually
+calls, when it didn't.
 """
 
 from __future__ import annotations
