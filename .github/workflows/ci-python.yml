@@ -68,3 +68,96 @@ jobs:
           # The services above exist so integration tests RUN here; a suite
           # that silently skips must fail, not pass green while covering nothing.
           TRUEALPHA_REQUIRE_RUNTIME: "1"
+
+  # truealpha#454: dagster-webserver/dagster-daemon under `-m data_engine.dagster_defs`
+  # each spawn and heartbeat-manage their own local code-server subprocess with a
+  # hardcoded 20s TTL (dagster._daemon.controller.DAEMON_GRPC_SERVER_HEARTBEAT_TTL) --
+  # unreliable heartbeat delivery made it self-terminate and respawn every ~68-70s on
+  # staging. The fix (infra2 PR #573) points the daemon at a *persistent* code-server
+  # via `--grpc-socket` instead. This job proves that behavior directly -- no Traefik,
+  # Vault, or Dokploy involved, just truealpha's own dagster_defs.py against a real
+  # Postgres -- instead of only being verifiable by SSHing into staging after a deploy
+  # (reproduced locally in the same shape before adding this: 0 heartbeat warnings over
+  # 120s with --grpc-socket, vs. one every ~68-70s under plain `-m`).
+  dagster-code-server-liveness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: truealpha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DAGSTER_HOME: ${{ github.workspace }}/.dagster_home_ci
+      DAGSTER_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/truealpha?options=-csearch_path%3Ddagster
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --package truealpha-data-engine --frozen
+      - name: Apply DB migrations
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in db/migrations/*.sql db/roles.sql; do
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done
+      - name: Write dagster.yaml
+        run: |
+          mkdir -p "$DAGSTER_HOME"
+          cat > "$DAGSTER_HOME/dagster.yaml" <<'YAML'
+          storage:
+            postgres:
+              postgres_url:
+                env: DAGSTER_POSTGRES_URL
+          local_artifact_storage:
+            module: dagster.core.storage.root
+            class: LocalArtifactStorage
+            config:
+              base_dir: /tmp/dagster-ci-artifacts
+          telemetry:
+            enabled: false
+          YAML
+      - name: Start persistent code-server + daemon over --grpc-socket
+        run: |
+          SOCK=/tmp/ta-code-server.sock
+          uv run --package truealpha-data-engine dagster api grpc \
+            -m data_engine.dagster_defs --socket "$SOCK" --lazy-load-user-code \
+            --location-name data_engine.dagster_defs --log-level debug \
+            > code_server.log 2>&1 &
+          echo "CODE_SERVER_PID=$!" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do
+            uv run --package truealpha-data-engine dagster api grpc-health-check --socket "$SOCK" && break
+            sleep 1
+          done
+          uv run --package truealpha-data-engine dagster-daemon run --grpc-socket "$SOCK" \
+            > daemon.log 2>&1 &
+          echo "DAEMON_PID=$!" >> "$GITHUB_ENV"
+          echo "SOCK=$SOCK" >> "$GITHUB_ENV"
+      - name: Observe for 120s (over one old ~68-70s churn cycle) and assert no heartbeat churn
+        run: |
+          sleep 120
+          echo "--- code_server.log ---"
+          cat code_server.log
+          if grep -q "No heartbeat received" code_server.log; then
+            echo "::error::code-server self-terminated on a missing heartbeat -- --grpc-socket regressed to per-role managed spawning" >&2
+            exit 1
+          fi
+      - name: Positive health checks
+        run: |
+          uv run --package truealpha-data-engine dagster api grpc-health-check --socket "$SOCK"
+          uv run --package truealpha-data-engine dagster-daemon liveness-check
+      - name: Stop background processes
+        if: always()
+        run: |
+          kill "$DAEMON_PID" "$CODE_SERVER_PID" 2>/dev/null || true
