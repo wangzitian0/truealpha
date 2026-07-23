@@ -72,6 +72,8 @@ def test_latest_resolves_head_from_current_pointer_before_the_acceptance_fallbac
         calls.append(sql)
         if "current_pointer_head" in sql:
             return [_row_keyed_like_postgres_would(sql, RUN_ID)]
+        if "obligation_count" in sql:
+            return [{"obligation_count": 84}]
         if "topt_capture_status" in sql:
             raise AssertionError("must not fall back once the pointer resolves")
         if "topt_gppe_results" in sql:
@@ -90,6 +92,7 @@ def test_latest_resolves_head_from_current_pointer_before_the_acceptance_fallbac
     assert report.run_id == RUN_ID
     assert report.cells[0].gppe == "1500000.00"
     assert report.quality == {"independent_reconciliation": "0.25"}
+    assert report.requested_count == 84
     assert any("current_pointer_head" in sql for sql in calls)
 
 
@@ -97,6 +100,8 @@ def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkey
     def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
         if "current_pointer_head" in sql:
             return []
+        if "obligation_count" in sql:
+            return [{"obligation_count": 84}]
         if "topt_capture_status" in sql:
             return [{"run_id": RUN_ID}]
         if "topt_gppe_results" in sql:
@@ -113,6 +118,44 @@ def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkey
     assert report.run_id == RUN_ID
     assert report.cells == ()
     assert report.quality is None
+
+
+def test_requested_count_follows_the_runs_own_denominator(monkeypatch: Any) -> None:
+    """#462 AC3 / the universe-≠-84 trigger state at the wiring level: the
+    denominator is the capture plane's obligation_count for THE governed run,
+    never a constant — a 100-cell universe must report 100."""
+
+    def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
+        if "current_pointer_head" in sql:
+            return [_row_keyed_like_postgres_would(sql, RUN_ID)]
+        if "obligation_count" in sql:
+            return [{"obligation_count": 100}]
+        if "topt_gppe_results" in sql or "datahub_quality_report" in sql:
+            return []
+        raise AssertionError(f"unexpected query: {sql}")
+
+    _install_fake_connect(monkeypatch, responder)
+    repo = PostgresToptGppeRepository(database_url="postgresql://unused/unused")
+
+    report = repo.latest()
+    assert report.requested_count == 100
+
+
+def test_latest_reports_unavailable_when_the_governed_run_has_no_capture_status(monkeypatch: Any) -> None:
+    def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
+        if "current_pointer_head" in sql:
+            return [_row_keyed_like_postgres_would(sql, RUN_ID)]
+        if "obligation_count" in sql:
+            return []
+        if "topt_gppe_results" in sql or "datahub_quality_report" in sql:
+            return []
+        raise AssertionError(f"unexpected query: {sql}")
+
+    _install_fake_connect(monkeypatch, responder)
+    repo = PostgresToptGppeRepository(database_url="postgresql://unused/unused")
+
+    result = repo.latest()
+    assert result.reason == "no capture status for the governed run"
 
 
 def test_latest_reports_unavailable_when_neither_source_resolves(monkeypatch: Any) -> None:

@@ -747,6 +747,9 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
     listing_ids = [cell.listing_id for cell in served.cells]
     assert listing_ids == sorted(listing_ids)
     assert served.quality is not None and served.quality["run_id"] == run.run_id
+    # #462 AC3: the denominator is DB-derived (capture plane obligation_count),
+    # asserted against the corpus's real 84 requested cells on the real schema.
+    assert served.requested_count == 84
 
 
 def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connection, monkeypatch) -> None:

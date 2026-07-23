@@ -52,6 +52,7 @@ function fakeRunner(
   const calls: Call[] = [];
   const runner = fakeRunner((sql) => {
     if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_capture_status")) throw new Error("must not fall back once the pointer resolves");
     if (sql.includes("topt_gppe_results")) {
       return {
@@ -91,6 +92,7 @@ function fakeRunner(
   const calls: Call[] = [];
   const runner = fakeRunner((sql) => {
     if (sql.includes("current_pointer_head")) return { rows: [] };
+    if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_capture_status")) return { rows: [{ run_id: RUN_ID }] };
     if (sql.includes("topt_gppe_results")) {
       return { rows: [{ listing_id: "listing:aaa", availability: "available", gppe: "1500000.00", confidence: "0.90" }] };
@@ -129,6 +131,7 @@ function fakeRunner(
 {
   const runner = fakeRunner((sql) => {
     if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_gppe_results")) return { rows: [] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
     throw new Error(`unexpected query: ${sql}`);
@@ -147,6 +150,7 @@ function fakeRunner(
 {
   const runner = fakeRunner((sql) => {
     if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_gppe_results")) return { rows: [{ listing_id: null, availability: "available", gppe: null, confidence: null }] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
     throw new Error(`unexpected query: ${sql}`);
@@ -163,6 +167,7 @@ function fakeRunner(
 {
   const runner = fakeRunner((sql) => {
     if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 84 }] };
     if (sql.includes("topt_gppe_results")) return { rows: [] };
     if (sql.includes("datahub_quality_report where run_id")) return { rows: [{ payload: "not-an-object" }] };
     throw new Error(`unexpected query: ${sql}`);
@@ -202,4 +207,39 @@ function fakeRunner(
   assert(threw, "limit=501 must throw RangeError");
 
   console.log("#433 topt-gppe-repository limit validation passed");
+}
+
+// --- #462 AC3 / the universe-≠-84 trigger state at the wiring level: the denominator
+// is the capture plane's obligation_count for THE governed run, never a constant ---
+{
+  const runner = fakeRunner((sql) => {
+    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 100 }] };
+    if (sql.includes("topt_gppe_results")) return { rows: [] };
+    if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
+    throw new Error(`unexpected query: ${sql}`);
+  }, []);
+
+  const result = await new MartToptGppeRepository(runner).latest();
+  assert("cells" in result, `expected a report, got unavailable: ${JSON.stringify(result)}`);
+  assert(result.requested_count === 100, `a 100-cell universe must report 100, got ${result.requested_count}`);
+
+  console.log("#462 topt-gppe-repository run-own-denominator path passed");
+}
+
+// --- a governed run with no capture status row cannot report a denominator: unavailable ---
+{
+  const runner = fakeRunner((sql) => {
+    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("obligation_count")) return { rows: [] };
+    if (sql.includes("topt_gppe_results")) return { rows: [] };
+    if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
+    throw new Error(`unexpected query: ${sql}`);
+  }, []);
+
+  const result = await new MartToptGppeRepository(runner).latest();
+  assert(!("cells" in result), "missing capture status must not silently produce a report");
+  assert(result.reason.includes("no capture status"), `unexpected reason: ${result.reason}`);
+
+  console.log("#462 topt-gppe-repository missing-status path passed");
 }
