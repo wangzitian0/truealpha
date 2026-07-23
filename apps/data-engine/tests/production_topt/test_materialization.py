@@ -677,11 +677,26 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
     reader = PostgresToptGppeRepository(database_url=settings.database_url)
 
+    # State 4 must be deterministic on ANY database (Copilot on #478): the
+    # reader picks the head by `advanced_at desc`, and register_run_evidence
+    # stamps this run's pointer with the fixed corpus cutoff — a developer
+    # database with a NEWER real pointer would win and fail the served-state
+    # asserts. Clear this factor's pointers inside the rolled-back transaction;
+    # the append-only trigger is bypassed via replica mode, and rollback
+    # restores everything.
+    connection.execute("set session_replication_role = replica")
+    connection.execute(
+        "delete from mart.current_pointer where environment = 'production' and factor_id = %s",
+        ("gross_profit_per_employee",),
+    )
+    connection.execute("set session_replication_role = origin")
+
     before = reader.latest()
-    # The transaction starts on the committed database state: empty in CI's
-    # ephemeral Postgres; a developer database that already serves a production
-    # run makes the withheld-state assertions vacuous while every served-state
-    # assertion still binds.
+    # The transaction now sees no governed pointer; `before` is a report only
+    # when the committed database carries a quality-accepted complete run the
+    # FALLBACK serves (a developer database). That makes the withheld-state
+    # assertions vacuous while every served-state assertion still binds; CI's
+    # ephemeral Postgres always takes the fresh path.
     fresh_database = isinstance(before, ToptGppeUnavailable)
     if fresh_database:
         assert before.reason == "no accepted (quality-reported) production TOPT run"
