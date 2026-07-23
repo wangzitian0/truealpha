@@ -32,7 +32,15 @@ runtime-up:
 	docker compose up -d --wait postgres minio
 	docker compose run --rm minio-init
 
+# #447 preflight: the app-web image runs NODE_ENV=production and refuses to
+# serve without a real SECRET_KEY; without this check an unset key surfaces
+# only as a healthcheck timeout after a full build. Compose reads .env itself;
+# make does not, hence the file fallback.
 stack-up:
+	@if [ -z "$${SECRET_KEY}" ] && ! grep -qE '^SECRET_KEY=.+' .env 2>/dev/null; then \
+		echo "SECRET_KEY is not set (environment or .env). app-web runs NODE_ENV=production and refuses to serve without a real key — see .env.example"; \
+		exit 1; \
+	fi
 	docker compose --profile app up -d --build --wait
 
 runtime-check:
