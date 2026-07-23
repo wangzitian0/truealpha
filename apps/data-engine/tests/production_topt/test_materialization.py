@@ -814,3 +814,79 @@ def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connecti
         "select snapshot_id from mart.strategy_runs where strategy_run_id = %s", (run_id,)
     ).fetchone()
     assert lineage == (snapshot_id,)
+
+
+def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch) -> None:
+    """#395 trigger states for the strategy-input lane (0032's PIT semantics):
+
+    - supersede-by-recorded_at: a corrected input row (same issuer/cutoff/key,
+      later recorded_at) must win in the gateway's distinct-on read and flow
+      through a re-run into the consumer-visible report — history is never
+      overwritten, the later vintage simply supersedes (this lane's
+      restatement mechanism);
+    - no look-ahead: an input with knowable_at > cutoff_at must be impossible
+      to land at all (the 0032 CHECK, asserted red).
+    """
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
+    _repository, run, _list_version, _release_manifest_id, *_ = _seed_complete_production_run(connection)
+    seed_strategy_inputs_from_capture(
+        connection, run.run_id, cutoff=CUTOFF, parser_version="production-topt-integration-parser:v1"
+    )
+    first_executed = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
+    run_strategy_replay_for_cutoff(
+        connection, cutoff=CUTOFF, executed_at=first_executed, risk_free_rate=Decimal("0.05")
+    )
+
+    context = AccessContext(
+        context_id="ctx:test-supersede",
+        principal_id="principal:test-supersede",
+        tenant_id="tenant:test-supersede",
+        session_id="session:test-supersede",
+        authentication_method=AuthenticationMethod.SERVICE_IDENTITY,
+        principal_kind=PrincipalKind.SERVICE,
+        issued_at=first_executed,
+        expires_at=first_executed + timedelta(hours=1),
+    )
+    reader = PostgresStrategyRunRepository(database_url=settings.database_url)
+    first = reader.get_latest(strategy_id="large_model_value_v0", context=context)
+    assert isinstance(first, StrategyRunReport)
+    target = next(d for d in first.decisions if d.current_price_to_sales is not None)
+    assert target.current_price_to_sales is not None
+
+    # Correct the issuer's last_close (40 -> 80): a NEW row with a later
+    # recorded_at, same (issuer, cutoff, key) — never an UPDATE.
+    connection.execute(
+        """
+        insert into staging.strategy_backtest_inputs
+            (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, recorded_at)
+        select issuer_id, cutoff_at, input_key, value * 2, confidence, knowable_at,
+               recorded_at + interval '1 second'
+        from staging.strategy_backtest_inputs
+        where issuer_id = %s and cutoff_at = %s and input_key = 'last_close'
+        order by recorded_at desc limit 1
+        """,
+        (target.issuer_id, CUTOFF),
+    )
+    run_strategy_replay_for_cutoff(
+        connection, cutoff=CUTOFF, executed_at=first_executed + timedelta(minutes=5), risk_free_rate=Decimal("0.05")
+    )
+    second = reader.get_latest(strategy_id="large_model_value_v0", context=context)
+    assert isinstance(second, StrategyRunReport)
+    corrected = next(d for d in second.decisions if d.issuer_id == target.issuer_id)
+    assert corrected.current_price_to_sales is not None
+    assert corrected.current_price_to_sales == target.current_price_to_sales * 2, (
+        f"the superseding last_close must double P/S: {target.current_price_to_sales} -> "
+        f"{corrected.current_price_to_sales}"
+    )
+
+    # No look-ahead can even land: knowable_at > cutoff_at violates 0032's CHECK.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with connection.transaction():
+            connection.execute(
+                """
+                insert into staging.strategy_backtest_inputs
+                    (issuer_id, cutoff_at, input_key, value, confidence, knowable_at)
+                values (%s, %s, 'last_close', 999, 0.9, %s)
+                """,
+                (target.issuer_id, CUTOFF, CUTOFF + timedelta(seconds=1)),
+            )
