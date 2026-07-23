@@ -37,10 +37,12 @@ function run() {
 
   assert(parseBeforeCursor(undefined) === null, "an absent cursor must parse to null");
   assert(parseBeforeCursor(null) === null, "a null cursor must parse to null");
-  const parsed = parseBeforeCursor({ createdAt: "2026-07-18T00:00:00.000Z", documentId: "document:1" });
+  // The parsed cursor keeps the ORIGINAL string — a Date round-trip truncated
+  // Postgres microseconds to milliseconds and silently skipped rows (#470).
+  const parsed = parseBeforeCursor({ createdAt: "2026-07-18T00:00:00.123456Z", documentId: "document:1" });
   assert(
-    parsed !== null && parsed.createdAt.toISOString() === "2026-07-18T00:00:00.000Z" && parsed.documentId === "document:1",
-    "a valid cursor must parse",
+    parsed !== null && parsed.createdAt === "2026-07-18T00:00:00.123456Z" && parsed.documentId === "document:1",
+    "a valid cursor must parse and keep its microsecond precision verbatim",
   );
 
   for (const bad of [
