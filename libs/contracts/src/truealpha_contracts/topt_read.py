@@ -106,10 +106,21 @@ class PostgresToptGppeRepository:
                     "select payload from mart.datahub_quality_report where run_id = %s order by created_at desc limit 1",
                     (run_id,),
                 ).fetchone()
+                # The requested-cell denominator comes from the capture plane —
+                # mart.topt_capture_status.obligation_count IS the run's requested
+                # cells — never a constant: the hardcoded 84 made any run over a
+                # different universe self-contradict its own quality payload
+                # (#462 AC3; the TS twin applies the identical query).
+                status_row = conn.execute(
+                    "select obligation_count from mart.topt_capture_status where run_id = %s",
+                    (run_id,),
+                ).fetchone()
+                if status_row is None:
+                    return ToptGppeUnavailable(reason="no capture status for the governed run")
                 cells = tuple(ToptGppeCell(**r) for r in rows)
                 return ToptGppeReport(
                     run_id=run_id,
-                    requested_count=84,
+                    requested_count=status_row["obligation_count"],
                     available_count=sum(c.availability == "available" for c in cells),
                     cells=cells,
                     quality=report_row["payload"] if report_row else None,

@@ -53,9 +53,14 @@ const QUALITY_SQL = `
   select payload from mart.datahub_quality_report where run_id = $1 order by created_at desc limit 1
 `;
 
-// Mirrors the Python repository's hardcoded curated-universe size — matches the
-// `observation_count = 84` invariant enforced on staging.topt_core_snapshots.
-const REQUESTED_COUNT = 84;
+// The requested-cell denominator comes from the capture plane —
+// mart.topt_capture_status.obligation_count IS the run's requested cells —
+// never a constant: the hardcoded 84 made any run over a different universe
+// self-contradict its own quality payload (#462 AC3; identical query in the
+// Python twin, truealpha_contracts.topt_read).
+const REQUESTED_COUNT_SQL = `
+  select obligation_count from mart.topt_capture_status where run_id = $1
+`;
 
 class SchemaMismatchError extends Error {}
 
@@ -115,15 +120,24 @@ export class MartToptGppeRepository {
       try {
         const runId = requireString(head.rows[0].run_id, "run_id");
 
-        const [cellRows, qualityRows] = await Promise.all([
+        const [cellRows, qualityRows, statusRows] = await Promise.all([
           client.query(CELLS_SQL, [runId, limit]),
           client.query(QUALITY_SQL, [runId]),
+          client.query(REQUESTED_COUNT_SQL, [runId]),
         ]);
+
+        if (statusRows.rows.length === 0) {
+          return { reason: "no capture status for the governed run" };
+        }
+        const requestedCount = statusRows.rows[0].obligation_count;
+        if (typeof requestedCount !== "number" || !Number.isInteger(requestedCount)) {
+          throw new SchemaMismatchError("obligation_count is not an integer");
+        }
 
         const cells = cellRows.rows.map(cellFromRow);
         return {
           run_id: runId,
-          requested_count: REQUESTED_COUNT,
+          requested_count: requestedCount,
           available_count: cells.filter((cell) => cell.availability === "available").length,
           cells,
           quality: qualityFromRow(qualityRows.rows[0]),
