@@ -100,13 +100,29 @@ function cutoffIso(value: unknown): string {
   throw new SchemaMismatchError("cutoff_at did not arrive as SQL-formatted text");
 }
 
+/** Exact [0, 1] membership test on a Postgres numeric string — string
+ * arithmetic only, because coercing through a JS number reintroduces the
+ * float rounding this module's own rule forbids (#482 review): an edge value
+ * like "1.0000000000000000001" must be rejected exactly as the Python twin's
+ * Decimal bound rejects it, not rounded into acceptance. */
+function outsideUnitInterval(text: string): boolean {
+  const negative = text.startsWith("-");
+  const magnitude = negative ? text.slice(1) : text;
+  const [whole = "", fraction = ""] = magnitude.split(".");
+  const wholeStripped = whole.replace(/^0+/, "");
+  const fractionHasValue = /[1-9]/.test(fraction);
+  if (negative) return wholeStripped !== "" || fractionHasValue; // any negative non-zero
+  if (wholeStripped === "") return false; // 0 <= value < 1
+  if (wholeStripped === "1") return fractionHasValue; // exactly 1 passes; 1.0…01 fails
+  return true; // integer part >= 2
+}
+
 /** Mirrors the Python twin's pydantic Field bounds — a row the MCP side would
  * reject as `schema_mismatch` must not render in the App (#469). */
 function boundedDecimalString(value: unknown, field: string): string | null {
   const text = decimalString(value, field);
-  if (text !== null) {
-    const numeric = Number(text);
-    if (!(numeric >= 0 && numeric <= 1)) throw new SchemaMismatchError(`${field} is outside [0, 1]`);
+  if (text !== null && outsideUnitInterval(text)) {
+    throw new SchemaMismatchError(`${field} is outside [0, 1]`);
   }
   return text;
 }
@@ -118,7 +134,9 @@ function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
   if (typeof row.eligible !== "boolean") throw new SchemaMismatchError("eligible is not a boolean");
   const rank = row.rank;
   if (rank !== null && typeof rank !== "number") throw new SchemaMismatchError("rank is not an integer");
-  if (typeof rank === "number" && rank < 1) throw new SchemaMismatchError("rank is below 1");
+  if (typeof rank === "number" && (!Number.isInteger(rank) || rank < 1)) {
+    throw new SchemaMismatchError("rank is not an integer >= 1");
+  }
   return {
     issuer_id: row.issuer_id,
     cutoff_at: cutoffIso(row.cutoff_at),

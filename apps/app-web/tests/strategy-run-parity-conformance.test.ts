@@ -60,14 +60,14 @@ const RUN_SQL = `insert into mart.strategy_runs
  (strategy_run_id, content_sha256, strategy_key, strategy_version, definition_content_sha256,
   corpus_sha256, claim_ceiling, executed_at)
  values ($1, $2, $3, $4, $5, $6, $7, $8)
- on conflict (strategy_run_id) do nothing`;
+ `;
 
 const DECISION_SQL = `insert into mart.strategy_decisions
  (strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
   capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
   valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight)
  values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
- on conflict (strategy_decision_id) do nothing`;
+ `;
 
 /** Stable stringify (sorted keys) so a mismatch prints one comparable line. */
 function canonical(value: unknown): string {
