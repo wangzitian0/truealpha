@@ -16,6 +16,7 @@ migration belongs to #26/#355's own lane.
 
 from __future__ import annotations
 
+from datetime import UTC
 from decimal import InvalidOperation
 from typing import Any
 
@@ -61,7 +62,12 @@ _DECISIONS_SQL = """
 def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
     return StrategyRunDecision(
         issuer_id=row["issuer_id"],
-        cutoff_at=row["cutoff_at"],
+        # psycopg returns timestamptz in the SESSION's timezone; without this
+        # normalization the serialized report (and every trace ID derived from
+        # it) varies with the server's TZ setting — invisible on UTC CI, wrong
+        # everywhere else. The TS twin normalizes in SQL (at time zone 'UTC');
+        # the parity conformance fixture pins both to the same bytes (#469).
+        cutoff_at=row["cutoff_at"].astimezone(UTC),
         outcome=StrategyRunOutcome(row["outcome"]),
         eligible=row["eligible"],
         tier=ValuationTier(row["tier"]) if row["tier"] is not None else None,

@@ -57,7 +57,12 @@ async function reachable(): Promise<Client | null> {
 
 const admin = await reachable();
 if (admin !== null) {
-  const strategyKey = `test-mart-strategy-run-${randomBytes(6).toString("hex")}`;
+  // The report DTO pins strategy_id to the Literal "large_model_value_v0" —
+  // a run under any other key is schema_mismatch on BOTH twins (#469), so the
+  // happy path cannot use a disposable per-test key. Isolation mirrors the
+  // Python twin's convention: executed_at = now() outranks any prior
+  // committed run, so this test's row is deterministically "the latest".
+  const strategyKey = "large_model_value_v0";
   const runId = `strategy-run:${hex64()}`;
   const corpus = hex64();
 
@@ -66,7 +71,7 @@ if (admin !== null) {
       `insert into mart.strategy_runs
          (strategy_run_id, content_sha256, strategy_key, strategy_version,
           definition_content_sha256, corpus_sha256, claim_ceiling, executed_at)
-       values ($1, $2, $3, 'v0', $4, $5, 'preview', '2026-07-19T12:00:00Z')`,
+       values ($1, $2, $3, 'v0', $4, $5, 'preview', now())`,
       [runId, hex64(), strategyKey, hex64(), corpus],
     );
     // Two decisions, deliberately out of (cutoff, issuer) order to prove the
