@@ -9,6 +9,8 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.datahub import quality_report
+from data_engine.datahub.a1_evidence import register_run_evidence
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
@@ -28,6 +30,7 @@ from truealpha_contracts.datahub import (
     SourceRequest,
     SourceVintage,
 )
+from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeReport, ToptGppeUnavailable
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
@@ -630,3 +633,94 @@ def test_snapshot_rejects_unknown_run(connection) -> None:
             run_id=f"capture-run:{'0' * 64}",
             release_manifest_id=f"release-manifest:{'1' * 64}",
         )
+
+
+class _BorrowedConnection:
+    """Lends the test's own transaction to code that would open a fresh psycopg
+    connection: `PostgresToptGppeRepository` connects per call, but the governed
+    read must see the same uncommitted rows the real writers just produced, and
+    committing the deterministic corpus identity would break the first-insert
+    assertions other tests make against a shared database. Every SQL statement
+    still executes against the real schema; only connection acquisition is
+    redirected, rows are shaped per cursor (dict_row, the repository's own row
+    factory), and close/commit are withheld so the test's rollback owns the
+    data's lifetime. This is the same seam test_topt_read.py fakes — here the
+    backend is the real database."""
+
+    def __init__(self, real: psycopg.Connection) -> None:
+        self._real = real
+
+    def __enter__(self) -> _BorrowedConnection:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def execute(self, query, params=None):
+        return self._real.cursor(row_factory=psycopg.rows.dict_row).execute(query, params)
+
+
+def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(connection, monkeypatch) -> None:
+    """#462: the exact repository class MCP ships (`PostgresToptGppeRepository`,
+    asserted as `_default_repository()`'s type by test_mcp_server) reads real
+    materialized rows through the governed pointer, against the real schema —
+    seeded by the real writers, never skipped for lack of data.
+
+    Trigger states covered (#461 postmortem — that bug fired only once
+    `mart.current_pointer_head` had rows, so every head-resolution branch is
+    driven with data, in the deployed order):
+      1. nothing seeded                -> unavailable
+      2. materialized, no quality      -> still unavailable (the acceptance gate)
+      3. quality persisted, no pointer -> served via the acceptance-gated FALLBACK
+      4. pointer advanced              -> served via the governed POINTER path
+    """
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
+    reader = PostgresToptGppeRepository(database_url=settings.database_url)
+
+    before = reader.latest()
+    # The transaction starts on the committed database state: empty in CI's
+    # ephemeral Postgres; a developer database that already serves a production
+    # run makes the withheld-state assertions vacuous while every served-state
+    # assertion still binds.
+    fresh_database = isinstance(before, ToptGppeUnavailable)
+    if fresh_database:
+        assert before.reason == "no accepted (quality-reported) production TOPT run"
+
+    _repository, run, _list_version, release_manifest_id, *_ = _seed_complete_production_run(connection)
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    assert len(results) == 20
+
+    if fresh_database:
+        # State 2: captured and materialized — but not quality-accepted and not
+        # pointer-advanced. The governed read must still withhold the run: the
+        # head is acceptance-gated, not an ORDER BY over mart rows.
+        withheld = reader.latest()
+        assert isinstance(withheld, ToptGppeUnavailable)
+
+    # Deployed order (a1_evidence docstring): the quality report persists first,
+    # then the pointer advances.
+    quality_report.persist(connection, quality_report.build_report(connection, run.run_id))
+
+    if fresh_database:
+        # State 3: quality-accepted but no pointer advanced yet — the reader's
+        # documented interim fallback must serve exactly this run.
+        via_fallback = reader.latest()
+        assert isinstance(via_fallback, ToptGppeReport), f"expected the fallback to serve, got {via_fallback!r}"
+        assert via_fallback.run_id == run.run_id
+        assert via_fallback.quality is not None
+
+    sequence = register_run_evidence(connection, run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert sequence >= 0
+
+    # State 4: the governed pointer path — the state in which #461 crashed.
+    served = reader.latest()
+    assert isinstance(served, ToptGppeReport), f"expected a report after the pointer advance, got {served!r}"
+    assert served.run_id == run.run_id
+    assert len(served.cells) == 20
+    assert served.available_count == 20
+    assert all(cell.availability == "available" for cell in served.cells)
+    listing_ids = [cell.listing_id for cell in served.cells]
+    assert listing_ids == sorted(listing_ids)
+    assert served.quality is not None and served.quality["run_id"] == run.run_id
