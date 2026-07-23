@@ -10,19 +10,58 @@ jobs:
     defaults:
       run:
         working-directory: apps/app-web
+    # Real Postgres so the DB-backed tests RUN here instead of skipping (#468).
+    # Mirrors ci-python: same image, same migrations, same arming contract.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: truealpha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - name: Apply DB migrations and roles
+        working-directory: .
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in db/migrations/*.sql db/roles.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done
       # Runs every tests/*.test.ts file, not just one hardcoded name — #373
       # found that only issue58-conformance.test.ts was ever invoked here,
       # so the other 13 (auth, conversations, documents, dashboard, route-group
       # boundary scans, etc.) silently never ran in CI despite passing locally.
-      - run: |
+      #
+      # TRUEALPHA_REQUIRE_RUNTIME=1 arms every DB guard: a test that cannot
+      # reach the Postgres service above must FAIL, not skip (#468). The grep
+      # gate below is the backstop for any future test that skips without
+      # honoring the arming variable — the convention is that a skip branch
+      # prints a line ending in "— SKIP", and no such line may appear here.
+      - name: Run tests (DB-backed tests armed)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+          TRUEALPHA_REQUIRE_RUNTIME: "1"
+        run: |
           set -euo pipefail
           for f in tests/*.test.ts; do
             echo "== $f"
             bun run "$f"
-          done
+          done 2>&1 | tee /tmp/ci-web-tests.log
+          if grep -F -- "— SKIP" /tmp/ci-web-tests.log; then
+            echo "::error::a test printed a skip marker; the Postgres service exists so integration tests must RUN in CI" >&2
+            exit 1
+          fi
       - run: bun run build

@@ -46,7 +46,11 @@ async function reachable(): Promise<Client | null> {
   } catch (error) {
     await client.end().catch(() => {});
     if (REQUIRE_DB) throw new Error(`configured Postgres is unreachable: ${String(error)}`);
-    console.log("mart-strategy-run-repository: no local Postgres; CI runs the required integration coverage — SKIP");
+    // Local-only escape hatch. ci-web provisions a real Postgres and sets
+    // TRUEALPHA_REQUIRE_RUNTIME=1, so in CI this branch is unreachable — an
+    // unreachable database fails hard above, and ci-web's grep gate rejects
+    // any "— SKIP" line as a second line of defense (#468).
+    console.log("mart-strategy-run-repository: no local Postgres and TRUEALPHA_REQUIRE_RUNTIME unset — SKIP");
     return null;
   }
 }
