@@ -59,7 +59,7 @@ jobs:
           for f in tests/*.test.ts; do
             echo "== $f"
             bun run "$f"
-          done | tee /tmp/ci-web-tests.log
+          done 2>&1 | tee /tmp/ci-web-tests.log
           if grep -F -- "— SKIP" /tmp/ci-web-tests.log; then
             echo "::error::a test printed a skip marker; the Postgres service exists so integration tests must RUN in CI" >&2
             exit 1
