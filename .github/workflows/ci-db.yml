@@ -54,29 +54,44 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/runtime_contract.sql
-      # #472: these two contract files had no execution host anywhere — written,
-      # reviewed, never run. Both are schema-level (data-independent), so the
-      # freshly migrated database above is exactly the right target.
-      - name: Assert capture-control and headcount-extraction contracts
+      # #472: these three contract files had no execution host anywhere — written,
+      # reviewed, never run (governed_research_access_contract.sql even SAID so in
+      # a docstring). All are schema-level and self-seeding inside a rolled-back
+      # transaction, so the freshly migrated database above is the right target.
+      - name: Assert orphaned db/tests contracts
         env:
           PGPASSWORD: postgres
         run: |
-          for f in db/tests/capture_control_contract.sql db/tests/headcount_extraction_contract.sql; do
+          for f in db/tests/capture_control_contract.sql \
+                   db/tests/headcount_extraction_contract.sql \
+                   db/tests/governed_research_access_contract.sql; do
             echo "== $f"
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
           done
       # #472 meta-check (#373 class): a contract test nothing runs passes no
-      # signal. Every db/tests/*.sql must be referenced by a workflow, a
-      # Python/TS test, or a shell runner — an unreferenced new file fails here
-      # instead of silently never running.
+      # signal. A file counts as hosted only when (a) a workflow or shell runner
+      # names its full db/tests/ path, or (b) a Python/TS file references it AND
+      # that file itself executes SQL (psql / ON_ERROR_STOP) — a prose-only
+      # mention in a non-executing file no longer counts (#480 review found
+      # exactly that false positive). Known residual gap, accepted and
+      # documented: a prose mention inside a file that executes a DIFFERENT
+      # contract still passes; tighten to an explicit host manifest if it bites.
       - name: Every db/tests file has an execution host
         run: |
           set -euo pipefail
           missing=0
           for f in db/tests/*.sql; do
             name="$(basename "$f")"
-            if ! grep -rqF -- "$name" .github/workflows libs apps tools db/apply_migrations.sh 2>/dev/null; then
-              echo "::error::db/tests/$name is referenced by no workflow or test — give it a host or delete it"
+            hosted=0
+            if grep -rqF -- "db/tests/$name" .github/workflows db/apply_migrations.sh 2>/dev/null; then
+              hosted=1
+            else
+              while IFS= read -r ref; do
+                if grep -qE "psql|ON_ERROR_STOP" "$ref"; then hosted=1; break; fi
+              done < <(grep -rlF -- "$name" libs apps tools --include="*.py" --include="*.ts" 2>/dev/null || true)
+            fi
+            if [ "$hosted" -eq 0 ]; then
+              echo "::error::db/tests/$name has no executing host — give it a real runner or delete it"
               missing=1
             fi
           done

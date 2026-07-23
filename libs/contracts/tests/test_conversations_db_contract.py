@@ -3,9 +3,9 @@
 Mirrors apps/data-engine/tests/datahub/test_evidence_graph_repository.py's
 `test_db_contract_executes` pattern: the contract SQL is the source of
 truth for RLS/append-only/single-redemption behavior; this test exists so
-it actually executes in CI rather than sitting unreferenced (unlike
-db/tests/governed_research_access_contract.sql, which nothing currently
-runs — see the PR discussion on #396).
+it actually executes in CI rather than sitting unreferenced. (The formerly
+unreferenced governed_research_access_contract.sql is executed by ci-db
+since #472, alongside a meta-check that fails on any future orphan.)
 """
 
 from __future__ import annotations
