@@ -67,7 +67,9 @@ export interface NewDocumentRevisionInput {
 /** Keyset cursor: `created_at` alone is not unique (two documents can share
  * a timestamp), so `documentId` breaks the tie — without it, pagination
  * could skip or repeat rows whenever a page boundary lands on a shared
- * `created_at`. */
+ * `created_at`. OPAQUE: `createdAt` carries the database's full microsecond
+ * precision (more than `Date` can hold) — echo it verbatim, never re-derive
+ * it from a parsed date (#470). */
 export interface DocumentCursor {
   createdAt: string;
   documentId: string;
@@ -174,7 +176,7 @@ const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:
  * of a clear, deterministic one here. */
 export function parseBeforeCursor(
   before: DocumentCursor | null | undefined,
-): { createdAt: Date; documentId: string } | null {
+): { createdAt: string; documentId: string } | null {
   // Loose check: a JSON round-trip of an optional field commonly produces
   // `null`, not `undefined` — treating only the latter as absent would
   // throw a TypeError on `before.createdAt` for the equally-valid null case.
@@ -182,14 +184,17 @@ export function parseBeforeCursor(
   if (!ISO_DATE_TIME_PATTERN.test(before.createdAt)) {
     throw new Error("before.createdAt must be a valid ISO datetime");
   }
-  const createdAt = new Date(before.createdAt);
-  if (Number.isNaN(createdAt.getTime())) {
+  // Validation only — the VALUE stays the original string. Converting to a
+  // JS Date truncated Postgres microseconds to milliseconds, so the replayed
+  // boundary was strictly below the real row and the keyset silently skipped
+  // rows in the boundary's sub-millisecond window (#470).
+  if (Number.isNaN(new Date(before.createdAt).getTime())) {
     throw new Error("before.createdAt must be a valid ISO datetime");
   }
   // Same reasoning as validateNewRevision: no trim before validating a
   // stable identifier.
   const documentId = assertStableId(before.documentId, "before.documentId");
-  return { createdAt, documentId };
+  return { createdAt: before.createdAt, documentId };
 }
 
 export interface DocumentsRepository {
@@ -224,13 +229,20 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
     return withOwnerScopedRuntime(
       { tenantId: context.tenantId, principalId: context.principalId },
       async (client) => {
+        // created_at_cursor is the LOSSLESS microsecond text of the boundary
+        // row: the display DTO's toISOString() truncates to milliseconds, and
+        // replaying a truncated cursor sits strictly below the real boundary,
+        // silently skipping same-window rows and dead-coding the document_id
+        // tie-break (#470). Clients echo the cursor verbatim.
         const result = await client.query<{
           document_id: string;
           tenant_id: string;
           owner_principal_id: string;
           created_at: Date;
+          created_at_cursor: string;
         }>(
-          `select d.document_id, d.tenant_id, d.owner_principal_id, d.created_at
+          `select d.document_id, d.tenant_id, d.owner_principal_id, d.created_at,
+                  to_char(d.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at_cursor
            from app.research_documents d
            where not exists (
              select 1 from app.research_document_tombstones t where t.document_id = d.document_id
@@ -244,8 +256,11 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
           [before?.createdAt ?? null, before?.documentId ?? null, limit],
         );
         const documents = result.rows.map(rowToDocument);
-        const last = documents[documents.length - 1];
-        const nextBefore = documents.length === limit && last ? { createdAt: last.createdAt, documentId: last.documentId } : null;
+        const lastRow = result.rows[result.rows.length - 1];
+        const nextBefore =
+          documents.length === limit && lastRow
+            ? { createdAt: lastRow.created_at_cursor, documentId: lastRow.document_id }
+            : null;
         return { documents, nextBefore };
       },
     );
