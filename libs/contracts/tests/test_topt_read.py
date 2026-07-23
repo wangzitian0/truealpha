@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import psycopg
 from truealpha_contracts import topt_read as topt_read_module
 from truealpha_contracts.topt_read import PostgresToptGppeRepository
 
@@ -126,3 +127,37 @@ def test_latest_reports_unavailable_when_neither_source_resolves(monkeypatch: An
     result = repo.latest()
 
     assert result.reason == "no accepted (quality-reported) production TOPT run"
+
+
+def test_latest_fails_closed_instead_of_raising_on_a_malformed_head_row(monkeypatch: Any) -> None:
+    """truealpha#462 AC2: a row-shape mismatch (the exact class of bug #461 was --
+    the query selected one column name and the code read another) must degrade to
+    ToptGppeUnavailable(reason="schema_mismatch"), not crash the whole MCP tool
+    call. Simulated here the same way #461 actually happened: the primary query's
+    row is missing the key the code reads."""
+
+    def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
+        if "current_pointer_head" in sql:
+            # No "as run_id" alias applied -- the row is keyed by the raw column
+            # expression, so `head["run_id"]` raises KeyError, exactly like #461.
+            return [{"target_run_id": RUN_ID}]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    _install_fake_connect(monkeypatch, responder)
+    repo = PostgresToptGppeRepository(database_url="postgresql://unused/unused")
+
+    result = repo.latest()
+
+    assert result.reason == "schema_mismatch"
+
+
+def test_latest_fails_closed_on_a_database_error(monkeypatch: Any) -> None:
+    def raise_connect(*_a: Any, **_kw: Any) -> Any:
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(topt_read_module.psycopg, "connect", raise_connect)
+    repo = PostgresToptGppeRepository(database_url="postgresql://unused/unused")
+
+    result = repo.latest()
+
+    assert result.reason == "database_unavailable"
