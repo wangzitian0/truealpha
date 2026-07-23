@@ -35,6 +35,19 @@ function run() {
     }
     assert(threw, "production with no SECRET_KEY must throw, not fall back to a hardcoded default");
 
+    // --- production with the dev default explicitly pasted must also throw (#447):
+    // .env.example promises "refuses to start a production session on the dev
+    // default", which an unset-only check does not deliver ---
+    process.env.SECRET_KEY = "dev-only-insecure-secret-do-not-use-in-production-change-me";
+    (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+    let threwOnDefault = false;
+    try {
+      loadAuthConfig();
+    } catch {
+      threwOnDefault = true;
+    }
+    assert(threwOnDefault, "production with the dev default explicitly set must throw, exactly like unset");
+
     // --- production with SECRET_KEY set: succeeds and uses it ---
     process.env.SECRET_KEY = "a-real-production-secret-at-least-32-bytes";
     (process.env as Record<string, string | undefined>).NODE_ENV = "production";

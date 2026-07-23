@@ -24,6 +24,13 @@ export function loadAuthConfig(): AuthConfig {
       "SECRET_KEY is not set. In production this must come from Vault, never the development default.",
     );
   }
+  // .env.example promises production refuses the dev default; an explicitly
+  // pasted default must be rejected exactly like an unset key (#447).
+  if (secretKey === DEV_ONLY_DEFAULT_SECRET && isProduction) {
+    throw new Error(
+      "SECRET_KEY is the development default. In production this must come from Vault, never the development default.",
+    );
+  }
 
   const parsedExpiry = Number.parseInt(process.env.ACCESS_TOKEN_EXPIRE_MINUTES ?? "", 10);
   const accessTokenExpireMinutes =
