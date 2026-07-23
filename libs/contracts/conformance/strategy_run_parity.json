@@ -1,0 +1,166 @@
+{
+  "report": {
+    "run": {
+      "strategy_run_id": "strategy-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "strategy_key": "large_model_value_v0",
+      "strategy_version": "v0",
+      "definition_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "corpus_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "claim_ceiling": "preview",
+      "executed_at": "2027-06-01T00:00:00Z"
+    },
+    "decisions": [
+      {
+        "strategy_decision_id": "strategy-decision:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "content_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "issuer_id": "issuer:zeta",
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "capital_adjusted_labor_efficiency": "12.5",
+        "tier": "tech",
+        "current_price_to_sales": "20",
+        "target_price_to_sales": "18.75",
+        "valuation_gap": "0.5",
+        "eligible": true,
+        "outcome": "selected",
+        "exclusion_reason": null,
+        "rank": 1,
+        "target_weight": "1.0"
+      },
+      {
+        "strategy_decision_id": "strategy-decision:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "content_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "issuer_id": "issuer:adm",
+        "cutoff_at": "2026-03-31T23:59:59.123456Z",
+        "capital_adjusted_labor_efficiency": null,
+        "tier": null,
+        "current_price_to_sales": null,
+        "target_price_to_sales": null,
+        "valuation_gap": null,
+        "eligible": false,
+        "outcome": "excluded",
+        "exclusion_reason": "insufficient_confidence",
+        "rank": null,
+        "target_weight": null
+      }
+    ],
+    "request_strategy_id": "large_model_value_v0",
+    "expected_report": {
+      "strategy_id": "large_model_value_v0",
+      "source": "mart",
+      "corpus_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "decisions": [
+        {
+          "issuer_id": "issuer:zeta",
+          "cutoff_at": "2026-03-31T23:59:59Z",
+          "outcome": "selected",
+          "eligible": true,
+          "tier": "tech",
+          "capital_adjusted_labor_efficiency": "12.5",
+          "current_price_to_sales": "20",
+          "target_price_to_sales": "18.75",
+          "valuation_gap": "0.5",
+          "confidence": null,
+          "exclusion_reason": null,
+          "rank": 1,
+          "target_weight": "1.0"
+        },
+        {
+          "issuer_id": "issuer:adm",
+          "cutoff_at": "2026-03-31T23:59:59.123456Z",
+          "outcome": "excluded",
+          "eligible": false,
+          "tier": null,
+          "capital_adjusted_labor_efficiency": null,
+          "current_price_to_sales": null,
+          "target_price_to_sales": null,
+          "valuation_gap": null,
+          "confidence": null,
+          "exclusion_reason": "insufficient_confidence",
+          "rank": null,
+          "target_weight": null
+        }
+      ],
+      "golden_mismatches": []
+    }
+  },
+  "wrong_strategy_id": {
+    "run": {
+      "strategy_run_id": "strategy-run:1111111111111111111111111111111111111111111111111111111111111111",
+      "content_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "strategy_key": "parity-not-the-default",
+      "strategy_version": "v0",
+      "definition_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "corpus_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "claim_ceiling": "preview",
+      "executed_at": "2027-06-01T00:00:00Z"
+    },
+    "decisions": [],
+    "request_strategy_id": "parity-not-the-default",
+    "expected_reason": "schema_mismatch"
+  },
+  "rank_zero": {
+    "run": {
+      "strategy_run_id": "strategy-run:3333333333333333333333333333333333333333333333333333333333333333",
+      "content_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "strategy_key": "large_model_value_v0-parity-rank-zero",
+      "strategy_version": "v0",
+      "definition_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "corpus_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "claim_ceiling": "preview",
+      "executed_at": "2027-06-01T00:00:00Z"
+    },
+    "decisions": [
+      {
+        "strategy_decision_id": "strategy-decision:5555555555555555555555555555555555555555555555555555555555555555",
+        "content_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "issuer_id": "issuer:zeta",
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "capital_adjusted_labor_efficiency": "12.5",
+        "tier": "tech",
+        "current_price_to_sales": "20",
+        "target_price_to_sales": "18.75",
+        "valuation_gap": "0.5",
+        "eligible": true,
+        "outcome": "selected",
+        "exclusion_reason": null,
+        "rank": 0,
+        "target_weight": "1.0"
+      }
+    ],
+    "request_strategy_id": "large_model_value_v0-parity-rank-zero",
+    "expected_reason": "schema_mismatch"
+  },
+  "weight_out_of_bounds": {
+    "run": {
+      "strategy_run_id": "strategy-run:6666666666666666666666666666666666666666666666666666666666666666",
+      "content_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "strategy_key": "large_model_value_v0-parity-weight-oob",
+      "strategy_version": "v0",
+      "definition_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "corpus_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "claim_ceiling": "preview",
+      "executed_at": "2027-06-01T00:00:00Z"
+    },
+    "decisions": [
+      {
+        "strategy_decision_id": "strategy-decision:8888888888888888888888888888888888888888888888888888888888888888",
+        "content_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "issuer_id": "issuer:zeta",
+        "cutoff_at": "2026-03-31T23:59:59Z",
+        "capital_adjusted_labor_efficiency": "12.5",
+        "tier": "tech",
+        "current_price_to_sales": "20",
+        "target_price_to_sales": "18.75",
+        "valuation_gap": "0.5",
+        "eligible": true,
+        "outcome": "selected",
+        "exclusion_reason": null,
+        "rank": 1,
+        "target_weight": "1.5"
+      }
+    ],
+    "request_strategy_id": "large_model_value_v0-parity-weight-oob",
+    "expected_reason": "schema_mismatch"
+  }
+}

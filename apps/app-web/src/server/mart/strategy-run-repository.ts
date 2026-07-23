@@ -4,10 +4,11 @@
  * through the `mart_readonly` role (`./db.ts`), replacing the checked-in
  * `FixtureStrategyRunRepository` as the shipped consumer path.
  *
- * The SQL and the row→DTO mapping mirror the Python
- * `truealpha_contracts.strategy_run_postgres.PostgresStrategyRunRepository`
- * exactly, so the App and MCP return semantically identical responses from the
- * same mart contract:
+ * Parity with the Python `PostgresStrategyRunRepository` is not a comment —
+ * it is EXECUTED: tests/strategy-run-parity-conformance.test.ts and its Python
+ * half seed the same rows on one real schema and assert both serializations
+ * equal the frozen canon in libs/contracts/conformance/strategy_run_parity.json
+ * (#469). The shared semantics:
  *  - latest run per `strategy_key` by `executed_at desc, created_at desc, strategy_run_id desc`;
  *  - decisions ordered by `cutoff_at, issuer_id`;
  *  - `confidence` is always null (mart.strategy_decisions has no such column yet, #355);
@@ -46,13 +47,25 @@ const LATEST_RUN_SQL = `
   limit 1
 `;
 
+// cutoff_at is formatted in SQL to Python's datetime.isoformat semantics
+// ("...:59Z" when microseconds are zero, "...:59.123456Z" otherwise) so the
+// serialized decision is byte-identical to the Python twin's pydantic output —
+// JS Date.toISOString() always emits milliseconds and silently truncates
+// microseconds, which broke trace-ID parity on exactly the mart path (#469).
+// ORDER BY names the source column, not the text alias: the two text formats
+// do not sort chronologically.
 const DECISIONS_SQL = `
-  select issuer_id, cutoff_at, capital_adjusted_labor_efficiency, tier,
+  select issuer_id,
+         case when to_char(cutoff_at at time zone 'UTC', 'US') = '000000'
+              then to_char(cutoff_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+              else to_char(cutoff_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+         end as cutoff_at,
+         capital_adjusted_labor_efficiency, tier,
          current_price_to_sales, target_price_to_sales, valuation_gap,
          eligible, outcome, exclusion_reason, rank, target_weight
   from mart.strategy_decisions
   where strategy_run_id = $1
-  order by cutoff_at, issuer_id
+  order by mart.strategy_decisions.cutoff_at, issuer_id
 `;
 
 class SchemaMismatchError extends Error {}
@@ -81,16 +94,49 @@ function tierOf(value: unknown): ValuationTier | null {
 }
 
 function cutoffIso(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
+  // DECISIONS_SQL emits Python-isoformat text; a Date here means the SQL-side
+  // formatting was lost, which silently reintroduces the millisecond drift.
   if (typeof value === "string") return value;
-  throw new SchemaMismatchError("cutoff_at is neither a timestamp nor a string");
+  throw new SchemaMismatchError("cutoff_at did not arrive as SQL-formatted text");
+}
+
+/** Exact [0, 1] membership test on a Postgres numeric string — string
+ * arithmetic only, because coercing through a JS number reintroduces the
+ * float rounding this module's own rule forbids (#482 review): an edge value
+ * like "1.0000000000000000001" must be rejected exactly as the Python twin's
+ * Decimal bound rejects it, not rounded into acceptance. */
+function outsideUnitInterval(text: string): boolean {
+  const negative = text.startsWith("-");
+  const magnitude = negative ? text.slice(1) : text;
+  const [whole = "", fraction = ""] = magnitude.split(".");
+  const wholeStripped = whole.replace(/^0+/, "");
+  const fractionHasValue = /[1-9]/.test(fraction);
+  if (negative) return wholeStripped !== "" || fractionHasValue; // any negative non-zero
+  if (wholeStripped === "") return false; // 0 <= value < 1
+  if (wholeStripped === "1") return fractionHasValue; // exactly 1 passes; 1.0…01 fails
+  return true; // integer part >= 2
+}
+
+/** Mirrors the Python twin's pydantic Field bounds — a row the MCP side would
+ * reject as `schema_mismatch` must not render in the App (#469). */
+function boundedDecimalString(value: unknown, field: string): string | null {
+  const text = decimalString(value, field);
+  if (text !== null && outsideUnitInterval(text)) {
+    throw new SchemaMismatchError(`${field} is outside [0, 1]`);
+  }
+  return text;
 }
 
 function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
-  if (typeof row.issuer_id !== "string") throw new SchemaMismatchError("issuer_id is not a string");
+  if (typeof row.issuer_id !== "string" || row.issuer_id.length === 0) {
+    throw new SchemaMismatchError("issuer_id is not a non-empty string");
+  }
   if (typeof row.eligible !== "boolean") throw new SchemaMismatchError("eligible is not a boolean");
   const rank = row.rank;
   if (rank !== null && typeof rank !== "number") throw new SchemaMismatchError("rank is not an integer");
+  if (typeof rank === "number" && (!Number.isInteger(rank) || rank < 1)) {
+    throw new SchemaMismatchError("rank is not an integer >= 1");
+  }
   return {
     issuer_id: row.issuer_id,
     cutoff_at: cutoffIso(row.cutoff_at),
@@ -108,7 +154,7 @@ function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
     confidence: null,
     exclusion_reason: typeof row.exclusion_reason === "string" ? row.exclusion_reason : null,
     rank: (rank as number | null) ?? null,
-    target_weight: decimalString(row.target_weight, "target_weight"),
+    target_weight: boundedDecimalString(row.target_weight, "target_weight"),
   };
 }
 
@@ -132,6 +178,14 @@ export class MartStrategyRunRepository {
 
     if (runRow === undefined) {
       return { strategy_id: strategyId, reason: "no_runs_recorded" };
+    }
+
+    // The Python twin's report type pins strategy_id to the Literal
+    // "large_model_value_v0": a run recorded under any other key fails its
+    // validation and returns schema_mismatch. Mirror that instead of
+    // relabeling foreign rows as the default strategy (#469).
+    if (strategyId !== "large_model_value_v0") {
+      return { strategy_id: strategyId, reason: "schema_mismatch" };
     }
 
     const corpusSha256 = runRow.corpus_sha256;
