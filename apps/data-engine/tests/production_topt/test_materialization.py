@@ -12,11 +12,13 @@ from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.a1_evidence import register_run_evidence
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
+from data_engine.datahub.live_topt_pipeline import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from factors.production_topt import GppeV0Definition, ToptCoreAvailability
 from truealpha_contracts import CaptureEnvironment, canonical_sha256
+from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.capture_control import CaptureObligationWorkBinding
 from truealpha_contracts.datahub import (
     CaptureCampaign,
@@ -30,6 +32,8 @@ from truealpha_contracts.datahub import (
     SourceRequest,
     SourceVintage,
 )
+from truealpha_contracts.strategy_run import StrategyRunReport
+from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeReport, ToptGppeUnavailable
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
@@ -659,6 +663,10 @@ class _BorrowedConnection:
     def execute(self, query, params=None):
         return self._real.cursor(row_factory=psycopg.rows.dict_row).execute(query, params)
 
+    def cursor(self, **kwargs):
+        # PostgresStrategyRunRepository opens its own dict_row cursor.
+        return self._real.cursor(**kwargs)
+
 
 def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(connection, monkeypatch) -> None:
     """#462: the exact repository class MCP ships (`PostgresToptGppeRepository`,
@@ -739,3 +747,70 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
     listing_ids = [cell.listing_id for cell in served.cells]
     assert listing_ids == sorted(listing_ids)
     assert served.quality is not None and served.quality["run_id"] == run.run_id
+
+
+def test_capture_feeds_strategy_mart_read_back_by_the_shipping_consumer(connection, monkeypatch) -> None:
+    """#395's missing weld, driven end to end in one transaction: the captured
+    corpus run's observation payloads cross the capture→strategy bridge
+    (`seed_strategy_inputs_from_capture`, #429), the gateway + frozen evaluator
+    run the strategy, `write_replay` persists to mart, and the result returns
+    through the exact consumer MCP ships (`PostgresStrategyRunRepository`) —
+    islands 1→2→3 with no fixture on the data path.
+
+    Also pins a capture-shape drift so it stays visible until #407 converges the
+    corpus: the checked-in corpus payload keeps `gross_profit` NULL for the
+    financial issuer (raw SEC reality), while #451 fixed LIVE capture to place
+    the PPNR proxy into `gross_profit`. On corpus shape the bridge therefore
+    seeds no gross_profit for JPM and the evaluator excludes it — asserted
+    explicitly below.
+    """
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
+    _repository, run, _list_version, _release_manifest_id, *_ = _seed_complete_production_run(connection)
+
+    written = seed_strategy_inputs_from_capture(
+        connection, run.run_id, cutoff=CUTOFF, parser_version="production-topt-integration-parser:v1"
+    )
+    # 19 non-financial issuers × 5 financial keys + JPM's 4 (no gross_profit on
+    # corpus shape) + 20 last_close rows.
+    assert written == 19 * 5 + 4 + 20
+
+    executed_at = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
+    run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
+        connection, cutoff=CUTOFF, executed_at=executed_at, risk_free_rate=Decimal("0.05")
+    )
+    assert decision_count == 20
+    assert snapshot_id.startswith("strategy-snapshot:")
+
+    context = AccessContext(
+        context_id="ctx:test-e2e",
+        principal_id="principal:test-e2e",
+        tenant_id="tenant:test-e2e",
+        session_id="session:test-e2e",
+        authentication_method=AuthenticationMethod.SERVICE_IDENTITY,
+        principal_kind=PrincipalKind.SERVICE,
+        issued_at=executed_at,
+        expires_at=executed_at + timedelta(hours=1),
+    )
+    reader = PostgresStrategyRunRepository(database_url=settings.database_url)
+    report = reader.get_latest(strategy_id="large_model_value_v0", context=context)
+    assert isinstance(report, StrategyRunReport), f"expected a mart-backed report, got {report!r}"
+    assert report.source == "mart"
+    assert len(report.decisions) == decision_count
+
+    issuer_ids = [decision.issuer_id for decision in report.decisions]
+    assert issuer_ids == sorted(issuer_ids)  # single cutoff, so (cutoff_at, issuer_id) order is issuer order
+    by_issuer = {decision.issuer_id: decision for decision in report.decisions}
+    assert len(by_issuer) == 20
+
+    jpm = by_issuer["issuer:lei:8I5DZWZKVSZI1NUHU748"]
+    assert jpm.outcome == "excluded" and jpm.eligible is False
+    assert jpm.exclusion_reason == "missing_gross_profit_fact"
+    assert any(decision.outcome == "selected" for decision in report.decisions), (
+        "the corpus capture must select at least one issuer"
+    )
+
+    # The persisted run binds the exact content-addressed snapshot of its inputs.
+    lineage = connection.execute(
+        "select snapshot_id from mart.strategy_runs where strategy_run_id = %s", (run_id,)
+    ).fetchone()
+    assert lineage == (snapshot_id,)

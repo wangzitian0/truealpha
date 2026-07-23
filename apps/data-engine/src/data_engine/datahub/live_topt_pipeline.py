@@ -578,7 +578,13 @@ def run_live_topt_pipeline(
 _STRATEGY_FINANCIAL_KEYS = ("gross_profit", "total_assets", "headcount", "revenue", "shares_outstanding")
 
 
-def seed_strategy_inputs_from_capture(connection: psycopg.Connection[Any], run_id: str, *, cutoff: datetime) -> int:
+def seed_strategy_inputs_from_capture(
+    connection: psycopg.Connection[Any],
+    run_id: str,
+    *,
+    cutoff: datetime,
+    parser_version: str = PRIMARY_PARSER_VERSION,
+) -> int:
     """The capture->strategy bridge (#429): land the run's captured cells as
     provenance-neutral strategy inputs in ``staging.strategy_backtest_inputs``.
 
@@ -587,6 +593,10 @@ def seed_strategy_inputs_from_capture(connection: psycopg.Connection[Any], run_i
     canonical class's price — an approximation already reflected in the price
     confidence. Missing fields are simply not seeded; the evaluator excludes those
     issuers with explicit reasons rather than receiving fabricated values.
+
+    ``parser_version`` selects which parser vintage of the run's observations
+    crosses the bridge; the deployed tick uses the live default, and the #395
+    end-to-end test drives the integration-corpus vintage through the same code.
     """
     rows = connection.execute(
         """
@@ -599,7 +609,7 @@ def seed_strategy_inputs_from_capture(connection: psycopg.Connection[Any], run_i
           and o.parser_version = %s
           and o.semantic_type in ('financial-fact', 'market-price')
         """,
-        (run_id, PRIMARY_PARSER_VERSION),
+        (run_id, parser_version),
     ).fetchall()
 
     financial: dict[str, tuple[str, dict, Decimal]] = {}  # issuer -> (listing, payload, confidence)
