@@ -28,6 +28,14 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+      # #463: every route must fall inside its service's declared prefixes in
+      # tools/route_manifest.json, and no two services' prefixes may overlap —
+      # the shadowing class that broke login on staging AND production had no
+      # in-repo tripwire. Stdlib-only; also runs in ci-python for the
+      # llm-service side.
+      - name: Route-namespace manifest
+        working-directory: .
+        run: python3 tools/check_route_manifest.py
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck

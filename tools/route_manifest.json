@@ -1,0 +1,20 @@
+{
+  "_comment": "#463: the route-namespace contract between the two deployed services. Incident: llm-service's Traefik `/api` rule shadowed app-web's /api/auth/* and login broke on staging AND production \u2014 no artifact in this repo could turn red when either service grew a conflicting route. Each service declares the URL prefixes it owns on the shared domain; tools/check_route_manifest.py (ci-web + ci-python) fails when a route lands outside its service's prefixes or when two services' prefixes overlap. infra2's Traefik rules must map exactly these prefixes \u2014 link this file from the infra2 change that fixes #463.",
+  "services": {
+    "app-web": {
+      "owns": [
+        "/login",
+        "/admin",
+        "/research",
+        "/api/auth"
+      ],
+      "root": true
+    },
+    "llm-service": {
+      "owns": [
+        "/mcp",
+        "/health"
+      ]
+    }
+  }
+}

@@ -29,6 +29,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
+      # #463 route-namespace manifest (llm-service side; ci-web runs the same
+      # check for app-web). Stdlib-only.
+      - run: python3 tools/check_route_manifest.py
       - run: uv run ruff check apps libs
       - run: uv run ruff format --check apps libs
       - run: uv run mypy
