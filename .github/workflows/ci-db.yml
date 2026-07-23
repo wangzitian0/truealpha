@@ -54,3 +54,30 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/runtime_contract.sql
+      # #472: these two contract files had no execution host anywhere — written,
+      # reviewed, never run. Both are schema-level (data-independent), so the
+      # freshly migrated database above is exactly the right target.
+      - name: Assert capture-control and headcount-extraction contracts
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in db/tests/capture_control_contract.sql db/tests/headcount_extraction_contract.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done
+      # #472 meta-check (#373 class): a contract test nothing runs passes no
+      # signal. Every db/tests/*.sql must be referenced by a workflow, a
+      # Python/TS test, or a shell runner — an unreferenced new file fails here
+      # instead of silently never running.
+      - name: Every db/tests file has an execution host
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in db/tests/*.sql; do
+            name="$(basename "$f")"
+            if ! grep -rqF -- "$name" .github/workflows libs apps tools db/apply_migrations.sh 2>/dev/null; then
+              echo "::error::db/tests/$name is referenced by no workflow or test — give it a host or delete it"
+              missing=1
+            fi
+          done
+          exit "$missing"
