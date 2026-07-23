@@ -104,6 +104,9 @@ contract-conformance:
 	# file is added and this line isn't touched; the glob can't drift).
 	# -eu only (no pipefail): make's default shell is /bin/sh (dash on most Linux, no
 	# `-o pipefail` support), and this loop has no pipe to protect anyway (Copilot review).
+	# DB-backed tests skip gracefully without a local Postgres; set
+	# TRUEALPHA_REQUIRE_RUNTIME=1 to forbid skips (unreachable DB then fails hard,
+	# exactly as ci-web runs them — #468).
 	cd apps/app-web && set -eu; for f in tests/*.test.ts; do echo "== $$f"; bun run "$$f"; done
 
 check: lint typecheck test contract-conformance
