@@ -116,3 +116,33 @@ grant app_runtime to app_service_login;
 select format('alter role app_service_login password %L', nullif(:'app_service_db_password', ''))
   where nullif(:'app_service_db_password', '') is not null \gexec
 \endif
+
+-- #495 (surface 2b): the /admin ops overview reads run history, pointer
+-- freshness, and per-source quota burn. No existing role may touch
+-- dagster/raw (mart_readonly is mart-only; app_runtime is app-only + the
+-- one trigger table), so the ops surface gets its own nologin role with
+-- SELECT on exactly the three relations it renders — the app assumes it
+-- per-request the same way it assumes mart_readonly. Granted to
+-- app_service_login so the #432 cutover keeps working unchanged.
+do $$ begin
+    create role app_ops_reader nologin;
+exception when duplicate_object then null;
+end $$;
+
+alter role app_ops_reader set statement_timeout = '5s';
+grant usage on schema dagster to app_ops_reader;
+-- dagster.runs is created by Dagster's own instance bootstrap at runtime, not
+-- by our migrations — on a fresh database (CI) it does not exist yet, so the
+-- grant is conditional; deployed environments always have it by the time this
+-- runs, and re-running roles.sql after bootstrap picks it up.
+do $$ begin
+    if exists (select 1 from information_schema.tables
+               where table_schema = 'dagster' and table_name = 'runs') then
+        grant select on dagster.runs to app_ops_reader;
+    end if;
+end $$;
+grant usage on schema raw to app_ops_reader;
+grant select on raw.fetches to app_ops_reader;
+grant usage on schema mart to app_ops_reader;
+grant select on mart.current_pointer_head to app_ops_reader;
+grant app_ops_reader to app_service_login;
