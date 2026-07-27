@@ -260,3 +260,141 @@ def test_look_ahead_bundle_is_rejected() -> None:
         lambda c, cut, b: _bundle(knowable_at=datetime(2026, 4, 20, tzinfo=UTC)),
     )
     assert adapter.fetch(item).reason_code is ObligationReasonCode.LOOK_AHEAD_VIOLATION
+
+
+# -- concept-variant recency (#496) ----------------------------------------------------
+#
+# Every fixture above declares exactly one variant per field. That is the premise
+# production data violates: an issuer that switched tags keeps the abandoned one's history
+# forever, so both are present and only the period end says which is current. The cases
+# below are the real shapes, reduced.
+
+
+def test_a_current_variant_beats_an_abandoned_one_regardless_of_declaration_order() -> None:
+    """AAPL: `Revenues` stops at FY2018, `RevenueFromContract…` carries FY2025.
+
+    The abandoned tag is declared first, so a first-non-empty rule returns the 2018 figure
+    — which is what production mart held for seven years.
+    """
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2018-09-29", "2017-10-01", 265595000000, "2018-11-05")]}},
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_annual("2025-09-27", "2024-09-29", 416161000000, "2025-10-31")]}
+                },
+            }
+        }
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.revenue == Decimal("416161000000")
+    assert bundle.revenue_period_end == date(2025, 9, 27)
+
+
+def test_a_stale_reported_gross_profit_loses_to_a_current_derivation() -> None:
+    """AMZN: `GrossProfit` last tagged FY2009; FY2025 revenue and cost are both present."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": {"units": {"USD": [_annual("2009-12-31", "2009-01-01", 5531000000, "2010-01-29")]}},
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 716924000000, "2026-02-06")]}
+                },
+                "CostOfGoodsAndServicesSold": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 356414000000, "2026-02-06")]}
+                },
+            }
+        }
+    }
+    datum = gross_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("360510000000")
+    assert datum.period_end == date(2025, 12, 31)
+
+
+def test_a_reported_figure_still_wins_its_own_period() -> None:
+    """The rule is 'later period wins', not 'derivation always wins': for a shared period
+    the issuer's own assertion is preferred over our arithmetic."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 500, "2026-02-01")]}},
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 900, "2026-02-01")]}},
+                "CostOfRevenue": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 380, "2026-02-01")]}},
+            }
+        }
+    }
+    datum = gross_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("500")  # not 520
+
+
+def test_variants_are_never_cross_paired_across_periods() -> None:
+    """A legacy revenue tag and a current cost tag must not be subtracted from each other
+    just because that pair is reached first."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2018-12-31", "2018-01-01", 100, "2019-02-01")]}},
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 900, "2026-02-01")]}
+                },
+                "CostOfRevenue": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]}},
+            }
+        }
+    }
+    datum = gross_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("500")  # 900 - 400, both FY2025 — never 100 - 400
+
+
+def test_a_restatement_wins_by_filing_date_not_array_position() -> None:
+    """Company-facts repeats one period end across every document that reported it. The
+    latest FILING must win; taking whatever sits last in the array makes restatement
+    handling depend on the vendor's serialization order."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": {
+                    "units": {
+                        "USD": [
+                            _annual("2025-12-31", "2025-01-01", 120, "2026-03-01"),  # restated, later filing
+                            _annual("2025-12-31", "2025-01-01", 100, "2026-02-01"),  # original, later in array
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    values = annual_values_by_period_end(facts, "us-gaap", "GrossProfit", "USD", _CUTOFF)
+    assert values[date(2025, 12, 31)].value == Decimal("120")
+    assert values[date(2025, 12, 31)].filed == date(2026, 3, 1)
+
+
+def test_share_count_resolves_through_the_dei_taxonomy() -> None:
+    """META/ABBV/JNJ/LLY reported no us-gaap share count at all; the figure large filers
+    actually publish lives in `dei`."""
+    facts = {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {"shares": [{"end": "2026-01-31", "val": 2500000000, "filed": "2026-02-10"}]}
+                }
+            }
+        }
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("2500000000")
+
+
+def test_the_normalized_payload_carries_the_fiscal_periods() -> None:
+    """Without these the warehouse cannot answer how old its own numbers are — the
+    seven-year-stale revenue was only detectable by re-deriving from the vendor (#429)."""
+    adapter = SecFinancialFactAdapter(
+        {_work_item("d" * 64).work_item_id: _target()},
+        lambda *_: build_bundle(_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL),
+    )
+    result = adapter.fetch(_work_item("d" * 64))
+    assert isinstance(result, FetchSuccess)
+    assert result.record is not None
+    assert result.record.payload["operating_period_end"] == "2025-12-31"
