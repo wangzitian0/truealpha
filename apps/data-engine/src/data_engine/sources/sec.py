@@ -15,6 +15,7 @@ from data_engine.config import settings
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
 
 def client() -> httpx.Client:
@@ -26,19 +27,44 @@ def client() -> httpx.Client:
     return httpx.Client(headers={"User-Agent": settings.sec_user_agent}, timeout=30.0, follow_redirects=True)
 
 
+def ticker_cik_index(http: httpx.Client | None = None) -> dict[str, int]:
+    """The whole ticker -> CIK crosswalk from SEC's official mapping file, once.
+
+    Resolving a universe one ticker at a time re-downloads this file per lookup; a
+    capture run reads it once and indexes.
+    """
+    if http is None:
+        with client() as c:
+            return ticker_cik_index(c)
+    resp = http.get(TICKERS_URL)
+    resp.raise_for_status()
+    return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in resp.json().values()}
+
+
 def ticker_to_cik(ticker: str) -> int:
     """Resolve ticker -> CIK via SEC's official mapping file.
 
     NOTE: this per-source lookup is temporary. From Phase 0 on, the crosswalk lives
     in the KG as same_as edges (factors.shared.entity_resolution).
     """
-    with client() as c:
-        resp = c.get(TICKERS_URL)
-        resp.raise_for_status()
-        for row in resp.json().values():
-            if row["ticker"].upper() == ticker.upper():
-                return int(row["cik_str"])
-    raise KeyError(f"ticker not found in SEC mapping: {ticker}")
+    cik = ticker_cik_index().get(ticker.upper())
+    if cik is None:
+        raise KeyError(f"ticker not found in SEC mapping: {ticker}")
+    return cik
+
+
+def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
+    """The issuer's EDGAR submissions metadata (name, SIC classification, filing index).
+
+    This is issuer *registry* metadata, not reported financial data: it is what says
+    an issuer is a depository institution rather than a manufacturer.
+    """
+    if http is None:
+        with client() as c:
+            return fetch_company_submissions(cik, c)
+    resp = http.get(SUBMISSIONS_URL.format(cik=cik))
+    resp.raise_for_status()
+    return dict(resp.json())
 
 
 def fetch_company_facts(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:

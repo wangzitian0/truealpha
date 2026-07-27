@@ -1,8 +1,10 @@
-"""Register a live capture run on the A1 evidence plane and advance the governed
-pointer (#378 / #429 P2).
+"""Bind a captured run to its release manifest and advance the governed pointer
+(#378 / #429 P2).
 
-Called by the deployed pipeline after the quality report persists: appends the
-run + release-manifest evidence nodes (idempotent), then advances
+Called by the deployed pipeline after the quality report persists. The capture executor
+already appended this run's own evidence — the run node plus every raw-fetch and
+normalized-observation node it produced — so this step adds only what capture cannot
+know: the release-manifest node and the `bound_to` edge, then advances
 ``mart.current_pointer`` so consumers resolve the head through
 ``mart.current_pointer_head`` (init.md rule 26) instead of an ORDER BY.
 """
@@ -30,7 +32,7 @@ POINTER_FACTOR_ID = "gross_profit_per_employee"
 
 
 def register_run_evidence(connection: psycopg.Connection[Any], *, run_id: str, release_manifest_id: str) -> int:
-    """Append the run's evidence nodes and advance the pointer. Returns the pointer
+    """Bind the run to its release manifest and advance the pointer. Returns the pointer
     sequence now heading the governed read. Idempotent per run: appends dedupe on
     node identity, and an already-heading run advances nothing."""
     status = connection.execute(
@@ -44,12 +46,13 @@ def register_run_evidence(connection: psycopg.Connection[Any], *, run_id: str, r
     stamp = BitemporalStamp(valid_from=cutoff.date(), transaction_time=cutoff, recorded_at=cutoff)
     run_ref = EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=run_id)
     manifest_ref = EvidenceNodeRef(kind=EvidenceNodeKind.RELEASE_MANIFEST, node_id=release_manifest_id)
-    run_node = EvidenceNode(ref=run_ref, content_sha256=run_ref.content_sha256, stamp=stamp)
+    # The run node is the executor's to append — it owns the capture that created it.
+    # Re-appending it here would claim authorship of a node this step never produced.
     manifest_node = EvidenceNode(ref=manifest_ref, content_sha256=manifest_ref.content_sha256, stamp=stamp)
     edge = EvidenceEdge(from_ref=run_ref, to_ref=manifest_ref, relation=EvidenceRelation.BOUND_TO, stamp=stamp)
 
     repo = PostgresEvidenceGraphRepository(connection)
-    repo.append([run_node, manifest_node], [edge])
+    repo.append([manifest_node], [edge])
 
     key = CurrentPointerKey(
         environment=CaptureEnvironment.PRODUCTION,

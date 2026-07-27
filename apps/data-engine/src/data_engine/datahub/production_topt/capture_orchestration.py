@@ -18,6 +18,7 @@ from truealpha_contracts.datahub import CaptureWorkItem
 from data_engine.datahub.production_topt.executor import (
     FetchFailure,
     FetchOutcome,
+    ObligationSink,
     SourceFetchPort,
     ToptCaptureExecutor,
     ToptCaptureRunReport,
@@ -43,11 +44,16 @@ def run_topt_capture(
     routes: Mapping[str, SourceFetchPort],
     writer: EvidenceGraphWriter,
     *,
+    sink: ObligationSink | None = None,
     cutoff: datetime,
     recorded_at: datetime,
     max_attempts: int = 3,
 ) -> ToptCaptureRunReport:
-    """Execute the planned TOPT capture through the routed adapters and the evidence writer."""
+    """Execute the planned TOPT capture through the routed adapters and the evidence writer.
+
+    `sink` persists the capture-control tables the snapshot/mart path reads; on the
+    same connection as `writer`, so one run commits as one transaction.
+    """
     port = CompositeSourceFetchPort(routes)
-    executor = ToptCaptureExecutor(writer, max_attempts=max_attempts)
+    executor = ToptCaptureExecutor(writer, sink=sink, max_attempts=max_attempts)
     return executor.run(run_id, work_items, port, cutoff=cutoff, recorded_at=recorded_at)

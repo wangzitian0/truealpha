@@ -9,11 +9,11 @@ from data_engine.datahub.production_topt.executor import (
     FetchSuccess,
     ToptCaptureExecutor,
 )
-from data_engine.datahub.production_topt.yahoo_market_price_adapter import (
+from data_engine.datahub.production_topt.market_price_adapter import (
+    MarketPriceAdapter,
     MarketPriceQuote,
     MarketPriceTarget,
     SourceUnavailableError,
-    YahooMarketPriceAdapter,
 )
 from truealpha_contracts import EvidenceEdge, EvidenceNode, ObligationReasonCode
 from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
@@ -38,8 +38,15 @@ def _quote(day: date, close: str, knowable: datetime | None = None) -> MarketPri
     )
 
 
-def _adapter(item: CaptureWorkItem, fetcher) -> YahooMarketPriceAdapter:
-    return YahooMarketPriceAdapter({item.work_item_id: MarketPriceTarget("GOOG", _CUTOFF)}, fetcher)
+def _adapter(item: CaptureWorkItem, fetcher) -> MarketPriceAdapter:
+    return MarketPriceAdapter(
+        {
+            item.work_item_id: MarketPriceTarget(
+                "GOOG", _CUTOFF, "issuer:lei:X", "security:cusip:Y", "listing:xnas:goog"
+            )
+        },
+        fetcher,
+    )
 
 
 def test_success_is_decimal_and_deterministic() -> None:
@@ -47,7 +54,7 @@ def test_success_is_decimal_and_deterministic() -> None:
     adapter = _adapter(item, lambda symbol, cutoff: _quote(date(2026, 3, 31), "150.25"))
     result = adapter.fetch(item)
     assert isinstance(result, FetchSuccess)
-    assert result.confidence == Decimal("0.9")
+    assert result.confidence == Decimal("0.85")
     # Same inputs → identical normalized identity.
     assert adapter.fetch(item).normalized_sha256 == result.normalized_sha256
 

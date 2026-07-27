@@ -12,12 +12,20 @@ from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.a1_evidence import register_run_evidence
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
-from data_engine.datahub.live_topt_pipeline import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
+from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
 from data_engine.datahub.repository import PostgresCaptureControlRepository
+from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
 from factors.production_topt import GppeV0Definition, ToptCoreAvailability
-from truealpha_contracts import CaptureEnvironment, canonical_sha256
+from truealpha_contracts import (
+    BitemporalStamp,
+    CaptureEnvironment,
+    EvidenceNode,
+    EvidenceNodeKind,
+    EvidenceNodeRef,
+    canonical_sha256,
+)
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.capture_control import CaptureObligationWorkBinding
 from truealpha_contracts.datahub import (
@@ -151,6 +159,19 @@ def _seed_complete_production_run(
     repository.put_list_version(list_version)
     repository.bind_campaign_list(campaign.campaign_id, list_version.list_version_id)
     repository.put_run(run)
+    # The capture executor appends the run's evidence node as part of the capture it
+    # performed (#171 A1/A4); this seeder stands in for that executor, so it owes the
+    # same node. `register_run_evidence` only binds the release manifest to it.
+    PostgresEvidenceGraphRepository(connection).append(
+        [
+            EvidenceNode(
+                ref=EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=run.run_id),
+                content_sha256=run.run_id.split(":", 1)[1],
+                stamp=BitemporalStamp(valid_from=CUTOFF.date(), transaction_time=CUTOFF, recorded_at=CUTOFF),
+            )
+        ],
+        [],
+    )
     terminal_observation_id = None
     unselected_same_request_observation_ids = None
     foreign_observation_id = None

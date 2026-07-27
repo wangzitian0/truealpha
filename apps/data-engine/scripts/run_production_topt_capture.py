@@ -1,8 +1,10 @@
-"""Manual one-shot TOPT capture (thin wrapper over the schedulable pipeline).
+"""Manual one-shot TOPT capture (thin shell over the schedulable pipeline).
 
-The real logic lives in `data_engine.datahub.live_topt_pipeline` — the same module
-the deployed Dagster job (#27) runs per schedule tick. This wrapper keeps the
-manual, confirmation-free CLI path for prod bootstrap/backfill use.
+The real logic lives in `data_engine.datahub.production_topt.composition` — the same
+module the deployed Dagster job (#27) runs per schedule tick: plan, dispatch every
+obligation through the generic executor and its per-semantic adapters, freeze,
+materialize and grade. This wrapper keeps the manual, Dagster-free CLI path for
+bootstrap/backfill use.
 
 Usage (against the DATABASE_URL in settings, or DATABASE_URL env):
     uv run --package truealpha-data-engine python \
@@ -11,20 +13,17 @@ Usage (against the DATABASE_URL in settings, or DATABASE_URL env):
 `--version` must be unique per (cutoff) rerun — record identities derive from it.
 Default derives from the current UTC time so accidental reruns never collide.
 
-truealpha#271 (2026-07-22 follow-up): this wrapper used to stop after capture +
-core materialization, so a manual production run never advanced
-`mart.current_pointer` -- only the scheduled Dagster tick's `run_topt_live_tick`
-op called `register_run_evidence` (`dagster_defs.py`), which this script
-deliberately bypasses (it must run without a Dagster deployment). That left every
-manual production run resolvable only through `PostgresToptGppeRepository`'s
-acceptance-gated fallback query, never the governed `current_pointer_head` path --
-silently defeating the #429/#434 P4 exit criterion (MCP and the App must agree via
-the SAME governed head) for any consumer reading production. Mirrors the op's
-`register_run_evidence` call, in the same transaction, so a manual run is a
-governed head too. Deliberately does NOT mirror the op's
-`seed_strategy_inputs_from_capture`/`run_strategy_replay_for_cutoff` steps --
-the large_model_value_v0 strategy layer in production is explicit non-goal scope
-for truealpha#475.
+truealpha#271: this wrapper used to stop after capture + core materialization, so a
+manual run never advanced `mart.current_pointer` -- only the scheduled Dagster tick's
+`run_topt_live_tick` op called `register_run_evidence` (`dagster_defs.py`), which this
+script deliberately bypasses (it must run without a Dagster deployment). That left every
+manual run resolvable only through `PostgresToptGppeRepository`'s acceptance-gated
+fallback query, never the governed `current_pointer_head` path -- silently defeating the
+#429/#434 P4 exit criterion (MCP and the App must agree via the SAME governed head).
+Mirrors the op's `register_run_evidence` call, in the same transaction, so a manual run
+is a governed head too. Deliberately does NOT mirror the op's strategy-bridge steps --
+the large_model_value_v0 strategy layer in production is explicit non-goal scope for
+truealpha#475.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ from datetime import UTC, datetime
 import psycopg
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import register_run_evidence
-from data_engine.datahub.live_topt_pipeline import run_live_topt_pipeline
+from data_engine.datahub.production_topt.composition import run_topt_pipeline
 
 
 def main() -> int:
@@ -48,12 +47,12 @@ def main() -> int:
     version = args.version or f"manual-{datetime.now(UTC):%Y%m%dT%H%M%S}"
 
     with psycopg.connect(settings.database_url, autocommit=False) as connection:
-        print(f"== live TOPT pipeline: cutoff={cutoff.isoformat()} version={version} ==")
-        result = run_live_topt_pipeline(connection, cutoff=cutoff, version=version)
-        # #378/truealpha#271: register the run on the A1 evidence plane and advance
-        # the governed pointer inside the same transaction as the capture, so a
-        # manual production run is resolvable through mart.current_pointer_head the
-        # moment this commits -- same guarantee the scheduled tick makes.
+        print(f"== TOPT capture pipeline: cutoff={cutoff.isoformat()} version={version} ==")
+        result = run_topt_pipeline(connection, cutoff=cutoff, version=version)
+        # #378/truealpha#271: bind the run to its release manifest on the A1 evidence
+        # plane and advance the governed pointer inside the same transaction as the
+        # capture, so the run is resolvable through mart.current_pointer_head the moment
+        # this commits -- the same guarantee the scheduled tick makes.
         pointer_sequence = register_run_evidence(
             connection, run_id=result.run_id, release_manifest_id=result.release_manifest_id
         )

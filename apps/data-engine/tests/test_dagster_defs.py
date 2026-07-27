@@ -23,7 +23,7 @@ from data_engine.dagster_defs import (
     fixture_canary_definitions,
     topt_live_schedule,
 )
-from data_engine.datahub.live_topt_pipeline import live_version_for
+from data_engine.datahub.production_topt.composition import live_version_for
 
 
 def test_defs_loads_and_exposes_only_the_live_pipeline() -> None:
