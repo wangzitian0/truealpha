@@ -11,7 +11,7 @@ function cell(value: string | null): string {
 
 export default async function ToptQualityPage() {
   const principal = await getServerPrincipal();
-  if (!principal) redirect("/login?from=%2Fresearch%2Fquality");
+  if (!principal) redirect("/login?from=%2Fadmin%2Fquality");
   const state = await loadToptQuality(principal.context);
 
   return (
