@@ -20,7 +20,13 @@ from typing import Any
 from truealpha_contracts import ObligationReasonCode, canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
 
-from data_engine.datahub.production_topt.executor import FetchFailure, FetchOutcome, FetchSuccess
+from data_engine.datahub.production_topt.executor import (
+    FetchFailure,
+    FetchOutcome,
+    FetchSuccess,
+    NormalizedRecord,
+)
+from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 
 _RELEASE_SEMANTICS = frozenset({"listing-identity", "universe-membership"})
 
@@ -61,18 +67,15 @@ class ReleaseDerivedAdapter:
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
-        normalized_sha256 = canonical_sha256(
-            {
-                "semantic_type": record.semantic_type,
-                "subject_id": record.subject_id,
-                "payload": record.payload,
-            }
-        )
         return FetchSuccess(
             raw_sha256=hashlib.sha256(raw_bytes).hexdigest(),
             object_uri=f"release-derived://{record.semantic_type}/{record.subject_id}",
-            normalized_sha256=normalized_sha256,
+            normalized_sha256=canonical_sha256(record.payload),
             confidence=Decimal("1.0"),  # a frozen release projection is exact
             valid_from=record.knowable_at.date(),
             transaction_time=record.knowable_at,
+            record=NormalizedRecord(
+                payload=record.payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION
+            ),
+            raw_byte_length=len(raw_bytes),
         )

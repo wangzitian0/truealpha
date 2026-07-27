@@ -7,9 +7,10 @@ loads THIS module in both roles:
     dagster-daemon    run -m data_engine.dagster_defs  # sole recurring-run authority
 
 The ONE scheduled job here is the REAL-SOURCE pipeline (#27 appended acceptance,
-#429 P1): capture all 84 TOPT obligations from live sources (Yahoo closes, SEC
-company-facts, Twelve Data second price origin), freeze + materialize GPPE/three-tier
-into `mart.topt_*`, persist the run's quality report, seed the captured cells into
+#429 P1, #171): drive all 84 TOPT obligations through the generic capture executor
+and its per-semantic adapters (Yahoo closes with a Twelve Data second origin, SEC
+company-facts, release-derived identity), freeze + materialize GPPE/three-tier into
+`mart.topt_*`, persist the run's quality report, seed the captured cells into
 `staging.strategy_backtest_inputs`, and run the frozen strategy over that captured
 staging into `mart.strategy_*`. No fixture data is seeded anywhere in this job graph
 (#429 invariant I2); the only corpus-derived objects are the frozen universe scope
@@ -32,9 +33,8 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import register_run_evidence
-from data_engine.datahub.live_topt_pipeline import (
-    live_version_for,
-    run_live_topt_pipeline,
+from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
+from data_engine.datahub.strategy_bridge import (
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
 )
@@ -62,7 +62,7 @@ def run_topt_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfi
     # a mid-run failure leaves no partial run; the daemon's retry re-runs the tick
     # against the same content-addressed identities.
     with psycopg.connect(settings.database_url) as connection:
-        pipeline = run_live_topt_pipeline(connection, cutoff=cutoff, version=version)
+        pipeline = run_topt_pipeline(connection, cutoff=cutoff, version=version)
         seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
         strategy_run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
             connection, cutoff=cutoff, executed_at=cutoff, risk_free_rate=Decimal("0.05")

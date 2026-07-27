@@ -29,6 +29,11 @@ class Settings(RuntimeSettings):
     # Optional; raises OpenFIGI mapping limits from 25 req/min x 10 jobs to
     # 25 req/6s x 100 jobs. Free key: https://www.openfigi.com/api
     openfigi_api_key: str = ""
+    # Optional independent second price origin (#344, init.md rule 15). Rendered
+    # from Vault by infra2's truealpha/20.data_engine/secrets.ctmpl. Without it
+    # every market-price cell is honestly single-origin and reconciliation
+    # reports insufficient_independent_origins rather than silently agreeing.
+    twelve_data_api_key: str = ""
 
 
 settings = Settings()

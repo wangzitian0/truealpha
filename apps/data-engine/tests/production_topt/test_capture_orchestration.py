@@ -9,14 +9,14 @@ from data_engine.datahub.production_topt.capture_orchestration import (
     run_topt_capture,
 )
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
+from data_engine.datahub.production_topt.market_price_adapter import (
+    MarketPriceAdapter,
+    MarketPriceQuote,
+    MarketPriceTarget,
+)
 from data_engine.datahub.production_topt.release_derived_adapter import (
     ReleaseDerivedAdapter,
     ReleaseDerivedRecord,
-)
-from data_engine.datahub.production_topt.yahoo_market_price_adapter import (
-    MarketPriceQuote,
-    MarketPriceTarget,
-    YahooMarketPriceAdapter,
 )
 from truealpha_contracts import EvidenceEdge, EvidenceNode, ObligationReasonCode
 from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
@@ -48,8 +48,12 @@ class _FakeWriter:
 def test_composite_routes_and_fails_closed_on_unmapped() -> None:
     known = _work_item("3" * 64)
     unmapped = _work_item("4" * 64)
-    price = YahooMarketPriceAdapter(
-        {known.work_item_id: MarketPriceTarget("GOOG", _CUTOFF_D)},
+    price = MarketPriceAdapter(
+        {
+            known.work_item_id: MarketPriceTarget(
+                "GOOG", _CUTOFF_D, "issuer:lei:X", "security:cusip:Y", "listing:xnas:goog"
+            )
+        },
         lambda s, c: MarketPriceQuote(b"raw", Decimal("150.0"), date(2026, 3, 31), _KNOWN),
     )
     port = CompositeSourceFetchPort({known.work_item_id: price})
@@ -62,14 +66,18 @@ def test_composite_routes_and_fails_closed_on_unmapped() -> None:
 def test_run_topt_capture_across_two_semantics() -> None:
     price_item = _work_item("5" * 64)
     member_item = _work_item("6" * 64)
-    price = YahooMarketPriceAdapter(
-        {price_item.work_item_id: MarketPriceTarget("GOOG", _CUTOFF_D)},
+    price = MarketPriceAdapter(
+        {
+            price_item.work_item_id: MarketPriceTarget(
+                "GOOG", _CUTOFF_D, "issuer:lei:X", "security:cusip:Y", "listing:xnas:goog"
+            )
+        },
         lambda s, c: MarketPriceQuote(b"raw", Decimal("150.0"), date(2026, 3, 31), _KNOWN),
     )
     membership = ReleaseDerivedAdapter(
         {
             member_item.work_item_id: ReleaseDerivedRecord(
-                "universe-membership", "listing:goog", {"member": True}, _KNOWN
+                "universe-membership", "listing:goog", {"listing_id": "listing:goog", "member": True}, _KNOWN
             )
         },
         cutoff=_CUTOFF_D,
