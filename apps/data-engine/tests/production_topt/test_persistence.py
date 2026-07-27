@@ -23,7 +23,7 @@ from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphR
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.composition import PlannedRun, plan_and_persist
-from data_engine.datahub.production_topt.executor import SourceFetchPort
+from data_engine.datahub.production_topt.executor import FetchSuccess, SourceFetchPort
 from data_engine.datahub.production_topt.headcount import STOPGAP_HEADCOUNTS, StopgapHeadcountExtractor
 from data_engine.datahub.production_topt.market_price_adapter import (
     CorroboratingOrigin,
@@ -42,6 +42,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
+from truealpha_contracts import ObligationReasonCode
 from truealpha_contracts.datahub import ObligationTerminalState
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
@@ -251,3 +252,50 @@ def test_retrying_the_same_tick_is_idempotent(connection) -> None:
         (plan.run_id,),
     ).fetchone()
     assert before == after
+
+
+def test_sink_refuses_a_success_it_cannot_persist(connection) -> None:
+    """A success with no normalized record would terminally resolve the obligation with
+    nothing behind it; `freeze_snapshot` would then refuse the run far from the cause."""
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-a1-guard")
+    sink = PostgresCaptureControlSink(
+        connection,
+        plan.bindings,
+        source_label=plan.source_label,
+        timeline=plan.timeline,
+        retry=plan.retry,
+    )
+    work_item = plan.work_items[0]
+    recordless = FetchSuccess(
+        raw_sha256="a" * 64,
+        object_uri="s3://truealpha-raw/x",
+        normalized_sha256="b" * 64,
+        confidence=Decimal("0.9"),
+        valid_from=date(2026, 3, 31),
+        transaction_time=datetime(2026, 3, 31, tzinfo=UTC),
+    )
+    with pytest.raises(ValueError, match="without a normalized record"):
+        sink.record_outcome(
+            work_item,
+            attempt_reasons=(None,),
+            terminal_state=ObligationTerminalState.SUCCESS,
+            success=recordless,
+        )
+
+
+def test_sink_refuses_more_attempts_than_the_retry_policy_permits(connection) -> None:
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-a1-attempts")
+    sink = PostgresCaptureControlSink(
+        connection,
+        plan.bindings,
+        source_label=plan.source_label,
+        timeline=plan.timeline,
+        retry=plan.retry,
+    )
+    with pytest.raises(ValueError, match="beyond the 3"):
+        sink.record_outcome(
+            plan.work_items[0],
+            attempt_reasons=(ObligationReasonCode.TIMEOUT,) * 4,
+            terminal_state=ObligationTerminalState.UNAVAILABLE,
+            success=None,
+        )

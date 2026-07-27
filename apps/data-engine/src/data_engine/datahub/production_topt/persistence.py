@@ -160,6 +160,16 @@ class PostgresCaptureControlSink:
             raise LookupError(f"work item is not part of the persisted plan: {work_item.work_item_id}")
         if not attempt_reasons:
             raise ValueError("a terminal obligation must record at least one attempt")
+        if len(attempt_reasons) > self._retry.max_attempts:
+            raise ValueError(
+                f"{work_item.work_item_id} ran {len(attempt_reasons)} attempts, "
+                f"beyond the {self._retry.max_attempts} its retry policy permits"
+            )
+        if success is not None and success.record is None:
+            # A success the sink cannot persist would leave the obligation terminally
+            # resolved with no observation behind it, and `freeze_snapshot` would then
+            # refuse the run for a reason far from its cause.
+            raise ValueError(f"{work_item.work_item_id} succeeded without a normalized record to persist")
 
         ledger = AttemptLedger(work_item_id=work_item.work_item_id, retry_policy=self._retry)
         vintage_id: str | None = None
