@@ -1,18 +1,18 @@
 /**
- * #349/#371: /admin/strategy-runs server loader — denial, ready, and error
- * outcomes. #371 adds the role check: a verified session that is not
- * `principal_kind='administrator'` must be denied exactly like no session
- * at all — administrator routing is driven by principal_kind, never by
- * merely being logged in (#368 acceptance criterion).
+ * #349/#371/#493: /research/strategy server loader — denial, ready, and
+ * error outcomes. #493 moved strategy decisions into the research world:
+ * ANY verified principal (member included) may read; only the anonymous
+ * request is denied, and the repository must never be called before that
+ * authorization decision.
  *
- * Run standalone (`bun run tests/admin-strategy-runs.test.ts`), not through Next.js.
+ * Run standalone (`bun run tests/strategy-page.test.ts`), not through Next.js.
  */
 
 import {
   loadStrategyRunPage,
   type StrategyRunPrincipal,
   type StrategyRunReadRepositoryLike,
-} from "../src/server/admin-strategy-runs";
+} from "../src/server/strategy-page";
 import {
   FixtureStrategyRunRepository,
   type AccessContext,
@@ -59,17 +59,10 @@ const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principa
   assert(!repositoryCalled, "repository must not be called before authorization");
 }
 
-// --- denied: a verified session that is NOT an administrator, repository never called ---
+// --- ready: a verified MEMBER reads decisions (#493 — research output, not admin-only) ---
 {
-  let repositoryCalled = false;
-  const outcome = await loadStrategyRunPage(MEMBER_PRINCIPAL, "large_model_value_v0", {
-    getLatest: (_strategyId, _context) => {
-      repositoryCalled = true;
-      throw new Error("must not be reached when a member is denied admin access");
-    },
-  });
-  assert(outcome.kind === "denied", `expected a non-administrator to be denied, got ${outcome.kind}`);
-  assert(!repositoryCalled, "repository must not be called for a non-administrator");
+  const outcome = await loadStrategyRunPage(MEMBER_PRINCIPAL, "large_model_value_v0", fixtureRepository);
+  assert(outcome.kind === "ready", `expected a member to read strategy decisions (#493), got ${outcome.kind}`);
 }
 
 // --- ready: administrator principal present, repository returns a report ---
@@ -102,4 +95,4 @@ const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principa
   assert(outcome.message.includes("simulated fixture read failure"), `unexpected message: ${outcome.message}`);
 }
 
-console.log("#349/#371 admin-strategy-runs loader outcomes passed");
+console.log("#349/#371/#493 strategy-page loader outcomes passed");

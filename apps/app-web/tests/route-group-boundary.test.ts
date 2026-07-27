@@ -1,12 +1,14 @@
 /**
- * #371: normal-user route group boundary — no file under src/app/research
- * (or the shared components/lib it can reach) may import an administrator
- * loader/repository (`@/server/admin-strategy-runs`), and no file outside
- * src/app/admin may import it either. This is a static source scan, same
- * style as tests/dashboard-boundary.test.ts, not a runtime check — it
- * proves the import graph, which is what #371's acceptance criterion asks
- * for ("a test proves a normal-user route cannot import an administrator
- * loader").
+ * #371/#493: normal-user route group boundary — no file under
+ * src/app/research may import an administrator server module. #493
+ * generalized the rule from the single admin loader (which moved to
+ * src/server/strategy-page.ts when strategy decisions became research
+ * output) to the NAMING CONVENTION: every administrator-only server module
+ * lives at `src/server/admin-*` or `src/server/admin/*`, and only
+ * src/app/admin may import those paths. #495's ops read adapters must
+ * follow the convention to stay covered by this scan. Static source scan,
+ * same style as tests/dashboard-boundary.test.ts — it proves the import
+ * graph.
  *
  * Run standalone: `bun run tests/route-group-boundary.test.ts`.
  */
@@ -29,28 +31,37 @@ function listFilesRecursive(dir: string): string[] {
   return out;
 }
 
-const ADMIN_IMPORT_MARKERS = ["@/server/admin-strategy-runs", "server/admin-strategy-runs"];
+// Matches `@/server/admin-<anything>` and `@/server/admin/<anything>` import
+// specifiers (also their relative `server/admin...` spellings).
+const ADMIN_IMPORT_PATTERN = /["'@\/.]server\/admin[-\/]/;
 
-const researchDir = join(process.cwd(), "src/app/research");
-const researchFiles = listFilesRecursive(researchDir);
+const researchFiles = listFilesRecursive(join(process.cwd(), "src/app/research"));
 assert(researchFiles.length > 0, "expected at least one file under src/app/research to scan");
-
 for (const file of researchFiles) {
-  const source = readFileSync(file, "utf8");
-  for (const marker of ADMIN_IMPORT_MARKERS) {
-    assert(!source.includes(marker), `${file} must not import the administrator loader (${marker})`);
+  assert(
+    !ADMIN_IMPORT_PATTERN.test(readFileSync(file, "utf8")),
+    `${file} must not import an administrator server module (src/server/admin-*)`,
+  );
+}
+
+// The shared component/lib layers research pages can reach are covered too.
+for (const dir of ["src/components", "src/client"]) {
+  for (const file of listFilesRecursive(join(process.cwd(), dir))) {
+    assert(
+      !ADMIN_IMPORT_PATTERN.test(readFileSync(file, "utf8")),
+      `${file} must not import an administrator server module (src/server/admin-*)`,
+    );
   }
 }
 
-// Sanity check the other direction too: the admin loader module must exist
-// and actually be imported somewhere under src/app/admin, so this isn't a
-// vacuously-true scan of an unused file.
-const adminLoaderPath = join(process.cwd(), "src/server/admin-strategy-runs.ts");
-const adminDirFiles = listFilesRecursive(join(process.cwd(), "src/app/admin"));
-const adminLoaderIsUsed = adminDirFiles.some((file) =>
-  ADMIN_IMPORT_MARKERS.some((marker) => readFileSync(file, "utf8").includes(marker)),
+// Guard against the rule going vacuous in the OTHER direction: the moved
+// strategy loader must no longer match the admin convention (it is research
+// surface now), and must be imported by the research strategy page.
+statSync(join(process.cwd(), "src/server/strategy-page.ts"));
+const strategyPage = readFileSync(join(process.cwd(), "src/app/research/strategy/page.tsx"), "utf8");
+assert(
+  strategyPage.includes("@/server/strategy-page"),
+  "sanity check failed: /research/strategy must import the research-side strategy loader",
 );
-assert(adminLoaderIsUsed, "sanity check failed: expected src/app/admin to actually import the admin loader");
-statSync(adminLoaderPath); // throws if the file has moved/been renamed without updating this test
 
-console.log("#371 route-group boundary scan passed (research routes cannot import the admin loader)");
+console.log("#371/#493 route-group boundary scan passed (research cannot import src/server/admin-*)");

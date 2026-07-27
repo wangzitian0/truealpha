@@ -1,5 +1,5 @@
 /**
- * Server-only route loader for /admin/strategy-runs — see #349/#371/#362.
+ * Server-only route loader for /research/strategy — see #349/#371/#362/#493.
  *
  * Re-authorizes on every call (never trusts a cached decision), then reads
  * through the real `mart` schema (`MartStrategyRunRepository`, via the
@@ -9,9 +9,11 @@
  *
  * #371: takes an already-resolved `StrategyRunPrincipal | null` (this
  * module never derives identity itself — same pattern as `dashboard.ts`).
- * A verified session that is not `principal_kind='administrator'` is denied
- * exactly like no session at all: administrator routing is driven by
- * `app.principals.principal_kind`, never by merely being logged in.
+ * #493 moved this page from /admin/strategy-runs into the research world:
+ * strategy decisions are research output, readable by every verified
+ * principal — the same mart rows /research/rankings already serves them.
+ * Anonymous (null principal) stays denied; the administrator-only gate is
+ * gone by design, not by accident.
  */
 
 import type { AccessContext, StrategyRunReport, StrategyRunUnavailable } from "@/contracts/strategyRun";
@@ -38,7 +40,7 @@ export async function loadStrategyRunPage(
   strategyId: string,
   repository: StrategyRunReadRepositoryLike = new MartStrategyRunRepository(),
 ): Promise<StrategyRunPageOutcome> {
-  if (principal === null || principal.principalKind !== "administrator") {
+  if (principal === null) {
     return { kind: "denied" };
   }
 

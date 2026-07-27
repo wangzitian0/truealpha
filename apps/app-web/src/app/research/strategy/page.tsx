@@ -1,4 +1,4 @@
-import { loadStrategyRunPage } from "@/server/admin-strategy-runs";
+import { loadStrategyRunPage } from "@/server/strategy-page";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import type { StrategyRunDecision, StrategyRunOutcome } from "@/contracts/strategyRun";
 
@@ -31,7 +31,7 @@ export default async function StrategyRunsPage() {
           Strategy runs
         </h1>
         <p role="status" className="mt-4 rounded-lg border border-border bg-card p-4 text-amber-400">
-          Access denied. No verified administrator identity for this request.
+          Access denied. No verified session for this request.
         </p>
       </section>
     );

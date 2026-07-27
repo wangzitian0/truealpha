@@ -1,0 +1,26 @@
+{
+  "_comment": "#493: the frozen app-web URL tree — the inner-tree counterpart of tools/route_manifest.json (which only assigns service PREFIXES). tests/route-tree-freeze.test.ts fails when a filesystem route exists that is not listed here, when a live route is missing, or when a planned route gets built without flipping it to live in the same PR. Planned entries are the approved-but-unbuilt pages from the 4-step overhaul (#494/#495); adding any route outside this contract requires amending this file, visibly, in the same PR.",
+  "routes": [
+    { "path": "/", "live": true },
+    { "path": "/login", "live": true },
+    { "path": "/api/auth/login", "live": true },
+    { "path": "/api/auth/logout", "live": true },
+    { "path": "/api/auth/me", "live": true },
+    { "path": "/research", "live": true },
+    { "path": "/research/rankings", "live": true },
+    { "path": "/research/strategy", "live": true },
+    { "path": "/research/compare", "live": true },
+    { "path": "/research/coverage", "live": false },
+    { "path": "/research/entities/[id]", "live": true },
+    { "path": "/research/library", "live": true },
+    { "path": "/research/library/[id]", "live": true },
+    { "path": "/research/conversations", "live": true },
+    { "path": "/research/conversations/[id]", "live": true },
+    { "path": "/research/trace", "live": true },
+    { "path": "/admin", "live": false },
+    { "path": "/admin/quality", "live": true },
+    { "path": "/admin/pipeline", "live": false },
+    { "path": "/admin/releases", "live": false },
+    { "path": "/admin/access", "live": false }
+  ]
+}
