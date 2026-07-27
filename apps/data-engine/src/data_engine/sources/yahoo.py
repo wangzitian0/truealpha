@@ -107,7 +107,8 @@ def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
     bars = []
     for i, ts in enumerate(timestamps):
         o, h, low, c, v = quote["open"][i], quote["high"][i], quote["low"][i], quote["close"][i], quote["volume"][i]
-        if c is None:  # non-trading gaps inside the range come back null
+        close = recover_quoted_price(c)
+        if close is None:  # non-trading gaps inside the range come back null
             continue
         bars.append(
             PriceBar(
@@ -115,7 +116,7 @@ def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
                 open_=recover_quoted_price(o),
                 high=recover_quoted_price(h),
                 low=recover_quoted_price(low),
-                close=recover_quoted_price(c),
+                close=close,
                 adj_close=recover_quoted_price(adjclose[i]),
                 volume=v,
             )
