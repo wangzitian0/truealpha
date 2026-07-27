@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadRanking } from "@/server/dashboard";
+import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
 import { formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
@@ -21,6 +22,7 @@ export default async function RankingsPage({
   if (!principal) redirect("/login?from=%2Fresearch%2Frankings");
   const params = await searchParams;
   const state = await loadRanking(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
+  const names = await loadEntityDisplayMap();
 
   return (
     <section aria-labelledby="rankings-heading" className="space-y-6">
@@ -64,8 +66,9 @@ export default async function RankingsPage({
                       <Link
                         href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
                         className="text-accent hover:underline"
+                        title={row.issuerId}
                       >
-                        {row.issuerId}
+                        {entityLabel(row.issuerId, names)}
                       </Link>
                     </th>
                     <td className="px-4 py-3">{cell(row.tier)}</td>
