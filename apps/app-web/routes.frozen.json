@@ -17,7 +17,7 @@
     { "path": "/research/conversations", "live": true },
     { "path": "/research/conversations/[id]", "live": true },
     { "path": "/research/trace", "live": true },
-    { "path": "/admin", "live": false },
+    { "path": "/admin", "live": true },
     { "path": "/admin/api/trigger", "live": true },
     { "path": "/admin/quality", "live": true },
     { "path": "/admin/pipeline", "live": false },
