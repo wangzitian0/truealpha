@@ -25,7 +25,7 @@ The retired fixture-seeded canary lives in `fixture_canary_definitions()` — an
 explicitly named, tests-only composition that is NOT part of the deployed `defs`.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import dagster as dg
@@ -124,9 +124,47 @@ def topt_live_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     )
 
 
+@dg.sensor(
+    job=topt_live_pipeline_job,
+    minimum_interval_seconds=30,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
+    """#495: DB-mediated manual trigger. The admin UI INSERTs into
+    `staging.pipeline_trigger_requests` (init.md §2.2 — services exchange
+    data only through Postgres; app-web has no path to this daemon and must
+    not get one); this sensor launches the SAME job with the requested
+    `executed_at` — identical thin-trigger semantics to the schedule
+    (idempotent, content-addressed, #491). `run_key = manual:<dedupe_key>`
+    makes redelivery harmless: if the consume-UPDATE races a daemon restart
+    after the yield, the daemon dedupes the run_key and no second run
+    launches.
+    """
+    with psycopg.connect(settings.database_url) as connection:
+        pending = connection.execute(
+            "select request_id, executed_at, dedupe_key from staging.pipeline_trigger_requests "
+            "where consumed_at is null order by request_id limit 5"
+        ).fetchall()
+        for request_id, executed_at, dedupe_key in pending:
+            run_key = f"manual:{dedupe_key}"
+            yield dg.RunRequest(
+                run_key=run_key,
+                run_config=dg.RunConfig(
+                    ops={"run_topt_live_tick": ToptLiveTickConfig(executed_at=executed_at.astimezone(UTC).isoformat())}
+                ),
+            )
+            connection.execute(
+                "update staging.pipeline_trigger_requests "
+                "set consumed_at = clock_timestamp(), launched_run_key = %s where request_id = %s",
+                (run_key, request_id),
+            )
+        connection.commit()
+
+
 defs = dg.Definitions(
     jobs=[topt_live_pipeline_job],
     schedules=[topt_live_schedule],
+    sensors=[pipeline_trigger_sensor],
 )
 
 
