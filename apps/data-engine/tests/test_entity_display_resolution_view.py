@@ -94,9 +94,7 @@ def test_display_name_is_null_without_kg_and_fills_through_the_join(frozen_membe
 def test_mart_readonly_reads_the_view_but_not_staging(frozen_members) -> None:
     connection, _snapshot = frozen_members
     connection.execute("set local role mart_readonly")
-    row = connection.execute(
-        "select issuer_id, ticker from mart.entity_display_resolution limit 1"
-    ).fetchone()
+    row = connection.execute("select issuer_id, ticker from mart.entity_display_resolution limit 1").fetchone()
     assert row is not None and row[1]
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         connection.execute("select 1 from staging.topt_core_snapshot_members limit 1")
