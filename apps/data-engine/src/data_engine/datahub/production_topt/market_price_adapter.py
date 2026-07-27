@@ -169,6 +169,11 @@ def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
     Targets carry the canonical ticker; a vendor's own symbol convention is the vendor
     client's business — Yahoo writes share classes with a hyphen (BRK.B -> BRK-B).
 
+    The window is requested around the CUTOFF, not the wall clock. Asking for the last
+    year and filtering afterwards returns nothing for any cutoff older than that, so a
+    backfill would report every price cell `FIELD_UNAVAILABLE` instead of failing loudly
+    — and a replayed tick would silently pull a different window than the original.
+
     Imported lazily so the adapter and its tests carry no network dependency.
     """
     import httpx
@@ -177,7 +182,7 @@ def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
 
     vendor_symbol = symbol.replace(".", "-")
     try:
-        bars = yahoo.fetch_daily_bars(vendor_symbol)
+        bars = yahoo.fetch_daily_bars(vendor_symbol, end=cutoff)
     except httpx.HTTPError as error:  # transient network/timeout classified by the adapter
         raise SourceUnavailableError(str(error)) from error
     eligible = [bar for bar in bars if bar.date <= cutoff]
@@ -186,8 +191,10 @@ def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
     bar = max(eligible, key=lambda item: item.date)
     knowable_at = datetime.combine(bar.date, datetime.min.time(), tzinfo=UTC)
     return MarketPriceQuote(
+        # `bar.close` is already the recovered Decimal; re-casting through str() here
+        # would be a no-op that invites someone to reintroduce a float upstream.
         raw_bytes=f"{symbol}:{bar.date.isoformat()}:{bar.close}".encode(),
-        close=Decimal(str(bar.close)),
+        close=bar.close,
         as_of=bar.date,
         knowable_at=knowable_at,
     )
