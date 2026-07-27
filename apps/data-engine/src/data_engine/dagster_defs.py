@@ -40,10 +40,14 @@ from data_engine.datahub.strategy_bridge import (
 )
 
 TOPT_LIVE_JOB_NAME = "topt_live_pipeline"
-# Hourly: #27's evidence is two consecutive scheduled real-source cycles; an hourly
-# cadence makes that observable within a working session while staying inside every
-# source's limits (Twelve Data free tier: 21 fetches/tick, throttled 8s apart).
-TOPT_LIVE_CRON = "15 * * * *"
+# Daily at 22:15 UTC — after the US close (2h+ in EDT, 5h+ in EST), so same-day
+# closes and facts are settled. #27's two-consecutive-cycles proof was gathered on a
+# temporary hourly cadence and is complete in both environments; hourly ALSO
+# over-spent the shared Twelve Data free tier once production joined staging
+# (21 fetches/tick x 24 x 2 envs = 1008/day against an 800/day budget, #491).
+# Daily spends 42/day across both environments. Testing/retry never needs a faster
+# cron: launch the same job manually with an explicit `executed_at`.
+TOPT_LIVE_CRON = "15 22 * * *"
 
 
 class ToptLiveTickConfig(dg.Config):
