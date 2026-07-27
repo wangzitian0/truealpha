@@ -1,4 +1,6 @@
 import { loadStrategyRunPage } from "@/server/strategy-page";
+import { ClaimCeilingBanner } from "@/components/claim-ceiling";
+import { formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import type { StrategyRunDecision, StrategyRunOutcome } from "@/contracts/strategyRun";
 
@@ -80,6 +82,8 @@ export default async function StrategyRunsPage() {
         )}
       </p>
 
+      <ClaimCeilingBanner />
+
       <div className="mt-6 overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
           <caption className="sr-only">Decisions for {report.strategy_id}, by issuer and cutoff</caption>
@@ -120,10 +124,19 @@ export default async function StrategyRunsPage() {
                 <td className="px-4 py-3">{decision.cutoff_at}</td>
                 <td className="px-4 py-3">{decisionLabel(decision)}</td>
                 <td className="px-4 py-3">{cell(decision.tier)}</td>
-                <td className="px-4 py-3">{cell(decision.valuation_gap)}</td>
-                <td className="px-4 py-3">{cell(decision.confidence)}</td>
-                <td className="px-4 py-3">{decision.rank ?? "—"}</td>
-                <td className="px-4 py-3">{cell(decision.target_weight)}</td>
+                <td
+                  className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
+                  title={decision.valuation_gap ?? undefined}
+                >
+                  {cell(formatSignedRatio(decision.valuation_gap))}
+                </td>
+                <td className="px-4 py-3 tabular-nums" title={decision.confidence ?? undefined}>
+                  {cell(formatRatio(decision.confidence))}
+                </td>
+                <td className="px-4 py-3 tabular-nums">{decision.rank ?? "—"}</td>
+                <td className="px-4 py-3 tabular-nums" title={decision.target_weight ?? undefined}>
+                  {cell(formatPercentFromFraction(decision.target_weight))}
+                </td>
               </tr>
             ))}
           </tbody>
