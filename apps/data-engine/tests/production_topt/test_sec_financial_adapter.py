@@ -398,3 +398,71 @@ def test_the_normalized_payload_carries_the_fiscal_periods() -> None:
     assert isinstance(result, FetchSuccess)
     assert result.record is not None
     assert result.record.payload["operating_period_end"] == "2025-12-31"
+
+
+# -- synonym variants merge; stand-in variants do not ----------------------------------
+
+
+def test_treasury_inflated_share_counts_are_never_substituted() -> None:
+    """`CommonStockSharesIssued` includes treasury stock: JNJ reports 3,119,843,000 issued
+    against 2,409,898,597 outstanding. Ranking share concepts purely by period end would
+    hand market cap a 29% error on whichever filing cycle carried the later date."""
+    facts = {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {"shares": [{"end": "2026-01-31", "val": 2409898597, "filed": "2026-02-10"}]}
+                }
+            },
+            "us-gaap": {
+                "CommonStockSharesIssued": {  # later period, larger number, different quantity
+                    "units": {"shares": [{"end": "2026-03-31", "val": 3119843000, "filed": "2026-04-20"}]}
+                }
+            },
+        }
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("2409898597")
+
+
+def test_a_bank_never_takes_gross_revenue_just_because_it_is_more_recent() -> None:
+    """For a bank, plain `Revenues` is gross of interest expense. Subtracting noninterest
+    expense from it is not pre-provision NET revenue, however recent it is."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "RevenuesNetOfInterestExpense": {
+                    "units": {"USD": [_annual("2024-12-31", "2024-01-01", 180, "2025-02-01")]}
+                },
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]}},
+                "NoninterestExpense": {
+                    "units": {
+                        "USD": [
+                            _annual("2024-12-31", "2024-01-01", 95, "2025-02-01"),
+                            _annual("2025-12-31", "2025-01-01", 100, "2026-02-01"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    datum = pre_provision_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("85")  # 180 - 95, the net-of-interest pair — never 400 - 100
+    assert datum.period_end == date(2024, 12, 31)
+
+
+def test_the_bank_fallback_is_still_reachable_when_the_exact_concept_is_absent() -> None:
+    """Preference must not become prohibition: an issuer publishing no net-of-interest
+    total still resolves, it just is not overridden by recency when it does publish one."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]}},
+                "NoninterestExpense": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 100, "2026-02-01")]}},
+            }
+        }
+    }
+    datum = pre_provision_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("300")
