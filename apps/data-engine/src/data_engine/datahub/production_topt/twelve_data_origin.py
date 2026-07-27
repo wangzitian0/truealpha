@@ -50,7 +50,13 @@ class TwelveDataQuoteFetcher:
         key = (symbol, cutoff)
         if key in self._cache:
             return self._cache[key]
-        quote = self._fetch(symbol, cutoff)
+        try:
+            quote = self._fetch(symbol, cutoff)
+        except Exception:  # noqa: BLE001 - a second origin that errors is simply absent
+            # Absorbed here rather than raised, so the throttle below still runs: a
+            # rate-limited request that skipped its wait would fire the next symbol
+            # immediately and rate-limit the rest of the tick with it.
+            quote = None
         self._cache[key] = quote
         if self._throttle_seconds:
             time.sleep(self._throttle_seconds)
