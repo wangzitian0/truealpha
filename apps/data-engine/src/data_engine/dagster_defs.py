@@ -35,6 +35,7 @@ from data_engine.config import settings
 from data_engine.datahub.a1_evidence import register_run_evidence
 from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
 from data_engine.datahub.strategy_bridge import (
+    persist_strategy_input_coverage,
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
 )
@@ -68,6 +69,8 @@ def run_topt_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfi
     with psycopg.connect(settings.database_url) as connection:
         pipeline = run_topt_pipeline(connection, cutoff=cutoff, version=version)
         seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
+        # #496: the L2 funnel metric, same transaction as the seed it measures.
+        l2_complete, l2_total = persist_strategy_input_coverage(connection, pipeline.run_id, cutoff=cutoff)
         strategy_run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
             connection, cutoff=cutoff, executed_at=cutoff, risk_free_rate=Decimal("0.05")
         )
@@ -91,6 +94,7 @@ def run_topt_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfi
             "quality_report_id": pipeline.quality_report_id,
             "independent_reconciliation": pipeline.quality["independent_reconciliation"],
             "strategy_inputs_seeded": seeded,
+            "l2_input_coverage": f"{l2_complete}/{l2_total}",
             "strategy_run_id": strategy_run_id,
             "decision_count": decision_count,
             "snapshot_id": snapshot_id,

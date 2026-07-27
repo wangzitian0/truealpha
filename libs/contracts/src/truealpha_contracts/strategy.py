@@ -481,6 +481,24 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
         _identify(self, id_field="strategy_definition_id", prefix="strategy-definition")
         return self
 
+    def required_input_keys(self) -> frozenset[str]:
+        """#496: the per-issuer input keys this definition's factors consume,
+        DERIVED from the frozen semantics (no hashed field is added, so
+        content identity is untouched). The L2 coverage metric measures
+        staging presence against exactly this set."""
+        return frozenset(
+            {
+                self.labor_efficiency.numerator.value,
+                self.labor_efficiency.denominator.value,
+                self.labor_efficiency.capital_charge_base.value,
+                # price_to_sales rules: market value = shares x last close;
+                # sales = latest complete fiscal-year revenue.
+                "shares_outstanding",
+                "last_close",
+                "revenue",
+            }
+        )
+
 
 class StrategyEngineBinding(_StrictFrozenModel):
     """Binds one exact strategy definition to one exact Qlib engine identity."""
