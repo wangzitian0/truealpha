@@ -50,7 +50,13 @@ _REVENUE_CONCEPTS = ("Revenues", "RevenueFromContractWithCustomerExcludingAssess
 _COGS_CONCEPTS = ("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices")
 _BANK_REVENUE_CONCEPTS = ("RevenuesNetOfInterestExpense", "Revenues")
 _TOTAL_ASSETS = ("us-gaap", "Assets", "USD")
-_SHARES = ("us-gaap", "CommonStockSharesOutstanding", "shares")
+# Share counts live in the `dei` taxonomy for most large filers, not `us-gaap`; a single
+# us-gaap concept left META/ABBV/JNJ/LLY with no share count at all (#496).
+_SHARES_CONCEPTS = (
+    ("dei", "EntityCommonStockSharesOutstanding"),
+    ("us-gaap", "CommonStockSharesOutstanding"),
+    ("us-gaap", "CommonStockSharesIssued"),
+)
 # An annual period: shorter spans are quarterly facts that must not be compared with
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
@@ -70,6 +76,12 @@ class FinancialFactsBundle:
     # document exists but asserts nothing this cutoff can use (a real state: XOM's
     # post-reorganization CIK publishes no us-gaap taxonomy yet).
     knowable_at: datetime | None
+    # The fiscal periods the two headline figures describe. Carried into the normalized
+    # payload because without them the warehouse cannot answer how old its own numbers
+    # are: the seven-year-stale AAPL revenue was only detectable by re-deriving from the
+    # vendor. With them, staleness is a plain SQL invariant (#429).
+    operating_period_end: date | None = None
+    revenue_period_end: date | None = None
 
 
 @dataclass(frozen=True)
@@ -111,10 +123,17 @@ class SourceUnavailableError(Exception):
 
 @dataclass(frozen=True)
 class _Datum:
-    """One eligible XBRL fact: its value and the filing date that made it knowable."""
+    """One eligible XBRL fact: its value, the filing that made it knowable, and the
+    fiscal period it describes.
+
+    `period_end` is what distinguishes a current figure from an abandoned tag's last
+    gasp, so it travels with the value rather than only being the key of the dict it
+    came out of — a datum that has left that dict must still be comparable.
+    """
 
     value: Decimal
     filed: date
+    period_end: date
 
 
 def annual_values_by_period_end(
@@ -125,6 +144,12 @@ def annual_values_by_period_end(
     Only facts *filed* on or before the cutoff are eligible — a later filing is not
     knowable and would be look-ahead. Instant facts (no `start`) are kept as reported;
     shorter spans are quarterly and must never be compared with annual figures.
+
+    One period end appears many times in company-facts — the original filing plus every
+    later document that restated or simply re-reported it. The latest *filing* wins, never
+    the entry that happens to sit last in the JSON array: selecting by array position makes
+    restatement handling depend on the vendor's serialization order, which is the
+    "never select the most recently inserted row" rule read backwards.
     """
     entries = facts.get("facts", {}).get(taxonomy, {}).get(concept, {}).get("units", {}).get(unit)
     if not entries:
@@ -148,7 +173,9 @@ def annual_values_by_period_end(
             continue
         if filed > cutoff:
             continue
-        values[end] = _Datum(value=value, filed=filed)
+        existing = values.get(end)
+        if existing is None or filed > existing.filed:
+            values[end] = _Datum(value=value, filed=filed, period_end=end)
     return values
 
 
@@ -156,12 +183,34 @@ def _latest(values: dict[date, _Datum]) -> _Datum | None:
     return values[max(values)] if values else None
 
 
-def _first_available(facts: dict[str, Any], concepts: Sequence[str], unit: str, cutoff: date) -> _Datum | None:
-    for concept in concepts:
-        datum = _latest(annual_values_by_period_end(facts, "us-gaap", concept, unit, cutoff))
-        if datum is not None:
-            return datum
-    return None
+def _merge_variants(
+    facts: dict[str, Any], concepts: Sequence[tuple[str, str]], unit: str, cutoff: date
+) -> dict[date, _Datum]:
+    """Every annual period any declared variant reports, as one series.
+
+    An issuer's tagging is not stable across time: nearly every large filer moved off
+    `Revenues` at the ASC 606 transition, and company-facts keeps the abandoned tag's
+    history forever. Merging the variants into one period-keyed series before selecting
+    is what lets the series follow the issuer across that switch. Earlier variants win a
+    period they share, so declaration order still expresses preference — it just can no
+    longer decide *recency*.
+    """
+    merged: dict[date, _Datum] = {}
+    for taxonomy, concept in concepts:
+        for end, datum in annual_values_by_period_end(facts, taxonomy, concept, unit, cutoff).items():
+            merged.setdefault(end, datum)
+    return merged
+
+
+def _latest_across_variants(facts: dict[str, Any], concepts: Sequence[str], unit: str, cutoff: date) -> _Datum | None:
+    """The most recent annual value across ALL variants (us-gaap), not the first with data.
+
+    The rule this replaces returned the first concept carrying any value, so an issuer
+    that stopped using a tag stayed pinned to it: AAPL's mart revenue was its FY2018
+    `Revenues` figure for seven years while `RevenueFromContractWithCustomer…` carried
+    FY2025 (#496).
+    """
+    return _latest(_merge_variants(facts, tuple(("us-gaap", concept) for concept in concepts), unit, cutoff))
 
 
 def _period_matched_difference(
@@ -171,29 +220,39 @@ def _period_matched_difference(
 
     Two concepts reported for different periods are not comparable, so only a shared
     period end resolves; the difference is knowable once both filings are.
+
+    Each side is merged across its variants *before* intersecting. Iterating variant
+    pairs and returning the first that shares any period could pair a legacy revenue tag
+    with a current cost tag purely because that pair was reached first.
     """
-    for subtrahend_concept in subtrahend:
-        subtracted = annual_values_by_period_end(facts, "us-gaap", subtrahend_concept, "USD", cutoff)
-        if not subtracted:
-            continue
-        for minuend_concept in minuend:
-            base = annual_values_by_period_end(facts, "us-gaap", minuend_concept, "USD", cutoff)
-            shared = set(base) & set(subtracted)
-            if shared:
-                end = max(shared)
-                return _Datum(
-                    value=base[end].value - subtracted[end].value,
-                    filed=max(base[end].filed, subtracted[end].filed),
-                )
-    return None
+    base = _merge_variants(facts, tuple(("us-gaap", concept) for concept in minuend), "USD", cutoff)
+    subtracted = _merge_variants(facts, tuple(("us-gaap", concept) for concept in subtrahend), "USD", cutoff)
+    shared = set(base) & set(subtracted)
+    if not shared:
+        return None
+    end = max(shared)
+    return _Datum(
+        value=base[end].value - subtracted[end].value,
+        filed=max(base[end].filed, subtracted[end].filed),
+        period_end=end,
+    )
 
 
 def gross_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
-    """Reported `GrossProfit`, or revenue minus cost of revenue over a shared annual period."""
+    """Reported `GrossProfit` or revenue minus cost of revenue — whichever covers the later period.
+
+    "Reported wins unconditionally" is not safe: Amazon last tagged `GrossProfit` for
+    FY2009 and mart carried that figure against FY2025 headcount, which is what made its
+    reported GPPE negative (#496). A directly reported figure is still preferred when the
+    two cover the *same* period — it is the issuer's own assertion rather than our
+    arithmetic — but it cannot outrank a more recent one.
+    """
     direct = _latest(annual_values_by_period_end(facts, "us-gaap", "GrossProfit", "USD", cutoff))
-    if direct is not None:
-        return direct
-    return _period_matched_difference(facts, _REVENUE_CONCEPTS, _COGS_CONCEPTS, cutoff)
+    derived = _period_matched_difference(facts, _REVENUE_CONCEPTS, _COGS_CONCEPTS, cutoff)
+    candidates = [datum for datum in (direct, derived) if datum is not None]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda datum: datum.period_end)
 
 
 def pre_provision_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
@@ -211,8 +270,8 @@ def build_bundle(facts: dict[str, Any], cutoff: date, branch: OperatingBranch) -
     retryable failure, never a null-filled fact.
     """
     assets = _latest(annual_values_by_period_end(facts, *_TOTAL_ASSETS, cutoff))
-    shares = _latest(annual_values_by_period_end(facts, *_SHARES, cutoff))
-    revenue = _first_available(facts, _REVENUE_CONCEPTS, "USD", cutoff)
+    shares = _latest(_merge_variants(facts, _SHARES_CONCEPTS, "shares", cutoff))
+    revenue = _latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff)
     ppnr = pre_provision_profit(facts, cutoff) if branch is OperatingBranch.FINANCIAL else None
     # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer,
     # financial branch included: a bank's operating numerator is the pre-provision-profit
@@ -228,6 +287,8 @@ def build_bundle(facts: dict[str, Any], cutoff: date, branch: OperatingBranch) -
         pre_provision_profit=_v(ppnr),
         raw_bytes=json.dumps(facts, sort_keys=True, separators=(",", ":")).encode(),
         knowable_at=None if knowable is None else datetime.combine(knowable, datetime.min.time(), tzinfo=UTC),
+        operating_period_end=None if profit is None else profit.period_end,
+        revenue_period_end=None if revenue is None else revenue.period_end,
     )
 
 
@@ -285,6 +346,8 @@ class SecFinancialFactAdapter:
             "revenue": _s(bundle.revenue),
             "shares_outstanding": _s(bundle.shares_outstanding),
             "pre_provision_profit": _s(bundle.pre_provision_profit),
+            "operating_period_end": _d(bundle.operating_period_end),
+            "revenue_period_end": _d(bundle.revenue_period_end),
         }
         return FetchSuccess(
             raw_sha256=hashlib.sha256(bundle.raw_bytes).hexdigest(),
@@ -306,6 +369,10 @@ def _confidence(payload: dict[str, str | None]) -> Decimal:
 
 def _s(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
+
+
+def _d(value: date | None) -> str | None:
+    return None if value is None else value.isoformat()
 
 
 def sec_financial_fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:

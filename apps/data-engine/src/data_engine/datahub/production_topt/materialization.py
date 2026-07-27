@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Self
 
@@ -62,6 +62,12 @@ class FinancialFactPayload(_FrozenModel):
     revenue: Decimal | None
     shares_outstanding: Decimal | None
     pre_provision_profit: Decimal | None
+    # The fiscal periods behind the two headline figures. Optional so a snapshot frozen
+    # before #496 still validates; new captures always carry them, which is what makes
+    # "this number is years out of date" answerable in SQL instead of only by re-deriving
+    # from the vendor.
+    operating_period_end: date | None = None
+    revenue_period_end: date | None = None
 
     @field_validator(
         "gross_profit",
