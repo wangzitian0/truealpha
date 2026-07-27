@@ -26,10 +26,9 @@ from data_engine.datahub.production_topt.executor import (
     FetchSuccess,
     NormalizedRecord,
 )
+from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 
 _RELEASE_SEMANTICS = frozenset({"listing-identity", "universe-membership"})
-PARSER_VERSION = "production-topt-live-parser:v1"
-MAPPING_VERSION = "production-topt-live-map:v1"
 
 
 @dataclass(frozen=True)

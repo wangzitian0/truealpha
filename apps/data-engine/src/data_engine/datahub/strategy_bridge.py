@@ -26,7 +26,7 @@ from factors.composite.strategy_evaluator import evaluate_cutoff
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 from data_engine.core_strategy_replay import _load_corpus, _to_decision
-from data_engine.datahub.production_topt.market_price_adapter import PARSER_VERSION as PRIMARY_PARSER_VERSION
+from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import write_replay
 

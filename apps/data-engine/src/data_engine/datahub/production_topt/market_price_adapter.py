@@ -32,9 +32,7 @@ from data_engine.datahub.production_topt.executor import (
     FetchSuccess,
     NormalizedRecord,
 )
-
-PARSER_VERSION = "production-topt-live-parser:v1"
-MAPPING_VERSION = "production-topt-live-map:v1"
+from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 
 
 @dataclass(frozen=True)
