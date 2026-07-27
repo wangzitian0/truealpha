@@ -1,4 +1,5 @@
 import { loadStrategyRunPage } from "@/server/strategy-page";
+import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
 import { formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
@@ -66,6 +67,7 @@ export default async function StrategyRunsPage() {
   }
 
   const { report } = outcome;
+  const names = await loadEntityDisplayMap();
 
   return (
     <section aria-labelledby="strategy-runs-heading">
@@ -118,8 +120,8 @@ export default async function StrategyRunsPage() {
           <tbody>
             {report.decisions.map((decision) => (
               <tr key={`${decision.issuer_id}:${decision.cutoff_at}`} className="border-t border-border">
-                <th scope="row" className="px-4 py-3 font-medium">
-                  {decision.issuer_id}
+                <th scope="row" className="px-4 py-3 font-medium" title={decision.issuer_id}>
+                  {entityLabel(decision.issuer_id, names)}
                 </th>
                 <td className="px-4 py-3">{decision.cutoff_at}</td>
                 <td className="px-4 py-3">{decisionLabel(decision)}</td>
