@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadRanking } from "@/server/dashboard";
+import { ClaimCeilingBanner } from "@/components/claim-ceiling";
+import { formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -67,9 +69,18 @@ export default async function RankingsPage({
                       </Link>
                     </th>
                     <td className="px-4 py-3">{cell(row.tier)}</td>
-                    <td className="px-4 py-3">{cell(row.currentPriceToSales)}</td>
-                    <td className="px-4 py-3">{cell(row.valuationGap)}</td>
-                    <td className="px-4 py-3">{cell(row.confidence)}</td>
+                    <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
+                      {cell(formatRatio(row.currentPriceToSales))}
+                    </td>
+                    <td
+                      className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`}
+                      title={row.valuationGap ?? undefined}
+                    >
+                      {cell(formatSignedRatio(row.valuationGap))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
+                      {cell(formatRatio(row.confidence))}
+                    </td>
                     <td className="px-4 py-3">
                       <AvailabilityBadge status={row.availability} />
                     </td>

@@ -1,12 +1,36 @@
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadToptQuality } from "@/server/topt-quality";
+import { formatRatio, formatUsdMagnitude } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
 function cell(value: string | null): string {
   return value ?? "—";
+}
+
+/**
+ * #494 P0a: headline metrics lifted out of the raw report. Reads
+ * defensively — the payload is the persisted, content-addressed report
+ * (append-only); a missing key renders as an absent card, never a crash.
+ */
+function qualityHeadline(quality: unknown): { label: string; value: string }[] {
+  if (typeof quality !== "object" || quality === null) return [];
+  const q = quality as Record<string, unknown>;
+  const ratio = (key: string): string | null => {
+    const raw = q[key];
+    return typeof raw === "string" || typeof raw === "number" ? formatRatio(String(raw)) : null;
+  };
+  const cards: { label: string; value: string | null }[] = [
+    { label: "Availability (cells)", value: ratio("availability") },
+    { label: "Freshness", value: ratio("freshness") },
+    { label: "Independent reconciliation", value: ratio("independent_reconciliation") },
+    { label: "Lineage completeness", value: ratio("lineage_completeness") },
+    { label: "Mean confidence", value: ratio("denominator_mean_confidence") },
+    { label: "Complete", value: typeof q.complete === "boolean" ? String(q.complete) : null },
+  ];
+  return cards.filter((c): c is { label: string; value: string } => c.value !== null);
 }
 
 export default async function ToptQualityPage() {
@@ -31,8 +55,9 @@ export default async function ToptQualityPage() {
       {state.kind === "ready" && (
         <>
           <p className="text-sm text-gray-500">
-            Run <code className="text-accent">{state.data.run_id}</code> — {state.data.available_count} /{" "}
-            {state.data.requested_count} listings available.
+            Run <code className="text-accent">{state.data.run_id}</code> — GPPE available for{" "}
+            {state.data.cells.filter((row) => row.availability === "available").length} / {state.data.cells.length}{" "}
+            listings; capture plane {state.data.available_count} / {state.data.requested_count} cells available.
           </p>
 
           <div className="overflow-x-auto rounded-xl border border-border">
@@ -63,8 +88,12 @@ export default async function ToptQualityPage() {
                     <td className="px-4 py-3">
                       <AvailabilityBadge status={row.availability === "available" ? "available" : "unavailable"} />
                     </td>
-                    <td className="px-4 py-3">{cell(row.gppe)}</td>
-                    <td className="px-4 py-3">{cell(row.confidence)}</td>
+                    <td className="px-4 py-3 tabular-nums" title={row.gppe ?? undefined}>
+                      {cell(formatUsdMagnitude(row.gppe))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
+                      {cell(formatRatio(row.confidence))}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -74,9 +103,20 @@ export default async function ToptQualityPage() {
           {state.data.quality && (
             <div className="rounded-xl border border-border bg-card p-5">
               <h2 className="font-semibold">Quality report</h2>
-              <pre className="mt-2 overflow-x-auto text-xs text-gray-400">
-                {JSON.stringify(state.data.quality, null, 2)}
-              </pre>
+              <dl className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3">
+                {qualityHeadline(state.data.quality).map(({ label, value }) => (
+                  <div key={label} className="rounded-lg border border-border bg-background px-4 py-3">
+                    <dt className="text-xs uppercase tracking-wide text-gray-500">{label}</dt>
+                    <dd className="mt-1 text-lg font-semibold tabular-nums">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+              <details className="mt-4">
+                <summary className="cursor-pointer text-sm text-gray-400">Raw report (exact, content-addressed)</summary>
+                <pre className="mt-2 overflow-x-auto text-xs text-gray-400">
+                  {JSON.stringify(state.data.quality, null, 2)}
+                </pre>
+              </details>
             </div>
           )}
         </>
