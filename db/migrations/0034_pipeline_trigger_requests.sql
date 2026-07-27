@@ -27,12 +27,8 @@ create table if not exists staging.pipeline_trigger_requests (
 comment on table staging.pipeline_trigger_requests is
     '#495: admin-initiated pipeline launches, mediated through Postgres (init.md 2.2). INSERT by app, consume-UPDATE by the Dagster sensor.';
 
--- app_runtime has no staging privileges at all today (db/roles.sql grants it
--- `usage` on schema app only). USAGE on staging + a grant on exactly this
--- table exposes nothing else: every other staging table stays unreadable
--- without its own table-level grant.
-grant usage on schema staging to app_runtime;
-grant select, insert on staging.pipeline_trigger_requests to app_runtime;
+-- Grants live in db/roles.sql (applied AFTER migrations; on a fresh database
+-- the app_runtime role does not exist yet when this file runs).
 
 -- The app must not fabricate or rewrite consumption state, and nobody deletes
 -- the audit trail. (UPDATE stays with the data-engine role that owns

@@ -30,6 +30,12 @@ grant select on app.private_research_objects to app_runtime;
 revoke select on app.access_audit_metadata from app_runtime;
 grant insert on app.authorization_decisions, app.authorization_decision_grants,
     app.access_audit_events to app_runtime;
+-- #495: the ONE staging write exception — the DB-mediated pipeline trigger
+-- (migration 0034). USAGE on staging plus exactly this table exposes nothing
+-- else; consume-UPDATEs stay with the data-engine/migration role, and the
+-- table's own triggers enforce append-only/consume-once.
+grant usage on schema staging to app_runtime;
+grant select, insert on staging.pipeline_trigger_requests to app_runtime;
 revoke all on function app.validate_access_audit_decision_tenant() from public;
 revoke all on function app.validate_authorization_decision_policy_set() from public;
 revoke all on function app.validate_authorization_decision_grant() from public;
