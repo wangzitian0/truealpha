@@ -135,3 +135,51 @@ def run_strategy_replay_for_cutoff(
         connection, decisions, definition, executed_at=executed_at, snapshot_id=snapshot_id
     )
     return run_id, len(decision_ids), snapshot_id
+
+
+def persist_strategy_input_coverage(
+    connection: psycopg.Connection[Any],
+    run_id: str,
+    *,
+    cutoff: datetime,
+) -> tuple[int, int]:
+    """#496: the L2 funnel metric — one `mart.strategy_input_coverage` row per
+    issuer of this run, measuring seeded staging inputs against the FROZEN
+    definition's `required_input_keys()` (derived semantics, not a hardcoded
+    list). Runs right after `seed_strategy_inputs_from_capture` in the same
+    tick transaction; the same latest-vintage-per-(issuer, key) read the
+    gateway uses, so the metric can never disagree with the replay's view.
+    Returns (complete_issuers, total_issuers)."""
+    required = sorted(load_strategy_definition().required_input_keys())
+    issuers = [
+        row[0]
+        for row in connection.execute(
+            "select distinct issuer_id from mart.topt_core_meta_info where run_id = %s order by 1",
+            (run_id,),
+        )
+    ]
+    present_rows = connection.execute(
+        """
+        select distinct on (issuer_id, input_key) issuer_id, input_key
+        from staging.strategy_backtest_inputs
+        where cutoff_at = %s
+        order by issuer_id, input_key, recorded_at desc
+        """,
+        (cutoff,),
+    ).fetchall()
+    present: dict[str, set[str]] = {}
+    for issuer_id, input_key in present_rows:
+        present.setdefault(issuer_id, set()).add(input_key)
+
+    complete = 0
+    for issuer_id in issuers:
+        missing = [key for key in required if key not in present.get(issuer_id, set())]
+        if not missing:
+            complete += 1
+        connection.execute(
+            "insert into mart.strategy_input_coverage "
+            "(run_id, issuer_id, required_count, present_count, missing_keys) "
+            "values (%s, %s, %s, %s, %s) on conflict (run_id, issuer_id) do nothing",
+            (run_id, issuer_id, len(required), len(required) - len(missing), missing),
+        )
+    return complete, len(issuers)
