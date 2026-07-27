@@ -44,18 +44,36 @@ from data_engine.datahub.production_topt.executor import (
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 
-# The us-gaap concepts each normalized field is drawn from, in resolution order.
-# SEC XBRL heterogeneity: issuers report the same economics under different tags.
-_REVENUE_CONCEPTS = ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax")
-_COGS_CONCEPTS = ("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices")
+# Two kinds of concept list, and they must never be resolved the same way.
+#
+# SYNONYM lists hold tags for the SAME quantity that an issuer used at different times —
+# `Revenues` and `RevenueFromContractWithCustomerExcludingAssessedTax` are both "total
+# revenue", the second replaced the first at the ASC 606 transition. Merging these into one
+# period-keyed series is correct and is what follows an issuer across the switch (#496).
+#
+# FALLBACK lists hold tags for DIFFERENT quantities, ordered by how well each stands in for
+# the one we want. Merging those by period is wrong however recent the alternative is: it
+# silently swaps in another number. Resolution stops at the first concept the issuer reports
+# at all, so a stand-in is only reached when the exact quantity is absent entirely.
+_REVENUE_CONCEPTS = ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax")  # synonyms
+_COGS_CONCEPTS = ("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices")  # synonyms
+# FALLBACK: for a bank, plain `Revenues` is gross of interest expense, so subtracting
+# noninterest expense from it is not pre-provision NET revenue. Only usable when the
+# issuer publishes no net-of-interest total — never because it happens to be more recent.
 _BANK_REVENUE_CONCEPTS = ("RevenuesNetOfInterestExpense", "Revenues")
 _TOTAL_ASSETS = ("us-gaap", "Assets", "USD")
-# Share counts live in the `dei` taxonomy for most large filers, not `us-gaap`; a single
-# us-gaap concept left META/ABBV/JNJ/LLY with no share count at all (#496).
+# SYNONYMS: both are shares *outstanding*, one on the cover page and one in the statements.
+# Share counts live in `dei` for most large filers; a single us-gaap concept left
+# ABBV/JNJ/LLY with no count at all (#496).
+#
+# `CommonStockSharesIssued` is deliberately NOT here. Issued includes treasury stock and is
+# a different quantity — JNJ reports 3,119,843,000 issued against 2,409,898,597
+# outstanding. Ranking it by period end would hand market cap a 29% error on whichever
+# filing cycle it happened to carry the later date, with nothing in the payload disclosing
+# the substitution.
 _SHARES_CONCEPTS = (
     ("dei", "EntityCommonStockSharesOutstanding"),
     ("us-gaap", "CommonStockSharesOutstanding"),
-    ("us-gaap", "CommonStockSharesIssued"),
 )
 # An annual period: shorter spans are quarterly facts that must not be compared with
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
@@ -202,6 +220,23 @@ def _merge_variants(
     return merged
 
 
+def _preferred_variant(
+    facts: dict[str, Any], concepts: Sequence[tuple[str, str]], unit: str, cutoff: date
+) -> dict[date, _Datum]:
+    """The first concept the issuer reports at all — for lists whose entries differ in meaning.
+
+    The counterpart to `_merge_variants`. Where variants are stand-ins rather than synonyms,
+    recency must not promote one: a more recent number for a different quantity is still a
+    different quantity. Falling back only when the preferred concept is entirely absent keeps
+    the substitution rare, deliberate, and driven by availability rather than by dates.
+    """
+    for taxonomy, concept in concepts:
+        values = annual_values_by_period_end(facts, taxonomy, concept, unit, cutoff)
+        if values:
+            return values
+    return {}
+
+
 def _latest_across_variants(facts: dict[str, Any], concepts: Sequence[str], unit: str, cutoff: date) -> _Datum | None:
     """The most recent annual value across ALL variants (us-gaap), not the first with data.
 
@@ -213,20 +248,16 @@ def _latest_across_variants(facts: dict[str, Any], concepts: Sequence[str], unit
     return _latest(_merge_variants(facts, tuple(("us-gaap", concept) for concept in concepts), unit, cutoff))
 
 
-def _period_matched_difference(
-    facts: dict[str, Any], minuend: Sequence[str], subtrahend: Sequence[str], cutoff: date
-) -> _Datum | None:
-    """`minuend - subtrahend` at their latest *shared* annual period end.
+def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date, _Datum]) -> _Datum | None:
+    """`base - subtracted` at their latest *shared* annual period end.
 
     Two concepts reported for different periods are not comparable, so only a shared
     period end resolves; the difference is knowable once both filings are.
 
-    Each side is merged across its variants *before* intersecting. Iterating variant
-    pairs and returning the first that shares any period could pair a legacy revenue tag
-    with a current cost tag purely because that pair was reached first.
+    Both sides arrive already resolved, because how each side resolves is a property of
+    what its concepts MEAN — synonyms merge, stand-ins do not — and that decision belongs
+    to the caller that knows the semantics, not to the arithmetic here.
     """
-    base = _merge_variants(facts, tuple(("us-gaap", concept) for concept in minuend), "USD", cutoff)
-    subtracted = _merge_variants(facts, tuple(("us-gaap", concept) for concept in subtrahend), "USD", cutoff)
     shared = set(base) & set(subtracted)
     if not shared:
         return None
@@ -235,6 +266,20 @@ def _period_matched_difference(
         value=base[end].value - subtracted[end].value,
         filed=max(base[end].filed, subtracted[end].filed),
         period_end=end,
+    )
+
+
+def _period_matched_difference(
+    facts: dict[str, Any], minuend: Sequence[str], subtrahend: Sequence[str], cutoff: date
+) -> _Datum | None:
+    """`minuend - subtrahend` where BOTH sides are synonym lists, so both merge.
+
+    Iterating variant pairs and returning the first that shares any period could pair a
+    legacy revenue tag with a current cost tag purely because that pair was reached first.
+    """
+    return _difference_at_shared_period(
+        _merge_variants(facts, tuple(("us-gaap", concept) for concept in minuend), "USD", cutoff),
+        _merge_variants(facts, tuple(("us-gaap", concept) for concept in subtrahend), "USD", cutoff),
     )
 
 
@@ -256,8 +301,18 @@ def gross_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
 
 
 def pre_provision_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
-    """Bank pre-provision net revenue: net revenue minus noninterest expense (#59)."""
-    return _period_matched_difference(facts, _BANK_REVENUE_CONCEPTS, ("NoninterestExpense",), cutoff)
+    """Bank pre-provision net revenue: net revenue minus noninterest expense (#59).
+
+    The revenue side is a FALLBACK list, so it resolves by preference rather than by
+    recency: `Revenues` for a bank is gross of interest expense, and subtracting
+    noninterest expense from it yields something that is not pre-provision net revenue at
+    all. It is reached only when the issuer publishes no net-of-interest total — never
+    because it carries a later period end.
+    """
+    return _difference_at_shared_period(
+        _preferred_variant(facts, tuple(("us-gaap", concept) for concept in _BANK_REVENUE_CONCEPTS), "USD", cutoff),
+        annual_values_by_period_end(facts, "us-gaap", "NoninterestExpense", "USD", cutoff),
+    )
 
 
 def build_bundle(facts: dict[str, Any], cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:

@@ -32,6 +32,9 @@ from truealpha_contracts.reconciliation import (
 )
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 
+from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
+from data_engine.datahub.production_topt.twelve_data_origin import PARSER_VERSION as TWELVE_DATA_PARSER_VERSION
+
 # Declared fusion policy for the dual-origin market-price cells (init.md rule 12):
 # yahoo-chart is the pinned primary, twelve-data the independent second origin; a
 # 0.1% relative tolerance absorbs vendor rounding, and disagreement beyond it
@@ -43,9 +46,20 @@ RECONCILIATION_POLICY = ReconciliationPolicy(
     relative_tolerance=Decimal("0.001"),
     minimum_independent_origin_groups=2,
 )
+# Which origin group each parser vintage's observations belong to.
+#
+# The primary key is imported, never spelled out: it was a literal copy of
+# `parser_identity.PARSER_VERSION`, so bumping that version silently dropped every primary
+# observation out of this map and reconciliation reported zero two-origin cells with no
+# error anywhere. A parse version bump is a routine, expected event — it must not be able
+# to disconnect fusion by drifting away from a duplicated string.
+#
+# Older vintages stay listed: observations captured under them are still in the warehouse
+# and a report over a historical run must still resolve their origin.
 _SOURCE_BY_PARSER = {
+    PARSER_VERSION: ("yahoo-chart:v1", "origin:yahoo:v1", "close"),
     "production-topt-live-parser:v1": ("yahoo-chart:v1", "origin:yahoo:v1", "close"),
-    "twelve-data-parser:v1": ("twelve-data:v1", "origin:twelve-data:v1", "price"),
+    TWELVE_DATA_PARSER_VERSION: ("twelve-data:v1", "origin:twelve-data:v1", "price"),
 }
 
 

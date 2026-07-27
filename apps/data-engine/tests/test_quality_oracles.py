@@ -185,3 +185,25 @@ def test_staleness_is_measured_from_the_period_mart_actually_used() -> None:
 def test_a_value_matching_no_vendor_period_claims_no_staleness() -> None:
     facts = _facts(Revenues=[_annual("2025-12-31", "2025-01-01", 900, "2026-02-01")])
     assert period_reporting(facts, ("Revenues",), Decimal("12345"), _CUTOFF) is None
+
+
+# -- the fusion origin registry must track the parser identity -------------------------
+
+
+def test_the_origin_registry_covers_the_current_parser_version() -> None:
+    """A parse-version bump must not silently disconnect reconciliation.
+
+    `_SOURCE_BY_PARSER` held a literal copy of `PARSER_VERSION`. Bumping the parser to v2
+    dropped every primary observation out of the map, so the quality report found zero
+    two-origin cells and said so without raising — a green run reporting no reconciliation
+    at all. Version bumps are routine; this asserts the coupling stays real.
+    """
+    from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
+    from data_engine.datahub.production_topt.twelve_data_origin import PARSER_VERSION as SECOND_ORIGIN_VERSION
+    from data_engine.datahub.quality_report import _SOURCE_BY_PARSER
+
+    assert PARSER_VERSION in _SOURCE_BY_PARSER, "primary parser vintage is not mapped to an origin group"
+    assert SECOND_ORIGIN_VERSION in _SOURCE_BY_PARSER, "second origin's parser vintage is not mapped"
+    assert len({group for _, group, _ in _SOURCE_BY_PARSER.values()}) >= 2, (
+        "reconciliation needs at least two distinct origin groups to compare"
+    )

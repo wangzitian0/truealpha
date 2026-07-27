@@ -15,5 +15,16 @@ restatements).
 
 from __future__ import annotations
 
-PARSER_VERSION = "production-topt-live-parser:v1"
-MAPPING_VERSION = "production-topt-live-map:v1"
+PARSER_VERSION = "production-topt-live-parser:v2"
+MAPPING_VERSION = "production-topt-live-map:v2"
+
+# v1 -> v2 (#496): concept selection changed from "first variant carrying any value" to
+# "latest period across synonym variants", restatements began resolving by filing date
+# rather than JSON array position, share counts gained the `dei` cover-page concept, and
+# the payload gained `operating_period_end` / `revenue_period_end`.
+#
+# Both strings move together because they identify one parse. Leaving them at v1 would
+# make every corrected figure indistinguishable from a restatement of the old one: the
+# same issuer, the same period, a different number, under the same parser identity — which
+# is precisely the ambiguity `mapping_version` exists to prevent. The v1 observations stay
+# in place and stay queryable; v2 appends alongside them.
