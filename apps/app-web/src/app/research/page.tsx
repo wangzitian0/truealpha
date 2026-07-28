@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
+import { ClaimCeilingBanner } from "@/components/claim-ceiling";
+import { formatPercentFromFraction, formatSignedRatio, signColor } from "@/client/format";
+import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { loadOverview } from "@/server/dashboard";
+import { loadStrategyRunPage } from "@/server/strategy-page";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -10,20 +14,86 @@ export default async function ResearchOverviewPage() {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch");
   const state = await loadOverview(principal.context);
+  const strategy = await loadStrategyRunPage(principal, "large_model_value_v0");
+  const names = await loadEntityDisplayMap();
+  const selections =
+    strategy.kind === "ready"
+      ? strategy.report.decisions.filter((decision) => decision.outcome === "selected")
+      : [];
+  const evaluated = strategy.kind === "ready" ? strategy.report.decisions.length : 0;
+  const latestCutoff = selections[0]?.cutoff_at ?? null;
 
   return (
     <section aria-labelledby="overview-heading" className="space-y-8">
       <div>
         <h1 id="overview-heading" className="text-3xl font-bold tracking-tight">
-          Dashboard
+          Today
         </h1>
         <p className="mt-2 text-gray-400">
-          Reads through the <code className="text-accent">mart</code> read adapter — no hardcoded list, no fixture
-          (#370). Each module shows its materialized availability from the governed strategy run.
+          {latestCutoff
+            ? `Data as of ${latestCutoff} — the governed run every surface (web, MCP, chat) resolves.`
+            : "No strategy run recorded yet."}
         </p>
       </div>
 
       <ReadStateNotice state={state} />
+
+      {selections.length > 0 && (
+        <>
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full text-left text-sm">
+              <caption className="sr-only">Current strategy selections</caption>
+              <thead className="bg-card text-xs uppercase text-gray-500">
+                <tr>
+                  <th scope="col" className="px-4 py-3">Selected</th>
+                  <th scope="col" className="px-4 py-3">Tier</th>
+                  <th scope="col" className="px-4 py-3">Valuation gap</th>
+                  <th scope="col" className="px-4 py-3">Weight</th>
+                  <th scope="col" className="px-4 py-3">Trace</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selections.map((decision) => (
+                  <tr key={decision.issuer_id} className="border-t border-border">
+                    <th scope="row" className="px-4 py-3 font-medium" title={decision.issuer_id}>
+                      {entityLabel(decision.issuer_id, names)}
+                    </th>
+                    <td className="px-4 py-3">{decision.tier ?? "—"}</td>
+                    <td
+                      className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
+                      title={decision.valuation_gap ?? undefined}
+                    >
+                      {formatSignedRatio(decision.valuation_gap) ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">
+                      {formatPercentFromFraction(decision.target_weight) ?? "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link
+                        className="text-accent hover:underline"
+                        href={`/research/trace?issuer=${encodeURIComponent(decision.issuer_id)}&cutoff=${encodeURIComponent(decision.cutoff_at)}`}
+                      >
+                        trace
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-sm text-gray-500">
+            {selections.length} selected of {evaluated} evaluated —{" "}
+            <Link href="/research/strategy" className="text-accent hover:underline">
+              full decisions
+            </Link>{" "}
+            ·{" "}
+            <Link href="/research/coverage" className="text-accent hover:underline">
+              why some companies are missing
+            </Link>
+          </p>
+          <ClaimCeilingBanner />
+        </>
+      )}
 
       {state.kind === "ready" && (
         <>
