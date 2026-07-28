@@ -88,6 +88,10 @@ class ToptCoreAvailability(StrEnum):
 class OperatingBranch(StrEnum):
     NON_FINANCIAL = "non_financial"
     FINANCIAL = "financial"
+    # #496: insurers (SIC 63xx) — the operating numerator is revenue minus
+    # policyholder benefits/claims (the insurance analog of the bank PPNR
+    # proxy), owner-approved 2026-07-28.
+    INSURANCE = "insurance"
 
 
 class OperatingEfficiencyMetric(StrEnum):

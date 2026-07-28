@@ -74,6 +74,21 @@ _TOTAL_ASSETS = ("us-gaap", "Assets", "USD")
 _SHARES_CONCEPTS = (
     ("dei", "EntityCommonStockSharesOutstanding"),
     ("us-gaap", "CommonStockSharesOutstanding"),
+    # #496 LAST-RESORT: dual-class filers (META) tag point-in-time shares only
+    # per class with dimensions, which the company-facts API drops entirely —
+    # the annual weighted-average is the only whole-entity share count the API
+    # carries. Preference order keeps it from ever shadowing a real
+    # point-in-time figure (mapping v3).
+    ("us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic"),
+)
+# #496: the insurance operating numerator subtracts policyholder benefits/
+# claims from revenue (owner-approved 2026-07-28) — the insurance analog of
+# the bank PPNR proxy. Preference list, not synonyms (`_preferred_variant`):
+# the entries measure different nettings and recency must not promote one.
+_CLAIMS_CONCEPTS = (
+    "PolicyholderBenefitsAndClaimsIncurredNet",
+    "BenefitsLossesAndExpenses",
+    "IncurredClaimsPropertyCasualtyAndLiability",
 )
 # An annual period: shorter spans are quarterly facts that must not be compared with
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
@@ -295,9 +310,42 @@ def gross_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
     direct = _latest(annual_values_by_period_end(facts, "us-gaap", "GrossProfit", "USD", cutoff))
     derived = _period_matched_difference(facts, _REVENUE_CONCEPTS, _COGS_CONCEPTS, cutoff)
     candidates = [datum for datum in (direct, derived) if datum is not None]
-    if not candidates:
+    if candidates:
+        return max(candidates, key=lambda datum: datum.period_end)
+    if _files_no_cogs_concepts(facts):
+        # #496 owner decision (2026-07-28): an issuer whose company-facts carry
+        # NO GrossProfit and NO COGS-family concept AT ALL (payment networks,
+        # integrated oil majors) uses revenue as the gross-profit proxy —
+        # their cost-of-revenue is ~zero or structurally unreported, the bias
+        # is small and its direction known. Concept-level absence only: a mere
+        # period mismatch on a real COGS filer still resolves to None.
+        return _latest(_merge_variants(facts, tuple(("us-gaap", c) for c in _REVENUE_CONCEPTS), "USD", cutoff))
+    return None
+
+
+def _files_no_cogs_concepts(facts: dict[str, Any]) -> bool:
+    gaap = facts.get("facts", {}).get("us-gaap", {})
+    return "GrossProfit" not in gaap and all(concept not in gaap for concept in _COGS_CONCEPTS)
+
+
+def insurance_pre_claims_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
+    """Insurance operating numerator: revenue minus policyholder benefits/claims (#496).
+
+    Mirrors `pre_provision_profit` in shape, with one extra guard: the shared
+    period must be the revenue series' LATEST period. Berkshire's only
+    API-visible claims concept stops in 2016 (segment-dimension facts are
+    dropped by company-facts); a 2016 difference silently paired with 2025
+    headcount is the Amazon-2009 GrossProfit lesson all over again, so a
+    stale claims series resolves to None and the factor surfaces
+    `missing_gross_profit` honestly — never a silent revenue proxy: for an
+    insurer, claims ARE the cost of revenue.
+    """
+    revenue = _merge_variants(facts, tuple(("us-gaap", c) for c in _REVENUE_CONCEPTS), "USD", cutoff)
+    claims = _preferred_variant(facts, tuple(("us-gaap", c) for c in _CLAIMS_CONCEPTS), "USD", cutoff)
+    datum = _difference_at_shared_period(revenue, claims)
+    if datum is None or datum.period_end != max(revenue):
         return None
-    return max(candidates, key=lambda datum: datum.period_end)
+    return datum
 
 
 def pre_provision_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
@@ -327,11 +375,16 @@ def build_bundle(facts: dict[str, Any], cutoff: date, branch: OperatingBranch) -
     assets = _latest(annual_values_by_period_end(facts, *_TOTAL_ASSETS, cutoff))
     shares = _latest(_merge_variants(facts, _SHARES_CONCEPTS, "shares", cutoff))
     revenue = _latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff)
-    ppnr = pre_provision_profit(facts, cutoff) if branch is OperatingBranch.FINANCIAL else None
-    # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer,
-    # financial branch included: a bank's operating numerator is the pre-provision-profit
-    # proxy, not a reported gross profit it never files.
-    profit = ppnr if branch is OperatingBranch.FINANCIAL else gross_profit(facts, cutoff)
+    # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
+    # the branch only decides WHICH versioned extraction asserts the operating numerator:
+    # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
+    # else reported/derived gross profit (with the no-COGS revenue proxy inside).
+    if branch is OperatingBranch.FINANCIAL:
+        profit = pre_provision_profit(facts, cutoff)
+    elif branch is OperatingBranch.INSURANCE:
+        profit = insurance_pre_claims_profit(facts, cutoff)
+    else:
+        profit = gross_profit(facts, cutoff)
     resolved = [datum for datum in (profit, assets, shares, revenue) if datum is not None]
     knowable = max((datum.filed for datum in resolved), default=None)
     return FinancialFactsBundle(
@@ -339,7 +392,7 @@ def build_bundle(facts: dict[str, Any], cutoff: date, branch: OperatingBranch) -
         total_assets=_v(assets),
         shares_outstanding=_v(shares),
         revenue=_v(revenue),
-        pre_provision_profit=_v(ppnr),
+        pre_provision_profit=_v(profit) if branch is OperatingBranch.FINANCIAL else None,
         raw_bytes=json.dumps(facts, sort_keys=True, separators=(",", ":")).encode(),
         knowable_at=None if knowable is None else datetime.combine(knowable, datetime.min.time(), tzinfo=UTC),
         operating_period_end=None if profit is None else profit.period_end,

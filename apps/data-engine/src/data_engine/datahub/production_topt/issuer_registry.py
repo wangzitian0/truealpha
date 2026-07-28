@@ -23,6 +23,7 @@ from factors.production_topt import OperatingBranch
 from data_engine.sources import sec
 
 _DEPOSITORY_INSTITUTION_SIC = range(6000, 6100)
+_INSURANCE_SIC = range(6300, 6400)
 
 
 class IssuerRegistryUnavailableError(RuntimeError):
@@ -33,9 +34,12 @@ def operating_branch_for_sic(sic: str | None) -> OperatingBranch:
     """Map an EDGAR SIC code to the operating branch its economics belong to."""
     if sic is None or not sic.strip().isdigit():
         return OperatingBranch.NON_FINANCIAL
-    return (
-        OperatingBranch.FINANCIAL if int(sic.strip()) in _DEPOSITORY_INSTITUTION_SIC else OperatingBranch.NON_FINANCIAL
-    )
+    code = int(sic.strip())
+    if code in _DEPOSITORY_INSTITUTION_SIC:
+        return OperatingBranch.FINANCIAL
+    if code in _INSURANCE_SIC:
+        return OperatingBranch.INSURANCE
+    return OperatingBranch.NON_FINANCIAL
 
 
 def resolve_operating_branches(ciks: Mapping[str, int]) -> dict[int, OperatingBranch]:
