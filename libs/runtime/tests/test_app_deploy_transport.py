@@ -6,17 +6,23 @@ covered by infra2-sdk's own test suite, not re-tested here)."""
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
+import sys
 from pathlib import Path
 
 import pytest
 from infra2_sdk.dispatch import INFRA_REPOSITORY, ReceiverRun
 
-import tools.app_deploy_transport as transport
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_PATH = REPO_ROOT / "libs/runtime/tests/fixtures/infra_boundary.v1.json"
+MODULE_PATH = REPO_ROOT / "tools/app_deploy_transport.py"
+SPEC = importlib.util.spec_from_file_location("truealpha_app_deploy_transport", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+transport = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = transport
+SPEC.loader.exec_module(transport)
 
 
 def _valid_request() -> dict:

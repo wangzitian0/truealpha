@@ -8,13 +8,22 @@ import os
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import httpx
 from infra2_sdk.dispatch import Api, LogFetcher, ReceiverRun, github_api_client
 from infra2_sdk.dispatch import dispatch_and_wait as _sdk_dispatch_and_wait
 
-from tools.app_deploy_request import request_from_mapping
+# `tools` has no __init__.py and isn't installed as a package, so it is only
+# resolvable as `tools.app_deploy_request` when the repo root is on sys.path --
+# true for a direct `python tools/app_deploy_transport.py` run (whose own
+# directory lands at sys.path[0], not the repo root) only after this insert.
+_TOOLS_DIR = Path(__file__).resolve().parent
+if str(_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_DIR))
+
+from app_deploy_request import request_from_mapping  # noqa: E402
 
 
 def dispatch_and_wait(

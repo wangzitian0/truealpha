@@ -4,11 +4,21 @@ algorithm against llm-service's {"status": "ok", "git_sha": ...} convention."""
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
-from tools.health_check import check_health
+REPO_ROOT = Path(__file__).resolve().parents[3]
+MODULE_PATH = REPO_ROOT / "tools/health_check.py"
+SPEC = importlib.util.spec_from_file_location("truealpha_health_check", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+_module = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = _module
+SPEC.loader.exec_module(_module)
+check_health = _module.check_health
 
 URL = "https://truealpha.club/api/health"
 
