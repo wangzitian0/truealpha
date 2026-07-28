@@ -43,7 +43,8 @@ def test_sdk_release_identity_is_exactly_pinned(corpus: dict) -> None:
     assert importlib.metadata.version(binding["distribution"]) == binding["version"]
 
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    dependency = f"{binding['distribution']} @ {binding['wheel_url']}"
+    extras = f"[{','.join(binding['extras'])}]" if binding.get("extras") else ""
+    dependency = f"{binding['distribution']}{extras} @ {binding['wheel_url']}"
     assert dependency in pyproject["dependency-groups"]["dev"]
 
     lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
@@ -161,6 +162,8 @@ def test_contract_version_must_be_v1(corpus: dict, contract_version: object) -> 
         "invalid-source-sha",
         "invalid-source-evidence-host",
         "invalid-source-evidence-repository",
+        "unexpected-top-level-field",
+        "unexpected-evidence-field",
     ],
 )
 def test_frozen_negative_cases_fail_closed(corpus: dict, case_id: str) -> None:
@@ -168,6 +171,32 @@ def test_frozen_negative_cases_fail_closed(corpus: dict, case_id: str) -> None:
     case = next(case for case in corpus["cases"] if case["id"] == case_id)
     with pytest.raises(ValueError, match=re.escape(case["error"])):
         renderer.request_from_mapping(_merged(valid["request"], case["override"]))
+
+
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ("source_sha", "request fields must exactly match DeployRequest v1"),
+        ("evidence", "request fields must exactly match DeployRequest v1"),
+    ],
+)
+def test_a_missing_top_level_field_fails_closed(corpus: dict, key: str, message: str) -> None:
+    """infra2_sdk.deploy.validate_wire_shape (#508): TrueAlpha's own authority check
+    previously had no exact-field-set completeness check at all."""
+    valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")["request"]
+    raw = {k: v for k, v in valid.items() if k != key}
+    with pytest.raises(ValueError, match=message):
+        renderer.request_from_mapping(raw)
+
+
+def test_a_missing_evidence_field_fails_closed(corpus: dict) -> None:
+    valid = next(case for case in corpus["cases"] if case["expected"] == "accepted")["request"]
+    raw = {
+        **valid,
+        "evidence": {k: v for k, v in valid["evidence"].items() if k != "source_run_id"},
+    }
+    with pytest.raises(ValueError, match="evidence fields must exactly match DeployEvidence v1"):
+        renderer.request_from_mapping(raw)
 
 
 @pytest.mark.parametrize("version_ref", [None, True, 1])
@@ -273,13 +302,23 @@ def test_release_workflow_dispatches_only_the_rendered_sdk_request() -> None:
     assert "wangzitian0/infra2/actions/runs/([1-9][0-9]*)" not in workflow
     assert "timeout-minutes: 50" in workflow
     assert "python tools/app_deploy_request.py" in workflow
-    assert "event_type: app-deploy-request" in workflow
-    assert '"client_payload": $request' in workflow
-    assert "actions/workflows/app-deploy-request.yml/runs" in workflow
-    assert 'receiver_conclusion" != "success"' in workflow
+    # infra2#508: the watermark/ambiguity-guard/log-content-verification dispatch
+    # algorithm (the inline title-match `first(...)` lookup this replaced had none
+    # of those) now lives in infra2_sdk.dispatch, shared with finance_report -- the
+    # workflow only pipes the rendered request into the shared transport tool.
+    assert "python tools/app_deploy_transport.py" in workflow
+    assert "event_type: app-deploy-request" not in workflow
+    assert "actions/workflows/app-deploy-request.yml/runs" not in workflow
     assert "secrets.INFRA2_PAT" in workflow
     assert "DOKPLOY_API_KEY" not in workflow
     assert "IAC_WEBHOOK_SECRET" not in workflow
+    # infra2#508: a bare `wget`/root-path Docker healthcheck exists, but no
+    # version-reporting endpoint did until llm-service's /health gained git_sha --
+    # this confirms the deployed prod release is actually live, not just reachable.
+    # Staging has no stable public URL yet (#11), so this is prod-only for now.
+    assert "python tools/health_check.py" in workflow
+    assert "https://truealpha.club/api/health" in workflow
+    assert "inputs.deploy_type == 'prod'" in workflow
 
 
 def test_frozen_corpus_documents_stable_tag_only_policy(corpus: dict) -> None:

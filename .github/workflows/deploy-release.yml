@@ -116,17 +116,17 @@ jobs:
             echo EOF
           } >>"$GITHUB_OUTPUT"
       - name: Dispatch the validated request to infra2
+        id: dispatch
         env:
-          GH_TOKEN: ${{ secrets.INFRA2_PAT }}
-          event_type: app-deploy-request
+          GH_TOKEN: ${{ github.token }}
+          INFRA2_PAT: ${{ secrets.INFRA2_PAT }}
           REQUEST_JSON: ${{ steps.request.outputs.json }}
         run: |
           set -euo pipefail
-          if [[ -z "${GH_TOKEN:-}" ]]; then
+          if [[ -z "${INFRA2_PAT:-}" ]]; then
             echo "::error::INFRA2_PAT is required"
             exit 1
           fi
-          service="$(jq -r '.service' <<<"$REQUEST_JSON")"
           deploy_type="$(jq -r '.deploy_type' <<<"$REQUEST_JSON")"
           version_ref="$(jq -r '.version_ref' <<<"$REQUEST_JSON")"
           source_sha="$(jq -r '.source_sha' <<<"$REQUEST_JSON")"
@@ -157,41 +157,14 @@ jobs:
                 exit 1
               }
           fi
-          payload="$(jq -n --arg event_type "$event_type" --argjson request "$REQUEST_JSON" \
-            '{event_type: $event_type, "client_payload": $request}')"
-          gh api --method POST /repos/wangzitian0/infra2/dispatches --input - <<<"$payload"
 
-          request_id="$(jq -r '.request_id' <<<"$REQUEST_JSON")"
-          expected_title="Deploy ${service} ${deploy_type} ${version_ref} ${source_sha} [${request_id}]"
-
-          receiver_run_id=""
-          for _ in {1..60}; do
-            runs="$(gh api '/repos/wangzitian0/infra2/actions/workflows/app-deploy-request.yml/runs?event=repository_dispatch&per_page=100')"
-            receiver_run_id="$(jq -r --arg title "$expected_title" \
-              'first(.workflow_runs[] | select(.display_title == $title) | .id) // empty' \
-              <<<"$runs")"
-            [[ -n "$receiver_run_id" ]] && break
-            sleep 10
-          done
-          if [[ -z "$receiver_run_id" ]]; then
-            echo "::error::infra2 receiver run was not created for ${request_id}"
-            exit 1
-          fi
-
-          receiver_conclusion=""
-          receiver_run_url=""
-          for _ in {1..60}; do
-            receiver_run="$(gh api "/repos/wangzitian0/infra2/actions/runs/${receiver_run_id}")"
-            receiver_status="$(jq -r '.status' <<<"$receiver_run")"
-            receiver_conclusion="$(jq -r '.conclusion // empty' <<<"$receiver_run")"
-            receiver_run_url="$(jq -r '.html_url' <<<"$receiver_run")"
-            [[ "$receiver_status" == "completed" ]] && break
-            sleep 30
-          done
-          if [[ "$receiver_conclusion" != "success" ]]; then
-            echo "::error::infra2 receiver did not succeed: ${receiver_run_url:-unknown} (${receiver_conclusion:-timeout})"
-            exit 1
-          fi
+          # infra2#508: watermark/ambiguity-guard/log-content-verification dispatch
+          # (the properties the previous inline title-match `first(...)` lookup here
+          # did not have) now lives in infra2_sdk.dispatch, shared with finance_report.
+          result="$(echo "$REQUEST_JSON" | uv run --no-sync python tools/app_deploy_transport.py \
+            --timeout 1800 --poll-interval 5)"
+          jq . <<<"$result"
+          receiver_run_url="$(jq -r '.receiver_run_url' <<<"$result")"
           {
             echo "### infra2 deployment receipt"
             echo
@@ -199,3 +172,18 @@ jobs:
             echo "- Release: \`${version_ref}\` (\`${source_sha}\`)"
             echo "- Receiver: ${receiver_run_url}"
           } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Confirm the deployed release is healthy
+        if: ${{ inputs.deploy_type == 'prod' }}
+        env:
+          EXPECTED_SHA: ${{ fromJson(steps.request.outputs.json).source_sha }}
+        run: |
+          set -euo pipefail
+          # infra2#508: llm-service's /health (reached through Traefik's /api prefix
+          # route, tools/route_manifest.json) now reports git_sha, so this confirms
+          # the deployed release is actually live -- not just that something answers.
+          # Staging has no stable public URL yet (#11); scoped to prod only for now.
+          uv run --no-sync python tools/health_check.py \
+            "https://truealpha.club/api/health" \
+            "$EXPECTED_SHA" \
+            24

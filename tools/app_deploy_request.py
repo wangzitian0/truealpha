@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
-from infra2_sdk.deploy import DeployOperation, DeployRequest, DeployType
+from infra2_sdk.deploy import DeployOperation, DeployRequest, DeployType, validate_wire_shape
 
 SERVICE = "truealpha/app"
 SOURCE_REPOSITORY = "wangzitian0/truealpha"
@@ -86,6 +86,7 @@ def canonical_json(request: DeployRequest) -> str:
 
 
 def _validate_authority(raw: Mapping[str, Any]) -> None:
+    validate_wire_shape(raw)
     contract_version = raw.get("contract_version")
     if isinstance(contract_version, bool) or contract_version != CONTRACT_VERSION:
         raise ValueError(f"contract_version must be {CONTRACT_VERSION}")
@@ -111,8 +112,6 @@ def _validate_authority(raw: Mapping[str, Any]) -> None:
         raise ValueError("source_sha must be a lowercase 40-hex commit sha")
 
     evidence = raw.get("evidence")
-    if not isinstance(evidence, Mapping):
-        raise ValueError("evidence must be an object")
     source_run_url = evidence.get("source_run_url")
     if not isinstance(source_run_url, str) or not source_run_url:
         raise ValueError("evidence.source_run_url is required")

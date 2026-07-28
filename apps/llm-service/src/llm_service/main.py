@@ -5,6 +5,7 @@ Roadmap: the MCP endpoint comes first (reuses libs/factors, nearly free to wire 
 Claude Desktop); the self-built /chat SSE endpoint is Tier 3 (Phase 7).
 """
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -27,4 +28,6 @@ app.mount("/mcp", mcp.streamable_http_app())
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    # git_sha lets tools/health_check.py confirm the deployed release tag is
+    # actually live post-deploy, not just that something answers (#508).
+    return {"status": "ok", "git_sha": os.environ.get("GIT_COMMIT_SHA", "unknown")}
