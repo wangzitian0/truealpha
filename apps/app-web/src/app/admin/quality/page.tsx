@@ -1,8 +1,17 @@
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadToptQuality } from "@/server/topt-quality";
+import { loadQualityFunnel, type FunnelLayer } from "@/server/admin/funnel";
+import { loadOpsOverview } from "@/server/admin/ops";
 import { formatRatio, formatUsdMagnitude } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
+
+const LAYER_BAR: Record<FunnelLayer["status"], string> = {
+  ok: "bg-emerald-500/70",
+  warn: "bg-amber-400/70",
+  crit: "bg-red-500/70",
+  muted: "bg-gray-600/40",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +46,15 @@ export default async function ToptQualityPage() {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fadmin%2Fquality");
   const state = await loadToptQuality(principal.context);
+  const funnel = await loadQualityFunnel({
+    context: principal.context,
+    principalKind: principal.principalKind,
+  });
+  const ops = await loadOpsOverview({ principalKind: principal.principalKind });
+  const quotaHeadline =
+    ops.kind === "ready" && ops.data.quotaToday.length > 0
+      ? ops.data.quotaToday.map((q) => `${q.source} ${q.fetches}`).join(" · ")
+      : "no fetches recorded today";
 
   return (
     <section aria-labelledby="quality-heading" className="space-y-8">
@@ -51,6 +69,43 @@ export default async function ToptQualityPage() {
       </div>
 
       <ReadStateNotice state={state} />
+
+      {funnel.kind === "ready" && (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h2 className="font-semibold">L0–L5 funnel — where the data narrows is where the problem is</h2>
+          <div className="mt-4 space-y-2">
+            <div className="grid grid-cols-[7rem_1fr] items-center gap-3">
+              <div className="text-right">
+                <span className="font-mono text-xs text-gray-400">L0 Sources</span>
+              </div>
+              <div>
+                <div className="flex h-8 items-center rounded bg-gray-600/40 px-3 font-mono text-xs">
+                  {quotaHeadline}
+                </div>
+                <p className="mt-0.5 text-xs text-gray-500">raw.fetches today, per source</p>
+              </div>
+            </div>
+            {funnel.layers.map((layer) => (
+              <div key={layer.key} className="grid grid-cols-[7rem_1fr] items-center gap-3">
+                <div className="text-right">
+                  <span className="font-mono text-xs text-gray-400">
+                    {layer.key} {layer.title}
+                  </span>
+                </div>
+                <div>
+                  <div
+                    className={`flex h-8 items-center rounded px-3 font-mono text-xs text-white ${LAYER_BAR[layer.status]}`}
+                    style={{ width: `${Math.round((layer.ratio ?? 1) * 100)}%`, minWidth: "9rem" }}
+                  >
+                    {layer.headline}
+                  </div>
+                  <p className="mt-0.5 text-xs text-gray-500">{layer.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {state.kind === "ready" && (
         <>
