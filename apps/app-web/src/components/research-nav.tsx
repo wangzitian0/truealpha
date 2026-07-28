@@ -10,6 +10,7 @@ const LINKS: readonly { href: string; label: string }[] = [
   { href: "/research/rankings", label: "Rankings / themes" },
   { href: "/research/compare", label: "Comparison" },
   { href: "/research/strategy", label: "Strategy" },
+  { href: "/research/coverage", label: "Coverage" },
   { href: "/research/conversations", label: "Conversations" },
   { href: "/research/library", label: "Library" },
 ];

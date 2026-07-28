@@ -36,11 +36,15 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     );
   }
 
+  // #494: the OPERATE chrome — a 3px amber bar + eyebrow on EVERY /admin
+  // page, from this one layout. Any screenshot or shared tab is instantly
+  // recognizable as the operator world (and never mistakable for research).
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-accent">Administrator</span>
-        <span className="text-xs text-gray-500">— separately server-gated from research routes</span>
+      <div className="-mx-4 border-t-[3px] border-amber-400" aria-hidden="true" />
+      <div className="flex items-center gap-2" data-operate-chrome="true">
+        <span className="text-xs font-semibold uppercase tracking-wider text-amber-400">Operate</span>
+        <span className="text-xs text-gray-500">— administrator world, separately server-gated from research</span>
       </div>
       {children}
     </div>
