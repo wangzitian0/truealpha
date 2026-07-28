@@ -38,6 +38,8 @@ export default async function RankingsPage({
 
       <ReadStateNotice state={state} />
 
+      <ClaimCeilingBanner />
+
       {state.kind === "ready" && (
         <>
           <p className="text-sm text-gray-500">
@@ -91,6 +93,7 @@ export default async function RankingsPage({
                       <Link
                         href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
                         className="font-mono text-xs text-gray-400 hover:text-accent"
+                        data-evidence="true"
                       >
                         {row.traceId}
                       </Link>

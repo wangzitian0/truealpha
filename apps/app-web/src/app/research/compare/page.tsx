@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadComparison } from "@/server/dashboard";
+import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,7 @@ export default async function ComparePage({
   if (!principal) redirect("/login?from=%2Fresearch%2Fcompare");
   const params = await searchParams;
   const state = await loadComparison(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
+  const names = await loadEntityDisplayMap();
 
   return (
     <section aria-labelledby="compare-heading" className="space-y-6">
@@ -60,8 +62,9 @@ export default async function ComparePage({
                       <Link
                         href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
                         className="text-accent hover:underline"
+                        title={row.issuerId}
                       >
-                        {row.issuerId}
+                        {entityLabel(row.issuerId, names)}
                       </Link>
                     </th>
                     <td className="px-4 py-3">{cell(row.capitalAdjustedLaborEfficiency)}</td>
