@@ -5,14 +5,17 @@ from decimal import Decimal
 
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
 from data_engine.datahub.production_topt.sec_financial_adapter import (
+    _SHARES_CONCEPTS,
     FinancialFactsBundle,
     HeadcountFact,
     SecFinancialFactAdapter,
     SecTarget,
     SourceUnavailableError,
+    _merge_variants,
     annual_values_by_period_end,
     build_bundle,
     gross_profit,
+    insurance_pre_claims_profit,
     pre_provision_profit,
 )
 from factors.production_topt import OperatingBranch
@@ -466,3 +469,112 @@ def test_the_bank_fallback_is_still_reachable_when_the_exact_concept_is_absent()
     datum = pre_provision_profit(facts, _CUTOFF)
     assert datum is not None
     assert datum.value == Decimal("300")
+
+
+# --- #496 numerator policies (mapping v3, owner decision 2026-07-28) ---------------
+
+
+def _units(entries: list[dict], unit: str = "USD") -> dict:
+    return {"units": {unit: entries}}
+
+
+def test_no_cogs_filer_uses_revenue_as_gross_profit_proxy() -> None:
+    """V/MA/XOM: no GrossProfit and no COGS-family concept AT ALL -> revenue proxy."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": _units([_annual("2025-12-31", "2025-01-01", 300, "2026-02-01")]),
+            }
+        }
+    }
+    datum = gross_profit(facts, _CUTOFF)
+    assert datum is not None and datum.value == Decimal("300")
+
+
+def test_cogs_filer_with_period_mismatch_still_resolves_none() -> None:
+    """Concept-level absence only: a real COGS filer whose periods never align
+    must NOT silently fall to the revenue proxy."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": _units([_annual("2025-12-31", "2025-01-01", 300, "2026-02-01")]),
+                "CostOfRevenue": _units([_annual("2024-12-31", "2024-01-01", 120, "2025-02-01")]),
+            }
+        }
+    }
+    assert gross_profit(facts, _CUTOFF) is None
+
+
+def test_insurance_branch_subtracts_claims_at_the_latest_revenue_period() -> None:
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": _units([_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]),
+                "PolicyholderBenefitsAndClaimsIncurredNet": _units(
+                    [_annual("2025-12-31", "2025-01-01", 250, "2026-02-01")]
+                ),
+            }
+        }
+    }
+    datum = insurance_pre_claims_profit(facts, _CUTOFF)
+    assert datum is not None and datum.value == Decimal("150")
+
+
+def test_insurance_branch_refuses_a_stale_claims_series() -> None:
+    """BRK.B reality: the only API-visible claims series stops years before the
+    latest revenue period — a stale difference paired with current headcount is
+    the Amazon-2009 lesson, so the numerator resolves None (honest absence)."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": _units(
+                    [
+                        _annual("2016-12-31", "2016-01-01", 200, "2017-02-01"),
+                        _annual("2025-12-31", "2025-01-01", 400, "2026-02-01"),
+                    ]
+                ),
+                "IncurredClaimsPropertyCasualtyAndLiability": _units(
+                    [_annual("2016-12-31", "2016-01-01", 120, "2017-02-01")]
+                ),
+            }
+        }
+    }
+    assert insurance_pre_claims_profit(facts, _CUTOFF) is None
+
+
+def test_weighted_average_shares_is_a_last_resort_and_never_shadows_point_in_time() -> None:
+    both = {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": _units(
+                    [{"end": "2026-01-31", "val": 10, "filed": "2026-02-10"}], unit="shares"
+                )
+            },
+            "us-gaap": {
+                "WeightedAverageNumberOfSharesOutstandingBasic": _units(
+                    [_annual("2026-01-31", "2025-02-01", 999, "2026-02-10")], unit="shares"
+                )
+            },
+        }
+    }
+    dual_class_only = {
+        "facts": {
+            "us-gaap": {
+                "WeightedAverageNumberOfSharesOutstandingBasic": _units(
+                    [_annual("2025-12-31", "2025-01-01", 2500, "2026-02-01")], unit="shares"
+                )
+            }
+        }
+    }
+    shadowed = _merge_variants(both, _SHARES_CONCEPTS, "shares", _CUTOFF)
+    assert shadowed[max(shadowed)].value == Decimal("10"), "point-in-time count must win its period"
+    fallback = _merge_variants(dual_class_only, _SHARES_CONCEPTS, "shares", _CUTOFF)
+    assert fallback[max(fallback)].value == Decimal("2500"), "META-style filers get the weighted average"
+
+
+def test_operating_branch_for_sic_maps_insurers() -> None:
+    from data_engine.datahub.production_topt.issuer_registry import operating_branch_for_sic
+
+    assert operating_branch_for_sic("6331") is OperatingBranch.INSURANCE
+    assert operating_branch_for_sic("6022") is OperatingBranch.FINANCIAL
+    assert operating_branch_for_sic("7389") is OperatingBranch.NON_FINANCIAL

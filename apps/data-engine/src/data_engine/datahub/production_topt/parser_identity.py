@@ -15,8 +15,8 @@ restatements).
 
 from __future__ import annotations
 
-PARSER_VERSION = "production-topt-live-parser:v2"
-MAPPING_VERSION = "production-topt-live-map:v2"
+PARSER_VERSION = "production-topt-live-parser:v3"
+MAPPING_VERSION = "production-topt-live-map:v3"
 
 # v1 -> v2 (#496): concept selection changed from "first variant carrying any value" to
 # "latest period across synonym variants", restatements began resolving by filing date
