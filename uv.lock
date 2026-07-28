@@ -27,7 +27,7 @@ members = [
 
 [manifest.dependency-groups]
 dev = [
-    { name = "infra2-sdk", url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.4.1/infra2_sdk-0.4.1-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["http"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.5.1/infra2_sdk-0.5.1-py3-none-any.whl" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pandas-stubs", specifier = ">=2.2" },
 ]
@@ -847,13 +847,18 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "0.4.1"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.4.1/infra2_sdk-0.4.1-py3-none-any.whl" }
+version = "0.5.1"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.5.1/infra2_sdk-0.5.1-py3-none-any.whl" }
 dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.4.1/infra2_sdk-0.4.1-py3-none-any.whl", hash = "sha256:55df39bf72e89f7f1d980b369535cb87fd8fad8c71ac01b39439781ade378a10" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v0.5.1/infra2_sdk-0.5.1-py3-none-any.whl", hash = "sha256:7ccbcfa2017c45ca14d7b29d74f4bd1c8164d573aa4543c5420249784c5e94ba" },
+]
+
+[package.optional-dependencies]
+http = [
+    { name = "httpx" },
 ]
 
 [package.metadata]
