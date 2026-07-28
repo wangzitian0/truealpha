@@ -55,10 +55,12 @@ for (const path of livePages) {
   // (a) visible raw ids on research pages — innerText excludes attributes,
   // so title=/href= demotions pass and visible leaks fail.
   if (path.startsWith("/research")) {
+    // innerText must be computed on the LIVE body (layout-aware: excludes
+    // script/RSC payloads a detached clone would leak); the page is
+    // throwaway, so evidence elements are simply removed first.
     const visible = await page.evaluate(() => {
-      const clone = document.body.cloneNode(true);
-      for (const el of clone.querySelectorAll("[data-evidence]")) el.remove();
-      return clone.innerText || clone.textContent || "";
+      for (const el of document.querySelectorAll("[data-evidence]")) el.remove();
+      return document.body.innerText;
     });
     const match = visible.match(ID_PATTERN);
     if (match) problems.push(`visible raw id: ${match[0]}`);
