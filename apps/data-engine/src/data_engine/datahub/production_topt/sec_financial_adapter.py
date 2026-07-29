@@ -24,7 +24,6 @@ port (#70), never as a branch in generic capture code.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -35,12 +34,14 @@ from typing import Any
 from factors.production_topt import OperatingBranch
 from truealpha_contracts import ObligationReasonCode, canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
+from truealpha_contracts.models import DataSource
 
 from data_engine.datahub.production_topt.executor import (
     FetchFailure,
     FetchOutcome,
     FetchSuccess,
     NormalizedRecord,
+    RawResponse,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 
@@ -363,7 +364,9 @@ def pre_provision_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
     )
 
 
-def build_bundle(facts: dict[str, Any], cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+def build_bundle(
+    facts: dict[str, Any], cutoff: date, branch: OperatingBranch, *, raw_bytes: bytes | None = None
+) -> FinancialFactsBundle:
     """Extract the PIT financial-fact bundle from a company-facts payload.
 
     A payload with no eligible fact is not a failure: the source honestly asserts
@@ -393,7 +396,12 @@ def build_bundle(facts: dict[str, Any], cutoff: date, branch: OperatingBranch) -
         shares_outstanding=_v(shares),
         revenue=_v(revenue),
         pre_provision_profit=_v(profit) if branch is OperatingBranch.FINANCIAL else None,
-        raw_bytes=json.dumps(facts, sort_keys=True, separators=(",", ":")).encode(),
+        # The vendor's own document when the caller has it. The fallback re-serialization
+        # is for callers that only ever hold a parsed dict (tests); its digest describes our
+        # rendering, not SEC's, so it must never be what a live capture lands.
+        raw_bytes=raw_bytes
+        if raw_bytes is not None
+        else json.dumps(facts, sort_keys=True, separators=(",", ":")).encode(),
         knowable_at=None if knowable is None else datetime.combine(knowable, datetime.min.time(), tzinfo=UTC),
         operating_period_end=None if profit is None else profit.period_end,
         revenue_period_end=None if revenue is None else revenue.period_end,
@@ -458,14 +466,16 @@ class SecFinancialFactAdapter:
             "revenue_period_end": _d(bundle.revenue_period_end),
         }
         return FetchSuccess(
-            raw_sha256=hashlib.sha256(bundle.raw_bytes).hexdigest(),
-            object_uri=f"s3://truealpha-raw/sec/companyfacts/CIK{target.cik:010d}.json",
+            raw=RawResponse(
+                body=bundle.raw_bytes,
+                source=DataSource.SEC,
+                record_id=f"companyfacts:CIK{target.cik:010d}",
+            ),
             normalized_sha256=canonical_sha256(payload),
             confidence=_confidence(payload),
             valid_from=knowable_at.date(),
             transaction_time=knowable_at,
             record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
-            raw_byte_length=len(bundle.raw_bytes),
         )
 
 
@@ -494,7 +504,7 @@ def sec_financial_fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> Fi
     from data_engine.sources import sec
 
     try:
-        facts = sec.fetch_company_facts(cik)
+        body, facts = sec.fetch_company_facts_response(cik)
     except httpx.HTTPError as error:
         raise SourceUnavailableError(str(error)) from error
-    return build_bundle(facts, cutoff, branch)
+    return build_bundle(facts, cutoff, branch, raw_bytes=body)

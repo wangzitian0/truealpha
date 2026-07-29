@@ -67,15 +67,29 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
     return dict(resp.json())
 
 
-def fetch_company_facts(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
-    """Pass a client to reuse one connection across a sweep; without one, a
-    throwaway client is opened per call (fine for single fetches)."""
+def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> tuple[bytes, dict[str, Any]]:
+    """The verbatim response body and the facts parsed from it.
+
+    Callers that land evidence need the bytes SEC actually sent. Re-serializing the
+    parsed dict is not the same thing — key order and separators differ, so its digest
+    describes our rendering rather than the vendor's document, and a reparse under a
+    corrected mapping would be replaying our own output.
+    """
     if http is not None:
         resp = http.get(COMPANY_FACTS_URL.format(cik=cik))
         resp.raise_for_status()
-        return resp.json()
+        return resp.content, json.loads(resp.content.decode())
     with client() as c:
-        return fetch_company_facts(cik, c)
+        return fetch_company_facts_response(cik, c)
+
+
+def fetch_company_facts(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
+    """Parsed facts only, for callers with nothing to land.
+
+    Pass a client to reuse one connection across a sweep; without one, a throwaway
+    client is opened per call (fine for single fetches).
+    """
+    return fetch_company_facts_response(cik, http)[1]
 
 
 def save_sample(ticker: str, out_dir: Path) -> Path:

@@ -11,6 +11,7 @@ only when every obligation is `available` (see #366).
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -31,6 +32,7 @@ from truealpha_contracts import (
     disposition_for,
 )
 from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from truealpha_contracts.models import DataSource
 
 _HEX64 = 64
 
@@ -55,6 +57,36 @@ class NormalizedRecord:
 
 
 @dataclass(frozen=True)
+class RawResponse:
+    """The vendor's response bytes, verbatim, plus where they belong in raw storage.
+
+    Adapters used to hand over a digest and an object URI they had computed themselves,
+    keeping the bytes. Nothing then wrote those bytes anywhere, so `raw.fetches` filled
+    with pointers into buckets that do not exist — 924 captures and one stored object
+    (#171). Carrying the bytes makes the landing possible and makes the digest
+    underivable-by-hand: it is computed here, from what actually arrived.
+
+    `source` and `record_id` are the VENDOR's identity for this response, not the capture
+    run's. That is what lets the content-addressed store collapse an unchanged re-fetch
+    onto the object already there; keying on the run version, as the synthesized URIs did,
+    guarantees every tick writes a new copy of identical bytes.
+    """
+
+    body: bytes
+    source: DataSource
+    record_id: str
+    content_type: str = "application/json"
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.body).hexdigest()
+
+    @property
+    def byte_length(self) -> int:
+        return len(self.body)
+
+
+@dataclass(frozen=True)
 class Corroboration:
     """An independent second-origin assertion about the same cell (init.md rule 15).
 
@@ -67,13 +99,10 @@ class Corroboration:
     origin: str
     record: NormalizedRecord
     confidence: Decimal
-    raw_sha256: str
-    object_uri: str
+    raw: RawResponse
     normalized_sha256: str
-    raw_byte_length: int = 0
 
     def __post_init__(self) -> None:
-        _require_digest(self.raw_sha256)
         _require_digest(self.normalized_sha256)
         if canonical_sha256(dict(self.record.payload)) != self.normalized_sha256:
             raise ValueError("corroboration payload does not match its normalized digest")
@@ -90,19 +119,20 @@ class FetchSuccess:
     cell's independent second-origin assertions.
     """
 
-    raw_sha256: str
-    object_uri: str
+    raw: RawResponse
     normalized_sha256: str
     confidence: Decimal
     valid_from: date
     transaction_time: datetime
     record: NormalizedRecord | None = None
     corroborations: tuple[Corroboration, ...] = field(default=())
-    raw_byte_length: int = 0
+
+    @property
+    def raw_sha256(self) -> str:
+        return self.raw.sha256
 
     def __post_init__(self) -> None:
-        for digest in (self.raw_sha256, self.normalized_sha256):
-            _require_digest(digest)
+        _require_digest(self.normalized_sha256)
         if not (Decimal(0) <= self.confidence <= Decimal(1)):
             raise ValueError("confidence must be in [0, 1]")
         if self.record is not None and canonical_sha256(dict(self.record.payload)) != self.normalized_sha256:
