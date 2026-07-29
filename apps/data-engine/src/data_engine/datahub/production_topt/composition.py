@@ -20,6 +20,7 @@ reproduces the same identities (conflict-tolerant inserts make the replay idempo
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -233,7 +234,36 @@ def plan_and_persist(connection: psycopg.Connection[Any], *, cutoff: datetime, v
     )
 
 
-def build_routes(plan: PlannedRun) -> dict[str, SourceFetchPort]:
+def predecessor_ciks(connection: psycopg.Connection[Any], listing_ids: Sequence[str]) -> dict[str, int]:
+    """#496: each listing's most recent successfully-parsed company-facts CIK,
+    from OUR OWN capture lineage — the registry the predecessor-CIK fallback
+    consults when the index-mapped CIK's taxonomy is empty (post-reorganization
+    holdco). "Successfully parsed" means the observation's payload carried a
+    revenue value; the lineage join runs entirely on archived, immutable rows.
+    """
+    rows = connection.execute(
+        """
+        select distinct on (o.subject_id) o.subject_id, v.source_record_id
+        from staging.capture_normalized_observations o
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        where o.subject_id = any(%s)
+          and o.semantic_type = 'financial-fact'
+          and p.normalized_payload->>'revenue' is not null
+          and v.source_record_id like 'companyfacts:CIK%%'
+        order by o.subject_id, o.knowable_at desc
+        """,
+        (list(listing_ids),),
+    ).fetchall()
+    resolved: dict[str, int] = {}
+    for subject_id, record_id in rows:
+        digits = record_id.removeprefix("companyfacts:CIK")
+        if digits.isdigit():
+            resolved[subject_id] = int(digits)
+    return resolved
+
+
+def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = None) -> dict[str, SourceFetchPort]:
     """Resolve every planned work item to the adapter that owns its semantic.
 
     Source-facing resolution (CIKs, issuer classification) happens once here, so no
@@ -247,6 +277,8 @@ def build_routes(plan: PlannedRun) -> dict[str, SourceFetchPort]:
     if missing:
         raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
     branches = resolve_operating_branches(cik_by_ticker)
+    listing_ids = [coordinate[2] for coordinate in plan.coordinates.values()]
+    predecessors = predecessor_ciks(connection, listing_ids) if connection is not None else {}
 
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
@@ -271,6 +303,11 @@ def build_routes(plan: PlannedRun) -> dict[str, SourceFetchPort]:
                 instrument_id=instrument_id,
                 listing_id=listing_id,
                 operating_branch=branches.get(cik, OperatingBranch.NON_FINANCIAL),
+                # only meaningful when it differs from the mapped CIK — the
+                # fallback would otherwise refetch the same empty document.
+                predecessor_cik=(
+                    predecessors.get(listing_id) if predecessors.get(listing_id) not in (None, cik) else None
+                ),
             )
         elif semantic_type in _RELEASE_SEMANTICS:
             release_targets[work_item_id] = ReleaseDerivedRecord(
@@ -329,7 +366,7 @@ def run_topt_pipeline(
     report = run_topt_capture(
         plan.run_id,
         plan.work_items,
-        build_routes(plan),
+        build_routes(plan, connection),
         writer or PostgresEvidenceGraphRepository(connection),
         sink=sink,
         cutoff=cutoff,

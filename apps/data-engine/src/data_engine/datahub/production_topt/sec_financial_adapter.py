@@ -128,6 +128,12 @@ class SecTarget:
     listing_id: str
     operating_branch: OperatingBranch
     currency: str = "USD"
+    # #496: the issuer's most recent successfully-parsed CIK from OUR OWN
+    # capture lineage (raw.capture_source_vintages), resolved at planning.
+    # Used ONLY when the index-mapped CIK's payload yields no eligible fact at
+    # all (a real state: XOM's post-reorganization holdco CIK publishes no
+    # us-gaap taxonomy). Registry/lineage-driven — never a ticker allowlist.
+    predecessor_cik: int | None = None
 
 
 FinancialFactsFetcher = Callable[[int, date, OperatingBranch], FinancialFactsBundle | None]
@@ -424,6 +430,13 @@ class SecFinancialFactAdapter:
             return FetchFailure(ObligationReasonCode.CONTRACT_VIOLATION)
         try:
             bundle = self._fetcher(target.cik, target.cutoff, target.operating_branch)
+            if bundle is not None and bundle.knowable_at is None and target.predecessor_cik is not None:
+                # #496 predecessor-CIK fallback: the mapped CIK's document
+                # exists but asserts nothing (empty taxonomy after a corporate
+                # reorganization); the issuer's own capture lineage names the
+                # CIK that last parsed successfully. Both payloads end up
+                # archived (the empty one deduped from prior runs).
+                bundle = self._fetcher(target.predecessor_cik, target.cutoff, target.operating_branch)
         except SourceUnavailableError:
             return FetchFailure(ObligationReasonCode.TRANSIENT_NETWORK)
         except TimeoutError:
