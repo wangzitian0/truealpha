@@ -38,26 +38,45 @@ order by kind, sequence desc;
 comment on view staging.accepted_ruleset_head is
     'The in-force ruleset per kind. Resolving through this view, not through contract_objects directly, is what keeps the read governed.';
 
--- Extend the contract-kind allowlist for published concept mappings. The allowlist is
--- deliberate: an arbitrary kind would let anything masquerade as a governed contract, so
--- a new kind is a reviewed schema change even though publishing an INSTANCE of it is not.
+-- Extend the contract-kind allowlist for published concept mappings.
+--
+-- Derived from whatever constraint is in force rather than re-declaring the list. The
+-- first version of this migration copied 0017's clauses and silently dropped the two
+-- kinds 0018 had added since — a whole-list rewrite cannot see additions it predates, and
+-- the next such migration would have dropped `concept-mapping` the same way. Widening the
+-- existing expression makes that class of mistake impossible.
+--
+-- The allowlist itself stays deliberate: an arbitrary kind would let anything masquerade
+-- as a governed contract, so adding a KIND is a reviewed schema change even though
+-- publishing an INSTANCE of one is not.
 do $$
+declare
+    existing_def text;
 begin
-    alter table staging.contract_objects
-        drop constraint if exists contract_objects_kind_identity_check;
-    alter table staging.contract_objects
-    add constraint contract_objects_kind_identity_check check (
-        (contract_kind = 'registry_snapshot' and contract_id like 'registry-snapshot:%')
-        or (contract_kind = 'research_catalog_manifest' and contract_id like 'research-catalog:%')
-        or (contract_kind = 'snapshot_manifest' and contract_id like 'snapshot:%')
-        or (contract_kind = 'release_manifest' and contract_id like 'release-manifest:%')
-        or (contract_kind = 'capture_scope' and contract_id like 'capture-scope:%')
-        or (contract_kind = 'capture_manifest' and contract_id like 'capture-manifest:%')
-        or (contract_kind = 'capture_evaluation_report' and contract_id like 'capture-evaluation:%')
-        or (contract_kind = 'trace_bundle' and contract_id like 'trace-bundle:%')
-        or (contract_kind = 'strategy_usage_audit' and contract_id like 'strategy-usage-audit:%')
-        or (contract_kind = 'graduation_attestation' and contract_id like 'graduation-attestation:%')
-        or (contract_kind = 'concept-mapping' and contract_id like 'concept-mapping:%')
+    select pg_get_constraintdef(constraint_row.oid) into existing_def
+    from pg_constraint as constraint_row
+    join pg_class as table_row on table_row.oid = constraint_row.conrelid
+    join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
+    where schema_row.nspname = 'staging'
+      and table_row.relname = 'contract_objects'
+      and constraint_row.conname = 'contract_objects_kind_identity_check';
+
+    if existing_def is null then
+        raise exception 'contract_objects_kind_identity_check is missing; 0017/0018 must apply first';
+    end if;
+
+    -- Idempotent: re-running the migration file must be a no-op, not a second OR clause.
+    if position('concept-mapping' in existing_def) > 0 then
+        return;
+    end if;
+
+    execute 'alter table staging.contract_objects drop constraint contract_objects_kind_identity_check';
+    execute format(
+        'alter table staging.contract_objects add constraint contract_objects_kind_identity_check '
+        'check ((%s) or (contract_kind = %L and contract_id like %L))',
+        regexp_replace(existing_def, '^CHECK\s*\((.*)\)$', '\1'),
+        'concept-mapping',
+        'concept-mapping:%'
     );
 end;
 $$;
