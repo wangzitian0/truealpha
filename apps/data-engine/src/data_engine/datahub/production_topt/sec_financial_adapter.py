@@ -33,9 +33,11 @@ from typing import Any
 
 from factors.production_topt import OperatingBranch
 from truealpha_contracts import ObligationReasonCode, canonical_sha256
+from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef, ResolutionKind
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
 
+from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.executor import (
     FetchFailure,
     FetchOutcome,
@@ -45,52 +47,10 @@ from data_engine.datahub.production_topt.executor import (
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 
-# Two kinds of concept list, and they must never be resolved the same way.
-#
-# SYNONYM lists hold tags for the SAME quantity that an issuer used at different times —
-# `Revenues` and `RevenueFromContractWithCustomerExcludingAssessedTax` are both "total
-# revenue", the second replaced the first at the ASC 606 transition. Merging these into one
-# period-keyed series is correct and is what follows an issuer across the switch (#496).
-#
-# FALLBACK lists hold tags for DIFFERENT quantities, ordered by how well each stands in for
-# the one we want. Merging those by period is wrong however recent the alternative is: it
-# silently swaps in another number. Resolution stops at the first concept the issuer reports
-# at all, so a stand-in is only reached when the exact quantity is absent entirely.
-_REVENUE_CONCEPTS = ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax")  # synonyms
-_COGS_CONCEPTS = ("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfServices")  # synonyms
-# FALLBACK: for a bank, plain `Revenues` is gross of interest expense, so subtracting
-# noninterest expense from it is not pre-provision NET revenue. Only usable when the
-# issuer publishes no net-of-interest total — never because it happens to be more recent.
-_BANK_REVENUE_CONCEPTS = ("RevenuesNetOfInterestExpense", "Revenues")
-_TOTAL_ASSETS = ("us-gaap", "Assets", "USD")
-# SYNONYMS: both are shares *outstanding*, one on the cover page and one in the statements.
-# Share counts live in `dei` for most large filers; a single us-gaap concept left
-# ABBV/JNJ/LLY with no count at all (#496).
-#
-# `CommonStockSharesIssued` is deliberately NOT here. Issued includes treasury stock and is
-# a different quantity — JNJ reports 3,119,843,000 issued against 2,409,898,597
-# outstanding. Ranking it by period end would hand market cap a 29% error on whichever
-# filing cycle it happened to carry the later date, with nothing in the payload disclosing
-# the substitution.
-_SHARES_CONCEPTS = (
-    ("dei", "EntityCommonStockSharesOutstanding"),
-    ("us-gaap", "CommonStockSharesOutstanding"),
-    # #496 LAST-RESORT: dual-class filers (META) tag point-in-time shares only
-    # per class with dimensions, which the company-facts API drops entirely —
-    # the annual weighted-average is the only whole-entity share count the API
-    # carries. Preference order keeps it from ever shadowing a real
-    # point-in-time figure (mapping v3).
-    ("us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic"),
-)
-# #496: the insurance operating numerator subtracts policyholder benefits/
-# claims from revenue (owner-approved 2026-07-28) — the insurance analog of
-# the bank PPNR proxy. Preference list, not synonyms (`_preferred_variant`):
-# the entries measure different nettings and recency must not promote one.
-_CLAIMS_CONCEPTS = (
-    "PolicyholderBenefitsAndClaimsIncurredNet",
-    "BenefitsLossesAndExpenses",
-    "IncurredClaimsPropertyCasualtyAndLiability",
-)
+# Concept lists are NOT here any more: they are a published, content-addressed ruleset
+# (`concept_mapping.DEFAULT_RULESET`, superseded at runtime by the governed pointer), so
+# a corrected mapping is an insert rather than a deploy. Keeping a second copy in code
+# would recreate exactly the drift the ruleset removes.
 # An annual period: shorter spans are quarterly facts that must not be compared with
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
@@ -259,17 +219,6 @@ def _preferred_variant(
     return {}
 
 
-def _latest_across_variants(facts: dict[str, Any], concepts: Sequence[str], unit: str, cutoff: date) -> _Datum | None:
-    """The most recent annual value across ALL variants (us-gaap), not the first with data.
-
-    The rule this replaces returned the first concept carrying any value, so an issuer
-    that stopped using a tag stayed pinned to it: AAPL's mart revenue was its FY2018
-    `Revenues` figure for seven years while `RevenueFromContractWithCustomer…` carried
-    FY2025 (#496).
-    """
-    return _latest(_merge_variants(facts, tuple(("us-gaap", concept) for concept in concepts), unit, cutoff))
-
-
 def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date, _Datum]) -> _Datum | None:
     """`base - subtracted` at their latest *shared* annual period end.
 
@@ -291,21 +240,28 @@ def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date
     )
 
 
-def _period_matched_difference(
-    facts: dict[str, Any], minuend: Sequence[str], subtrahend: Sequence[str], cutoff: date
-) -> _Datum | None:
-    """`minuend - subtrahend` where BOTH sides are synonym lists, so both merge.
+def resolve_field(
+    facts: dict[str, Any], ruleset: ConceptMappingRuleset, field: str, cutoff: date
+) -> dict[date, _Datum]:
+    """The annual series for one declared field, resolved by its DECLARED kind.
 
-    Iterating variant pairs and returning the first that shares any period could pair a
-    legacy revenue tag with a current cost tag purely because that pair was reached first.
+    Synonyms merge into one period-keyed series so the latest period wins across a tag
+    switch; stand-ins stop at the first concept the issuer reports, so a different quantity
+    can never be promoted by carrying a later date. Which one applies is data, not a
+    decision this function makes.
     """
-    return _difference_at_shared_period(
-        _merge_variants(facts, tuple(("us-gaap", concept) for concept in minuend), "USD", cutoff),
-        _merge_variants(facts, tuple(("us-gaap", concept) for concept in subtrahend), "USD", cutoff),
-    )
+    mapping = ruleset.mapping_for(field)
+    if mapping is None:
+        return {}
+    concepts = tuple((item.taxonomy, item.concept) for item in mapping.concepts)
+    if mapping.kind is ResolutionKind.FALLBACK:
+        return _preferred_variant(facts, concepts, mapping.unit, cutoff)
+    return _merge_variants(facts, concepts, mapping.unit, cutoff)
 
 
-def gross_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
+def gross_profit(
+    facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
+) -> _Datum | None:
     """Reported `GrossProfit` or revenue minus cost of revenue — whichever covers the later period.
 
     "Reported wins unconditionally" is not safe: Amazon last tagged `GrossProfit` for
@@ -314,28 +270,49 @@ def gross_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
     two cover the *same* period — it is the issuer's own assertion rather than our
     arithmetic — but it cannot outrank a more recent one.
     """
-    direct = _latest(annual_values_by_period_end(facts, "us-gaap", "GrossProfit", "USD", cutoff))
-    derived = _period_matched_difference(facts, _REVENUE_CONCEPTS, _COGS_CONCEPTS, cutoff)
+    direct = _latest(resolve_field(facts, ruleset, "gross_profit", cutoff))
+    derived = _difference_at_shared_period(
+        resolve_field(facts, ruleset, "revenue", cutoff),
+        resolve_field(facts, ruleset, "cost_of_revenue", cutoff),
+    )
     candidates = [datum for datum in (direct, derived) if datum is not None]
     if candidates:
         return max(candidates, key=lambda datum: datum.period_end)
-    if _files_no_cogs_concepts(facts):
+    if _files_no_cogs_concepts(facts, ruleset):
         # #496 owner decision (2026-07-28): an issuer whose company-facts carry
         # NO GrossProfit and NO COGS-family concept AT ALL (payment networks,
         # integrated oil majors) uses revenue as the gross-profit proxy —
         # their cost-of-revenue is ~zero or structurally unreported, the bias
         # is small and its direction known. Concept-level absence only: a mere
         # period mismatch on a real COGS filer still resolves to None.
-        return _latest(_merge_variants(facts, tuple(("us-gaap", c) for c in _REVENUE_CONCEPTS), "USD", cutoff))
+        return _latest(resolve_field(facts, ruleset, "revenue", cutoff))
     return None
 
 
-def _files_no_cogs_concepts(facts: dict[str, Any]) -> bool:
+def _declared_concepts(ruleset: ConceptMappingRuleset, field: str) -> tuple[ConceptRef, ...]:
+    mapping = ruleset.mapping_for(field)
+    return () if mapping is None else mapping.concepts
+
+
+def _files_no_cogs_concepts(facts: dict[str, Any], ruleset: ConceptMappingRuleset) -> bool:
+    """True when the issuer tags NO gross-profit and NO cost concept the ruleset knows.
+
+    Concept-level absence, read off the ruleset rather than a second copy of the list —
+    two lists that must agree are two lists that eventually will not.
+    """
     gaap = facts.get("facts", {}).get("us-gaap", {})
-    return "GrossProfit" not in gaap and all(concept not in gaap for concept in _COGS_CONCEPTS)
+    declared = [
+        item.concept
+        for field in ("gross_profit", "cost_of_revenue")
+        for item in _declared_concepts(ruleset, field)
+        if item.taxonomy == "us-gaap"
+    ]
+    return all(concept not in gaap for concept in declared)
 
 
-def insurance_pre_claims_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
+def insurance_pre_claims_profit(
+    facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
+) -> _Datum | None:
     """Insurance operating numerator: revenue minus policyholder benefits/claims (#496).
 
     Mirrors `pre_provision_profit` in shape, with one extra guard: the shared
@@ -347,15 +324,17 @@ def insurance_pre_claims_profit(facts: dict[str, Any], cutoff: date) -> _Datum |
     `missing_gross_profit` honestly — never a silent revenue proxy: for an
     insurer, claims ARE the cost of revenue.
     """
-    revenue = _merge_variants(facts, tuple(("us-gaap", c) for c in _REVENUE_CONCEPTS), "USD", cutoff)
-    claims = _preferred_variant(facts, tuple(("us-gaap", c) for c in _CLAIMS_CONCEPTS), "USD", cutoff)
+    revenue = resolve_field(facts, ruleset, "revenue", cutoff)
+    claims = resolve_field(facts, ruleset, "insurance_claims", cutoff)
     datum = _difference_at_shared_period(revenue, claims)
     if datum is None or datum.period_end != max(revenue):
         return None
     return datum
 
 
-def pre_provision_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
+def pre_provision_profit(
+    facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
+) -> _Datum | None:
     """Bank pre-provision net revenue: net revenue minus noninterest expense (#59).
 
     The revenue side is a FALLBACK list, so it resolves by preference rather than by
@@ -365,13 +344,18 @@ def pre_provision_profit(facts: dict[str, Any], cutoff: date) -> _Datum | None:
     because it carries a later period end.
     """
     return _difference_at_shared_period(
-        _preferred_variant(facts, tuple(("us-gaap", concept) for concept in _BANK_REVENUE_CONCEPTS), "USD", cutoff),
-        annual_values_by_period_end(facts, "us-gaap", "NoninterestExpense", "USD", cutoff),
+        resolve_field(facts, ruleset, "bank_revenue", cutoff),
+        resolve_field(facts, ruleset, "noninterest_expense", cutoff),
     )
 
 
 def build_bundle(
-    facts: dict[str, Any], cutoff: date, branch: OperatingBranch, *, raw_bytes: bytes | None = None
+    facts: dict[str, Any],
+    cutoff: date,
+    branch: OperatingBranch,
+    *,
+    raw_bytes: bytes | None = None,
+    ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
 ) -> FinancialFactsBundle:
     """Extract the PIT financial-fact bundle from a company-facts payload.
 
@@ -381,19 +365,24 @@ def build_bundle(
     inventing one. A source that could not be *reached* raises instead — that is a
     retryable failure, never a null-filled fact.
     """
-    assets = _latest(annual_values_by_period_end(facts, *_TOTAL_ASSETS, cutoff))
-    shares = _latest(_merge_variants(facts, _SHARES_CONCEPTS, "shares", cutoff))
-    revenue = _latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff)
+    assets = _latest(resolve_field(facts, ruleset, "total_assets", cutoff))
+    # The last-resort share count is consulted only when the point-in-time series is
+    # EMPTY. Kept as a separate lookup rather than a trailing synonym so a period average
+    # can never win on recency over a real point-in-time figure (#496).
+    shares = _latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)) or _latest(
+        resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)
+    )
+    revenue = _latest(resolve_field(facts, ruleset, "revenue", cutoff))
     # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
     # the branch only decides WHICH versioned extraction asserts the operating numerator:
     # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
     # else reported/derived gross profit (with the no-COGS revenue proxy inside).
     if branch is OperatingBranch.FINANCIAL:
-        profit = pre_provision_profit(facts, cutoff)
+        profit = pre_provision_profit(facts, cutoff, ruleset)
     elif branch is OperatingBranch.INSURANCE:
-        profit = insurance_pre_claims_profit(facts, cutoff)
+        profit = insurance_pre_claims_profit(facts, cutoff, ruleset)
     else:
-        profit = gross_profit(facts, cutoff)
+        profit = gross_profit(facts, cutoff, ruleset)
     resolved = [datum for datum in (profit, assets, shares, revenue) if datum is not None]
     knowable = max((datum.filed for datum in resolved), default=None)
     return FinancialFactsBundle(
@@ -427,10 +416,15 @@ class SecFinancialFactAdapter:
         fetcher: FinancialFactsFetcher,
         *,
         headcount_extractor: HeadcountExtractor | None = None,
+        mapping_version: str = MAPPING_VERSION,
     ) -> None:
         self._targets = targets
         self._fetcher = fetcher
         self._headcount_extractor = headcount_extractor
+        # Carries the resolved ruleset's hash, so an observation names the exact concept
+        # rules behind it. Without that, advancing the pointer silently changes what
+        # numbers mean while every row still claims the same mapping identity.
+        self._mapping_version = mapping_version
 
     def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome:
         target = self._targets.get(work_item.work_item_id)
@@ -488,7 +482,9 @@ class SecFinancialFactAdapter:
             confidence=_confidence(payload),
             valid_from=knowable_at.date(),
             transaction_time=knowable_at,
-            record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
+            record=NormalizedRecord(
+                payload=payload, parser_version=PARSER_VERSION, mapping_version=self._mapping_version
+            ),
         )
 
 
@@ -506,7 +502,9 @@ def _d(value: date | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
-def sec_financial_fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+def sec_financial_fetcher(
+    cik: int, cutoff: date, branch: OperatingBranch, *, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
+) -> FinancialFactsBundle:
     """Default fetcher: the real SEC company-facts client, parsed point-in-time.
 
     Imported lazily so the adapter and its tests carry no network dependency.
@@ -520,4 +518,4 @@ def sec_financial_fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> Fi
         body, facts = sec.fetch_company_facts_response(cik)
     except httpx.HTTPError as error:
         raise SourceUnavailableError(str(error)) from error
-    return build_bundle(facts, cutoff, branch, raw_bytes=body)
+    return build_bundle(facts, cutoff, branch, raw_bytes=body, ruleset=ruleset)
