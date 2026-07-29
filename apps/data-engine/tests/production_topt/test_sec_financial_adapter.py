@@ -5,13 +5,11 @@ from decimal import Decimal
 
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
 from data_engine.datahub.production_topt.sec_financial_adapter import (
-    _SHARES_CONCEPTS,
     FinancialFactsBundle,
     HeadcountFact,
     SecFinancialFactAdapter,
     SecTarget,
     SourceUnavailableError,
-    _merge_variants,
     annual_values_by_period_end,
     build_bundle,
     gross_profit,
@@ -566,10 +564,40 @@ def test_weighted_average_shares_is_a_last_resort_and_never_shadows_point_in_tim
             }
         }
     }
-    shadowed = _merge_variants(both, _SHARES_CONCEPTS, "shares", _CUTOFF)
-    assert shadowed[max(shadowed)].value == Decimal("10"), "point-in-time count must win its period"
-    fallback = _merge_variants(dual_class_only, _SHARES_CONCEPTS, "shares", _CUTOFF)
-    assert fallback[max(fallback)].value == Decimal("2500"), "META-style filers get the weighted average"
+    # Same period end: preference decides, and the point-in-time count wins.
+    bundle = build_bundle(both, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("10"), "point-in-time count must win its period"
+
+    # No point-in-time tag at all: the dual-class filer gets the weighted average.
+    bundle = build_bundle(dual_class_only, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("2500"), "META-style filers get the weighted average"
+
+
+def test_a_weighted_average_never_wins_on_recency_alone() -> None:
+    """The case a shared-period fixture cannot reach.
+
+    A weighted average is a period figure and a cover-page count is an instant, so their
+    dates routinely differ. Whenever the cover page predates the latest fiscal year end,
+    ranking both in one synonym list hands the share count to the average — a different
+    quantity, promoted purely by carrying a later date. Declaring it as a separate
+    last-resort field is what makes that impossible rather than merely unlikely.
+    """
+    stale_cover_page = {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": _units(
+                    [{"end": "2025-02-01", "val": 10, "filed": "2025-02-10"}], unit="shares"
+                )
+            },
+            "us-gaap": {
+                "WeightedAverageNumberOfSharesOutstandingBasic": _units(
+                    [_annual("2025-12-31", "2025-01-01", 999, "2026-02-01")], unit="shares"
+                )
+            },
+        }
+    }
+    bundle = build_bundle(stale_cover_page, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("10"), "a period average must not displace a real count"
 
 
 def test_operating_branch_for_sic_maps_insurers() -> None:

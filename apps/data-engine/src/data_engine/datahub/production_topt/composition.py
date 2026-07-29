@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from functools import partial
 from typing import Any
 
 import psycopg
@@ -47,6 +48,7 @@ from data_engine.datahub.control_plane import expand_obligations, replay_retry_p
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
+from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import SourceFetchPort
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
 from data_engine.datahub.production_topt.issuer_registry import resolve_operating_branches
@@ -56,6 +58,7 @@ from data_engine.datahub.production_topt.market_price_adapter import (
     yahoo_quote_fetcher,
 )
 from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
+from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION
 from data_engine.datahub.production_topt.persistence import (
     CaptureTimeline,
     ObligationBinding,
@@ -330,14 +333,18 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
         yahoo_quote_fetcher,
         corroborating_origins=() if second_origin is None else (second_origin,),
     )
+    # Resolved once per run through the governed pointer, so every cell in the run is
+    # parsed by ONE ruleset and the observations can name it.
+    ruleset = resolve_ruleset(connection)
     financial_adapter = SecFinancialFactAdapter(
         sec_targets,
-        sec_financial_fetcher,
+        partial(sec_financial_fetcher, ruleset=ruleset),
         # No connection means no headcount plane to read, so every issuer resolves
         # `missing_headcount` — an honest gap. Silently substituting a built-in table
         # would put the deployed denominator back in the code, which is what the fact
         # table exists to end (#70).
         headcount_extractor=None if connection is None else PostgresHeadcountExtractor(connection),
+        mapping_version=f"{MAPPING_VERSION}+{ruleset.content_sha256[:12]}",
     )
     release_adapter = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 
