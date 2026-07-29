@@ -578,3 +578,62 @@ def test_operating_branch_for_sic_maps_insurers() -> None:
     assert operating_branch_for_sic("6331") is OperatingBranch.INSURANCE
     assert operating_branch_for_sic("6022") is OperatingBranch.FINANCIAL
     assert operating_branch_for_sic("7389") is OperatingBranch.NON_FINANCIAL
+
+
+def test_predecessor_cik_fallback_fires_only_on_an_empty_taxonomy() -> None:
+    """#496: the mapped CIK's document exists but asserts nothing (knowable_at
+    None) -> the adapter refetches through the SAME injected fetcher with the
+    lineage-resolved predecessor. A payload with ANY eligible fact never falls
+    back, and no predecessor means honest nulls."""
+    calls: list[int] = []
+    empty = FinancialFactsBundle(
+        gross_profit=None,
+        total_assets=None,
+        shares_outstanding=None,
+        revenue=None,
+        pre_provision_profit=None,
+        raw_bytes=b"{}",
+        knowable_at=None,
+    )
+    full = FinancialFactsBundle(
+        gross_profit=Decimal("5"),
+        total_assets=Decimal("9"),
+        shares_outstanding=Decimal("3"),
+        revenue=Decimal("7"),
+        pre_provision_profit=None,
+        raw_bytes=b"{}",
+        knowable_at=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+
+    def fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        calls.append(cik)
+        return empty if cik == 2115436 else full
+
+    item = _work_item("a" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+    )
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher)
+    outcome = adapter.fetch(item)
+    assert calls == [2115436, 34088], "fallback must reuse the injected fetcher with the predecessor"
+    assert isinstance(outcome, FetchSuccess)
+
+    calls.clear()
+    item2 = _work_item("b" * 64)
+    target2 = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+    )
+    adapter_no_pred = SecFinancialFactAdapter({item2.work_item_id: target2}, fetcher)
+    adapter_no_pred.fetch(item2)
+    assert calls == [2115436], "no predecessor -> no second fetch, honest nulls stand"
