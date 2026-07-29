@@ -48,7 +48,7 @@ from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphR
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.executor import SourceFetchPort
-from data_engine.datahub.production_topt.headcount import StopgapHeadcountExtractor, headcounts_by_cik
+from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
 from data_engine.datahub.production_topt.issuer_registry import resolve_operating_branches
 from data_engine.datahub.production_topt.market_price_adapter import (
     MarketPriceAdapter,
@@ -333,7 +333,11 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
     financial_adapter = SecFinancialFactAdapter(
         sec_targets,
         sec_financial_fetcher,
-        headcount_extractor=StopgapHeadcountExtractor(headcounts_by_cik(cik_by_ticker)),
+        # No connection means no headcount plane to read, so every issuer resolves
+        # `missing_headcount` — an honest gap. Silently substituting a built-in table
+        # would put the deployed denominator back in the code, which is what the fact
+        # table exists to end (#70).
+        headcount_extractor=None if connection is None else PostgresHeadcountExtractor(connection),
     )
     release_adapter = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 

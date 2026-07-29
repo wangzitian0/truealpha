@@ -25,7 +25,7 @@ from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.composition import PlannedRun, plan_and_persist
 from data_engine.datahub.production_topt.executor import FetchSuccess, RawResponse, SourceFetchPort
-from data_engine.datahub.production_topt.headcount import STOPGAP_HEADCOUNTS, StopgapHeadcountExtractor
+from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor, record_headcount
 from data_engine.datahub.production_topt.market_price_adapter import (
     CorroboratingOrigin,
     MarketPriceAdapter,
@@ -91,7 +91,7 @@ def _bundle(branch: OperatingBranch) -> FinancialFactsBundle:
     )
 
 
-def _routes(plan: PlannedRun, *, corroborate: bool) -> dict[str, SourceFetchPort]:
+def _routes(plan: PlannedRun, *, corroborate: bool, headcount_extractor=None) -> dict[str, SourceFetchPort]:
     """The deployed adapters over fake fetchers, routed exactly as the composition root does."""
     cutoff_date = CUTOFF.date()
     price_targets: dict[str, MarketPriceTarget] = {}
@@ -151,13 +151,7 @@ def _routes(plan: PlannedRun, *, corroborate: bool) -> dict[str, SourceFetchPort
     financial = SecFinancialFactAdapter(
         sec_targets,
         lambda cik, cutoff, branch: _bundle(branch),
-        headcount_extractor=StopgapHeadcountExtractor(
-            {
-                cik_by_ticker[ticker]: Decimal(value)
-                for ticker, value in STOPGAP_HEADCOUNTS.items()
-                if ticker in cik_by_ticker
-            }
-        ),
+        headcount_extractor=headcount_extractor,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 
@@ -203,10 +197,28 @@ class _InMemoryObjectStore:
         return self.objects[ref.key]
 
 
+def _seed_headcounts(connection, plan: PlannedRun) -> None:
+    """Land headcount facts the way any producer must: through the write path, into the
+    table, with an evidence pointer. The capture then reads them like production does —
+    a fake extractor would have skipped the plane this milestone is about."""
+    for listing_id in sorted({coordinate[2] for coordinate in plan.coordinates.values()}):
+        cik = 100000 + sorted(plan.coordinates).index(listing_id)
+        record_headcount(
+            connection,
+            cik=cik,
+            headcount=Decimal("164000"),
+            knowable_at=datetime(2026, 1, 1, tzinfo=UTC),
+            source="test-fixture",
+            evidence_ref="test",
+            confidence=Decimal("0.7"),
+        )
+
+
 def _capture(
     connection, *, version: str, corroborate: bool = False, object_store: _InMemoryObjectStore | None = None
 ) -> PlannedRun:
     plan = plan_and_persist(connection, cutoff=CUTOFF, version=version)
+    _seed_headcounts(connection, plan)
     sink = PostgresCaptureControlSink(
         connection,
         plan.bindings,
@@ -218,7 +230,7 @@ def _capture(
     report = run_topt_capture(
         plan.run_id,
         plan.work_items,
-        _routes(plan, corroborate=corroborate),
+        _routes(plan, corroborate=corroborate, headcount_extractor=PostgresHeadcountExtractor(connection)),
         PostgresEvidenceGraphRepository(connection),
         sink=sink,
         cutoff=CUTOFF,
