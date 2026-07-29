@@ -24,7 +24,7 @@ from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
-from truealpha_contracts import ObligationReasonCode, canonical_sha256
+from truealpha_contracts import ObligationReasonCode, RawObjectStore, canonical_sha256
 from truealpha_contracts.capture_control import CaptureListObligation
 from truealpha_contracts.datahub import (
     CaptureWorkItem,
@@ -37,8 +37,9 @@ from truealpha_contracts.datahub import (
     SourceVintage,
 )
 
+from data_engine import raw_store
 from data_engine.datahub.control_plane import AttemptLedger
-from data_engine.datahub.production_topt.executor import Corroboration, FetchSuccess
+from data_engine.datahub.production_topt.executor import Corroboration, FetchSuccess, RawResponse
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 
 # How a classified reason code lands in the attempt ledger. The reason code stays
@@ -139,6 +140,7 @@ class PostgresCaptureControlSink:
         source_label: str,
         timeline: CaptureTimeline,
         retry: RetryPolicy,
+        object_store: RawObjectStore | None = None,
     ) -> None:
         self._connection = connection
         self._repository = PostgresCaptureControlRepository(connection)
@@ -146,6 +148,9 @@ class PostgresCaptureControlSink:
         self._source_label = source_label
         self._timeline = timeline
         self._retry = retry
+        # Injected so tests can land bytes without MinIO; production leaves it None and
+        # `raw_store` resolves the configured S3 store.
+        self._object_store = object_store
 
     def record_outcome(
         self,
@@ -240,58 +245,48 @@ class PostgresCaptureControlSink:
 
     def _persist_content(self, binding: ObligationBinding, success: FetchSuccess) -> str:
         """Land the immutable raw bytes and the source vintage; returns the vintage id."""
-        vintage = self._put_vintage(
+        return self._put_vintage(
             source_request_id=binding.source_request.source_request_id,
-            ordinal=binding.ordinal,
-            source=self._source_label,
-            raw_sha256=success.raw_sha256,
-            byte_length=success.raw_byte_length,
-        )
-        return vintage.source_vintage_id
+            raw=success.raw,
+        ).source_vintage_id
 
-    def _put_vintage(
-        self,
-        *,
-        source_request_id: str,
-        ordinal: int,
-        source: str,
-        raw_sha256: str,
-        byte_length: int,
-    ) -> SourceVintage:
-        record_id = f"{source}:{ordinal}"
-        raw_fetch_id = self._insert_fetch(
-            source=source, record_id=record_id, sha256=raw_sha256, byte_length=byte_length
-        )
+    def _put_vintage(self, *, source_request_id: str, raw: RawResponse) -> SourceVintage:
+        raw_fetch_id = self._insert_fetch(raw)
         vintage = SourceVintage(
             source_request_id=source_request_id,
-            source_record_id=record_id,
+            source_record_id=raw.record_id,
             source_published_at=self._timeline.source_published_at,
-            raw_object_id=f"raw-object:{raw_sha256}",
+            raw_object_id=f"raw-object:{raw.sha256}",
         )
         self._repository.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id)
         return vintage
 
-    def _insert_fetch(self, *, source: str, record_id: str, sha256: str, byte_length: int) -> int:
-        """Idempotent `raw.fetches` landing on the table's (source, source_record_id,
-        payload_sha256) unique key: a retried tick with unchanged bytes reuses the
-        existing row; changed source bytes land a NEW append-only vintage row."""
-        fetched_at = self._timeline.source_published_at
-        row = self._connection.execute(
-            "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
-            "byte_length, fetched_at, recorded_at, metadata) "
-            "values (%s, %s, %s, %s, 'application/json', %s, %s, %s, '{}'::jsonb) "
-            "on conflict (source, source_record_id, payload_sha256) do nothing returning id",
-            (source, record_id, sha256, f"s3://{source}/{sha256}", byte_length, fetched_at, fetched_at),
-        ).fetchone()
-        if row is not None:
-            return int(row[0])
-        existing = self._connection.execute(
-            "select id from raw.fetches where source = %s and source_record_id = %s and payload_sha256 = %s",
-            (source, record_id, sha256),
-        ).fetchone()
-        if existing is None:  # pragma: no cover - the conflicting row exists by definition
-            raise RuntimeError(f"raw.fetches landing for {record_id} neither inserted nor found")
-        return int(existing[0])
+    def _insert_fetch(self, raw: RawResponse) -> int:
+        """Store the bytes in object storage and record the pointer row.
+
+        This goes through `raw_store.insert_fetch` — the one path that actually uploads —
+        rather than writing `raw.fetches` directly. Writing the row alone is what left
+        production with 1016 pointers into buckets that never existed and a single stored
+        object; a pointer nobody can dereference is not evidence.
+
+        Keying on the VENDOR's source and record id (not the per-run label) is what makes
+        the table's (source, source_record_id, payload_sha256) uniqueness do its job: an
+        unchanged re-fetch collapses onto the existing row and the existing object, while
+        changed bytes land a new append-only vintage. With the run version in the key,
+        every tick re-landed identical bytes under a new identity forever.
+        """
+        return raw_store.insert_fetch(
+            self._connection,
+            source=raw.source,
+            source_record_id=raw.record_id,
+            body=raw.body,
+            content_type=raw.content_type,
+            fetched_at=self._timeline.source_published_at,
+            # Derived from the run's cutoff, never the wall clock, so a retried tick
+            # reproduces the same rows. `raw.fetches` checks recorded_at >= fetched_at.
+            recorded_at=self._timeline.knowable_at,
+            store=self._object_store,
+        )
 
     def _persist_observation(
         self,
@@ -321,10 +316,7 @@ class PostgresCaptureControlSink:
         self._repository.put_source_request(request)
         vintage = self._put_vintage(
             source_request_id=request.source_request_id,
-            ordinal=binding.ordinal,
-            source=source,
-            raw_sha256=corroboration.raw_sha256,
-            byte_length=corroboration.raw_byte_length,
+            raw=corroboration.raw,
         )
         self._put_observation(
             binding,

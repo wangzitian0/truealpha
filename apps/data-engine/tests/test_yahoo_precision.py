@@ -90,7 +90,7 @@ def test_the_requested_window_is_anchored_on_the_caller_cutoff(monkeypatch) -> N
     seen: dict[str, str] = {}
 
     class _Response:
-        text = '{"chart": {"result": []}}'
+        content = b'{"chart": {"result": []}}'
 
         def raise_for_status(self) -> None: ...
 

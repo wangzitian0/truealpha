@@ -10,7 +10,6 @@ bytes. A record knowable only after the cutoff is a look-ahead violation.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -19,12 +18,14 @@ from typing import Any
 
 from truealpha_contracts import ObligationReasonCode, canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
+from truealpha_contracts.models import DataSource
 
 from data_engine.datahub.production_topt.executor import (
     FetchFailure,
     FetchOutcome,
     FetchSuccess,
     NormalizedRecord,
+    RawResponse,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 
@@ -68,8 +69,11 @@ class ReleaseDerivedAdapter:
             separators=(",", ":"),
         ).encode()
         return FetchSuccess(
-            raw_sha256=hashlib.sha256(raw_bytes).hexdigest(),
-            object_uri=f"release-derived://{record.semantic_type}/{record.subject_id}",
+            raw=RawResponse(
+                body=raw_bytes,
+                source=DataSource.RELEASE,
+                record_id=f"{record.semantic_type}:{record.subject_id}",
+            ),
             normalized_sha256=canonical_sha256(record.payload),
             confidence=Decimal("1.0"),  # a frozen release projection is exact
             valid_from=record.knowable_at.date(),
@@ -77,5 +81,4 @@ class ReleaseDerivedAdapter:
             record=NormalizedRecord(
                 payload=record.payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION
             ),
-            raw_byte_length=len(raw_bytes),
         )

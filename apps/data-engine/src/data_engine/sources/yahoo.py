@@ -75,8 +75,12 @@ def _epoch(d: date) -> int:
     return int(datetime.combine(d, datetime.min.time(), tzinfo=UTC).timestamp())
 
 
-def fetch_daily_bars(symbol: str, *, end: date | None = None, period_days: int = 365) -> list[PriceBar]:
-    """Fetch ~period_days of daily OHLCV bars ending at `end` (chronological).
+def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int = 365) -> tuple[bytes, list[PriceBar]]:
+    """The verbatim response body and the bars parsed from it.
+
+    Callers that land evidence need the bytes Yahoo actually sent, not a rendering of
+    what we made of them: a digest over a summary string we composed ourselves proves
+    nothing about the vendor and cannot be reparsed under a corrected mapping.
 
     `end` exists so a point-in-time caller gets a window around ITS cutoff. Defaulting
     the window to the wall clock and filtering afterwards silently returns nothing for
@@ -89,10 +93,16 @@ def fetch_daily_bars(symbol: str, *, end: date | None = None, period_days: int =
     with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
         resp = client.get(CHART_URL.format(symbol=symbol), params=params)
         resp.raise_for_status()
+        body = resp.content
         # Decoded with parse_float=Decimal so the response is never routed through a
         # Python float — that would add a second rounding on top of the vendor's.
-        payload = json.loads(resp.text, parse_float=Decimal)
-    return _parse_chart_response(payload)
+        payload = json.loads(body.decode(), parse_float=Decimal)
+    return body, _parse_chart_response(payload)
+
+
+def fetch_daily_bars(symbol: str, *, end: date | None = None, period_days: int = 365) -> list[PriceBar]:
+    """Bars only, for callers with nothing to land."""
+    return fetch_daily_chart(symbol, end=end, period_days=period_days)[1]
 
 
 def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:

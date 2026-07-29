@@ -8,10 +8,12 @@ from data_engine.datahub.production_topt.executor import (
     FetchFailure,
     FetchOutcome,
     FetchSuccess,
+    RawResponse,
     ToptCaptureExecutor,
 )
 from truealpha_contracts import EvidenceEdge, EvidenceNode, ObligationReasonCode
 from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from truealpha_contracts.models import DataSource
 
 _RUN = "capture-run:" + "a" * 64
 _CUTOFF = datetime(2026, 4, 1, tzinfo=UTC)
@@ -46,8 +48,7 @@ def _work_item(digest: str) -> CaptureWorkItem:
 
 def _success(digest: str) -> FetchSuccess:
     return FetchSuccess(
-        raw_sha256="a" + digest[1:],
-        object_uri="s3://raw/obj",
+        raw=RawResponse(body=f"body:{digest}".encode(), source=DataSource.SEC, record_id=f"rec:{digest}"),
         normalized_sha256="b" + digest[1:],
         confidence=Decimal("0.9"),
         valid_from=date(2026, 3, 31),

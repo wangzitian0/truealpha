@@ -30,6 +30,11 @@ class DataSource(StrEnum):
     # source — its responses land in raw like any other so KG assertions can
     # carry a raw_ref.
     OPENFIGI = "openfigi"
+    # Not a vendor at all: a projection of the accepted release manifest, for cells
+    # (listing identity, universe membership) whose value IS the frozen scope rather
+    # than something fetched. Named explicitly so those bytes land under their own
+    # prefix instead of borrowing a vendor's and claiming a provenance they lack.
+    RELEASE = "release"
 
 
 class EntityIdentifier(BaseModel):

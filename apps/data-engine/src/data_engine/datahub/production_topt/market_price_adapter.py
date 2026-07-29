@@ -16,7 +16,6 @@ rather than the run failing.
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -24,6 +23,7 @@ from decimal import Decimal
 
 from truealpha_contracts import ObligationReasonCode, canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
+from truealpha_contracts.models import DataSource
 
 from data_engine.datahub.production_topt.executor import (
     Corroboration,
@@ -31,6 +31,7 @@ from data_engine.datahub.production_topt.executor import (
     FetchOutcome,
     FetchSuccess,
     NormalizedRecord,
+    RawResponse,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 
@@ -71,6 +72,9 @@ class CorroboratingOrigin:
     value_key: str
     confidence: Decimal
     fetch: MarketPriceFetcher
+    # Which vendor the corroborating bytes came from, so they land under that vendor's
+    # content-addressed prefix rather than the primary's.
+    raw_source: DataSource = DataSource.TWELVE_DATA
 
 
 class SourceUnavailableError(Exception):
@@ -115,8 +119,11 @@ class MarketPriceAdapter:
             "close": str(quote.close),
         }
         return FetchSuccess(
-            raw_sha256=hashlib.sha256(quote.raw_bytes).hexdigest(),
-            object_uri=f"s3://truealpha-raw/yahoo/{target.symbol}/{quote.as_of.isoformat()}",
+            raw=RawResponse(
+                body=quote.raw_bytes,
+                source=DataSource.YAHOO,
+                record_id=f"chart:{target.symbol}:{quote.as_of.isoformat()}",
+            ),
             normalized_sha256=canonical_sha256(payload),
             # A single public feed with no SLA (init.md's yfinance note) — the limitation
             # is represented as lower confidence, never as a provenance branch downstream.
@@ -125,7 +132,6 @@ class MarketPriceAdapter:
             transaction_time=quote.knowable_at,
             record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
             corroborations=self._corroborate(target),
-            raw_byte_length=len(quote.raw_bytes),
         )
 
     def _corroborate(self, target: MarketPriceTarget) -> tuple[Corroboration, ...]:
@@ -154,10 +160,12 @@ class MarketPriceAdapter:
                         mapping_version=origin.mapping_version,
                     ),
                     confidence=origin.confidence,
-                    raw_sha256=hashlib.sha256(quote.raw_bytes).hexdigest(),
-                    object_uri=f"s3://truealpha-raw/{origin.origin}/{target.symbol}/{quote.as_of.isoformat()}",
+                    raw=RawResponse(
+                        body=quote.raw_bytes,
+                        source=origin.raw_source,
+                        record_id=f"{origin.origin}:{target.symbol}:{quote.as_of.isoformat()}",
+                    ),
                     normalized_sha256=canonical_sha256(payload),
-                    raw_byte_length=len(quote.raw_bytes),
                 )
             )
         return tuple(found)
@@ -182,7 +190,7 @@ def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
 
     vendor_symbol = symbol.replace(".", "-")
     try:
-        bars = yahoo.fetch_daily_bars(vendor_symbol, end=cutoff)
+        body, bars = yahoo.fetch_daily_chart(vendor_symbol, end=cutoff)
     except httpx.HTTPError as error:  # transient network/timeout classified by the adapter
         raise SourceUnavailableError(str(error)) from error
     eligible = [bar for bar in bars if bar.date <= cutoff]
@@ -191,9 +199,13 @@ def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
     bar = max(eligible, key=lambda item: item.date)
     knowable_at = datetime.combine(bar.date, datetime.min.time(), tzinfo=UTC)
     return MarketPriceQuote(
+        # Yahoo's own response, verbatim. This used to be a summary string this function
+        # composed ("AAPL:2026-07-24:333.02"), whose digest attested to our formatting
+        # rather than to anything the vendor sent, and which no corrected mapping could
+        # ever be replayed against.
+        raw_bytes=body,
         # `bar.close` is already the recovered Decimal; re-casting through str() here
         # would be a no-op that invites someone to reintroduce a float upstream.
-        raw_bytes=f"{symbol}:{bar.date.isoformat()}:{bar.close}".encode(),
         close=bar.close,
         as_of=bar.date,
         knowable_at=knowable_at,

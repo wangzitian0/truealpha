@@ -11,6 +11,7 @@ Real schema, no network: the adapters are the deployed ones, wired to fake fetch
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -23,7 +24,7 @@ from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphR
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.composition import PlannedRun, plan_and_persist
-from data_engine.datahub.production_topt.executor import FetchSuccess, SourceFetchPort
+from data_engine.datahub.production_topt.executor import FetchSuccess, RawResponse, SourceFetchPort
 from data_engine.datahub.production_topt.headcount import STOPGAP_HEADCOUNTS, StopgapHeadcountExtractor
 from data_engine.datahub.production_topt.market_price_adapter import (
     CorroboratingOrigin,
@@ -42,8 +43,9 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
-from truealpha_contracts import ObligationReasonCode
+from truealpha_contracts import ObligationReasonCode, RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.datahub import ObligationTerminalState
+from truealpha_contracts.models import DataSource
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 # One TOPT issuer is a depository institution; the rest are not (SEC SIC 6021).
@@ -166,7 +168,44 @@ def _routes(plan: PlannedRun, *, corroborate: bool) -> dict[str, SourceFetchPort
     return routes
 
 
-def _capture(connection, *, version: str, corroborate: bool = False) -> PlannedRun:
+class _InMemoryObjectStore:
+    """A `RawObjectStore` that keeps bytes in a dict.
+
+    The suite must exercise the real landing path — sink -> raw_store -> object store —
+    because the defect this replaced was precisely that the row was written and the
+    upload never happened. Stubbing at the sink would have kept that invisible; stubbing
+    at the store keeps the whole path under test while staying offline.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def store(self, capture: RawCapture) -> RawIngestionEnvelope:
+        digest = hashlib.sha256(capture.body).hexdigest()
+        key = f"raw/{capture.source.value}/{digest[:2]}/{digest}"
+        self.objects[key] = capture.body
+        return RawIngestionEnvelope(
+            source=capture.source,
+            source_record_id=capture.source_record_id,
+            object=RawObjectRef(
+                bucket="truealpha-raw",
+                key=key,
+                sha256=digest,
+                byte_length=len(capture.body),
+                content_type=capture.content_type,
+            ),
+            fetched_at=capture.fetched_at,
+            source_published_at=capture.source_published_at,
+            metadata=capture.metadata,
+        )
+
+    def get(self, ref: RawObjectRef) -> bytes:
+        return self.objects[ref.key]
+
+
+def _capture(
+    connection, *, version: str, corroborate: bool = False, object_store: _InMemoryObjectStore | None = None
+) -> PlannedRun:
     plan = plan_and_persist(connection, cutoff=CUTOFF, version=version)
     sink = PostgresCaptureControlSink(
         connection,
@@ -174,6 +213,7 @@ def _capture(connection, *, version: str, corroborate: bool = False) -> PlannedR
         source_label=plan.source_label,
         timeline=plan.timeline,
         retry=plan.retry,
+        object_store=object_store or _InMemoryObjectStore(),
     )
     report = run_topt_capture(
         plan.run_id,
@@ -206,6 +246,10 @@ def test_executor_run_reconstructs_the_snapshot_and_mart(connection) -> None:
 
 
 def test_executor_run_writes_its_own_evidence_nodes(connection) -> None:
+    """The run's fetches are found through its vintages, not through a run-scoped source
+    string. `raw.fetches.source` is the VENDOR now, precisely so identical bytes collapse
+    across ticks — which means "this run's rows" is a linkage question, and asserting it
+    through the linkage is what proves the chain is connected."""
     plan = _capture(connection, version="test-a1-evidence")
     counts = dict(
         connection.execute(
@@ -213,15 +257,53 @@ def test_executor_run_writes_its_own_evidence_nodes(connection) -> None:
             select kind, count(*) from staging.evidence_nodes
             where node_id = %s
                or node_id in (
-                   select 'raw-fetch:' || payload_sha256 from raw.fetches where source = %s
+                   select 'raw-fetch:' || landing.payload_sha256
+                   from raw.capture_source_vintages vintage
+                   join raw.capture_source_requests request using (source_request_id)
+                   join raw.fetches landing on landing.id = vintage.raw_fetch_id
+                   join raw.capture_work_items work using (source_request_id)
+                   join raw.capture_obligation_work_bindings binding using (work_item_id)
+                   join raw.capture_obligations obligation using (obligation_id)
+                   where obligation.run_id = %s
                )
             group by kind
             """,
-            (plan.run_id, plan.source_label),
+            (plan.run_id, plan.run_id),
         ).fetchall()
     )
     assert counts.get("capture_run") == 1
     assert counts.get("raw_fetch", 0) >= 21
+
+
+def test_captured_bytes_are_readable_back_through_the_pointer(connection) -> None:
+    """The point of the whole landing path: every `raw.fetches` row this run wrote must
+    dereference to the bytes it claims, byte for byte.
+
+    Production held 1016 rows and one stored object — pointers into buckets that were
+    never created. A row whose object cannot be read is not evidence, so the assertion is
+    the read-back, not the row count.
+    """
+    store = _InMemoryObjectStore()
+    plan = _capture(connection, version="test-a1-readback", object_store=store)
+    rows = connection.execute(
+        """
+        select landing.object_uri, landing.payload_sha256, landing.byte_length
+        from raw.capture_source_vintages vintage
+        join raw.fetches landing on landing.id = vintage.raw_fetch_id
+        join raw.capture_work_items work using (source_request_id)
+        join raw.capture_obligation_work_bindings binding using (work_item_id)
+        join raw.capture_obligations obligation using (obligation_id)
+        where obligation.run_id = %s
+        """,
+        (plan.run_id,),
+    ).fetchall()
+    assert len(rows) >= 21
+    for object_uri, sha256, byte_length in rows:
+        assert object_uri.startswith("s3://")
+        key = object_uri.removeprefix("s3://").partition("/")[2]
+        body = store.objects[key]  # KeyError here means the pointer dangles
+        assert hashlib.sha256(body).hexdigest() == sha256
+        assert len(body) == byte_length
 
 
 def test_second_origin_reaches_two_independent_origins(connection) -> None:
@@ -264,11 +346,11 @@ def test_sink_refuses_a_success_it_cannot_persist(connection) -> None:
         source_label=plan.source_label,
         timeline=plan.timeline,
         retry=plan.retry,
+        object_store=_InMemoryObjectStore(),
     )
     work_item = plan.work_items[0]
     recordless = FetchSuccess(
-        raw_sha256="a" * 64,
-        object_uri="s3://truealpha-raw/x",
+        raw=RawResponse(body=b"{}", source=DataSource.SEC, record_id="recordless"),
         normalized_sha256="b" * 64,
         confidence=Decimal("0.9"),
         valid_from=date(2026, 3, 31),
@@ -291,6 +373,7 @@ def test_sink_refuses_more_attempts_than_the_retry_policy_permits(connection) ->
         source_label=plan.source_label,
         timeline=plan.timeline,
         retry=plan.retry,
+        object_store=_InMemoryObjectStore(),
     )
     with pytest.raises(ValueError, match="beyond the 3"):
         sink.record_outcome(
