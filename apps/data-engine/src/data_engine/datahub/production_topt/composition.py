@@ -15,6 +15,23 @@ is versioned scope configuration (init.md rule 13), not input data.
 `cutoff` and `version` come from the schedule tick, never the wall clock, so two
 consecutive ticks produce two distinct content-addressed runs and a retried tick
 reproduces the same identities (conflict-tolerant inserts make the replay idempotent).
+
+Degradation is recorded, not erased (#538). `mart.topt_capture_status` is a view over
+`raw.capture_*`, and the whole tick is one transaction (`dagster_defs.py`), so the bare
+raise this replaced took the run's own evidence down with it: 210 recorded runs across
+both environments, every one `84/84`, `failed_count` never once non-zero — not because
+capture never degraded but because a degraded run was rolled back. A degraded run now
+commits its record, its per-obligation terminal states and a quality report that states
+the shortfall, and only then fails the tick. Removing that fail is deliberately NOT part
+of this change and waits on the pointer gate (#536): until the pointer refuses to advance
+on a shortfall, a partial run reaching `freeze_snapshot` would silently change the
+denominator Production serves.
+
+Committing settles the tick's identity, which is the price of recording it: capture-control
+rows are append-only and one obligation holds at most one terminal result, so re-running the
+same `(cutoff, version)` cannot overwrite a recorded outcome with a better one. A replay of a
+recorded degraded tick therefore fails with the reason already on file rather than
+re-capturing; recovery is the next tick (or an explicit new `executed_at`), not a rewrite.
 """
 
 from __future__ import annotations
@@ -25,11 +42,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from functools import partial
-from typing import Any
+from typing import Any, NoReturn
 
 import psycopg
 from factors.production_topt import GppeV0Definition, OperatingBranch
-from truealpha_contracts import CaptureEnvironment, EvidenceGraphWriter, canonical_sha256
+from truealpha_contracts import (
+    CaptureEnvironment,
+    EvidenceGraphWriter,
+    ObligationReasonCode,
+    canonical_sha256,
+)
 from truealpha_contracts.capture_control import (
     CaptureListObligation,
     CaptureObligationWorkBinding,
@@ -74,7 +96,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     sec_financial_fetcher,
 )
 from data_engine.datahub.production_topt.twelve_data_origin import twelve_data_origin
-from data_engine.datahub.repository import PostgresCaptureControlRepository
+from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
 from data_engine.sources import sec
 
 SEMANTIC_TYPES = ("market-price", "listing-identity", "universe-membership", "financial-fact")
@@ -96,6 +118,26 @@ class ToptPipelineResult:
     core_result_count: int
     quality_report_id: str
     quality: dict[str, Any]
+
+
+class CaptureNotPublishableError(RuntimeError):
+    """A run that degraded: durably recorded, then deliberately not published (#538).
+
+    Raised only AFTER the run, its per-obligation terminal states and its quality
+    report have been committed, so the tick still fails exactly as it did before —
+    nothing is frozen, nothing is materialized, and `dagster_defs` never reaches the
+    pointer advance — while the warehouse keeps the evidence of what went wrong.
+
+    A `RuntimeError` subclass so existing handlers keep catching it, and distinct from
+    the bare `RuntimeError` that plan/persistence corruption still raises: this one
+    means "some cells did not resolve, and here is the run that says so".
+    """
+
+    def __init__(self, *, run_id: str, quality_report_id: str, shortfall: str) -> None:
+        super().__init__(f"capture run {run_id} {shortfall}; recorded as {quality_report_id}, not published")
+        self.run_id = run_id
+        self.quality_report_id = quality_report_id
+        self.shortfall = shortfall
 
 
 def _load_capture_corpus() -> dict[str, Any]:
@@ -380,6 +422,128 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
     return routes
 
 
+def _unresolved_obligations(connection: psycopg.Connection[Any], run_id: str) -> list[dict[str, Any]]:
+    """Every planned cell of this run that did not terminally succeed, with its reason.
+
+    A planned obligation the run never reached (the executor halted before it) has no
+    terminal state at all; `unreached` keeps that distinguishable from one that did
+    resolve and resolved `unavailable`.
+    """
+    rows = connection.execute(
+        """
+        select obligation.subject_id, obligation.capture_requirement_id,
+               result.terminal_state, result.reason_codes
+        from raw.capture_obligations obligation
+        left join raw.capture_obligation_results result
+               on result.capture_obligation_id = obligation.obligation_id
+        where obligation.run_id = %s
+          and (result.result_id is null or result.terminal_state <> 'success')
+        order by obligation.obligation_id
+        """,
+        (run_id,),
+    ).fetchall()
+    return [
+        {
+            "subject_id": subject_id,
+            "capture_requirement_id": requirement,
+            "terminal_state": terminal_state or "unreached",
+            "reason_codes": sorted(reason_codes or ()),
+        }
+        for subject_id, requirement, terminal_state, reason_codes in rows
+    ]
+
+
+def _shortfall_text(status: ToptCaptureStatus) -> str:
+    """The run's shortfall, derived from the status alone.
+
+    Derived rather than composed from the live run report on purpose: the same status
+    must produce the same words, so re-deriving the record for an already-recorded run
+    rebuilds a byte-identical report and collapses onto the report row already there.
+    """
+    return (
+        f"terminally resolved {status.success_count} of {status.obligation_count} obligations "
+        f"(unchanged {status.unchanged_count}, unavailable {status.unavailable_count}, "
+        f"skipped {status.skipped_count}, failed {status.failed_count}, complete {status.complete})"
+    )
+
+
+def _already_recorded(connection: psycopg.Connection[Any], run_id: str) -> ToptCaptureStatus | None:
+    """This exact run identity, already committed carrying a degraded record.
+
+    Capture-control rows are append-only, content-addressed, and guarded by
+    `reject_mutation`: `raw.capture_obligation_results` holds at most one row per
+    obligation and refuses to be rewritten. So once a run's outcomes are committed, that
+    run's outcomes are history — a replay of the same tick that produces DIFFERENT
+    outcomes is a different run, and the store is right to refuse it.
+
+    It refuses deep inside the sink, though, as a content conflict on an attempt-result
+    identity, which is exactly the "refuse the run for a reason far from its cause" that
+    `persistence.py` warns about. Detecting it here — before a single vendor call — lets
+    the tick fail with the reason that was actually recorded.
+
+    A run recorded as COMPLETE is deliberately not caught: replaying one reproduces every
+    identity and re-materializes, which is the idempotent-retry property the composition
+    has always had.
+    """
+    status = PostgresCaptureControlRepository(connection).status(run_id)
+    if status.terminal_count == 0:
+        return None
+    if status.complete and status.success_count == status.obligation_count:
+        return None
+    return status
+
+
+def _record_and_refuse(
+    connection: psycopg.Connection[Any],
+    plan: PlannedRun,
+    status: ToptCaptureStatus,
+    *,
+    halt_reason: ObligationReasonCode | None = None,
+) -> NoReturn:
+    """Commit the degraded run's record and report, then fail the tick (#538).
+
+    The commit IS the deliverable. `mart.topt_capture_status` is a view over
+    `raw.capture_*`, so the run's true counts exist only as long as those rows do, and
+    the tick is one transaction — which is why the raise this replaced left every one of
+    210 recorded runs reading a perfect 84/84. Committing here puts the run, its
+    per-obligation terminal states and its quality report beyond the reach of the abort
+    that follows.
+
+    It deliberately does not let the run through. `freeze_snapshot` must never
+    materialize a partial universe, and the governed pointer must not advance to one;
+    both are downstream of the raise, and both stay refused until #536 lands the pointer
+    gate that makes removing the raise safe.
+
+    `halt_reason` colours the raised message only. The persisted report stays purely
+    status-derived so that re-deriving it produces the same content hash; the halting
+    cell's own reason code is already in `unresolved`.
+    """
+    shortfall = _shortfall_text(status)
+    graded = quality_report.build_report(connection, plan.run_id)
+    graded["capture_shortfall"] = {
+        "reason": shortfall,
+        # The two properties the raise protects, asserted in the record itself.
+        "materialized": False,
+        "published": False,
+        "obligation_count": status.obligation_count,
+        "terminal_count": status.terminal_count,
+        "success_count": status.success_count,
+        "unchanged_count": status.unchanged_count,
+        "unavailable_count": status.unavailable_count,
+        "skipped_count": status.skipped_count,
+        "failed_count": status.failed_count,
+        "complete": status.complete,
+        "unresolved": _unresolved_obligations(connection, plan.run_id),
+    }
+    report_id = quality_report.persist(connection, graded)
+    connection.commit()
+    raise CaptureNotPublishableError(
+        run_id=plan.run_id,
+        quality_report_id=report_id,
+        shortfall=shortfall if halt_reason is None else f"halted on {halt_reason.value}; {shortfall}",
+    )
+
+
 def run_topt_pipeline(
     connection: psycopg.Connection[Any],
     *,
@@ -387,11 +551,21 @@ def run_topt_pipeline(
     version: str,
     writer: EvidenceGraphWriter | None = None,
 ) -> ToptPipelineResult:
-    """Capture → freeze → materialize → quality report, in the caller's transaction."""
+    """Capture → freeze → materialize → quality report, in the caller's transaction.
+
+    One exception to "the caller's transaction", and it is the point of #538: a run that
+    degrades commits its own record before raising, so the caller's abort cannot erase the
+    evidence of why the tick failed. Everything on the success path is still the caller's
+    to commit.
+    """
     if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ValueError("cutoff must be timezone-aware")
 
     plan = plan_and_persist(connection, cutoff=cutoff, version=version)
+    recorded = _already_recorded(connection, plan.run_id)
+    if recorded is not None:
+        _record_and_refuse(connection, plan, recorded)
+
     sink = PostgresCaptureControlSink(
         connection,
         plan.bindings,
@@ -409,12 +583,11 @@ def run_topt_pipeline(
         recorded_at=cutoff,
         max_attempts=_MAX_ATTEMPTS,
     )
-    if report.halted:
-        raise RuntimeError(f"capture run {plan.run_id} halted on {report.halt_reason}")
-
     status = PostgresCaptureControlRepository(connection).status(plan.run_id)
+    if report.halted:
+        _record_and_refuse(connection, plan, status, halt_reason=report.halt_reason)
     if not status.complete or status.success_count != status.obligation_count:
-        raise RuntimeError(f"capture run {plan.run_id} did not terminally resolve every obligation: {status}")
+        _record_and_refuse(connection, plan, status)
 
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
@@ -431,6 +604,7 @@ def run_topt_pipeline(
 
 
 __all__ = [
+    "CaptureNotPublishableError",
     "PlannedRun",
     "ToptPipelineResult",
     "build_routes",
