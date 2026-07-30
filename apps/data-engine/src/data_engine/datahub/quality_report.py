@@ -12,17 +12,31 @@ figures from the capture tables, and persists one append-only
 assertions are reconciled under a declared tolerance/priority policy, the
 per-cell outcome is persisted in the report payload, and only AGREED cells
 count as independently reconciled — a raw origin count never does.
+
+`availability` and `lineage_completeness` are falsifiable (#537): each is
+computed from the thing a row claims rather than from the row existing. Both
+metrics used to read `1.0000` no matter what the run actually produced —
+availability counted observation rows (Staging's 2026-07-30 13:01 tick reported
+84/84 for a run with zero complete strategy inputs) and lineage_completeness
+verified a `raw.fetches` join while Production's bucket held exactly one object.
+`tests/production_topt/test_persistence.py` arms that property: one deliberately
+broken cell per failure mode must drive the corresponding metric below 1.0.
 """
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 
 import psycopg
+from factors.production_topt import OperatingBranch
 from psycopg.types.json import Jsonb
+from pydantic import ValidationError
 from truealpha_contracts import canonical_sha256
+from truealpha_contracts.models import RawObjectRef
 from truealpha_contracts.reconciliation import (
     ReconciliationCell,
     ReconciliationOutcome,
@@ -31,7 +45,13 @@ from truealpha_contracts.reconciliation import (
     reconcile_source_assertions,
 )
 from truealpha_contracts.universe import SubjectKind, SubjectRef
+from truealpha_runtime import S3RawObjectStore
 
+from data_engine.datahub.production_topt.materialization import (
+    FinancialFactPayload,
+    IdentityPayload,
+    MarketPricePayload,
+)
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
 from data_engine.datahub.production_topt.twelve_data_origin import PARSER_VERSION as TWELVE_DATA_PARSER_VERSION
 from data_engine.datahub.production_topt.twelve_data_origin import VALUE_KEY as TWELVE_DATA_VALUE_KEY
@@ -67,6 +87,124 @@ _SOURCE_BY_PARSER = {
 }
 
 
+# What "a usable value" means for each requested semantic. The payload contracts are the
+# ones the mart itself parses (`materialization._snapshot_member`), and the financial-fact
+# requirement is the one the factor itself consumes
+# (`factors.production_topt.core.compute_topt_gppe`: the capital charge, the denominator,
+# and the branch's operating numerator). Reading the same fields is what stops the report
+# and the page disagreeing about one run — the report used to answer 84/84 for a tick the
+# mart scored 19 available / 1 unavailable.
+_IDENTITY_SEMANTICS = frozenset({"listing-identity", "universe-membership"})
+_FINANCIAL_FACT_OPERATING_NUMERATOR = {
+    OperatingBranch.FINANCIAL: "pre_provision_profit",
+    OperatingBranch.NON_FINANCIAL: "gross_profit",
+}
+
+
+def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> bool:
+    """Does this observation's normalized payload carry the value its cell was requested for?
+
+    An unparseable payload and a payload whose headline value is null are both "no": the
+    obligation is terminally resolved and the row is there, but nothing downstream can use
+    it. An unknown semantic type is also "no" — a new semantic must declare what usable
+    means for it, because defaulting to yes is exactly how this metric got pinned at
+    1.0000 in the first place.
+    """
+    if payload is None:
+        return False
+    try:
+        if semantic_type in _IDENTITY_SEMANTICS:
+            IdentityPayload.model_validate(payload)
+            return True
+        if semantic_type == "market-price":
+            return MarketPricePayload.model_validate(payload).close is not None
+        if semantic_type == "financial-fact":
+            fact = FinancialFactPayload.model_validate(payload)
+            numerator = getattr(fact, _FINANCIAL_FACT_OPERATING_NUMERATOR[fact.operating_branch])
+            return all(value is not None for value in (fact.total_assets, fact.headcount, numerator))
+    except ValidationError:
+        return False
+    return False
+
+
+class _ObjectReader(Protocol):
+    """The one thing lineage verification needs from an object store."""
+
+    def get(self, ref: RawObjectRef) -> bytes: ...
+
+
+class _PointerDereferencer:
+    """Answers whether a `raw.fetches` pointer resolves to the bytes it claims.
+
+    `_insert_fetch`'s docstring (`persistence.py`) names the defect this exists to catch:
+    "a pointer nobody can dereference is not evidence". Production held 1016 rows into
+    buckets that were never created, one stored object, and `lineage_completeness =
+    1.0000` on every report, because the metric only checked that the row joined.
+
+    Results are memoised per (uri, sha256): identical source bytes collapse onto one
+    content-addressed object across cells and ticks, so a tick's 84 pointers cost far
+    fewer round trips than that. When no store is injected the S3 store is built once and
+    its bucket probed once — a dead endpoint then costs one timeout rather than 84.
+    """
+
+    def __init__(self, store: _ObjectReader | None = None) -> None:
+        self._store = store
+        self._resolved = store is not None
+        self._cache: dict[tuple[str, str], bool] = {}
+
+    def _reader(self) -> _ObjectReader | None:
+        if not self._resolved:
+            self._resolved = True
+            try:
+                store = S3RawObjectStore()
+                store.ensure_bucket(create=False)
+                self._store = store
+            except Exception:
+                self._store = None
+        return self._store
+
+    def dereferences(self, *, object_uri: str, sha256: str, byte_length: int, content_type: str) -> bool:
+        cache_key = (object_uri, sha256)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        reader = self._reader()
+        result = False
+        bucket, _, key = object_uri.removeprefix("s3://").partition("/")
+        if reader is not None and bucket and key:
+            try:
+                body = reader.get(
+                    RawObjectRef(
+                        bucket=bucket,
+                        key=key,
+                        sha256=sha256,
+                        byte_length=byte_length,
+                        content_type=content_type,
+                    )
+                )
+                # Re-checked here rather than trusted: `S3RawObjectStore.get` verifies the
+                # digest, but the port does not oblige every implementation to.
+                result = hashlib.sha256(body).hexdigest() == sha256 and len(body) == byte_length
+            except Exception:
+                result = False
+        self._cache[cache_key] = result
+        return result
+
+
+@dataclass
+class _Cell:
+    """One requested cell's graded facts, folded over the observations bound to it.
+
+    A cell with no observation at all keeps these defaults, which is the honest answer:
+    nothing was captured for it.
+    """
+
+    available: bool = False
+    lineage_complete: bool = False
+    fresh: bool = False
+    confidence: Decimal | None = None
+
+
 def latest_run(conn: psycopg.Connection[Any]) -> str:
     row = conn.execute(
         "select run_id from mart.topt_capture_status order by cutoff desc, run_id desc limit 1"
@@ -76,7 +214,14 @@ def latest_run(conn: psycopg.Connection[Any]) -> str:
     return row[0]
 
 
-def build_report(conn: psycopg.Connection[Any], run_id: str) -> dict[str, Any]:
+def build_report(
+    conn: psycopg.Connection[Any], run_id: str, *, object_store: _ObjectReader | None = None
+) -> dict[str, Any]:
+    """Grade one capture run over its exact requested-cell denominator.
+
+    `object_store` is where lineage pointers are dereferenced; it defaults to the deployed
+    S3 store, so the deployed call site needs no argument and tests can inject.
+    """
     status = conn.execute(
         """
         select obligation_count, terminal_count, success_count, unchanged_count,
@@ -89,17 +234,23 @@ def build_report(conn: psycopg.Connection[Any], run_id: str) -> dict[str, Any]:
         raise ValueError(f"no capture status for run {run_id}")
     requested = status[0]
 
-    # Per-obligation observation facts for this run.
+    # One row per (requested cell, bound observation) for this run. Left-joined throughout
+    # so a cell that produced nothing still appears — an absent cell must be gradeable, and
+    # the payload and the object pointer have to travel with it: they are what
+    # `availability` and `lineage_completeness` are read off, rather than the row's mere
+    # existence.
     rows = conn.execute(
         """
         select ob.obligation_id,
-               count(distinct o.observation_id)                          as obs,
-               count(distinct o.observation_id) filter (
-                   where p.observation_id is not null and v.source_vintage_id is not null
-                     and f.id is not null)                                as lineaged,
-               bool_or(o.freshness_state = 'fresh')                       as fresh,
-               count(distinct v.source_request_id)                        as sources,
-               max(o.confidence)                                          as confidence
+               regexp_replace(ob.capture_requirement_id, ':v1$', '')      as semantic_type,
+               o.observation_id,
+               p.normalized_payload,
+               o.freshness_state,
+               o.confidence,
+               f.object_uri,
+               f.payload_sha256,
+               f.byte_length,
+               f.content_type
         from raw.capture_obligations ob
         left join staging.capture_observation_obligations oo
                on oo.capture_obligation_id = ob.obligation_id
@@ -108,17 +259,47 @@ def build_report(conn: psycopg.Connection[Any], run_id: str) -> dict[str, Any]:
         left join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
         left join raw.fetches f on f.id = v.raw_fetch_id
         where ob.run_id = %s
-        group by ob.obligation_id
+        order by ob.obligation_id, o.observation_id
         """,
         (run_id,),
     ).fetchall()
 
-    available = sum(1 for r in rows if r[1] > 0)
-    lineage_complete = sum(1 for r in rows if (r[2] or 0) > 0)
-    fresh = sum(1 for r in rows if r[3])
+    pointers = _PointerDereferencer(object_store)
+    cells: dict[str, _Cell] = {}
+    for (
+        obligation_id,
+        semantic_type,
+        observation_id,
+        payload,
+        freshness_state,
+        confidence,
+        object_uri,
+        payload_sha256,
+        byte_length,
+        content_type,
+    ) in rows:
+        cell = cells.setdefault(obligation_id, _Cell())
+        if observation_id is None:
+            continue
+        cell.fresh = cell.fresh or freshness_state == "fresh"
+        if confidence is not None:
+            cell.confidence = confidence if cell.confidence is None else max(cell.confidence, confidence)
+        if not cell.available:
+            cell.available = _has_usable_value(semantic_type, payload)
+        if not cell.lineage_complete and payload is not None and object_uri is not None:
+            cell.lineage_complete = pointers.dereferences(
+                object_uri=object_uri,
+                sha256=payload_sha256,
+                byte_length=byte_length,
+                content_type=content_type,
+            )
+
+    available = sum(1 for cell in cells.values() if cell.available)
+    lineage_complete = sum(1 for cell in cells.values() if cell.lineage_complete)
+    fresh = sum(1 for cell in cells.values() if cell.fresh)
     reconciliation = _reconcile_market_price_cells(conn, run_id)
     independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
-    confidences = [r[5] for r in rows if r[5] is not None]
+    confidences = [cell.confidence for cell in cells.values() if cell.confidence is not None]
     mean_conf = (sum(confidences) / requested) if requested else Decimal(0)
 
     def ratio(n: int) -> str:
