@@ -6,6 +6,10 @@ module and building its `Definitions` is exactly what `dagster -m` and CI collec
 do, so this proves the deploy target loads hermetically, that the deployed job graph
 carries NO fixture seeding (#429 invariant I2), and that the schedule carries #27's
 idempotency semantics.
+
+The op-body checks at the bottom keep that promise: they invoke `run_topt_live_tick`
+directly with every collaborator faked, so the op's reporting surface (#536: which
+service objective withheld the governed pointer) is asserted without a database.
 """
 
 from __future__ import annotations
@@ -14,16 +18,20 @@ import inspect
 from datetime import UTC, datetime
 
 import dagster as dg
+import psycopg
 from data_engine import dagster_defs
 from data_engine.dagster_defs import (
     CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME,
     TOPT_LIVE_CRON,
     TOPT_LIVE_JOB_NAME,
+    ToptLiveTickConfig,
     defs,
     fixture_canary_definitions,
+    run_topt_live_tick,
     topt_live_schedule,
 )
-from data_engine.datahub.production_topt.composition import live_version_for
+from data_engine.datahub.a1_evidence import PointerRegistration, UnmetObjective
+from data_engine.datahub.production_topt.composition import ToptPipelineResult, live_version_for
 
 
 def test_defs_loads_and_exposes_only_the_live_pipeline() -> None:
@@ -95,3 +103,87 @@ def test_packaged_corpus_matches_the_tests_fixture_byte_for_byte() -> None:
         Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "capture_control" / "corpus.v1.json"
     ).read_bytes()
     assert hashlib.sha256(packaged).hexdigest() == hashlib.sha256(fixture).hexdigest()
+
+
+# -- the op's reporting surface (#536) --------------------------------------------------
+
+TICK = "2026-07-30T22:15:00+00:00"
+_QUALITY = {
+    "available_count": 84,
+    "requested_count": 84,
+    "independent_reconciliation": "0.0000",
+}
+
+
+class _FakeConnection:
+    """Stands in for the tick's psycopg connection: opened, committed, closed."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def commit(self) -> None:
+        return None
+
+
+def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
+    """Fake every collaborator the op calls, so only the op's own reporting is under
+    test. `register_run_evidence` returns the given verdict verbatim."""
+    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _FakeConnection())
+    monkeypatch.setattr(
+        dagster_defs,
+        "run_topt_pipeline",
+        lambda *args, **kwargs: ToptPipelineResult(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            core_result_count=20,
+            quality_report_id="datahub-quality-report:" + "c" * 64,
+            quality=dict(_QUALITY),
+        ),
+    )
+    monkeypatch.setattr(dagster_defs, "seed_strategy_inputs_from_capture", lambda *a, **k: 21)
+    monkeypatch.setattr(dagster_defs, "persist_strategy_input_coverage", lambda *a, **k: (20, 20))
+    monkeypatch.setattr(
+        dagster_defs,
+        "run_strategy_replay_for_cutoff",
+        lambda *a, **k: ("strategy-run:" + "d" * 64, 20, "snapshot:" + "e" * 64),
+    )
+    monkeypatch.setattr(dagster_defs, "register_run_evidence", lambda *a, **k: registration)
+
+
+def _run_tick(monkeypatch, registration: PointerRegistration):
+    _fake_tick(monkeypatch, registration)
+    context = dg.build_op_context()
+    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
+    return context.get_output_metadata("result")
+
+
+def test_a_withheld_pointer_names_the_failing_objective_in_op_metadata(monkeypatch) -> None:
+    # #536 acceptance: the failing objective is visible without reading the database.
+    metadata = _run_tick(
+        monkeypatch,
+        PointerRegistration(
+            run_id="capture-run:" + "a" * 64,
+            sequence=9,
+            unmet=(UnmetObjective(objective="independent_origin_groups", required="2", observed="0"),),
+        ),
+    )
+
+    assert metadata["pointer_advanced"] is False
+    assert metadata["pointer_sequence"] == 9  # the incumbent head, untouched
+    assert "independent_origin_groups" in metadata["unmet_service_objectives"]
+    assert "required >= 2" in metadata["unmet_service_objectives"]
+    assert "observed 0" in metadata["unmet_service_objectives"]
+
+
+def test_an_accepted_pointer_reports_the_advance_it_made(monkeypatch) -> None:
+    metadata = _run_tick(
+        monkeypatch,
+        PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=10, unmet=()),
+    )
+
+    assert metadata["pointer_advanced"] is True
+    assert metadata["pointer_sequence"] == 10
+    assert metadata["unmet_service_objectives"] == "every objective met"

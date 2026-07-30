@@ -10,7 +10,8 @@ The ONE scheduled job here is the REAL-SOURCE pipeline (#27 appended acceptance,
 #429 P1, #171): drive all 84 TOPT obligations through the generic capture executor
 and its per-semantic adapters (Yahoo closes with a Twelve Data second origin, SEC
 company-facts, release-derived identity), freeze + materialize GPPE/three-tier into
-`mart.topt_*`, persist the run's quality report, seed the captured cells into
+`mart.topt_*`, persist the run's quality report and advance the governed pointer only
+if that report meets the accepted service objectives (#536), seed the captured cells into
 `staging.strategy_backtest_inputs`, and run the frozen strategy over that captured
 staging into `mart.strategy_*`. No fixture data is seeded anywhere in this job graph
 (#429 invariant I2); the only corpus-derived objects are the frozen universe scope
@@ -76,18 +77,32 @@ def run_topt_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfi
         )
         # #378: register the run on the A1 evidence plane and advance the governed
         # pointer inside the same transaction, so consumers resolve THIS run through
-        # mart.current_pointer_head the moment the tick commits.
-        pointer_sequence = register_run_evidence(
-            connection, run_id=pipeline.run_id, release_manifest_id=pipeline.release_manifest_id
+        # mart.current_pointer_head the moment the tick commits. #536: the advance is
+        # gated on THIS run's report — a run that misses a declared service objective
+        # commits its run, report and evidence but does not become the served head.
+        registration = register_run_evidence(
+            connection,
+            run_id=pipeline.run_id,
+            release_manifest_id=pipeline.release_manifest_id,
+            quality_report=pipeline.quality,
         )
         connection.commit()
 
-    context.log.info(
+    tick = (
         f"topt live tick {config.executed_at}: capture {pipeline.run_id} "
         f"(available {pipeline.quality['available_count']}/{pipeline.quality['requested_count']}, "
         f"reconciliation {pipeline.quality['independent_reconciliation']}), "
         f"{seeded} strategy inputs, strategy run {strategy_run_id} ({decision_count} decisions)"
     )
+    if registration.accepted:
+        context.log.info(f"{tick}; pointer sequence {registration.sequence}")
+    else:
+        # #536 acceptance: which objective failed is readable from the run log and the
+        # op's output metadata, without opening the database.
+        context.log.warning(
+            f"{tick}; POINTER WITHHELD at sequence {registration.sequence} "
+            f"— unmet service objectives: {registration.summary}"
+        )
     context.add_output_metadata(
         {
             "capture_run_id": pipeline.run_id,
@@ -98,7 +113,9 @@ def run_topt_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfi
             "strategy_run_id": strategy_run_id,
             "decision_count": decision_count,
             "snapshot_id": snapshot_id,
-            "pointer_sequence": pointer_sequence,
+            "pointer_advanced": registration.accepted,
+            "pointer_sequence": registration.sequence,
+            "unmet_service_objectives": registration.summary,
         }
     )
     return pipeline.run_id

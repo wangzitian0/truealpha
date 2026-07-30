@@ -10,7 +10,11 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub import quality_report
-from data_engine.datahub.a1_evidence import register_run_evidence
+from data_engine.datahub.a1_evidence import (
+    ACCEPTED_SERVICE_OBJECTIVES,
+    ServiceObjectives,
+    register_run_evidence,
+)
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.medium_replay import frozen_topt_list_version
@@ -47,6 +51,16 @@ from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeRe
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 SEMANTIC_TYPES = ("market-price", "listing-identity", "universe-membership", "financial-fact")
+# The corpus is a single-origin fixture: its market-price parser vintage is not in the
+# fusion source map, so a report over a corpus run grades zero reconciled cells. Every
+# other accepted objective is kept exactly as declared, so a corpus run that regressed on
+# coverage, availability or confidence would still be refused the pointer here (#536).
+_CORPUS_OBJECTIVES = ServiceObjectives(
+    minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
+    minimum_availability=ACCEPTED_SERVICE_OBJECTIVES.minimum_availability,
+    minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
+    minimum_independent_origin_groups=0,
+)
 
 
 @pytest.fixture
@@ -745,7 +759,8 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
 
     # Deployed order (a1_evidence docstring): the quality report persists first,
     # then the pointer advances.
-    quality_report.persist(connection, quality_report.build_report(connection, run.run_id))
+    graded = quality_report.build_report(connection, run.run_id)
+    quality_report.persist(connection, graded)
 
     if fresh_database:
         # State 3: quality-accepted but no pointer advanced yet — the reader's
@@ -755,8 +770,21 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
         assert via_fallback.run_id == run.run_id
         assert via_fallback.quality is not None
 
-    sequence = register_run_evidence(connection, run_id=run.run_id, release_manifest_id=release_manifest_id)
-    assert sequence >= 0
+    # #536: the advance is gated on the report. This test drives the READER's
+    # governed-pointer branch, not the gate — and the checked-in corpus carries one
+    # price origin whose parser vintage the fusion source map does not list, so it
+    # grades zero reconciled cells and can never reach the demand's `high` band.
+    # Register it against an explicitly relaxed objective set so every reader assertion
+    # below still binds; the gate itself is proven in tests/datahub/test_a1_evidence.py.
+    registration = register_run_evidence(
+        connection,
+        run_id=run.run_id,
+        release_manifest_id=release_manifest_id,
+        quality_report=graded,
+        objectives=_CORPUS_OBJECTIVES,
+    )
+    assert registration.accepted, registration.summary
+    assert registration.sequence is not None and registration.sequence >= 0
 
     # State 4: the governed pointer path — the state in which #461 crashed.
     served = reader.latest()
