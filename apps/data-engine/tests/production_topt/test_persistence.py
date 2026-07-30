@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -78,31 +79,63 @@ def _quote(close: str) -> MarketPriceQuote:
     )
 
 
-def _bundle(branch: OperatingBranch) -> FinancialFactsBundle:
+@dataclass(frozen=True)
+class _OneBrokenCell:
+    """One deliberately broken cell, injected through the deployed write path (#537).
+
+    The falsifiability harness needs damage that is real, singular, and invisible to
+    everything except the metric under test: the run still terminally succeeds on all 84
+    obligations and writes all 84 rows, so a metric that moves moved because it read the
+    payload or the stored bytes rather than because the capture failed. A metric that
+    stays at 1.0000 under its own failure mode is not measuring anything.
+
+    Whichever listing sorts first is the victim, so a test never has to name one.
+    """
+
+    # The financial-fact payload lands with a null operating numerator: the row exists,
+    # the obligation succeeds, and nothing downstream can score the issuer. This is the
+    # Staging 2026-07-30 13:01 shape — 84/84 availability over an empty portfolio.
+    financial_fact_numerator: bool = False
+    # The listing-identity payload lands without its required `ticker`: bytes are stored
+    # and the row is written, but the payload does not satisfy its own semantic contract.
+    identity_payload: bool = False
+
+
+def _bundle(branch: OperatingBranch, *, blank_numerator: bool = False) -> FinancialFactsBundle:
     financial = branch is OperatingBranch.FINANCIAL
     return FinancialFactsBundle(
-        gross_profit=Decimal("80000000") if financial else Decimal("210000000"),
+        gross_profit=None if blank_numerator else (Decimal("80000000") if financial else Decimal("210000000")),
         total_assets=Decimal("200000000"),
         shares_outstanding=Decimal("10000000"),
         revenue=Decimal("100000000"),
-        pre_provision_profit=Decimal("80000000") if financial else None,
-        raw_bytes=b'{"facts":{}}',
+        pre_provision_profit=None if blank_numerator or not financial else Decimal("80000000"),
+        raw_bytes=b'{"facts":{}}' if not blank_numerator else b'{"facts":{"empty":true}}',
         knowable_at=datetime(2026, 2, 1, tzinfo=UTC),
     )
 
 
-def _routes(plan: PlannedRun, *, corroborate: bool, headcount_extractor=None) -> dict[str, SourceFetchPort]:
+def _routes(
+    plan: PlannedRun,
+    *,
+    corroborate: bool,
+    headcount_extractor=None,
+    broken: _OneBrokenCell = _OneBrokenCell(),
+) -> dict[str, SourceFetchPort]:
     """The deployed adapters over fake fetchers, routed exactly as the composition root does."""
     cutoff_date = CUTOFF.date()
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
     release_targets: dict[str, ReleaseDerivedRecord] = {}
     cik_by_ticker: dict[str, int] = {}
+    victim_listing = min(coordinate[2] for coordinate in plan.coordinates.values())
+    blank_ciks: set[int] = set()
     for work_item_id, binding in plan.bindings.items():
         semantic_type = binding.obligation.capture_requirement_id.removesuffix(":v1")
         issuer_id, instrument_id, listing_id, ticker = plan.coordinates[binding.obligation.subject.id]
         cik = 100000 + sorted(plan.coordinates).index(listing_id)
         cik_by_ticker.setdefault(ticker, cik)
+        if broken.financial_fact_numerator and listing_id == victim_listing:
+            blank_ciks.add(cik_by_ticker[ticker])
         if semantic_type == "market-price":
             price_targets[work_item_id] = MarketPriceTarget(
                 symbol=ticker,
@@ -123,15 +156,18 @@ def _routes(plan: PlannedRun, *, corroborate: bool, headcount_extractor=None) ->
                 ),
             )
         else:
+            payload = {
+                "issuer_id": issuer_id,
+                "instrument_id": instrument_id,
+                "listing_id": listing_id,
+                "ticker": ticker,
+            }
+            if broken.identity_payload and semantic_type == "listing-identity" and listing_id == victim_listing:
+                payload.pop("ticker")
             release_targets[work_item_id] = ReleaseDerivedRecord(
                 semantic_type=semantic_type,
                 subject_id=listing_id,
-                payload={
-                    "issuer_id": issuer_id,
-                    "instrument_id": instrument_id,
-                    "listing_id": listing_id,
-                    "ticker": ticker,
-                },
+                payload=payload,
                 knowable_at=plan.timeline.partition_start,
             )
 
@@ -150,7 +186,7 @@ def _routes(plan: PlannedRun, *, corroborate: bool, headcount_extractor=None) ->
     )
     financial = SecFinancialFactAdapter(
         sec_targets,
-        lambda cik, cutoff, branch: _bundle(branch),
+        lambda cik, cutoff, branch: _bundle(branch, blank_numerator=cik in blank_ciks),
         headcount_extractor=headcount_extractor,
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
@@ -215,7 +251,12 @@ def _seed_headcounts(connection, plan: PlannedRun) -> None:
 
 
 def _capture(
-    connection, *, version: str, corroborate: bool = False, object_store: _InMemoryObjectStore | None = None
+    connection,
+    *,
+    version: str,
+    corroborate: bool = False,
+    object_store: _InMemoryObjectStore | None = None,
+    broken: _OneBrokenCell = _OneBrokenCell(),
 ) -> PlannedRun:
     plan = plan_and_persist(connection, cutoff=CUTOFF, version=version)
     _seed_headcounts(connection, plan)
@@ -230,7 +271,12 @@ def _capture(
     report = run_topt_capture(
         plan.run_id,
         plan.work_items,
-        _routes(plan, corroborate=corroborate, headcount_extractor=PostgresHeadcountExtractor(connection)),
+        _routes(
+            plan,
+            corroborate=corroborate,
+            headcount_extractor=PostgresHeadcountExtractor(connection),
+            broken=broken,
+        ),
         PostgresEvidenceGraphRepository(connection),
         sink=sink,
         cutoff=CUTOFF,
@@ -324,6 +370,174 @@ def test_second_origin_reaches_two_independent_origins(connection) -> None:
     two_origin_cells = [cell for cell in report["reconciliation_cells"].values() if cell["origin_groups"] >= 2]
     assert len(two_origin_cells) == 21
     assert Decimal(report["independent_reconciliation"]) > 0
+
+
+def _cell_objects(connection, run_id: str) -> list[tuple[str, str]]:
+    """(obligation_id, object_uri) for every landed pointer this run's cells rest on."""
+    return connection.execute(
+        """
+        select distinct ob.obligation_id, landing.object_uri
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join raw.capture_source_vintages vintage on vintage.source_vintage_id = o.source_vintage_id
+        join raw.fetches landing on landing.id = vintage.raw_fetch_id
+        where ob.run_id = %s
+        """,
+        (run_id,),
+    ).fetchall()
+
+
+def _a_pointer_only_one_cell_rests_on(connection, run_id: str) -> str:
+    """An object URI that exactly one cell depends on, and that cell on nothing else.
+
+    Deleting it must move `lineage_completeness` by exactly one cell, which is what makes
+    the harness a measurement rather than a smoke test.
+    """
+    pairs = _cell_objects(connection, run_id)
+    objects_per_cell: dict[str, set[str]] = {}
+    cells_per_object: dict[str, set[str]] = {}
+    for obligation_id, object_uri in pairs:
+        objects_per_cell.setdefault(obligation_id, set()).add(object_uri)
+        cells_per_object.setdefault(object_uri, set()).add(obligation_id)
+    for object_uri, cells in sorted(cells_per_object.items()):
+        if len(cells) == 1 and len(objects_per_cell[next(iter(cells))]) == 1:
+            return object_uri
+    raise AssertionError("no pointer is exclusive to a single cell; the harness cannot isolate one")
+
+
+# --- Falsifiability harness for mart.datahub_quality_report (#537) ------------------
+#
+# `availability` counted observation rows and `lineage_completeness` counted a
+# `raw.fetches` join, so both read 1.0000 no matter what the run produced: Staging
+# reported 84/84 availability for a tick with zero complete strategy inputs, and every
+# Production report claimed full lineage while the bucket held exactly one object.
+#
+# The control below pins both metrics at 1.0000 for an intact run; each injection breaks
+# exactly one cell through the deployed write path and requires the corresponding metric
+# to move. Delete the control and "always below 1.0" passes; delete an injection and a
+# pinned metric passes. Both halves are the check.
+
+
+def test_quality_report_metrics_are_perfect_only_when_the_run_is(connection) -> None:
+    """Control: an intact 84-cell run scores 1.0000 on both falsifiable metrics."""
+    store = _InMemoryObjectStore()
+    plan = _capture(connection, version="test-537-control", object_store=store)
+
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+
+    assert report["requested_count"] == 84
+    assert report["available_count"] == 84
+    assert report["lineage_complete_count"] == 84
+    assert report["availability"] == "1.0000"
+    assert report["lineage_completeness"] == "1.0000"
+
+
+def test_availability_falls_when_a_payload_yields_no_usable_value(connection) -> None:
+    """One financial-fact cell lands with a null operating numerator.
+
+    Every obligation still terminally succeeds and every row is still written — the only
+    thing that changed is that one payload carries no number the factor can use.
+    """
+    store = _InMemoryObjectStore()
+    plan = _capture(
+        connection,
+        version="test-537-empty-payload",
+        object_store=store,
+        broken=_OneBrokenCell(financial_fact_numerator=True),
+    )
+
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+
+    assert report["requested_count"] == 84
+    assert report["available_count"] < 84
+    assert Decimal(report["availability"]) < 1
+    # The damage is confined to availability: the bytes still landed and still dereference.
+    assert report["lineage_complete_count"] == 84
+
+
+def test_availability_falls_when_a_payload_cannot_be_parsed(connection) -> None:
+    """One listing-identity cell lands without the `ticker` its semantic contract requires."""
+    store = _InMemoryObjectStore()
+    plan = _capture(
+        connection,
+        version="test-537-unparseable",
+        object_store=store,
+        broken=_OneBrokenCell(identity_payload=True),
+    )
+
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+
+    assert report["requested_count"] == 84
+    assert report["available_count"] == 83
+    assert Decimal(report["availability"]) < 1
+    assert report["lineage_complete_count"] == 84
+
+
+def test_lineage_completeness_falls_when_the_stored_object_is_gone(connection) -> None:
+    """Deleting one object from the bucket must drop that run's lineage_completeness.
+
+    The `raw.fetches` row, its vintage, and its observation all stay exactly as they were;
+    only the bytes the pointer names are gone. That is the Production state the old metric
+    scored 1.0000 for, 1016 rows deep.
+    """
+    store = _InMemoryObjectStore()
+    plan = _capture(connection, version="test-537-dangling-pointer", object_store=store)
+    intact = quality_report.build_report(connection, plan.run_id, object_store=store)
+    assert intact["lineage_complete_count"] == 84
+
+    object_uri = _a_pointer_only_one_cell_rests_on(connection, plan.run_id)
+    del store.objects[object_uri.removeprefix("s3://").partition("/")[2]]
+
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+
+    assert report["lineage_complete_count"] == 83
+    assert Decimal(report["lineage_completeness"]) < 1
+    # A dangling pointer says nothing about whether the payload holds a value.
+    assert report["available_count"] == 84
+
+
+def test_lineage_completeness_falls_when_the_stored_bytes_are_not_the_bytes_claimed(connection) -> None:
+    """The pointer resolves but the object's digest no longer matches `payload_sha256`.
+
+    A checksum that is never recomputed is a checksum nobody is checking.
+    """
+    store = _InMemoryObjectStore()
+    plan = _capture(connection, version="test-537-checksum", object_store=store)
+
+    object_uri = _a_pointer_only_one_cell_rests_on(connection, plan.run_id)
+    store.objects[object_uri.removeprefix("s3://").partition("/")[2]] = b"not the captured bytes"
+
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+
+    assert report["lineage_complete_count"] == 83
+    assert Decimal(report["lineage_completeness"]) < 1
+
+
+def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> None:
+    """The report cannot call a run whole while the mart calls part of it unavailable.
+
+    Production's report said `84/84` for a run `mart.topt_gppe_results` scored
+    19 available / 1 unavailable, and the App renders the mart's number. Both now read
+    the same payload fields, so one run cannot produce two answers.
+    """
+    store = _InMemoryObjectStore()
+    plan = _capture(
+        connection,
+        version="test-537-agreement",
+        object_store=store,
+        broken=_OneBrokenCell(financial_fact_numerator=True),
+    )
+
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    unavailable = [result for result in results if result.availability.value == "unavailable"]
+
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+
+    assert unavailable, "the mart must see the missing operating numerator"
+    assert report["available_count"] < report["requested_count"], "so must the report"
 
 
 def test_retrying_the_same_tick_is_idempotent(connection) -> None:

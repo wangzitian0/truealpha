@@ -1,4 +1,11 @@
-"""Real-Postgres coverage for `quality_report.persist` (truealpha#462 AC4).
+"""Coverage for `quality_report` (truealpha#462 AC4, #537).
+
+Two layers. The falsifiability harness for `availability` and `lineage_completeness`
+lives in `tests/production_topt/test_persistence.py`, because falsifying them needs a
+real 84-cell capture run with one deliberately broken cell. What is here is the
+Postgres-free half: the two predicates those metrics are built on, pinned directly, so
+"usable value" and "the pointer dereferences" cannot quietly widen back into
+"a row exists".
 
 `persist` is the one function in this module genuinely testable standalone: it
 inserts a caller-supplied report dict straight into `mart.datahub_quality_report`,
@@ -13,12 +20,14 @@ referencing it anywhere in the repo), not the whole thing.
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.quality_report import persist
+from data_engine.datahub.quality_report import _has_usable_value, _PointerDereferencer, persist
+from truealpha_contracts.models import RawObjectRef
 
 
 @pytest.fixture
@@ -44,6 +53,96 @@ def _report(run_id: str, **overrides: object) -> dict[str, object]:
     }
     report.update(overrides)
     return report
+
+
+_IDENTITY = {"issuer_id": "i", "instrument_id": "n", "listing_id": "l", "ticker": "T"}
+_MARKET_PRICE = {"issuer_id": "i", "instrument_id": "n", "listing_id": "l", "currency": "USD", "close": "40"}
+_FINANCIAL = {
+    "issuer_id": "i",
+    "instrument_id": "n",
+    "listing_id": "l",
+    "operating_branch": "non_financial",
+    "currency": "USD",
+    "gross_profit": "210000000",
+    "total_assets": "200000000",
+    "headcount": "164000",
+    "revenue": "100000000",
+    "shares_outstanding": "10000000",
+    "pre_provision_profit": None,
+}
+
+
+def test_a_complete_payload_is_usable_for_every_requested_semantic() -> None:
+    assert _has_usable_value("listing-identity", _IDENTITY)
+    assert _has_usable_value("universe-membership", _IDENTITY)
+    assert _has_usable_value("market-price", _MARKET_PRICE)
+    assert _has_usable_value("financial-fact", _FINANCIAL)
+
+
+def test_a_payload_that_yields_no_number_is_not_usable() -> None:
+    """The Staging 13:01 shape: the row is there, the number is not."""
+    assert not _has_usable_value("market-price", {**_MARKET_PRICE, "close": None})
+    assert not _has_usable_value("financial-fact", {**_FINANCIAL, "gross_profit": None})
+    assert not _has_usable_value("financial-fact", {**_FINANCIAL, "headcount": None})
+    assert not _has_usable_value("financial-fact", {**_FINANCIAL, "total_assets": None})
+
+
+def test_an_unparseable_or_absent_payload_is_not_usable() -> None:
+    assert not _has_usable_value("listing-identity", {k: v for k, v in _IDENTITY.items() if k != "ticker"})
+    assert not _has_usable_value("financial-fact", {"unexpected": "shape"})
+    assert not _has_usable_value("market-price", None)
+
+
+def test_an_undeclared_semantic_is_not_usable() -> None:
+    """A new semantic must declare what usable means for it; defaulting to yes is the bug."""
+    assert not _has_usable_value("employee-headcount", _IDENTITY)
+
+
+class _Bucket:
+    def __init__(self, objects: dict[str, bytes]) -> None:
+        self.objects = objects
+        self.reads = 0
+
+    def get(self, ref: RawObjectRef) -> bytes:
+        self.reads += 1
+        return self.objects[ref.key]
+
+
+def _uri(key: str) -> str:
+    return f"s3://truealpha-raw/{key}"
+
+
+def test_a_pointer_dereferences_only_when_the_bytes_are_there_and_match() -> None:
+    body = b'{"facts":{}}'
+    digest = hashlib.sha256(body).hexdigest()
+    store = _Bucket({"raw/sec/ab/object": body})
+    pointers = _PointerDereferencer(store)
+
+    assert pointers.dereferences(
+        object_uri=_uri("raw/sec/ab/object"), sha256=digest, byte_length=len(body), content_type="application/json"
+    )
+    # Absent object, and present object whose digest is not the one claimed.
+    assert not pointers.dereferences(
+        object_uri=_uri("raw/sec/cd/gone"), sha256=digest, byte_length=len(body), content_type="application/json"
+    )
+    store.objects["raw/sec/ef/tampered"] = b"other bytes"
+    assert not pointers.dereferences(
+        object_uri=_uri("raw/sec/ef/tampered"), sha256=digest, byte_length=len(body), content_type="application/json"
+    )
+
+
+def test_repeated_pointers_cost_one_read() -> None:
+    """84 cells per tick collapse onto far fewer content-addressed objects."""
+    body = b"shared"
+    digest = hashlib.sha256(body).hexdigest()
+    store = _Bucket({"raw/release/aa/shared": body})
+    pointers = _PointerDereferencer(store)
+
+    for _ in range(5):
+        assert pointers.dereferences(
+            object_uri=_uri("raw/release/aa/shared"), sha256=digest, byte_length=len(body), content_type="text/plain"
+        )
+    assert store.reads == 1
 
 
 def test_persist_writes_a_content_addressed_row(connection) -> None:
