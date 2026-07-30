@@ -237,13 +237,33 @@ def plan_and_persist(connection: psycopg.Connection[Any], *, cutoff: datetime, v
     )
 
 
-def predecessor_ciks(connection: psycopg.Connection[Any], listing_ids: Sequence[str]) -> dict[str, int]:
-    """#496: each listing's most recent successfully-parsed company-facts CIK,
-    from OUR OWN capture lineage — the registry the predecessor-CIK fallback
-    consults when the index-mapped CIK's taxonomy is empty (post-reorganization
-    holdco). "Successfully parsed" means the observation's payload carried a
-    revenue value; the lineage join runs entirely on archived, immutable rows.
+def predecessor_ciks(
+    connection: psycopg.Connection[Any],
+    listing_ids: Sequence[str],
+    issuer_by_listing: dict[str, str] | None = None,
+) -> dict[str, int]:
+    """#496: each listing's predecessor company-facts CIK, consulted only when
+    the index-mapped CIK's taxonomy is empty (post-reorganization holdco).
+
+    Two registry sources, both our own versioned data, owner-signed rows first:
+    1. `staging.issuer_cik_predecessors` — the explicit registry (migration
+       0037; every row carries reason + approved_by);
+    2. the capture lineage — the most recent vintage whose observation carried
+       a revenue value (generic, self-maintaining once the A1 spine has seen
+       an issuer parse successfully; empty for issuers that never did).
     """
+    resolved: dict[str, int] = {}
+    if issuer_by_listing:
+        registry = dict(
+            connection.execute(
+                "select issuer_id, predecessor_cik from staging.issuer_cik_predecessors where issuer_id = any(%s)",
+                (sorted(set(issuer_by_listing.values())),),
+            ).fetchall()
+        )
+        for listing_id, issuer_id in issuer_by_listing.items():
+            if issuer_id in registry:
+                resolved[listing_id] = int(registry[issuer_id])
+
     rows = connection.execute(
         """
         select distinct on (o.subject_id) o.subject_id, v.source_record_id
@@ -258,11 +278,10 @@ def predecessor_ciks(connection: psycopg.Connection[Any], listing_ids: Sequence[
         """,
         (list(listing_ids),),
     ).fetchall()
-    resolved: dict[str, int] = {}
     for subject_id, record_id in rows:
         digits = record_id.removeprefix("companyfacts:CIK")
         if digits.isdigit():
-            resolved[subject_id] = int(digits)
+            resolved.setdefault(subject_id, int(digits))
     return resolved
 
 
@@ -281,7 +300,8 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
         raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
     branches = resolve_operating_branches(cik_by_ticker)
     listing_ids = [coordinate[2] for coordinate in plan.coordinates.values()]
-    predecessors = predecessor_ciks(connection, listing_ids) if connection is not None else {}
+    issuer_by_listing = {coordinate[2]: coordinate[0] for coordinate in plan.coordinates.values()}
+    predecessors = predecessor_ciks(connection, listing_ids, issuer_by_listing) if connection is not None else {}
 
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
