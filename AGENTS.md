@@ -53,6 +53,22 @@ tests prove it, review and green CI gate the merge.
    the issue. Honest partial scope stays open with a scope note instead of closing.
    (vision.md: fixture-only tools or code existence are not completion evidence;
    drift audit #429, invariants I1–I4; root #434.)
+7. **Acceptance criteria are standing checks, and they cover the whole scope.** Two rules,
+   both learned from closed issues whose scope silently evaporated (#371, #494, #495 —
+   see `docs/architecture-decisions/A2-acceptance-criteria-are-standing-checks.md`):
+   - **Every scope item has a matching acceptance criterion.** If a deliverable is named in
+     the issue body, exactly one acceptance criterion must assert it. A deliverable with no
+     criterion does not belong in the scope — delete it or write the check. Closure is
+     judged against the scope, item by item, not against whichever criteria happen to exist.
+   - **A criterion is a check that runs again, not a run that happened.** "I executed this
+     and pasted the output" is evidence; acceptance is a named CI step, test, or gate that
+     turns red on the next regression. A one-time manual walk, a hand-run script, or a
+     measurement taken on one production run satisfies rule 6's evidence requirement and
+     still fails this one. State how the check is armed and where it lives.
+   Auto-closing an issue with `Closes #N` asserts both rules were evaluated. When an issue
+   carries a criterion a merge cannot prove — a user journey, a role-dependent view, a
+   deployed-environment state — reference it with a plain `#N` instead and close it by hand
+   with a comment that walks the criteria in order.
 
 At the start of a task and after context compaction: re-read the user's latest
 instruction, run the checkpoint commands above, and note (issue number, branch, files you
