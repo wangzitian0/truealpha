@@ -34,6 +34,7 @@ from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
 from data_engine.datahub.production_topt.twelve_data_origin import PARSER_VERSION as TWELVE_DATA_PARSER_VERSION
+from data_engine.datahub.production_topt.twelve_data_origin import VALUE_KEY as TWELVE_DATA_VALUE_KEY
 
 # Declared fusion policy for the dual-origin market-price cells (init.md rule 12):
 # yahoo-chart is the pinned primary, twelve-data the independent second origin; a
@@ -59,7 +60,10 @@ RECONCILIATION_POLICY = ReconciliationPolicy(
 _SOURCE_BY_PARSER = {
     PARSER_VERSION: ("yahoo-chart:v1", "origin:yahoo:v1", "close"),
     "production-topt-live-parser:v1": ("yahoo-chart:v1", "origin:yahoo:v1", "close"),
-    TWELVE_DATA_PARSER_VERSION: ("twelve-data:v1", "origin:twelve-data:v1", "price"),
+    TWELVE_DATA_PARSER_VERSION: ("twelve-data:v1", "origin:twelve-data:v1", TWELVE_DATA_VALUE_KEY),
+    # v1 asserted `price` — Twelve Data's last trade, extended hours included — against the
+    # primary's regular-session close, so every tick inside a session abstained (#535).
+    "twelve-data-parser:v1": ("twelve-data:v1", "origin:twelve-data:v1", "price"),
 }
 
 
