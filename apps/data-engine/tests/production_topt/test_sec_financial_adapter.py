@@ -183,9 +183,7 @@ def test_a_share_count_older_than_the_staleness_bound_is_refused() -> None:
 
 
 def test_a_current_share_count_is_kept_and_dated() -> None:
-    bundle = build_bundle(
-        _multi_class_facts("2026-01-31", "2026-02-10", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL
-    )
+    bundle = build_bundle(_multi_class_facts("2026-01-31", "2026-02-10", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL)
     assert bundle.shares_outstanding == Decimal("1000")
     assert bundle.shares_period_end == date(2026, 1, 31)
 
@@ -193,9 +191,7 @@ def test_a_current_share_count_is_kept_and_dated() -> None:
 def test_the_staleness_bound_does_not_reject_a_normal_quarterly_cadence() -> None:
     # A filer whose latest cover page is a year old is late, not broken: the bound exists to
     # catch a fifteen-year gap, and must not start excluding compliant issuers.
-    bundle = build_bundle(
-        _multi_class_facts("2025-03-31", "2025-04-15", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL
-    )
+    bundle = build_bundle(_multi_class_facts("2025-03-31", "2025-04-15", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL)
     assert bundle.shares_outstanding == Decimal("1000")
 
 
