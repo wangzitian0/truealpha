@@ -55,6 +55,22 @@ from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION,
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
 
+# How far before the cutoff a share count may have been measured and still be used.
+#
+# For a multi-class issuer, company-facts drops the dimensional per-class share facts and
+# what survives is the pre-2011 cover-page figure from before dimensional tagging was
+# adopted. The concept is then PRESENT and parses cleanly, so nothing upstream refuses it:
+# V resolved 469,280,842 measured 2010-01-27 and BRK.B a Class-A-scale 941,481 measured
+# 2011-04-29, against fresh current-period revenue. V's market cap came out at $173.0B
+# against a real ~$712B and it ranked first at half the target weight; BRK.B's at $836.8M
+# against a real ~$1.1T, held back from the same outcome only by a missing numerator.
+#
+# Deliberately generous: a compliant filer restates this figure on every 10-Q cover page,
+# so two years cannot reject anyone legitimate, while the failures it must catch are off by
+# fifteen. A tighter, better-calibrated bound belongs with the vintage-carrying read path
+# (#530) — this one only has to make an order-of-magnitude error impossible to publish.
+_MAX_SHARES_STALENESS_DAYS = 730
+
 
 @dataclass(frozen=True)
 class FinancialFactsBundle:
@@ -76,6 +92,16 @@ class FinancialFactsBundle:
     # vendor. With them, staleness is a plain SQL invariant (#429).
     operating_period_end: date | None = None
     revenue_period_end: date | None = None
+    # The share count's own measurement date, carried for the same reason and additionally
+    # enforced: `shares_outstanding` is None whenever this is staler than
+    # `_MAX_SHARES_STALENESS_DAYS`, so a market capitalisation can never be built from a
+    # figure the warehouse cannot date.
+    shares_period_end: date | None = None
+    # True when `gross_profit` is the revenue proxy rather than a reported or derived
+    # figure. Reported rather than inferred, because "gross_profit happens to equal
+    # revenue" is a coincidence for some issuers and the substitution must be auditable
+    # (#533). The adapter refuses it for industries the proxy was not approved for.
+    gross_profit_is_revenue_proxy: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,6 +121,11 @@ class SecTarget:
     # all (a real state: XOM's post-reorganization holdco CIK publishes no
     # us-gaap taxonomy). Registry/lineage-driven — never a ticker allowlist.
     predecessor_cik: int | None = None
+    # #533: whether this issuer's industry may substitute revenue for an untagged gross
+    # profit. Resolved from the EDGAR SIC at planning, exactly like `operating_branch`.
+    # Defaults False so a target assembled without the registry cannot inherit a
+    # substitution that only holds for ~zero-COGS industries.
+    revenue_proxy_allowed: bool = False
 
 
 FinancialFactsFetcher = Callable[[int, date, OperatingBranch], FinancialFactsBundle | None]
@@ -270,6 +301,18 @@ def gross_profit(
     two cover the *same* period — it is the issuer's own assertion rather than our
     arithmetic — but it cannot outrank a more recent one.
     """
+    return _gross_profit_resolved(facts, cutoff, ruleset)[0]
+
+
+def _gross_profit_resolved(
+    facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset
+) -> tuple[_Datum | None, bool]:
+    """Gross profit, and whether it is the revenue proxy rather than a real figure.
+
+    The caller needs to know which, because the proxy is only valid for industries whose
+    cost of revenue really is ~zero (#533) — and that is a property of the issuer, which
+    this function cannot see.
+    """
     direct = _latest(resolve_field(facts, ruleset, "gross_profit", cutoff))
     derived = _difference_at_shared_period(
         resolve_field(facts, ruleset, "revenue", cutoff),
@@ -277,16 +320,21 @@ def gross_profit(
     )
     candidates = [datum for datum in (direct, derived) if datum is not None]
     if candidates:
-        return max(candidates, key=lambda datum: datum.period_end)
+        return max(candidates, key=lambda datum: datum.period_end), False
     if _files_no_cogs_concepts(facts, ruleset):
-        # #496 owner decision (2026-07-28): an issuer whose company-facts carry
-        # NO GrossProfit and NO COGS-family concept AT ALL (payment networks,
-        # integrated oil majors) uses revenue as the gross-profit proxy —
-        # their cost-of-revenue is ~zero or structurally unreported, the bias
-        # is small and its direction known. Concept-level absence only: a mere
-        # period mismatch on a real COGS filer still resolves to None.
-        return _latest(resolve_field(facts, ruleset, "revenue", cutoff))
-    return None
+        # #496 owner decision (2026-07-28): an issuer whose company-facts carry NO
+        # GrossProfit and NO COGS-family concept AT ALL uses revenue as the gross-profit
+        # proxy — "payment networks carry ~zero COGS; the bias is small and its direction
+        # known". Concept-level absence only: a mere period mismatch on a real COGS filer
+        # still resolves to None.
+        #
+        # Absence of a tag is NOT evidence of absent cost, so the substitution is offered
+        # here and accepted only for an industry the registry says qualifies. Read as
+        # "~zero or structurally unreported" it also fired for XOM (Petroleum Refining),
+        # publishing $332B of revenue as gross profit — $5.36M per employee, above NVIDIA
+        # (#533).
+        return _latest(resolve_field(facts, ruleset, "revenue", cutoff)), True
+    return None, False
 
 
 def _declared_concepts(ruleset: ConceptMappingRuleset, field: str) -> tuple[ConceptRef, ...]:
@@ -369,20 +417,39 @@ def build_bundle(
     # The last-resort share count is consulted only when the point-in-time series is
     # EMPTY. Kept as a separate lookup rather than a trailing synonym so a period average
     # can never win on recency over a real point-in-time figure (#496).
-    shares = _latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)) or _latest(
-        resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)
+    # A share count too old to describe today's company is refused, and refusing the
+    # point-in-time series lets the period-average last resort answer instead of nothing —
+    # which is the difference between MA (whose 2010 cover-page fact is the only `dei` one,
+    # but whose weighted-average series is current) and V (where both are stale or absent).
+    # Staleness is applied per candidate rather than to the winner, because `primary or
+    # fallback` would otherwise let a sixteen-year-old primary block a usable fallback.
+    shares_primary = _fresh_shares(_latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)), cutoff)
+    shares_fallback = _fresh_shares(
+        _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)), cutoff
+    )
+    shares = shares_primary or shares_fallback
+    # When every candidate is refused the newest measurement date is still recorded, so the
+    # warehouse says HOW stale the best candidate was rather than leaving an
+    # indistinguishable null. Fail-closed is deliberate: the factor then reports
+    # `missing_shares_outstanding` exactly as for an issuer that never filed one, and an
+    # honest gap outranks a market capitalisation wrong by three orders of magnitude.
+    shares_period_end = _newest_period_end(
+        shares,
+        _latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)),
+        _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)),
     )
     revenue = _latest(resolve_field(facts, ruleset, "revenue", cutoff))
     # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
     # the branch only decides WHICH versioned extraction asserts the operating numerator:
     # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
     # else reported/derived gross profit (with the no-COGS revenue proxy inside).
+    is_revenue_proxy = False
     if branch is OperatingBranch.FINANCIAL:
         profit = pre_provision_profit(facts, cutoff, ruleset)
     elif branch is OperatingBranch.INSURANCE:
         profit = insurance_pre_claims_profit(facts, cutoff, ruleset)
     else:
-        profit = gross_profit(facts, cutoff, ruleset)
+        profit, is_revenue_proxy = _gross_profit_resolved(facts, cutoff, ruleset)
     resolved = [datum for datum in (profit, assets, shares, revenue) if datum is not None]
     knowable = max((datum.filed for datum in resolved), default=None)
     return FinancialFactsBundle(
@@ -400,6 +467,8 @@ def build_bundle(
         knowable_at=None if knowable is None else datetime.combine(knowable, datetime.min.time(), tzinfo=UTC),
         operating_period_end=None if profit is None else profit.period_end,
         revenue_period_end=None if revenue is None else revenue.period_end,
+        shares_period_end=shares_period_end,
+        gross_profit_is_revenue_proxy=is_revenue_proxy,
     )
 
 
@@ -447,6 +516,15 @@ class SecFinancialFactAdapter:
             return FetchFailure(ObligationReasonCode.FIELD_UNAVAILABLE)
         if bundle.knowable_at is not None and bundle.knowable_at.date() > target.cutoff:
             return FetchFailure(ObligationReasonCode.LOOK_AHEAD_VIOLATION)
+        # #533: the revenue-for-gross-profit substitution is valid only where cost of
+        # revenue really is ~zero, which is a property of the issuer's industry and so is
+        # only knowable here, on the target, rather than inside the parse. Refusing it
+        # leaves the honest gap the issuer had before the substitution existed: the factor
+        # reports `missing_gross_profit` and the issuer is excluded, which is strictly
+        # better than ranking an oil major above NVIDIA on labour efficiency.
+        gross_profit_value = bundle.gross_profit
+        if bundle.gross_profit_is_revenue_proxy and not target.revenue_proxy_allowed:
+            gross_profit_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
         headcount: Decimal | None = None
         # A payload that resolved nothing is knowable exactly at the cutoff: what it
@@ -463,7 +541,7 @@ class SecFinancialFactAdapter:
             "listing_id": target.listing_id,
             "operating_branch": target.operating_branch.value,
             "currency": target.currency,
-            "gross_profit": _s(bundle.gross_profit),
+            "gross_profit": _s(gross_profit_value),
             "total_assets": _s(bundle.total_assets),
             "headcount": _s(headcount),
             "revenue": _s(bundle.revenue),
@@ -471,6 +549,7 @@ class SecFinancialFactAdapter:
             "pre_provision_profit": _s(bundle.pre_provision_profit),
             "operating_period_end": _d(bundle.operating_period_end),
             "revenue_period_end": _d(bundle.revenue_period_end),
+            "shares_period_end": _d(bundle.shares_period_end),
         }
         return FetchSuccess(
             raw=RawResponse(
@@ -492,6 +571,19 @@ def _confidence(payload: dict[str, str | None]) -> Decimal:
     """Per-source-class confidence prior (#207/#404); the calibrated formula is #337."""
     present = sum(payload.get(field) is not None for field in ("gross_profit", "total_assets", "shares_outstanding"))
     return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
+
+
+def _fresh_shares(datum: _Datum | None, cutoff: date) -> _Datum | None:
+    """The datum, or None when it was measured too long before the cutoff (#529)."""
+    if datum is None or (cutoff - datum.period_end).days > _MAX_SHARES_STALENESS_DAYS:
+        return None
+    return datum
+
+
+def _newest_period_end(*candidates: _Datum | None) -> date | None:
+    """The latest measurement date among the candidates, refused ones included."""
+    ends = [datum.period_end for datum in candidates if datum is not None]
+    return max(ends) if ends else None
 
 
 def _s(value: Decimal | None) -> str | None:

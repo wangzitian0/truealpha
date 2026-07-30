@@ -4,6 +4,10 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
+from data_engine.datahub.production_topt.issuer_registry import (
+    operating_branch_for_sic,
+    revenue_proxy_allowed_for_sic,
+)
 from data_engine.datahub.production_topt.sec_financial_adapter import (
     FinancialFactsBundle,
     HeadcountFact,
@@ -86,6 +90,204 @@ def test_build_bundle_extracts_the_core_fields() -> None:
     assert bundle.pre_provision_profit is None
     assert bundle.knowable_at is not None
     assert bundle.knowable_at.date() <= _CUTOFF
+
+
+def _no_cogs_facts() -> dict:
+    """An issuer tagging neither GrossProfit nor any COGS concept, but reporting revenue.
+
+    Shared by a payment network (whose cost of revenue really is ~zero) and an oil major
+    (whose cost of revenue is enormous but untagged) — the payload cannot tell them apart,
+    which is the whole point of #533.
+    """
+    facts = _facts()
+    del facts["facts"]["us-gaap"]["GrossProfit"]
+    facts["facts"]["us-gaap"]["Revenues"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 332238000000, "2026-02-01")]}
+    }
+    return facts
+
+
+def test_the_revenue_proxy_is_refused_for_an_industry_it_was_not_approved_for() -> None:
+    # XOM's real shape: no GrossProfit, no COGS family, $332B revenue. Petroleum Refining
+    # is not a ~zero-COGS industry, so the substitution must not happen (#533).
+    item = _work_item("e" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:J3WHBG0MTS7O8ZVMDC91",
+        instrument_id="security:cusip:30231G102",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        revenue_proxy_allowed=False,
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: build_bundle(_no_cogs_facts(), cutoff, branch)
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record.payload["gross_profit"] is None, "an oil major must not publish revenue as gross profit"
+    # Revenue itself is untouched: the issuer really does report it.
+    assert result.record.payload["revenue"] == "332238000000"
+
+
+def test_the_revenue_proxy_still_applies_to_an_approved_industry() -> None:
+    item = _work_item("f" * 64)
+    target = SecTarget(
+        cik=1403161,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:549300JZ4OKEHW3DPJ59",
+        instrument_id="security:cusip:92826C839",
+        listing_id="listing:xnys:v",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        revenue_proxy_allowed=True,
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: build_bundle(_no_cogs_facts(), cutoff, branch)
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record.payload["gross_profit"] == "332238000000"
+
+
+def test_the_bundle_reports_whether_gross_profit_is_the_proxy() -> None:
+    assert build_bundle(_no_cogs_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit_is_revenue_proxy
+    # A real reported figure is never flagged, so the adapter cannot refuse it.
+    assert not build_bundle(_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit_is_revenue_proxy
+
+
+def _multi_class_facts(shares_end: str, shares_filed: str, shares_val: object) -> dict:
+    """A multi-class issuer's shape: current profit, and the only surviving share fact old.
+
+    company-facts drops the dimensional per-class share facts, so what remains for V and
+    BRK.B is the cover-page figure from before dimensional tagging. The concept is present
+    and parses, which is exactly why nothing refused it (#529).
+    """
+    facts = _facts()
+    del facts["facts"]["us-gaap"]["CommonStockSharesOutstanding"]
+    facts["facts"]["dei"] = {
+        "EntityCommonStockSharesOutstanding": {
+            "units": {"shares": [{"end": shares_end, "val": shares_val, "filed": shares_filed}]}
+        }
+    }
+    return facts
+
+
+def _issuer_shape(
+    *,
+    sic: str,
+    shares: tuple[str, str, object] | None,
+    reports_gross_profit: bool,
+) -> tuple[dict, bool]:
+    """One issuer's company-facts shape plus the registry verdict its SIC produces.
+
+    `shares=None` means the issuer tags a current `CommonStockSharesOutstanding` (the
+    ordinary case); a tuple is the multi-class shape where only a `dei` cover-page fact
+    survives.
+    """
+    facts = _facts() if shares is None else _multi_class_facts(*shares)
+    if not reports_gross_profit:
+        del facts["facts"]["us-gaap"]["GrossProfit"]
+        facts["facts"]["us-gaap"]["Revenues"] = {
+            "units": {"USD": [_annual("2025-12-31", "2025-01-01", 332238000000, "2026-02-01")]}
+        }
+    return facts, revenue_proxy_allowed_for_sic(sic)
+
+
+# The universe's real shapes, so a regression in either guard turns this red rather than
+# being caught only by re-deriving from the vendor by hand (AGENTS.md rule 7). Each row is
+# (label, SIC, surviving dei share fact or None, tags GrossProfit, expect gross profit,
+# expect shares). The dates and SICs are the live values verified on 2026-07-30.
+_UNIVERSE_SHAPES = [
+    # Ordinary issuers: real gross profit, current share count. Stands for the sixteen
+    # whose values this change must leave untouched.
+    ("AAPL-like non_financial", "3571", None, True, True, True),
+    # SIC 7389, tags neither GrossProfit nor COGS: the proxy is owner-approved here.
+    ("V-like payment network", "7389", None, False, True, True),
+    # Petroleum Refining with the same untagged shape: the proxy must NOT apply (#533).
+    ("XOM-like oil major", "2911", None, False, False, True),
+    # Multi-class issuer whose only surviving cover-page fact is from 2010 (#529).
+    ("V-like multi-class shares", "7389", ("2010-01-27", "2010-02-03", 469280842), True, True, False),
+    # Berkshire's Class-A-scale figure from 2011, refused for the same reason. Its gross
+    # profit is absent too, because SIC 6331 routes to the insurance numerator and the
+    # claims concept it needs stops at FY2016 in company-facts — the open residual on #496,
+    # and the reason this landmine has not yet detonated in a decision.
+    ("BRK.B-like multi-class shares", "6331", ("2011-04-29", "2011-05-06", 941481), True, False, False),
+    # A current cover-page fact is kept: the bound must not reject a compliant filer.
+    ("MA-like current cover page", "7389", ("2026-01-31", "2026-02-10", 905000000), True, True, True),
+]
+
+
+def test_both_guards_hold_across_every_shape_in_the_universe() -> None:
+    for label, sic, shares, reports_gp, expect_gp, expect_shares in _UNIVERSE_SHAPES:
+        facts, proxy_allowed = _issuer_shape(sic=sic, shares=shares, reports_gross_profit=reports_gp)
+        branch = operating_branch_for_sic(sic)
+        item = _work_item("1" * 64)
+        target = SecTarget(
+            cik=1,
+            cutoff=_CUTOFF,
+            issuer_id="issuer:lei:X",
+            instrument_id="security:cusip:Y",
+            listing_id="listing:xnas:x",
+            operating_branch=branch,
+            revenue_proxy_allowed=proxy_allowed,
+        )
+        adapter = SecFinancialFactAdapter(
+            {item.work_item_id: target}, lambda cik, cutoff, b, _f=facts: build_bundle(_f, cutoff, b)
+        )
+        result = adapter.fetch(item)
+        assert isinstance(result, FetchSuccess), label
+        payload = result.record.payload
+        assert (payload["gross_profit"] is not None) is expect_gp, f"{label}: gross_profit"
+        assert (payload["shares_outstanding"] is not None) is expect_shares, f"{label}: shares_outstanding"
+
+
+def test_a_share_count_older_than_the_staleness_bound_is_refused() -> None:
+    # V's real shape: shares measured 2010-01-27 against fresh current-period profit.
+    bundle = build_bundle(
+        _multi_class_facts("2010-01-27", "2010-02-03", 469280842), _CUTOFF, OperatingBranch.NON_FINANCIAL
+    )
+    assert bundle.shares_outstanding is None, "a 2010 share count must not build a market capitalisation"
+    # The measurement date survives the refusal so the gap is diagnosable in SQL, not just
+    # reproducible by re-deriving from the vendor.
+    assert bundle.shares_period_end == date(2010, 1, 27)
+    # Refusing shares must not disturb the other inputs.
+    assert bundle.gross_profit == Decimal("120")
+    assert bundle.total_assets == Decimal("500")
+
+
+def test_a_current_share_count_is_kept_and_dated() -> None:
+    bundle = build_bundle(_multi_class_facts("2026-01-31", "2026-02-10", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("1000")
+    assert bundle.shares_period_end == date(2026, 1, 31)
+
+
+def test_the_staleness_bound_does_not_reject_a_normal_quarterly_cadence() -> None:
+    # A filer whose latest cover page is a year old is late, not broken: the bound exists to
+    # catch a fifteen-year gap, and must not start excluding compliant issuers.
+    bundle = build_bundle(_multi_class_facts("2025-03-31", "2025-04-15", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("1000")
+
+
+def test_a_refused_share_count_lowers_the_recorded_confidence() -> None:
+    # `_confidence` counts present fields, so the refusal has to show up as a real gap
+    # rather than a full-confidence record with a null in it.
+    item = _work_item("d" * 64)
+
+    def _fetched(shares_end: str, shares_filed: str, val: object) -> FetchSuccess | FetchFailure:
+        adapter = SecFinancialFactAdapter(
+            {item.work_item_id: _target()},
+            lambda cik, cutoff, branch: build_bundle(
+                _multi_class_facts(shares_end, shares_filed, val), cutoff, OperatingBranch.NON_FINANCIAL
+            ),
+        )
+        return adapter.fetch(item)
+
+    stale = _fetched("2010-01-27", "2010-02-03", 469280842)
+    fresh = _fetched("2026-01-31", "2026-02-10", 1000)
+    assert isinstance(stale, FetchSuccess) and isinstance(fresh, FetchSuccess)
+    assert stale.confidence < fresh.confidence
+    assert stale.record.payload["shares_outstanding"] is None
+    assert stale.record.payload["shares_period_end"] == "2010-01-27"
 
 
 def test_gross_profit_falls_back_to_revenue_minus_cost_over_a_shared_period() -> None:
