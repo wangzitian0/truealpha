@@ -8,6 +8,10 @@ dependencies = [
     "psycopg[binary]>=3.2.0",
     "pydantic-settings>=2.2.0",
     "truealpha-contracts",
+    # S3RawObjectStore's client construction (bucket/endpoint/credential validation)
+    # via infra2_sdk.runtime.s3 — boto3 above already satisfies its optional-dependency
+    # check, no extras needed.
+    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v0.5.1/infra2_sdk-0.5.1-py3-none-any.whl",
 ]
 
 [project.scripts]
@@ -25,6 +29,11 @@ truealpha-contracts = { workspace = true }
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# infra2-sdk above is a direct URL reference (the immutable release wheel, matching
+# every other infra2-sdk consumer in this repo), which hatchling otherwise rejects.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/truealpha_runtime"]

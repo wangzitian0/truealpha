@@ -4,9 +4,8 @@ import contextlib
 import hashlib
 from typing import Any
 
-import boto3
-from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from infra2_sdk.runtime.s3 import S3Settings, create_s3_client
 from truealpha_contracts import RawCapture, RawIngestionEnvelope, RawObjectRef
 
 from truealpha_runtime.config import RuntimeSettings, runtime_settings
@@ -26,18 +25,24 @@ class S3RawObjectStore:
     def __init__(self, settings: RuntimeSettings | None = None, *, client: Any | None = None) -> None:
         self.settings = settings or runtime_settings
         self.bucket = self.settings.s3_bucket
-        self.client = client or boto3.client(
-            "s3",
-            endpoint_url=self.settings.s3_endpoint,
-            aws_access_key_id=self.settings.s3_access_key,
-            aws_secret_access_key=self.settings.s3_secret_key.get_secret_value(),
-            region_name=self.settings.s3_region,
-            config=Config(
-                signature_version="s3v4",
-                connect_timeout=self.settings.s3_connect_timeout_seconds,
-                read_timeout=self.settings.s3_connect_timeout_seconds,
-                s3={"addressing_style": "path"},
-            ),
+        # Built from RuntimeSettings' already-resolved values, NOT S3Settings.from_env()
+        # — from_env() re-reads os.environ with the SDK's own defaults/required-ness
+        # (S3_BUCKET is required there), which differ from RuntimeSettings' Pydantic
+        # local-dev defaults (e.g. s3_bucket="truealpha-raw" when unset) and would
+        # break local dev. addressing_style="path" stays forced (MinIO doesn't support
+        # virtual-hosted-style routing) rather than left to S3Settings' env-driven
+        # default of None.
+        self.client = client or create_s3_client(
+            S3Settings(
+                bucket=self.settings.s3_bucket,
+                endpoint_url=self.settings.s3_endpoint,
+                access_key_id=self.settings.s3_access_key,
+                secret_access_key=self.settings.s3_secret_key.get_secret_value(),
+                region_name=self.settings.s3_region,
+                addressing_style="path",
+                connect_timeout_seconds=self.settings.s3_connect_timeout_seconds,
+                read_timeout_seconds=self.settings.s3_connect_timeout_seconds,
+            )
         )
 
     def ensure_bucket(self, *, create: bool | None = None) -> None:

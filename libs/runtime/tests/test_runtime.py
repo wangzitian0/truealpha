@@ -61,6 +61,21 @@ def test_deployment_environment_is_typed_separately_from_app_config():
     assert settings.restart_policy == "always"
 
 
+def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing():
+    """S3RawObjectStore.__init__ builds its client via infra2_sdk.runtime.s3, from
+    RuntimeSettings' already-resolved values (not S3Settings.from_env(), which has
+    different defaults/required-ness and would break local dev — see storage.py).
+    addressing_style stays forced to "path": MinIO doesn't support virtual-hosted
+    -style routing, and S3Settings only defaults it when S3_ADDRESSING_STYLE is set."""
+    settings = RuntimeSettings(_env_file=None, app_env="test")
+
+    store = S3RawObjectStore(settings)
+
+    assert store.client.meta.config.s3["addressing_style"] == "path"
+    assert store.client.meta.endpoint_url == settings.s3_endpoint
+    assert store.client.meta.region_name == settings.s3_region
+
+
 def test_raw_storage_is_content_addressed_and_idempotent():
     client = FakeS3()
     settings = RuntimeSettings(_env_file=None, app_env="test")

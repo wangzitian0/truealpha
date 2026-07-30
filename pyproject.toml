@@ -28,12 +28,22 @@ files = [
     "libs/runtime/src",
 ]
 
-# Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients).
+# Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients;
+# infra2_sdk ships no py.typed marker as of v0.5.1).
 # Scoped per-module so a typo'd or missing dependency still fails the check.
 # mypy's `foo.*` matches `foo` itself too; bare names listed anyway so the
 # intent survives a reader who doesn't know that.
 [[tool.mypy.overrides]]
-module = ["moomoo", "moomoo.*", "boto3", "boto3.*", "botocore", "botocore.*"]
+module = [
+    "moomoo",
+    "moomoo.*",
+    "boto3",
+    "boto3.*",
+    "botocore",
+    "botocore.*",
+    "infra2_sdk",
+    "infra2_sdk.*",
+]
 ignore_missing_imports = true
 
 [tool.ruff]
