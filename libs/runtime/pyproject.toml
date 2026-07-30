@@ -11,7 +11,7 @@ dependencies = [
     # S3RawObjectStore's client construction (bucket/endpoint/credential validation)
     # via infra2_sdk.runtime.s3 — boto3 above already satisfies its optional-dependency
     # check, no extras needed.
-    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v0.5.1/infra2_sdk-0.5.1-py3-none-any.whl",
+    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v1.0.0/infra2_sdk-1.0.0-py3-none-any.whl",
 ]
 
 [project.scripts]
