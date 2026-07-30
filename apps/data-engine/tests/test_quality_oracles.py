@@ -207,3 +207,27 @@ def test_the_origin_registry_covers_the_current_parser_version() -> None:
     assert len({group for _, group, _ in _SOURCE_BY_PARSER.values()}) >= 2, (
         "reconciliation needs at least two distinct origin groups to compare"
     )
+
+
+def test_the_origin_registry_covers_every_parser_version_ever_shipped() -> None:
+    """A report over a HISTORICAL run must still resolve its observations' origin.
+
+    The assertion above covers only the current vintage, and that was the whole defect
+    (#543): when v4 shipped, every observation already in the warehouse carried v3, v3 was
+    not in the map, and `_reconcile_market_price_cells` skips unmapped vintages — so a report
+    rebuilt over any earlier run resolved `insufficient_independent_origins` for all 21
+    cells, silently, for runs that had agreed 21/21 across two origins.
+
+    Observations are append-only and never rewritten, so every vintage ever shipped stays
+    readable forever and must stay mapped forever.
+    """
+    from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION, PARSER_VERSION_HISTORY
+    from data_engine.datahub.quality_report import _SOURCE_BY_PARSER
+
+    missing = [vintage for vintage in PARSER_VERSION_HISTORY if vintage not in _SOURCE_BY_PARSER]
+    assert not missing, f"historical parser vintages dropped out of the origin registry: {missing}"
+    # The current version has to BE the newest history entry, not a parallel constant that
+    # can drift from it — that is what makes "bump the version" and "record the vintage" one
+    # edit rather than two, the second of which gets forgotten.
+    assert PARSER_VERSION == PARSER_VERSION_HISTORY[-1]
+    assert len(set(PARSER_VERSION_HISTORY)) == len(PARSER_VERSION_HISTORY), "duplicate vintage in the history"

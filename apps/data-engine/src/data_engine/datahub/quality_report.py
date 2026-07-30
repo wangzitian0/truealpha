@@ -52,7 +52,7 @@ from data_engine.datahub.production_topt.materialization import (
     IdentityPayload,
     MarketPricePayload,
 )
-from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
+from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 from data_engine.datahub.production_topt.twelve_data_origin import PARSER_VERSION as TWELVE_DATA_PARSER_VERSION
 from data_engine.datahub.production_topt.twelve_data_origin import VALUE_KEY as TWELVE_DATA_VALUE_KEY
 
@@ -69,20 +69,25 @@ RECONCILIATION_POLICY = ReconciliationPolicy(
 )
 # Which origin group each parser vintage's observations belong to.
 #
-# The primary key is imported, never spelled out: it was a literal copy of
-# `parser_identity.PARSER_VERSION`, so bumping that version silently dropped every primary
-# observation out of this map and reconciliation reported zero two-origin cells with no
-# error anywhere. A parse version bump is a routine, expected event — it must not be able
-# to disconnect fusion by drifting away from a duplicated string.
+# EVERY primary vintage is enumerated, not just the current one, and the enumeration comes
+# from `PARSER_VERSION_HISTORY` rather than being written out here. Two earlier attempts at
+# this were both half-right: a literal copy of the current version drifted the moment it was
+# bumped, and importing the current version fixed only the current version — when v4 shipped,
+# every observation already in the warehouse (all v3) fell out of the map and a report over a
+# historical run resolved `insufficient_independent_origins` for all 21 cells, silently, for
+# runs that had agreed 21/21 across two origins (#543).
 #
-# Older vintages stay listed: observations captured under them are still in the warehouse
-# and a report over a historical run must still resolve their origin.
+# Deriving from the history makes both failures unreachable: a vintage cannot be current
+# without being in the tuple, and cannot leave the tuple once shipped. A report over a
+# historical run keeps resolving its origin because the vintage it was captured under is
+# still listed.
 _SOURCE_BY_PARSER = {
-    PARSER_VERSION: ("yahoo-chart:v1", "origin:yahoo:v1", "close"),
-    "production-topt-live-parser:v1": ("yahoo-chart:v1", "origin:yahoo:v1", "close"),
+    **{vintage: ("yahoo-chart:v1", "origin:yahoo:v1", "close") for vintage in PARSER_VERSION_HISTORY},
     TWELVE_DATA_PARSER_VERSION: ("twelve-data:v1", "origin:twelve-data:v1", TWELVE_DATA_VALUE_KEY),
     # v1 asserted `price` — Twelve Data's last trade, extended hours included — against the
-    # primary's regular-session close, so every tick inside a session abstained (#535).
+    # primary's regular-session close, so every tick inside a session abstained (#535). Listed
+    # by hand because the second origin has no version history to derive from yet; the primary
+    # side above shows the shape that would make this maintenance unnecessary.
     "twelve-data-parser:v1": ("twelve-data:v1", "origin:twelve-data:v1", "price"),
 }
 

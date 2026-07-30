@@ -15,8 +15,34 @@ restatements).
 
 from __future__ import annotations
 
-PARSER_VERSION = "production-topt-live-parser:v4"
-MAPPING_VERSION = "production-topt-live-map:v4"
+# Every primary parser vintage ever shipped, oldest first. The current version is the LAST
+# entry rather than a separate constant, so a bump and the record of it are one edit: there
+# is no way to advance `PARSER_VERSION` while forgetting that the previous vintage still
+# exists in the warehouse.
+#
+# That mattered (#543). Downstream code keys on the vintage — `quality_report`'s
+# `_SOURCE_BY_PARSER` resolves a market-price cell's origin group from it — and such a map
+# listed only the imported current version plus a v1 literal. Importing the current version
+# protected the current version and nothing else, so when v4 shipped, every observation in
+# both warehouses (all v3) fell out of the map and a report over any historical run resolved
+# `insufficient_independent_origins` for all 21 cells, silently, for runs that had in fact
+# agreed 21/21 across two origins. History is the half that a "current version is mapped"
+# guard cannot cover; a map built from this tuple covers it by construction.
+PARSER_VERSION_HISTORY = (
+    "production-topt-live-parser:v1",
+    "production-topt-live-parser:v2",
+    "production-topt-live-parser:v3",
+    "production-topt-live-parser:v4",
+)
+MAPPING_VERSION_HISTORY = (
+    "production-topt-live-map:v1",
+    "production-topt-live-map:v2",
+    "production-topt-live-map:v3",
+    "production-topt-live-map:v4",
+)
+
+PARSER_VERSION = PARSER_VERSION_HISTORY[-1]
+MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 
 # v1 -> v2 (#496): concept selection changed from "first variant carrying any value" to
 # "latest period across synonym variants", restatements began resolving by filing date
