@@ -88,6 +88,76 @@ def test_build_bundle_extracts_the_core_fields() -> None:
     assert bundle.knowable_at.date() <= _CUTOFF
 
 
+def _multi_class_facts(shares_end: str, shares_filed: str, shares_val: object) -> dict:
+    """A multi-class issuer's shape: current profit, and the only surviving share fact old.
+
+    company-facts drops the dimensional per-class share facts, so what remains for V and
+    BRK.B is the cover-page figure from before dimensional tagging. The concept is present
+    and parses, which is exactly why nothing refused it (#529).
+    """
+    facts = _facts()
+    del facts["facts"]["us-gaap"]["CommonStockSharesOutstanding"]
+    facts["facts"]["dei"] = {
+        "EntityCommonStockSharesOutstanding": {
+            "units": {"shares": [{"end": shares_end, "val": shares_val, "filed": shares_filed}]}
+        }
+    }
+    return facts
+
+
+def test_a_share_count_older_than_the_staleness_bound_is_refused() -> None:
+    # V's real shape: shares measured 2010-01-27 against fresh current-period profit.
+    bundle = build_bundle(
+        _multi_class_facts("2010-01-27", "2010-02-03", 469280842), _CUTOFF, OperatingBranch.NON_FINANCIAL
+    )
+    assert bundle.shares_outstanding is None, "a 2010 share count must not build a market capitalisation"
+    # The measurement date survives the refusal so the gap is diagnosable in SQL, not just
+    # reproducible by re-deriving from the vendor.
+    assert bundle.shares_period_end == date(2010, 1, 27)
+    # Refusing shares must not disturb the other inputs.
+    assert bundle.gross_profit == Decimal("120")
+    assert bundle.total_assets == Decimal("500")
+
+
+def test_a_current_share_count_is_kept_and_dated() -> None:
+    bundle = build_bundle(
+        _multi_class_facts("2026-01-31", "2026-02-10", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL
+    )
+    assert bundle.shares_outstanding == Decimal("1000")
+    assert bundle.shares_period_end == date(2026, 1, 31)
+
+
+def test_the_staleness_bound_does_not_reject_a_normal_quarterly_cadence() -> None:
+    # A filer whose latest cover page is a year old is late, not broken: the bound exists to
+    # catch a fifteen-year gap, and must not start excluding compliant issuers.
+    bundle = build_bundle(
+        _multi_class_facts("2025-03-31", "2025-04-15", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL
+    )
+    assert bundle.shares_outstanding == Decimal("1000")
+
+
+def test_a_refused_share_count_lowers_the_recorded_confidence() -> None:
+    # `_confidence` counts present fields, so the refusal has to show up as a real gap
+    # rather than a full-confidence record with a null in it.
+    item = _work_item("d" * 64)
+
+    def _fetched(shares_end: str, shares_filed: str, val: object) -> FetchSuccess | FetchFailure:
+        adapter = SecFinancialFactAdapter(
+            {item.work_item_id: _target()},
+            lambda cik, cutoff, branch: build_bundle(
+                _multi_class_facts(shares_end, shares_filed, val), cutoff, OperatingBranch.NON_FINANCIAL
+            ),
+        )
+        return adapter.fetch(item)
+
+    stale = _fetched("2010-01-27", "2010-02-03", 469280842)
+    fresh = _fetched("2026-01-31", "2026-02-10", 1000)
+    assert isinstance(stale, FetchSuccess) and isinstance(fresh, FetchSuccess)
+    assert stale.confidence < fresh.confidence
+    assert stale.record.payload["shares_outstanding"] is None
+    assert stale.record.payload["shares_period_end"] == "2010-01-27"
+
+
 def test_gross_profit_falls_back_to_revenue_minus_cost_over_a_shared_period() -> None:
     facts = {
         "facts": {

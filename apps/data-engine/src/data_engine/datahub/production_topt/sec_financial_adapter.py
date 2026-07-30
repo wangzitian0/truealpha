@@ -55,6 +55,22 @@ from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION,
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
 
+# How far before the cutoff a share count may have been measured and still be used.
+#
+# For a multi-class issuer, company-facts drops the dimensional per-class share facts and
+# what survives is the pre-2011 cover-page figure from before dimensional tagging was
+# adopted. The concept is then PRESENT and parses cleanly, so nothing upstream refuses it:
+# V resolved 469,280,842 measured 2010-01-27 and BRK.B a Class-A-scale 941,481 measured
+# 2011-04-29, against fresh current-period revenue. V's market cap came out at $173.0B
+# against a real ~$712B and it ranked first at half the target weight; BRK.B's at $836.8M
+# against a real ~$1.1T, held back from the same outcome only by a missing numerator.
+#
+# Deliberately generous: a compliant filer restates this figure on every 10-Q cover page,
+# so two years cannot reject anyone legitimate, while the failures it must catch are off by
+# fifteen. A tighter, better-calibrated bound belongs with the vintage-carrying read path
+# (#530) — this one only has to make an order-of-magnitude error impossible to publish.
+_MAX_SHARES_STALENESS_DAYS = 730
+
 
 @dataclass(frozen=True)
 class FinancialFactsBundle:
@@ -76,6 +92,11 @@ class FinancialFactsBundle:
     # vendor. With them, staleness is a plain SQL invariant (#429).
     operating_period_end: date | None = None
     revenue_period_end: date | None = None
+    # The share count's own measurement date, carried for the same reason and additionally
+    # enforced: `shares_outstanding` is None whenever this is staler than
+    # `_MAX_SHARES_STALENESS_DAYS`, so a market capitalisation can never be built from a
+    # figure the warehouse cannot date.
+    shares_period_end: date | None = None
 
 
 @dataclass(frozen=True)
@@ -369,8 +390,26 @@ def build_bundle(
     # The last-resort share count is consulted only when the point-in-time series is
     # EMPTY. Kept as a separate lookup rather than a trailing synonym so a period average
     # can never win on recency over a real point-in-time figure (#496).
-    shares = _latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)) or _latest(
-        resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)
+    # A share count too old to describe today's company is refused, and refusing the
+    # point-in-time series lets the period-average last resort answer instead of nothing —
+    # which is the difference between MA (whose 2010 cover-page fact is the only `dei` one,
+    # but whose weighted-average series is current) and V (where both are stale or absent).
+    # Staleness is applied per candidate rather than to the winner, because `primary or
+    # fallback` would otherwise let a sixteen-year-old primary block a usable fallback.
+    shares_primary = _fresh_shares(_latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)), cutoff)
+    shares_fallback = _fresh_shares(
+        _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)), cutoff
+    )
+    shares = shares_primary or shares_fallback
+    # When every candidate is refused the newest measurement date is still recorded, so the
+    # warehouse says HOW stale the best candidate was rather than leaving an
+    # indistinguishable null. Fail-closed is deliberate: the factor then reports
+    # `missing_shares_outstanding` exactly as for an issuer that never filed one, and an
+    # honest gap outranks a market capitalisation wrong by three orders of magnitude.
+    shares_period_end = _newest_period_end(
+        shares,
+        _latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)),
+        _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)),
     )
     revenue = _latest(resolve_field(facts, ruleset, "revenue", cutoff))
     # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
@@ -400,6 +439,7 @@ def build_bundle(
         knowable_at=None if knowable is None else datetime.combine(knowable, datetime.min.time(), tzinfo=UTC),
         operating_period_end=None if profit is None else profit.period_end,
         revenue_period_end=None if revenue is None else revenue.period_end,
+        shares_period_end=shares_period_end,
     )
 
 
@@ -471,6 +511,7 @@ class SecFinancialFactAdapter:
             "pre_provision_profit": _s(bundle.pre_provision_profit),
             "operating_period_end": _d(bundle.operating_period_end),
             "revenue_period_end": _d(bundle.revenue_period_end),
+            "shares_period_end": _d(bundle.shares_period_end),
         }
         return FetchSuccess(
             raw=RawResponse(
@@ -492,6 +533,19 @@ def _confidence(payload: dict[str, str | None]) -> Decimal:
     """Per-source-class confidence prior (#207/#404); the calibrated formula is #337."""
     present = sum(payload.get(field) is not None for field in ("gross_profit", "total_assets", "shares_outstanding"))
     return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
+
+
+def _fresh_shares(datum: _Datum | None, cutoff: date) -> _Datum | None:
+    """The datum, or None when it was measured too long before the cutoff (#529)."""
+    if datum is None or (cutoff - datum.period_end).days > _MAX_SHARES_STALENESS_DAYS:
+        return None
+    return datum
+
+
+def _newest_period_end(*candidates: _Datum | None) -> date | None:
+    """The latest measurement date among the candidates, refused ones included."""
+    ends = [datum.period_end for datum in candidates if datum is not None]
+    return max(ends) if ends else None
 
 
 def _s(value: Decimal | None) -> str | None:

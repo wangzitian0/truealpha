@@ -68,6 +68,10 @@ class FinancialFactPayload(_FrozenModel):
     # from the vendor.
     operating_period_end: date | None = None
     revenue_period_end: date | None = None
+    # The share count's measurement date (#529). Present even when `shares_outstanding` is
+    # None, because a count refused for staleness must be distinguishable from one the
+    # source never published — the first is a dated gap, the second an absence.
+    shares_period_end: date | None = None
 
     @field_validator(
         "gross_profit",

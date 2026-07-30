@@ -15,8 +15,8 @@ restatements).
 
 from __future__ import annotations
 
-PARSER_VERSION = "production-topt-live-parser:v3"
-MAPPING_VERSION = "production-topt-live-map:v3"
+PARSER_VERSION = "production-topt-live-parser:v4"
+MAPPING_VERSION = "production-topt-live-map:v4"
 
 # v1 -> v2 (#496): concept selection changed from "first variant carrying any value" to
 # "latest period across synonym variants", restatements began resolving by filing date
@@ -28,3 +28,15 @@ MAPPING_VERSION = "production-topt-live-map:v3"
 # same issuer, the same period, a different number, under the same parser identity — which
 # is precisely the ambiguity `mapping_version` exists to prevent. The v1 observations stay
 # in place and stay queryable; v2 appends alongside them.
+#
+# v3 (#514): the numerator gained branch/tag policies — a revenue proxy for issuers that
+# report no COGS family, the insurance revenue-minus-claims branch, and weighted-average
+# shares as a versioned fallback for issuers whose per-class cover-page facts the
+# company-facts API omits.
+#
+# v3 -> v4 (#529): a share count measured more than `_MAX_SHARES_STALENESS_DAYS` before the
+# cutoff is refused instead of used, and the payload gained `shares_period_end` so the
+# refusal is auditable in SQL rather than only reproducible by re-deriving from the vendor.
+# This changes a resolved value (V's shares go from a 2010 figure to absent), which is why
+# it takes a version rather than a silent correction: under the old identity the two would
+# be the same issuer, the same period and a different number.
