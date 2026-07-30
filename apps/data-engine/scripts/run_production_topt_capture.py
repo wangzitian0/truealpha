@@ -21,7 +21,9 @@ manual run resolvable only through `PostgresToptGppeRepository`'s acceptance-gat
 fallback query, never the governed `current_pointer_head` path -- silently defeating the
 #429/#434 P4 exit criterion (MCP and the App must agree via the SAME governed head).
 Mirrors the op's `register_run_evidence` call, in the same transaction, so a manual run
-is a governed head too. Deliberately does NOT mirror the op's strategy-bridge steps --
+is a governed head too -- including its #536 gate: a manual run whose quality report
+misses a declared service objective persists in full and leaves the head where it is.
+Deliberately does NOT mirror the op's strategy-bridge steps --
 the large_model_value_v0 strategy layer in production is explicit non-goal scope for
 truealpha#475.
 """
@@ -53,15 +55,22 @@ def main() -> int:
         # plane and advance the governed pointer inside the same transaction as the
         # capture, so the run is resolvable through mart.current_pointer_head the moment
         # this commits -- the same guarantee the scheduled tick makes.
-        pointer_sequence = register_run_evidence(
-            connection, run_id=result.run_id, release_manifest_id=result.release_manifest_id
+        registration = register_run_evidence(
+            connection,
+            run_id=result.run_id,
+            release_manifest_id=result.release_manifest_id,
+            quality_report=result.quality,
         )
         connection.commit()
 
     print(f"== run {result.run_id} ==")
     print(f"== materialized {result.core_result_count} core results ==")
     print(f"== quality report {result.quality_report_id} ==")
-    print(f"== current_pointer sequence {pointer_sequence} ==")
+    if registration.accepted:
+        print(f"== current_pointer sequence {registration.sequence} ==")
+    else:
+        # #536: the manual path refuses the same advances the scheduled tick refuses.
+        print(f"== current_pointer WITHHELD at sequence {registration.sequence}: {registration.summary} ==")
     for key, value in result.quality.items():
         print(f"  {key}: {value}")
     return 0
