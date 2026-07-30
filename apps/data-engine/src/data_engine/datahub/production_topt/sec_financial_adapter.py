@@ -97,6 +97,11 @@ class FinancialFactsBundle:
     # `_MAX_SHARES_STALENESS_DAYS`, so a market capitalisation can never be built from a
     # figure the warehouse cannot date.
     shares_period_end: date | None = None
+    # True when `gross_profit` is the revenue proxy rather than a reported or derived
+    # figure. Reported rather than inferred, because "gross_profit happens to equal
+    # revenue" is a coincidence for some issuers and the substitution must be auditable
+    # (#533). The adapter refuses it for industries the proxy was not approved for.
+    gross_profit_is_revenue_proxy: bool = False
 
 
 @dataclass(frozen=True)
@@ -116,6 +121,11 @@ class SecTarget:
     # all (a real state: XOM's post-reorganization holdco CIK publishes no
     # us-gaap taxonomy). Registry/lineage-driven — never a ticker allowlist.
     predecessor_cik: int | None = None
+    # #533: whether this issuer's industry may substitute revenue for an untagged gross
+    # profit. Resolved from the EDGAR SIC at planning, exactly like `operating_branch`.
+    # Defaults False so a target assembled without the registry cannot inherit a
+    # substitution that only holds for ~zero-COGS industries.
+    revenue_proxy_allowed: bool = False
 
 
 FinancialFactsFetcher = Callable[[int, date, OperatingBranch], FinancialFactsBundle | None]
@@ -291,6 +301,18 @@ def gross_profit(
     two cover the *same* period — it is the issuer's own assertion rather than our
     arithmetic — but it cannot outrank a more recent one.
     """
+    return _gross_profit_resolved(facts, cutoff, ruleset)[0]
+
+
+def _gross_profit_resolved(
+    facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset
+) -> tuple[_Datum | None, bool]:
+    """Gross profit, and whether it is the revenue proxy rather than a real figure.
+
+    The caller needs to know which, because the proxy is only valid for industries whose
+    cost of revenue really is ~zero (#533) — and that is a property of the issuer, which
+    this function cannot see.
+    """
     direct = _latest(resolve_field(facts, ruleset, "gross_profit", cutoff))
     derived = _difference_at_shared_period(
         resolve_field(facts, ruleset, "revenue", cutoff),
@@ -298,16 +320,21 @@ def gross_profit(
     )
     candidates = [datum for datum in (direct, derived) if datum is not None]
     if candidates:
-        return max(candidates, key=lambda datum: datum.period_end)
+        return max(candidates, key=lambda datum: datum.period_end), False
     if _files_no_cogs_concepts(facts, ruleset):
-        # #496 owner decision (2026-07-28): an issuer whose company-facts carry
-        # NO GrossProfit and NO COGS-family concept AT ALL (payment networks,
-        # integrated oil majors) uses revenue as the gross-profit proxy —
-        # their cost-of-revenue is ~zero or structurally unreported, the bias
-        # is small and its direction known. Concept-level absence only: a mere
-        # period mismatch on a real COGS filer still resolves to None.
-        return _latest(resolve_field(facts, ruleset, "revenue", cutoff))
-    return None
+        # #496 owner decision (2026-07-28): an issuer whose company-facts carry NO
+        # GrossProfit and NO COGS-family concept AT ALL uses revenue as the gross-profit
+        # proxy — "payment networks carry ~zero COGS; the bias is small and its direction
+        # known". Concept-level absence only: a mere period mismatch on a real COGS filer
+        # still resolves to None.
+        #
+        # Absence of a tag is NOT evidence of absent cost, so the substitution is offered
+        # here and accepted only for an industry the registry says qualifies. Read as
+        # "~zero or structurally unreported" it also fired for XOM (Petroleum Refining),
+        # publishing $332B of revenue as gross profit — $5.36M per employee, above NVIDIA
+        # (#533).
+        return _latest(resolve_field(facts, ruleset, "revenue", cutoff)), True
+    return None, False
 
 
 def _declared_concepts(ruleset: ConceptMappingRuleset, field: str) -> tuple[ConceptRef, ...]:
@@ -416,12 +443,13 @@ def build_bundle(
     # the branch only decides WHICH versioned extraction asserts the operating numerator:
     # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
     # else reported/derived gross profit (with the no-COGS revenue proxy inside).
+    is_revenue_proxy = False
     if branch is OperatingBranch.FINANCIAL:
         profit = pre_provision_profit(facts, cutoff, ruleset)
     elif branch is OperatingBranch.INSURANCE:
         profit = insurance_pre_claims_profit(facts, cutoff, ruleset)
     else:
-        profit = gross_profit(facts, cutoff, ruleset)
+        profit, is_revenue_proxy = _gross_profit_resolved(facts, cutoff, ruleset)
     resolved = [datum for datum in (profit, assets, shares, revenue) if datum is not None]
     knowable = max((datum.filed for datum in resolved), default=None)
     return FinancialFactsBundle(
@@ -440,6 +468,7 @@ def build_bundle(
         operating_period_end=None if profit is None else profit.period_end,
         revenue_period_end=None if revenue is None else revenue.period_end,
         shares_period_end=shares_period_end,
+        gross_profit_is_revenue_proxy=is_revenue_proxy,
     )
 
 
@@ -487,6 +516,15 @@ class SecFinancialFactAdapter:
             return FetchFailure(ObligationReasonCode.FIELD_UNAVAILABLE)
         if bundle.knowable_at is not None and bundle.knowable_at.date() > target.cutoff:
             return FetchFailure(ObligationReasonCode.LOOK_AHEAD_VIOLATION)
+        # #533: the revenue-for-gross-profit substitution is valid only where cost of
+        # revenue really is ~zero, which is a property of the issuer's industry and so is
+        # only knowable here, on the target, rather than inside the parse. Refusing it
+        # leaves the honest gap the issuer had before the substitution existed: the factor
+        # reports `missing_gross_profit` and the issuer is excluded, which is strictly
+        # better than ranking an oil major above NVIDIA on labour efficiency.
+        gross_profit_value = bundle.gross_profit
+        if bundle.gross_profit_is_revenue_proxy and not target.revenue_proxy_allowed:
+            gross_profit_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
         headcount: Decimal | None = None
         # A payload that resolved nothing is knowable exactly at the cutoff: what it
@@ -503,7 +541,7 @@ class SecFinancialFactAdapter:
             "listing_id": target.listing_id,
             "operating_branch": target.operating_branch.value,
             "currency": target.currency,
-            "gross_profit": _s(bundle.gross_profit),
+            "gross_profit": _s(gross_profit_value),
             "total_assets": _s(bundle.total_assets),
             "headcount": _s(headcount),
             "revenue": _s(bundle.revenue),

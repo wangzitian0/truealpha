@@ -88,6 +88,69 @@ def test_build_bundle_extracts_the_core_fields() -> None:
     assert bundle.knowable_at.date() <= _CUTOFF
 
 
+def _no_cogs_facts() -> dict:
+    """An issuer tagging neither GrossProfit nor any COGS concept, but reporting revenue.
+
+    Shared by a payment network (whose cost of revenue really is ~zero) and an oil major
+    (whose cost of revenue is enormous but untagged) — the payload cannot tell them apart,
+    which is the whole point of #533.
+    """
+    facts = _facts()
+    del facts["facts"]["us-gaap"]["GrossProfit"]
+    facts["facts"]["us-gaap"]["Revenues"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 332238000000, "2026-02-01")]}
+    }
+    return facts
+
+
+def test_the_revenue_proxy_is_refused_for_an_industry_it_was_not_approved_for() -> None:
+    # XOM's real shape: no GrossProfit, no COGS family, $332B revenue. Petroleum Refining
+    # is not a ~zero-COGS industry, so the substitution must not happen (#533).
+    item = _work_item("e" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:J3WHBG0MTS7O8ZVMDC91",
+        instrument_id="security:cusip:30231G102",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        revenue_proxy_allowed=False,
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: build_bundle(_no_cogs_facts(), cutoff, branch)
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record.payload["gross_profit"] is None, "an oil major must not publish revenue as gross profit"
+    # Revenue itself is untouched: the issuer really does report it.
+    assert result.record.payload["revenue"] == "332238000000"
+
+
+def test_the_revenue_proxy_still_applies_to_an_approved_industry() -> None:
+    item = _work_item("f" * 64)
+    target = SecTarget(
+        cik=1403161,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:549300JZ4OKEHW3DPJ59",
+        instrument_id="security:cusip:92826C839",
+        listing_id="listing:xnys:v",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        revenue_proxy_allowed=True,
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: build_bundle(_no_cogs_facts(), cutoff, branch)
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record.payload["gross_profit"] == "332238000000"
+
+
+def test_the_bundle_reports_whether_gross_profit_is_the_proxy() -> None:
+    assert build_bundle(_no_cogs_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit_is_revenue_proxy
+    # A real reported figure is never flagged, so the adapter cannot refuse it.
+    assert not build_bundle(_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit_is_revenue_proxy
+
+
 def _multi_class_facts(shares_end: str, shares_filed: str, shares_val: object) -> dict:
     """A multi-class issuer's shape: current profit, and the only surviving share fact old.
 

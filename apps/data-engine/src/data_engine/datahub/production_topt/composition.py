@@ -51,7 +51,7 @@ from data_engine.datahub.production_topt.capture_orchestration import run_topt_c
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import SourceFetchPort
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
-from data_engine.datahub.production_topt.issuer_registry import resolve_operating_branches
+from data_engine.datahub.production_topt.issuer_registry import resolve_issuer_classifications
 from data_engine.datahub.production_topt.market_price_adapter import (
     MarketPriceAdapter,
     MarketPriceTarget,
@@ -298,7 +298,7 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
     missing = sorted(tickers - set(cik_by_ticker))
     if missing:
         raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
-    branches = resolve_operating_branches(cik_by_ticker)
+    classifications = resolve_issuer_classifications(cik_by_ticker)
     listing_ids = [coordinate[2] for coordinate in plan.coordinates.values()]
     issuer_by_listing = {coordinate[2]: coordinate[0] for coordinate in plan.coordinates.values()}
     predecessors = predecessor_ciks(connection, listing_ids, issuer_by_listing) if connection is not None else {}
@@ -325,7 +325,12 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
                 issuer_id=issuer_id,
                 instrument_id=instrument_id,
                 listing_id=listing_id,
-                operating_branch=branches.get(cik, OperatingBranch.NON_FINANCIAL),
+                operating_branch=(
+                    classifications[cik].operating_branch if cik in classifications else OperatingBranch.NON_FINANCIAL
+                ),
+                # #533: only the industries whose cost of revenue is ~zero may substitute
+                # revenue for an untagged gross profit. Absent from the registry means no.
+                revenue_proxy_allowed=cik in classifications and classifications[cik].revenue_proxy_allowed,
                 # only meaningful when it differs from the mapped CIK — the
                 # fallback would otherwise refetch the same empty document.
                 predecessor_cik=(
