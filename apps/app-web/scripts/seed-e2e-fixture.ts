@@ -40,9 +40,14 @@
  * suite's pattern does not match) and stays a real check only where real
  * snapshots exist. See #494.
  *
- * Idempotent: every insert is ON CONFLICT DO NOTHING. The mart tables carry
- * append-only triggers, so DO UPDATE is not an option and re-running must be a
- * no-op rather than a conflict.
+ * Rerun semantics differ by table, deliberately:
+ *   - `mart.*` is ON CONFLICT DO NOTHING. Those tables carry append-only
+ *     triggers, so DO UPDATE is not an option and a rerun must be a no-op.
+ *   - `app.principal_credentials` UPSERTS, matching
+ *     `seed-principal-credential.ts`. E2E_PASSWORD is generated per CI run, so
+ *     DO NOTHING would leave a stale hash on any database that already has the
+ *     row and every login in the suite would then fail — a fresh CI service
+ *     container hides that, a local rerun does not.
  *
  * Usage (see ci-web.yml):
  *   DATABASE_URL=postgresql://… E2E_PASSWORD=… bun run scripts/seed-e2e-fixture.ts
@@ -126,7 +131,7 @@ async function main() {
       );
       await client.query(
         "insert into app.principal_credentials (principal_id, email, hashed_password) values ($1, $2, $3) " +
-          "on conflict (principal_id) do nothing",
+          "on conflict (principal_id) do update set email = excluded.email, hashed_password = excluded.hashed_password",
         [principal.principalId, principal.email, await hashPassword(password)],
       );
     }
