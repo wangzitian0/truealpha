@@ -200,6 +200,48 @@ async function walkRoutes(browser, { role, email, password }) {
   return failures;
 }
 
+/** #540: the session's other end, walked. The logout endpoint has worked since
+ * #368 and nothing called it, because #368's acceptance covered only the login
+ * half of the lifecycle — a criterion that never named the state transition it
+ * was missing. This asserts the whole transition: control present, click it,
+ * the cookie is gone, and the next protected request bounces to /login. */
+async function walkSignOutJourney(browser, { email, password }) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const login = await context.request.post(`${BASE}/api/auth/login`, { data: { email, password } });
+  if (login.status() !== 200) {
+    console.error(`login failed for the sign-out journey: ${login.status()}`);
+    await context.close();
+    process.exit(2);
+  }
+  const page = await context.newPage();
+  const problems = [];
+
+  await page.goto(`${BASE}/research`, { waitUntil: "networkidle" });
+  const control = page.locator("[data-sign-out]");
+  if ((await control.count()) === 0) {
+    problems.push("no sign-out control on an authenticated page");
+  } else {
+    await Promise.all([page.waitForURL(/\/login/, { timeout: 15000 }).catch(() => {}), control.first().click()]);
+
+    const cookies = await context.cookies();
+    if (cookies.some((c) => c.name === "truealpha_session" && c.value !== "")) {
+      problems.push("the session cookie survived sign-out");
+    }
+    await page.goto(`${BASE}/research`, { waitUntil: "networkidle" });
+    if (!new URL(page.url()).pathname.startsWith("/login")) {
+      problems.push(`a protected route still rendered after sign-out (${new URL(page.url()).pathname})`);
+    }
+  }
+
+  await context.close();
+  if (problems.length > 0) {
+    console.log(`FAIL [sign-out] — ${problems.join("; ")}`);
+    return 1;
+  }
+  console.log("ok   [sign-out] control present, cookie cleared, protected route bounces to /login");
+  return 0;
+}
+
 const browser = await chromium.launch();
 // Two passes. The administrator pass asserts (c) across the whole frozen tree —
 // it is the only identity that can see operator chrome at all. The member pass
@@ -209,6 +251,7 @@ let failures = await walkRoutes(browser, { role: "administrator", email: EMAIL, 
 if (MEMBER_EMAIL) {
   failures += await walkRoutes(browser, { role: "member", email: MEMBER_EMAIL, password: PASSWORD });
 }
+failures += await walkSignOutJourney(browser, { email: EMAIL, password: PASSWORD });
 await browser.close();
 
 if (failures > 0) {

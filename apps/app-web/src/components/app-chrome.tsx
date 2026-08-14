@@ -20,6 +20,7 @@
  */
 
 import Link from "next/link";
+import { SignOutButton } from "@/components/sign-out-button";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export async function AppChrome() {
@@ -49,6 +50,9 @@ export async function AppChrome() {
       >
         {principal.context.principalId}
       </span>
+      {/* #540: the session's other end. The endpoint has worked since #368;
+          nothing ever called it. */}
+      <SignOutButton />
     </div>
   );
 }

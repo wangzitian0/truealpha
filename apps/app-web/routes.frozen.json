@@ -18,10 +18,6 @@
       "live": true
     },
     {
-      "path": "/api/auth/me",
-      "live": true
-    },
-    {
       "path": "/research",
       "live": true
     },
