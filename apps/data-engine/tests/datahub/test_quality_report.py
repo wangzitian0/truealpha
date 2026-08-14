@@ -26,7 +26,14 @@ import os
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.quality_report import _has_usable_value, _PointerDereferencer, persist
+from data_engine.datahub.production_topt.materialization import FinancialFactPayload
+from data_engine.datahub.quality_report import (
+    _FINANCIAL_FACT_OPERATING_NUMERATOR,
+    _has_usable_value,
+    _PointerDereferencer,
+    persist,
+)
+from factors.production_topt import OperatingBranch
 from truealpha_contracts.models import RawObjectRef
 
 
@@ -185,3 +192,36 @@ def test_persist_gives_distinct_reports_distinct_ids(connection) -> None:
         "select report_id from mart.datahub_quality_report where run_id = %s", (run_id,)
     ).fetchall()
     assert {r[0] for r in rows} == {first_id, second_id}
+
+
+def test_the_numerator_map_is_total_over_operating_branches() -> None:
+    """Every `OperatingBranch` member must resolve a numerator attribute.
+
+    The first deployed tick after INSURANCE was added (#534) crashed on BRK.B's
+    financial-fact cell with a KeyError in `_has_usable_value`, aborting the whole
+    run — CI stayed green because its fixture emitted only the two branches the map
+    then covered. A branch added without a row here must fail THIS test, not the
+    next production tick.
+    """
+    assert set(_FINANCIAL_FACT_OPERATING_NUMERATOR) == set(OperatingBranch)
+    for branch, attribute in _FINANCIAL_FACT_OPERATING_NUMERATOR.items():
+        assert attribute in FinancialFactPayload.model_fields, (branch, attribute)
+
+
+def test_an_insurance_branch_payload_grades_available() -> None:
+    """The exact payload shape that crashed the 2026-08-14 05:41 staging tick."""
+    payload = {
+        "issuer_id": "issuer:lei:5493000C01ZX7D35SD85",
+        "instrument_id": "security:cusip:084670702",
+        "listing_id": "listing:xnys:brk.b",
+        "operating_branch": "insurance",
+        "currency": "USD",
+        "gross_profit": "80000000",
+        "total_assets": "200000000",
+        "headcount": "392400",
+        "revenue": "100000000",
+        "shares_outstanding": "10000000",
+        "pre_provision_profit": None,
+    }
+    assert _has_usable_value("financial-fact", payload) is True
+    assert _has_usable_value("financial-fact", {**payload, "gross_profit": None}) is False

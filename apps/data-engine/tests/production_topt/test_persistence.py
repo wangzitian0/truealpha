@@ -49,8 +49,12 @@ from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
-# One TOPT issuer is a depository institution; the rest are not (SEC SIC 6021).
+# One TOPT issuer is a depository institution, one an insurer (SEC SIC 6021 / 63xx);
+# the rest are non-financial. All three OperatingBranch members must flow through the
+# harness: the 2026-08-14 staging tick crashed on the INSURANCE branch precisely
+# because this fixture only ever emitted the other two (#534, quality_report KeyError).
 _BANK_TICKER = "JPM"
+_INSURANCE_TICKER = "BRK.B"
 
 
 @pytest.fixture
@@ -152,7 +156,11 @@ def _routes(
                 instrument_id=instrument_id,
                 listing_id=listing_id,
                 operating_branch=(
-                    OperatingBranch.FINANCIAL if ticker == _BANK_TICKER else OperatingBranch.NON_FINANCIAL
+                    OperatingBranch.FINANCIAL
+                    if ticker == _BANK_TICKER
+                    else OperatingBranch.INSURANCE
+                    if ticker == _INSURANCE_TICKER
+                    else OperatingBranch.NON_FINANCIAL
                 ),
             )
         else:
@@ -300,7 +308,7 @@ def test_executor_run_reconstructs_the_snapshot_and_mart(connection) -> None:
     # The depository-institution branch survives capture: a bank scores through the
     # pre-provision-profit numerator instead of landing missing_gross_profit.
     branches = {result.operating_branch for result in results}
-    assert "financial" in branches
+    assert {"financial", "insurance"} <= branches
 
 
 def test_executor_run_writes_its_own_evidence_nodes(connection) -> None:
