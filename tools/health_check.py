@@ -95,9 +95,14 @@ def _guarding_kind(http_get: HttpGet, expected: str) -> HttpGet:
                 f"deployed release until the deployer threads GIT_COMMIT_SHA through"
             )
         if reported_kind != expected_kind:
+            # Labelled pair rather than a sentence: `identifier_kind` returns
+            # "unset" and "unrecognised" too, and no single article reads for
+            # all four. This message is the whole point of the guard — an
+            # operator reading only the failed step must be able to act on it —
+            # so it must not degrade to "expected a unset" (review).
             raise IdentifierKindMismatch(
-                f"identifier kinds disagree: expected a {expected_kind} ({expected!r}) but "
-                f"{url} reports a {reported_kind} ({reported!r}). These can never compare "
+                f"identifier kinds disagree — gate expects {expected_kind} ({expected!r}); "
+                f"{url} reports {reported_kind} ({reported!r}). These can never compare "
                 f"equal, so the release cannot be confirmed either way. Fix the side that "
                 f"is wrong — the gate must pass what the runtime actually reports (#526)"
             )
