@@ -96,13 +96,21 @@ for (const route of frozen.routes.map((r) => r.path)) {
 
 // --- 5. a frozen live /api route must be reachable from the application ---
 {
-  const sourceFiles = listSourceFiles(join(process.cwd(), "src"));
+  // Read each file once: this is a routes x files scan, and re-reading per
+  // route made it quadratic for no reason (review).
+  const sources = listSourceFiles(join(process.cwd(), "src")).map((file) => ({
+    file,
+    text: readFileSync(file, "utf8"),
+  }));
   for (const route of frozen.routes) {
     if (!route.live || !route.path.startsWith("/api/")) continue;
-    // Its own handler file does not count as a consumer.
-    const handlerDir = join("src", "app", ...route.path.split("/").filter(Boolean));
-    const consumers = sourceFiles.filter(
-      (file) => !file.includes(handlerDir) && readFileSync(file, "utf8").includes(route.path),
+    // Exclude the handler FILE, not its directory: a legitimate consumer or
+    // helper co-located under the same src/app/api/... folder would otherwise
+    // be discounted and fail a route that is genuinely reachable (review).
+    const segments = route.path.split("/").filter(Boolean);
+    const handlerFile = join(process.cwd(), "src", "app", ...segments, "route.ts");
+    const consumers = sources.filter(
+      ({ file, text }) => file !== handlerFile && text.includes(route.path),
     );
     assert(
       consumers.length > 0,
