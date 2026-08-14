@@ -173,10 +173,17 @@ jobs:
             echo "- Receiver: ${receiver_run_url}"
           } >>"$GITHUB_STEP_SUMMARY"
 
+      # #526: this compared `source_sha` (a 40-hex commit sha) against what the
+      # runtime reports, which the deployers set to the release TAG — two kinds
+      # of identifier that can never compare equal, so EVERY prod release
+      # recorded as FAILURE while actually deploying fine. Pass the release ref,
+      # which is what the runtime actually reports; tools/health_check.py now
+      # fails immediately and says so if the two sides ever disagree in kind
+      # again, instead of exhausting a 24-attempt budget on an impossible match.
       - name: Confirm the deployed release is healthy
         if: ${{ inputs.deploy_type == 'prod' }}
         env:
-          EXPECTED_SHA: ${{ fromJson(steps.request.outputs.json).source_sha }}
+          EXPECTED_RELEASE: ${{ fromJson(steps.request.outputs.json).version_ref }}
         run: |
           set -euo pipefail
           # infra2#508: llm-service's /health (reached through Traefik's /api prefix
@@ -185,5 +192,5 @@ jobs:
           # Staging has no stable public URL yet (#11); scoped to prod only for now.
           uv run --no-sync python tools/health_check.py \
             "https://truealpha.club/api/health" \
-            "$EXPECTED_SHA" \
+            "$EXPECTED_RELEASE" \
             24

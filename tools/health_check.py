@@ -17,6 +17,8 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -25,6 +27,83 @@ from infra2_sdk.deploy_health import HttpGet, default_http_get, poll_until_healt
 
 DEFAULT_MAX_ATTEMPTS = 24
 INTERVAL_SECONDS = 10.0
+
+# #526: the two sides of this gate must speak the same kind of identifier.
+# `deploy-release.yml` passed `source_sha` (a 40-hex commit sha) while the
+# deployed service reports `GIT_COMMIT_SHA`, which the deployers set to the
+# release TAG. The SDK's version match is a two-way prefix match, so a tag and
+# a sha can never match and the gate burned its whole 24-attempt budget before
+# reporting "did not become healthy (last status: HTTP 200)" — the endpoint was
+# fine, the comparison was impossible. Every prod release recorded as FAILURE,
+# and the run history was believed over the runtime for two days (#429's exact
+# failure mode, manufactured on every release).
+#
+# A kind mismatch is never transitional: a service that reports tags will not
+# start reporting shas mid-rollout. So it fails IMMEDIATELY and says which side
+# reports what, instead of hiding behind a four-minute timeout. A same-kind
+# mismatch keeps the SDK's rollout tolerance untouched.
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+_RELEASE_TAG = re.compile(r"^v\d+\.\d+\.\d+$")
+_VERSION_KEYS = ("git_sha", "version")
+
+
+class IdentifierKindMismatch(RuntimeError):
+    """The expected and reported release identifiers can never compare equal."""
+
+
+def identifier_kind(value: str) -> str:
+    """Name the kind of release identifier, for a message a human can act on."""
+    if not value or value == "unknown":
+        return "unset"
+    if _COMMIT_SHA.match(value):
+        return "commit sha"
+    if _RELEASE_TAG.match(value):
+        return "release tag"
+    return "unrecognised"
+
+
+def _reported_identifier(body: str) -> str | None:
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in _VERSION_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _guarding_kind(http_get: HttpGet, expected: str) -> HttpGet:
+    """Wrap `http_get` so the first usable response settles the kind question."""
+    expected_kind = identifier_kind(expected)
+
+    def guarded(url: str) -> tuple[int, str]:
+        status_code, body = http_get(url)
+        if not expected or status_code != 200:
+            return status_code, body
+        reported = _reported_identifier(body)
+        if reported is None:
+            return status_code, body
+        reported_kind = identifier_kind(reported)
+        if reported_kind == "unset":
+            raise IdentifierKindMismatch(
+                f"{url} does not report its release identity "
+                f"(reported {reported!r}); this gate cannot confirm anything about the "
+                f"deployed release until the deployer threads GIT_COMMIT_SHA through"
+            )
+        if reported_kind != expected_kind:
+            raise IdentifierKindMismatch(
+                f"identifier kinds disagree: expected a {expected_kind} ({expected!r}) but "
+                f"{url} reports a {reported_kind} ({reported!r}). These can never compare "
+                f"equal, so the release cannot be confirmed either way. Fix the side that "
+                f"is wrong — the gate must pass what the runtime actually reports (#526)"
+            )
+        return status_code, body
+
+    return guarded
 
 
 def check_health(
@@ -40,13 +119,16 @@ def check_health(
     try:
         result = poll_until_healthy(
             url,
-            http_get=http_get,
+            http_get=_guarding_kind(http_get, expected_version),
             expected_version=expected_version,
             require_status="ok",
             max_attempts=max_attempts,
             interval_seconds=INTERVAL_SECONDS,
             sleep=sleep,
         )
+    except IdentifierKindMismatch as exc:
+        print(f"health check failed: {exc}", file=sys.stderr)
+        return 1
     except RuntimeError as exc:
         print(f"health check failed: {exc}", file=sys.stderr)
         return 1
