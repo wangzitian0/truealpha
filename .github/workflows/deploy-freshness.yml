@@ -21,6 +21,10 @@ on:
   workflow_dispatch:
     inputs:
       max_age_days:
+        # Read below as `github.event.inputs.*`, not `inputs.*`: the `inputs`
+        # context belongs to workflow_dispatch/workflow_call, and this workflow's
+        # PRIMARY trigger is the schedule. A guard whose own expression can fail
+        # on its main trigger is the failure mode it exists to prevent (review).
         description: "Fail when the oldest unreleased commit is older than this"
         required: false
         default: "3"
@@ -55,4 +59,4 @@ jobs:
           uv run --no-sync python tools/deploy_freshness.py \
             "${{ matrix.url }}" \
             --environment "${{ matrix.environment }}" \
-            --max-age-days "${{ inputs.max_age_days || '3' }}"
+            --max-age-days "${{ github.event.inputs.max_age_days || '3' }}"

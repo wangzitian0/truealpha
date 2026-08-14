@@ -126,3 +126,41 @@ def test_a_ref_this_checkout_cannot_resolve_fails(capsys: pytest.CaptureFixture[
     )
     assert exit_code == 1
     assert "not a commit here" in capsys.readouterr().err
+
+
+def test_a_ref_git_could_read_as_an_option_never_reaches_git(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The reported release arrives over HTTP; git must not be handed an option (review)."""
+    reached_git = False
+
+    def run(argv, capture_output=True, text=True, check=False):  # noqa: ANN001, ARG001
+        nonlocal reached_git
+        reached_git = True
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    for hostile in ("--upload-pack=touch /tmp/x", "-n", "v1 --all", "a" * 300):
+        exit_code = check_freshness(URL, environment="production", http_get=_health(hostile), now=NOW, run=run)
+        assert exit_code == 1, f"{hostile!r} must be refused"
+        assert "not a usable release identifier" in capsys.readouterr().err
+    assert not reached_git, "a hostile ref must be rejected before any git invocation"
+
+
+def test_the_scheduled_gate_does_not_depend_on_the_dispatch_inputs_context() -> None:
+    """A guard whose expression can fail on its PRIMARY trigger is the failure
+    mode it exists to prevent. `inputs` belongs to workflow_dispatch and
+    workflow_call; this workflow's main trigger is the schedule (review)."""
+    workflow = (REPO_ROOT / ".github/workflows/deploy-freshness.yml").read_text()
+    assert "schedule:" in workflow, "the freshness gate must run on a schedule, not only on demand"
+    body = workflow.split("steps:", 1)[1]
+    assert "github.event.inputs.max_age_days" in body
+    assert "${{ inputs." not in body, "the inputs context is not available on a schedule event"
+
+
+def test_the_release_walk_requires_every_credential_it_uses() -> None:
+    """The member pass needs TA_MEMBER_EMAIL; a guard that checks two of three
+    secrets fails later and less clearly (review)."""
+    workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
+    guard = workflow.split("Walk the deployed surface", 1)[1].split("bun install", 1)[0]
+    for variable in ("TA_EMAIL", "TA_PASSWORD", "TA_MEMBER_EMAIL"):
+        assert f'"${{{variable}}}"' in guard, f"{variable} must be checked before the walk starts"

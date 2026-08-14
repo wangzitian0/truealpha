@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -38,6 +39,14 @@ from infra2_sdk.deploy_health import HttpGet, default_http_get
 # ordinary work, and it cannot stay quiet through the failure it exists for.
 DEFAULT_MAX_AGE_DAYS = 3
 _VERSION_KEYS = ("git_sha", "version")
+
+# The reported release arrives over HTTP and is then handed to git. A value
+# beginning with "-" would be read as an option rather than a revision, and
+# anything with whitespace or shell-significant characters makes the failure
+# non-deterministic. Accept only what a release identifier can actually look
+# like — a tag or a sha — and reject the rest with a message that names the
+# value (review).
+_SAFE_REF = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._/-]{0,199}$")
 
 
 class FreshnessFailure(RuntimeError):
@@ -88,6 +97,12 @@ def measure(
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> Staleness:
     """How far behind ``origin/main`` the deployed release is."""
+    if not _SAFE_REF.match(deployed_ref):
+        raise FreshnessFailure(
+            f"{environment} reports {deployed_ref!r}, which is not a usable release identifier — "
+            f"a leading '-' would be read by git as an option, and whitespace makes the failure "
+            f"non-deterministic. This value never reaches git"
+        )
     # Not via `_git`: a failing rev-parse must produce the message an operator
     # can act on ("that ref is not in this checkout" — a shallow clone, or tags
     # not fetched), not git's own stderr.
