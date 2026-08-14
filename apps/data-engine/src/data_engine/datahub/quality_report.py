@@ -100,9 +100,18 @@ _SOURCE_BY_PARSER = {
 # and the page disagreeing about one run — the report used to answer 84/84 for a tick the
 # mart scored 19 available / 1 unavailable.
 _IDENTITY_SEMANTICS = frozenset({"listing-identity", "universe-membership"})
+# Mirrors `compute_topt_gppe`'s dispatch exactly: FINANCIAL scores through
+# pre-provision profit, every other branch through gross profit (the insurance
+# parse lands revenue-minus-claims INTO gross_profit). This map must stay total
+# over `OperatingBranch` — the first deployed tick after INSURANCE was added
+# (#534) crashed on BRK.B's cell with a KeyError here, aborting the whole run,
+# because CI's fixture emitted only the two branches this map then covered.
+# `test_the_numerator_map_is_total_over_operating_branches` turns red on the
+# next branch added without a row here.
 _FINANCIAL_FACT_OPERATING_NUMERATOR = {
     OperatingBranch.FINANCIAL: "pre_provision_profit",
     OperatingBranch.NON_FINANCIAL: "gross_profit",
+    OperatingBranch.INSURANCE: "gross_profit",
 }
 
 
