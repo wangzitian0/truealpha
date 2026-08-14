@@ -219,7 +219,46 @@ jobs:
       # answered daily by tools/walk_evidence.py in deploy-freshness.yml, which
       # is red until the deployed release has a successful walk. Same pressure,
       # no deadlock, and neither signal has to mean two things.
+      # Credentials decide whether the walk RUNS. It must not run-and-pretend:
+      # an unconfigured walk that exits 0 gives the step a `success` conclusion,
+      # and tools/walk_evidence.py reads exactly that — so the standing check
+      # built to keep this visible was satisfied by the case it exists to catch.
+      # Caught by verifying a real staging release rather than the workflow file.
+      #
+      # `secrets` is not reliably available in a step-level `if`, so it is
+      # reduced to an output here.
+      - name: Are the surface-walk credentials configured
+        id: walk_credentials
+        env:
+          TA_EMAIL: ${{ secrets.E2E_WALK_EMAIL }}
+          TA_MEMBER_EMAIL: ${{ secrets.E2E_WALK_MEMBER_EMAIL }}
+          TA_PASSWORD: ${{ secrets.E2E_WALK_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${TA_EMAIL}" ] && [ -n "${TA_PASSWORD}" ] && [ -n "${TA_MEMBER_EMAIL}" ]; then
+            echo "ready=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >>"$GITHUB_OUTPUT"
+            echo "::error::post-release surface verification is UNCONFIGURED — this release is \
+          deployed but unverified. Add repository secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and \
+          E2E_WALK_MEMBER_EMAIL. deploy-freshness reports this daily until a deployed release \
+          has a successful walk (#560)."
+            {
+              echo "### Surface walk: UNVERIFIED"
+              echo
+              echo "Credentials are not configured, so nothing confirmed a person can use this"
+              echo "release. The walk step below is SKIPPED, which \`tools/walk_evidence.py\`"
+              echo "reads as missing evidence — deliberately, so an absent walk cannot pass for"
+              echo "a successful one."
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Skipped when unconfigured — conclusion "skipped", never "success". A real
+      # walk failure DOES fail the release: the deadlock this design avoids came
+      # from the unconfigured case, not from a broken surface, and a release whose
+      # surface is broken should not become prod evidence.
       - name: Walk the deployed surface
+        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}
         env:
           TA_BASE_URL: ${{ inputs.deploy_type == 'prod' && 'https://truealpha.club' || 'https://truealpha-staging.truealpha.club' }}
           TA_EMAIL: ${{ secrets.E2E_WALK_EMAIL }}
@@ -228,19 +267,6 @@ jobs:
         working-directory: apps/app-web
         run: |
           set -euo pipefail
-          if [ -z "${TA_EMAIL}" ] || [ -z "${TA_PASSWORD}" ] || [ -z "${TA_MEMBER_EMAIL}" ]; then
-            echo "::error::post-release surface verification is UNCONFIGURED — this release is \
-          deployed but unverified. Add repository secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and \
-          E2E_WALK_MEMBER_EMAIL. deploy-freshness stays red until a deployed release has a \
-          successful walk (#560)."
-            {
-              echo "### Surface walk: UNVERIFIED"
-              echo
-              echo "Credentials are not configured, so nothing confirmed a person can use this"
-              echo "release. \`deploy-freshness\` reports this daily until it is fixed."
-            } >>"$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
           bun install --frozen-lockfile
           bunx playwright install --with-deps chromium
           node e2e/walk-tree.mjs

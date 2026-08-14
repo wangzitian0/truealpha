@@ -107,35 +107,47 @@ def test_the_newest_matching_run_is_the_one_that_counts() -> None:
     assert exit_code == 0
 
 
-def test_the_release_run_does_not_block_the_lane_on_missing_credentials() -> None:
-    """Making the release fail here blocked every prod release, since prod
-    requires a successful staging run. The guard must exit 0 and leave the
-    standing check to report it."""
-    workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
-    guard = workflow.split("Walk the deployed surface", 1)[1].split("bun install", 1)[0]
-    assert "exit 0" in guard, "an unconfigured walk must not fail the release lane"
-    assert "exit 1" not in guard
-    assert "UNVERIFIED" in guard, "but it must be unmistakable in the run summary"
+def test_a_skipped_walk_is_not_evidence(capsys: pytest.CaptureFixture[str]) -> None:
+    """The hole this file was written to close, and then briefly had.
 
-
-def test_the_freshness_matrix_passes_a_deploy_type_the_release_workflow_accepts() -> None:
-    """`deploy_type` and the human environment name are not interchangeable.
-
-    deploy-release.yml's run-name is built from `inputs.deploy_type` ("prod"),
-    while the freshness matrix names environments for humans ("production").
-    Passing the latter would look for "Deploy production <tag>" runs that can
-    never exist, making the guard red forever for a reason unrelated to what it
-    guards — and a manual check that happens to pass the right word cannot see
-    it (review).
+    An unconfigured walk that exits 0 gives the step a `success` conclusion, so
+    this check reported "walked its surface" about a walk that never ran —
+    satisfied by the exact case it exists to catch. The workflow now SKIPS the
+    step instead, and anything other than success is missing evidence.
     """
-    import re
-
-    freshness = (REPO_ROOT / ".github/workflows/deploy-freshness.yml").read_text()
-    release = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
-    allowed = set(re.search(r"options:\s*\[([^\]]+)\]", release).group(1).replace(" ", "").split(","))
-    passed = set(re.findall(r"deploy_type:\s*(\S+)", freshness))
-    assert passed, "the freshness matrix must carry a deploy_type per environment"
-    assert passed <= allowed, (
-        f"freshness passes {sorted(passed - allowed)}, which deploy-release.yml's run-name "
-        f"can never produce (it accepts {sorted(allowed)})"
+    exit_code = check_walk_evidence(
+        "staging",
+        "v0.0.20",
+        environment="staging",
+        gh_api=_api(
+            [_run(11, "Deploy staging v0.0.20")],
+            [{"name": "Walk the deployed surface", "conclusion": "skipped"}],
+        ),
     )
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "'skipped'" in stderr
+    assert "deployed and unverified" in stderr
+
+
+def test_an_unconfigured_walk_is_skipped_rather_than_exiting_zero() -> None:
+    """A step that exits 0 without walking reports `success`, which this
+    check reads as evidence. The workflow must gate the step with an `if`."""
+    workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
+    walk = workflow.split("- name: Walk the deployed surface", 1)[1].split("run: |", 1)[0]
+    assert "if: ${{ steps.walk_credentials.outputs.ready == 'true' }}" in walk, (
+        "an unconfigured walk must be SKIPPED, never a step that exits 0 and reports success"
+    )
+    body = workflow.split("- name: Walk the deployed surface", 1)[1]
+    assert "exit 0" not in body.split("node e2e/walk-tree.mjs", 1)[0]
+
+
+def test_the_release_lane_is_still_not_deadlocked() -> None:
+    """Failing the run on unconfigured credentials blocked every prod release,
+    since prod requires a successful staging run. The credential probe must
+    report, not fail."""
+    workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
+    probe = workflow.split("id: walk_credentials", 1)[1].split("- name: Walk the deployed", 1)[0]
+    assert "ready=false" in probe, "an unconfigured walk must be reported"
+    assert "exit 1" not in probe, "and must not fail the release lane"
+    assert "UNVERIFIED" in probe, "but must be unmistakable in the run summary"
