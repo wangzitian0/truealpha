@@ -11,7 +11,15 @@
  *   3. no `live: false` (planned) entry is discovered — building a planned
  *      page requires flipping it to live in the same PR;
  *   4. every route sits inside a prefix app-web owns in
- *      tools/route_manifest.json (keeps the two contracts consistent).
+ *      tools/route_manifest.json (keeps the two contracts consistent);
+ *   5. every `live: true` /api/* route has a CONSUMER in src/ (#540).
+ *
+ * (5) exists because (1)-(4) prove the frozen file and the filesystem agree and
+ * nothing more. `/api/auth/me` was frozen `live: true` by #493 while its only
+ * caller — #368's client `AuthGuard`, superseded by #371's server-side gates —
+ * was already dead, so a route with zero consumers became a checked-in contract
+ * a later reader would treat as load-bearing. A supersession with no
+ * decommission step is invisible to a consistency check; this makes it visible.
  *
  * Run standalone: `bun run tests/route-tree-freeze.test.ts`.
  */
@@ -24,6 +32,16 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const APP_DIR = join(process.cwd(), "src", "app");
+
+/** Every .ts/.tsx file under a directory, for the consumer scan in (5). */
+function listSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    out.push(...(statSync(full).isDirectory() ? listSourceFiles(full) : /\.tsx?$/.test(entry) ? [full] : []));
+  }
+  return out;
+}
 
 function discoverRoutes(dir: string, prefix: string): string[] {
   const out: string[] = [];
@@ -74,6 +92,25 @@ for (const route of frozen.routes.map((r) => r.path)) {
     inPrefix || (rootOk && route === "/"),
     `Route ${route} falls outside app-web's prefixes in tools/route_manifest.json (${prefixes.join(", ")}).`,
   );
+}
+
+// --- 5. a frozen live /api route must be reachable from the application ---
+{
+  const sourceFiles = listSourceFiles(join(process.cwd(), "src"));
+  for (const route of frozen.routes) {
+    if (!route.live || !route.path.startsWith("/api/")) continue;
+    // Its own handler file does not count as a consumer.
+    const handlerDir = join("src", "app", ...route.path.split("/").filter(Boolean));
+    const consumers = sourceFiles.filter(
+      (file) => !file.includes(handlerDir) && readFileSync(file, "utf8").includes(route.path),
+    );
+    assert(
+      consumers.length > 0,
+      `${route.path} is frozen \`live: true\` but nothing under src/ calls it. A route with no ` +
+        `consumer is not a contract — either give it one or remove it from routes.frozen.json in ` +
+        `the same PR (#540).`,
+    );
+  }
 }
 
 console.log(
