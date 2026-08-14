@@ -218,7 +218,7 @@ jobs:
         working-directory: apps/app-web
         run: |
           set -euo pipefail
-          if [ -z "${TA_EMAIL}" ] || [ -z "${TA_PASSWORD}" ]; then
+          if [ -z "${TA_EMAIL}" ] || [ -z "${TA_PASSWORD}" ] || [ -z "${TA_MEMBER_EMAIL}" ]; then
             echo "::error::post-release surface verification is unconfigured. Add repository \
           secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and (for the member pass) \
           E2E_WALK_MEMBER_EMAIL. This release deployed, but nothing has confirmed a person \
