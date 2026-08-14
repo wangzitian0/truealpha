@@ -103,9 +103,14 @@ jobs:
           echo "E2E_PASSWORD=$E2E_PASSWORD" >> "$GITHUB_ENV"
           E2E_PASSWORD="$E2E_PASSWORD" bun run scripts/seed-e2e-fixture.ts
       # `output: "standalone"` (next.config.mjs) does not copy .next/static, so
-      # the server 404s every asset without this. SECRET_KEY must be real: the
-      # standalone server runs NODE_ENV=production, where auth/config.ts refuses
-      # both an unset key and the pasted dev default (#447/#481).
+      # the server 404s every asset without this.
+      #
+      # NODE_ENV=production is set EXPLICITLY rather than relied on: the whole
+      # point of walking a standalone build is that the suite sees deployed-mode
+      # behaviour, and several paths key off it — auth/config.ts refuses both an
+      # unset SECRET_KEY and the pasted dev default only in production
+      # (#447/#481). Depending on whatever the generated server happens to set
+      # would make that a claim rather than a property (review).
       - name: Walk the frozen route tree in a browser
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
@@ -114,7 +119,8 @@ jobs:
         run: |
           set -euo pipefail
           cp -r .next/static .next/standalone/.next/static
-          SECRET_KEY="$(openssl rand -hex 32)" HOSTNAME=127.0.0.1 PORT=3000 \
+          SECRET_KEY="$(openssl rand -hex 32)" NODE_ENV=production \
+            NEXT_TELEMETRY_DISABLED=1 HOSTNAME=127.0.0.1 PORT=3000 \
             node .next/standalone/server.js &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
