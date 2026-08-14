@@ -300,3 +300,27 @@ def test_the_fallback_request_takes_its_own_throttle_turn(_no_real_sleep, http) 
     assert fetcher("AAPL", _PARTITION) is not None
     assert len(requested) == 2
     assert _no_real_sleep == [1, 1], "the fallback request must wait its turn like any other"
+
+
+def test_an_http_error_status_still_reaches_the_fallback(_no_real_sleep, monkeypatch) -> None:
+    """The live /eod answers a no-data date with HTTP 400 + a JSON body, and urlopen
+    raises. The raise must not swallow the fallback: the staging 2026-08-14 06:08 tick
+    lost all 21 second-origin cells exactly this way (key provisioned, quota untouched,
+    zero requests recorded)."""
+    import io
+    import urllib.error
+
+    requested: list[str] = []
+
+    def fake_urlopen(url: str, timeout: float | None = None):
+        requested.append(url)
+        if len(requested) == 1:
+            raise urllib.error.HTTPError(url, 400, "Bad Request", None, io.BytesIO(_NO_END_OF_DAY))
+        return _FakeResponse(_TIME_SERIES_WITH_IN_PROGRESS_ROW)
+
+    monkeypatch.setattr(origin_module.urllib.request, "urlopen", fake_urlopen)
+    fetcher = TwelveDataQuoteFetcher("k", throttle_seconds=1)
+    quote = fetcher("AAPL", _PARTITION)
+    assert len(requested) == 2, "the fallback request must fire after an HTTP-error /eod"
+    assert quote is not None and quote.as_of == date(2026, 7, 28)
+    assert quote.close == Decimal("337.10000")
