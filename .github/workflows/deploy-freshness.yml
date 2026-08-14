@@ -31,6 +31,8 @@ on:
 
 permissions:
   contents: read
+  # walk_evidence.py reads this repository's own release runs.
+  actions: read
 
 jobs:
   freshness:
@@ -60,3 +62,20 @@ jobs:
             "${{ matrix.url }}" \
             --environment "${{ matrix.environment }}" \
             --max-age-days "${{ github.event.inputs.max_age_days || '3' }}"
+
+      # #560 (W4): freshness asks "is what a user sees recent". This asks "did
+      # anyone confirm a user can USE it". Separate questions, separate signals —
+      # and deliberately NOT enforced inside the release run, which would block
+      # every prod release on a setup deficiency (prod requires a successful
+      # staging run) and so reproduce the invisible-work failure this workflow
+      # exists to catch. `always()` so a stale environment still gets asked.
+      - name: Check ${{ matrix.environment }} surface-walk evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release="$(curl -fsS "${{ matrix.url }}" | jq -r '.git_sha')"
+          uv run --no-sync python tools/walk_evidence.py \
+            --environment "${{ matrix.environment }}" \
+            --release "$release"
