@@ -107,7 +107,7 @@ export default async function AdminOverviewPage() {
                  header with nothing under it, so "no runs yet" and "the query
                  failed" looked identical — on the page whose job is telling an
                  operator the pipeline is healthy. These two sentences must stay
-                 different; tests/admin-empty-states.test.ts asserts it. */
+                 different; tests/read-state.test.ts asserts it. */
               <tr>
                 <td colSpan={5} className="px-4 py-3 text-gray-400">
                   {RUNS_EMPTY_MESSAGE}

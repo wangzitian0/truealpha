@@ -77,13 +77,22 @@ export default async function ToptQualityPage() {
       {funnel.kind !== "ready" && (
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-semibold">L0–L5 funnel</h2>
-          <p role="status" className="mt-2 text-sm text-gray-400">
-            {funnel.kind === "denied"
-              ? "Not computed: this view requires a verified administrator identity."
-              : funnel.kind === "error"
-                ? `Not computed: ${funnel.message}`
-                : "Not computed yet — no accepted run has reported the layer metrics this funnel reads."}
-          </p>
+          {/* The same renderer and the same words as everything else — the
+              funnel is a ReadState now, so its absence states do not get their
+              own prose. `unavailable` carries an operationally useful reason,
+              so it is surfaced rather than flattened into "not computed". */}
+          <ReadStateNotice
+            state={funnel}
+            overrides={{
+              denied: "Not computed: this view requires a verified administrator identity.",
+              empty:
+                "Not computed yet — no accepted run has reported the layer metrics this funnel reads.",
+              unavailable:
+                funnel.kind === "unavailable"
+                  ? `Not computed yet: ${funnel.reason}. No accepted run has reported the layer metrics this funnel reads.`
+                  : undefined,
+            }}
+          />
         </div>
       )}
 

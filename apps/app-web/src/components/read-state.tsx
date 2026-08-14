@@ -11,7 +11,6 @@
 import {
   NOTICE_STYLE,
   readStateMessage,
-  type NoticeKind,
   type ReadState,
   type ReadStateOverrides,
 } from "@/server/read-state";
@@ -52,14 +51,15 @@ export function ReadStateNotice({
   state: ReadState<unknown>;
   overrides?: ReadStateOverrides;
 }) {
+  // Narrowing, not casting: after this the compiler knows `state.kind` is a
+  // NoticeKind, so NOTICE_STYLE is total by construction and a kind added to
+  // the union without a style is a type error rather than an undefined lookup.
+  if (state.kind === "ready" || state.kind === "stale") return null;
   const message = readStateMessage(state, overrides);
   if (message === null) return null;
 
   return (
-    <p
-      role="status"
-      className={`mt-4 rounded-lg border border-border bg-card p-4 ${NOTICE_STYLE[state.kind as NoticeKind]}`}
-    >
+    <p role="status" className={`mt-4 rounded-lg border border-border bg-card p-4 ${NOTICE_STYLE[state.kind]}`}>
       {message}
     </p>
   );
