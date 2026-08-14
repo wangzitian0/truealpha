@@ -12,6 +12,7 @@
  */
 
 import { Pool, type PoolClient } from "pg";
+import type { ReadState } from "@/server/read-state";
 
 let pool: Pool | null = null;
 let testClientOverride: Pick<PoolClient, "query"> | null = null;
@@ -51,6 +52,15 @@ async function withOpsReader<T>(fn: (client: Pick<PoolClient, "query">) => Promi
   }
 }
 
+/** #495: the run table's two absent states, owned by the loader that produces
+ * them so a test can assert they stay different sentences. "Dagster has no
+ * tables here" and "Dagster has tables but no runs" are different operational
+ * facts; the page used to render the second one as a bare header. */
+export const RUNS_UNAVAILABLE_MESSAGE: string =
+  "Run history unavailable — Dagster has not bootstrapped its tables on this database.";
+export const RUNS_EMPTY_MESSAGE: string =
+  "No runs recorded yet — Dagster has its tables here but has not launched a run on this database.";
+
 export interface OpsPrincipal {
   principalKind: "member" | "administrator" | "service";
 }
@@ -69,10 +79,12 @@ export interface OpsOverview {
   quotaToday: { source: string; fetches: number }[];
 }
 
-export type OpsOverviewOutcome =
-  | { kind: "ready"; data: OpsOverview }
-  | { kind: "denied" }
-  | { kind: "error"; message: string };
+/** #495: the SAME `ReadState` union the research surfaces use, so the shared
+ * `ReadStateNotice` renders this page's absence states and every one of them
+ * is proven to have words by `tests/read-state.test.ts`. The three cases this
+ * loader can actually produce are `ready`, `denied` and `error`; the union is
+ * wider because it is shared, and the renderer covers the rest. */
+export type OpsOverviewOutcome = ReadState<OpsOverview>;
 
 export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<OpsOverviewOutcome> {
   if (principal === null || principal.principalKind !== "administrator") {

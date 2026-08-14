@@ -16,6 +16,7 @@ import { withMartReadonly } from "@/server/mart/db";
 import { MartStrategyRunRepository } from "@/server/mart/strategy-run-repository";
 import { MartToptGppeRepository } from "@/server/mart/topt-gppe-repository";
 import type { AccessContext } from "@/contracts/strategyRun";
+import type { ReadState } from "@/server/read-state";
 
 export interface FunnelLayer {
   key: string;
@@ -32,10 +33,7 @@ export interface FunnelPrincipal {
 }
 
 export type FunnelOutcome =
-  | { kind: "ready"; runId: string; layers: FunnelLayer[] }
-  | { kind: "denied" }
-  | { kind: "unavailable"; reason: string }
-  | { kind: "error"; message: string };
+  ReadState<{ runId: string; layers: FunnelLayer[] }>;
 
 function num(value: unknown): number | null {
   const parsed = Number(value);
@@ -139,7 +137,7 @@ export async function loadQualityFunnel(principal: FunnelPrincipal | null): Prom
         detail: "mart.current_pointer_head — web/MCP/chat resolve the same governed run",
       },
     ];
-    return { kind: "ready", runId, layers };
+    return { kind: "ready", data: { runId, layers } };
   } catch (error) {
     return { kind: "error", message: error instanceof Error ? error.message : String(error) };
   }

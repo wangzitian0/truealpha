@@ -70,6 +70,32 @@ export default async function ToptQualityPage() {
 
       <ReadStateNotice state={state} />
 
+      {/* #495: an `&&` with no else made the headline diagnostic vanish without
+          comment whenever it could not be computed, which reads as "nothing is
+          wrong" rather than "not computed". Every state of this block now says
+          something. */}
+      {funnel.kind !== "ready" && (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h2 className="font-semibold">L0–L5 funnel</h2>
+          {/* The same renderer and the same words as everything else — the
+              funnel is a ReadState now, so its absence states do not get their
+              own prose. `unavailable` carries an operationally useful reason,
+              so it is surfaced rather than flattened into "not computed". */}
+          <ReadStateNotice
+            state={funnel}
+            overrides={{
+              denied: "Not computed: this view requires a verified administrator identity.",
+              empty:
+                "Not computed yet — no accepted run has reported the layer metrics this funnel reads.",
+              unavailable:
+                funnel.kind === "unavailable"
+                  ? `Not computed yet: ${funnel.reason}. No accepted run has reported the layer metrics this funnel reads.`
+                  : undefined,
+            }}
+          />
+        </div>
+      )}
+
       {funnel.kind === "ready" && (
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-semibold">L0–L5 funnel — where the data narrows is where the problem is</h2>
@@ -85,7 +111,7 @@ export default async function ToptQualityPage() {
                 <p className="mt-0.5 text-xs text-gray-500">raw.fetches today, per source</p>
               </div>
             </div>
-            {funnel.layers.map((layer) => (
+            {funnel.data.layers.map((layer) => (
               <div key={layer.key} className="grid grid-cols-[7rem_1fr] items-center gap-3">
                 <div className="text-right">
                   <span className="font-mono text-xs text-gray-400">

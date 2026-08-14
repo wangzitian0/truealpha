@@ -27,14 +27,11 @@ import {
 } from "@/server/mart/research-read";
 import { paginate, type PageInfo } from "@/server/mart/pagination";
 
-export type ReadState<T> =
-  | { kind: "loading" }
-  | { kind: "ready"; data: T }
-  | { kind: "empty" }
-  | { kind: "unavailable"; reason: string }
-  | { kind: "stale"; data: T; asOf: string }
-  | { kind: "error"; message: string }
-  | { kind: "denied" };
+// #495: the union moved to `@/server/read-state` so the administrator surfaces
+// share it — and its words — instead of growing a second one. Re-exported here
+// because every research loader and page imports it from this module.
+export type { ReadState } from "@/server/read-state";
+import type { ReadState } from "@/server/read-state";
 
 export interface OverviewData {
   modules: readonly ModuleOverviewRow[];
