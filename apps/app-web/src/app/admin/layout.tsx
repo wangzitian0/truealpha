@@ -13,6 +13,7 @@
  * it themselves for their own reads (re-authorization per request).
  */
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
@@ -45,6 +46,17 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       <div className="flex items-center gap-2" data-operate-chrome="true">
         <span className="text-xs font-semibold uppercase tracking-wider text-amber-400">Operate</span>
         <span className="text-xs text-gray-500">— administrator world, separately server-gated from research</span>
+        {/* #371: the return leg. The Operate world had no way out — an
+            administrator who typed /admin had to type /research to get back.
+            One hop, from this one layout, so every page under the prefix has
+            it; e2e/walk-tree.mjs asserts it on each of them. */}
+        <Link
+          href="/research"
+          data-world-switch="research"
+          className="ml-auto rounded-lg border border-border px-3 py-1 text-xs text-gray-300 hover:border-accent hover:text-white"
+        >
+          ← Research
+        </Link>
       </div>
       {children}
     </div>

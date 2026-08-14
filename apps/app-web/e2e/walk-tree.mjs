@@ -34,6 +34,11 @@ import { chromium } from "playwright";
 const BASE = process.env.TA_BASE_URL;
 const EMAIL = process.env.TA_EMAIL;
 const PASSWORD = process.env.TA_PASSWORD;
+// #371: optional second identity. When set, a member pass runs after the
+// administrator pass and asserts the properties that DIFFER by role. Absent
+// (e.g. against a deployment where only the owner has credentials), the
+// administrator pass runs alone exactly as before.
+const MEMBER_EMAIL = process.env.TA_MEMBER_EMAIL;
 if (!BASE || !EMAIL || !PASSWORD) {
   console.error("TA_BASE_URL, TA_EMAIL, TA_PASSWORD are required");
   process.exit(2);
@@ -81,14 +86,81 @@ async function assertClaimCeiling(page, path, problems) {
   if (banner === 0) problems.push("claim-ceiling banner missing");
 }
 
-/** (c) OPERATE chrome is exactly the /admin prefix: on all of it, on none of research. */
-async function assertOperateChromeMembership(page, path, problems) {
+/** (c) OPERATE chrome is exactly the /admin prefix — for an identity that may
+ * see it. A member reaching /admin gets the explicit denied state instead, and
+ * must NOT be shown operator chrome. */
+async function assertOperateChromeMembership(page, path, problems, role) {
   const chrome = await page.locator("[data-operate-chrome]").count();
-  if (path.startsWith("/admin") && chrome === 0) problems.push("OPERATE chrome missing");
+  if (path.startsWith("/admin")) {
+    if (role === "administrator" && chrome === 0) problems.push("OPERATE chrome missing");
+    if (role !== "administrator" && chrome > 0) problems.push("OPERATE chrome shown to a non-administrator");
+  }
   if (path.startsWith("/research") && chrome > 0) problems.push("OPERATE chrome leaked into research");
 }
 
-async function checkRoute(page, path) {
+/** #371: the world switch, both legs, role-dependent. This is the criterion
+ * that closed as met and was never true: there was no link to /admin anywhere
+ * and no link back. */
+async function assertWorldSwitch(page, path, problems, role) {
+  if (path.startsWith("/research")) {
+    const toAdmin = await page.locator('[data-world-switch="admin"]').count();
+    if (role === "administrator" && toAdmin === 0) problems.push("no world switch to /admin");
+    if (role !== "administrator" && toAdmin > 0) problems.push("world switch to /admin offered to a non-administrator");
+  }
+  if (path.startsWith("/admin") && role === "administrator") {
+    const back = await page.locator('[data-world-switch="research"]').count();
+    if (back === 0) problems.push("no way back to /research from the operate world");
+  }
+}
+
+/** #371: an authenticated page says who is signed in.
+ *
+ * `/login` is skipped rather than asserted-empty: this suite walks it while
+ * holding a session, and the top bar correctly shows that session there. What
+ * an ANONYMOUS visitor sees on /login is not something a logged-in walk can
+ * observe — AppChrome returns null without a principal, which is a server-side
+ * property the auth tests already cover. */
+async function assertSignedInIdentity(page, path, problems) {
+  if (path === "/login") return;
+  const shown = await page.locator("[data-signed-in-as]").allInnerTexts();
+  const identity = shown.map((t) => t.trim()).filter((t) => t.length > 0);
+  if (identity.length === 0) problems.push("no signed-in identity in the top bar");
+}
+
+/** #371: the nav says where you are. Seven identical pills told you nothing,
+ * by sight or by screen reader.
+ *
+ * The nav declares its own destinations, so this does not duplicate the link
+ * list and cannot drift from it. On a page that IS a destination exactly one
+ * link is current and it is this one; on a page that is not — /research/trace
+ * is the evidence viewer, reached from trace chips and deliberately absent
+ * from the nav (#493's tree) — no link may claim to be current. */
+async function assertCurrentNavLink(page, path, problems) {
+  if (!path.startsWith("/research")) return;
+  const nav = page.locator('nav[aria-label="Research sections"]');
+  if ((await nav.count()) === 0) {
+    problems.push("no research nav rendered");
+    return;
+  }
+  const destinations = await nav.locator("a").evaluateAll((links) =>
+    links.map((a) => new URL(a.href).pathname),
+  );
+  const current = nav.locator('[aria-current="page"]');
+  const count = await current.count();
+
+  if (!destinations.includes(path)) {
+    if (count !== 0) problems.push(`${path} is not a nav destination but ${count} link(s) claim to be current`);
+    return;
+  }
+  if (count !== 1) {
+    problems.push(`expected exactly 1 nav link marked aria-current="page", found ${count}`);
+    return;
+  }
+  const href = await current.first().getAttribute("href");
+  if (href !== path) problems.push(`nav marks ${href} current on ${path}`);
+}
+
+async function checkRoute(page, path, role) {
   await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
   const finalPath = new URL(page.url()).pathname;
   const problems = [];
@@ -96,7 +168,10 @@ async function checkRoute(page, path) {
 
   await assertNoVisibleRawIds(page, path, problems);
   await assertClaimCeiling(page, path, problems);
-  await assertOperateChromeMembership(page, path, problems);
+  await assertOperateChromeMembership(page, path, problems, role);
+  await assertWorldSwitch(page, path, problems, role);
+  await assertSignedInIdentity(page, path, problems);
+  await assertCurrentNavLink(page, path, problems);
   return problems;
 }
 
@@ -113,7 +188,7 @@ async function walkRoutes(browser, { role, email, password }) {
 
   let failures = 0;
   for (const path of livePages) {
-    const problems = await checkRoute(page, path);
+    const problems = await checkRoute(page, path, role);
     if (problems.length > 0) {
       failures += 1;
       console.log(`FAIL [${role}] ${path} — ${problems.join("; ")}`);
@@ -126,11 +201,14 @@ async function walkRoutes(browser, { role, email, password }) {
 }
 
 const browser = await chromium.launch();
-// The administrator pass is the only one this issue arms: it is the identity
-// that can reach /admin at all, so it is the one that can assert (c) across the
-// whole frozen tree. #371 adds the member pass, which asserts what differs by
-// role — nav membership, and the denied state on /admin.
-const failures = await walkRoutes(browser, { role: "administrator", email: EMAIL, password: PASSWORD });
+// Two passes. The administrator pass asserts (c) across the whole frozen tree —
+// it is the only identity that can see operator chrome at all. The member pass
+// (#371) asserts the mirror image: no chrome, no world switch, and the same
+// identity/current-page properties everywhere else.
+let failures = await walkRoutes(browser, { role: "administrator", email: EMAIL, password: PASSWORD });
+if (MEMBER_EMAIL) {
+  failures += await walkRoutes(browser, { role: "member", email: MEMBER_EMAIL, password: PASSWORD });
+}
 await browser.close();
 
 if (failures > 0) {

@@ -116,6 +116,9 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
           TA_BASE_URL: http://127.0.0.1:3000
           TA_EMAIL: admin@e2e.invalid
+          # #371: the member pass. Both principals are seeded with the same
+          # throwaway password, so one TA_PASSWORD covers both identities.
+          TA_MEMBER_EMAIL: member@e2e.invalid
         run: |
           set -euo pipefail
           cp -r .next/static .next/standalone/.next/static
