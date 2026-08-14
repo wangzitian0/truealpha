@@ -1,0 +1,58 @@
+name: deploy-freshness
+
+# #560 (W5): fail when an environment is serving work that finished days ago.
+#
+# On 2026-08-14 both environments served v0.0.19, cut 2026-07-30, while main ran
+# 18 commits ahead — the factor corrections, the datahub fixes and the whole
+# app-web remediation, invisible to every user for 15 days. Nothing was red
+# about it, because no acceptance criterion in this repository was ever about
+# how old what a user sees is. This is that criterion.
+#
+# The bound is AGE, not commit count, deliberately: a count measures how busy
+# the repository has been, age measures how long finished work has been
+# invisible. Ten commits merged this morning are not a problem; one commit
+# merged last week is.
+
+on:
+  schedule:
+    # 07:00 UTC daily — after the 22:15 UTC pipeline tick and before a working
+    # day starts, so a stale environment is the first thing anyone sees.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: "Fail when the oldest unreleased commit is older than this"
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: production
+            url: https://truealpha.club/api/health
+          - environment: staging
+            url: https://truealpha-staging.truealpha.club/api/health
+    steps:
+      # Full history AND tags: the environments report release tags, and the
+      # check resolves that tag to a commit to measure the gap. A shallow clone
+      # makes every environment look unresolvable.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git fetch --tags --force origin
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-packages
+      - name: Check ${{ matrix.environment }} freshness
+        run: |
+          uv run --no-sync python tools/deploy_freshness.py \
+            "${{ matrix.url }}" \
+            --environment "${{ matrix.environment }}" \
+            --max-age-days "${{ inputs.max_age_days || '3' }}"

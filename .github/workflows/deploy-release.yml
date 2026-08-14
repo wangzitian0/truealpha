@@ -180,6 +180,9 @@ jobs:
       # which is what the runtime actually reports; tools/health_check.py now
       # fails immediately and says so if the two sides ever disagree in kind
       # again, instead of exhausting a 24-attempt budget on an impossible match.
+      # The surface walk below runs for BOTH environments, so bun is not gated
+      # on deploy_type the way the prod-only health confirmation is.
+      - uses: oven-sh/setup-bun@v2
       - name: Confirm the deployed release is healthy
         if: ${{ inputs.deploy_type == 'prod' }}
         env:
@@ -194,3 +197,34 @@ jobs:
             "https://truealpha.club/api/health" \
             "$EXPECTED_RELEASE" \
             24
+
+      # #560 (W4): the health gate proves the release is LIVE; this proves it is
+      # USABLE. Every web property #494/#371/#495/#540 guard is asserted in
+      # ci-web against a build, and was true nowhere a person is — both
+      # environments served a release from two weeks earlier while the
+      # properties were green on main. A release is not verified until the same
+      # suite has walked the deployed surface, which is also the closure
+      # condition rule 6 already implies for those four issues.
+      #
+      # Unconfigured credentials FAIL rather than skip. A release that cannot be
+      # verified at the surface is exactly what this step exists to surface, and
+      # a silent skip would rebuild the gap it was added to close.
+      - name: Walk the deployed surface
+        env:
+          TA_BASE_URL: ${{ inputs.deploy_type == 'prod' && 'https://truealpha.club' || 'https://truealpha-staging.truealpha.club' }}
+          TA_EMAIL: ${{ secrets.E2E_WALK_EMAIL }}
+          TA_MEMBER_EMAIL: ${{ secrets.E2E_WALK_MEMBER_EMAIL }}
+          TA_PASSWORD: ${{ secrets.E2E_WALK_PASSWORD }}
+        working-directory: apps/app-web
+        run: |
+          set -euo pipefail
+          if [ -z "${TA_EMAIL}" ] || [ -z "${TA_PASSWORD}" ]; then
+            echo "::error::post-release surface verification is unconfigured. Add repository \
+          secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and (for the member pass) \
+          E2E_WALK_MEMBER_EMAIL. This release deployed, but nothing has confirmed a person \
+          can use it — see #560." >&2
+            exit 1
+          fi
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+          node e2e/walk-tree.mjs
