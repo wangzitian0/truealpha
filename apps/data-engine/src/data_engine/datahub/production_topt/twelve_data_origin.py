@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
@@ -233,8 +234,21 @@ class TwelveDataQuoteFetcher:
 
     def _get(self, url: str, params: dict[str, str]) -> bytes:
         query = urllib.parse.urlencode({**params, "apikey": self._api_key})
-        with urllib.request.urlopen(f"{url}?{query}", timeout=20) as response:  # noqa: S310
-            return bytes(response.read())
+        try:
+            with urllib.request.urlopen(f"{url}?{query}", timeout=20) as response:  # noqa: S310
+                return bytes(response.read())
+        except urllib.error.HTTPError as error:
+            # Twelve Data answers "no end of day for this date" with HTTP 400 and a
+            # JSON error body — and urlopen RAISES on any non-2xx. Letting that raise
+            # propagate skipped the parser's error-body path and with it the
+            # last-settled-session fallback, so every tick inside an unsettled
+            # session lost the whole second origin (staging 2026-08-14 06:08: 21/21
+            # insufficient_independent_origins, zero twelvedata fetch rows, while
+            # the key was provisioned and the quota untouched). The body IS the
+            # vendor's answer: return it and let the parser refuse it, so the
+            # fallback gets its turn.
+            with error:
+                return bytes(error.read())
 
 
 def twelve_data_origin() -> CorroboratingOrigin | None:
