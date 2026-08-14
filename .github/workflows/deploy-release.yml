@@ -206,9 +206,19 @@ jobs:
       # suite has walked the deployed surface, which is also the closure
       # condition rule 6 already implies for those four issues.
       #
-      # Unconfigured credentials FAIL rather than skip. A release that cannot be
-      # verified at the surface is exactly what this step exists to surface, and
-      # a silent skip would rebuild the gap it was added to close.
+      # Unconfigured credentials do NOT fail the release, and that is a
+      # correction to how this shipped. A prod release requires this repo's own
+      # successful "Deploy staging <tag>" run, so a hard failure here blocked
+      # EVERY prod release — including the one that would carry the fix — which
+      # is precisely the "finished work stays invisible" outcome #560 exists to
+      # prevent. Blocking the lane on a setup deficiency punishes the wrong
+      # thing.
+      #
+      # The two questions are separated instead. This run answers "is it
+      # deployed". Whether the surface was ever walked is a STANDING question,
+      # answered daily by tools/walk_evidence.py in deploy-freshness.yml, which
+      # is red until the deployed release has a successful walk. Same pressure,
+      # no deadlock, and neither signal has to mean two things.
       - name: Walk the deployed surface
         env:
           TA_BASE_URL: ${{ inputs.deploy_type == 'prod' && 'https://truealpha.club' || 'https://truealpha-staging.truealpha.club' }}
@@ -219,11 +229,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${TA_EMAIL}" ] || [ -z "${TA_PASSWORD}" ] || [ -z "${TA_MEMBER_EMAIL}" ]; then
-            echo "::error::post-release surface verification is unconfigured. Add repository \
-          secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and (for the member pass) \
-          E2E_WALK_MEMBER_EMAIL. This release deployed, but nothing has confirmed a person \
-          can use it — see #560." >&2
-            exit 1
+            echo "::error::post-release surface verification is UNCONFIGURED — this release is \
+          deployed but unverified. Add repository secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and \
+          E2E_WALK_MEMBER_EMAIL. deploy-freshness stays red until a deployed release has a \
+          successful walk (#560)."
+            {
+              echo "### Surface walk: UNVERIFIED"
+              echo
+              echo "Credentials are not configured, so nothing confirmed a person can use this"
+              echo "release. \`deploy-freshness\` reports this daily until it is fixed."
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           bun install --frozen-lockfile
           bunx playwright install --with-deps chromium
