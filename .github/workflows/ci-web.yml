@@ -73,3 +73,54 @@ jobs:
             exit 1
           fi
       - run: bun run build
+
+      # #494 criterion 1: the frozen route tree, walked in a real browser, on
+      # every push — not once by hand. Before this, e2e/walk-tree.mjs was
+      # checked in, passing, and referenced by no workflow and no Makefile
+      # target, so deleting the OPERATE chrome or a claim-ceiling banner merged
+      # green. The three properties it asserts are the ones #494 exists to
+      # protect; this is where they stop being a July screenshot.
+      - name: Install chromium for the walk-tree suite
+        run: bunx playwright install --with-deps chromium
+      # The seed is about what the walk COVERS, not about whether it passes —
+      # measured, not assumed. On a migrated database with principals but no
+      # mart rows the suite is green (11/11), because every research surface
+      # renders an `unavailable` notice and the claim ceiling is unconditional
+      # on both strategy-output pages. Green over four words is not coverage:
+      # assertion (a) has no rendered entity to scan, and every assertion the
+      # stacked issues add (#371 nav membership, #540 sign-out) would walk empty
+      # pages. seed-e2e-fixture.ts loads the frozen twin-parity canon (#482) so
+      # the surfaces reach `ready` on the same bytes the parity test asserts,
+      # plus the member/administrator principals the route-group gates
+      # discriminate on.
+      - name: Seed the e2e fixture (two principals + the frozen parity canon)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+        run: |
+          set -euo pipefail
+          E2E_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$E2E_PASSWORD"
+          echo "E2E_PASSWORD=$E2E_PASSWORD" >> "$GITHUB_ENV"
+          E2E_PASSWORD="$E2E_PASSWORD" bun run scripts/seed-e2e-fixture.ts
+      # `output: "standalone"` (next.config.mjs) does not copy .next/static, so
+      # the server 404s every asset without this. SECRET_KEY must be real: the
+      # standalone server runs NODE_ENV=production, where auth/config.ts refuses
+      # both an unset key and the pasted dev default (#447/#481).
+      - name: Walk the frozen route tree in a browser
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+          TA_BASE_URL: http://127.0.0.1:3000
+          TA_EMAIL: admin@e2e.invalid
+        run: |
+          set -euo pipefail
+          cp -r .next/static .next/standalone/.next/static
+          SECRET_KEY="$(openssl rand -hex 32)" HOSTNAME=127.0.0.1 PORT=3000 \
+            node .next/standalone/server.js &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            curl -fsS -o /dev/null "$TA_BASE_URL/login" && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null "$TA_BASE_URL/login"
+          TA_PASSWORD="$E2E_PASSWORD" node e2e/walk-tree.mjs
