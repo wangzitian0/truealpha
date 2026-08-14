@@ -43,7 +43,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <div className="space-y-6">
       <div className="-mx-4 border-t-[3px] border-amber-400" aria-hidden="true" />
-      <div className="flex items-center gap-2" data-operate-chrome="true">
+      <div className="flex items-center gap-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-amber-400">Operate</span>
         <span className="text-xs text-gray-500">— administrator world, separately server-gated from research</span>
         {/* #371: the return leg. The Operate world had no way out — an
