@@ -5,8 +5,9 @@
  * re-checks anyway (re-authorization per request, house style).
  */
 
+import { ReadStateNotice } from "@/components/read-state";
 import { TriggerRunButton } from "@/components/trigger-run-button";
-import { loadOpsOverview } from "@/server/admin/ops";
+import { loadOpsOverview, RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/server/admin/ops";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -28,11 +29,18 @@ export default async function AdminOverviewPage() {
         <h1 id="ops-heading" className="text-2xl font-bold tracking-tight">
           Operate
         </h1>
-        <p role="status" className="mt-4 rounded-lg border border-border bg-card p-4 text-amber-400">
-          {outcome.kind === "denied"
-            ? "Access denied. This area requires a verified administrator identity."
-            : `Error loading the ops overview: ${outcome.message}`}
-        </p>
+        {/* #495: the shared renderer, not a hand-written branch per state. The
+            two overrides are the wording this world owns; every other state's
+            sentence comes from `readStateMessage`, which a unit test proves is
+            non-empty for all of them. */}
+        <ReadStateNotice
+          state={outcome}
+          overrides={{
+            denied: "Access denied. This area requires a verified administrator identity.",
+            error:
+              outcome.kind === "error" ? `Error loading the ops overview: ${outcome.message}` : undefined,
+          }}
+        />
       </section>
     );
   }
@@ -91,8 +99,18 @@ export default async function AdminOverviewPage() {
             {runs === "unavailable" ? (
               <tr>
                 <td colSpan={5} className="px-4 py-3 text-gray-400">
-                  Run history unavailable — Dagster has not bootstrapped its tables on this
-                  database.
+                  {RUNS_UNAVAILABLE_MESSAGE}
+                </td>
+              </tr>
+            ) : runs.length === 0 ? (
+              /* #495: an empty list used to fall through to `.map()` and draw a
+                 header with nothing under it, so "no runs yet" and "the query
+                 failed" looked identical — on the page whose job is telling an
+                 operator the pipeline is healthy. These two sentences must stay
+                 different; tests/admin-empty-states.test.ts asserts it. */
+              <tr>
+                <td colSpan={5} className="px-4 py-3 text-gray-400">
+                  {RUNS_EMPTY_MESSAGE}
                 </td>
               </tr>
             ) : (

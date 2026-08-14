@@ -70,6 +70,23 @@ export default async function ToptQualityPage() {
 
       <ReadStateNotice state={state} />
 
+      {/* #495: an `&&` with no else made the headline diagnostic vanish without
+          comment whenever it could not be computed, which reads as "nothing is
+          wrong" rather than "not computed". Every state of this block now says
+          something. */}
+      {funnel.kind !== "ready" && (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h2 className="font-semibold">L0–L5 funnel</h2>
+          <p role="status" className="mt-2 text-sm text-gray-400">
+            {funnel.kind === "denied"
+              ? "Not computed: this view requires a verified administrator identity."
+              : funnel.kind === "error"
+                ? `Not computed: ${funnel.message}`
+                : "Not computed yet — no accepted run has reported the layer metrics this funnel reads."}
+          </p>
+        </div>
+      )}
+
       {funnel.kind === "ready" && (
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-semibold">L0–L5 funnel — where the data narrows is where the problem is</h2>
@@ -85,7 +102,7 @@ export default async function ToptQualityPage() {
                 <p className="mt-0.5 text-xs text-gray-500">raw.fetches today, per source</p>
               </div>
             </div>
-            {funnel.layers.map((layer) => (
+            {funnel.data.layers.map((layer) => (
               <div key={layer.key} className="grid grid-cols-[7rem_1fr] items-center gap-3">
                 <div className="text-right">
                   <span className="font-mono text-xs text-gray-400">

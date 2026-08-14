@@ -1,9 +1,20 @@
 /**
- * Shared, server-rendered presentation of the dashboard's typed read states — see #370.
- * Keeps every route's loading/empty/unavailable/stale/error/denied handling consistent.
+ * Shared, server-rendered presentation of the typed read states — #370, and
+ * #495 which brought the administrator surfaces onto it too.
+ *
+ * The words live in `@/server/read-state` (`readStateMessage`), so every state
+ * is proven to have a sentence by a unit test instead of by whichever page
+ * happened to write a branch for it. This component only decides where the
+ * sentence goes.
  */
 
-import type { ReadState } from "@/server/dashboard";
+import {
+  NOTICE_STYLE,
+  readStateMessage,
+  type NoticeKind,
+  type ReadState,
+  type ReadStateOverrides,
+} from "@/server/read-state";
 import type { Availability } from "@/server/mart/research-read";
 
 const AVAILABILITY_STYLE: Record<Availability, string> = {
@@ -26,31 +37,30 @@ export function AvailabilityBadge({ status }: { status: Availability }) {
 }
 
 /**
- * Renders the notice for a non-`ready` state, or `null` when the caller should render its
- * own data (`ready`, or `stale` which still shows data with its own badge).
+ * Renders the notice for a non-`ready` state, or `null` when the caller should
+ * render its own data (`ready`, or `stale` which still shows data with its own
+ * badge).
+ *
+ * `overrides` re-words one state for one surface — the administrator world
+ * denies for a different reason than the research world — without introducing
+ * a second vocabulary to do it.
  */
-export function ReadStateNotice({ state }: { state: ReadState<unknown> }) {
-  if (state.kind === "ready" || state.kind === "stale") return null;
-
-  const styles: Record<string, string> = {
-    denied: "text-amber-400",
-    error: "text-red-400",
-    unavailable: "text-gray-400",
-    empty: "text-gray-400",
-    loading: "text-gray-400",
-  };
-
-  const messages: Record<string, string> = {
-    denied: "Access denied. No owner identity configured for this request.",
-    error: state.kind === "error" ? `Error reading the mart: ${state.message}` : "",
-    unavailable: state.kind === "unavailable" ? `Unavailable: ${state.reason}` : "",
-    empty: "No materialized results for this view yet.",
-    loading: "Loading…",
-  };
+export function ReadStateNotice({
+  state,
+  overrides,
+}: {
+  state: ReadState<unknown>;
+  overrides?: ReadStateOverrides;
+}) {
+  const message = readStateMessage(state, overrides);
+  if (message === null) return null;
 
   return (
-    <p role="status" className={`mt-4 rounded-lg border border-border bg-card p-4 ${styles[state.kind]}`}>
-      {messages[state.kind]}
+    <p
+      role="status"
+      className={`mt-4 rounded-lg border border-border bg-card p-4 ${NOTICE_STYLE[state.kind as NoticeKind]}`}
+    >
+      {message}
     </p>
   );
 }
