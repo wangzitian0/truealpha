@@ -42,9 +42,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `deploy_type` is what deploy-release.yml's run-name is built from
+          # ("Deploy prod v0.0.20"); `environment` is the human name used in
+          # messages. Conflating them made the evidence check look for runs that
+          # can never exist (review).
           - environment: production
+            deploy_type: prod
             url: https://truealpha.club/api/health
           - environment: staging
+            deploy_type: staging
             url: https://truealpha-staging.truealpha.club/api/health
     steps:
       # Full history AND tags: the environments report release tags, and the
@@ -77,5 +83,6 @@ jobs:
           set -euo pipefail
           release="$(curl -fsS "${{ matrix.url }}" | jq -r '.git_sha')"
           uv run --no-sync python tools/walk_evidence.py \
+            --deploy-type "${{ matrix.deploy_type }}" \
             --environment "${{ matrix.environment }}" \
             --release "$release"

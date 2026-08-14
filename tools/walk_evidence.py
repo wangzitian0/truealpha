@@ -13,7 +13,7 @@ the release that would have carried the fix. Blocking the lane on a setup
 deficiency produces exactly the invisible-work outcome #560 exists to prevent.
 
 Usage:
-  python tools/walk_evidence.py --environment prod --release v0.0.20
+  python tools/walk_evidence.py --deploy-type prod --environment production --release v0.0.20
 
 Exit codes:
   0 - the deployed release has a successful surface walk
@@ -48,9 +48,19 @@ def _gh_api(path: str) -> str:
     return result.stdout
 
 
-def find_walk(environment: str, release: str, *, gh_api: GhApi = _gh_api) -> dict[str, object]:
-    """The walk step of this repo's own `Deploy <environment> <release>` run."""
-    title = f"Deploy {environment} {release}"
+def find_walk(deploy_type: str, release: str, *, environment: str = "", gh_api: GhApi = _gh_api) -> dict[str, object]:
+    """The walk step of this repo's own `Deploy <deploy_type> <release>` run.
+
+    `deploy_type` and `environment` are NOT interchangeable and were conflated
+    in the first version of this file: deploy-release.yml's run-name is built
+    from `inputs.deploy_type` ("prod", "staging"), while the freshness matrix
+    names environments for humans ("production"). Looking for
+    "Deploy production <tag>" would have made this red forever, for a reason
+    unrelated to what it guards — the exact defect class it exists to catch, and
+    invisible to a manual check that happens to pass the right word (review).
+    """
+    environment = environment or deploy_type
+    title = f"Deploy {deploy_type} {release}"
     runs = json.loads(gh_api(RUNS_PATH))
     matching = [
         run
@@ -60,8 +70,9 @@ def find_walk(environment: str, release: str, *, gh_api: GhApi = _gh_api) -> dic
     if not matching:
         raise MissingWalkEvidence(
             f"no {title!r} run in {WINDOW}, so nothing recent has walked the surface "
-            f"{environment} is serving. Either the release predates the post-release walk, or "
-            f"{environment} is serving something this repository did not release"
+            f"{environment} is serving. Either that release is older than the window, or it "
+            f"predates the post-release walk, or {environment} is serving something this "
+            f"repository did not release — open the deploy-release run list to tell which"
         )
     newest = max(matching, key=lambda run: str(run.get("created_at", "")))
     jobs = json.loads(gh_api(f"/repos/wangzitian0/truealpha/actions/runs/{newest['id']}/jobs"))
@@ -75,9 +86,10 @@ def find_walk(environment: str, release: str, *, gh_api: GhApi = _gh_api) -> dic
     )
 
 
-def check_walk_evidence(environment: str, release: str, *, gh_api: GhApi = _gh_api) -> int:
+def check_walk_evidence(deploy_type: str, release: str, *, environment: str = "", gh_api: GhApi = _gh_api) -> int:
+    environment = environment or deploy_type
     try:
-        found = find_walk(environment, release, gh_api=gh_api)
+        found = find_walk(deploy_type, release, environment=environment, gh_api=gh_api)
     except MissingWalkEvidence as exc:
         print(f"walk evidence missing: {exc}", file=sys.stderr)
         return 1
@@ -95,14 +107,16 @@ def check_walk_evidence(environment: str, release: str, *, gh_api: GhApi = _gh_a
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--environment", required=True)
+    # The value deploy-release.yml's run-name is built from, not the human name.
+    parser.add_argument("--deploy-type", required=True)
     parser.add_argument("--release", required=True)
+    parser.add_argument("--environment", default="")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    return check_walk_evidence(args.environment, args.release)
+    return check_walk_evidence(args.deploy_type, args.release, environment=args.environment)
 
 
 if __name__ == "__main__":
