@@ -158,9 +158,16 @@ def test_the_scheduled_gate_does_not_depend_on_the_dispatch_inputs_context() -> 
 
 
 def test_the_release_walk_requires_every_credential_it_uses() -> None:
-    """The member pass needs TA_MEMBER_EMAIL; a guard that checks two of three
-    secrets fails later and less clearly (review)."""
+    """The member pass needs TA_MEMBER_EMAIL; a probe that checks two of three
+    secrets lets the walk start and fail later, less clearly (review).
+
+    The check moved out of the walk step into its own `walk_credentials` probe
+    when an unconfigured walk stopped exiting 0 and started being SKIPPED — a
+    step that exits 0 without walking reports `success`, which
+    tools/walk_evidence.py reads as evidence. The property is unchanged: all
+    three secrets are examined before anything decides the walk can run.
+    """
     workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
-    guard = workflow.split("Walk the deployed surface", 1)[1].split("bun install", 1)[0]
+    probe = workflow.split("id: walk_credentials", 1)[1].split("- name: Walk the deployed", 1)[0]
     for variable in ("TA_EMAIL", "TA_PASSWORD", "TA_MEMBER_EMAIL"):
-        assert f'"${{{variable}}}"' in guard, f"{variable} must be checked before the walk starts"
+        assert f'"${{{variable}}}"' in probe, f"{variable} must be examined before the walk runs"
