@@ -60,6 +60,7 @@ def test_no_release_run_at_all_fails(capsys: pytest.CaptureFixture[str]) -> None
     assert exit_code == 1
     stderr = capsys.readouterr().err
     assert "no 'Deploy prod v0.0.19' run in the last 100 deploy-release runs" in stderr
+    assert "older than the window" in stderr, "the window case must not be omitted (review)"
 
 
 def test_a_release_predating_the_walk_step_fails(capsys: pytest.CaptureFixture[str]) -> None:
@@ -115,3 +116,26 @@ def test_the_release_run_does_not_block_the_lane_on_missing_credentials() -> Non
     assert "exit 0" in guard, "an unconfigured walk must not fail the release lane"
     assert "exit 1" not in guard
     assert "UNVERIFIED" in guard, "but it must be unmistakable in the run summary"
+
+
+def test_the_freshness_matrix_passes_a_deploy_type_the_release_workflow_accepts() -> None:
+    """`deploy_type` and the human environment name are not interchangeable.
+
+    deploy-release.yml's run-name is built from `inputs.deploy_type` ("prod"),
+    while the freshness matrix names environments for humans ("production").
+    Passing the latter would look for "Deploy production <tag>" runs that can
+    never exist, making the guard red forever for a reason unrelated to what it
+    guards — and a manual check that happens to pass the right word cannot see
+    it (review).
+    """
+    import re
+
+    freshness = (REPO_ROOT / ".github/workflows/deploy-freshness.yml").read_text()
+    release = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
+    allowed = set(re.search(r"options:\s*\[([^\]]+)\]", release).group(1).replace(" ", "").split(","))
+    passed = set(re.findall(r"deploy_type:\s*(\S+)", freshness))
+    assert passed, "the freshness matrix must carry a deploy_type per environment"
+    assert passed <= allowed, (
+        f"freshness passes {sorted(passed - allowed)}, which deploy-release.yml's run-name "
+        f"can never produce (it accepts {sorted(allowed)})"
+    )
