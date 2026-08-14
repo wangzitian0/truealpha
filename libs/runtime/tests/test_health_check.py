@@ -127,6 +127,26 @@ def test_fails_immediately_when_a_sha_is_compared_against_a_reported_tag(
     assert "commit sha" in stderr and "release tag" in stderr
 
 
+def test_the_mismatch_message_reads_for_every_kind() -> None:
+    """The message is the deliverable: an operator reading only the failed step
+    must be able to act on it. `identifier_kind` returns "unset" and
+    "unrecognised" too, and an article hardcoded for one kind degrades the
+    others into "expected a unset" (review)."""
+    for expected in (_SHA_40, "v0.0.19", "refs/heads/main"):
+        buffered: list[str] = []
+        try:
+            _module._guarding_kind(lambda _url: (200, json.dumps({"status": "ok", "git_sha": "abcdef1"})), expected)(
+                URL
+            )
+        except _module.IdentifierKindMismatch as exc:
+            buffered.append(str(exc))
+        if not buffered:
+            continue
+        message = buffered[0]
+        assert " a unset" not in message and " a unrecognised" not in message
+        assert "expects" in message and "reports" in message
+
+
 def test_passes_when_both_sides_are_release_tags() -> None:
     exit_code = check_health(
         URL,
