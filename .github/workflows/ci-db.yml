@@ -96,3 +96,21 @@ jobs:
             fi
           done
           exit "$missing"
+
+      # #581: the invariants, against the schema this workflow just migrated.
+      # Here rather than ci-web because that workflow has no Python toolchain
+      # (the first attempt died on `uv: command not found`) and because a
+      # question about what is IN the database belongs beside the workflow that
+      # owns the database contracts.
+      #
+      # An empty schema means most invariants examine zero rows; the tool prints
+      # that rather than reporting ok over an empty set, and `--require-coverage`
+      # is deliberately not passed here. It IS passed where the data is real.
+      - uses: astral-sh/setup-uv@v5
+      - name: Output invariants (migrated schema)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          uv sync --all-packages
+          uv run --no-sync python tools/output_invariants.py \
+            --database-url postgresql://postgres:postgres@localhost:5432/truealpha

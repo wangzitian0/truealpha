@@ -52,6 +52,31 @@ import psycopg
 
 EXEMPTIONS_PATH = Path(__file__).with_name("output_invariant_exemptions.json")
 
+# Resolve runs the way the CONSUMERS do, not a third way. Review caught all
+# three invariants inventing their own: `order by created_at desc` picked a GPPE
+# run nothing serves (production's pointer targets capture-run:8c49eec8… while
+# the newest row belongs to capture-run:49a1f57e…), and `max()` over
+# current_pointer_head mixed a table that is keyed per (environment,
+# universe_id, universe_version, factor_id). Both were correct only by accident
+# of today's data — one pointer row, one strategy key — and a second factor or
+# strategy would have made them compare across planes silently. That is #462's
+# defect class, which this file exists to guard against.
+#
+# Mirrors apps/app-web/src/server/mart/topt-gppe-repository.ts's GOVERNED_HEAD_SQL.
+# test_output_invariants.py asserts the two stay in step.
+GOVERNED_HEAD = """
+    select target_run_id from mart.current_pointer_head
+    where environment = 'production' and factor_id = 'gross_profit_per_employee'
+    order by advanced_at desc limit 1
+"""
+# Mirrors strategy-run-repository.ts: latest per strategy_key, that ordering.
+DASHBOARD_STRATEGY = "large_model_value_v0"
+LATEST_STRATEGY_RUN = f"""
+    select strategy_run_id from mart.strategy_runs
+    where strategy_key = '{DASHBOARD_STRATEGY}'
+    order by executed_at desc, created_at desc, strategy_run_id desc limit 1
+"""
+
 
 @dataclass(frozen=True)
 class Invariant:
@@ -70,15 +95,15 @@ INVARIANTS: tuple[Invariant, ...] = (
             "gross profit per employee cannot be negative — a company with positive gross "
             "profit and at least one employee has a positive ratio (#528)"
         ),
-        violations="""
+        violations=f"""
             select listing_id, gppe::text, operating_branch
             from mart.topt_gppe_results
-            where run_id = (select run_id from mart.topt_gppe_results order by created_at desc limit 1)
+            where run_id = ({GOVERNED_HEAD})
               and gppe < 0
         """,
-        population="""
+        population=f"""
             select count(*) from mart.topt_gppe_results
-            where run_id = (select run_id from mart.topt_gppe_results order by created_at desc limit 1)
+            where run_id = ({GOVERNED_HEAD})
         """,
     ),
     Invariant(
@@ -87,57 +112,61 @@ INVARIANTS: tuple[Invariant, ...] = (
             "a cell marked `available` carries a value and a non-zero confidence — "
             "'available with nothing in it' is a contradiction, not a state"
         ),
-        violations="""
+        violations=f"""
             select listing_id, availability, coalesce(gppe::text, 'null') as gppe, confidence::text
             from mart.topt_gppe_results
-            where run_id = (select run_id from mart.topt_gppe_results order by created_at desc limit 1)
+            where run_id = ({GOVERNED_HEAD})
               and availability = 'available'
               and (gppe is null or confidence = 0)
         """,
-        population="""
+        population=f"""
             select count(*) from mart.topt_gppe_results
-            where run_id = (select run_id from mart.topt_gppe_results order by created_at desc limit 1)
+            where run_id = ({GOVERNED_HEAD})
               and availability = 'available'
         """,
     ),
     Invariant(
         id="selected-weights-close",
         claim="the selected positions of a strategy run sum to a whole portfolio",
-        violations="""
+        violations=f"""
             select strategy_run_id, round(sum(target_weight), 6)::text as total, count(*)::text as selected
             from mart.strategy_decisions
-            where strategy_run_id = (select strategy_run_id from mart.strategy_runs order by executed_at desc limit 1)
+            where strategy_run_id = ({LATEST_STRATEGY_RUN})
               and outcome = 'selected'
             group by strategy_run_id
             having abs(sum(target_weight) - 1) > 0.000001
         """,
-        population="""
+        population=f"""
             select count(*) from mart.strategy_decisions
-            where strategy_run_id = (select strategy_run_id from mart.strategy_runs order by executed_at desc limit 1)
+            where strategy_run_id = ({LATEST_STRATEGY_RUN})
               and outcome = 'selected'
         """,
     ),
     Invariant(
-        id="pointer-tracks-the-latest-run",
+        id="pointer-has-advanced-recently",
         claim=(
-            "the governed pointer must not lag the latest accepted run by more than one "
-            "scheduled cycle — /research tells every visitor the pointer IS what it is "
-            "showing (#594)"
+            "the governed pointer must advance with each accepted run — /research tells every "
+            "visitor it IS what they are looking at, and the tick is daily (#594)"
         ),
-        # 36h: the tick is daily at 22:15Z, so this is one cycle plus slack and
-        # well under two. A pointer that has missed a whole cycle is the defect.
+        # Single-plane on purpose. An earlier version compared the pointer's age
+        # against the latest STRATEGY run, which is a different plane: the
+        # pointer is per (environment, factor_id) over capture runs. That the
+        # page conflates the two is #594's subject, not something an invariant
+        # should reproduce. 36h is one daily cycle plus slack, under two.
         violations="""
             select
-              round(extract(epoch from (r.executed_at - p.advanced_at)) / 3600, 1)::text as lag_hours,
-              p.target_run_id,
-              r.strategy_run_id
-            from (select max(advanced_at) as advanced_at, max(target_run_id) as target_run_id
-                  from mart.current_pointer_head) p,
-                 (select max(executed_at) as executed_at, max(strategy_run_id) as strategy_run_id
-                  from mart.strategy_runs) r
-            where r.executed_at - p.advanced_at > interval '36 hours'
+              round(extract(epoch from (now() - advanced_at)) / 3600, 1)::text as hours_since,
+              target_run_id,
+              sequence::text
+            from mart.current_pointer_head
+            where environment = 'production' and factor_id = 'gross_profit_per_employee'
+              and now() - advanced_at > interval '36 hours'
+            order by advanced_at desc limit 1
         """,
-        population="select count(*) from mart.current_pointer_head",
+        population="""
+            select count(*) from mart.current_pointer_head
+            where environment = 'production' and factor_id = 'gross_profit_per_employee'
+        """,
     ),
 )
 
