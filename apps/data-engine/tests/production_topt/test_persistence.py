@@ -25,7 +25,7 @@ from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphR
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.composition import PlannedRun, plan_and_persist
-from data_engine.datahub.production_topt.executor import FetchSuccess, RawResponse, SourceFetchPort
+from data_engine.datahub.production_topt.executor import FetchSuccess, NormalizedRecord, RawResponse, SourceFetchPort
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor, record_headcount
 from data_engine.datahub.production_topt.market_price_adapter import (
     CorroboratingOrigin,
@@ -44,7 +44,13 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
-from truealpha_contracts import ObligationReasonCode, RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts import (
+    ObligationReasonCode,
+    RawCapture,
+    RawIngestionEnvelope,
+    RawObjectRef,
+    canonical_sha256,
+)
 from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource
 
@@ -274,6 +280,8 @@ def _capture(
         source_label=plan.source_label,
         timeline=plan.timeline,
         retry=plan.retry,
+        freshness_windows=plan.freshness_windows,
+        default_freshness_max_age=plan.default_freshness_max_age,
         object_store=object_store or _InMemoryObjectStore(),
     )
     report = run_topt_capture(
@@ -706,3 +714,90 @@ def test_semantic_freshness_windows_round_trip_and_cast(connection) -> None:
         (policy.schedule_policy_id,),
     ).fetchone()
     assert fresh is True and stale is False
+
+
+def test_observation_knowable_at_is_the_adapters_time_and_freshness_is_graded(connection) -> None:
+    """#530 slice 3: the stamped lie is gone.
+
+    Financial-fact observations carry the adapter's transaction_time (the fixture
+    bundle's 2026-02-01 filed-derived date — impossible under the old cutoff-58min
+    arithmetic) and grade FRESH under their semantic's 730-day window despite being
+    60 days before the cutoff, which the old single 2-day window would have called
+    stale. Price observations carry their bar date. Nothing carries the fabricated
+    constant."""
+    import datetime as _dt
+
+    plan = _capture(connection, version="test-530-real-time", corroborate=True)
+    rows = connection.execute(
+        """
+        select o.semantic_type, o.knowable_at, o.freshness_state
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        where ob.run_id = %s
+        """,
+        (plan.run_id,),
+    ).fetchall()
+    assert rows
+    fabricated = CUTOFF - _dt.timedelta(minutes=58)
+    for semantic, knowable_at, freshness in rows:
+        assert knowable_at != fabricated, semantic
+        if semantic == "financial-fact":
+            assert knowable_at == _dt.datetime(2026, 2, 1, tzinfo=_dt.UTC)
+            assert freshness == "fresh", "60 days old is fresh under the 730-day facts window"
+        if semantic == "market-price":
+            assert knowable_at == _dt.datetime(2026, 3, 31, tzinfo=_dt.UTC)
+            assert freshness == "fresh"
+
+
+def test_a_stale_source_grades_stale_at_write_time(connection) -> None:
+    """A price bar older than its semantic's 5-day window lands as 'stale' — the
+    write-time half of the honest-freshness chain (#530 slice 3)."""
+    import datetime as _dt
+
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-530-stale-price")
+    sink = PostgresCaptureControlSink(
+        connection,
+        plan.bindings,
+        source_label=plan.source_label,
+        timeline=plan.timeline,
+        retry=plan.retry,
+        freshness_windows=plan.freshness_windows,
+        default_freshness_max_age=plan.default_freshness_max_age,
+        object_store=_InMemoryObjectStore(),
+    )
+    work_item_id, binding = next(
+        (k, v) for k, v in plan.bindings.items() if v.obligation.capture_requirement_id == "market-price:v1"
+    )
+    work_item = next(w for w in plan.work_items if w.work_item_id == work_item_id)
+    payload = {"listing_id": binding.obligation.subject.id, "close": "100.00", "currency": "USD"}
+    old_bar = _dt.datetime(2026, 3, 20, tzinfo=_dt.UTC)  # 13 days before the 04-02 cutoff
+    success = FetchSuccess(
+        raw=RawResponse(body=b"bar:2026-03-20:100.00", source=DataSource.YAHOO, record_id="stale-bar"),
+        normalized_sha256=canonical_sha256(payload),
+        confidence=Decimal("0.9"),
+        valid_from=old_bar.date(),
+        transaction_time=old_bar,
+        record=NormalizedRecord(
+            payload=payload,
+            parser_version="production-topt-live-parser:v4",
+            mapping_version="production-topt-live-map:v4",
+        ),
+    )
+    sink.record_outcome(
+        work_item,
+        attempt_reasons=(None,),
+        terminal_state=ObligationTerminalState.SUCCESS,
+        success=success,
+    )
+    freshness, knowable_at = connection.execute(
+        """
+        select o.freshness_state, o.knowable_at from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        where ob.obligation_id = %s
+        """,
+        (binding.obligation.obligation_id,),
+    ).fetchone()
+    assert knowable_at == old_bar
+    assert freshness == "stale", "13 days beyond a 5-day window must not grade fresh"
