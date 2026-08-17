@@ -81,6 +81,22 @@ _WINDOW_TOLERANCE_DAYS = 45
 # (#530) — this one only has to make an order-of-magnitude error impossible to publish.
 _MAX_SHARES_STALENESS_DAYS = 730
 
+# The PEG growth window (#284), and the reason `build_bundle` takes no value meaning "skip
+# the growth basis".
+#
+# It used to: `earnings_cagr_years: int | None = None`, where None returned an empty earnings
+# series. `sec_financial_fetcher` -- the ONLY deployed caller -- never passed it, so
+# `net_income` and `earnings_cagr_3y` shipped as payload keys whose value was structurally
+# null for all 20 issuers, in both environments, in runs that reported SUCCESS. Nothing was
+# red: the keys existed, the contract accepted them, the mart column existed, `peg` was
+# simply NULL everywhere. The only caller that passed the parameter was the end-to-end test
+# written to prove the path worked, which is how a test can be greener than production.
+#
+# So the window is a default rather than a request, and a caller that says nothing gets the
+# growth basis instead of silence. The payload key `earnings_cagr_3y` names this number;
+# `test_the_payload_key_names_the_window_it_measures` fails if the two ever disagree.
+EARNINGS_CAGR_YEARS = 3
+
 
 @dataclass(frozen=True)
 class FinancialFactsBundle:
@@ -428,7 +444,7 @@ def build_bundle(
     *,
     raw_bytes: bytes | None = None,
     ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
-    earnings_cagr_years: int | None = None,
+    earnings_cagr_years: int = EARNINGS_CAGR_YEARS,
 ) -> FinancialFactsBundle:
     """Extract the PIT financial-fact bundle from a company-facts payload.
 
@@ -467,11 +483,9 @@ def build_bundle(
     # The growth basis for module 1. `resolve_field` already returns EVERY annual period
     # knowable at the cutoff, filed-date-resolved and duration-filtered, so the whole
     # series is here and the bundle simply stops discarding it.
-    earnings_periods = resolve_field(facts, ruleset, "net_income", cutoff) if earnings_cagr_years is not None else {}
+    earnings_periods = resolve_field(facts, ruleset, "net_income", cutoff)
     net_income = _latest(earnings_periods) if earnings_periods else None
-    earnings_cagr, cagr_base, cagr_latest = (
-        _earnings_cagr(earnings_periods, earnings_cagr_years) if earnings_cagr_years is not None else (None, None, None)
-    )
+    earnings_cagr, cagr_base, cagr_latest = _earnings_cagr(earnings_periods, earnings_cagr_years)
     # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
     # the branch only decides WHICH versioned extraction asserts the operating numerator:
     # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone

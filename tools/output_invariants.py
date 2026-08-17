@@ -143,6 +143,50 @@ INVARIANTS: tuple[Invariant, ...] = (
         """,
     ),
     Invariant(
+        id="every-consumed-input-is-populated",
+        claim=(
+            "an input key the strategy consumes must be written for at least one issuer at "
+            "the latest cutoff — a key that is declared, permitted by the 0039 CHECK and "
+            "written for NOBODY is a wiring gap, and it publishes as a missing factor rather "
+            "than an error (#284)"
+        ),
+        # The check that would have caught #284's real defect. `net_income` and
+        # `earnings_cagr_3y` were absent from BOTH environments for as long as they
+        # existed, because the only deployed caller never asked the parser for them.
+        # Every gate stayed green: the keys were declared, the CHECK allowed them, the
+        # payload carried them as nulls, `mart...peg` was simply NULL for all 20 issuers
+        # and the runs reported SUCCESS. Nothing anywhere asked "is this key populated".
+        #
+        # Deliberately not "populated for every issuer": correct refusals are normal and
+        # common (declining earnings, a loss year inside the window, a refused share
+        # count). Zero issuers across a whole cutoff is not a data gap, it is nobody
+        # calling the code.
+        #
+        # The expected list restates migration 0039's CHECK on purpose. A single source
+        # would only prove the list agrees with itself; the value here is a second,
+        # independent statement of what the deployed run is supposed to produce.
+        violations="""
+            with expected(input_key) as (values
+                ('gross_profit'), ('total_assets'), ('headcount'), ('revenue'),
+                ('shares_outstanding'), ('last_close'), ('net_income'), ('earnings_cagr_3y')
+            ), latest as (
+                select max(cutoff_at) as cutoff_at from staging.strategy_backtest_inputs
+            )
+            select expected.input_key, (select cutoff_at from latest)::text as cutoff_at
+            from expected
+            where exists (select 1 from latest where cutoff_at is not null)
+              and not exists (
+                select 1 from staging.strategy_backtest_inputs i
+                where i.input_key = expected.input_key
+                  and i.cutoff_at = (select cutoff_at from latest)
+              )
+        """,
+        population="""
+            select count(distinct input_key) from staging.strategy_backtest_inputs
+            where cutoff_at = (select max(cutoff_at) from staging.strategy_backtest_inputs)
+        """,
+    ),
+    Invariant(
         id="pointer-has-advanced-recently",
         claim=(
             "the governed pointer must advance with each accepted run — /research tells every "

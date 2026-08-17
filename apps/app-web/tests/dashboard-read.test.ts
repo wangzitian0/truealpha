@@ -86,7 +86,11 @@ function fixtureAdapter(): StrategyRunReadAdapter {
   const peg = outcome.data.modules.find((m) => m.module === 1);
   assert(gppe?.availability === "available", "module 2 (GPPE) should be materialized/available");
   assert(tier?.availability === "available", "module 7 (tier) should be materialized/available");
-  assert(peg?.availability === "unavailable", "module 1 (PEG) is not materialized yet");
+  // Unavailable here because the smoke fixture's inputs carry no `net_income` /
+  // `earnings_cagr_3y`, so every fixture decision has `peg: null` — NOT because the
+  // catalog hardcodes module 1 as absent, which is what it used to mean. The block below
+  // proves the badge follows the data.
+  assert(peg?.availability === "unavailable", "module 1 (PEG) has no value in the smoke fixture");
   assert(outcome.data.latestCutoff === "2026-06-30T23:59:59Z", `unexpected latest cutoff ${outcome.data.latestCutoff}`);
   // #370 AC 3 (PR #440): fixture-backed reports carry no run id and honestly render null,
   // rather than fabricating one — this had no test coverage before this review pass.
@@ -152,6 +156,53 @@ function fixtureAdapter(): StrategyRunReadAdapter {
   // exclusion, so that mapping branch is covered directly below instead of via this fixture.
   const jpm = outcome.data.rows.find((r) => r.issuerId === "issuer:jpm");
   assert(jpm?.availability === "available", "jpm should no longer be an exclusion after #381");
+}
+
+// --- #284: a module's availability badge follows the decisions, not the catalog ---
+// The regression this arms: PEG shipped through adapter, mart, both read repositories and
+// the rankings page while /research still badged module 1 "unavailable", because its
+// catalog entry carried `field: null`. Any module that lands a decision column and forgets
+// to name it now fails here rather than silently under-reporting itself to the owner.
+{
+  const withPeg: StrategyRunDecision = {
+    issuer_id: "issuer:test-peg",
+    cutoff_at: "2026-06-30T23:59:59Z",
+    outcome: "selected",
+    eligible: true,
+    tier: null,
+    capital_adjusted_labor_efficiency: null,
+    current_price_to_sales: null,
+    target_price_to_sales: null,
+    valuation_gap: null,
+    confidence: null,
+    exclusion_reason: null,
+    rank: 1,
+    target_weight: null,
+    peg: "0.2431",
+    peg_rank: 1,
+  };
+  const outcome = await loadOverview(
+    TEST_CONTEXT,
+    new StrategyRunReadAdapter(
+      repositoryReturning({ ...emptyReport(), decisions: [withPeg] }),
+    ),
+  );
+  assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
+  const peg = outcome.data.modules.find((m) => m.module === 1);
+  assert(peg?.availability === "available", "module 1 must be available once a decision carries a PEG");
+  // The converse, so this cannot pass by the catalog simply hardcoding "available":
+  // strip the value and the same code path must report unavailable again.
+  const withoutPeg = await loadOverview(
+    TEST_CONTEXT,
+    new StrategyRunReadAdapter(
+      repositoryReturning({ ...emptyReport(), decisions: [{ ...withPeg, peg: null, peg_rank: null }] }),
+    ),
+  );
+  assert(withoutPeg.kind === "ready", `expected ready, got ${withoutPeg.kind}`);
+  assert(
+    withoutPeg.data.modules.find((m) => m.module === 1)?.availability === "unavailable",
+    "module 1 must fall back to unavailable when no decision carries a PEG",
+  );
 }
 
 // --- hard-excluded mapping is explicit, tested independently of the shared fixture ---
