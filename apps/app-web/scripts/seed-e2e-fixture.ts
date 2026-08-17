@@ -49,8 +49,17 @@
  *     row and every login in the suite would then fail — a fresh CI service
  *     container hides that, a local rerun does not.
  *
+ * `--principals-only` seeds the login identities and stops. #580: the browser
+ * suite ran against one data state, and every UI defect of the 2026-07 review
+ * was in the other one — the claim ceiling dropped when no run existed, the
+ * run table drew a bare header when the list was empty, the funnel vanished
+ * when it could not be computed. A suite seeded with good data sees none of
+ * them, because the branch it walks is the branch whoever wrote the page was
+ * looking at.
+ *
  * Usage (see ci-web.yml):
  *   DATABASE_URL=postgresql://… E2E_PASSWORD=… bun run scripts/seed-e2e-fixture.ts
+ *   DATABASE_URL=…  … bun run scripts/seed-e2e-fixture.ts --principals-only
  */
 
 import { readFileSync } from "node:fs";
@@ -99,6 +108,7 @@ interface CanonDecision {
 }
 
 async function main() {
+  const principalsOnly = process.argv.includes("--principals-only");
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     console.error("DATABASE_URL is not set.");
@@ -134,6 +144,15 @@ async function main() {
           "on conflict (principal_id) do update set email = excluded.email, hashed_password = excluded.hashed_password",
         [principal.principalId, principal.email, await hashPassword(password)],
       );
+    }
+
+    if (principalsOnly) {
+      await client.query("commit");
+      console.log(
+        `Seeded ${E2E_PRINCIPALS.length} principals only — mart left empty, so the walk sees ` +
+          `every surface's absent state (#580).`,
+      );
+      return;
     }
 
     await client.query(
