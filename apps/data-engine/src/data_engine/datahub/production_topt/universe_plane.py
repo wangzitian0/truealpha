@@ -325,6 +325,42 @@ def publish_universe_list(
     return contract_id, sequence
 
 
+def latest_quarter_end(as_of: date) -> date:
+    """The most recent completed calendar quarter end at `as_of` — the report_date a
+    scheduled refresh publishes under (the universe asserts scope for that partition)."""
+    quarter_ends = [
+        date(as_of.year - 1, 12, 31),
+        date(as_of.year, 3, 31),
+        date(as_of.year, 6, 30),
+        date(as_of.year, 9, 30),
+        date(as_of.year, 12, 31),
+    ]
+    return max(q for q in quarter_ends if q < as_of)
+
+
+def refresh_and_publish(
+    connection: Connection[Any],
+    source: UniverseSource,
+    *,
+    report_date: date,
+    note: str,
+    openfigi_api_key: str = "",
+) -> str:
+    """One refresh cycle: fetch+land, then publish ONLY when membership changed.
+
+    The single entrypoint the operator script and the scheduled job share — the
+    owner requirement is automatic refresh (index membership and weights move
+    over time), and automation must not spray a new governed version per run
+    when nothing changed.
+    """
+    landed = refresh_etf_constituents(connection, source, openfigi_api_key=openfigi_api_key)
+    fresh_sha = build_denominator(connection, source, report_date=report_date)["instrument_mapping_sha256"]
+    if fresh_sha == current_head_mapping_sha(connection, source):
+        return f"{source.etf}: {landed} rows landed; membership unchanged, head kept"
+    contract_id, sequence = publish_universe_list(connection, source, report_date=report_date, note=note)
+    return f"{source.etf}: {landed} rows landed; published {contract_id} at sequence {sequence}"
+
+
 def resolve_universe_corpus(connection: Connection[Any], head_kind: str) -> dict[str, Any]:
     """The governed universe head as a corpus dict the composition root consumes.
 
