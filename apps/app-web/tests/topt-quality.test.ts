@@ -97,4 +97,7 @@ console.log("#433 topt-quality loader outcomes passed");
 
   const malformed: ToptGppeReport = { ...report, quality: { available_count: "82" } };
   assert(captureAvailableCount(malformed) === null, "a non-numeric payload count fails closed");
+
+  const overflowing: ToptGppeReport = { ...report, quality: { available_count: 999 } };
+  assert(captureAvailableCount(overflowing) === null, "a numerator above the denominator is malformed, not rendered");
 }
