@@ -304,9 +304,62 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
         connection.commit()
 
 
+# -- universe refresh (#539 owner requirement: automatic pulls) ------------------------
+
+UNIVERSE_REFRESH_JOB_NAME = "universe_refresh_pipeline"
+# Saturday 08:07 UTC: markets closed, no capture window anywhere near, and a
+# membership change published on Saturday governs Monday's ticks. Weekly matches
+# the index's actual cadence (annual reconstitution + episodic swaps); the
+# publish leg is change-gated, so a quiet week advances nothing.
+UNIVERSE_REFRESH_CRON = "7 8 * * 6"
+
+
+@dg.op
+def refresh_universes_op(context: dg.OpExecutionContext) -> None:
+    """Refresh every configured universe's constituent plane; publish on change."""
+    from data_engine.datahub.production_topt.universe_plane import (
+        UNIVERSE_SOURCES,
+        latest_quarter_end,
+        refresh_and_publish,
+    )
+
+    with psycopg.connect(settings.database_url) as connection:
+        for source in UNIVERSE_SOURCES.values():
+            outcome = refresh_and_publish(
+                connection,
+                source,
+                report_date=latest_quarter_end(datetime.now(UTC).date()),
+                note="scheduled weekly refresh",
+                openfigi_api_key=settings.openfigi_api_key,
+            )
+            context.log.info(outcome)
+        connection.commit()
+
+
+@dg.job(name=UNIVERSE_REFRESH_JOB_NAME)
+def universe_refresh_pipeline_job() -> None:
+    refresh_universes_op()
+
+
+@dg.schedule(
+    job=universe_refresh_pipeline_job,
+    cron_schedule=UNIVERSE_REFRESH_CRON,
+    execution_timezone="UTC",
+    # Production-only, like the QQQ capture itself; staging exercises the plane
+    # via the operator script when needed.
+    default_status=(
+        dg.DefaultScheduleStatus.RUNNING
+        if settings.app_env.strip().lower() in ("production", "prod")
+        else dg.DefaultScheduleStatus.STOPPED
+    ),
+)
+def universe_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
+
+
 defs = dg.Definitions(
-    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job],
-    schedules=[topt_live_schedule, qqq_live_schedule],
+    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job, universe_refresh_pipeline_job],
+    schedules=[topt_live_schedule, qqq_live_schedule, universe_refresh_schedule],
     sensors=[pipeline_trigger_sensor],
 )
 

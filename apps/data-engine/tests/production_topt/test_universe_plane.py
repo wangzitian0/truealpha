@@ -246,3 +246,13 @@ def test_build_routes_trusts_the_universes_embedded_ciks(connection, monkeypatch
     )
     routes = build_routes(plan, connection)
     assert len(routes) == 102 * 4
+
+
+def test_latest_quarter_end_is_the_completed_quarter() -> None:
+    from data_engine.datahub.production_topt.universe_plane import latest_quarter_end
+
+    assert latest_quarter_end(date(2026, 8, 17)) == date(2026, 6, 30)
+    assert latest_quarter_end(date(2026, 1, 2)) == date(2025, 12, 31)
+    # A quarter end publishes the PRIOR quarter — 06-30's own data is not settled on 06-30.
+    assert latest_quarter_end(date(2026, 6, 30)) == date(2026, 3, 31)
+    assert latest_quarter_end(date(2026, 7, 1)) == date(2026, 6, 30)

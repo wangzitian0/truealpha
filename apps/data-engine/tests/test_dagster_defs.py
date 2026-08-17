@@ -25,6 +25,7 @@ from data_engine.dagster_defs import (
     QQQ_LIVE_JOB_NAME,
     TOPT_LIVE_CRON,
     TOPT_LIVE_JOB_NAME,
+    UNIVERSE_REFRESH_JOB_NAME,
     ToptLiveTickConfig,
     defs,
     fixture_canary_definitions,
@@ -45,7 +46,7 @@ def test_defs_loads_and_exposes_only_the_live_pipeline() -> None:
     deployed_jobs = {job.name for job in defs.jobs}
     # Two real-source pipelines since the QQQ universe landed (#539); the
     # fixture canary stays out of the deployed composition (#429 I2).
-    assert deployed_jobs == {TOPT_LIVE_JOB_NAME, QQQ_LIVE_JOB_NAME}
+    assert deployed_jobs == {TOPT_LIVE_JOB_NAME, QQQ_LIVE_JOB_NAME, UNIVERSE_REFRESH_JOB_NAME}
     assert CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME not in deployed_jobs
 
 
