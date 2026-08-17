@@ -248,14 +248,21 @@ class PostgresCaptureControlSink:
         return self._put_vintage(
             source_request_id=binding.source_request.source_request_id,
             raw=success.raw,
+            source_published_at=success.transaction_time,
         ).source_vintage_id
 
-    def _put_vintage(self, *, source_request_id: str, raw: RawResponse) -> SourceVintage:
+    def _put_vintage(
+        self, *, source_request_id: str, raw: RawResponse, source_published_at: datetime | None = None
+    ) -> SourceVintage:
         raw_fetch_id = self._insert_fetch(raw)
         vintage = SourceVintage(
             source_request_id=source_request_id,
             source_record_id=raw.record_id,
-            source_published_at=self._timeline.source_published_at,
+            # The adapter's own transaction_time — the source property (SEC filed
+            # date, price-bar date, release manifest time) — not arithmetic on the
+            # tick's cutoff (#530). The timeline fallback remains only for callers
+            # that genuinely have no adapter assertion to carry.
+            source_published_at=source_published_at or self._timeline.source_published_at,
             raw_object_id=f"raw-object:{raw.sha256}",
         )
         self._repository.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id)
@@ -275,16 +282,22 @@ class PostgresCaptureControlSink:
         changed bytes land a new append-only vintage. With the run version in the key,
         every tick re-landed identical bytes under a new identity forever.
         """
+        ingested_at = datetime.now(UTC)
         return raw_store.insert_fetch(
             self._connection,
             source=raw.source,
             source_record_id=raw.record_id,
             body=raw.body,
             content_type=raw.content_type,
-            fetched_at=self._timeline.source_published_at,
-            # Derived from the run's cutoff, never the wall clock, so a retried tick
-            # reproduces the same rows. `raw.fetches` checks recorded_at >= fetched_at.
-            recorded_at=self._timeline.knowable_at,
+            # Honest audit clocks (#530). These are "ingestion audit time only"
+            # (CLAUDE.md) and are identity-safe: the table's uniqueness is
+            # (source, source_record_id, payload_sha256), so a retried tick still
+            # collapses onto the existing row — the fabricated cutoff-derived
+            # stamps bought no determinism and produced a false diagnosis in #531
+            # (rows read as pre-deploy output because recorded_at sat an hour
+            # before the tick that wrote them).
+            fetched_at=ingested_at,
+            recorded_at=ingested_at,
             store=self._object_store,
         )
 
