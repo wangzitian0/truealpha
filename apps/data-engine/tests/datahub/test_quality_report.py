@@ -225,3 +225,60 @@ def test_an_insurance_branch_payload_grades_available() -> None:
     }
     assert _has_usable_value("financial-fact", payload) is True
     assert _has_usable_value("financial-fact", {**payload, "gross_profit": None}) is False
+
+
+def _fact(**overrides):
+    from data_engine.datahub.production_topt.materialization import FinancialFactPayload
+
+    base = {
+        "issuer_id": "issuer:lei:TEST00000000000000000",
+        "instrument_id": "security:cusip:tst000000",
+        "listing_id": "listing:xnas:tst",
+        "operating_branch": "non_financial",
+        "currency": "USD",
+        "gross_profit": "80000000",
+        "total_assets": "200000000",
+        "headcount": "40000",
+        "revenue": "100000000",
+        "shares_outstanding": "10000000",
+        "pre_provision_profit": None,
+    }
+    return FinancialFactPayload.model_validate({**base, **overrides})
+
+
+def test_every_plausibility_rule_fires_on_its_own_violation() -> None:
+    """D8 for the oracle (#578): a rule that cannot fire measures nothing, so each
+    rule is driven by the exact shape it exists to refuse — including the two
+    incidents that reached the served page (revenue-as-gross-profit inflation and
+    a stale share count driving per-employee off the domain)."""
+    from data_engine.datahub.quality_report import _plausibility_violations
+
+    assert _plausibility_violations(_fact()) == []
+    # A numerator strictly above revenue is impossible accounting.
+    assert _plausibility_violations(_fact(gross_profit="150000000", revenue="100000000")) == [
+        "gross_profit_exceeds_revenue"
+    ]
+    # Division of labor, stated where it can be read: the REAL XOM incident was
+    # gross_profit == revenue (the proxy substitution), and equality passes this
+    # oracle BY DESIGN because payment networks earn it legitimately. The guard
+    # for the equality case is the adapter's industry bound (#533) — the oracle's
+    # job is the strictly-impossible and the out-of-domain, not re-litigating
+    # industry approval.
+    assert _plausibility_violations(_fact(gross_profit="100000000")) == []
+    assert "pre_provision_profit_exceeds_revenue" in _plausibility_violations(
+        _fact(operating_branch="financial", gross_profit=None, pre_provision_profit="200000000")
+    )
+    assert _plausibility_violations(_fact(headcount="0")) == ["nonpositive_headcount"]
+    assert _plausibility_violations(_fact(total_assets="-1")) == ["nonpositive_total_assets"]
+    assert _plausibility_violations(_fact(shares_outstanding="0")) == ["nonpositive_shares_outstanding"]
+    # Domain bound, both sides: $500/employee and $50M/employee are outside any
+    # legitimate issuer's range.
+    assert _plausibility_violations(_fact(headcount="160000000")) == ["per_employee_outside_domain"]
+    assert _plausibility_violations(_fact(headcount="1")) == ["per_employee_outside_domain"]
+
+
+def test_the_boundary_values_are_inside_the_domain() -> None:
+    from data_engine.datahub.quality_report import _plausibility_violations
+
+    exactly_floor = _fact(gross_profit="40000000", headcount="40000")  # $1,000/employee
+    assert _plausibility_violations(exactly_floor) == []

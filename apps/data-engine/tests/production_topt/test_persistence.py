@@ -833,3 +833,20 @@ def test_the_vintage_axis_reaches_the_served_mart_row(connection) -> None:
         assert operating == _dt.date(2025, 12, 31)
         assert revenue == _dt.date(2025, 12, 31)
         assert shares == _dt.date(2026, 3, 15)
+
+
+def test_the_oracle_catches_the_fixtures_own_impossible_numbers(connection) -> None:
+    """#578 integration — and an honest confession: the oracle's first catch is this
+    suite's own corpus, in two distinct ways nobody noticed while inventing values.
+    Non-financial bundles assert gross_profit 210M over revenue 100M — impossible
+    accounting. The financial and insurance bundles pair an invented 80M numerator
+    with the REAL seeded headcounts (JPM at 309,926 people), which is $258 per
+    employee — below any legitimate issuer's floor. Fixture data that survives this
+    oracle now has to be at least arithmetically possible."""
+    plan = _capture(connection, version="test-578-oracle")
+    report = quality_report.build_report(connection, plan.run_id)
+    cells = report["plausibility_cells"]
+    assert cells, "financial-fact cells must be graded"
+    assert report["implausible_count"] == len(cells) == 21
+    reasons = {tuple(cell["violated"]) for cell in cells.values()}
+    assert reasons == {("gross_profit_exceeds_revenue",), ("per_employee_outside_domain",)}
