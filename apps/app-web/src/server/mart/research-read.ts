@@ -112,7 +112,10 @@ const MODULE_CATALOG: readonly {
   gate: string;
   field: keyof StrategyRunDecision | null;
 }[] = [
-  { module: 1, name: "PEG", note: "three versioned growth conventions", gate: "Gate 2", field: null },
+  // `field` must name the decision key the module writes, or the badge reports the
+  // catalog's opinion instead of the data (Copilot review on #603: PEG read "unavailable"
+  // while `peg` values were present and rendering on /research/rankings).
+  { module: 1, name: "PEG", note: "recency-weighted historical growth", gate: "Gate 2", field: "peg" },
   {
     module: 2,
     name: "Gross profit / employee",
