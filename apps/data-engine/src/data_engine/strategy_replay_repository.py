@@ -108,8 +108,8 @@ def write_strategy_decision(connection: Connection[Any], decision: Decision, *, 
         insert into mart.strategy_decisions (
             strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
             capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
-            valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         on conflict (strategy_decision_id) do nothing
         returning strategy_decision_id
         """,
@@ -129,6 +129,7 @@ def write_strategy_decision(connection: Connection[Any], decision: Decision, *, 
             decision.exclusion_reason,
             decision.rank,
             decision.target_weight,
+            decision.peg,
         ),
     ).fetchone()
     if inserted is not None:

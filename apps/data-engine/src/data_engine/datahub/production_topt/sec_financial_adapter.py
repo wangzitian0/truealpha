@@ -28,7 +28,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation, localcontext
 from typing import Any
 
 from factors.production_topt import OperatingBranch
@@ -54,6 +54,10 @@ from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION,
 # An annual period: shorter spans are quarterly facts that must not be compared with
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
+
+# Matches libs/factors' factor arithmetic so a rate derived here and a ratio computed
+# downstream cannot disagree on rounding.
+_DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 
 # How far before the cutoff a share count may have been measured and still be used.
 #
@@ -102,6 +106,20 @@ class FinancialFactsBundle:
     # revenue" is a coincidence for some issuers and the substitution must be auditable
     # (#533). The adapter refuses it for industries the proxy was not approved for.
     gross_profit_is_revenue_proxy: bool = False
+    # Module 1 (PEG) needs multi-period earnings, and company-facts already carries every
+    # annual period. Deriving the compound rate HERE means PEG needs no new data plane:
+    # `staging.financial_facts` is empty in Production with no reachable writer (#530),
+    # and the two defects in that plane (#572) do not apply to this path -- net income is
+    # split-immune, and `annual_values_by_period_end` already refuses periods shorter than
+    # `_ANNUAL_MINIMUM_DAYS`, which is what makes a six-month row a growth observation.
+    # The latest annual net income, which module 1's multiple divides the market cap by.
+    # Carried alongside the rate because both halves of PEG must sit on one earnings basis.
+    net_income: Decimal | None = None
+    earnings_cagr: Decimal | None = None
+    # Both endpoints, so the window behind the rate is auditable rather than implied, and
+    # so a consumer can check the rate was not built from a filing later than the cutoff.
+    earnings_cagr_base_period_end: date | None = None
+    earnings_cagr_latest_period_end: date | None = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +422,7 @@ def build_bundle(
     *,
     raw_bytes: bytes | None = None,
     ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
+    earnings_cagr_years: int | None = None,
 ) -> FinancialFactsBundle:
     """Extract the PIT financial-fact bundle from a company-facts payload.
 
@@ -439,6 +458,14 @@ def build_bundle(
         _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)),
     )
     revenue = _latest(resolve_field(facts, ruleset, "revenue", cutoff))
+    # The growth basis for module 1. `resolve_field` already returns EVERY annual period
+    # knowable at the cutoff, filed-date-resolved and duration-filtered, so the whole
+    # series is here and the bundle simply stops discarding it.
+    earnings_periods = resolve_field(facts, ruleset, "net_income", cutoff) if earnings_cagr_years is not None else {}
+    net_income = _latest(earnings_periods) if earnings_periods else None
+    earnings_cagr, cagr_base, cagr_latest = (
+        _earnings_cagr(earnings_periods, earnings_cagr_years) if earnings_cagr_years is not None else (None, None, None)
+    )
     # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
     # the branch only decides WHICH versioned extraction asserts the operating numerator:
     # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
@@ -450,7 +477,7 @@ def build_bundle(
         profit = insurance_pre_claims_profit(facts, cutoff, ruleset)
     else:
         profit, is_revenue_proxy = _gross_profit_resolved(facts, cutoff, ruleset)
-    resolved = [datum for datum in (profit, assets, shares, revenue) if datum is not None]
+    resolved = [datum for datum in (profit, assets, shares, revenue, cagr_base, cagr_latest) if datum is not None]
     knowable = max((datum.filed for datum in resolved), default=None)
     return FinancialFactsBundle(
         gross_profit=_v(profit),
@@ -469,6 +496,10 @@ def build_bundle(
         revenue_period_end=None if revenue is None else revenue.period_end,
         shares_period_end=shares_period_end,
         gross_profit_is_revenue_proxy=is_revenue_proxy,
+        net_income=_v(net_income),
+        earnings_cagr=earnings_cagr,
+        earnings_cagr_base_period_end=None if cagr_base is None else cagr_base.period_end,
+        earnings_cagr_latest_period_end=None if cagr_latest is None else cagr_latest.period_end,
     )
 
 
@@ -550,6 +581,10 @@ class SecFinancialFactAdapter:
             "operating_period_end": _d(bundle.operating_period_end),
             "revenue_period_end": _d(bundle.revenue_period_end),
             "shares_period_end": _d(bundle.shares_period_end),
+            "net_income": _s(bundle.net_income),
+            "earnings_cagr_3y": _s(bundle.earnings_cagr),
+            "earnings_cagr_base_period_end": _d(bundle.earnings_cagr_base_period_end),
+            "earnings_cagr_latest_period_end": _d(bundle.earnings_cagr_latest_period_end),
         }
         return FetchSuccess(
             raw=RawResponse(
@@ -571,6 +606,30 @@ def _confidence(payload: dict[str, str | None]) -> Decimal:
     """Per-source-class confidence prior (#207/#404); the calibrated formula is #337."""
     present = sum(payload.get(field) is not None for field in ("gross_profit", "total_assets", "shares_outstanding"))
     return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
+
+
+def _earnings_cagr(values: dict[date, _Datum], years: int) -> tuple[Decimal | None, _Datum | None, _Datum | None]:
+    """The compound annual growth rate of an annual series, plus the two periods used.
+
+    Returns `(None, None, None)` unless BOTH endpoints exist exactly `years` apart. The
+    window is never stretched to whatever history happens to exist: a rate over a
+    different number of years is a different number, and mixing them makes issuers
+    incomparable inside one ranking. A sign change resolves to None as well -- the root
+    of a negative ratio is undefined, and a swing from loss to profit has no compound
+    rate to divide a multiple by.
+    """
+    if not values:
+        return None, None, None
+    latest_end = max(values)
+    base_end = next((end for end in values if end.year == latest_end.year - years), None)
+    if base_end is None:
+        return None, None, None
+    latest, base = values[latest_end], values[base_end]
+    if base.value <= 0 or latest.value <= 0:
+        return None, base, latest
+    with localcontext(_DECIMAL_CONTEXT):
+        rate = (latest.value / base.value) ** (Decimal(1) / Decimal(years)) - Decimal(1)
+    return rate, base, latest
 
 
 def _fresh_shares(datum: _Datum | None, cutoff: date) -> _Datum | None:

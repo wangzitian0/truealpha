@@ -80,10 +80,10 @@ if (admin !== null) {
       `insert into mart.strategy_decisions
          (strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
           capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
-          valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight)
+          valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg)
        values
-         ($1, $2, $3, 'issuer:zeta', '2026-03-31T00:00:00Z', '12.5', 'tech', '20', '18.75', '0.5', true, 'selected', null, 1, '1.0'),
-         ($4, $5, $3, 'issuer:adm',  '2026-03-31T00:00:00Z', null, null, null, null, null, false, 'excluded', 'insufficient_confidence', null, null)`,
+         ($1, $2, $3, 'issuer:zeta', '2026-03-31T00:00:00Z', '12.5', 'tech', '20', '18.75', '0.5', true, 'selected', null, 1, '1.0', '0.50'),
+         ($4, $5, $3, 'issuer:adm',  '2026-03-31T00:00:00Z', null, null, null, null, null, false, 'excluded', 'insufficient_confidence', null, null, null)`,
       [`strategy-decision:${hex64()}`, hex64(), runId, `strategy-decision:${hex64()}`, hex64()],
     );
 
@@ -108,6 +108,10 @@ if (admin !== null) {
     assert(second.valuation_gap === "0.5" && typeof second.valuation_gap === "string", "numeric stays a string");
     assert(second.target_weight === "1.0", "target_weight round-trips verbatim");
     assert(second.rank === 1, "rank round-trips as an integer");
+    // Module 1 (#284): a factor that reaches mart but not the read model is invisible on
+    // the surface the owner looks at, which is the gap #434 exists to close.
+    assert(second.peg === "0.50", `expected peg '0.50' on the read path, got ${second.peg}`);
+    assert(first.peg === null, "an excluded decision carries no PEG");
 
     // An unknown key reads no run — the same structured outcome the Python repo returns.
     const missing = await new MartStrategyRunRepository().getLatest(`nonexistent-${randomBytes(4).toString("hex")}`, CONTEXT);

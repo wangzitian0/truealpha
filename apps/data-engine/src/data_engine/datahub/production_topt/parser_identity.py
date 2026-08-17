@@ -33,12 +33,14 @@ PARSER_VERSION_HISTORY = (
     "production-topt-live-parser:v2",
     "production-topt-live-parser:v3",
     "production-topt-live-parser:v4",
+    "production-topt-live-parser:v5",
 )
 MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v1",
     "production-topt-live-map:v2",
     "production-topt-live-map:v3",
     "production-topt-live-map:v4",
+    "production-topt-live-map:v5",
 )
 
 PARSER_VERSION = PARSER_VERSION_HISTORY[-1]
@@ -66,3 +68,9 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # This changes a resolved value (V's shares go from a 2010 figure to absent), which is why
 # it takes a version rather than a silent correction: under the old identity the two would
 # be the same issuer, the same period and a different number.
+#
+# v4 -> v5 (#284): the ruleset gained `net_income` and the payload gained
+# `earnings_cagr_3y` with both of its period endpoints, so module 1 can compute PEG from
+# the annual series company-facts already carries. The parse resolves a field it did not
+# before, which is a new parse rather than a restatement of the old one -- under the v4
+# identity an observation with and without the growth basis would be indistinguishable.

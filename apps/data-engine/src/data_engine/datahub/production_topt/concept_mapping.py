@@ -59,6 +59,20 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "GrossProfit"},),
             },
             {
+                # Module 1's growth basis. NOT per-share: a diluted-EPS series is
+                # incomparable across a stock split and nothing here adjusts for one
+                # (`staging.mvp_corporate_actions` is empty). Netflix's stored EPS reads
+                # 11.24, 9.95, 1.20, 1.98, 2.53 for 2021-2025 because the 10-for-1 split
+                # restated the recent years and left older filings on the pre-split
+                # basis, so an EPS CAGR shows a 37%/yr DECLINE for an issuer whose net
+                # income went $4.49B -> $10.98B. Net income is company-level and a split
+                # cannot touch it. `NetIncomeLoss` is present for all 20 TOPT issuers.
+                "field": "net_income",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "NetIncomeLoss"},),
+            },
+            {
                 "field": "total_assets",
                 "unit": "USD",
                 "kind": "synonym",

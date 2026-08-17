@@ -69,6 +69,10 @@ class Decision:
     rank: int | None = None
     target_weight: Decimal | None = None
     confidence: Decimal | None = None
+    # Module 1 (#284), recorded but not selecting. Part of the content hash because it is
+    # part of what the decision asserts about the issuer; when a versioned definition bump
+    # lets PEG enter selection it is already covered.
+    peg: Decimal | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -91,6 +95,7 @@ class Decision:
             "rank": self.rank,
             "target_weight": str(self.target_weight) if self.target_weight is not None else None,
             "confidence": str(self.confidence) if self.confidence is not None else None,
+            "peg": str(self.peg) if self.peg is not None else None,
         }
 
 
@@ -127,6 +132,7 @@ def _to_decision(evaluated: EvaluatedDecision, cutoff_at: str) -> Decision:
         rank=evaluated.rank,
         target_weight=evaluated.target_weight,
         confidence=evaluated.confidence,
+        peg=evaluated.peg,
     )
 
 

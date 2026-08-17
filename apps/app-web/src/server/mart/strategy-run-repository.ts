@@ -62,7 +62,7 @@ const DECISIONS_SQL = `
          end as cutoff_at,
          capital_adjusted_labor_efficiency, tier,
          current_price_to_sales, target_price_to_sales, valuation_gap,
-         eligible, outcome, exclusion_reason, rank, target_weight
+         eligible, outcome, exclusion_reason, rank, target_weight, peg
   from mart.strategy_decisions
   where strategy_run_id = $1
   order by mart.strategy_decisions.cutoff_at, issuer_id
@@ -155,6 +155,10 @@ function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
     exclusion_reason: typeof row.exclusion_reason === "string" ? row.exclusion_reason : null,
     rank: (rank as number | null) ?? null,
     target_weight: boundedDecimalString(row.target_weight, "target_weight"),
+    // Module 1 (#284). Nullable by design: PEG is undefined for non-positive earnings or
+    // growth and the factor returns no value rather than a signed one, so the read model
+    // must carry the absence rather than coercing it to a number.
+    peg: decimalString(row.peg, "peg"),
   };
 }
 

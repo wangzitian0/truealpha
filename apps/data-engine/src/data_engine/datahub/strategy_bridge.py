@@ -17,7 +17,7 @@ never read (#429 invariant I2).
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -30,7 +30,19 @@ from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION a
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import write_replay
 
-_STRATEGY_FINANCIAL_KEYS = ("gross_profit", "total_assets", "headcount", "revenue", "shares_outstanding")
+# `net_income` and `earnings_cagr_3y` are module 1's two additions (#284). The CAGR is a
+# rate the adapter reduced from the annual series rather than a raw fact, and it crosses
+# here as an ordinary input because `strategy_backtest_inputs` has no fiscal-period
+# dimension — giving it one means the read path #530 tracks.
+_STRATEGY_FINANCIAL_KEYS = (
+    "gross_profit",
+    "total_assets",
+    "headcount",
+    "revenue",
+    "shares_outstanding",
+    "net_income",
+    "earnings_cagr_3y",
+)
 
 
 def load_strategy_definition() -> LargeModelValueV0Definition:
@@ -62,7 +74,7 @@ def seed_strategy_inputs_from_capture(
     """
     rows = connection.execute(
         """
-        select o.semantic_type, o.confidence, p.normalized_payload
+        select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at
         from raw.capture_obligations ob
         join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
         join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
@@ -74,31 +86,38 @@ def seed_strategy_inputs_from_capture(
         (run_id, parser_version),
     ).fetchall()
 
-    financial: dict[str, tuple[str, dict, Decimal]] = {}  # issuer -> (listing, payload, confidence)
-    price: dict[str, tuple[str, dict, Decimal]] = {}
-    for semantic_type, confidence, payload in rows:
+    # issuer -> (canonical listing, payload, confidence, the observation's own knowable_at)
+    financial: dict[str, tuple[str, dict, Decimal, datetime]] = {}
+    price: dict[str, tuple[str, dict, Decimal, datetime]] = {}
+    for semantic_type, confidence, payload, observed_at in rows:
         issuer_id, listing_id = payload["issuer_id"], payload["listing_id"]
         bucket = financial if semantic_type == "financial-fact" else price
         current = bucket.get(issuer_id)
         if current is None or listing_id < current[0]:  # canonical listing = lowest listing_id
-            bucket[issuer_id] = (listing_id, payload, Decimal(str(confidence)))
+            bucket[issuer_id] = (listing_id, payload, Decimal(str(confidence)), observed_at)
 
-    knowable_at = cutoff - timedelta(minutes=58)
     written = 0
     for issuer_id in sorted(set(financial) | set(price)):
-        inputs: list[tuple[str, str, Decimal]] = []
+        # `knowable_at` is the observation's OWN knowable time, not a constant offset from
+        # the cutoff. It used to be `cutoff - 58 minutes`, which satisfies the table's
+        # `knowable_at <= cutoff_at` CHECK for every row while saying nothing about when
+        # the data actually became public — so a replay at a historical cutoff could
+        # consume a figure that was not knowable then and no constraint would object. That
+        # matters most for a derived multi-period input like `earnings_cagr_3y`, whose
+        # basis spans several filings (#284).
+        inputs: list[tuple[str, str, Decimal, datetime]] = []
         if issuer_id in financial:
-            _listing, payload, confidence = financial[issuer_id]
+            _listing, payload, confidence, observed_at = financial[issuer_id]
             for key in _STRATEGY_FINANCIAL_KEYS:
                 value = payload.get(key)
                 if value is not None:
-                    inputs.append((key, value, confidence))
+                    inputs.append((key, value, confidence, observed_at))
         if issuer_id in price:
-            _listing, payload, confidence = price[issuer_id]
+            _listing, payload, confidence, observed_at = price[issuer_id]
             close = payload.get("close")
             if close is not None:
-                inputs.append(("last_close", close, confidence))
-        for input_key, value, confidence in inputs:
+                inputs.append(("last_close", close, confidence, observed_at))
+        for input_key, value, confidence, knowable_at in inputs:
             connection.execute(
                 """
                 insert into staging.strategy_backtest_inputs
