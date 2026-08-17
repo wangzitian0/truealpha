@@ -448,7 +448,7 @@ class PostgresToptCoreRepository:
                     observation.observation_id,
                     observation.confidence,
                     case
-                        when %s - observation.knowable_at <= policy.freshness_max_age then 'fresh'
+                        when %s - observation.knowable_at <= coalesce(nullif(policy.semantic_freshness_max_age->>observation.semantic_type, '')::interval, policy.freshness_max_age) then 'fresh'
                         else 'stale'
                     end as cutoff_freshness_state,
                     observation.knowable_at,

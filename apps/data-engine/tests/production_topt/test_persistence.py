@@ -652,3 +652,56 @@ def test_vintage_and_fetch_stamps_are_source_truth_not_cutoff_arithmetic(connect
         # Audit clocks: within this test's own wall-clock window, never cutoff-derived.
         assert before <= fetched_at <= after, (before, fetched_at, after)
         assert before <= recorded_at <= after, (before, recorded_at, after)
+
+def test_semantic_freshness_windows_round_trip_and_cast(connection) -> None:
+    """#530 slice 2: the per-semantic windows land as text intervals the views can cast.
+
+    End-to-end grading flips only in slice 3 (real knowable_at); this slice proves the
+    storage leg — the map survives the repository, casts via ::interval, and an absent
+    key falls back to the policy's single freshness_max_age.
+    """
+    import datetime as _dt
+
+    from data_engine.datahub.control_plane import replay_retry_policy
+    from data_engine.datahub.repository import PostgresCaptureControlRepository
+    from truealpha_contracts.datahub import CaptureSchedulePolicy
+
+    policy = CaptureSchedulePolicy(
+        policy_version="test-530-windows",
+        demanded_cadence=_dt.timedelta(days=1),
+        freshness_max_age=_dt.timedelta(days=2),
+        semantic_freshness_max_age={
+            "market-price": _dt.timedelta(days=5),
+            "financial-fact": _dt.timedelta(days=730),
+        },
+        provider_availability_cadence="scheduled:v1",
+        retry=replay_retry_policy(3),
+    )
+    PostgresCaptureControlRepository(connection).put_schedule_policy(policy)
+
+    fact_window, price_window, fallback = connection.execute(
+        """
+        select
+          nullif(semantic_freshness_max_age->>'financial-fact', '')::interval,
+          nullif(semantic_freshness_max_age->>'market-price', '')::interval,
+          coalesce(nullif(semantic_freshness_max_age->>'listing-identity', '')::interval, freshness_max_age)
+        from raw.capture_schedule_policies where schedule_policy_id = %s
+        """,
+        (policy.schedule_policy_id,),
+    ).fetchone()
+    assert fact_window == _dt.timedelta(days=730)
+    assert price_window == _dt.timedelta(days=5)
+    # The undeclared semantic falls back to the single window — existing behavior.
+    assert fallback == _dt.timedelta(days=2)
+
+    # The exact expression the materializer and both views use, on both sides of the
+    # 730-day window: a 60-day-old filed date grades fresh, a 3-year-old one stale.
+    fresh, stale = connection.execute(
+        """
+        select interval '60 days' <= x.w, interval '1100 days' <= x.w
+        from (select nullif(semantic_freshness_max_age->>'financial-fact', '')::interval as w
+              from raw.capture_schedule_policies where schedule_policy_id = %s) x
+        """,
+        (policy.schedule_policy_id,),
+    ).fetchone()
+    assert fresh is True and stale is False
