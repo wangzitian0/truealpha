@@ -152,6 +152,41 @@ def test_coverage_can_be_required_where_the_data_is_real(
     assert "examined 0 rows where real data was required" in capsys.readouterr().err
 
 
+def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
+    """Review caught the invariants inventing their own run resolution: `order by
+    created_at desc` picked a GPPE run nothing serves — production's pointer
+    targets capture-run:8c49eec8… while the newest row belongs to
+    capture-run:49a1f57e…. Checking a run no consumer reads is not checking a
+    published number.
+
+    So this asserts the Python and the TypeScript scope the head identically. The
+    duplication is deliberate (a Python tool cannot call a TS repository) and
+    therefore needs a guard — #462's defect is exactly this read reimplemented
+    without one."""
+    ts = (REPO_ROOT / "apps/app-web/src/server/mart/topt-gppe-repository.ts").read_text()
+    head = ts.split("POINTER_HEAD_SQL", 1)[1].split("`", 2)[1]
+    for predicate in (
+        "current_pointer_head",
+        "environment = 'production'",
+        "factor_id = 'gross_profit_per_employee'",
+        "order by advanced_at desc",
+    ):
+        assert predicate in head, f"the consumer no longer scopes the head by {predicate!r}"
+        assert predicate in _module.GOVERNED_HEAD, (
+            f"the invariants resolve the governed head without {predicate!r}, so they check a run "
+            f"the App does not serve"
+        )
+
+
+def test_the_strategy_run_matches_the_consumer_that_serves_it() -> None:
+    """Same, for the strategy plane: the App surfaces the latest run PER
+    strategy_key, not the latest across all strategies."""
+    ts = (REPO_ROOT / "apps/app-web/src/server/mart/strategy-run-repository.ts").read_text()
+    assert "where strategy_key = $1" in ts
+    assert "strategy_key = " in _module.LATEST_STRATEGY_RUN
+    assert "order by executed_at desc, created_at desc, strategy_run_id desc" in _module.LATEST_STRATEGY_RUN
+
+
 def test_every_shipped_exemption_names_an_issue_and_a_future_date() -> None:
     """The file is the mechanism; a malformed entry silently disables a guard."""
     exemptions = _module.load_exemptions()
