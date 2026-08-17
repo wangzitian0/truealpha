@@ -8,22 +8,16 @@ long finished work has been invisible.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from truealpha_runtime.testing import load_tool
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-MODULE_PATH = REPO_ROOT / "tools/deploy_freshness.py"
-SPEC = importlib.util.spec_from_file_location("truealpha_deploy_freshness", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-_module = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = _module
-SPEC.loader.exec_module(_module)
+_module = load_tool("deploy_freshness")
 check_freshness = _module.check_freshness
 
 URL = "https://truealpha.club/api/health"

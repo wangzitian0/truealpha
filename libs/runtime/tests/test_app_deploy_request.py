@@ -11,15 +11,11 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from truealpha_runtime.testing import TOOLS, load_tool
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_PATH = REPO_ROOT / "libs/runtime/tests/fixtures/infra_boundary.v1.json"
-MODULE_PATH = REPO_ROOT / "tools/app_deploy_request.py"
-SPEC = importlib.util.spec_from_file_location("truealpha_app_deploy_request", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-renderer = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = renderer
-SPEC.loader.exec_module(renderer)
+renderer = load_tool("app_deploy_request")
 
 
 @pytest.fixture(scope="module")
@@ -255,7 +251,7 @@ def test_cli_exposes_no_authority_or_dispatch_switches(corpus: dict) -> None:
     result = subprocess.run(
         [
             sys.executable,
-            str(MODULE_PATH),
+            str(renderer.__file__),
             "--request-id",
             valid["request_id"],
             "--version-ref",
@@ -274,7 +270,7 @@ def test_cli_exposes_no_authority_or_dispatch_switches(corpus: dict) -> None:
     )
     assert json.loads(result.stdout) == valid
     assert result.stderr == ""
-    assert "repository_dispatch" not in MODULE_PATH.read_text(encoding="utf-8")
+    assert "repository_dispatch" not in (TOOLS / "app_deploy_request.py").read_text(encoding="utf-8")
 
 
 def test_frozen_corpus_documents_stable_tag_only_policy(corpus: dict) -> None:

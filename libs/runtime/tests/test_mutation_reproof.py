@@ -8,17 +8,12 @@ be added without a mutation.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
+from truealpha_runtime.testing import load_tool
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
-MODULE_PATH = REPO_ROOT / "tools/mutation_reproof.py"
-SPEC = importlib.util.spec_from_file_location("truealpha_mutation_reproof", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-_module = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = _module
-SPEC.loader.exec_module(_module)
+_module = load_tool("mutation_reproof")
 
 #: A guard whose whole value is catching a class of defect statically. Adding one
 #: without a mutation makes it decoration the day someone weakens it, which is

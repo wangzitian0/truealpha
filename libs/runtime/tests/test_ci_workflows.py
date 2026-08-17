@@ -18,6 +18,7 @@ workflow's shape does not belong beside one about a function's return value.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import re
 import sys
@@ -224,4 +225,41 @@ def test_no_other_test_reads_a_workflow_directly() -> None:
         f"{offenders} read a workflow directly. Workflow-shape assertions live in "
         f"{Path(__file__).name} and resolve steps through tests/workflow_contract.py "
         f"(#583)"
+    )
+
+
+def test_no_test_bootstraps_a_tools_script_by_hand() -> None:
+    """The second copy-paste the same six files carried.
+
+    Deleting nine copies is a run that happened; this is the check that runs
+    again (rule 7). Without it a tenth copy lands silently — verified by adding
+    one, which the scan above did not notice because it looks for a different
+    string.
+
+    Scoped to `tools/` on purpose. This file's own `spec_from_file_location`
+    loads a tests-directory sibling, which is a different problem with a
+    different right answer, so forbidding the call outright would push a
+    correct use into an exemption.
+
+    Parsed rather than grepped, because the first version matched "tools"
+    anywhere in the file and the first thing it flagged was this test — the
+    word appears in the failure message three lines down. A scanner that reads
+    prose as code is the defect `source-contracts.test.ts` already learned once.
+    """
+    offenders = []
+    for path in sorted((REPO_ROOT / "libs/runtime/tests").glob("test_*.py")):
+        source = path.read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            if name != "spec_from_file_location":
+                continue
+            if "tools" in (ast.get_source_segment(source, node) or ""):
+                offenders.append(path.name)
+    assert not offenders, (
+        f"{offenders} bootstrap a tools/ script by hand. Use "
+        f"`truealpha_runtime.testing.load_tool(name)` — it registers the module in "
+        f"sys.modules before exec, which a hand copy forgets and a dataclass in the "
+        f"tool then fails on (#583)"
     )
