@@ -9,8 +9,9 @@ neighbours had the same fragility; nobody noticed, because each file had
 invented the technique separately.
 
 These tests now resolve workflows, jobs and steps by name through
-`truealpha_runtime.workflow_contract`, which raises when the thing a test is
-about no longer exists — a better failure than an assertion over the wrong
+`tests/workflow_contract.py` — test infrastructure, beside the tests rather than
+in the runtime package, since nothing the application or the deployers run reads
+a workflow file. It raises when the thing a test is about no longer exists — a better failure than an assertion over the wrong
 slice. The tool-behaviour tests stay in their own files; a test about a
 workflow's shape does not belong beside one about a function's return value.
 """
@@ -221,6 +222,6 @@ def test_no_other_test_reads_a_workflow_directly() -> None:
             offenders.append(path.name)
     assert not offenders, (
         f"{offenders} read a workflow directly. Workflow-shape assertions live in "
-        f"{Path(__file__).name} and resolve steps through truealpha_runtime.workflow_contract "
+        f"{Path(__file__).name} and resolve steps through tests/workflow_contract.py "
         f"(#583)"
     )
