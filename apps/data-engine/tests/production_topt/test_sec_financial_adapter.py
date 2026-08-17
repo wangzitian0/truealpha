@@ -9,6 +9,7 @@ from data_engine.datahub.production_topt.issuer_registry import (
     revenue_proxy_allowed_for_sic,
 )
 from data_engine.datahub.production_topt.sec_financial_adapter import (
+    EARNINGS_CAGR_YEARS,
     FinancialFactsBundle,
     HeadcountFact,
     SecFinancialFactAdapter,
@@ -19,6 +20,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     gross_profit,
     insurance_pre_claims_profit,
     pre_provision_profit,
+    sec_financial_fetcher,
 )
 from factors.production_topt import OperatingBranch
 from truealpha_contracts import ObligationReasonCode
@@ -1084,3 +1086,68 @@ def test_net_income_falls_back_to_profit_loss_for_the_latest_year() -> None:
     # 2023 resolves to 100 from the preferred tag, not 999: rates are 25%, 30%, 23.08%,
     # weighted 1:2:3 -> 25.71%.
     assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2571")
+
+
+def test_the_deployed_fetcher_resolves_the_growth_basis_without_being_asked() -> None:
+    """The regression this arms: PEG's two inputs were structurally null in production.
+
+    `build_bundle` took `earnings_cagr_years: int | None = None`, and `sec_financial_fetcher`
+    — the only deployed caller — never passed it. So every real run emitted `net_income` and
+    `earnings_cagr_3y` as keys whose value was null for all 20 issuers, `mart.peg` was NULL
+    everywhere, and the run reported SUCCESS. Every existing CAGR test above passes
+    `earnings_cagr_years=3` explicitly, which is exactly why none of them saw it: they
+    supplied the argument production omits.
+
+    So this test asserts through the DEPLOYED entry point and passes no window at all. Wire
+    the growth basis behind a flag again and it fails here.
+    """
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", 120),
+        ("2024-01-01", "2024-12-31", 150),
+        ("2025-01-01", "2025-12-31", 200),
+    )
+    monkeypatched: dict[str, object] = {}
+
+    def fake_fetch(cik: int) -> tuple[bytes, dict[str, object]]:
+        monkeypatched["cik"] = cik
+        return b"{}", facts
+
+    from data_engine.sources import sec
+
+    original = sec.fetch_company_facts_response
+    sec.fetch_company_facts_response = fake_fetch  # type: ignore[assignment]
+    try:
+        bundle = sec_financial_fetcher(7, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL)
+    finally:
+        sec.fetch_company_facts_response = original  # type: ignore[assignment]
+
+    assert monkeypatched["cik"] == 7
+    assert bundle.net_income == Decimal("200"), "the deployed path must resolve net income"
+    assert bundle.earnings_cagr is not None, "the deployed path must resolve the growth basis"
+    assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
+    assert bundle.earnings_cagr_latest_period_end == date(2025, 12, 31)
+
+
+def test_the_payload_key_names_the_window_it_measures() -> None:
+    """`earnings_cagr_3y` is a literal in the payload, the `input_key` CHECK, the bridge's
+    key tuple and the evaluator's lookup. Changing `EARNINGS_CAGR_YEARS` without renaming
+    all of them would publish a 5-year rate under a key that says three."""
+    assert EARNINGS_CAGR_YEARS == 3
+    item = _work_item("c" * 64)
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda cik, cutoff, branch: build_bundle(
+            _earnings_facts(
+                ("2022-01-01", "2022-12-31", 100),
+                ("2023-01-01", "2023-12-31", 120),
+                ("2024-01-01", "2024-12-31", 150),
+                ("2025-01-01", "2025-12-31", 200),
+            ),
+            cutoff,
+            branch,
+        ),
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert f"earnings_cagr_{EARNINGS_CAGR_YEARS}y" in result.record.payload

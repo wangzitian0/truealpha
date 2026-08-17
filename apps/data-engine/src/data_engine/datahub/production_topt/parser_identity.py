@@ -86,8 +86,25 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # DIFFERENT number under v6 than under v5 -- exactly the ambiguity a version exists to
 # prevent -- and some issuers resolve none where v5 resolved one.
 #
-# v6 -> v7 (#284): `net_income` gained `ProfitLoss` as a second variant. AVGO's FY2025
-# figure exists in company-facts only under that tag, so v6 resolved no recent endpoint and
-# left PEG unavailable for an issuer whose earnings were on file. The variant resolves a
-# value where v6 resolved none, and for an issuer with material noncontrolling interests it
-# would resolve a DIFFERENT value, which is why it takes a version rather than an edit.
+# v6 -> v7 (#284) carries two changes, and the second is the one that matters in a
+# warehouse:
+#
+# 1. `net_income` gained `ProfitLoss` as a second variant. AVGO's FY2025 figure exists in
+#    company-facts only under that tag, so v6 resolved no recent endpoint and left PEG
+#    unavailable for an issuer whose earnings were on file. The variant resolves a value
+#    where v6 resolved none, and for an issuer with material noncontrolling interests it
+#    would resolve a DIFFERENT value, which is why it takes a version rather than an edit.
+#
+# 2. v5 and v6 never resolved the growth basis IN THE DEPLOYED PATH AT ALL. `build_bundle`
+#    gated `net_income` and `earnings_cagr_3y` behind `earnings_cagr_years`, which defaulted
+#    to None meaning "skip", and `sec_financial_fetcher` — the only deployed caller — never
+#    passed it. Every v6 observation in both environments carries both keys with a null
+#    value (21/21 in Staging, checked in SQL), and `mart.strategy_decisions.peg` is NULL for
+#    all 600 Production and 4,260 Staging decisions. The runs reported SUCCESS throughout.
+#    v7 is therefore the first vintage under which these two fields mean "the source
+#    asserted nothing" rather than "nobody asked" — a v6 null and a v7 null are different
+#    claims about the same issuer, which is the whole reason this tuple exists.
+#
+# Both land in one vintage because v7 was never deployed: no observation anywhere carries
+# it, so there is no v6/v7 boundary in the warehouse to keep clean between them, and (1) is
+# unobservable in production without (2).
