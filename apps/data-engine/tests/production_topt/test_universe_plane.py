@@ -129,3 +129,46 @@ def test_land_publish_resolve_round_trip(connection) -> None:
 def test_resolving_an_unpublished_universe_fails_loud(connection) -> None:
     with pytest.raises(LookupError, match="no published universe head"):
         resolve_universe_corpus(connection, "universe-list:never-published")
+
+
+def test_a_same_day_second_refresh_does_not_smear_the_denominator(connection) -> None:
+    """Two landings on one as_of: the denominator is the newest refresh alone
+    (Copilot Medium on #606 — max(as_of) alone unioned both)."""
+    source = UNIVERSE_SOURCES["qqq"]
+    body = _bytes()
+    from data_engine import raw_store
+
+    for hour, marker in ((10, "first"), (14, "second")):
+        fetched_at = datetime(2026, 8, 17, hour, 0, tzinfo=UTC)
+        fetch_id = raw_store.insert_fetch(
+            connection,
+            source=DataSource.NASDAQ_INDEX,
+            source_record_id=f"index-constituents:qqq:smear-{marker}",
+            body=body + marker.encode(),
+            content_type="application/json",
+            fetched_at=fetched_at,
+            recorded_at=fetched_at,
+        )
+        for i, row in enumerate(parse_nasdaq_index_rows(body)):
+            connection.execute(
+                """
+                insert into staging.etf_constituent_facts
+                    (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, cik, figi, knowable_at)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    "qqq",
+                    date(2026, 8, 17),
+                    DataSource.NASDAQ_INDEX.value,
+                    fetch_id,
+                    row["ticker"],
+                    row["name"],
+                    row.get("market_cap"),
+                    200000 + i,
+                    f"smr{marker}{i:06d}",
+                    fetched_at,
+                ),
+            )
+    denominator = build_denominator(connection, source, report_date=date(2026, 6, 30))
+    assert denominator["instrument_count"] == 102, "one refresh's rows, not the union"
+    assert all(row[1].startswith("security:figi:smrsecond") for row in denominator["instruments"])

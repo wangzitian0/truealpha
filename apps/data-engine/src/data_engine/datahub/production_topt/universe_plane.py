@@ -211,12 +211,19 @@ def build_denominator(connection: Connection[Any], source: UniverseSource, *, re
     rows = connection.execute(
         """
         select ticker, cik, figi from staging.etf_constituent_facts
-        where etf_symbol = %s and as_of = (
-            select max(as_of) from staging.etf_constituent_facts where etf_symbol = %s
+        where etf_symbol = %s and (as_of, knowable_at) = (
+            -- The single newest REFRESH, not the union of a day's refreshes: rows
+            -- of one refresh share their knowable_at, so a same-day re-run cannot
+            -- smear two snapshots into one denominator (Copilot Medium on #606).
+            select as_of, max(knowable_at) from staging.etf_constituent_facts
+            where etf_symbol = %s and as_of = (
+                select max(as_of) from staging.etf_constituent_facts where etf_symbol = %s
+            )
+            group by as_of
         )
         order by ticker
         """,
-        (source.etf, source.etf),
+        (source.etf, source.etf, source.etf),
     ).fetchall()
     if not rows:
         raise LookupError(f"no landed constituents for {source.etf}; run the refresh first")

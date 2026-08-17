@@ -86,3 +86,12 @@ begin
     end if;
 end;
 $$;
+
+-- The thin manual trigger dispatches by job_name since the QQQ pipeline landed;
+-- 0034's check pinned it to the single job of its era (Copilot High on #606 —
+-- without this, QQQ trigger rows cannot even be inserted).
+alter table staging.pipeline_trigger_requests
+    drop constraint if exists pipeline_trigger_requests_job_name_check;
+alter table staging.pipeline_trigger_requests
+    add constraint pipeline_trigger_requests_job_name_check
+    check (job_name in ('topt_live_pipeline', 'qqq_live_pipeline'));
