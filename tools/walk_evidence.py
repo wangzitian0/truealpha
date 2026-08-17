@@ -28,6 +28,9 @@ import subprocess
 import sys
 from collections.abc import Callable, Sequence
 
+from infra2_sdk.deploy_health import HttpGet, default_http_get
+from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
+
 WALK_STEP_NAME = "Walk the deployed surface"
 # Query the release workflow's OWN runs, not every run in the repository: on a
 # busy repo the release run falls off a 100-item all-workflows page within days,
@@ -109,14 +112,34 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     # The value deploy-release.yml's run-name is built from, not the human name.
     parser.add_argument("--deploy-type", required=True)
-    parser.add_argument("--release", required=True)
+    # #585: `--url` replaces the workflow's `curl | jq -r '.git_sha'`, which was
+    # the fourth implementation of this read and the only one that validated
+    # nothing — a non-object body made jq print "null", and this tool then
+    # reported "no 'Deploy prod null' run", a true sentence about the wrong
+    # question. `--release` stays for a manual run against a known tag.
+    parser.add_argument("--url", default="")
+    parser.add_argument("--release", default="")
     parser.add_argument("--environment", default="")
     return parser
 
 
+def resolve_release(url: str, release: str, *, http_get: HttpGet | None = None) -> str:
+    """The release to judge: an explicit one, or whatever the environment serves."""
+    if release:
+        return release
+    if not url:
+        raise MissingWalkEvidence("one of --release or --url is required")
+    return read_deployed_release(url, http_get or default_http_get())
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    return check_walk_evidence(args.deploy_type, args.release, environment=args.environment)
+    try:
+        release = resolve_release(args.url, args.release)
+    except (MissingWalkEvidence, ReleaseIdentityError) as exc:
+        print(f"walk evidence missing: {exc}", file=sys.stderr)
+        return 1
+    return check_walk_evidence(args.deploy_type, release, environment=args.environment)
 
 
 if __name__ == "__main__":

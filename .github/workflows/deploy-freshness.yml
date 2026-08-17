@@ -81,8 +81,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          release="$(curl -fsS "${{ matrix.url }}" | jq -r '.git_sha')"
           uv run --no-sync python tools/walk_evidence.py \
             --deploy-type "${{ matrix.deploy_type }}" \
             --environment "${{ matrix.environment }}" \
-            --release "$release"
+            --url "${{ matrix.url }}"

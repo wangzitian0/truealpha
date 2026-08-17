@@ -248,7 +248,9 @@ def test_non_object_health_json_is_a_verdict_failure_not_a_crash(
     )
     assert exit_code == 1
     assert calls == []
-    assert "does not report a release identity" in capsys.readouterr().err
+    # #585 sharpened this: non-object JSON now says so, instead of being
+    # collapsed into "no identity field" as all three copies used to do.
+    assert "not an object" in capsys.readouterr().err
 
 
 def test_a_release_identity_git_could_read_as_an_option_never_reaches_git(

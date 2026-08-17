@@ -168,7 +168,7 @@ def test_fails_immediately_when_the_runtime_reports_no_release_identity(
         sleep=lambda _: None,
     )
     assert exit_code == 1
-    assert "does not report its release identity" in capsys.readouterr().err
+    assert "does not report a release identity" in capsys.readouterr().err
 
 
 def test_same_kind_mismatch_still_gets_the_rollout_budget() -> None:

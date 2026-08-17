@@ -23,8 +23,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
-import re
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -32,21 +30,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from infra2_sdk.deploy_health import HttpGet, default_http_get
+from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
 
 # Daily releases were the norm before the lane stopped (v0.0.16 through v0.0.19
 # in three days). Three days is therefore comfortably above normal cadence and
 # far below the 15-day gap that went unnoticed: it cannot fire on a weekend of
 # ordinary work, and it cannot stay quiet through the failure it exists for.
 DEFAULT_MAX_AGE_DAYS = 3
-_VERSION_KEYS = ("git_sha", "version")
-
-# The reported release arrives over HTTP and is then handed to git. A value
-# beginning with "-" would be read as an option rather than a revision, and
-# anything with whitespace or shell-significant characters makes the failure
-# non-deterministic. Accept only what a release identifier can actually look
-# like — a tag or a sha — and reject the rest with a message that names the
-# value (review).
-_SAFE_REF = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._/-]{0,199}$")
 
 
 class FreshnessFailure(RuntimeError):
@@ -60,25 +50,6 @@ class Staleness:
     unreleased_commits: int
     oldest_unreleased_age: timedelta | None
     oldest_unreleased_subject: str
-
-
-def reported_release(url: str, http_get: HttpGet) -> str:
-    """The release identifier the environment reports, or raise."""
-    status_code, body = http_get(url)
-    if status_code != 200:
-        raise FreshnessFailure(f"{url} answered HTTP {status_code}, so its release is unknown")
-    try:
-        payload = json.loads(body)
-    except (TypeError, ValueError) as exc:
-        raise FreshnessFailure(f"{url} did not answer JSON: {body[:120]!r}") from exc
-    for key in _VERSION_KEYS:
-        value = payload.get(key) if isinstance(payload, dict) else None
-        if isinstance(value, str) and value and value != "unknown":
-            return value
-    raise FreshnessFailure(
-        f"{url} does not report a release identity (body {body[:120]!r}); freshness cannot be "
-        f"judged until the deployer threads GIT_COMMIT_SHA through"
-    )
 
 
 def _git(args: Sequence[str], repo: str, run: Callable[..., subprocess.CompletedProcess[str]]) -> str:
@@ -97,12 +68,6 @@ def measure(
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> Staleness:
     """How far behind ``origin/main`` the deployed release is."""
-    if not _SAFE_REF.match(deployed_ref):
-        raise FreshnessFailure(
-            f"{environment} reports {deployed_ref!r}, which is not a usable release identifier — "
-            f"a leading '-' would be read by git as an option, and whitespace makes the failure "
-            f"non-deterministic. This value never reaches git"
-        )
     # Not via `_git`: a failing rev-parse must produce the message an operator
     # can act on ("that ref is not in this checkout" — a shallow clone, or tags
     # not fetched), not git's own stderr.
@@ -153,9 +118,9 @@ def check_freshness(
     http_get = http_get or default_http_get()
     max_age = timedelta(days=max_age_days)
     try:
-        deployed_ref = reported_release(url, http_get)
+        deployed_ref = read_deployed_release(url, http_get)
         staleness = measure(environment or url, deployed_ref, repo=repo, now=now, run=run)
-    except FreshnessFailure as exc:
+    except (FreshnessFailure, ReleaseIdentityError) as exc:
         print(f"freshness check failed: {exc}", file=sys.stderr)
         return 1
 
