@@ -141,6 +141,44 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
     return False
 
 
+# ---- Class-B plausibility: single-source semantics get domain falsifiers (#578) ----
+# A financial-fact cell has no second vendor to disagree with it, so its
+# corroboration is accounting identity and domain bounds. Each rule returns its
+# name when VIOLATED; every rule has a fixture that triggers it (D8 — a rule
+# that cannot fire measures nothing). Rule names are report vocabulary.
+_PER_EMPLOYEE_FLOOR = Decimal("1000")
+_PER_EMPLOYEE_CEILING = Decimal("20000000")
+
+
+def _plausibility_violations(fact: FinancialFactPayload) -> list[str]:
+    violated: list[str] = []
+    if fact.gross_profit is not None and fact.revenue is not None and fact.gross_profit > fact.revenue:
+        # Gross profit strictly above revenue is impossible accounting, not an
+        # aggressive margin. Equality is deliberately allowed: payment networks
+        # legitimately run at ~zero COGS (#533's approved proxy).
+        violated.append("gross_profit_exceeds_revenue")
+    if fact.pre_provision_profit is not None and fact.revenue is not None and fact.pre_provision_profit > fact.revenue:
+        violated.append("pre_provision_profit_exceeds_revenue")
+    for name in ("headcount", "total_assets", "shares_outstanding"):
+        value = getattr(fact, name)
+        if value is not None and value <= 0:
+            violated.append(f"nonpositive_{name}")
+    # The branch's own numerator, via the same dispatch the factor and
+    # _has_usable_value use — choosing "whichever field is present" diverges the
+    # moment a payload carries both (Copilot on #599); totality over the branch
+    # enum is guarded by test_the_numerator_map_is_total_over_operating_branches.
+    numerator = getattr(fact, _FINANCIAL_FACT_OPERATING_NUMERATOR[fact.operating_branch])
+    if numerator is not None and fact.headcount is not None and fact.headcount > 0:
+        per_employee = numerator / fact.headcount
+        if not (_PER_EMPLOYEE_FLOOR <= per_employee <= _PER_EMPLOYEE_CEILING):
+            # The glance a human applies, mechanized: $1K-$20M gross profit per
+            # employee brackets every legitimate issuer in the universe with an
+            # order of magnitude to spare on both sides; a 2010 share count or a
+            # revenue-as-gross-profit substitution lands outside it.
+            violated.append("per_employee_outside_domain")
+    return violated
+
+
 class _ObjectReader(Protocol):
     """The one thing lineage verification needs from an object store."""
 
@@ -257,6 +295,7 @@ def build_report(
         """
         select ob.obligation_id,
                regexp_replace(ob.capture_requirement_id, ':v1$', '')      as semantic_type,
+               o.subject_id,
                o.observation_id,
                p.normalized_payload,
                o.freshness_state,
@@ -280,9 +319,11 @@ def build_report(
 
     pointers = _PointerDereferencer(object_store)
     cells: dict[str, _Cell] = {}
+    plausibility: dict[str, dict[str, Any]] = {}
     for (
         obligation_id,
         semantic_type,
+        subject_id,
         observation_id,
         payload,
         freshness_state,
@@ -300,6 +341,20 @@ def build_report(
             cell.confidence = confidence if cell.confidence is None else max(cell.confidence, confidence)
         if not cell.available:
             cell.available = _has_usable_value(semantic_type, payload)
+        if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
+            try:
+                violations = _plausibility_violations(FinancialFactPayload.model_validate(payload))
+            except ValidationError:
+                pass  # unparseable payloads are availability's finding, not this one's
+            else:
+                # UNION across a subject's observations: a later plausible parse
+                # must never flip an earlier violation off the record (Copilot on
+                # #599 — the capture plane can bind several observations to one
+                # subject).
+                cell_grades = plausibility.setdefault(str(subject_id), {"outcome": "plausible", "violated": []})
+                merged = sorted(set(cell_grades["violated"]) | set(violations))
+                cell_grades["violated"] = merged
+                cell_grades["outcome"] = "implausible" if merged else "plausible"
         if not cell.lineage_complete and payload is not None and object_uri is not None:
             cell.lineage_complete = pointers.dereferences(
                 object_uri=object_uri,
@@ -322,6 +377,8 @@ def build_report(
     return {
         "reconciliation_policy_id": RECONCILIATION_POLICY.policy_id,
         "reconciliation_cells": reconciliation,
+        "plausibility_cells": plausibility,
+        "implausible_count": sum(1 for cell in plausibility.values() if cell["outcome"] == "implausible"),
         "run_id": run_id,
         "requested_count": requested,
         "terminal_count": status[1],
