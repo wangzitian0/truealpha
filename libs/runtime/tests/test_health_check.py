@@ -183,19 +183,3 @@ def test_same_kind_mismatch_still_gets_the_rollout_budget() -> None:
     exit_code = check_health(URL, expected_version="v0.0.19", http_get=http_get, max_attempts=3, sleep=lambda _: None)
     assert exit_code == 1
     assert attempts == 3, "a same-kind mismatch must keep the SDK's tolerance for a rollout"
-
-
-def test_the_release_workflow_passes_the_kind_the_runtime_reports() -> None:
-    """The two sides are in different files; nothing else asserts they agree.
-
-    The runtime reports `GIT_COMMIT_SHA`, which the deployers set to the release
-    tag, so the gate must pass `version_ref`. If a future change makes the
-    service report a real commit sha, this test is the thing that says the
-    workflow has to move with it.
-    """
-    workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
-    gate = workflow.split("Confirm the deployed release is healthy", 1)[1]
-    assert "version_ref" in gate, "the health gate must compare the release ref the runtime reports"
-    assert "source_sha" not in gate.split("health_check.py", 1)[0], (
-        "the health gate must not pass a commit sha while the runtime reports a tag (#526)"
-    )

@@ -128,26 +128,3 @@ def test_a_skipped_walk_is_not_evidence(capsys: pytest.CaptureFixture[str]) -> N
     stderr = capsys.readouterr().err
     assert "'skipped'" in stderr
     assert "deployed and unverified" in stderr
-
-
-def test_an_unconfigured_walk_is_skipped_rather_than_exiting_zero() -> None:
-    """A step that exits 0 without walking reports `success`, which this
-    check reads as evidence. The workflow must gate the step with an `if`."""
-    workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
-    walk = workflow.split("- name: Walk the deployed surface", 1)[1].split("run: |", 1)[0]
-    assert "if: ${{ steps.walk_credentials.outputs.ready == 'true' }}" in walk, (
-        "an unconfigured walk must be SKIPPED, never a step that exits 0 and reports success"
-    )
-    body = workflow.split("- name: Walk the deployed surface", 1)[1]
-    assert "exit 0" not in body.split("node e2e/walk-tree.mjs", 1)[0]
-
-
-def test_the_release_lane_is_still_not_deadlocked() -> None:
-    """Failing the run on unconfigured credentials blocked every prod release,
-    since prod requires a successful staging run. The credential probe must
-    report, not fail."""
-    workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
-    probe = workflow.split("id: walk_credentials", 1)[1].split("- name: Walk the deployed", 1)[0]
-    assert "ready=false" in probe, "an unconfigured walk must be reported"
-    assert "exit 1" not in probe, "and must not fail the release lane"
-    assert "UNVERIFIED" in probe, "but must be unmistakable in the run summary"

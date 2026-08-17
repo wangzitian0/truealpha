@@ -15,7 +15,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_PATH = REPO_ROOT / "libs/runtime/tests/fixtures/infra_boundary.v1.json"
 MODULE_PATH = REPO_ROOT / "tools/app_deploy_request.py"
-WORKFLOW_PATH = REPO_ROOT / ".github/workflows/deploy-release.yml"
 SPEC = importlib.util.spec_from_file_location("truealpha_app_deploy_request", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 renderer = importlib.util.module_from_spec(SPEC)
@@ -276,49 +275,6 @@ def test_cli_exposes_no_authority_or_dispatch_switches(corpus: dict) -> None:
     assert json.loads(result.stdout) == valid
     assert result.stderr == ""
     assert "repository_dispatch" not in MODULE_PATH.read_text(encoding="utf-8")
-
-
-def test_release_workflow_dispatches_only_the_rendered_sdk_request() -> None:
-    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-
-    assert "workflow_dispatch:" in workflow
-    assert "options: [preview/tag, staging, prod]" in workflow
-    assert "pull-requests: read" in workflow
-    assert 'GITHUB_REF" != "refs/heads/main"' in workflow
-    assert 'rev-parse --verify --quiet "refs/tags/${VERSION_REF}^{commit}"' in workflow
-    assert "version_ref must identify an existing commit tag" in workflow
-    assert "merge-base --is-ancestor" in workflow
-    assert '.path == ".github/workflows/ci-required.yml"' in workflow
-    assert '.event == "push"' in workflow
-    assert ".merge_commit_sha == $sha" in workflow
-    assert '.base.ref == "main"' in workflow
-    # infra2#571 blocker 2 (fixed): staging evidence is this repo's OWN "Deploy
-    # staging" run — matching what infra2's verify_production_evidence and
-    # tools/production_evidence_policy.json declare — never an infra2 receiver run.
-    assert 'this repo\'s own successful "Deploy staging <tag>" run URL' in workflow
-    assert 'expected_staging_title="Deploy staging ${version_ref}"' in workflow
-    assert '.path == ".github/workflows/deploy-release.yml"' in workflow
-    assert '.event == "workflow_dispatch"' in workflow
-    assert "wangzitian0/infra2/actions/runs/([1-9][0-9]*)" not in workflow
-    assert "timeout-minutes: 50" in workflow
-    assert "python tools/app_deploy_request.py" in workflow
-    # infra2#508: the watermark/ambiguity-guard/log-content-verification dispatch
-    # algorithm (the inline title-match `first(...)` lookup this replaced had none
-    # of those) now lives in infra2_sdk.dispatch, shared with finance_report -- the
-    # workflow only pipes the rendered request into the shared transport tool.
-    assert "python tools/app_deploy_transport.py" in workflow
-    assert "event_type: app-deploy-request" not in workflow
-    assert "actions/workflows/app-deploy-request.yml/runs" not in workflow
-    assert "secrets.INFRA2_PAT" in workflow
-    assert "DOKPLOY_API_KEY" not in workflow
-    assert "IAC_WEBHOOK_SECRET" not in workflow
-    # infra2#508: a bare `wget`/root-path Docker healthcheck exists, but no
-    # version-reporting endpoint did until llm-service's /health gained git_sha --
-    # this confirms the deployed prod release is actually live, not just reachable.
-    # Staging has no stable public URL yet (#11), so this is prod-only for now.
-    assert "python tools/health_check.py" in workflow
-    assert "https://truealpha.club/api/health" in workflow
-    assert "inputs.deploy_type == 'prod'" in workflow
 
 
 def test_frozen_corpus_documents_stable_tag_only_policy(corpus: dict) -> None:

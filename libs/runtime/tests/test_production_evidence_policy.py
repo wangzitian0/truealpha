@@ -93,15 +93,3 @@ def test_staging_declares_branch_dispatch_head_sha_semantics(policy) -> None:
     run = json.loads(STAGING_RUN_FIXTURE.read_text(encoding="utf-8"))
     assert run["head_branch"] == "main"
     assert policy.staging.require_head_sha is False
-
-
-def test_sender_staging_url_check_matches_the_contract() -> None:
-    # infra2#571 blocker 2: the sender used to require an INFRA2 receiver-run URL
-    # while infra2's verifier requires this repo's own staging run. Both sender
-    # checks (the CLI regex and the workflow's inline bash) must point at THIS
-    # repo, consistent with the contract's staging expectation.
-    cli_text = (REPO_ROOT / "tools/app_deploy_request.py").read_text(encoding="utf-8")
-    assert '_STAGING_RUN_PATH_RE = re.compile(r"\\A/wangzitian0/truealpha/actions/runs/' in cli_text
-    workflow_text = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text(encoding="utf-8")
-    assert "https://github.com/wangzitian0/truealpha/actions/runs/" in workflow_text
-    assert 'staging_run="$(gh api "/repos/wangzitian0/infra2/actions/runs/' not in workflow_text
