@@ -25,6 +25,7 @@ weekly refresh publishes a new version only when the mapping actually changed.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -118,6 +119,26 @@ def parse_nasdaq_index_rows(body: bytes) -> list[ConstituentRow]:
     return out
 
 
+def _parse_edgar_cik(body: bytes) -> int | None:
+    match = re.search(rb"CIK=(\d{4,10})", body)
+    return int(match.group(1)) if match else None
+
+
+def _resolve_cik_via_edgar(ticker: str, *, user_agent: str) -> int | None:
+    """Per-ticker authority fallback. SEC's own crosswalk files have gaps — AEP
+    appears in neither company_tickers.json nor company_tickers_exchange.json
+    (10,398 rows, verified 2026-08-17) while EDGAR itself resolves the ticker —
+    so an unresolved ticker asks EDGAR directly rather than failing a
+    102-listing universe on the index's clerical hole."""
+    status, body = _get(
+        f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={ticker}&type=10-K&output=atom&count=1",
+        headers={"User-Agent": user_agent, "Accept": "application/atom+xml"},
+    )
+    if status != 200:
+        return None
+    return _parse_edgar_cik(body)
+
+
 def _resolve_figis(tickers: list[str], *, api_key: str = "") -> dict[str, str]:
     """Share-class FIGIs via OpenFIGI mapping, batched within the anonymous limits."""
     resolved: dict[str, str] = {}
@@ -175,6 +196,16 @@ def refresh_etf_constituents(
 
     cik_index = sec.ticker_cik_index()
     figis = _resolve_figis([row["ticker"] for row in rows], api_key=openfigi_api_key)
+    from data_engine.config import settings as _settings
+
+    for row in rows:
+        normalized = row["ticker"].replace(".", "-")
+        if normalized not in cik_index:
+            fallback = _resolve_cik_via_edgar(
+                row["ticker"], user_agent=_settings.sec_user_agent or "truealpha research"
+            )
+            if fallback is not None:
+                cik_index[normalized] = fallback
     missing = [
         row["ticker"] for row in rows if row["ticker"].replace(".", "-") not in cik_index or row["ticker"] not in figis
     ]

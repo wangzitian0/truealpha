@@ -172,3 +172,15 @@ def test_a_same_day_second_refresh_does_not_smear_the_denominator(connection) ->
     denominator = build_denominator(connection, source, report_date=date(2026, 6, 30))
     assert denominator["instrument_count"] == 102, "one refresh's rows, not the union"
     assert all(row[1].startswith("security:figi:smrsecond") for row in denominator["instruments"])
+
+
+def test_the_edgar_atom_cik_parses() -> None:
+    """The fallback's parse leg on EDGAAR's real answer shape: SEC's crosswalk files
+    miss AEP entirely while browse-edgar resolves it (verified live 2026-08-17)."""
+    from data_engine.datahub.production_topt.universe_plane import _parse_edgar_cik
+
+    assert (
+        _parse_edgar_cik(b'<link href="...cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000004904&amp;type=10-K"/>')
+        == 4904
+    )
+    assert _parse_edgar_cik(b"<feed>no cik here</feed>") is None
