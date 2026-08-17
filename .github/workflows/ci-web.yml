@@ -44,9 +44,14 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          for f in db/migrations/*.sql db/roles.sql; do
-            echo "== $f"
-            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          # #580: a second database, migrated identically and left empty, so
+          # the browser suite can walk the absent-state branch of every surface.
+          createdb -h localhost -U postgres truealpha_empty
+          for db in truealpha truealpha_empty; do
+            for f in db/migrations/*.sql db/roles.sql; do
+              echo "== $db $f"
+              psql -h localhost -U postgres -d "$db" -v ON_ERROR_STOP=1 -f "$f"
+            done
           done
       # Runs every tests/*.test.ts file, not just one hardcoded name — #373
       # found that only issue58-conformance.test.ts was ever invoked here,
@@ -93,15 +98,19 @@ jobs:
       # the surfaces reach `ready` on the same bytes the parity test asserts,
       # plus the member/administrator principals the route-group gates
       # discriminate on.
-      - name: Seed the e2e fixture (two principals + the frozen parity canon)
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+      - name: Seed the e2e fixtures (populated and empty)
         run: |
           set -euo pipefail
           E2E_PASSWORD="$(openssl rand -hex 24)"
           echo "::add-mask::$E2E_PASSWORD"
           echo "E2E_PASSWORD=$E2E_PASSWORD" >> "$GITHUB_ENV"
-          E2E_PASSWORD="$E2E_PASSWORD" bun run scripts/seed-e2e-fixture.ts
+          export E2E_PASSWORD
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/truealpha \
+            bun run scripts/seed-e2e-fixture.ts
+          # The same principals, no mart rows: the login the walk needs, and
+          # nothing else, so every surface renders its absent state (#580).
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/truealpha_empty \
+            bun run scripts/seed-e2e-fixture.ts --principals-only
       # `output: "standalone"` (next.config.mjs) does not copy .next/static, so
       # the server 404s every asset without this.
       #
@@ -111,9 +120,19 @@ jobs:
       # unset SECRET_KEY and the pasted dev default only in production
       # (#447/#481). Depending on whatever the generated server happens to set
       # would make that a claim rather than a property (review).
-      - name: Walk the frozen route tree in a browser
+      # #580: the SAME suite, twice, against two data states. Every UI defect
+      # the 2026-07 review found was in the absent-state branch — the claim
+      # ceiling dropped when no run existed (#551), the run table drew a bare
+      # header when the list was empty (#554), the funnel vanished when it could
+      # not be computed (#554). The suite was green throughout, because it only
+      # ever walked the branch whoever wrote the page was looking at.
+      #
+      # One step with a loop rather than two near-identical steps: the
+      # duplication would be the same class of thing #583/#584/#585 just
+      # deleted. The `::error::` names the state, so a red run identifies the
+      # branch from the summary without opening a log.
+      - name: Walk the frozen route tree in a browser (populated and empty)
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
           TA_BASE_URL: http://127.0.0.1:3000
           TA_EMAIL: admin@e2e.invalid
           # #371: the member pass. Both principals are seeded with the same
@@ -122,14 +141,28 @@ jobs:
         run: |
           set -euo pipefail
           cp -r .next/static .next/standalone/.next/static
-          SECRET_KEY="$(openssl rand -hex 32)" NODE_ENV=production \
-            NEXT_TELEMETRY_DISABLED=1 HOSTNAME=127.0.0.1 PORT=3000 \
-            node .next/standalone/server.js &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          for _ in $(seq 1 60); do
-            curl -fsS -o /dev/null "$TA_BASE_URL/login" && break
-            sleep 1
+          for state in populated empty; do
+            database=truealpha
+            [ "$state" = empty ] && database=truealpha_empty
+            echo "::group::walk against the ${state} database"
+            DATABASE_URL="postgresql://postgres:postgres@localhost:5432/${database}" \
+              SECRET_KEY="$(openssl rand -hex 32)" NODE_ENV=production \
+              NEXT_TELEMETRY_DISABLED=1 HOSTNAME=127.0.0.1 PORT=3000 \
+              node .next/standalone/server.js &
+            server_pid=$!
+            for _ in $(seq 1 60); do
+              curl -fsS -o /dev/null "$TA_BASE_URL/login" && break
+              sleep 1
+            done
+            curl -fsS -o /dev/null "$TA_BASE_URL/login"
+            if ! TA_PASSWORD="$E2E_PASSWORD" node e2e/walk-tree.mjs; then
+              echo "::error::the walk failed against the ${state} database. A failure here only \
+          on ${state} means the page handles one data state and not the other — the shape of \
+          every UI defect #580 was opened for."
+              kill "$server_pid" 2>/dev/null || true
+              exit 1
+            fi
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            echo "::endgroup::"
           done
-          curl -fsS -o /dev/null "$TA_BASE_URL/login"
-          TA_PASSWORD="$E2E_PASSWORD" node e2e/walk-tree.mjs
