@@ -223,3 +223,49 @@ def test_a_non_positive_growth_rate_yields_no_peg_rather_than_a_negative_one() -
     )[0]
     assert decision.peg is None
     assert decision.eligible is True
+
+
+def test_peg_rank_orders_by_peg_without_touching_selection() -> None:
+    """Owner decision (2026-08-17): ranking only, selection later.
+
+    So PEG gets its OWN ordering, recorded alongside, and `rank` / `target_weight` /
+    `outcome` stay exactly what the valuation gap made them. Folding PEG into the primary
+    rank would move the portfolio, which is the one thing landing module 1 must not do
+    before the selection rule is decided.
+    """
+    definition = _definition()
+    issuers = [
+        # Cheap on PEG, worse valuation gap.
+        _peg_inputs(),
+        # Same everything except a weaker growth rate, so a higher (worse) PEG.
+        IssuerInput(
+            issuer_id="issuer:slow",
+            records={**_peg_inputs().records, "earnings_cagr_3y": (Decimal("0.05"), Decimal("0.9"))},
+        ),
+    ]
+    decisions = rank_and_select(
+        evaluate_cutoff(issuers, definition=definition, cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0")),
+        definition=definition,
+    )
+    by_issuer = {d.issuer_id: d for d in decisions}
+    fast, slow = by_issuer["issuer:peg"], by_issuer["issuer:slow"]
+    assert fast.peg is not None and slow.peg is not None
+    assert fast.peg < slow.peg, "a faster grower on the same multiple has the lower PEG"
+    # Lower PEG ranks first.
+    assert fast.peg_rank == 1
+    assert slow.peg_rank == 2
+
+
+def test_an_issuer_without_a_peg_gets_no_peg_rank() -> None:
+    definition = _definition()
+    decisions = rank_and_select(
+        evaluate_cutoff(
+            [_peg_inputs(earnings_cagr_3y="__absent__")],
+            definition=definition,
+            cutoff_at=_PEG_CUTOFF,
+            risk_free_rate=Decimal("0"),
+        ),
+        definition=definition,
+    )
+    assert decisions[0].peg is None
+    assert decisions[0].peg_rank is None, "an absent PEG must not be ranked as if it were the worst"

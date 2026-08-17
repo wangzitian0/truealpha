@@ -615,37 +615,53 @@ def _confidence(payload: dict[str, str | None]) -> Decimal:
 
 
 def _earnings_cagr(values: dict[date, _Datum], years: int) -> tuple[Decimal | None, _Datum | None, _Datum | None]:
-    """The compound annual growth rate of an annual series, plus the two periods used.
+    """The recency-weighted annual growth rate over `years`, plus the window's endpoints.
 
-    Returns `(None, None, None)` unless BOTH endpoints exist `years` apart in ELAPSED
-    TIME. The window is never stretched to whatever history happens to exist: a rate over
-    a different number of years is a different number, and mixing them makes issuers
-    incomparable inside one ranking. A sign change resolves to None as well -- the root of
-    a negative ratio is undefined, and a swing from loss to profit has no compound rate to
-    divide a multiple by.
+    Owner decision (2026-08-17): three years, weights rising toward the present. So this is
+    NOT an endpoint CAGR. An endpoint rate is not equal-weighted, it is zero-weighted on
+    everything between the two ends — a collapse and recovery inside the window leaves it
+    unchanged, which is exactly the shape a recency preference is meant to distinguish. The
+    rate is the weighted mean of the year-over-year rates, weighted 1..n oldest to newest.
+
+    Every year in the window must be present. Dropping a missing one would reweight the
+    survivors without saying so, and the published number would no longer be the thing its
+    `mapping_version` claims. A non-positive observation anywhere in the window resolves to
+    None for the same reason it does at the endpoints: a rate across a sign change is not a
+    growth rate, and here it would additionally dominate the mean.
 
     Elapsed days, not calendar years, because the calendar year of a period END is not the
-    fiscal year. JNJ's FY2021 ends 2022-01-02, so matching `end.year == latest.year - 3`
-    from 2025-12-28 selected a period 1456 days back and reported the rate as if it were
-    1096 -- overstating growth for every issuer whose year ends in early January. Amazon
-    fails the same way for a different reason: its 10-Qs publish trailing-twelve-month
-    windows, so several "annual" periods share one calendar year and the first match was
-    arbitrary. Choosing the period closest to `years x 365.25` fixes both, and a tolerance
-    keeps a 4- or 5-year gap from silently standing in for a 3-year window.
+    fiscal year. JNJ's FY2021 ends 2022-01-02, so matching on `end.year` selected a period
+    1456 days back and reported it as a three-year rate. Amazon fails differently: its
+    10-Qs publish trailing-twelve-month windows, so several "annual" periods share one
+    calendar year and a year-match picked among them arbitrarily.
     """
-    if not values:
+    if not values or years < 1:
         return None, None, None
     latest_end = max(values)
-    target_days = round(years * 365.25)
-    candidates = [end for end in values if end < latest_end]
-    base_end = min(candidates, key=lambda end: abs((latest_end - end).days - target_days), default=None)
-    if base_end is None or abs((latest_end - base_end).days - target_days) > _WINDOW_TOLERANCE_DAYS:
+
+    def nearest(target_days: int) -> date | None:
+        candidates = [end for end in values if end <= latest_end]
+        best = min(candidates, key=lambda end: abs((latest_end - end).days - target_days), default=None)
+        if best is None or abs((latest_end - best).days - target_days) > _WINDOW_TOLERANCE_DAYS:
+            return None
+        return best
+
+    # One observation per year boundary, newest first: 0, 1 .. years back.
+    steps = [nearest(round(offset * 365.25)) for offset in range(years + 1)]
+    if any(end is None for end in steps) or len({end for end in steps}) != years + 1:
         return None, None, None
-    latest, base = values[latest_end], values[base_end]
-    if base.value <= 0 or latest.value <= 0:
+    ordered = [values[end] for end in reversed(steps)]  # type: ignore[index]
+    base, latest = ordered[0], ordered[-1]
+    if any(datum.value <= 0 for datum in ordered):
         return None, base, latest
+
     with localcontext(_DECIMAL_CONTEXT):
-        rate = (latest.value / base.value) ** (Decimal(1) / Decimal(years)) - Decimal(1)
+        weighted, total_weight = Decimal(0), Decimal(0)
+        for index in range(1, len(ordered)):
+            weight = Decimal(index)  # 1 for the oldest step, `years` for the newest
+            weighted += weight * (ordered[index].value / ordered[index - 1].value - Decimal(1))
+            total_weight += weight
+        rate = weighted / total_weight
     return rate, base, latest
 
 

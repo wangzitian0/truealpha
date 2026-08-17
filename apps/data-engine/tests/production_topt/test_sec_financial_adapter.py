@@ -897,8 +897,10 @@ def test_the_bundle_derives_an_earnings_cagr_from_the_payload_it_already_fetched
     )
     bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
     assert bundle.earnings_cagr is not None
-    # (200/100)^(1/3) - 1 = 0.2599
-    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2599")
+    # Yearly rates 20%, 25%, 33.33% weighted 1:2:3 -> (20 + 50 + 100) / 6 = 28.33%.
+    # An endpoint CAGR would have said 25.99%; the owner-chosen weighting favours the
+    # accelerating recent years.
+    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2833")
     # Both endpoints are recorded so the window is auditable rather than implied.
     assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
     assert bundle.earnings_cagr_latest_period_end == date(2025, 12, 31)
@@ -914,6 +916,8 @@ def test_the_cagr_is_never_knowable_before_the_filings_it_consumed() -> None:
     """
     facts = _earnings_facts(
         ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", 120),
+        ("2024-01-01", "2024-12-31", 150),
         ("2025-01-01", "2025-12-31", 200),
     )
     bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
@@ -945,6 +949,8 @@ def test_the_adapter_publishes_the_cagr_and_its_window_in_the_payload() -> None:
     item = _work_item("a" * 64)
     facts = _earnings_facts(
         ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", 120),
+        ("2024-01-01", "2024-12-31", 150),
         ("2025-01-01", "2025-12-31", 200),
     )
     adapter = SecFinancialFactAdapter(
@@ -990,4 +996,55 @@ def test_a_period_that_is_not_close_enough_to_the_window_is_refused() -> None:
         ("2025-01-01", "2025-12-31", 200),
     )
     bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is None
+
+
+def test_the_growth_rate_weights_recent_years_more_heavily() -> None:
+    """Owner decision (2026-08-17): three years, but not equal weights — recent higher.
+
+    A plain endpoint CAGR is not equal-weighted, it is ZERO-weighted on the middle: only
+    the base and the latest observation enter it, so a collapse and recovery in between is
+    invisible. The rate is now the recency-weighted mean of the year-over-year rates inside
+    the window, weights rising linearly toward the present (1:2:3 over three steps).
+
+    Here the yearly rates are +10%, +20% and +50%. Equal weighting gives 26.67%; weighting
+    1:2:3 gives (1*10 + 2*20 + 3*50) / 6 = 33.33%, and an endpoint CAGR would give 24.6%.
+    """
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", 110),
+        ("2024-01-01", "2024-12-31", 132),
+        ("2025-01-01", "2025-12-31", 198),
+    )
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is not None
+    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.3333")
+
+
+def test_a_gap_inside_the_window_refuses_rather_than_skipping_a_year() -> None:
+    """Recency weighting needs every year in the window, not just the endpoints.
+
+    Silently dropping a missing year would change the weights without saying so — the
+    remaining rates would be reweighted and the number would no longer be the thing its
+    version claims. 2024 is absent here.
+    """
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", 110),
+        ("2025-01-01", "2025-12-31", 198),
+    )
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is None
+
+
+def test_a_loss_year_inside_the_window_makes_the_rate_undefined() -> None:
+    # A year-over-year rate across a sign change is not a growth rate, and it would
+    # dominate a weighted mean. Endpoint-only logic could not see this.
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", -50),
+        ("2024-01-01", "2024-12-31", 132),
+        ("2025-01-01", "2025-12-31", 198),
+    )
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
     assert bundle.earnings_cagr is None

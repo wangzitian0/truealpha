@@ -65,6 +65,8 @@ export interface StrategyRunDecision {
   // Module 1 (#284), recorded but not selecting. Optional so a report produced before it
   // existed still validates, and null when PEG is undefined for the issuer.
   peg?: string | null;
+  // Module 1 ordering (#284). Independent of `rank`; PEG does not participate in selection.
+  peg_rank?: number | null;
 }
 
 export interface StrategyRunReport {
@@ -185,6 +187,7 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
       "rank",
       "target_weight",
       "peg",
+      "peg_rank",
     ],
     path,
   );
@@ -218,6 +221,12 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
     fail(`${path}.rank`, "expected a positive integer or null");
   }
 
+  // Module 1's ordering, validated the same way and kept separate from `rank` (#284).
+  const pegRank = object.peg_rank ?? null;
+  if (pegRank !== null && (typeof pegRank !== "number" || !Number.isInteger(pegRank) || pegRank < 1)) {
+    fail(`${path}.peg_rank`, "expected a positive integer or null");
+  }
+
   return {
     issuer_id: issuerId,
     cutoff_at: cutoffAt,
@@ -236,6 +245,7 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
     rank: rank as number | null,
     target_weight: asDecimalString(object.target_weight, `${path}.target_weight`, [0, 1]),
     peg: object.peg === undefined ? null : asDecimalString(object.peg, `${path}.peg`),
+    peg_rank: pegRank as number | null,
   };
 }
 

@@ -86,8 +86,10 @@ def test_a_vendor_payload_becomes_a_peg_the_read_query_serves(connection) -> Non
     # 1. The adapter reduces the annual series the payload already carries.
     bundle = build_bundle(_company_facts(), _CUTOFF.date(), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
     assert bundle.earnings_cagr is not None, "the adapter must derive the growth basis"
-    # (16000/8000)^(1/3) - 1 = 25.99%
-    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2599")
+    # Yearly rates 25%, 30% and 23.08%, weighted 1:2:3 toward the present -> 25.71%.
+    # An endpoint CAGR would have said 25.99%; the owner-chosen weighting (2026-08-17)
+    # discounts the older acceleration.
+    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2571")
     assert bundle.net_income == Decimal("16000")
     # The window endpoints travel with it, so the rate is auditable downstream.
     assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
@@ -117,9 +119,10 @@ def test_a_vendor_payload_becomes_a_peg_the_read_query_serves(connection) -> Non
         risk_free_rate=Decimal("0"),
     )
     assert decision.peg is not None, "the evaluator must carry module 1 onto the decision"
-    # Market cap 100,000 over net income 16,000 is a P/E of 6.25; over 25.99% growth that
-    # is 0.2405. Asserting the composed number, not the parts, is the point of an E2E.
-    assert decision.peg.quantize(Decimal("0.0001")) == Decimal("0.2405")
+    # Market cap 100,000 over net income 16,000 is a P/E of 6.25; over the 25.71% weighted
+    # rate that is 0.2431. Asserting the composed number, not the parts, is the point of
+    # an end-to-end test.
+    assert decision.peg.quantize(Decimal("0.0001")) == Decimal("0.2431")
 
     # 3. It survives the database round trip and the read query the App issues.
     run_id = "strategy-run:" + "e" * 64
@@ -169,7 +172,7 @@ def test_a_vendor_payload_becomes_a_peg_the_read_query_serves(connection) -> Non
         (decision_id,),
     ).fetchone()
     assert served is not None and served[0] is not None, "the read path must serve PEG"
-    assert served[0].quantize(Decimal("0.0001")) == Decimal("0.2405")
+    assert served[0].quantize(Decimal("0.0001")) == Decimal("0.2431")
 
 
 def test_the_database_refuses_a_non_positive_peg(connection) -> None:
