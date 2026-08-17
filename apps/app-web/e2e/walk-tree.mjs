@@ -160,6 +160,36 @@ async function assertCurrentNavLink(page, path, problems) {
   if (href !== path) problems.push(`nav marks ${href} current on ${path}`);
 }
 
+/** #494 criterion 3: the funnel block says something in EVERY state.
+ *
+ * `{funnel.kind === "ready" && …}` with no else made the headline L0–L5
+ * diagnostic vanish without comment whenever it could not be computed, which
+ * reads as "nothing is wrong" rather than "not computed". #495 fixed the code;
+ * this is the assertion, and it is deliberately state-agnostic: it does not
+ * care whether the funnel computed, only that the region is never empty below
+ * its own heading. A CI database cannot compute the funnel, so this exercises
+ * the branch that used to render nothing.
+ *
+ * Anchored on the heading rather than a test id: the two branches render
+ * different containers, and asserting through the visible heading means a
+ * refactor that drops the heading fails here too, which is the point. */
+async function assertFunnelSaysSomething(page, path, problems) {
+  if (path !== "/admin/quality") return;
+  const heading = page.getByRole("heading", { name: /L0.{0,3}L5 funnel/ });
+  if ((await heading.count()) === 0) {
+    problems.push("no L0-L5 funnel section on /admin/quality");
+    return;
+  }
+  const section = await heading.first().evaluate((node) => {
+    const container = node.parentElement;
+    return { heading: node.innerText.trim(), all: container ? container.innerText.trim() : "" };
+  });
+  const body = section.all.replace(section.heading, "").trim();
+  if (body.length === 0) {
+    problems.push("the funnel section renders its heading and nothing else — every state must say something");
+  }
+}
+
 async function checkRoute(page, path, role) {
   await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
   const finalPath = new URL(page.url()).pathname;
@@ -172,6 +202,7 @@ async function checkRoute(page, path, role) {
   await assertWorldSwitch(page, path, problems, role);
   await assertSignedInIdentity(page, path, problems);
   await assertCurrentNavLink(page, path, problems);
+  await assertFunnelSaysSomething(page, path, problems);
   return problems;
 }
 
