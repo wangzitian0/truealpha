@@ -34,6 +34,7 @@ PARSER_VERSION_HISTORY = (
     "production-topt-live-parser:v3",
     "production-topt-live-parser:v4",
     "production-topt-live-parser:v5",
+    "production-topt-live-parser:v6",
 )
 MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v1",
@@ -41,6 +42,7 @@ MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v3",
     "production-topt-live-map:v4",
     "production-topt-live-map:v5",
+    "production-topt-live-map:v6",
 )
 
 PARSER_VERSION = PARSER_VERSION_HISTORY[-1]
@@ -74,3 +76,10 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # the annual series company-facts already carries. The parse resolves a field it did not
 # before, which is a new parse rather than a restatement of the old one -- under the v4
 # identity an observation with and without the growth basis would be indistinguishable.
+#
+# v5 -> v6 (#284, owner decision 2026-08-17): `earnings_cagr_3y` stops being an endpoint
+# CAGR and becomes the recency-weighted mean of the year-over-year rates inside the window,
+# weighted 1..n oldest to newest. It also now requires an observation at every year
+# boundary rather than only the two ends. The same issuer and window therefore resolves a
+# DIFFERENT number under v6 than under v5 -- exactly the ambiguity a version exists to
+# prevent -- and some issuers resolve none where v5 resolved one.

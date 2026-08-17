@@ -41,11 +41,11 @@ _RUN_SQL = """insert into mart.strategy_runs
 _DECISION_SQL = """insert into mart.strategy_decisions
  (strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
   capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
-  valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg)
+  valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg, peg_rank)
  values (%(strategy_decision_id)s, %(content_sha256)s, %(strategy_run_id)s, %(issuer_id)s,
   %(cutoff_at)s, %(capital_adjusted_labor_efficiency)s, %(tier)s, %(current_price_to_sales)s,
   %(target_price_to_sales)s, %(valuation_gap)s, %(eligible)s, %(outcome)s, %(exclusion_reason)s,
-  %(rank)s, %(target_weight)s, %(peg)s)"""
+  %(rank)s, %(target_weight)s, %(peg)s, %(peg_rank)s)"""
 
 
 def _database_url() -> str:

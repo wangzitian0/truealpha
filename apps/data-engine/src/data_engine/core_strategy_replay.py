@@ -73,6 +73,7 @@ class Decision:
     # part of what the decision asserts about the issuer; when a versioned definition bump
     # lets PEG enter selection it is already covered.
     peg: Decimal | None = None
+    peg_rank: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -96,6 +97,7 @@ class Decision:
             "target_weight": str(self.target_weight) if self.target_weight is not None else None,
             "confidence": str(self.confidence) if self.confidence is not None else None,
             "peg": str(self.peg) if self.peg is not None else None,
+            "peg_rank": self.peg_rank,
         }
 
 
@@ -133,6 +135,7 @@ def _to_decision(evaluated: EvaluatedDecision, cutoff_at: str) -> Decision:
         target_weight=evaluated.target_weight,
         confidence=evaluated.confidence,
         peg=evaluated.peg,
+        peg_rank=evaluated.peg_rank,
     )
 
 

@@ -93,6 +93,12 @@ class EvaluatedDecision:
     # landing the factor must not move the portfolio before the owner decides how it
     # enters selection.
     peg: Decimal | None = None
+    # Module 1's OWN ordering, lowest PEG first (#284, owner decision 2026-08-17: ranking
+    # only, selection later). Deliberately separate from `rank`: folding PEG into the
+    # primary rank would change which issuers are selected, and the selection rule has not
+    # been decided. None when the issuer has no PEG — an absent value must not be ranked as
+    # though it were the worst.
+    peg_rank: int | None = None
 
 
 def _quantize(value: Decimal, quantization: DecimalQuantization) -> Decimal:
@@ -248,6 +254,18 @@ def rank_and_select(
     ranked = sorted(candidates, key=lambda d: (-(d.valuation_gap or Decimal(0)), d.issuer_id))
     selection_count = definition.selection.selection_count
     weight = _quantize(Decimal(1) / Decimal(max(min(len(ranked), selection_count), 1)), definition.sizing.quantization)
+    # PEG's ordering is assigned over EVERY decision that has one, not only the ranked
+    # candidates, so a valuation-rejected issuer still shows where its growth-adjusted
+    # multiple sits. It never feeds `rank` or `target_weight`.
+    peg_positions = {
+        decision.issuer_id: position
+        for position, decision in enumerate(
+            sorted((d for d in decisions if d.peg is not None), key=lambda d: (d.peg, d.issuer_id)), start=1
+        )
+    }
+    resolved = [EvaluatedDecision(**{**d.__dict__, "peg_rank": peg_positions.get(d.issuer_id)}) for d in resolved]
+    ranked = [EvaluatedDecision(**{**d.__dict__, "peg_rank": peg_positions.get(d.issuer_id)}) for d in ranked]
+
     for position, decision in enumerate(ranked, start=1):
         if position <= selection_count:
             resolved.append(

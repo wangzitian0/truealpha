@@ -52,7 +52,7 @@ _LATEST_RUN_SQL = """
 _DECISIONS_SQL = """
     select issuer_id, cutoff_at, capital_adjusted_labor_efficiency, tier,
            current_price_to_sales, target_price_to_sales, valuation_gap,
-           eligible, outcome, exclusion_reason, rank, target_weight, peg
+           eligible, outcome, exclusion_reason, rank, target_weight, peg, peg_rank
     from mart.strategy_decisions
     where strategy_run_id = %s
     order by cutoff_at, issuer_id
@@ -83,6 +83,7 @@ def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
         # Module 1 (#284), recorded but not selecting. Both twins must carry it or the
         # parity gate diverges — which is exactly how this was caught.
         peg=row["peg"],
+        peg_rank=row["peg_rank"],
     )
 
 

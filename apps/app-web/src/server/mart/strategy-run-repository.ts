@@ -62,7 +62,7 @@ const DECISIONS_SQL = `
          end as cutoff_at,
          capital_adjusted_labor_efficiency, tier,
          current_price_to_sales, target_price_to_sales, valuation_gap,
-         eligible, outcome, exclusion_reason, rank, target_weight, peg
+         eligible, outcome, exclusion_reason, rank, target_weight, peg, peg_rank
   from mart.strategy_decisions
   where strategy_run_id = $1
   order by mart.strategy_decisions.cutoff_at, issuer_id
@@ -159,6 +159,8 @@ function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
     // growth and the factor returns no value rather than a signed one, so the read model
     // must carry the absence rather than coercing it to a number.
     peg: decimalString(row.peg, "peg"),
+    // Module 1's own ordering (#284). Independent of `rank`: PEG does not select.
+    peg_rank: typeof row.peg_rank === "number" ? row.peg_rank : null,
   };
 }
 
