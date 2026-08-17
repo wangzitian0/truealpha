@@ -1,0 +1,77 @@
+{
+  "_comment": "#582. Every guard here was shown red once, on the day it was written. That proves nothing about six months later: assertFunnelSaysSomething was red-proven and still used node.parentElement, which a later <header> wrapper would have made pass vacuously. This file declares, for each guard, an edit that MUST make it fail. A guard whose mutation stops failing has gone inert, and that is the only output this job exists to produce. Adding a guard without adding its mutation is visible here, in review, rather than discovered years later.",
+  "mutations": [
+    {
+      "id": "source-contracts/no-metric-arithmetic",
+      "guard": "apps/app-web/tests/source-contracts.test.ts",
+      "file": "apps/app-web/src/server/mart/research-read.ts",
+      "find": "export type Availability =",
+      "replace": "const _mutation = 1 * 2;\nexport type Availability =",
+      "command": ["bun", "run", "tests/source-contracts.test.ts"],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "source-contracts/research-cannot-import-admin",
+      "guard": "apps/app-web/tests/source-contracts.test.ts",
+      "file": "apps/app-web/src/app/research/coverage/page.tsx",
+      "find": "import { exclusionLabel }",
+      "replace": "import { loadOpsOverview } from \"@/server/admin/ops\";\nimport { exclusionLabel }",
+      "command": ["bun", "run", "tests/source-contracts.test.ts"],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "source-contracts/one-read-state-vocabulary",
+      "guard": "apps/app-web/tests/source-contracts.test.ts",
+      "file": "apps/app-web/src/server/admin/ops.ts",
+      "find": "export interface OpsPrincipal {",
+      "replace": "export type Mutation = { kind: \"ready\"; data: number };\nexport interface OpsPrincipal {",
+      "command": ["bun", "run", "tests/source-contracts.test.ts"],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "source-contracts/claim-ceiling-unconditional",
+      "guard": "apps/app-web/tests/source-contracts.test.ts",
+      "file": "apps/app-web/src/app/research/rankings/page.tsx",
+      "find": "  const params = await searchParams;",
+      "replace": "  if (!principal) return null;\n  const params = await searchParams;",
+      "command": ["bun", "run", "tests/source-contracts.test.ts"],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "route-freeze/live-api-route-has-a-consumer",
+      "guard": "apps/app-web/tests/route-tree-freeze.test.ts",
+      "file": "apps/app-web/src/app/login/page.tsx",
+      "find": "\"/api/auth/login\"",
+      "replace": "\"/api/session/begin\"",
+      "command": ["bun", "run", "tests/route-tree-freeze.test.ts"],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "workflow-contract/health-gate-compares-a-release-ref",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/deploy-release.yml",
+      "find": "EXPECTED_RELEASE: ${{ fromJson(steps.request.outputs.json).version_ref }}",
+      "replace": "EXPECTED_RELEASE: ${{ fromJson(steps.request.outputs.json).source_sha }}",
+      "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_ci_workflows.py", "-q"],
+      "cwd": "."
+    },
+    {
+      "id": "workflow-contract/unconfigured-walk-is-skipped",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/deploy-release.yml",
+      "find": "        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}\n",
+      "replace": "",
+      "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_ci_workflows.py", "-q"],
+      "cwd": "."
+    },
+    {
+      "id": "invariants/head-matches-the-consumer",
+      "guard": "libs/runtime/tests/test_output_invariants.py",
+      "file": "tools/output_invariants.py",
+      "find": "    where environment = 'production' and factor_id = 'gross_profit_per_employee'\n",
+      "replace": "",
+      "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_output_invariants.py", "-q"],
+      "cwd": "."
+    }
+  ]
+}
