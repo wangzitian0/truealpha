@@ -37,7 +37,7 @@ re-capturing; recovery is the next tick (or an explicit new `executed_at`), not 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -186,6 +186,8 @@ class PlannedRun:
     coordinates: dict[str, tuple[str, str, str, str]]
     source_label: str
     retry: RetryPolicy
+    freshness_windows: Mapping[str, timedelta]
+    default_freshness_max_age: timedelta
 
 
 def plan_and_persist(connection: psycopg.Connection[Any], *, cutoff: datetime, version: str) -> PlannedRun:
@@ -294,6 +296,8 @@ def plan_and_persist(connection: psycopg.Connection[Any], *, cutoff: datetime, v
         coordinates=coordinates,
         source_label=source_label,
         retry=policy.retry,
+        freshness_windows=policy.semantic_freshness_max_age,
+        default_freshness_max_age=policy.freshness_max_age,
     )
 
 
@@ -590,6 +594,8 @@ def run_topt_pipeline(
         source_label=plan.source_label,
         timeline=plan.timeline,
         retry=plan.retry,
+        freshness_windows=plan.freshness_windows,
+        default_freshness_max_age=plan.default_freshness_max_age,
     )
     report = run_topt_capture(
         plan.run_id,

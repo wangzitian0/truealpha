@@ -152,6 +152,8 @@ class PostgresCaptureControlSink:
         timeline: CaptureTimeline,
         retry: RetryPolicy,
         object_store: RawObjectStore | None = None,
+        freshness_windows: Mapping[str, timedelta] | None = None,
+        default_freshness_max_age: timedelta = timedelta(days=2),
     ) -> None:
         self._connection = connection
         self._repository = PostgresCaptureControlRepository(connection)
@@ -159,6 +161,11 @@ class PostgresCaptureControlSink:
         self._source_label = source_label
         self._timeline = timeline
         self._retry = retry
+        # The per-semantic freshness windows the policy declared (#530 slice 2);
+        # the sink grades each observation against ITS semantic's window at write
+        # time, so `freshness_state` is a computation, not a stamped literal.
+        self._freshness_windows = dict(freshness_windows or {})
+        self._default_freshness_max_age = default_freshness_max_age
         # Injected so tests can land bytes without MinIO; production leaves it None and
         # `raw_store` resolves the configured S3 store.
         self._object_store = object_store
@@ -327,6 +334,7 @@ class PostgresCaptureControlSink:
             mapping_version=success.record.mapping_version,
             confidence=success.confidence,
             source_vintage_id=source_vintage_id,
+            knowable_at=success.transaction_time,
         )
 
     def _persist_corroboration(self, binding: ObligationBinding, corroboration: Corroboration) -> None:
@@ -341,6 +349,7 @@ class PostgresCaptureControlSink:
         vintage = self._put_vintage(
             source_request_id=request.source_request_id,
             raw=corroboration.raw,
+            source_published_at=corroboration.transaction_time,
         )
         self._put_observation(
             binding,
@@ -349,6 +358,7 @@ class PostgresCaptureControlSink:
             mapping_version=corroboration.record.mapping_version,
             confidence=corroboration.confidence,
             source_vintage_id=vintage.source_vintage_id,
+            knowable_at=corroboration.transaction_time,
         )
 
     def _corroborating_request(self, binding: ObligationBinding, *, origin: str, source: str) -> SourceRequest:
@@ -379,6 +389,7 @@ class PostgresCaptureControlSink:
         mapping_version: str,
         confidence: Decimal,
         source_vintage_id: str,
+        knowable_at: datetime,
     ) -> None:
         obligation = binding.obligation
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
@@ -386,9 +397,17 @@ class PostgresCaptureControlSink:
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
+            # Deliberately the PARTITION anchor, not the adapter's date: the
+            # materializer selects observations whose valid_from covers the frozen
+            # partition (a live August bar asserts a value FOR the 2026-03-31
+            # partition). The adapter's own time lives in knowable_at below; the
+            # valid-time remodel is out of #530 slice 3's scope and tracked on the
+            # issue.
             valid_from=self._timeline.partition_start,
             valid_to=None,
-            knowable_at=self._timeline.knowable_at,
+            # The adapter's transaction_time — filed date, bar date, manifest
+            # time — never arithmetic on the cutoff (#530 slice 3).
+            knowable_at=_require_aware(knowable_at),
             source_vintage_id=source_vintage_id,
             parser_version=parser_version,
             mapping_version=mapping_version,
@@ -399,5 +418,14 @@ class PostgresCaptureControlSink:
             observation,
             normalized_payload=payload,
             confidence=confidence,
-            freshness_state="fresh",
+            # Graded against THIS semantic's declared window (#530): the same
+            # expression the materializer and the 0039 views use, applied at
+            # write time. A literal here is how the metric stayed pinned at
+            # 1.0000 for a month.
+            freshness_state=(
+                "fresh"
+                if self._timeline.cutoff - knowable_at
+                <= self._freshness_windows.get(semantic_type, self._default_freshness_max_age)
+                else "stale"
+            ),
         )

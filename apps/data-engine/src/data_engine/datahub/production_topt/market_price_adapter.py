@@ -154,6 +154,7 @@ class MarketPriceAdapter:
             found.append(
                 Corroboration(
                     origin=origin.origin,
+                    transaction_time=quote.knowable_at,
                     record=NormalizedRecord(
                         payload=payload,
                         parser_version=origin.parser_version,

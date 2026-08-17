@@ -101,6 +101,10 @@ class Corroboration:
     confidence: Decimal
     raw: RawResponse
     normalized_sha256: str
+    # The second origin's own source time (its settled bar's date) — the sink
+    # persists it as the corroborating observation's knowable_at and the
+    # vintage's source_published_at (#530 slice 3).
+    transaction_time: datetime
 
     def __post_init__(self) -> None:
         _require_digest(self.normalized_sha256)
@@ -108,6 +112,8 @@ class Corroboration:
             raise ValueError("corroboration payload does not match its normalized digest")
         if not (Decimal(0) <= self.confidence <= Decimal(1)):
             raise ValueError("confidence must be in [0, 1]")
+        if self.transaction_time.tzinfo is None or self.transaction_time.utcoffset() is None:
+            raise ValueError("corroboration transaction_time must be timezone-aware")
 
 
 @dataclass(frozen=True)
