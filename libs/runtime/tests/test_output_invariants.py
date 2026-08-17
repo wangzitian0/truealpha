@@ -13,20 +13,14 @@ after its defect is fixed also fails.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from datetime import date
 from pathlib import Path
 
 import pytest
+from truealpha_runtime.testing import load_tool
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-MODULE_PATH = REPO_ROOT / "tools/output_invariants.py"
-SPEC = importlib.util.spec_from_file_location("truealpha_output_invariants", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-_module = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = _module
-SPEC.loader.exec_module(_module)
+_module = load_tool("output_invariants")
 
 check = _module.check
 Invariant = _module.Invariant
