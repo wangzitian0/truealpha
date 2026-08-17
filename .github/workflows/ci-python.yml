@@ -140,10 +140,24 @@ jobs:
             --location-name data_engine.dagster_defs --log-level debug \
             > code_server.log 2>&1 &
           echo "CODE_SERVER_PID=$!" >> "$GITHUB_ENV"
+          # An explicit failure, not a fall-through: the loop's `break` is the
+          # only success path, so 30 fruitless attempts used to start the daemon
+          # anyway and let this job fail 120s later inside the churn assertion --
+          # a socket that never came up reported as a heartbeat regression, which
+          # is the wrong diagnosis for the wrong reason (review).
+          ready=""
           for attempt in $(seq 1 30); do
-            uv run --package truealpha-data-engine dagster api grpc-health-check --socket "$SOCK" && break
+            if uv run --package truealpha-data-engine dagster api grpc-health-check --socket "$SOCK"; then
+              ready=1
+              break
+            fi
             sleep 1
           done
+          if [ -z "$ready" ]; then
+            echo "::error::code-server never answered a health check on $SOCK after 30 attempts" >&2
+            cat code_server.log >&2
+            exit 1
+          fi
           uv run --package truealpha-data-engine dagster-daemon run --grpc-socket "$SOCK" \
             > daemon.log 2>&1 &
           echo "DAEMON_PID=$!" >> "$GITHUB_ENV"
