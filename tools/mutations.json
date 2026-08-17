@@ -72,6 +72,15 @@
       "replace": "",
       "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_output_invariants.py", "-q"],
       "cwd": "."
+    },
+    {
+      "id": "invariants/strategy-ordering-must-match-the-consumer",
+      "guard": "libs/runtime/tests/test_output_invariants.py",
+      "file": "apps/app-web/src/server/mart/strategy-run-repository.ts",
+      "find": "order by executed_at desc, created_at desc, strategy_run_id desc",
+      "replace": "order by created_at desc",
+      "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_output_invariants.py", "-q"],
+      "cwd": "."
     }
   ]
 }
