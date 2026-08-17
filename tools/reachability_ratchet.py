@@ -66,14 +66,25 @@ def unreachable() -> tuple[int, list[str]]:
         # Operator scripts are deployment-adjacent: what they import is alive.
         roots |= _imports(ast.parse(script.read_text()), modules)
 
+    def with_ancestors(name: str) -> list[str]:
+        # Importing a.b.c executes a/__init__ and a.b/__init__, whose own imports
+        # are alive — a walker that skips ancestors counts modules reachable only
+        # through a package __init__ as dead, and this tool guides deletions
+        # (Copilot Medium on #601).
+        parts = name.split(".")
+        return [".".join(parts[: i + 1]) for i in range(len(parts))]
+
     seen: set[str] = set()
-    stack = [root for root in roots if root in modules]
+    stack = [candidate for root in roots for candidate in with_ancestors(root) if candidate in modules]
     while stack:
         current = stack.pop()
         if current in seen:
             continue
         seen.add(current)
-        stack.extend(edge for edge in edges.get(current, ()) if edge in modules and edge not in seen)
+        for edge in edges.get(current, ()):
+            for candidate in with_ancestors(edge):
+                if candidate in modules and candidate not in seen:
+                    stack.append(candidate)
 
     dead = sorted(name for name in modules if name not in seen)
     lines = sum(len(modules[name].read_text().splitlines()) for name in dead)
