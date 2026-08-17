@@ -22,6 +22,7 @@ import psycopg
 from data_engine import dagster_defs
 from data_engine.dagster_defs import (
     CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME,
+    QQQ_LIVE_JOB_NAME,
     TOPT_LIVE_CRON,
     TOPT_LIVE_JOB_NAME,
     ToptLiveTickConfig,
@@ -42,7 +43,9 @@ def test_defs_loads_and_exposes_only_the_live_pipeline() -> None:
     assert defs.get_job_def(TOPT_LIVE_JOB_NAME) is not None
     assert defs.get_schedule_def(topt_live_schedule.name) is not None
     deployed_jobs = {job.name for job in defs.jobs}
-    assert deployed_jobs == {TOPT_LIVE_JOB_NAME}
+    # Two real-source pipelines since the QQQ universe landed (#539); the
+    # fixture canary stays out of the deployed composition (#429 I2).
+    assert deployed_jobs == {TOPT_LIVE_JOB_NAME, QQQ_LIVE_JOB_NAME}
     assert CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME not in deployed_jobs
 
 

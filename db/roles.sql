@@ -143,6 +143,12 @@ do $$ begin
 end $$;
 grant usage on schema raw to app_ops_reader;
 grant select on raw.fetches to app_ops_reader;
+-- #539 universe provenance page: the constituent plane + governed heads, read-only.
+grant usage on schema staging to app_ops_reader;
+grant select on staging.etf_constituent_facts to app_ops_reader;
+grant select on staging.accepted_rulesets to app_ops_reader;
+grant select on staging.accepted_ruleset_head to app_ops_reader;
+grant select on staging.contract_objects to app_ops_reader;
 grant usage on schema mart to app_ops_reader;
 grant select on mart.current_pointer_head to app_ops_reader;
 grant app_ops_reader to app_service_login;
