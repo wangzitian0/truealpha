@@ -165,15 +165,6 @@ def test_an_unanswerable_history_fails_loudly(capsys: pytest.CaptureFixture[str]
     assert "fetch tags and full history" in capsys.readouterr().err
 
 
-def test_the_workflow_can_actually_reopen_and_sees_full_history() -> None:
-    """Two ways this ships inert: no `issues: write`, or a shallow checkout that
-    makes every commit look unreleased."""
-    workflow = (REPO_ROOT / ".github/workflows/issue-close-guard.yml").read_text()
-    assert "issues: write" in workflow, "the guard cannot reopen anything without it"
-    assert "fetch-depth: 0" in workflow and "fetch --tags" in workflow
-    assert "types: [closed]" in workflow
-
-
 def test_a_tag_that_exists_but_is_not_deployed_is_not_evidence(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

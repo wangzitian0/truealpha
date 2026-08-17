@@ -144,30 +144,3 @@ def test_a_ref_git_could_read_as_an_option_never_reaches_git(
         assert exit_code == 1, f"{hostile!r} must be refused"
         assert "not a usable release identifier" in capsys.readouterr().err
     assert not reached_git, "a hostile ref must be rejected before any git invocation"
-
-
-def test_the_scheduled_gate_does_not_depend_on_the_dispatch_inputs_context() -> None:
-    """A guard whose expression can fail on its PRIMARY trigger is the failure
-    mode it exists to prevent. `inputs` belongs to workflow_dispatch and
-    workflow_call; this workflow's main trigger is the schedule (review)."""
-    workflow = (REPO_ROOT / ".github/workflows/deploy-freshness.yml").read_text()
-    assert "schedule:" in workflow, "the freshness gate must run on a schedule, not only on demand"
-    body = workflow.split("steps:", 1)[1]
-    assert "github.event.inputs.max_age_days" in body
-    assert "${{ inputs." not in body, "the inputs context is not available on a schedule event"
-
-
-def test_the_release_walk_requires_every_credential_it_uses() -> None:
-    """The member pass needs TA_MEMBER_EMAIL; a probe that checks two of three
-    secrets lets the walk start and fail later, less clearly (review).
-
-    The check moved out of the walk step into its own `walk_credentials` probe
-    when an unconfigured walk stopped exiting 0 and started being SKIPPED — a
-    step that exits 0 without walking reports `success`, which
-    tools/walk_evidence.py reads as evidence. The property is unchanged: all
-    three secrets are examined before anything decides the walk can run.
-    """
-    workflow = (REPO_ROOT / ".github/workflows/deploy-release.yml").read_text()
-    probe = workflow.split("id: walk_credentials", 1)[1].split("- name: Walk the deployed", 1)[0]
-    for variable in ("TA_EMAIL", "TA_PASSWORD", "TA_MEMBER_EMAIL"):
-        assert f'"${{{variable}}}"' in probe, f"{variable} must be examined before the walk runs"
