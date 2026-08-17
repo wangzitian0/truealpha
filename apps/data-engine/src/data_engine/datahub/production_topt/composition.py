@@ -202,8 +202,26 @@ def plan_and_persist(connection: psycopg.Connection[Any], *, cutoff: datetime, v
     policy = CaptureSchedulePolicy(
         policy_version=source_label,
         demanded_cadence=timedelta(days=1),
-        provider_availability_cadence="scheduled:v1",
         freshness_max_age=timedelta(days=2),
+        # Per-semantic windows (#530 slice 2): the freshest POSSIBLE observation
+        # must grade fresh at every scheduled tick.
+        # - market-price: a Friday bar is the freshest close at a Sunday or
+        #   Monday-holiday 22:15 tick (Fri 00:00 -> Tue 22:15 after a Monday
+        #   holiday is ~4.9 days); 5 days admits that and still fails a vendor
+        #   serving week-old bars.
+        # - financial-fact: knowable_at is the filed date, months old by nature;
+        #   730 days aligns with the factor's own period_end staleness bound
+        #   (#534) so capture freshness and factor vintage agree on the axis.
+        # - identity/universe: release-frozen configuration; a year covers the
+        #   universe's own refresh cadence (#67), and the release manifest is the
+        #   staleness authority, not the capture.
+        semantic_freshness_max_age={
+            "market-price": timedelta(days=5),
+            "financial-fact": timedelta(days=730),
+            "listing-identity": timedelta(days=365),
+            "universe-membership": timedelta(days=365),
+        },
+        provider_availability_cadence="scheduled:v1",
         retry=replay_retry_policy(_MAX_ATTEMPTS),
     )
     campaign = CaptureCampaign(

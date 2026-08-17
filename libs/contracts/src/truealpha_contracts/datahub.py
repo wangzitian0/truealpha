@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -214,6 +215,12 @@ class CaptureSchedulePolicy(BaseModel):
     demanded_cadence: timedelta
     provider_availability_cadence: str = Field(pattern=_STABLE_COORDINATE)
     freshness_max_age: timedelta
+    # Per-semantic freshness windows (#530): a Friday price bar is the freshest
+    # possible price at a Monday-holiday tick, and a filed 10-K is the freshest
+    # possible financial fact for months — one window cannot grade both. Keyed by
+    # the observation's semantic_type; an absent key falls back to
+    # freshness_max_age, so a policy without the map behaves exactly as before.
+    semantic_freshness_max_age: Mapping[str, timedelta] = Field(default_factory=dict)
     retry: RetryPolicy
 
     @field_validator("policy_version", "provider_availability_cadence")
@@ -225,6 +232,8 @@ class CaptureSchedulePolicy(BaseModel):
     def freeze_and_identify(self) -> Self:
         if self.demanded_cadence <= timedelta(0) or self.freshness_max_age <= timedelta(0):
             raise ValueError("cadence and freshness_max_age must be positive")
+        if any(window <= timedelta(0) for window in self.semantic_freshness_max_age.values()):
+            raise ValueError("semantic freshness windows must be positive")
         _freeze_identity(
             self,
             id_field="schedule_policy_id",
@@ -234,6 +243,11 @@ class CaptureSchedulePolicy(BaseModel):
                 "demanded_cadence",
                 "provider_availability_cadence",
                 "freshness_max_age",
+                # Two policies differing only in their per-semantic windows MUST
+                # get distinct identities: put_schedule_policy is on-conflict-do-
+                # nothing, so a shared id would silently keep the OLD windows
+                # (Copilot Medium on #591).
+                "semantic_freshness_max_age",
                 "retry",
             ),
         )

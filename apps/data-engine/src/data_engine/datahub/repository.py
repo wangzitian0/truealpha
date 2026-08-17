@@ -119,8 +119,9 @@ class PostgresCaptureControlRepository:
             """
             insert into raw.capture_schedule_policies (
                 schedule_policy_id, content_sha256, policy_version, demanded_cadence,
-                provider_availability_cadence, freshness_max_age, retry_policy, payload
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s)
+                provider_availability_cadence, freshness_max_age,
+                semantic_freshness_max_age, retry_policy, payload
+            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (schedule_policy_id) do nothing returning schedule_policy_id
             """,
             (
@@ -130,6 +131,9 @@ class PostgresCaptureControlRepository:
                 policy.demanded_cadence,
                 policy.provider_availability_cadence,
                 policy.freshness_max_age,
+                # Text intervals ('432000 seconds') so the views' ::interval cast
+                # reads them without an ISO8601 dependency.
+                Jsonb({k: f"{v.total_seconds()} seconds" for k, v in policy.semantic_freshness_max_age.items()}),
                 Jsonb(policy.retry.model_dump(mode="json")),
                 Jsonb(payload),
             ),
