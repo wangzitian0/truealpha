@@ -33,7 +33,7 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
-from data_engine.datahub.a1_evidence import register_run_evidence
+from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
 from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
@@ -170,8 +170,101 @@ def topt_live_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     )
 
 
+# -- QQQ universe pipeline (#539 owner directive 2026-08-17) ---------------------------
+
+QQQ_LIVE_JOB_NAME = "qqq_live_pipeline"
+# 23:20 UTC: after prod TOPT (22:15, ~7 min) and staging TOPT (22:45, ~7 min), so the
+# three consumers of the shared 8-requests-per-minute Twelve Data key never overlap
+# (#574's collision class, third consumer edition). A 102-listing tick at the 8s
+# throttle runs ~15-30 minutes and finishes before midnight UTC.
+QQQ_LIVE_CRON = "20 23 * * *"
+QQQ_UNIVERSE_HEAD = "universe-list:qqq"
+
+# Phase-1 service objectives for the QQQ universe, declared where the gate reads them
+# rather than silently reusing TOPT's demand: ~90 of 101 issuers have no headcount
+# fact yet (#564 fills them; the plane accepts inserts, never deploys) and a handful
+# of foreign filers report under IFRS the ruleset does not map yet — those cells
+# grade honestly unavailable, and a 0.95 availability floor would freeze the QQQ
+# pointer on day one for gaps we have chosen to serve honestly. The corroboration
+# band and coverage stay at full strength; availability rises back to 0.95 when the
+# headcount plane covers the universe (tracked on #578/#564).
+QQQ_PHASE1_OBJECTIVES = ServiceObjectives(
+    minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
+    minimum_availability=Decimal("0.70"),
+    minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
+    minimum_independent_origin_groups=ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups,
+)
+
+
+@dg.op
+def run_qqq_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
+    """The QQQ data pipeline: capture → freeze → materialize → report → governed pointer.
+
+    Deliberately NO strategy replay: the strategy definition is TOPT-scoped versioned
+    configuration; QQQ phase 1 serves data (prices, facts, GPPE where headcount exists,
+    valuation context), not selections.
+    """
+    cutoff = datetime.fromisoformat(config.executed_at)
+    version = live_version_for(cutoff)
+    with psycopg.connect(settings.database_url) as connection:
+        pipeline = run_topt_pipeline(
+            connection,
+            cutoff=cutoff,
+            version=version,
+            universe_head_kind=QQQ_UNIVERSE_HEAD,
+            label_prefix="production-qqq",
+        )
+        registration = register_run_evidence(
+            connection,
+            run_id=pipeline.run_id,
+            release_manifest_id=pipeline.release_manifest_id,
+            quality_report=pipeline.quality,
+            objectives=QQQ_PHASE1_OBJECTIVES,
+        )
+        connection.commit()
+    context.log.info(
+        f"qqq live tick {config.executed_at}: capture {pipeline.run_id} "
+        f"(available {pipeline.quality['available_count']}/{pipeline.quality['requested_count']}), "
+        f"pointer_advanced={registration.accepted}"
+    )
+    context.add_output_metadata(
+        {
+            "capture_run_id": pipeline.run_id,
+            "quality_report_id": pipeline.quality_report_id,
+            "pointer_advanced": registration.accepted,
+            "unmet_service_objectives": registration.summary,
+        }
+    )
+    return pipeline.run_id
+
+
+@dg.job(name=QQQ_LIVE_JOB_NAME)
+def qqq_live_pipeline_job() -> None:
+    run_qqq_live_tick()
+
+
+@dg.schedule(
+    job=qqq_live_pipeline_job,
+    cron_schedule=QQQ_LIVE_CRON,
+    execution_timezone="UTC",
+    # Production-only by owner directive ("staging 跑 topt 够了"): staging keeps the
+    # schedule STOPPED and QQQ runs there only via the manual trigger.
+    default_status=(
+        dg.DefaultScheduleStatus.RUNNING
+        if settings.app_env.strip().lower() in ("production", "prod")
+        else dg.DefaultScheduleStatus.STOPPED
+    ),
+)
+def qqq_live_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    executed_at = context.scheduled_execution_time.isoformat()
+    return dg.RunRequest(
+        run_key=executed_at,
+        run_config=dg.RunConfig(ops={"run_qqq_live_tick": ToptLiveTickConfig(executed_at=executed_at)}),
+    )
+
+
 @dg.sensor(
-    job=topt_live_pipeline_job,
+    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job],
     minimum_interval_seconds=30,
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
@@ -188,15 +281,19 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
     """
     with psycopg.connect(settings.database_url) as connection:
         pending = connection.execute(
-            "select request_id, executed_at, dedupe_key from staging.pipeline_trigger_requests "
+            "select request_id, executed_at, dedupe_key, job_name from staging.pipeline_trigger_requests "
             "where consumed_at is null order by request_id limit 5"
         ).fetchall()
-        for request_id, executed_at, dedupe_key in pending:
+        for request_id, executed_at, dedupe_key, job_name in pending:
             run_key = f"manual:{dedupe_key}"
+            # Dispatch by the request's declared job (#539 QQQ): the same thin
+            # trigger drives either universe's pipeline.
+            op_name = "run_qqq_live_tick" if job_name == QQQ_LIVE_JOB_NAME else "run_topt_live_tick"
             yield dg.RunRequest(
                 run_key=run_key,
+                job_name=job_name if job_name in (TOPT_LIVE_JOB_NAME, QQQ_LIVE_JOB_NAME) else TOPT_LIVE_JOB_NAME,
                 run_config=dg.RunConfig(
-                    ops={"run_topt_live_tick": ToptLiveTickConfig(executed_at=executed_at.astimezone(UTC).isoformat())}
+                    ops={op_name: ToptLiveTickConfig(executed_at=executed_at.astimezone(UTC).isoformat())}
                 ),
             )
             connection.execute(
@@ -208,8 +305,8 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
 
 
 defs = dg.Definitions(
-    jobs=[topt_live_pipeline_job],
-    schedules=[topt_live_schedule],
+    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job],
+    schedules=[topt_live_schedule, qqq_live_schedule],
     sensors=[pipeline_trigger_sensor],
 )
 

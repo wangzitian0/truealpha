@@ -96,6 +96,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     sec_financial_fetcher,
 )
 from data_engine.datahub.production_topt.twelve_data_origin import twelve_data_origin
+from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
 from data_engine.sources import sec
 
@@ -140,13 +141,13 @@ class CaptureNotPublishableError(RuntimeError):
         self.shortfall = shortfall
 
 
-def _load_capture_corpus() -> dict[str, Any]:
+def _load_capture_corpus(corpus_filename: str = "corpus.v1.json") -> dict[str, Any]:
     """The frozen capture-control universe corpus, loaded from PACKAGE data so the
     deployed image (site-packages only, no repo tree) can read it. Lazy: importing
     this module must never touch the filesystem (Definitions load hermetically)."""
     from importlib import resources
 
-    raw = resources.files("data_engine.datahub.data").joinpath("corpus.v1.json").read_bytes()
+    raw = resources.files("data_engine.datahub.data").joinpath(corpus_filename).read_bytes()
     return json.loads(raw)
 
 
@@ -190,16 +191,40 @@ class PlannedRun:
     default_freshness_max_age: timedelta
 
 
-def plan_and_persist(connection: psycopg.Connection[Any], *, cutoff: datetime, version: str) -> PlannedRun:
-    """Freeze the run's scope and persist the dispatch intent; performs no source calls."""
-    corpus = _load_capture_corpus()
+def plan_and_persist(
+    connection: psycopg.Connection[Any],
+    *,
+    cutoff: datetime,
+    version: str,
+    corpus_filename: str = "corpus.v1.json",
+    label_prefix: str = "production-topt",
+    universe_head_kind: str | None = None,
+) -> PlannedRun:
+    """Freeze the run's scope and persist the dispatch intent; performs no source calls.
+
+    A `universe_head_kind` resolves the universe from the GOVERNED head published
+    off the constituent data plane (#539 data-driven universes); the package
+    corpus file remains only for the hand-curated TOPT 20.
+    """
+    if universe_head_kind is not None:
+        from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
+
+        corpus = resolve_universe_corpus(connection, universe_head_kind)
+    else:
+        corpus = _load_capture_corpus(corpus_filename)
     denominator = corpus["topt_denominator"]
     coordinates = {
         str(row[2]): (str(row[0]), str(row[1]), str(row[2]), str(row[3])) for row in denominator["instruments"]
     }
     partition = str(denominator["report_date"])
-    list_version = frozen_topt_list_version(corpus)
-    source_label = f"production-topt-{version}"
+    # The hand-curated TOPT corpus keeps its literal-pinned loader; every
+    # self-pinned universe built by scripts/build_universe_corpus.py loads
+    # through the generic one (#539 QQQ expansion).
+    if "instrument_mapping_sha256" in denominator:
+        list_version = corpus_list_version(corpus)
+    else:
+        list_version = frozen_topt_list_version(corpus)
+    source_label = f"{label_prefix}-{version}"
 
     policy = CaptureSchedulePolicy(
         policy_version=source_label,

@@ -30,6 +30,10 @@ class DataSource(StrEnum):
     # source — its responses land in raw like any other so KG assertions can
     # carry a raw_ref.
     OPENFIGI = "openfigi"
+    # Index-operator constituent lists (Nasdaq for NDX/QQQ): the authority on
+    # membership itself, landed like any vendor so universe list versions carry
+    # raw lineage (#539 data-driven universes).
+    NASDAQ_INDEX = "nasdaq-index"
     # Not a vendor at all: a projection of the accepted release manifest, for cells
     # (listing identity, universe membership) whose value IS the frozen scope rather
     # than something fetched. Named explicitly so those bytes land under their own
