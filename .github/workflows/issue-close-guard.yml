@@ -1,0 +1,40 @@
+name: issue-close-guard
+
+# #562: rule 7 tells an author to reference an issue with a plain `#N` and close
+# it by hand when a criterion needs a user journey, a role-dependent view, or a
+# deployed-environment state. Authors did that. GitHub closed the issues anyway
+# — #371 twice, #494 twice, each within seconds of a merge whose body said
+# "Not `Closes`". Rule 7's own second half applies to itself: a convention is a
+# run that happened, not a check that runs again.
+#
+# This fires ONLY on the auto-close case (closed by a commit no release tag
+# contains). An issue a human closed is left alone: that is exactly what rule 7
+# asks for, and the person doing it has seen more than a script can.
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Full history and tags: the verdict is "does any release tag contain the
+      # closing commit", which a shallow clone cannot answer.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git fetch --tags --force origin
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-packages
+      - name: Judge how #${{ github.event.issue.number }} was closed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run --no-sync python tools/issue_close_guard.py \
+            --issue "${{ github.event.issue.number }}"
