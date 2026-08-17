@@ -25,10 +25,14 @@ SPEC.loader.exec_module(_module)
 run = _module.run
 
 
-def _timeline(*events: dict):
+def _timeline(*events: dict, pages: list[list[dict]] | None = None):
+    """One short page by default; `pages` exercises the pagination loop."""
+    chunks = pages if pages is not None else [list(events)]
+
     def gh_api(path: str) -> str:
         assert "/timeline" in path
-        return json.dumps(list(events))
+        page = int(path.rsplit("page=", 1)[1])
+        return json.dumps(chunks[page - 1] if page <= len(chunks) else [])
 
     return gh_api
 
@@ -206,3 +210,67 @@ def test_an_unreachable_production_fails_rather_than_guesses(
     assert exit_code == 1
     assert calls == []
     assert "HTTP 503" in capsys.readouterr().err
+
+
+def test_the_latest_close_is_found_beyond_the_first_page() -> None:
+    """A long-running issue accumulates hundreds of timeline events; reading
+    only the first page judges a stale close (review)."""
+    filler = [{"event": "commented", "created_at": f"t{i}"} for i in range(100)]
+    calls, reopen = _capture()
+    run(
+        494,
+        gh_api=_timeline(
+            pages=[
+                filler,
+                [
+                    {"event": "closed", "created_at": "late", "commit_id": None},
+                    {"event": "referenced", "created_at": "late", "commit_id": "b" * 40},
+                ],
+            ]
+        ),
+        git=_git(contained=False),
+        http_get=_serving("v0.0.19"),
+        reopen=reopen,
+    )
+    assert len(calls) == 1, "the close on page 2 must be the one judged"
+
+
+def test_non_object_health_json_is_a_verdict_failure_not_a_crash(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls, reopen = _capture()
+    exit_code = run(
+        494,
+        gh_api=_timeline({"event": "closed", "created_at": "t", "commit_id": "a" * 40}),
+        git=_git(),
+        http_get=lambda _url: (200, json.dumps(["not", "an", "object"])),
+        reopen=reopen,
+    )
+    assert exit_code == 1
+    assert calls == []
+    assert "does not report a release identity" in capsys.readouterr().err
+
+
+def test_a_release_identity_git_could_read_as_an_option_never_reaches_git(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The same lesson tools/deploy_freshness.py had to learn: the identifier
+    comes from an HTTP response and is handed to git (review)."""
+    reached_git = False
+
+    def git(args):  # noqa: ANN001
+        nonlocal reached_git
+        reached_git = True
+        return 0, ""
+
+    calls, reopen = _capture()
+    exit_code = run(
+        494,
+        gh_api=_timeline({"event": "closed", "created_at": "t", "commit_id": "a" * 40}),
+        git=git,
+        http_get=_serving("--upload-pack=touch /tmp/x"),
+        reopen=reopen,
+    )
+    assert exit_code == 1
+    assert not reached_git
+    assert "not a usable release identifier" in capsys.readouterr().err

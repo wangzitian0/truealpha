@@ -12,7 +12,12 @@ not a check that runs again.
 What this deliberately does NOT do: touch an issue a human closed. A hand
 close is exactly what rule 7 asks for, and the person doing it has seen more
 than this script can. It fires only on the auto-close case — an issue closed by
-a commit that no release tag contains — which is the defect and nothing else.
+a commit that PRODUCTION IS NOT SERVING — which is the defect and nothing else.
+
+"Serving", not "a release tag contains": v0.0.20 contains the commits that
+closed #371, #494 and #495 while production served v0.0.19, so a tag-existence
+test called all three released when nothing a user touches had them. Rule 6 is
+explicit that a tag is not the bar.
 
 Usage:
   python tools/issue_close_guard.py --issue 494
@@ -26,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -37,6 +43,11 @@ REPO = "wangzitian0/truealpha"
 # Rule 6 asks whether a user has it, so the question is what production SERVES,
 # not what a tag contains.
 PRODUCTION_HEALTH = "https://truealpha.club/api/health"
+# Same lesson as tools/deploy_freshness.py, which had to learn it first: the
+# release identifier arrives over HTTP and is then handed to git, where a
+# leading "-" is read as an option. Duplicated rather than imported because
+# these are standalone scripts, not a package.
+_SAFE_REF = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._/-]{0,199}$")
 GhApi = Callable[[str], str]
 Git = Callable[[Sequence[str]], tuple[int, str]]
 
@@ -77,7 +88,17 @@ def closing_commit(issue: int, *, gh_api: GhApi = _gh_api) -> str | None:
     merge is identified by the commit-bearing event sharing the close's
     timestamp.
     """
-    events = json.loads(gh_api(f"/repos/{REPO}/issues/{issue}/timeline?per_page=100"))
+    # Paginated: a long-running issue accumulates hundreds of timeline events
+    # (#494 has been closed, reopened and closed again across three weeks), and
+    # reading only the first page would judge a stale close (review).
+    events: list[dict] = []
+    page = 1
+    while True:
+        chunk = json.loads(gh_api(f"/repos/{REPO}/issues/{issue}/timeline?per_page=100&page={page}"))
+        events.extend(chunk)
+        if len(chunk) < 100:
+            break
+        page += 1
     closes = [event for event in events if event.get("event") == "closed"]
     if not closes:
         raise GuardError(f"issue #{issue} has no close event to judge")
@@ -107,11 +128,18 @@ def deployed(
     if status_code != 200:
         raise GuardError(f"{health_url} answered HTTP {status_code}; what is deployed is unknown")
     try:
-        serving = json.loads(body).get("git_sha")
+        payload = json.loads(body)
     except (TypeError, ValueError) as exc:
-        raise GuardError(f"{health_url} did not answer JSON") from exc
+        raise GuardError(f"{health_url} did not answer JSON: {body[:120]!r}") from exc
+    # A bare list or string is valid JSON; `.get` on it raises AttributeError
+    # and the guard would fail as a crash rather than as a verdict (review).
+    serving = payload.get("git_sha") if isinstance(payload, dict) else None
     if not isinstance(serving, str) or not serving or serving == "unknown":
         raise GuardError(f"{health_url} does not report a release identity")
+    if not _SAFE_REF.match(serving):
+        raise GuardError(
+            f"{health_url} reports {serving!r}, which is not a usable release identifier — this value never reaches git"
+        )
     code, out = git(["merge-base", "--is-ancestor", commit, f"{serving}^{{commit}}"])
     if code not in (0, 1):
         raise GuardError(f"cannot tell whether {serving} contains {commit[:8]}; fetch tags and full history")
@@ -135,9 +163,7 @@ def judge(
         )
     is_deployed, serving = deployed(commit, health_url=health_url, http_get=http_get, git=git)
     if is_deployed:
-        return Verdict(
-            False, f"#{issue} was closed by {commit[:8]}, which production is serving ({serving})"
-        )
+        return Verdict(False, f"#{issue} was closed by {commit[:8]}, which production is serving ({serving})")
     return Verdict(
         True,
         f"#{issue} was closed by merge commit {commit[:8]}, which production is NOT serving — it "

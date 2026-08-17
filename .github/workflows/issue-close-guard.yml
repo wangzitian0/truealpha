@@ -7,9 +7,13 @@ name: issue-close-guard
 # "Not `Closes`". Rule 7's own second half applies to itself: a convention is a
 # run that happened, not a check that runs again.
 #
-# This fires ONLY on the auto-close case (closed by a commit no release tag
-# contains). An issue a human closed is left alone: that is exactly what rule 7
-# asks for, and the person doing it has seen more than a script can.
+# This fires ONLY on the auto-close case: an issue closed by a commit that
+# PRODUCTION IS NOT SERVING (read from /api/health, the same identity the
+# freshness gate uses). Not "no release tag contains it" — v0.0.20 contained the
+# commits that closed #371, #494 and #495 while production served v0.0.19, and
+# rule 6 is explicit that a tag is not the bar. An issue a human closed is left
+# alone: that is exactly what rule 7 asks for, and the person doing it has seen
+# more than a script can.
 
 on:
   issues:
@@ -24,8 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Full history and tags: the verdict is "does any release tag contain the
-      # closing commit", which a shallow clone cannot answer.
+      # Full history and tags: the verdict is "does the tag production serves
+      # contain the closing commit", which a shallow clone cannot answer.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
