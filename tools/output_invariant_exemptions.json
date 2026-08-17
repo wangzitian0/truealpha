@@ -1,0 +1,17 @@
+{
+  "_comment": "#581. An exemption defers an invariant; it never disables one. Each carries the issue that will resolve it and a date after which the check fails anyway, because invariant suites die by accumulating permanent waivers. An exemption for an invariant that is no longer violated also fails: a standing waiver for a fixed defect hides the next occurrence.",
+  "exemptions": [
+    {
+      "invariant": "gppe-not-negative",
+      "issue": "#528",
+      "expires": "2026-09-16",
+      "reason": "JPM publishes -528,985.79 because a uniform total_assets capital charge is applied to financial issuers; vision.md requires a separate financial branch and it is not built"
+    },
+    {
+      "invariant": "pointer-tracks-the-latest-run",
+      "issue": "#594",
+      "expires": "2026-09-16",
+      "reason": "the governed pointer lags the latest strategy run by 67h on production; which side is wrong — the pointer not advancing, or the surfaces not resolving through it — is what #594 decides"
+    }
+  ]
+}
