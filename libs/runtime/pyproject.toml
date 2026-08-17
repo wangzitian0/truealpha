@@ -21,6 +21,10 @@ truealpha-runtime = "truealpha_runtime.cli:main"
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.9.0",
+    # tests/workflow_contract.py parses .github/workflows. Declared rather than
+    # relied on transitively: `uv sync --package truealpha-runtime` in isolation
+    # would otherwise collect nothing (review, #583).
+    "pyyaml>=6.0",
 ]
 
 [tool.uv.sources]
