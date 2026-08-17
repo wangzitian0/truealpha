@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
-import { loadToptQuality } from "@/server/topt-quality";
+import { captureAvailableCount, loadToptQuality } from "@/server/topt-quality";
 import { loadQualityFunnel, type FunnelLayer } from "@/server/admin/funnel";
 import { loadOpsOverview } from "@/server/admin/ops";
 import { formatRatio, formatUsdMagnitude } from "@/client/format";
@@ -138,7 +138,16 @@ export default async function ToptQualityPage() {
           <p className="text-sm text-gray-500">
             Run <code className="text-accent">{state.data.run_id}</code> — GPPE available for{" "}
             {state.data.cells.filter((row) => row.availability === "available").length} / {state.data.cells.length}{" "}
-            listings; capture plane {state.data.available_count} / {state.data.requested_count} cells available.
+            listings
+            {/* The capture-plane numerator is the quality report's own cell-level count —
+                NOT `available_count`, which is the mart's listing-level figure (scale /20)
+                and produced "18 / 84 cells" here while the funnel said 82/84 (#539). */}
+            {captureAvailableCount(state.data) !== null && (
+              <>
+                ; capture plane {captureAvailableCount(state.data)} / {state.data.requested_count} cells available
+              </>
+            )}
+            .
           </p>
 
           <div className="overflow-x-auto rounded-xl border border-border">

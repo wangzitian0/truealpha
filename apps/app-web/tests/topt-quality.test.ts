@@ -8,7 +8,7 @@
 
 import type { AccessContext } from "../src/contracts/strategyRun";
 import type { ToptGppeReport, ToptGppeUnavailable } from "../src/contracts/toptGppe";
-import { loadToptQuality, type ToptGppeRepositoryLike } from "../src/server/topt-quality";
+import { captureAvailableCount, loadToptQuality, type ToptGppeRepositoryLike } from "../src/server/topt-quality";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -79,3 +79,22 @@ function repositoryReturning(result: ToptGppeReport | ToptGppeUnavailable): Topt
 }
 
 console.log("#433 topt-quality loader outcomes passed");
+
+// --- captureAvailableCount: the capture-plane clause never mixes denominators (#539) ---
+{
+  const report: ToptGppeReport = {
+    run_id: "capture-run:" + "c".repeat(64),
+    requested_count: 84,
+    available_count: 18, // mart listing-level (scale /20) — must NOT be the /84 numerator
+    cells: [],
+    quality: { available_count: 82 },
+  };
+  assert(captureAvailableCount(report) === 82, "the /84 numerator must come from the quality payload");
+  assert(captureAvailableCount(report) !== report.available_count, "listing-level count must not leak into the capture-plane clause");
+
+  const withoutQuality: ToptGppeReport = { ...report, quality: null };
+  assert(captureAvailableCount(withoutQuality) === null, "no quality report -> omit the clause, never render a wrong number");
+
+  const malformed: ToptGppeReport = { ...report, quality: { available_count: "82" } };
+  assert(captureAvailableCount(malformed) === null, "a non-numeric payload count fails closed");
+}
