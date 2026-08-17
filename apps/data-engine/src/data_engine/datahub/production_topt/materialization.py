@@ -27,9 +27,11 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts.common import canonical_sha256
 
-_EXPECTED_ISSUERS = 20
-_EXPECTED_INSTRUMENTS = 21
-_EXPECTED_OBSERVATIONS = 84
+# Snapshot invariants are SELF-consistent, never universe literals: the frozen
+# TOPT 20 and a 102-listing plane universe freeze through the same checks
+# (#539 — the first QQQ run captured all 408 obligations in 39 minutes and
+# then died on a hardcoded 84 here).
+_SEMANTICS_PER_LISTING = 4
 _REQUIRED_TYPES = frozenset(
     {
         "financial-fact",
@@ -161,17 +163,15 @@ class ToptCoreSnapshot(_FrozenModel):
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
         members = tuple(sorted(self.members, key=lambda member: member.instrument_id))
-        if len(members) != _EXPECTED_INSTRUMENTS:
-            raise ValueError("TOPT snapshot must contain exactly 21 instruments")
-        if len({member.instrument_id for member in members}) != _EXPECTED_INSTRUMENTS:
-            raise ValueError("TOPT snapshot instrument identities are not unique")
-        if len({member.listing_id for member in members}) != _EXPECTED_INSTRUMENTS:
-            raise ValueError("TOPT snapshot listing identities are not unique")
-        if len({member.issuer_id for member in members}) != _EXPECTED_ISSUERS:
-            raise ValueError("TOPT snapshot must contain exactly 20 issuers")
+        if not members:
+            raise ValueError("a core snapshot must contain at least one member")
+        if len({member.instrument_id for member in members}) != len(members):
+            raise ValueError("core snapshot instrument identities are not unique")
+        if len({member.listing_id for member in members}) != len(members):
+            raise ValueError("core snapshot listing identities are not unique")
         observations = {item for member in members for item in member.observation_ids}
-        if len(observations) != _EXPECTED_OBSERVATIONS:
-            raise ValueError("TOPT snapshot must bind exactly 84 observations")
+        if len(observations) != _SEMANTICS_PER_LISTING * len(members):
+            raise ValueError("core snapshot must bind exactly four distinct observations per member")
         object.__setattr__(self, "members", members)
         payload = self.model_dump(mode="json", exclude={"snapshot_id", "content_sha256"})
         digest = canonical_sha256(payload)
@@ -403,26 +403,29 @@ class PostgresToptCoreRepository:
             failed,
             complete,
         ) = status
-        if environment != "production" or (
-            obligations,
-            terminal,
-            success + unchanged,
-            unavailable,
-            skipped,
-            failed,
-            complete,
-        ) != (84, 84, 84, 0, 0, 0, True):
-            raise ValueError("TOPT core snapshot requires a complete 84-cell Production run")
+        if (
+            environment != "production"
+            or complete is not True
+            or (
+                terminal,
+                success + unchanged,
+                unavailable,
+                skipped,
+                failed,
+            )
+            != (obligations, obligations, 0, 0, 0)
+        ):
+            raise ValueError("core snapshot requires a completely successful Production run")
         rows = self._load_observations(run_id, cutoff=cutoff)
-        if len(rows) != _EXPECTED_OBSERVATIONS:
-            raise ValueError("complete Production run does not expose 84 normalized payloads")
+        if len(rows) != obligations:
+            raise ValueError("complete Production run does not expose one normalized payload per obligation")
         grouped: dict[str, dict[str, _ObservationRow]] = {}
         for row in rows:
             by_type = grouped.setdefault(row.listing_id, {})
             if row.semantic_type in by_type:
                 raise ValueError("Production run selected more than one observation for a listing semantic cell")
             by_type[row.semantic_type] = row
-        if len(grouped) != _EXPECTED_INSTRUMENTS:
+        if len(grouped) * _SEMANTICS_PER_LISTING != obligations:
             raise ValueError("Production normalized payloads do not cover 21 listings")
         members = tuple(self._snapshot_member(listing_id, by_type) for listing_id, by_type in grouped.items())
         snapshot = ToptCoreSnapshot(
@@ -698,8 +701,9 @@ class PostgresToptCoreRepository:
         }
         invocation_sha256 = canonical_sha256(invocation_payload)
         invocation_id = f"topt-core-invocation:{invocation_sha256}"
-        if len(gppe_results) != _EXPECTED_ISSUERS:
-            raise ValueError("TOPT GPPE materialization denominator drifted")
+        expected_issuers = len({member.issuer_id for member in snapshot.members})
+        if len(gppe_results) != expected_issuers:
+            raise ValueError("GPPE materialization denominator drifted from the snapshot's issuers")
         with self._connection.transaction():
             gppe_inserted = self._connection.execute(
                 """
@@ -732,8 +736,8 @@ class PostgresToptCoreRepository:
             for gppe_result in gppe_results:
                 self._put_gppe_result(gppe_result)
             materialized_gppe_results = self._load_gppe_results(gppe_invocation_id)
-            if len(materialized_gppe_results) != _EXPECTED_ISSUERS:
-                raise ValueError("TOPT GPPE materialization did not persist the complete denominator")
+            if len(materialized_gppe_results) != expected_issuers:
+                raise ValueError("GPPE materialization did not persist the complete denominator")
 
             results = tuple(
                 compute_topt_core(
@@ -744,8 +748,8 @@ class PostgresToptCoreRepository:
                 )
                 for factor_input, gppe_result in zip(factor_inputs, materialized_gppe_results, strict=True)
             )
-            if len(results) != _EXPECTED_ISSUERS or len({item.issuer_id for item in results}) != _EXPECTED_ISSUERS:
-                raise ValueError("TOPT core materialization denominator drifted")
+            if len(results) != expected_issuers or len({item.issuer_id for item in results}) != expected_issuers:
+                raise ValueError("core materialization denominator drifted from the snapshot's issuers")
             inserted = self._connection.execute(
                 """
                 insert into mart.topt_core_invocations (
