@@ -56,6 +56,11 @@ def test_the_operator_bytes_parse_to_the_full_index() -> None:
     tickers = {row["ticker"] for row in rows}
     assert {"AAPL", "NVDA", "GOOG", "GOOGL"} <= tickers
     assert all(row["name"] for row in rows)
+    # The operator's own market caps ride the same bytes (weights proper are
+    # #63's N-PORT plane): AAPL parses to its actual dollar figure, not a string.
+    aapl = next(row for row in rows if row["ticker"] == "AAPL")
+    assert aapl["market_cap"] == "4464797487400"
+    assert sum(1 for row in rows if row["market_cap"]) >= 100
 
 
 def test_a_truncated_response_refuses_to_parse() -> None:
@@ -87,8 +92,8 @@ def test_land_publish_resolve_round_trip(connection) -> None:
         connection.execute(
             """
             insert into staging.etf_constituent_facts
-                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, cik, figi, knowable_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 "qqq",
@@ -97,6 +102,7 @@ def test_land_publish_resolve_round_trip(connection) -> None:
                 fetch_id,
                 row["ticker"],
                 row["name"],
+                row.get("market_cap"),
                 100000 + i,  # resolution is exercised live by the refresh; here the
                 f"bbg{i:09d}",  # plane's own shape and the publish/resolve legs are under test
                 fetched_at,

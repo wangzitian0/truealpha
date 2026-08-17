@@ -15,7 +15,11 @@ create table if not exists staging.etf_constituent_facts (
     raw_fetch_id  bigint not null references raw.fetches (id),
     ticker        text not null check (ticker <> ''),
     company_name  text not null default '',
+    -- The official fund weight arrives with the N-PORT holdings plane (#63);
+    -- NULL until then rather than a fabricated market-cap ratio. market_cap is
+    -- the operator's own per-constituent figure, parsed from the same bytes.
     weight        numeric,
+    market_cap    numeric,
     cik           integer,
     figi          text,
     knowable_at   timestamptz not null,

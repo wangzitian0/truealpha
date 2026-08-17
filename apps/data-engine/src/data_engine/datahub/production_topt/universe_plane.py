@@ -90,11 +90,20 @@ def parse_nasdaq_index_rows(body: bytes) -> list[dict[str, str]]:
     """The operator API's constituent rows: [{'ticker', 'name'}, ...], validated."""
     payload = json.loads(body)
     rows = (payload.get("data") or {}).get("data", {}).get("rows") or (payload.get("data") or {}).get("rows") or []
-    out = [
-        {"ticker": str(row["symbol"]).strip().upper(), "name": str(row.get("companyName", "")).strip()}
-        for row in rows
-        if row.get("symbol")
-    ]
+    out = []
+    for row in rows:
+        if not row.get("symbol"):
+            continue
+        market_cap = str(row.get("marketCap", "")).replace(",", "").strip()
+        out.append(
+            {
+                "ticker": str(row["symbol"]).strip().upper(),
+                "name": str(row.get("companyName", "")).strip(),
+                # The operator's own per-constituent market cap; the official fund
+                # WEIGHT is #63's N-PORT plane, never derived here.
+                "market_cap": market_cap if market_cap.replace(".", "", 1).isdigit() else None,
+            }
+        )
     if len(out) < 90:  # NDX is ~100-102; a short list is a source failure, not a small index
         raise ValueError(f"index constituents response yielded only {len(out)} rows")
     tickers = [row["ticker"] for row in out]
@@ -172,8 +181,8 @@ def refresh_etf_constituents(
         connection.execute(
             """
             insert into staging.etf_constituent_facts
-                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, cik, figi, knowable_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source.etf,
@@ -182,6 +191,7 @@ def refresh_etf_constituents(
                 fetch_id,
                 row["ticker"],
                 row["name"],
+                row.get("market_cap"),
                 cik_index[row["ticker"].replace(".", "-")],
                 figis[row["ticker"]],
                 fetched_at,
