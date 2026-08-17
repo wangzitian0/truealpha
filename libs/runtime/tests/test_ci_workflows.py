@@ -245,17 +245,34 @@ def test_no_test_bootstraps_a_tools_script_by_hand() -> None:
     anywhere in the file and the first thing it flagged was this test — the
     word appears in the failure message three lines down. A scanner that reads
     prose as code is the defect `source-contracts.test.ts` already learned once.
+
+    Arguments are resolved through the file's assignments, because the second
+    version read only the call's own text and every one of the nine copies it
+    was written to prevent would have walked past it (review): they all bound
+    `MODULE_PATH = REPO_ROOT / "tools/<name>.py"` first and passed the NAME.
+    The red case used an inline path, so it proved the scanner ran, not that it
+    covered the pattern — a guard tested only against a shape nobody writes.
     """
     offenders = []
     for path in sorted((REPO_ROOT / "libs/runtime/tests").glob("test_*.py")):
         source = path.read_text(encoding="utf-8")
-        for node in ast.walk(ast.parse(source)):
+        tree = ast.parse(source)
+        bound = {
+            target.id: ast.get_source_segment(source, node.value) or ""
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
             if name != "spec_from_file_location":
                 continue
-            if "tools" in (ast.get_source_segment(source, node) or ""):
+            reachable = [ast.get_source_segment(source, node) or ""]
+            reachable += [bound.get(argument.id, "") for argument in ast.walk(node) if isinstance(argument, ast.Name)]
+            if any("tools" in text for text in reachable):
                 offenders.append(path.name)
     assert not offenders, (
         f"{offenders} bootstrap a tools/ script by hand. Use "
