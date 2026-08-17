@@ -256,3 +256,91 @@ def test_latest_quarter_end_is_the_completed_quarter() -> None:
     # A quarter end publishes the PRIOR quarter — 06-30's own data is not settled on 06-30.
     assert latest_quarter_end(date(2026, 6, 30)) == date(2026, 3, 31)
     assert latest_quarter_end(date(2026, 7, 1)) == date(2026, 6, 30)
+
+
+def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None:
+    """#539: the first QQQ run captured all 408 obligations and died on a hardcoded
+    84 in freeze/snapshot validation. Invariants are now derived from the snapshot
+    itself — any universe size freezes through the same checks, and the
+    four-distinct-observations-per-member consistency still refuses a malformed set."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+    from decimal import Decimal as _D
+
+    import pytest as _pytest
+    from data_engine.datahub.production_topt.materialization import SnapshotMember, ToptCoreSnapshot
+    from factors.production_topt import (
+        MetricAvailability,
+        MetricFreshness,
+        OperatingBranch,
+        ToptCellQualityInput,
+        ToptMetricInput,
+    )
+
+    def oid(member: int, k: int) -> str:
+        return "normalized-observation:" + f"{member:x}{k:x}".ljust(64, "0")
+
+    def metric(name: str, member: int, k: int) -> ToptMetricInput:
+        return ToptMetricInput(
+            input_id=oid(member, k),
+            metric=name,
+            value=_D("100"),
+            unit="USD",
+            confidence=_D("0.9"),
+            knowable_at=_dt(2026, 8, 1, tzinfo=_UTC),
+            freshness=MetricFreshness.FRESH,
+            availability=MetricAvailability.AVAILABLE,
+        )
+
+    def member(i: int) -> SnapshotMember:
+        observation_ids = tuple(oid(i, k) for k in range(4))
+        cells = tuple(
+            ToptCellQualityInput(
+                input_id=one,
+                confidence=_D("0.9"),
+                knowable_at=_dt(2026, 8, 1, tzinfo=_UTC),
+                freshness=MetricFreshness.FRESH,
+            )
+            for one in observation_ids
+        )
+        return SnapshotMember(
+            issuer_id=f"issuer:cik:{i:010d}",
+            instrument_id=f"security:figi:test{i:08d}",
+            listing_id=f"listing:xnas:t{i:03d}",
+            operating_branch=OperatingBranch.NON_FINANCIAL,
+            observation_ids=observation_ids,
+            cell_inputs=cells,
+            gross_profit=metric("gross_profit", i, 0),
+            total_assets=metric("total_assets", i, 1),
+            headcount=metric("headcount", i, 2),
+            revenue=metric("revenue", i, 3),
+            pre_provision_profit=None,
+            shares_outstanding=metric("shares_outstanding", i, 0),
+            market_price=metric("market_price", i, 1),
+        )
+
+    snapshot = ToptCoreSnapshot(
+        run_id="capture-run:" + "a" * 64,
+        release_manifest_id="release-manifest:" + "b" * 64,
+        universe_id="universe:test-2026-06-30",
+        universe_version="test-2026-06-30-v1",
+        universe_sha256="c" * 64,
+        cutoff=_dt(2026, 8, 17, tzinfo=_UTC),
+        members=(member(1), member(2)),
+    )
+    assert snapshot.snapshot_id.startswith("topt-core-snapshot:")
+
+    twin = member(3)
+    with _pytest.raises(ValueError, match="four distinct observations per member"):
+        ToptCoreSnapshot(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            universe_id="universe:test-2026-06-30",
+            universe_version="test-2026-06-30-v1",
+            universe_sha256="c" * 64,
+            cutoff=_dt(2026, 8, 17, tzinfo=_UTC),
+            members=(
+                twin,
+                twin.model_copy(update={"instrument_id": "security:figi:other000", "listing_id": "listing:xnas:oth"}),
+            ),
+        )
