@@ -36,7 +36,7 @@ A PR that adds or materially changes a source must contain:
 1. an adapter behind the existing `SourceFetchPort` — the executor never learns vendors;
 2. a **cassette from the first real capture**, sha-anchored to `raw.fetches` (#569's pattern:
    the fixture IS reality, provably);
-3. one named entry in `scripts/vendor_contract_smoke.py` per load-bearing vendor assumption;
+3. one named entry in `apps/data-engine/scripts/vendor_contract_smoke.py` per load-bearing vendor assumption;
 4. a throttle/shared-budget declaration — requests per window, and the consumption window when
    the credential is shared across environments (#574's collision class);
 5. an origin-registry entry for every parser vintage it introduces (#543's class).
@@ -53,7 +53,7 @@ Frozen until #530's vintage plane is deployed and proven on a scheduled tick. Th
 2. #62 analyst forecasts last — a new class-C-at-best plane that adds no corroboration to
    anything existing.
 
-Correctness > coverage > scale (the /goal ranking); width is a reward, not a starting point.
+Correctness before coverage, coverage before scale; width is a reward, not a starting point.
 
 ## Consequences
 
