@@ -10,9 +10,12 @@ row — the exact tables `freeze_snapshot` → `materialize` → `mart.topt_*` r
 Everything lands on the caller's connection, so the capture-control writes and the
 executor's evidence-graph append commit as one transaction per run.
 
-Stamps are derived from the run's `cutoff`, never the wall clock, so a retried tick
-reproduces the same content-addressed rows and the conflict-tolerant inserts make
-the replay idempotent.
+Content-addressed identities derive from the run's `cutoff`, so a retried tick
+reproduces the same rows and the conflict-tolerant inserts make the replay
+idempotent. Audit stamps are the opposite by design (#530): `raw.fetches`
+`fetched_at`/`recorded_at` carry the real ingestion clock — identity-safe, the
+table's uniqueness ignores them — and `source_published_at` carries the adapter's
+own `transaction_time` rather than arithmetic on the cutoff.
 """
 
 from __future__ import annotations
@@ -114,6 +117,14 @@ class CaptureTimeline:
     @property
     def completed_at(self) -> datetime:
         return self.cutoff - timedelta(minutes=57)
+
+
+def _require_aware(stamp: datetime | None) -> datetime | None:
+    """A naive adapter timestamp would land as a silently shifted instant; refuse it
+    loudly, the same stance CaptureTimeline takes on its own stamps (Copilot on #587)."""
+    if stamp is not None and (stamp.tzinfo is None or stamp.utcoffset() is None):
+        raise ValueError("adapter transaction_time must be timezone-aware")
+    return stamp
 
 
 @dataclass(frozen=True)
@@ -262,7 +273,7 @@ class PostgresCaptureControlSink:
             # date, price-bar date, release manifest time) — not arithmetic on the
             # tick's cutoff (#530). The timeline fallback remains only for callers
             # that genuinely have no adapter assertion to carry.
-            source_published_at=source_published_at or self._timeline.source_published_at,
+            source_published_at=_require_aware(source_published_at) or self._timeline.source_published_at,
             raw_object_id=f"raw-object:{raw.sha256}",
         )
         self._repository.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id)
