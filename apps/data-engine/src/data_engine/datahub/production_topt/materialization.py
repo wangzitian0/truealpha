@@ -775,9 +775,54 @@ class PostgresToptCoreRepository:
                 ).fetchone()
                 if existing is None or existing[0] != invocation_sha256 or existing[1] != invocation_payload:
                     raise ValueError("TOPT core invocation identity conflict")
+            periods_by_listing = self._load_result_periods(snapshot)
             for result in results:
-                self._put_result(result)
+                if result.listing_id not in periods_by_listing:
+                    # Every result must trace to a member's financial-fact
+                    # observation; a missing listing is a wiring bug, and silently
+                    # persisting NULL periods would defeat this column's purpose
+                    # (Copilot Medium on #598).
+                    raise ValueError(f"no financial-fact observation for {result.listing_id} in its own snapshot")
+                self._put_result(result, periods_by_listing[result.listing_id])
         return results
+
+    def _load_result_periods(
+        self, snapshot: ToptCoreSnapshot
+    ) -> dict[str, tuple[date | None, date | None, date | None]]:
+        """The fiscal periods behind each member's financial-fact observation.
+
+        Read back from the snapshot's OWN observations at persist time, never
+        carried on the snapshot model: the snapshot's content address is its
+        selection of observations, and two snapshots selecting identical
+        observations must stay the same snapshot across code versions (Copilot
+        High on #598 — adding fields to SnapshotMember changed snapshot_id,
+        invocation_id and every result id for identical inputs, which a
+        cross-deploy tick retry would observe as a second materialization of the
+        same run). Periods derive from the selected observations, so this query
+        adds no information to the identity — it surfaces what the identity
+        already binds.
+        """
+        observation_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
+        rows = self._connection.execute(
+            """
+            select o.subject_id,
+                   p.normalized_payload->>'operating_period_end',
+                   p.normalized_payload->>'revenue_period_end',
+                   p.normalized_payload->>'shares_period_end'
+            from staging.capture_normalized_observations o
+            join staging.capture_observation_payloads p using (observation_id)
+            where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
+            """,
+            (observation_ids,),
+        ).fetchall()
+        return {
+            str(subject_id): (
+                None if operating is None else date.fromisoformat(operating),
+                None if revenue is None else date.fromisoformat(revenue),
+                None if shares is None else date.fromisoformat(shares),
+            )
+            for subject_id, operating, revenue, shares in rows
+        }
 
     def _load_gppe_results(self, invocation_id: str) -> tuple[ToptGppeResult, ...]:
         rows = self._connection.execute(
@@ -854,7 +899,7 @@ class PostgresToptCoreRepository:
             if existing is None or existing[0] != result.content_sha256 or existing[1] != payload:
                 raise ValueError("TOPT GPPE result identity conflict")
 
-    def _put_result(self, result: ToptCoreResult) -> None:
+    def _put_result(self, result: ToptCoreResult, periods: tuple[date | None, date | None, date | None]) -> None:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
         inserted = self._connection.execute(
             """
@@ -865,6 +910,7 @@ class PostgresToptCoreRepository:
                 operating_metric, availability, operating_efficiency,
                 capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
                 target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                operating_period_end, revenue_period_end, shares_period_end,
                 confidence, freshness, reason_codes, input_observation_ids,
                 gppe_invocation_id, gppe_result_id,
                 gppe_definition_id, gppe_definition_sha256,
@@ -872,7 +918,7 @@ class PostgresToptCoreRepository:
             ) values (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             ) on conflict (result_id) do nothing returning result_id
             """,
             (
@@ -901,6 +947,9 @@ class PostgresToptCoreRepository:
                 result.target_ps_midpoint,
                 result.current_ps,
                 result.valuation_gap,
+                periods[0],
+                periods[1],
+                periods[2],
                 result.confidence,
                 result.freshness.value,
                 [item.value for item in result.reason_codes],

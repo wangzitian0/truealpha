@@ -121,6 +121,9 @@ def _bundle(branch: OperatingBranch, *, blank_numerator: bool = False) -> Financ
         pre_provision_profit=None if blank_numerator or not financial else Decimal("80000000"),
         raw_bytes=b'{"facts":{}}' if not blank_numerator else b'{"facts":{"empty":true}}',
         knowable_at=datetime(2026, 2, 1, tzinfo=UTC),
+        operating_period_end=date(2025, 12, 31),
+        revenue_period_end=date(2025, 12, 31),
+        shares_period_end=date(2026, 3, 15),
     )
 
 
@@ -801,3 +804,32 @@ def test_a_stale_source_grades_stale_at_write_time(connection) -> None:
     ).fetchone()
     assert knowable_at == old_bar
     assert freshness == "stale", "13 days beyond a 5-day window must not grade fresh"
+
+
+def test_the_vintage_axis_reaches_the_served_mart_row(connection) -> None:
+    """#530 slice 4: 'how old is the number this row serves' is a SQL question.
+
+    The fixture's fiscal periods (FY-end 2025-12-31, shares cover date 2026-03-15)
+    must arrive as typed columns on mart.topt_core_results — the V-2010 incident's
+    blind spot was exactly that mart rows carried no period, so a 16-year-old share
+    count was indistinguishable from a fresh one without re-deriving from the
+    vendor."""
+    import datetime as _dt
+
+    plan = _capture(connection, version="test-530-periods")
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+
+    rows = connection.execute(
+        """
+        select operating_period_end, revenue_period_end, shares_period_end
+        from mart.topt_core_results where run_id = %s
+        """,
+        (plan.run_id,),
+    ).fetchall()
+    assert rows
+    for operating, revenue, shares in rows:
+        assert operating == _dt.date(2025, 12, 31)
+        assert revenue == _dt.date(2025, 12, 31)
+        assert shares == _dt.date(2026, 3, 15)
