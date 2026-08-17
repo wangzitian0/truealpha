@@ -393,6 +393,12 @@ class PostgresCaptureControlSink:
     ) -> None:
         obligation = binding.obligation
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
+        # Validate once, use everywhere: the freshness arithmetic below must see
+        # the same aware value the observation persists (Copilot on #596). Inline
+        # rather than through _require_aware, whose Optional signature serves the
+        # vintage path; this parameter is never None.
+        if knowable_at.tzinfo is None or knowable_at.utcoffset() is None:
+            raise ValueError("adapter transaction_time must be timezone-aware")
         observation = NormalizedObservation(
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
@@ -407,7 +413,7 @@ class PostgresCaptureControlSink:
             valid_to=None,
             # The adapter's transaction_time — filed date, bar date, manifest
             # time — never arithmetic on the cutoff (#530 slice 3).
-            knowable_at=_require_aware(knowable_at),
+            knowable_at=knowable_at,
             source_vintage_id=source_vintage_id,
             parser_version=parser_version,
             mapping_version=mapping_version,
