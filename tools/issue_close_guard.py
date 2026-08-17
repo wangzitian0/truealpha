@@ -31,23 +31,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from infra2_sdk.deploy_health import HttpGet, default_http_get
+from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
 
 REPO = "wangzitian0/truealpha"
 # Rule 6 asks whether a user has it, so the question is what production SERVES,
 # not what a tag contains.
 PRODUCTION_HEALTH = "https://truealpha.club/api/health"
-# Same lesson as tools/deploy_freshness.py, which had to learn it first: the
-# release identifier arrives over HTTP and is then handed to git, where a
-# leading "-" is read as an option. Duplicated rather than imported because
-# these are standalone scripts, not a package.
-_SAFE_REF = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._/-]{0,199}$")
 GhApi = Callable[[str], str]
 Git = Callable[[Sequence[str]], tuple[int, str]]
 
@@ -124,22 +119,7 @@ def deployed(
     thing rule 6 explicitly is not satisfied by.
     """
     http_get = http_get or default_http_get()
-    status_code, body = http_get(health_url)
-    if status_code != 200:
-        raise GuardError(f"{health_url} answered HTTP {status_code}; what is deployed is unknown")
-    try:
-        payload = json.loads(body)
-    except (TypeError, ValueError) as exc:
-        raise GuardError(f"{health_url} did not answer JSON: {body[:120]!r}") from exc
-    # A bare list or string is valid JSON; `.get` on it raises AttributeError
-    # and the guard would fail as a crash rather than as a verdict (review).
-    serving = payload.get("git_sha") if isinstance(payload, dict) else None
-    if not isinstance(serving, str) or not serving or serving == "unknown":
-        raise GuardError(f"{health_url} does not report a release identity")
-    if not _SAFE_REF.match(serving):
-        raise GuardError(
-            f"{health_url} reports {serving!r}, which is not a usable release identifier — this value never reaches git"
-        )
+    serving = read_deployed_release(health_url, http_get)
     code, out = git(["merge-base", "--is-ancestor", commit, f"{serving}^{{commit}}"])
     if code not in (0, 1):
         raise GuardError(f"cannot tell whether {serving} contains {commit[:8]}; fetch tags and full history")
@@ -185,7 +165,7 @@ def run(
 ) -> int:
     try:
         verdict = judge(issue, gh_api=gh_api, git=git, health_url=health_url, http_get=http_get)
-    except GuardError as exc:
+    except (GuardError, ReleaseIdentityError) as exc:
         print(f"issue-close guard failed: {exc}", file=sys.stderr)
         return 1
     if not verdict.reopen:
