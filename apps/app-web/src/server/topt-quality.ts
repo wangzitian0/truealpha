@@ -31,7 +31,15 @@ export interface ToptGppeRepositoryLike {
  */
 export function captureAvailableCount(report: ToptGppeReport): number | null {
   const value = report.quality?.available_count;
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+  const usable =
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    // A numerator above the denominator is malformed, not merely surprising:
+    // rendering "999 / 84 cells" would be the same dimensional lie this helper
+    // exists to prevent (Copilot review on #571).
+    value <= report.requested_count;
+  return usable ? value : null;
 }
 
 /** `repository` is an injection point for tests only; production callers omit it. */

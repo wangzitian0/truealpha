@@ -115,7 +115,9 @@ def test_the_two_origins_agree_within_the_declared_tolerance() -> None:
     fixture that agrees with itself by construction.
     """
     yahoo_bars = _parse_chart_response(json.loads(_bytes(_YAHOO), parse_float=Decimal))
-    yahoo_close = max((b for b in yahoo_bars if b.date <= _PARTITION), key=lambda b: b.date).close
+    eligible = [b for b in yahoo_bars if b.date <= _PARTITION]
+    assert eligible, "the cassette must contain bars at or before the capture partition"
+    yahoo_close = max(eligible, key=lambda b: b.date).close
     twelve = parse_last_settled_close(_bytes(_TWELVE), partition=_PARTITION)
     assert twelve is not None
     tolerance = RECONCILIATION_POLICY.absolute_tolerance + RECONCILIATION_POLICY.relative_tolerance * max(

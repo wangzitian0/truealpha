@@ -206,6 +206,10 @@ def test_the_two_environments_never_tick_at_the_same_instant() -> None:
         minute, hour, dom, month, dow = cron.split()
         assert (hour, dom, month, dow) == ("22", "*", "*", "*")
         assert 0 <= int(minute) <= 59
-    # At least a full free-tier minute-window apart, so one env's tail cannot
-    # overlap the other's head even with per-request throttling drift.
-    assert abs(int(production.split()[0]) - int(staging.split()[0])) >= 15
+    # The full half-hour the fix promises: one env's ~6-minute request train plus
+    # throttling drift must never reach the other's window.
+    assert abs(int(production.split()[0]) - int(staging.split()[0])) >= 30
+    # Alias safety: APP_ENV=prod is production, not an accidental staging slot.
+    assert live_topt_cron("prod") == production
+    assert live_topt_cron("PRODUCTION") == production
+    assert live_topt_cron("dev") == staging, "unrecognized envs share the lower-stakes slot"

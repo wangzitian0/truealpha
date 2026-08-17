@@ -11,8 +11,9 @@ session). Every check below is one of those load-bearing assumptions, named.
 
 Cost: 1 Yahoo request + 3 Twelve Data credits (of the 800/day budget).
 Exit 0 = contract holds; exit 1 = a named assumption drifted. Intended for a
-cron/scheduled run and after any vendor incident; requires TWELVE_DATA_API_KEY
-for the Twelve Data checks (skips them, loudly, when absent).
+cron/scheduled run and after any vendor incident. A missing TWELVE_DATA_API_KEY is
+recorded as a FAILED check (a monitor with no credentials is a monitoring gap, not
+a skip).
 
 Usage:
     uv run --package truealpha-data-engine python apps/data-engine/scripts/vendor_contract_smoke.py
@@ -48,13 +49,23 @@ def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes
     except urllib.error.HTTPError as error:
         with error:
             return error.code, bytes(error.read())
+    except OSError as error:
+        # DNS, timeout, refused, TLS — transport failure is itself a drifted
+        # assumption for a monitor: report it as a failed check, never crash past
+        # the summary (Copilot review on #569).
+        return 0, f'{{"transport_error": "{type(error).__name__}"}}'.encode()
 
 
 def check_yahoo() -> None:
     from data_engine.sources.yahoo import fetch_daily_chart
 
     today = datetime.now(UTC).date()
-    body, bars = fetch_daily_chart("AAPL", end=today)
+    try:
+        body, bars = fetch_daily_chart("AAPL", end=today)
+    except Exception as error:  # noqa: BLE001 - a monitor reports, it does not crash
+        _check("yahoo: chart endpoint reachable", False, f"{type(error).__name__}: {error}")
+        return
+    _check("yahoo: chart endpoint reachable", True)
     _check("yahoo: chart returns parseable bars", len(bars) >= 1, f"{len(bars)} bars")
     if bars:
         newest = max(bars, key=lambda b: b.date)

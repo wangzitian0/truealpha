@@ -66,7 +66,12 @@ def live_topt_cron(app_env: str) -> str:
     retry never needs a faster cron: launch the same job manually with an explicit
     `executed_at`.
     """
-    return "15 22 * * *" if app_env == "production" else "45 22 * * *"
+    # Alias-safe: a deploy configured APP_ENV=prod must never silently take the
+    # staging slot and re-create the collision (Copilot review on #574). Only two
+    # environments run this schedule; anything unrecognized shares staging's slot,
+    # where a surprise collision costs a staging tick, not the production head.
+    normalized = app_env.strip().lower()
+    return "15 22 * * *" if normalized in ("production", "prod") else "45 22 * * *"
 
 
 TOPT_LIVE_CRON = live_topt_cron(settings.app_env)

@@ -142,11 +142,12 @@ export default async function ToptQualityPage() {
             {/* The capture-plane numerator is the quality report's own cell-level count —
                 NOT `available_count`, which is the mart's listing-level figure (scale /20)
                 and produced "18 / 84 cells" here while the funnel said 82/84 (#539). */}
-            {captureAvailableCount(state.data) !== null && (
-              <>
-                ; capture plane {captureAvailableCount(state.data)} / {state.data.requested_count} cells available
-              </>
-            )}
+            {((captureAvailable) =>
+              captureAvailable !== null && (
+                <>
+                  ; capture plane {captureAvailable} / {state.data.requested_count} cells available
+                </>
+              ))(captureAvailableCount(state.data))}
             .
           </p>
 
