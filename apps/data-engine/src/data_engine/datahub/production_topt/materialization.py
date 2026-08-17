@@ -131,12 +131,6 @@ class SnapshotMember(_FrozenModel):
     pre_provision_profit: ToptMetricInput | None
     shares_outstanding: ToptMetricInput
     market_price: ToptMetricInput
-    # The fiscal periods behind the headline figures (#530 slice 4): carried from
-    # FinancialFactPayload to the served mart columns, so "how old is this number"
-    # is a SQL question, not a vendor re-derivation.
-    operating_period_end: date | None = None
-    revenue_period_end: date | None = None
-    shares_period_end: date | None = None
 
     @field_validator("observation_ids")
     @classmethod
@@ -556,9 +550,6 @@ class PostgresToptCoreRepository:
             instrument_id=listing.instrument_id,
             listing_id=listing.listing_id,
             operating_branch=financial.operating_branch,
-            operating_period_end=financial.operating_period_end,
-            revenue_period_end=financial.revenue_period_end,
-            shares_period_end=financial.shares_period_end,
             observation_ids=(
                 observation_ids[0],
                 observation_ids[1],
@@ -784,10 +775,54 @@ class PostgresToptCoreRepository:
                 ).fetchone()
                 if existing is None or existing[0] != invocation_sha256 or existing[1] != invocation_payload:
                     raise ValueError("TOPT core invocation identity conflict")
-            members_by_listing = {member.listing_id: member for member in snapshot.members}
+            periods_by_listing = self._load_result_periods(snapshot)
             for result in results:
-                self._put_result(result, members_by_listing.get(result.listing_id))
+                if result.listing_id not in periods_by_listing:
+                    # Every result must trace to a member's financial-fact
+                    # observation; a missing listing is a wiring bug, and silently
+                    # persisting NULL periods would defeat this column's purpose
+                    # (Copilot Medium on #598).
+                    raise ValueError(f"no financial-fact observation for {result.listing_id} in its own snapshot")
+                self._put_result(result, periods_by_listing[result.listing_id])
         return results
+
+    def _load_result_periods(
+        self, snapshot: ToptCoreSnapshot
+    ) -> dict[str, tuple[date | None, date | None, date | None]]:
+        """The fiscal periods behind each member's financial-fact observation.
+
+        Read back from the snapshot's OWN observations at persist time, never
+        carried on the snapshot model: the snapshot's content address is its
+        selection of observations, and two snapshots selecting identical
+        observations must stay the same snapshot across code versions (Copilot
+        High on #598 — adding fields to SnapshotMember changed snapshot_id,
+        invocation_id and every result id for identical inputs, which a
+        cross-deploy tick retry would observe as a second materialization of the
+        same run). Periods derive from the selected observations, so this query
+        adds no information to the identity — it surfaces what the identity
+        already binds.
+        """
+        observation_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
+        rows = self._connection.execute(
+            """
+            select o.subject_id,
+                   p.normalized_payload->>'operating_period_end',
+                   p.normalized_payload->>'revenue_period_end',
+                   p.normalized_payload->>'shares_period_end'
+            from staging.capture_normalized_observations o
+            join staging.capture_observation_payloads p using (observation_id)
+            where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
+            """,
+            (observation_ids,),
+        ).fetchall()
+        return {
+            str(subject_id): (
+                None if operating is None else date.fromisoformat(operating),
+                None if revenue is None else date.fromisoformat(revenue),
+                None if shares is None else date.fromisoformat(shares),
+            )
+            for subject_id, operating, revenue, shares in rows
+        }
 
     def _load_gppe_results(self, invocation_id: str) -> tuple[ToptGppeResult, ...]:
         rows = self._connection.execute(
@@ -864,7 +899,7 @@ class PostgresToptCoreRepository:
             if existing is None or existing[0] != result.content_sha256 or existing[1] != payload:
                 raise ValueError("TOPT GPPE result identity conflict")
 
-    def _put_result(self, result: ToptCoreResult, member: SnapshotMember | None = None) -> None:
+    def _put_result(self, result: ToptCoreResult, periods: tuple[date | None, date | None, date | None]) -> None:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
         inserted = self._connection.execute(
             """
@@ -912,9 +947,9 @@ class PostgresToptCoreRepository:
                 result.target_ps_midpoint,
                 result.current_ps,
                 result.valuation_gap,
-                None if member is None else member.operating_period_end,
-                None if member is None else member.revenue_period_end,
-                None if member is None else member.shares_period_end,
+                periods[0],
+                periods[1],
+                periods[2],
                 result.confidence,
                 result.freshness.value,
                 [item.value for item in result.reason_codes],
