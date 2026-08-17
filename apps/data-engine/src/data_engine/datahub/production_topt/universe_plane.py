@@ -30,7 +30,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, TypedDict
 
 from psycopg import Connection
 from psycopg.types.json import Jsonb
@@ -86,11 +86,17 @@ def _get(url: str, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
             return error.code, bytes(error.read())
 
 
-def parse_nasdaq_index_rows(body: bytes) -> list[dict[str, str]]:
+class ConstituentRow(TypedDict):
+    ticker: str
+    name: str
+    market_cap: str | None
+
+
+def parse_nasdaq_index_rows(body: bytes) -> list[ConstituentRow]:
     """The operator API's constituent rows: [{'ticker', 'name'}, ...], validated."""
     payload = json.loads(body)
     rows = (payload.get("data") or {}).get("data", {}).get("rows") or (payload.get("data") or {}).get("rows") or []
-    out = []
+    out: list[ConstituentRow] = []
     for row in rows:
         if not row.get("symbol"):
             continue
@@ -270,12 +276,12 @@ def publish_universe_list(
         "values (%s, %s, %s, %s) on conflict (contract_id) do nothing",
         (contract_id, source.head_kind, content_sha256, Jsonb(denominator)),
     )
-    sequence = int(
-        connection.execute(
-            "select coalesce(max(sequence), 0) + 1 from staging.accepted_rulesets where kind = %s",
-            (source.head_kind,),
-        ).fetchone()[0]
-    )
+    sequence_row = connection.execute(
+        "select coalesce(max(sequence), 0) + 1 from staging.accepted_rulesets where kind = %s",
+        (source.head_kind,),
+    ).fetchone()
+    assert sequence_row is not None
+    sequence = int(sequence_row[0])
     connection.execute(
         "insert into staging.accepted_rulesets (kind, contract_id, sequence, note) values (%s, %s, %s, %s)",
         (source.head_kind, contract_id, sequence, note),

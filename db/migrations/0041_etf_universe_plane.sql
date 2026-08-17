@@ -72,10 +72,17 @@ begin
 end;
 $$;
 
--- The operator UI reads this plane through app_ops_reader (traceability page):
--- members + lineage + the governed heads, read-only.
-grant usage on schema staging to app_ops_reader;
-grant select on staging.etf_constituent_facts to app_ops_reader;
-grant select on staging.accepted_rulesets to app_ops_reader;
-grant select on staging.accepted_ruleset_head to app_ops_reader;
-grant select on staging.contract_objects to app_ops_reader;
+-- The operator UI reads this plane through app_ops_reader (traceability page).
+-- Conditional: CI applies migrations BEFORE db/roles.sql, so on a fresh database
+-- the role does not exist yet — roles.sql carries the permanent grants.
+do $$
+begin
+    if exists (select from pg_roles where rolname = 'app_ops_reader') then
+        grant usage on schema staging to app_ops_reader;
+        grant select on staging.etf_constituent_facts to app_ops_reader;
+        grant select on staging.accepted_rulesets to app_ops_reader;
+        grant select on staging.accepted_ruleset_head to app_ops_reader;
+        grant select on staging.contract_objects to app_ops_reader;
+    end if;
+end;
+$$;

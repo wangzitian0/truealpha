@@ -597,6 +597,9 @@ def run_topt_pipeline(
     cutoff: datetime,
     version: str,
     writer: EvidenceGraphWriter | None = None,
+    corpus_filename: str = "corpus.v1.json",
+    label_prefix: str = "production-topt",
+    universe_head_kind: str | None = None,
 ) -> ToptPipelineResult:
     """Capture → freeze → materialize → quality report, in the caller's transaction.
 
@@ -608,7 +611,14 @@ def run_topt_pipeline(
     if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ValueError("cutoff must be timezone-aware")
 
-    plan = plan_and_persist(connection, cutoff=cutoff, version=version)
+    plan = plan_and_persist(
+        connection,
+        cutoff=cutoff,
+        version=version,
+        corpus_filename=corpus_filename,
+        label_prefix=label_prefix,
+        universe_head_kind=universe_head_kind,
+    )
     recorded = _already_recorded(connection, plan.run_id)
     if recorded is not None:
         _record_and_refuse(connection, plan, recorded)
