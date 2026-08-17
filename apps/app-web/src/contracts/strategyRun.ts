@@ -62,6 +62,9 @@ export interface StrategyRunDecision {
   exclusion_reason: string | null;
   rank: number | null;
   target_weight: string | null;
+  // Module 1 (#284), recorded but not selecting. Optional so a report produced before it
+  // existed still validates, and null when PEG is undefined for the issuer.
+  peg?: string | null;
 }
 
 export interface StrategyRunReport {
@@ -181,6 +184,7 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
       "exclusion_reason",
       "rank",
       "target_weight",
+      "peg",
     ],
     path,
   );
@@ -231,6 +235,7 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
     exclusion_reason: object.exclusion_reason as string | null,
     rank: rank as number | null,
     target_weight: asDecimalString(object.target_weight, `${path}.target_weight`, [0, 1]),
+    peg: object.peg === undefined ? null : asDecimalString(object.peg, `${path}.peg`),
   };
 }
 

@@ -34,6 +34,7 @@ from truealpha_contracts.strategy import (
 )
 
 from factors.base.gross_profit_per_employee import gross_profit_per_employee
+from factors.base.peg import peg_from_rate
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation
 from factors.types import Fact
@@ -42,6 +43,12 @@ from factors.types import Fact
 # canonical metric registry names the base factors consume.
 _GPPE_KEYS = ("gross_profit", "total_assets", "headcount")
 _PS_KEYS = ("last_close", "shares_outstanding", "revenue")
+# Module 1 (#284). `earnings_cagr_3y` is a rate derived upstream from the annual net-income
+# series, not a raw fact, for the reason recorded in `base/peg.py`: a per-share series is
+# incomparable across a stock split and nothing adjusts for one. The multiple uses
+# net income rather than diluted EPS because it is present for 20 of 20 issuers against
+# 18, and it puts both halves of PEG on one earnings basis.
+_PEG_KEYS = ("last_close", "shares_outstanding", "net_income")
 _METRIC_FOR_KEY = {"headcount": "employees_total", "last_close": "price"}
 
 # Fixed evaluation order for a missing required input -> its exact reason code.
@@ -81,6 +88,11 @@ class EvaluatedDecision:
     confidence: Decimal | None
     rank: int | None = None
     target_weight: Decimal | None = None
+    # Module 1, recorded but not selecting (#284 step 4). Defaults to None so an excluded
+    # issuer needs no growth basis, and so its absence can never change eligibility —
+    # landing the factor must not move the portfolio before the owner decides how it
+    # enters selection.
+    peg: Decimal | None = None
 
 
 def _quantize(value: Decimal, quantization: DecimalQuantization) -> Decimal:
@@ -145,6 +157,17 @@ def _evaluate_issuer(
     if gppe_result.value is None or ps_result.value is None:
         return _excluded(issuer.issuer_id, ExclusionReason.STALE_REQUIRED_INPUT, confidence=consumed_confidence), None
 
+    # Recorded, not selecting (#284 step 4): module 1 must not change who is eligible until
+    # the owner decides how it enters selection, or landing the factor would silently move
+    # the portfolio. So a missing or degenerate PEG leaves the decision otherwise untouched.
+    growth = issuer.records.get("earnings_cagr_3y")
+    peg_value = peg_from_rate(
+        _facts_for(issuer, _PEG_KEYS, as_of=as_of),
+        entity_id=issuer.issuer_id,
+        as_of=as_of,
+        growth_rate=None if growth is None else growth[0],
+    ).value
+
     labor_efficiency = _quantize(gppe_result.value, labor_q)
     current_ps = _quantize(ps_result.value, ps_q)
     tier_result = three_tier_valuation(
@@ -171,6 +194,7 @@ def _evaluate_issuer(
                 current_price_to_sales=current_ps,
                 target_price_to_sales=target_ps,
                 valuation_gap=valuation_gap,
+                peg=peg_value,
                 eligible=True,
                 outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND,
                 exclusion_reason=None,
@@ -186,6 +210,7 @@ def _evaluate_issuer(
             current_price_to_sales=current_ps,
             target_price_to_sales=target_ps,
             valuation_gap=valuation_gap,
+            peg=peg_value,
             eligible=True,
             outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
             exclusion_reason=None,

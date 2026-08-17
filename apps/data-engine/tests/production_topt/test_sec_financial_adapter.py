@@ -867,3 +867,93 @@ def test_predecessor_cik_fallback_fires_only_on_an_empty_taxonomy() -> None:
     adapter_no_pred = SecFinancialFactAdapter({item2.work_item_id: target2}, fetcher)
     adapter_no_pred.fetch(item2)
     assert calls == [2115436], "no predecessor -> no second fetch, honest nulls stand"
+
+
+# -- earnings CAGR for module 1 (PEG) -------------------------------------------------
+
+
+def _earnings_facts(*pairs: tuple[str, str, str]) -> dict:
+    """company-facts carrying annual NetIncomeLoss periods: (start, end, value)."""
+    facts = _facts()
+    facts["facts"]["us-gaap"]["NetIncomeLoss"] = {
+        "units": {"USD": [_annual(end, start, value, f"{end[:4]}-02-15") for start, end, value in pairs]}
+    }
+    return facts
+
+
+def test_the_bundle_derives_an_earnings_cagr_from_the_payload_it_already_fetched() -> None:
+    """PEG needs multi-period earnings, and company-facts already carries them.
+
+    `annual_values_by_period_end` builds every annual period keyed by period end and
+    the bundle then throws all but the latest away. Deriving the CAGR here means module
+    1 needs no new data plane: no `staging.financial_facts`, which is empty in
+    Production with no reachable writer (#530).
+    """
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", 120),
+        ("2024-01-01", "2024-12-31", 150),
+        ("2025-01-01", "2025-12-31", 200),
+    )
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is not None
+    # (200/100)^(1/3) - 1 = 0.2599
+    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2599")
+    # Both endpoints are recorded so the window is auditable rather than implied.
+    assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
+    assert bundle.earnings_cagr_latest_period_end == date(2025, 12, 31)
+
+
+def test_the_cagr_is_never_knowable_before_the_filings_it_consumed() -> None:
+    """The PIT obligation strategy participation adds (#284).
+
+    `strategy_backtest_inputs_pit` only asserts `knowable_at <= cutoff_at`, so it would
+    accept a CAGR built from a restatement that was not public at the historical cutoff
+    — which makes a backtest look better for free. The bundle's `knowable_at` must be at
+    or after the latest filing behind the window.
+    """
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2025-01-01", "2025-12-31", 200),
+    )
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is not None
+    assert bundle.knowable_at is not None
+    # The 2025 period was filed 2025-02-15 in this fixture; nothing may claim the CAGR
+    # was knowable before then.
+    assert bundle.knowable_at.date() >= date(2025, 2, 15)
+
+
+def test_a_missing_base_period_yields_no_cagr_rather_than_a_shorter_window() -> None:
+    # Only 2024 and 2025 on file; a three-year window has no 2022 base. Silently
+    # computing a one-year rate would make issuers incomparable in one ranking.
+    facts = _earnings_facts(
+        ("2024-01-01", "2024-12-31", 150),
+        ("2025-01-01", "2025-12-31", 200),
+    )
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is None
+
+
+def test_no_cagr_is_derived_when_the_issuer_reports_no_net_income() -> None:
+    bundle = build_bundle(_facts(), date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is None
+    assert bundle.earnings_cagr_base_period_end is None
+
+
+def test_the_adapter_publishes_the_cagr_and_its_window_in_the_payload() -> None:
+    item = _work_item("a" * 64)
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2025-01-01", "2025-12-31", 200),
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda cik, cutoff, branch: build_bundle(facts, cutoff, branch, earnings_cagr_years=3),
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    payload = result.record.payload
+    assert payload["earnings_cagr_3y"] is not None
+    assert payload["earnings_cagr_base_period_end"] == "2022-12-31"
+    assert payload["earnings_cagr_latest_period_end"] == "2025-12-31"

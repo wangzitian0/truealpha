@@ -53,6 +53,7 @@ from factors.types import Fact, FactorResult, GrowthConvention, UnitFamily
 _EPS_DILUTED = "eps_diluted"
 _NET_INCOME = "net_income"
 _PRICE = "price"
+_SHARES = "shares_outstanding"
 
 # Staging encodes a fiscal period as "FY2025:FY:2024-01-29:2025-01-26" —
 # "<filing fiscal year>:<period kind>:<period start>:<period end>".
@@ -208,4 +209,94 @@ def peg(
         as_of=as_of,
         data_availability="unverified",
         flags=[f"cagr_years:{cagr_years}", f"base_fiscal_year:{base_year}"],
+    )
+
+
+def peg_from_rate(
+    facts: Sequence[Fact],
+    *,
+    entity_id: str,
+    as_of: datetime,
+    growth_rate: Decimal | None,
+) -> FactorResult:
+    """PEG when the growth rate was already derived upstream.
+
+    `peg()` above owns the whole computation, including reducing an annual series to a
+    compound rate, and is the form to use where the series is available. The deployed
+    capture path derives that rate at the source instead — company-facts already carries
+    every annual period, so the adapter reduces it there and lands one scalar rather than
+    a series, which is what lets module 1 run without the multi-period read path that does
+    not exist in Production (#530).
+
+    The rate arrives as a parameter rather than a `Fact` for the same reason
+    `risk_free_rate` does in module 2: it is a declared policy input, not an observation
+    of the issuer, and the metric registry is the source of truth for things that ARE
+    observations. Both forms share the degenerate-case rules below so the two entry points
+    cannot disagree about when PEG is undefined.
+
+    The multiple here is `market cap / net income` rather than `price / eps_diluted`,
+    which is the reverse of the choice `peg()` makes, and the reason is measured:
+    `NetIncomeLoss` is present for 20 of 20 TOPT issuers while `EarningsPerShareDiluted`
+    is present for 18. It also puts BOTH halves of the ratio on one earnings basis, so a
+    restatement moves the multiple and the growth together. The share count re-enters, but
+    it brings no new exposure — `current_price_to_sales` in the same decision already
+    depends on it, and #529's staleness guard turns a stale count into an absent one, so
+    the failure mode is an unavailable PEG rather than a wrong one.
+    """
+
+    def unavailable(flags: list[str]) -> FactorResult:
+        return FactorResult(
+            factor="peg",
+            entity_id=entity_id,
+            value=None,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal("0"),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=flags,
+        )
+
+    price = _sole(facts, entity_id, _PRICE)
+    shares = _sole(facts, entity_id, _SHARES)
+    earnings = _sole(facts, entity_id, _NET_INCOME)
+
+    flags: list[str] = []
+    if price is None or price.value is None:
+        flags.append("missing_price")
+    elif price.value <= 0:
+        flags.append("non_positive_price")
+    if shares is None or shares.value is None:
+        flags.append("missing_shares_outstanding")
+    elif shares.value <= 0:
+        flags.append("non_positive_shares_outstanding")
+    if earnings is None or earnings.value is None:
+        flags.append("missing_net_income")
+    if growth_rate is None:
+        flags.append("missing_growth_rate")
+    if flags:
+        return unavailable(flags)
+
+    assert price is not None and price.value is not None
+    assert shares is not None and shares.value is not None
+    assert earnings is not None and earnings.value is not None and growth_rate is not None
+    if earnings.value <= 0:
+        return unavailable(["non_positive_earnings"])
+    if growth_rate <= 0:
+        # A shrinking issuer must not read as cheap through a negative denominator.
+        return unavailable(["non_positive_growth"])
+
+    with localcontext() as context:
+        context.prec = 28
+        price_to_earnings = (price.value * shares.value) / earnings.value
+        value = price_to_earnings / (growth_rate * Decimal(100))
+
+    return FactorResult(
+        factor="peg",
+        entity_id=entity_id,
+        value=value,
+        unit_family=UnitFamily.RATIO,
+        confidence=min(price.confidence, shares.confidence, earnings.confidence),
+        as_of=as_of,
+        data_availability="unverified",
+        flags=[],
     )

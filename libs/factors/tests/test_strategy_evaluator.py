@@ -155,3 +155,71 @@ def test_in_band_issuer_is_not_rejected_above_band() -> None:
     assert decision.valuation_gap is not None and decision.valuation_gap < 0
     assert decision.outcome is not GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
     assert decision.eligible
+
+
+# -- module 1 (PEG) recorded alongside the decision (#284) -----------------------------
+
+
+_PEG_CUTOFF = datetime.fromisoformat("2026-03-31T00:00:00+00:00")
+
+
+def _peg_inputs(**overrides: str) -> IssuerInput:
+    """A complete issuer plus the two inputs module 1 adds."""
+    records = {
+        "gross_profit": (Decimal("40000"), Decimal("0.9")),
+        "total_assets": (Decimal("100000"), Decimal("0.9")),
+        "headcount": (Decimal("100"), Decimal("0.9")),
+        "revenue": (Decimal("50000"), Decimal("0.9")),
+        "shares_outstanding": (Decimal("1000"), Decimal("0.9")),
+        "last_close": (Decimal("100"), Decimal("0.85")),
+        # Market cap 100 x 1000 = 100,000 over net income 8,000 is a P/E of 12.5;
+        # a 25% grower puts PEG at 0.5.
+        "net_income": (Decimal("8000"), Decimal("0.9")),
+        "earnings_cagr_3y": (Decimal("0.25"), Decimal("0.9")),
+    }
+    for key, value in overrides.items():
+        if value == "__absent__":
+            records.pop(key, None)
+        else:
+            records[key] = (Decimal(value), Decimal("0.9"))
+    return IssuerInput(issuer_id="issuer:peg", records=records)
+
+
+def test_the_decision_carries_peg_when_module_1s_inputs_are_present() -> None:
+    decision = evaluate_cutoff(
+        [_peg_inputs()], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0")
+    )[0]
+    assert decision.peg is not None
+    assert decision.peg.quantize(Decimal("0.01")) == Decimal("0.50")
+
+
+def test_a_missing_growth_rate_leaves_peg_absent_without_excluding_the_issuer() -> None:
+    """PEG is recorded, not yet selecting (#284 step 4).
+
+    Until the owner decides how it enters selection, a missing PEG must not change who is
+    eligible — otherwise landing the factor would silently move the portfolio.
+    """
+    decision = evaluate_cutoff(
+        [_peg_inputs(earnings_cagr_3y="__absent__")],
+        definition=_definition(),
+        cutoff_at=_PEG_CUTOFF,
+        risk_free_rate=Decimal("0"),
+    )[0]
+    assert decision.peg is None
+    assert decision.eligible is True
+    assert decision.exclusion_reason is None
+    # The rest of the decision is untouched by module 1's absence.
+    assert decision.capital_adjusted_labor_efficiency is not None
+    assert decision.tier is not None
+
+
+def test_a_non_positive_growth_rate_yields_no_peg_rather_than_a_negative_one() -> None:
+    # A shrinking issuer must not read as "cheap" through a negative denominator.
+    decision = evaluate_cutoff(
+        [_peg_inputs(earnings_cagr_3y="-0.1")],
+        definition=_definition(),
+        cutoff_at=_PEG_CUTOFF,
+        risk_free_rate=Decimal("0"),
+    )[0]
+    assert decision.peg is None
+    assert decision.eligible is True

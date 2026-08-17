@@ -72,6 +72,14 @@ class FinancialFactPayload(_FrozenModel):
     # None, because a count refused for staleness must be distinguishable from one the
     # source never published — the first is a dated gap, the second an absence.
     shares_period_end: date | None = None
+    # Module 1's growth basis, derived from the annual net-income series the payload's own
+    # source already carries (#284). Both endpoints travel with it so the window is
+    # auditable and a consumer can confirm the rate was not built from a filing later than
+    # the cutoff — the PIT obligation that strategy participation adds.
+    net_income: Decimal | None = None
+    earnings_cagr_3y: Decimal | None = None
+    earnings_cagr_base_period_end: date | None = None
+    earnings_cagr_latest_period_end: date | None = None
 
     @field_validator(
         "gross_profit",
@@ -80,6 +88,8 @@ class FinancialFactPayload(_FrozenModel):
         "revenue",
         "shares_outstanding",
         "pre_provision_profit",
+        "net_income",
+        "earnings_cagr_3y",
         mode="before",
     )
     @classmethod
