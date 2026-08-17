@@ -77,6 +77,16 @@ jobs:
             echo "::error::a test printed a skip marker; the Postgres service exists so integration tests must RUN in CI" >&2
             exit 1
           fi
+      # #581: whether a published number is possible at all. Runs here against
+      # the seeded fixture, which cannot populate every plane — the tool prints
+      # which invariants examined zero rows rather than reporting "ok" over an
+      # empty set, and `--require-coverage` is deliberately NOT passed here.
+      - name: Output invariants (seeded fixture)
+        working-directory: .
+        run: |
+          uv run --no-sync python tools/output_invariants.py \
+            --database-url postgresql://postgres:postgres@localhost:5432/truealpha
+
       - run: bun run build
 
       # #494 criterion 1: the frozen route tree, walked in a real browser, on

@@ -75,6 +75,28 @@ jobs:
       # every prod release on a setup deficiency (prod requires a successful
       # staging run) and so reproduce the invisible-work failure this workflow
       # exists to catch. `always()` so a stale environment still gets asked.
+      # #581: the invariants against REAL data. Production's Postgres binds to
+      # the VPS loopback, so a runner cannot reach it without a tunnel the owner
+      # provisions — stated rather than papered over. Unconfigured is announced
+      # loudly and does not fail the schedule, the same shape #560 settled on
+      # for the surface walk: the release run answers "is it deployed", a
+      # standing check answers "was it verified", and neither pretends.
+      - name: Output invariants (${{ matrix.environment }})
+        if: ${{ matrix.deploy_type == 'prod' }}
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PROD_DATABASE_URL}" ]; then
+            echo "::error::the output invariants have no reachable production database. They are \
+          the only check that asks whether a published NUMBER is possible, and today they run \
+          only against the CI fixture, where most of them examine zero rows. Provision a tunnel \
+          and set PROD_DATABASE_URL (#581)."
+            exit 0
+          fi
+          uv run --no-sync python tools/output_invariants.py \
+            --database-url "$PROD_DATABASE_URL" --require-coverage
+
       - name: Check ${{ matrix.environment }} surface-walk evidence
         if: always()
         env:
