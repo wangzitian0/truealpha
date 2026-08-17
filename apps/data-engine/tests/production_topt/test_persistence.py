@@ -616,3 +616,39 @@ def test_sink_refuses_more_attempts_than_the_retry_policy_permits(connection) ->
             terminal_state=ObligationTerminalState.UNAVAILABLE,
             success=None,
         )
+
+
+def test_vintage_and_fetch_stamps_are_source_truth_not_cutoff_arithmetic(connection) -> None:
+    """#530 slice 1: the sink persists the adapter's own time, not `cutoff - constant`.
+
+    The fabricated stamps produced a false diagnosis in #531 (fetch rows read as
+    pre-deploy output because recorded_at sat 58 minutes before the tick that wrote
+    them). Financial-fact vintages must carry the adapter's transaction_time (the
+    fixture's knowable_at, 2026-02-01 — a real filed-derived date, months before the
+    cutoff), and raw.fetches audit stamps must be the ingestion clock.
+    """
+    import datetime as _dt
+
+    before = _dt.datetime.now(_dt.UTC)
+    plan = _capture(connection, version="test-530-stamps")
+    after = _dt.datetime.now(_dt.UTC)
+
+    rows = connection.execute(
+        """
+        select v.source_published_at, f.fetched_at, f.recorded_at
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        join raw.fetches f on f.id = v.raw_fetch_id
+        where ob.run_id = %s and o.semantic_type = 'financial-fact'
+        """,
+        (plan.run_id,),
+    ).fetchall()
+    assert rows, "the capture must have landed financial-fact vintages"
+    for source_published_at, fetched_at, recorded_at in rows:
+        # The adapter's transaction_time (bundle knowable_at), not CUTOFF - 2h.
+        assert source_published_at == _dt.datetime(2026, 2, 1, tzinfo=_dt.UTC), source_published_at
+        # Audit clocks: within this test's own wall-clock window, never cutoff-derived.
+        assert before <= fetched_at <= after, (before, fetched_at, after)
+        assert before <= recorded_at <= after, (before, recorded_at, after)
