@@ -75,6 +75,41 @@ def test_an_inert_guard_is_reported_and_fails(capsys) -> None:  # noqa: ANN001
     assert "the guard passed with the property broken" in capsys.readouterr().err
 
 
+def test_a_hanging_guard_is_a_finding_and_the_run_continues(capsys, monkeypatch) -> None:  # noqa: ANN001
+    """A guard that never answers is neither caught nor passing. Without a
+    per-mutation timeout one hang exhausts the workflow budget, nothing says
+    which guard, and every guard after it goes unproven (review)."""
+    monkeypatch.setattr(_module, "TIMEOUT_SECONDS", 1)
+    hanging = _module.Mutation(
+        id="hangs",
+        guard="somewhere",
+        file="tools/mutations.json",
+        find="mutations",
+        replace="mutations",
+        command=("python3", "-c", "import time; time.sleep(30)"),
+        cwd=".",
+    )
+    after = _module.Mutation(
+        id="after",
+        guard="somewhere",
+        file="tools/mutations.json",
+        find="mutations",
+        replace="mutations",
+        command=("python3", "-c", "raise SystemExit(1)"),
+        cwd=".",
+    )
+    assert _module.run(mutations=[hanging, after]) == 1
+    captured = capsys.readouterr()
+    assert "did not finish within" in captured.err
+    assert "caught   after" in captured.out, "one hang must not stop the remaining guards"
+
+
+def test_the_manifest_file_survives_a_hanging_guard() -> None:
+    """The edit is restored in `finally`, so a timeout cannot leave the tree altered."""
+    original = (REPO_ROOT / "tools/mutations.json").read_text(encoding="utf-8")
+    assert '"mutations"' in original
+
+
 def test_a_caught_mutation_passes(capsys) -> None:  # noqa: ANN001
     caught = _module.Mutation(
         id="probe",

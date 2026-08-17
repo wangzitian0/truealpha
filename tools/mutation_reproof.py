@@ -36,6 +36,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("mutations.json")
+# Per mutation, not per job. Without it a single hanging guard exhausts the
+# workflow's whole budget, nothing says which one, and every guard after it goes
+# unproven — the job that reports inertness, inert (review). Generous: the
+# slowest declared command is a bun test run measured in seconds.
+TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,15 @@ def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             check=False,
+            timeout=TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # Not caught and not passed: it never answered. Reported as a finding
+        # and the run continues, so one hanging guard cannot hide the state of
+        # every guard after it.
+        return False, (
+            f"the guard did not finish within {TIMEOUT_SECONDS}s — it neither passed nor "
+            f"failed, so the property is unproven"
         )
     finally:
         target.write_text(original, encoding="utf-8")
