@@ -382,8 +382,23 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
     """
     cutoff_date = plan.cutoff.astimezone(UTC).date()
     tickers = {coordinate[3] for coordinate in plan.coordinates.values()}
-    index = sec.ticker_cik_index()
-    cik_by_ticker = {ticker: index[_sec_ticker(ticker)] for ticker in sorted(tickers) if _sec_ticker(ticker) in index}
+    # A plane-published universe already RESOLVED its identities: issuer:cik ids
+    # carry the CIK the refresh verified (with the EDGAR fallback for the SEC
+    # crosswalk's own holes — AEP is in neither crosswalk file). Trust the
+    # governed head first; only LEI-style issuers (the hand-curated TOPT corpus)
+    # still consult the crosswalk. The first QQQ run failed HERE, on the same
+    # AEP hole the refresh had already worked around — one identity resolution,
+    # one place.
+    cik_by_ticker: dict[str, int] = {}
+    for issuer_id, _, _, ticker in plan.coordinates.values():
+        if issuer_id.startswith("issuer:cik:"):
+            cik_by_ticker[ticker] = int(issuer_id.removeprefix("issuer:cik:"))
+    unresolved = sorted(tickers - set(cik_by_ticker))
+    if unresolved:
+        index = sec.ticker_cik_index()
+        for ticker in unresolved:
+            if _sec_ticker(ticker) in index:
+                cik_by_ticker[ticker] = index[_sec_ticker(ticker)]
     missing = sorted(tickers - set(cik_by_ticker))
     if missing:
         raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
