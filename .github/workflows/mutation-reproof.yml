@@ -1,0 +1,40 @@
+name: mutation-reproof
+
+# #582, and the LAST new workflow. Everything after this is a function in an
+# existing file or a row in an existing table.
+#
+# Rule 7 asks for an acceptance criterion to be shown red once. That proves the
+# assertion worked the day it was written: assertFunnelSaysSomething was
+# red-proven and still used node.parentElement, which a later <header> wrapper
+# would have made pass vacuously. Six defects of that shape shipped or nearly
+# shipped in the 2026-08 work, each an assertion that looked right and checked
+# nothing, and every file-reading test passed on all six.
+#
+# So each week: break the property, require the guard to notice, restore. The
+# only output is which guards have gone inert.
+
+on:
+  schedule:
+    # Monday 06:00 UTC — before a working week, so an inert guard is found
+    # before it is relied on rather than after.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-packages
+      - working-directory: apps/app-web
+        run: bun install --frozen-lockfile
+      # Every mutation restores its file, but the checkout is throwaway either
+      # way — a run killed mid-edit cannot leave the repository altered.
+      - name: Break each declared property and require its guard to notice
+        run: uv run --no-sync python tools/mutation_reproof.py
