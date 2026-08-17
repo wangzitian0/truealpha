@@ -172,13 +172,43 @@ def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
         )
 
 
+def _run_ordering(sql: str) -> str:
+    """The `order by` clause of a `mart.strategy_runs` read, whitespace-normalised.
+
+    Comparing the two sides to EACH OTHER, rather than each to a literal typed
+    in this file, is the whole point — see the test below.
+
+    Case-insensitive and tolerant of an absent `limit`, so that reformatting one
+    side to `ORDER BY` reads as the same ordering rather than as drift. It still
+    fails closed: a missing `order by` raises here instead of returning a slice
+    that happens to compare equal (review).
+    """
+    body = " ".join(sql.split()).lower()
+    assert "from mart.strategy_runs" in body, f"not a strategy_runs read: {body!r}"
+    assert "order by" in body, f"the read no longer orders its runs at all: {body!r}"
+    return body.split("order by", 1)[1].split(" limit", 1)[0].strip().rstrip("`").strip()
+
+
 def test_the_strategy_run_matches_the_consumer_that_serves_it() -> None:
     """Same, for the strategy plane: the App surfaces the latest run PER
-    strategy_key, not the latest across all strategies."""
+    strategy_key, not the latest across all strategies.
+
+    The first version asserted the ordering against a literal on the PYTHON side
+    and checked the TypeScript side only for `where strategy_key = $1`. Breaking
+    the consumer's ordering on purpose walked straight past it — a one-sided
+    consistency check, which is #462's defect committed inside the guard written
+    to prevent #462. Both sides are now read out and compared to each other, so
+    changing either alone is what turns this red.
+    """
     ts = (REPO_ROOT / "apps/app-web/src/server/mart/strategy-run-repository.ts").read_text()
-    assert "where strategy_key = $1" in ts
-    assert "strategy_key = " in _module.LATEST_STRATEGY_RUN
-    assert "order by executed_at desc, created_at desc, strategy_run_id desc" in _module.LATEST_STRATEGY_RUN
+    consumer = ts.split("LATEST_RUN_SQL", 1)[1].split("`", 2)[1]
+    assert "where strategy_key = $1" in " ".join(consumer.split())
+    assert f"strategy_key = '{_module.DASHBOARD_STRATEGY}'" in " ".join(_module.LATEST_STRATEGY_RUN.split())
+    served, judged = _run_ordering(consumer), _run_ordering(_module.LATEST_STRATEGY_RUN)
+    assert served == judged, (
+        f"the App orders runs by {served!r} and the invariants by {judged!r}, so the invariants "
+        f"judge a run nobody serves"
+    )
 
 
 def test_every_shipped_exemption_names_an_issue_and_a_future_date() -> None:
