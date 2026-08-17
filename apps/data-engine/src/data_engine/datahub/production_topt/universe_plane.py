@@ -201,9 +201,7 @@ def refresh_etf_constituents(
     for row in rows:
         normalized = row["ticker"].replace(".", "-")
         if normalized not in cik_index:
-            fallback = _resolve_cik_via_edgar(
-                row["ticker"], user_agent=_settings.sec_user_agent or "truealpha research"
-            )
+            fallback = _resolve_cik_via_edgar(row["ticker"], user_agent=_settings.sec_user_agent)
             if fallback is not None:
                 cik_index[normalized] = fallback
     missing = [

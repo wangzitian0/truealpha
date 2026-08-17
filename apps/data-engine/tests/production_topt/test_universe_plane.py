@@ -175,7 +175,7 @@ def test_a_same_day_second_refresh_does_not_smear_the_denominator(connection) ->
 
 
 def test_the_edgar_atom_cik_parses() -> None:
-    """The fallback's parse leg on EDGAAR's real answer shape: SEC's crosswalk files
+    """The fallback's parse leg on EDGAR's real answer shape: SEC's crosswalk files
     miss AEP entirely while browse-edgar resolves it (verified live 2026-08-17)."""
     from data_engine.datahub.production_topt.universe_plane import _parse_edgar_cik
 
