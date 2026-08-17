@@ -179,13 +179,20 @@ async function assertCurrentNavLink(page, path, problems) {
  * both identities, after a local administrator-only run had passed. */
 async function assertFunnelSaysSomething(page, path, problems, role) {
   if (path !== "/admin/quality" || role !== "administrator") return;
-  const heading = page.getByRole("heading", { name: /L0.{0,3}L5 funnel/ });
+  // Tolerant of the dash character, surrounding whitespace and capitalisation:
+  // the assertion is about the region saying something, and it should not fail
+  // because someone typed an en dash or title-cased a word (review).
+  const heading = page.getByRole("heading", { name: /L0\s*[-–—]?\s*L5\s+funnel/i });
   if ((await heading.count()) === 0) {
     problems.push("no L0-L5 funnel section on /admin/quality");
     return;
   }
   const section = await heading.first().evaluate((node) => {
-    const container = node.parentElement;
+    // `closest("div")` rather than parentElement: the ready and non-ready
+    // branches render different containers, and wrapping the heading in a
+    // <header> later would otherwise shrink the subtree this inspects to the
+    // heading itself and make the assertion vacuously pass (review).
+    const container = node.closest("div") ?? node.parentElement;
     return { heading: node.innerText.trim(), all: container ? container.innerText.trim() : "" };
   });
   const body = section.all.replace(section.heading, "").trim();
