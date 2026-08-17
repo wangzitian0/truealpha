@@ -133,7 +133,7 @@ class PostgresCaptureControlRepository:
                 policy.freshness_max_age,
                 # Text intervals ('432000 seconds') so the views' ::interval cast
                 # reads them without an ISO8601 dependency.
-                Jsonb({k: f"{int(v.total_seconds())} seconds" for k, v in policy.semantic_freshness_max_age.items()}),
+                Jsonb({k: f"{v.total_seconds()} seconds" for k, v in policy.semantic_freshness_max_age.items()}),
                 Jsonb(policy.retry.model_dump(mode="json")),
                 Jsonb(payload),
             ),

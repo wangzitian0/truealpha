@@ -243,6 +243,11 @@ class CaptureSchedulePolicy(BaseModel):
                 "demanded_cadence",
                 "provider_availability_cadence",
                 "freshness_max_age",
+                # Two policies differing only in their per-semantic windows MUST
+                # get distinct identities: put_schedule_policy is on-conflict-do-
+                # nothing, so a shared id would silently keep the OLD windows
+                # (Copilot Medium on #591).
+                "semantic_freshness_max_age",
                 "retry",
             ),
         )

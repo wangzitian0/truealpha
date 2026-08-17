@@ -12,6 +12,11 @@
 
 alter table raw.capture_schedule_policies
     add column if not exists semantic_freshness_max_age jsonb not null default '{}'::jsonb;
+alter table raw.capture_schedule_policies
+    drop constraint if exists semantic_freshness_max_age_is_object;
+alter table raw.capture_schedule_policies
+    add constraint semantic_freshness_max_age_is_object
+    check (jsonb_typeof(semantic_freshness_max_age) = 'object');
 
 -- Both freshness-grading views, redefined verbatim from 0026 with the window
 -- expression swapped for the per-semantic coalesce.
