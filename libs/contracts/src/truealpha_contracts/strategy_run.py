@@ -58,6 +58,9 @@ class StrategyRunDecision(_StrictFrozenModel):
     current_price_to_sales: Decimal | None = None
     target_price_to_sales: Decimal | None = None
     valuation_gap: Decimal | None = None
+    # Module 1 PEG (#284). Recorded but not selecting; None when any input is absent or
+    # growth is non-positive, so the absence is meaningful rather than a default.
+    peg: Decimal | None = None
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     exclusion_reason: str | None = None
     rank: int | None = Field(default=None, ge=1)
