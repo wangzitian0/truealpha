@@ -872,7 +872,7 @@ def test_predecessor_cik_fallback_fires_only_on_an_empty_taxonomy() -> None:
 # -- earnings CAGR for module 1 (PEG) -------------------------------------------------
 
 
-def _earnings_facts(*pairs: tuple[str, str, str]) -> dict:
+def _earnings_facts(*pairs: tuple[str, str, object]) -> dict:
     """company-facts carrying annual NetIncomeLoss periods: (start, end, value)."""
     facts = _facts()
     facts["facts"]["us-gaap"]["NetIncomeLoss"] = {
@@ -957,3 +957,37 @@ def test_the_adapter_publishes_the_cagr_and_its_window_in_the_payload() -> None:
     assert payload["earnings_cagr_3y"] is not None
     assert payload["earnings_cagr_base_period_end"] == "2022-12-31"
     assert payload["earnings_cagr_latest_period_end"] == "2025-12-31"
+
+
+def test_the_window_is_measured_in_elapsed_time_not_calendar_years() -> None:
+    """JNJ's real shape: a fiscal year ending 2022-01-02 is FY2021, not FY2022.
+
+    Selecting the base period by `end.year == latest.year - years` made a 3.99-year span
+    read as a three-year one, overstating the rate. JNJ's periods end 2022-01-02,
+    2023-01-01, 2023-12-31, 2024-12-29 and 2025-12-28 — from 2025-12-28 a three-year
+    window is 2023-01-01 (1092 days), not 2022-01-02 (1456 days).
+    """
+    facts = _earnings_facts(
+        ("2021-01-04", "2022-01-02", 20_880),
+        ("2022-01-03", "2023-01-01", 17_940),
+        ("2023-01-02", "2023-12-31", 35_150),
+        ("2024-01-01", "2024-12-29", 14_070),
+        ("2024-12-30", "2025-12-28", 26_800),
+    )
+    bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr_latest_period_end == date(2025, 12, 28)
+    assert bundle.earnings_cagr_base_period_end == date(2023, 1, 1), (
+        "the base must be the period ~3 years back in elapsed time, not the one whose "
+        "calendar year happens to be latest.year - 3"
+    )
+
+
+def test_a_period_that_is_not_close_enough_to_the_window_is_refused() -> None:
+    # Only a 5-year-old base exists; stretching to it would report a 3-year rate for a
+    # 5-year span, which is a different number.
+    facts = _earnings_facts(
+        ("2020-01-01", "2020-12-31", 100),
+        ("2025-01-01", "2025-12-31", 200),
+    )
+    bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is None

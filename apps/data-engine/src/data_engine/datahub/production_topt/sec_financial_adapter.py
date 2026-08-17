@@ -59,6 +59,12 @@ _ANNUAL_MINIMUM_DAYS = 350
 # downstream cannot disagree on rounding.
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 
+# How far a candidate base period may sit from the requested window and still be used.
+# 52/53-week calendars drift by up to a week a year, and a fiscal year end moves within a
+# month or so after a calendar change; 45 days absorbs both while still refusing a 4-year
+# gap standing in for a 3-year window (which is 365 days out, not 45).
+_WINDOW_TOLERANCE_DAYS = 45
+
 # How far before the cutoff a share count may have been measured and still be used.
 #
 # For a multi-class issuer, company-facts drops the dimensional per-class share facts and
@@ -611,18 +617,29 @@ def _confidence(payload: dict[str, str | None]) -> Decimal:
 def _earnings_cagr(values: dict[date, _Datum], years: int) -> tuple[Decimal | None, _Datum | None, _Datum | None]:
     """The compound annual growth rate of an annual series, plus the two periods used.
 
-    Returns `(None, None, None)` unless BOTH endpoints exist exactly `years` apart. The
-    window is never stretched to whatever history happens to exist: a rate over a
-    different number of years is a different number, and mixing them makes issuers
-    incomparable inside one ranking. A sign change resolves to None as well -- the root
-    of a negative ratio is undefined, and a swing from loss to profit has no compound
-    rate to divide a multiple by.
+    Returns `(None, None, None)` unless BOTH endpoints exist `years` apart in ELAPSED
+    TIME. The window is never stretched to whatever history happens to exist: a rate over
+    a different number of years is a different number, and mixing them makes issuers
+    incomparable inside one ranking. A sign change resolves to None as well -- the root of
+    a negative ratio is undefined, and a swing from loss to profit has no compound rate to
+    divide a multiple by.
+
+    Elapsed days, not calendar years, because the calendar year of a period END is not the
+    fiscal year. JNJ's FY2021 ends 2022-01-02, so matching `end.year == latest.year - 3`
+    from 2025-12-28 selected a period 1456 days back and reported the rate as if it were
+    1096 -- overstating growth for every issuer whose year ends in early January. Amazon
+    fails the same way for a different reason: its 10-Qs publish trailing-twelve-month
+    windows, so several "annual" periods share one calendar year and the first match was
+    arbitrary. Choosing the period closest to `years x 365.25` fixes both, and a tolerance
+    keeps a 4- or 5-year gap from silently standing in for a 3-year window.
     """
     if not values:
         return None, None, None
     latest_end = max(values)
-    base_end = next((end for end in values if end.year == latest_end.year - years), None)
-    if base_end is None:
+    target_days = round(years * 365.25)
+    candidates = [end for end in values if end < latest_end]
+    base_end = min(candidates, key=lambda end: abs((latest_end - end).days - target_days), default=None)
+    if base_end is None or abs((latest_end - base_end).days - target_days) > _WINDOW_TOLERANCE_DAYS:
         return None, None, None
     latest, base = values[latest_end], values[base_end]
     if base.value <= 0 or latest.value <= 0:
