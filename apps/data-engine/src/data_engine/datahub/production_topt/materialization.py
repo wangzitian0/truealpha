@@ -131,6 +131,12 @@ class SnapshotMember(_FrozenModel):
     pre_provision_profit: ToptMetricInput | None
     shares_outstanding: ToptMetricInput
     market_price: ToptMetricInput
+    # The fiscal periods behind the headline figures (#530 slice 4): carried from
+    # FinancialFactPayload to the served mart columns, so "how old is this number"
+    # is a SQL question, not a vendor re-derivation.
+    operating_period_end: date | None = None
+    revenue_period_end: date | None = None
+    shares_period_end: date | None = None
 
     @field_validator("observation_ids")
     @classmethod
@@ -550,6 +556,9 @@ class PostgresToptCoreRepository:
             instrument_id=listing.instrument_id,
             listing_id=listing.listing_id,
             operating_branch=financial.operating_branch,
+            operating_period_end=financial.operating_period_end,
+            revenue_period_end=financial.revenue_period_end,
+            shares_period_end=financial.shares_period_end,
             observation_ids=(
                 observation_ids[0],
                 observation_ids[1],
@@ -775,8 +784,9 @@ class PostgresToptCoreRepository:
                 ).fetchone()
                 if existing is None or existing[0] != invocation_sha256 or existing[1] != invocation_payload:
                     raise ValueError("TOPT core invocation identity conflict")
+            members_by_listing = {member.listing_id: member for member in snapshot.members}
             for result in results:
-                self._put_result(result)
+                self._put_result(result, members_by_listing.get(result.listing_id))
         return results
 
     def _load_gppe_results(self, invocation_id: str) -> tuple[ToptGppeResult, ...]:
@@ -854,7 +864,7 @@ class PostgresToptCoreRepository:
             if existing is None or existing[0] != result.content_sha256 or existing[1] != payload:
                 raise ValueError("TOPT GPPE result identity conflict")
 
-    def _put_result(self, result: ToptCoreResult) -> None:
+    def _put_result(self, result: ToptCoreResult, member: SnapshotMember | None = None) -> None:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
         inserted = self._connection.execute(
             """
@@ -865,6 +875,7 @@ class PostgresToptCoreRepository:
                 operating_metric, availability, operating_efficiency,
                 capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
                 target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                operating_period_end, revenue_period_end, shares_period_end,
                 confidence, freshness, reason_codes, input_observation_ids,
                 gppe_invocation_id, gppe_result_id,
                 gppe_definition_id, gppe_definition_sha256,
@@ -872,7 +883,7 @@ class PostgresToptCoreRepository:
             ) values (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             ) on conflict (result_id) do nothing returning result_id
             """,
             (
@@ -901,6 +912,9 @@ class PostgresToptCoreRepository:
                 result.target_ps_midpoint,
                 result.current_ps,
                 result.valuation_gap,
+                None if member is None else member.operating_period_end,
+                None if member is None else member.revenue_period_end,
+                None if member is None else member.shares_period_end,
                 result.confidence,
                 result.freshness.value,
                 [item.value for item in result.reason_codes],
