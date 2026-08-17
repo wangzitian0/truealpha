@@ -184,3 +184,65 @@ def test_the_edgar_atom_cik_parses() -> None:
         == 4904
     )
     assert _parse_edgar_cik(b"<feed>no cik here</feed>") is None
+
+
+def test_build_routes_trusts_the_universes_embedded_ciks(connection, monkeypatch) -> None:
+    """A plane universe must never re-derive identities the governed head already
+    carries: the first QQQ run failed in build_routes on the same SEC crosswalk
+    hole (AEP) the refresh had already resolved via EDGAR. With issuer:cik ids in
+    the plan, the crosswalk is not even consulted."""
+    from data_engine.datahub.production_topt import composition
+    from data_engine.datahub.production_topt.composition import build_routes, plan_and_persist
+
+    source = UNIVERSE_SOURCES["qqq"]
+    body = _bytes()
+    fetched_at = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+    from data_engine import raw_store
+
+    fetch_id = raw_store.insert_fetch(
+        connection,
+        source=DataSource.NASDAQ_INDEX,
+        source_record_id="index-constituents:qqq:routes",
+        body=body,
+        content_type="application/json",
+        fetched_at=fetched_at,
+        recorded_at=fetched_at,
+    )
+    for i, row in enumerate(parse_nasdaq_index_rows(body)):
+        connection.execute(
+            """
+            insert into staging.etf_constituent_facts
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                "qqq",
+                date(2026, 8, 17),
+                DataSource.NASDAQ_INDEX.value,
+                fetch_id,
+                row["ticker"],
+                row["name"],
+                row.get("market_cap"),
+                300000 + i,
+                f"rte{i:09d}",
+                fetched_at,
+            ),
+        )
+    publish_universe_list(connection, source, report_date=date(2026, 6, 30), note="routes test")
+
+    def crosswalk_must_not_be_needed():
+        raise AssertionError("plane universes must not consult the SEC crosswalk")
+
+    monkeypatch.setattr(composition.sec, "ticker_cik_index", crosswalk_must_not_be_needed)
+    # Branch classification fetches SEC submissions per CIK — real network, not
+    # this test's subject; the embedded-CIK path is.
+    monkeypatch.setattr(composition, "resolve_issuer_classifications", lambda cik_by_ticker: {})
+    plan = plan_and_persist(
+        connection,
+        cutoff=datetime(2026, 8, 17, 12, 30, tzinfo=UTC),
+        version="test-routes",
+        universe_head_kind=source.head_kind,
+        label_prefix="test-qqq",
+    )
+    routes = build_routes(plan, connection)
+    assert len(routes) == 102 * 4
