@@ -187,3 +187,25 @@ def test_an_accepted_pointer_reports_the_advance_it_made(monkeypatch) -> None:
     assert metadata["pointer_advanced"] is True
     assert metadata["pointer_sequence"] == 10
     assert metadata["unmet_service_objectives"] == "every objective met"
+
+
+def test_the_two_environments_never_tick_at_the_same_instant() -> None:
+    """One shared Twelve Data key, an 8-requests-per-MINUTE ceiling, two environments:
+    same-instant crons put ~15 req/min on it and each env lost ~6 of 21 second-origin
+    cells every scheduled tick (2026-08-15/16: both envs 15/21 agreed, the governed
+    head frozen three days). No single-environment test could see this — the collision
+    is a cross-environment property, so the guard asserts the SCHEDULING, not a fetch.
+    """
+    from data_engine.dagster_defs import live_topt_cron
+
+    production = live_topt_cron("production")
+    staging = live_topt_cron("staging")
+    assert production != staging, "same-instant crons re-create the per-minute collision"
+    # Both stay in the settled after-close window the schedule's rationale requires.
+    for cron in (production, staging):
+        minute, hour, dom, month, dow = cron.split()
+        assert (hour, dom, month, dow) == ("22", "*", "*", "*")
+        assert 0 <= int(minute) <= 59
+    # At least a full free-tier minute-window apart, so one env's tail cannot
+    # overlap the other's head even with per-request throttling drift.
+    assert abs(int(production.split()[0]) - int(staging.split()[0])) >= 15

@@ -42,14 +42,34 @@ from data_engine.datahub.strategy_bridge import (
 )
 
 TOPT_LIVE_JOB_NAME = "topt_live_pipeline"
-# Daily at 22:15 UTC — after the US close (2h+ in EDT, 5h+ in EST), so same-day
-# closes and facts are settled. #27's two-consecutive-cycles proof was gathered on a
-# temporary hourly cadence and is complete in both environments; hourly ALSO
-# over-spent the shared Twelve Data free tier once production joined staging
-# (21 fetches/tick x 24 x 2 envs = 1008/day against an 800/day budget, #491).
-# Daily spends 42/day across both environments. Testing/retry never needs a faster
-# cron: launch the same job manually with an explicit `executed_at`.
-TOPT_LIVE_CRON = "15 22 * * *"
+
+
+def live_topt_cron(app_env: str) -> str:
+    """Daily, after the US close (2h+ in EDT, 5h+ in EST), so same-day closes and
+    facts are settled — and 30 minutes APART per environment.
+
+    Both environments used to fire at the same instant against ONE shared Twelve
+    Data key whose free tier caps requests per MINUTE at 8. Two simultaneous ticks
+    put ~15 req/min on that ceiling and each environment lost ~6 of its 21
+    second-origin cells to rate limiting (2026-08-15/16 scheduled ticks: prod and
+    staging both 15/21 agreed, 15+15 of 42 twelvedata objects landing in the shared
+    window) — which froze the governed head for three days straight, because the
+    #536 gate correctly refuses a run whose weakest cell lost corroboration. #491
+    sized the DAILY budget; the per-minute collision of two same-instant consumers
+    is what this offset removes. 22:45 is still comfortably after the close, so the
+    staleness argument above holds for both environments.
+
+    #27's two-consecutive-cycles proof was gathered on a temporary hourly cadence
+    and is complete in both environments; hourly ALSO over-spent the shared daily
+    tier once production joined staging (21 fetches/tick x 24 x 2 envs = 1008/day
+    against an 800/day budget, #491). Daily spends 42/day across both. Testing or
+    retry never needs a faster cron: launch the same job manually with an explicit
+    `executed_at`.
+    """
+    return "15 22 * * *" if app_env == "production" else "45 22 * * *"
+
+
+TOPT_LIVE_CRON = live_topt_cron(settings.app_env)
 
 
 class ToptLiveTickConfig(dg.Config):
