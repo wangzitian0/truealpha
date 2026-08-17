@@ -282,3 +282,17 @@ def test_the_boundary_values_are_inside_the_domain() -> None:
 
     exactly_floor = _fact(gross_profit="40000000", headcount="40000")  # $1,000/employee
     assert _plausibility_violations(exactly_floor) == []
+
+
+def test_financial_branch_uses_its_own_numerator_for_the_domain_bound() -> None:
+    """The per-employee bound judges the branch's OWN numerator: a FINANCIAL payload
+    carrying a plausible gross_profit must still be graded on pre_provision_profit
+    (Copilot on #599)."""
+    from data_engine.datahub.quality_report import _plausibility_violations
+
+    fact = _fact(
+        operating_branch="financial",
+        gross_profit="80000000",  # $2,000/employee — inside the domain
+        pre_provision_profit="1000000",  # $25/employee — outside it
+    )
+    assert _plausibility_violations(fact) == ["per_employee_outside_domain"]

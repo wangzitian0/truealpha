@@ -163,7 +163,11 @@ def _plausibility_violations(fact: FinancialFactPayload) -> list[str]:
         value = getattr(fact, name)
         if value is not None and value <= 0:
             violated.append(f"nonpositive_{name}")
-    numerator = fact.gross_profit if fact.gross_profit is not None else fact.pre_provision_profit
+    # The branch's own numerator, via the same dispatch the factor and
+    # _has_usable_value use — choosing "whichever field is present" diverges the
+    # moment a payload carries both (Copilot on #599); totality over the branch
+    # enum is guarded by test_the_numerator_map_is_total_over_operating_branches.
+    numerator = getattr(fact, _FINANCIAL_FACT_OPERATING_NUMERATOR[fact.operating_branch])
     if numerator is not None and fact.headcount is not None and fact.headcount > 0:
         per_employee = numerator / fact.headcount
         if not (_PER_EMPLOYEE_FLOOR <= per_employee <= _PER_EMPLOYEE_CEILING):
@@ -343,10 +347,14 @@ def build_report(
             except ValidationError:
                 pass  # unparseable payloads are availability's finding, not this one's
             else:
-                plausibility[str(subject_id)] = {
-                    "outcome": "implausible" if violations else "plausible",
-                    "violated": violations,
-                }
+                # UNION across a subject's observations: a later plausible parse
+                # must never flip an earlier violation off the record (Copilot on
+                # #599 — the capture plane can bind several observations to one
+                # subject).
+                cell_grades = plausibility.setdefault(str(subject_id), {"outcome": "plausible", "violated": []})
+                merged = sorted(set(cell_grades["violated"]) | set(violations))
+                cell_grades["violated"] = merged
+                cell_grades["outcome"] = "implausible" if merged else "plausible"
         if not cell.lineage_complete and payload is not None and object_uri is not None:
             cell.lineage_complete = pointers.dereferences(
                 object_uri=object_uri,
