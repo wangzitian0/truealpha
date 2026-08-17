@@ -67,10 +67,25 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 # basis, so an EPS CAGR shows a 37%/yr DECLINE for an issuer whose net
                 # income went $4.49B -> $10.98B. Net income is company-level and a split
                 # cannot touch it. `NetIncomeLoss` is present for all 20 TOPT issuers.
+                # `ProfitLoss` is the second variant because a single tag does not reliably
+                # identify net income either — the same lesson `samples/README.md` recorded
+                # for revenue. AVGO filed its FY2025 10-K on 2025-12-18 and company-facts
+                # carries that year ONLY under `ProfitLoss` (23.13B, period ending
+                # 2025-11-02); `NetIncomeLoss` stops at 2024-11-03. Without the variant the
+                # growth window has no recent endpoint and PEG is unavailable for an issuer
+                # whose earnings are plainly on file.
+                #
+                # They are not equal: `ProfitLoss` includes noncontrolling interests and
+                # `NetIncomeLoss` excludes them. Declaration order therefore matters — for
+                # any period both report, the preferred tag wins, and the merged series only
+                # reaches for `ProfitLoss` where the preferred one is silent.
                 "field": "net_income",
                 "unit": "USD",
                 "kind": "synonym",
-                "concepts": ({"taxonomy": "us-gaap", "concept": "NetIncomeLoss"},),
+                "concepts": (
+                    {"taxonomy": "us-gaap", "concept": "NetIncomeLoss"},
+                    {"taxonomy": "us-gaap", "concept": "ProfitLoss"},
+                ),
             },
             {
                 "field": "total_assets",

@@ -1048,3 +1048,39 @@ def test_a_loss_year_inside_the_window_makes_the_rate_undefined() -> None:
     )
     bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
     assert bundle.earnings_cagr is None
+
+
+def test_net_income_falls_back_to_profit_loss_for_the_latest_year() -> None:
+    """AVGO's real shape: `NetIncomeLoss` stops at FY2024, `ProfitLoss` carries FY2025.
+
+    Measured 2026-08-17 — AVGO filed its FY2025 10-K on 2025-12-18 and company-facts holds
+    that year's figure only under `ProfitLoss` (23.13B, period ending 2025-11-02), while
+    `NetIncomeLoss` ends at 2024-11-03. Without the synonym the window has no recent
+    endpoint and PEG is unavailable for an issuer whose earnings are plainly on file. This
+    is the tag inconsistency `samples/README.md` recorded for revenue, reaching net income.
+
+    `ProfitLoss` includes noncontrolling interests where `NetIncomeLoss` excludes them, so
+    it is a synonym rather than an equal: declaration order prefers `NetIncomeLoss` for any
+    period both report, and the merged series only reaches for `ProfitLoss` where the
+    preferred tag is silent.
+    """
+    facts = _facts()
+    us = facts["facts"]["us-gaap"]
+    us["NetIncomeLoss"] = {"units": {"USD": [_annual("2023-12-31", "2023-01-01", 100, "2024-02-15")]}}
+    us["ProfitLoss"] = {
+        "units": {
+            "USD": [
+                _annual("2022-12-31", "2022-01-01", 80, "2023-02-15"),
+                _annual("2023-12-31", "2023-01-01", 999, "2024-02-15"),  # must lose to NetIncomeLoss
+                _annual("2024-12-31", "2024-01-01", 130, "2025-02-15"),
+                _annual("2025-12-31", "2025-01-01", 160, "2026-02-15"),
+            ]
+        }
+    }
+    bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
+    assert bundle.earnings_cagr is not None, "the fallback must complete the window"
+    assert bundle.net_income == Decimal("160")
+    assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
+    # 2023 resolves to 100 from the preferred tag, not 999: rates are 25%, 30%, 23.08%,
+    # weighted 1:2:3 -> 25.71%.
+    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2571")

@@ -50,6 +50,11 @@ export interface RankingRow {
   targetPriceToSales: string | null;
   valuationGap: string | null;
   targetWeight: string | null;
+  // Module 1 (#284). `pegRank` is PEG's own ordering, deliberately separate from `rank`:
+  // PEG does not participate in selection, so a page must never present the two as one
+  // ranking.
+  peg: string | null;
+  pegRank: number | null;
   confidence: string | null;
   availability: Availability;
   traceId: string;
@@ -243,6 +248,8 @@ export class StrategyRunReadAdapter {
       targetPriceToSales: decision.target_price_to_sales,
       valuationGap: decision.valuation_gap,
       targetWeight: decision.target_weight,
+      peg: decision.peg ?? null,
+      pegRank: decision.peg_rank ?? null,
       confidence: decision.confidence,
       availability: status,
       traceId: traceId(source, decision.issuer_id, decision.cutoff_at, corpusSha256),

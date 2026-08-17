@@ -35,6 +35,7 @@ PARSER_VERSION_HISTORY = (
     "production-topt-live-parser:v4",
     "production-topt-live-parser:v5",
     "production-topt-live-parser:v6",
+    "production-topt-live-parser:v7",
 )
 MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v1",
@@ -43,6 +44,7 @@ MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v4",
     "production-topt-live-map:v5",
     "production-topt-live-map:v6",
+    "production-topt-live-map:v7",
 )
 
 PARSER_VERSION = PARSER_VERSION_HISTORY[-1]
@@ -83,3 +85,9 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # boundary rather than only the two ends. The same issuer and window therefore resolves a
 # DIFFERENT number under v6 than under v5 -- exactly the ambiguity a version exists to
 # prevent -- and some issuers resolve none where v5 resolved one.
+#
+# v6 -> v7 (#284): `net_income` gained `ProfitLoss` as a second variant. AVGO's FY2025
+# figure exists in company-facts only under that tag, so v6 resolved no recent endpoint and
+# left PEG unavailable for an issuer whose earnings were on file. The variant resolves a
+# value where v6 resolved none, and for an issuer with material noncontrolling interests it
+# would resolve a DIFFERENT value, which is why it takes a version rather than an edit.

@@ -55,6 +55,11 @@ export default async function RankingsPage({
                   <th scope="col" className="px-4 py-3">Tier</th>
                   <th scope="col" className="px-4 py-3">Current P/S</th>
                   <th scope="col" className="px-4 py-3">Valuation gap</th>
+                  {/* Module 1 (#284). Headed "PEG rank" rather than "Rank" because it is a
+                      SEPARATE ordering: PEG does not participate in selection, and showing
+                      the two under one heading would imply it does. */}
+                  <th scope="col" className="px-4 py-3">PEG</th>
+                  <th scope="col" className="px-4 py-3">PEG rank</th>
                   <th scope="col" className="px-4 py-3">Confidence</th>
                   <th scope="col" className="px-4 py-3">Availability</th>
                   <th scope="col" className="px-4 py-3">Trace</th>
@@ -83,6 +88,10 @@ export default async function RankingsPage({
                     >
                       {cell(formatSignedRatio(row.valuationGap))}
                     </td>
+                    <td className="px-4 py-3 tabular-nums" title={row.peg ?? undefined}>
+                      {cell(formatRatio(row.peg))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums">{cell(row.pegRank?.toString() ?? null)}</td>
                     <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
                       {cell(formatRatio(row.confidence))}
                     </td>
