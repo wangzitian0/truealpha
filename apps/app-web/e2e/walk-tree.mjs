@@ -172,9 +172,13 @@ async function assertCurrentNavLink(page, path, problems) {
  *
  * Anchored on the heading rather than a test id: the two branches render
  * different containers, and asserting through the visible heading means a
- * refactor that drops the heading fails here too, which is the point. */
-async function assertFunnelSaysSomething(page, path, problems) {
-  if (path !== "/admin/quality") return;
+ * refactor that drops the heading fails here too, which is the point.
+ *
+ * Administrator only. A member reaching /admin/quality gets the layout's denied
+ * section, which correctly has no funnel — found by walking real staging with
+ * both identities, after a local administrator-only run had passed. */
+async function assertFunnelSaysSomething(page, path, problems, role) {
+  if (path !== "/admin/quality" || role !== "administrator") return;
   const heading = page.getByRole("heading", { name: /L0.{0,3}L5 funnel/ });
   if ((await heading.count()) === 0) {
     problems.push("no L0-L5 funnel section on /admin/quality");
@@ -202,7 +206,7 @@ async function checkRoute(page, path, role) {
   await assertWorldSwitch(page, path, problems, role);
   await assertSignedInIdentity(page, path, problems);
   await assertCurrentNavLink(page, path, problems);
-  await assertFunnelSaysSomething(page, path, problems);
+  await assertFunnelSaysSomething(page, path, problems, role);
   return problems;
 }
 
