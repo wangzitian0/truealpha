@@ -81,6 +81,15 @@
       "replace": "order by created_at desc",
       "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_output_invariants.py", "-q"],
       "cwd": "."
+    },
+    {
+      "id": "migration-chain/a-new-collision-must-not-be-waved-through",
+      "guard": "libs/runtime/tests/test_migration_chain.py",
+      "file": "libs/runtime/tests/test_migration_chain.py",
+      "find": "KNOWN_COLLISIONS = {\"0019\"",
+      "replace": "KNOWN_COLLISIONS = {\"0041\", \"0019\"",
+      "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_migration_chain.py", "-q"],
+      "cwd": "."
     }
   ]
 }
