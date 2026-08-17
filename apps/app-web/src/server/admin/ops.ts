@@ -32,7 +32,7 @@ function getPool(): Pool {
   return pool;
 }
 
-async function withOpsReader<T>(fn: (client: Pick<PoolClient, "query">) => Promise<T>): Promise<T> {
+export async function withOpsReader<T>(fn: (client: Pick<PoolClient, "query">) => Promise<T>): Promise<T> {
   if (testClientOverride) {
     const injected = testClientOverride;
     await injected.query("set role app_ops_reader");
