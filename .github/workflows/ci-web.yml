@@ -141,6 +141,14 @@ jobs:
         run: |
           set -euo pipefail
           cp -r .next/static .next/standalone/.next/static
+          # Set once, updated per iteration: with `set -e`, a failure between
+          # starting a server and the explicit kill — the readiness curl below is
+          # the reachable one — would otherwise leave it holding port 3000, and
+          # the NEXT iteration would fail to bind for a reason unrelated to what
+          # it walks. The trap the single-state version had was lost in the
+          # conversion to a loop (review).
+          server_pid=""
+          trap 'kill "${server_pid:-}" 2>/dev/null || true' EXIT
           for state in populated empty; do
             database=truealpha
             [ "$state" = empty ] && database=truealpha_empty
@@ -164,5 +172,6 @@ jobs:
             fi
             kill "$server_pid" 2>/dev/null || true
             wait "$server_pid" 2>/dev/null || true
+            server_pid=""
             echo "::endgroup::"
           done
