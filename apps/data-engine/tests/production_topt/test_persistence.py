@@ -653,6 +653,7 @@ def test_vintage_and_fetch_stamps_are_source_truth_not_cutoff_arithmetic(connect
         assert before <= fetched_at <= after, (before, fetched_at, after)
         assert before <= recorded_at <= after, (before, recorded_at, after)
 
+
 def test_semantic_freshness_windows_round_trip_and_cast(connection) -> None:
     """#530 slice 2: the per-semantic windows land as text intervals the views can cast.
 
