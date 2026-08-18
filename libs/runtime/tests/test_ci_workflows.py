@@ -324,11 +324,21 @@ def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
             continue
         installs = re.findall(r"uv sync[^\n]*", text)
         assert installs, f"{workflow.name} runs {sorted(scripts)} without any `uv sync`"
-        if any("--no-install-workspace" in line for line in installs):
+        # A line counts as installing the workspace only when it excludes
+        # neither way. The first version tested `--no-install-workspace` alone,
+        # and the incident it was written from names `--only-group dev` as the
+        # ACTUAL blocker — measured: `uv sync --frozen --only-group dev` leaves
+        # truealpha_runtime unimportable. So the guard covered a spelling of the
+        # defect rather than the defect, which is the third time that shape has
+        # shown up this week (review).
+        installs_workspace = [
+            line for line in installs if "--no-install-workspace" not in line and "--only-group" not in line
+        ]
+        if not installs_workspace:
             offenders.append((workflow.name, sorted(needs_workspace), installs))
 
     assert not offenders, (
-        f"these workflows exclude the workspace and then run tools that import it: {offenders}. "
-        f"The script dies at import, before it can judge anything, and every later step in the "
-        f"job is skipped (#616)"
+        f"these workflows never install the workspace and then run tools that import it: "
+        f"{offenders}. The script dies at import, before it can judge anything, and every "
+        f"later step in the job is skipped (#616)"
     )

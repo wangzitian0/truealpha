@@ -45,7 +45,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
-      - name: Install the pinned SDK contract
+      - name: Install the pinned SDK contract and the workspace
         # --all-packages, not --no-install-workspace: three later steps run
         # tools/*.py that import `truealpha_runtime`, and #585 moved the shared
         # "what release is this environment serving" read into that workspace
