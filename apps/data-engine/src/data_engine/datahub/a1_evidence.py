@@ -66,6 +66,12 @@ class ServiceObjectives:
     # (confidence x 100). Report ratios themselves persist on the 0-1 scale.
     minimum_confidence_score: Decimal
     minimum_independent_origin_groups: int
+    # Share of graded reconciliation cells that must reach the `high` band (agreed
+    # with at least `minimum_independent_origin_groups` origin groups) for the
+    # pointer to advance. The per-cell band requirement stays absolute; what this
+    # replaces is weakest-cell gating, where one symbol's abstain froze every other
+    # symbol's fresher, fully corroborated data behind the previous head (#623).
+    minimum_corroborated_share: Decimal
 
 
 # The accepted demand, `docs/datahub-service-demand.md` ("Its service objective is"):
@@ -78,6 +84,7 @@ ACCEPTED_SERVICE_OBJECTIVES = ServiceObjectives(
     minimum_availability=Decimal("0.95"),
     minimum_confidence_score=Decimal("70"),
     minimum_independent_origin_groups=2,
+    minimum_corroborated_share=Decimal("0.95"),
 )
 
 
@@ -134,9 +141,12 @@ def unmet_objectives(
             _ratio(report.get("denominator_mean_confidence")) * 100,
             objectives.minimum_confidence_score,
         ),
-        "independent_origin_groups": (
-            Decimal(_corroborating_origin_groups(report.get("reconciliation_cells"))),
-            Decimal(objectives.minimum_independent_origin_groups),
+        "corroborated_share": (
+            _corroborated_share(
+                report.get("reconciliation_cells"),
+                minimum_origin_groups=objectives.minimum_independent_origin_groups,
+            ),
+            objectives.minimum_corroborated_share,
         ),
     }
     return tuple(
@@ -160,20 +170,28 @@ def _plain(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
-def _corroborating_origin_groups(cells: Any) -> int:
-    """Canonical origin groups corroborating the *weakest* graded cell.
+def _corroborated_share(cells: Any, *, minimum_origin_groups: int) -> Decimal:
+    """Share of graded cells whose served value reaches the `high` band.
 
-    The `high` band is a property of a served value, not of a source count: a cell only
-    reaches it when independent origins agree, which is exactly
-    `ReconciliationOutcome.AGREED` — the fusion engine can only reach that outcome with
-    the policy's minimum origin groups and no conflicting assertion. A cell that
-    abstained on conflict has two origins and no corroborated value, so it contributes
-    none; counting its disagreeing origins would be the raw origin count `quality_report`
-    itself rules out. A report that graded no cells corroborates nothing.
+    A cell reaches the band only when independent origins agree — exactly
+    `ReconciliationOutcome.AGREED` with at least the policy's minimum origin groups;
+    an abstained cell has origins but no corroborated value, so it contributes
+    nothing to the numerator (counting its disagreeing origins would be the raw
+    origin count `quality_report` itself rules out). The DENOMINATOR is every graded
+    cell: the objective judges the share, not the weakest cell, so one symbol's
+    abstain no longer freezes every other symbol's corroborated data behind the
+    previous head (#623 — weakest-cell gating held 20/21-agreed TOPT and the first
+    QQQ head on single-cell misses). A report that graded no cells corroborates
+    nothing — fail closed.
     """
     if not isinstance(cells, Mapping) or not cells:
-        return 0
-    return min(_cell_origin_groups(cell) for cell in cells.values())
+        return Decimal(0)
+    # Floor the bar at 1: `_cell_origin_groups` scores every non-AGREED cell 0, and a
+    # caller with `minimum_origin_groups=0` (the single-origin corpus objectives) must
+    # not turn that 0 into "corroborated" via `0 >= 0` (Copilot on #626).
+    minimum = max(minimum_origin_groups, 1)
+    corroborated = sum(1 for cell in cells.values() if _cell_origin_groups(cell) >= minimum)
+    return Decimal(corroborated) / Decimal(len(cells))
 
 
 def _cell_origin_groups(cell: Any) -> int:

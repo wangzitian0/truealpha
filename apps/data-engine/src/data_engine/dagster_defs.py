@@ -193,6 +193,11 @@ QQQ_PHASE1_OBJECTIVES = ServiceObjectives(
     minimum_availability=Decimal("0.70"),
     minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
     minimum_independent_origin_groups=ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups,
+    # 0.90 for a 102-listing universe with one primary+one corroborating vendor:
+    # per-symbol publication-tail stragglers (#622's same-day narrowing grades them
+    # insufficient, not conflict) should not hold 100+ corroborated cells behind the
+    # previous head. Rises to the accepted 0.95 with the second origin's coverage.
+    minimum_corroborated_share=Decimal("0.90"),
 )
 
 
