@@ -36,7 +36,9 @@ _VALUES_CLAUSE = re.compile(
     r"\bvalues\b(?P<body>.*?)(?:\bon\s+conflict\b|\breturning\b|;|$)",
     re.IGNORECASE | re.DOTALL,
 )
-_BARE_INT = re.compile(r"(?<![\w%(:.])\d+(?![\w.])")
+# The optional leading `-` keeps the reported literal identical to the SQL text
+# (review: `-1` must not surface as `1` in CI output and allowlist reasoning).
+_BARE_INT = re.compile(r"(?<![\w%(:.])-?\d+(?![\w.])")
 
 
 def _bare_ints_in_values(sql: str) -> list[str]:
@@ -45,8 +47,9 @@ def _bare_ints_in_values(sql: str) -> list[str]:
         body = clause.group("body")
         # Strip quoted SQL string literals and psycopg placeholders before scanning:
         # '...' contents are data-typed by the author on purpose; %s / %(name)s are
-        # exactly what this gate exists to demand.
-        body = re.sub(r"'[^']*'", "''", body)
+        # exactly what this gate exists to demand. The quote pattern consumes
+        # doubled '' escapes so `'O''Reilly'` strips as one literal (review).
+        body = re.sub(r"'(?:[^']|'')*'", "''", body)
         body = re.sub(r"%\(\w+\)s|%s", "", body)
         found.extend(_BARE_INT.findall(body))
     return found
@@ -77,22 +80,26 @@ def main() -> int:
     if allowlist_path.exists():
         allowlist = json.loads(allowlist_path.read_text())
 
+    violations = scan(args.root)
+    # Staleness judges the allowlist against the RAW scan, not the unallowlisted
+    # remainder — an entry that is still suppressing a live violation is doing its
+    # job, not rotting (review).
+    active_keys = {f"{rel}:{lineno}" for rel, lineno, _ in violations}
     failures = []
-    for rel, lineno, bare in scan(args.root):
+    for rel, lineno, bare in violations:
         key = f"{rel}:{lineno}"
         if key in allowlist:
             continue
         failures.append(f"{key}: bare integer(s) {', '.join(bare)} inside an INSERT VALUES clause")
 
-    stale = [key for key in allowlist if not any(f.startswith(key + ":") for f in failures)]
     for line in failures:
         print(f"::error::{line} — bind it as a parameter derived from the data (#621/#629)")
     if failures:
         return 1
-    if stale and not failures:
-        # Informational only: an allowlist entry whose violation no longer exists
-        # should be pruned, but must not fail the build on its own.
-        for key in stale:
+    for key in allowlist:
+        if key not in active_keys:
+            # Informational only: an allowlist entry whose violation no longer
+            # exists should be pruned, but must not fail the build on its own.
             print(f"note: allowlist entry {key} no longer matches a violation; prune it")
     print("sql-literal-gate: clean")
     return 0
