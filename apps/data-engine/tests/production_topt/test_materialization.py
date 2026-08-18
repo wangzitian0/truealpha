@@ -953,6 +953,13 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
             )
 
 
+# The seeder pins every observation's validity to exactly this day (its
+# valid_from/valid_to are CUTOFF - 2 days), so the corpus report_date — which
+# becomes the obligations' partition_key — must be that same day or the
+# selection query's validity window filters every row (review on #634).
+_SYNTHETIC_REPORT_DATE = (CUTOFF - timedelta(days=2)).date().isoformat()
+
+
 def _synthetic_corpus() -> dict:
     """A 3-listing / 2-issuer universe that shares no dimension with TOPT (21/20)
     or QQQ (102/101). One issuer is dual-class so issuer_count < instrument_count."""
@@ -964,8 +971,8 @@ def _synthetic_corpus() -> dict:
     ]
     return {
         "topt_denominator": {
-            "universe_id": "universe:synthetic-2026-03-31",
-            "report_date": "2026-03-31",
+            "universe_id": f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}",
+            "report_date": _SYNTHETIC_REPORT_DATE,
             "instrument_count": 3,
             "issuer_count": 2,
             "instrument_tuple_fields": fields,
@@ -987,7 +994,7 @@ def test_a_synthetic_three_listing_universe_flows_end_to_end(connection) -> None
         connection, corpus=_synthetic_corpus()
     )
     assert capture_repository.status(run.run_id).complete
-    assert list_version.universe.universe_id == "universe:synthetic-2026-03-31"
+    assert list_version.universe.universe_id == f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}"
 
     repository = PostgresToptCoreRepository(connection)
     snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
@@ -1023,6 +1030,6 @@ def test_a_synthetic_three_listing_universe_flows_end_to_end(connection) -> None
     assert registration.accepted, registration.summary
     head = connection.execute(
         "select universe_id, sequence from mart.current_pointer_head where universe_id = %s",
-        ("universe:synthetic-2026-03-31",),
+        (f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}",),
     ).fetchone()
-    assert head == ("universe:synthetic-2026-03-31", registration.sequence)
+    assert head == (f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}", registration.sequence)
