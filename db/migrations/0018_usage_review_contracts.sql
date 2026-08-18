@@ -39,7 +39,11 @@ begin
     end if;
 
     -- Idempotent: re-running must be a no-op, not a second pair of OR clauses.
-    if position('usage_frequency_slice' in existing_def) > 0 then
+    -- BOTH kinds are required before returning. Checking only the first would
+    -- no-op on a partial state and leave the vocabulary incomplete (review) —
+    -- and an incomplete vocabulary is what #615 was.
+    if position('usage_frequency_slice' in existing_def) > 0
+       and position('strategy_data_quality_review' in existing_def) > 0 then
         return;
     end if;
 

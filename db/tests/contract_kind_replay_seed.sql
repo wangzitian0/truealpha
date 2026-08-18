@@ -72,23 +72,37 @@ alter table staging.contract_objects enable trigger trg_contract_objects_append_
 -- covering nothing new. Count the clauses and require one row per clause.
 do $$
 declare
+    constraint_def text;
     clause_count int;
     seeded_count int;
 begin
+    select pg_get_constraintdef(constraint_row.oid) into constraint_def
+    from pg_constraint as constraint_row
+    join pg_class as table_row on table_row.oid = constraint_row.conrelid
+    join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
+    where schema_row.nspname = 'staging'
+      and table_row.relname = 'contract_objects'
+      and constraint_row.conname = 'contract_objects_kind_identity_check';
+
+    -- Fail loudly on a missing or unrecognisable constraint rather than
+    -- reporting coverage. Without this, `regexp_matches(NULL, ...)` returns no
+    -- rows, clause_count becomes 0, and `seeded_count < 0` can never fire — the
+    -- anti-rot check would itself rot silently, which is the exact failure this
+    -- file exists to prevent (review).
+    if constraint_def is null then
+        raise exception
+            'contract_objects_kind_identity_check does not exist; the chain did not finish, '
+            'and seeding against no vocabulary proves nothing (#615)';
+    end if;
+
     select count(*) into clause_count
-    from regexp_matches(
-        (
-            select pg_get_constraintdef(constraint_row.oid)
-            from pg_constraint as constraint_row
-            join pg_class as table_row on table_row.oid = constraint_row.conrelid
-            join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
-            where schema_row.nspname = 'staging'
-              and table_row.relname = 'contract_objects'
-              and constraint_row.conname = 'contract_objects_kind_identity_check'
-        ),
-        'contract_kind',
-        'g'
-    );
+    from regexp_matches(constraint_def, 'contract_kind', 'g');
+
+    if clause_count = 0 then
+        raise exception
+            'contract_objects_kind_identity_check mentions no contract_kind: %. The scan lost '
+            'its subject and would pass over anything (#615)', left(constraint_def, 120);
+    end if;
 
     select count(distinct contract_kind) into seeded_count from staging.contract_objects;
 
