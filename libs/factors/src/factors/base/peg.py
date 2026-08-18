@@ -47,6 +47,15 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, localcontext
 from re import compile as re_compile
 
+from truealpha_contracts.qlib_expression import (
+    QlibCallNode,
+    QlibFactorExpressionDefinition,
+    QlibFeatureBinding,
+    QlibFeatureNode,
+    QlibNumericNode,
+)
+
+from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY
 from factors.registry import factor
 from factors.types import Fact, FactorResult, GrowthConvention, UnitFamily
 
@@ -54,6 +63,66 @@ _EPS_DILUTED = "eps_diluted"
 _NET_INCOME = "net_income"
 _PRICE = "price"
 _SHARES = "shares_outstanding"
+
+# The `peg_from_rate` arithmetic as a matrix-compatible Qlib expression, built only from
+# the approved Div/Mul operators — the same shape modules 2 and 7 already carry, and the
+# one `qlib_engine`'s own docstring says the engine exists to carry ("init.md Section 7
+# modules 1-6"; module 1 is this one). init.md rule 25 makes Qlib the factor-expression
+# engine; module 1 shipped without its expression, so a pinned-Qlib run could reproduce
+# GPPE and P/S but had nothing to reproduce here.
+#
+# As in module 2, the Decimal path below stays the source of truth — fast and
+# dependency-light — and this definition is the reproducibility proof, cross-checked by
+# test rather than invoked per call. `growth_rate` binds as a feature exactly as
+# `risk_free_rate` does for GPPE: a declared input the caller supplies, not an
+# observation the factor looks up.
+#
+# The literal 100 is the percentage-point convention, not a tuning constant: PEG divides
+# the multiple by the growth rate expressed in points (0.0821 -> 8.21), so it belongs in
+# the expression rather than in a caller that could pick a different scale.
+PEG_EXPRESSION_DEFINITION = QlibFactorExpressionDefinition(
+    factor_id="factor.peg.from_rate",
+    factor_version="0.1.0",
+    operator_registry_id=BUILTIN_OPERATOR_REGISTRY.operator_registry_id,
+    feature_bindings=(
+        QlibFeatureBinding(feature_binding_id="feature.price", qlib_field_name="price"),
+        QlibFeatureBinding(feature_binding_id="feature.shares_outstanding", qlib_field_name="shares_outstanding"),
+        QlibFeatureBinding(feature_binding_id="feature.net_income", qlib_field_name="net_income"),
+        QlibFeatureBinding(feature_binding_id="feature.growth_rate", qlib_field_name="growth_rate"),
+    ),
+    root=QlibCallNode(
+        operator_id="truealpha.qlib.div.v1",
+        arguments=(
+            # market capitalisation / net income — the multiple
+            QlibCallNode(
+                operator_id="truealpha.qlib.div.v1",
+                arguments=(
+                    QlibCallNode(
+                        operator_id="truealpha.qlib.mul.v1",
+                        arguments=(
+                            QlibFeatureNode(feature_binding_id="feature.price"),
+                            QlibFeatureNode(feature_binding_id="feature.shares_outstanding"),
+                        ),
+                    ),
+                    QlibFeatureNode(feature_binding_id="feature.net_income"),
+                ),
+            ),
+            # the growth rate in percentage points
+            QlibCallNode(
+                operator_id="truealpha.qlib.mul.v1",
+                arguments=(
+                    QlibFeatureNode(feature_binding_id="feature.growth_rate"),
+                    QlibNumericNode(value=Decimal(100)),
+                ),
+            ),
+        ),
+    ),
+    # Zero, like module 2: every input is one PIT-resolved value at the cutoff, and the
+    # growth rate arrives already reduced. The window this factor divides by spans three
+    # years, but that reduction happens upstream — nothing here reads a prior session, and
+    # claiming a lookback would misdescribe what a pinned run needs to feed it.
+    maximum_lookback_sessions=0,
+)
 
 # Staging encodes a fiscal period as "FY2025:FY:2024-01-29:2025-01-26" —
 # "<filing fiscal year>:<period kind>:<period start>:<period end>".
