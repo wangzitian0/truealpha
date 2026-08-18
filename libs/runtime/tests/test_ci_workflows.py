@@ -280,3 +280,55 @@ def test_no_test_bootstraps_a_tools_script_by_hand() -> None:
         f"sys.modules before exec, which a hand copy forgets and a dataclass in the "
         f"tool then fails on (#583)"
     )
+
+
+def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
+    """A workflow that runs a tool must install what that tool imports — #616.
+
+    `deploy-release.yml` installed with `--no-install-workspace` and then ran
+    `tools/health_check.py`, which imports `truealpha_runtime` — the workspace
+    package #585 moved the shared release read into. The step died at IMPORT
+    time on the v0.0.22 production deploy, before it read or compared anything,
+    and because the job stops at the first failure the surface walk was skipped
+    too. So the release went out with no walk evidence, and the gate that exists
+    to confirm production is serving the release never reached the question.
+
+    Nothing above caught it: the assertions in this file check the shape of the
+    command, never that the command's interpreter can load its own module. #526
+    was "the gate compared the wrong thing"; this was "the gate never got as far
+    as comparing".
+    """
+    workspace_modules = {
+        member.rsplit("/", 1)[-1].replace("-", "_")
+        for member in ("apps/data-engine", "apps/llm-service", "libs/contracts", "libs/factors", "libs/runtime")
+    } | {"truealpha_runtime", "truealpha_contracts", "data_engine", "factors"}
+
+    def imports(script: Path) -> set[str]:
+        tree = ast.parse(script.read_text(encoding="utf-8"))
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                names.add(node.module.split(".")[0])
+        return names
+
+    offenders = []
+    for workflow in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        text = workflow.read_text(encoding="utf-8")
+        scripts = {name for name in re.findall(r"python (tools/[a-z_]+\.py)", text)}
+        if not scripts:
+            continue
+        needs_workspace = {script for script in scripts if imports(REPO_ROOT / script) & workspace_modules}
+        if not needs_workspace:
+            continue
+        installs = re.findall(r"uv sync[^\n]*", text)
+        assert installs, f"{workflow.name} runs {sorted(scripts)} without any `uv sync`"
+        if any("--no-install-workspace" in line for line in installs):
+            offenders.append((workflow.name, sorted(needs_workspace), installs))
+
+    assert not offenders, (
+        f"these workflows exclude the workspace and then run tools that import it: {offenders}. "
+        f"The script dies at import, before it can judge anything, and every later step in the "
+        f"job is skipped (#616)"
+    )

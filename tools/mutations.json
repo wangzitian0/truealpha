@@ -90,6 +90,15 @@
       "replace": "KNOWN_COLLISIONS = {\"0041\", \"0019\"",
       "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_migration_chain.py", "-q"],
       "cwd": "."
+    },
+    {
+      "id": "workflow-contract/release-lane-installs-what-it-imports",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/deploy-release.yml",
+      "find": "run: uv sync --frozen --all-packages",
+      "replace": "run: uv sync --frozen --only-group dev --no-install-workspace",
+      "command": ["uv", "run", "--no-sync", "pytest", "libs/runtime/tests/test_ci_workflows.py", "-q"],
+      "cwd": "."
     }
   ]
 }
