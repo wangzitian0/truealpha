@@ -13,8 +13,18 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --project libs/factors/qlib-runtime --all-groups --frozen
+      # The base-factor cross-checks belong here for the reason this job exists: they
+      # prove a pinned-Qlib execution reproduces each factor's Decimal output, and they
+      # `pytest.importorskip("qlib")`. Under `ci-python` qlib is absent so they skip; they
+      # were not in this job's paths either, so GPPE's reproducibility proof had never
+      # executed in CI at all — an unarmed check, which is exactly what AGENTS.md rule 7
+      # forbids. Listing the files rather than the whole directory keeps the pinned
+      # runtime's job scoped to tests that need it.
       - name: Run the pinned Qlib runtime tests without optional skips
         run: >-
           uv run --project libs/factors/qlib-runtime --frozen pytest
           libs/factors/tests/batches/issuer_strategy_selection_tiny
-          libs/factors/tests/batches/qlib_expression_contract_tiny -q
+          libs/factors/tests/batches/qlib_expression_contract_tiny
+          libs/factors/tests/test_gross_profit_per_employee.py
+          libs/factors/tests/test_peg.py
+          libs/factors/tests/test_price_to_sales.py -q

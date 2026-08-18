@@ -161,3 +161,68 @@ def test_a_period_tagged_annual_but_shorter_than_a_year_is_not_a_growth_observat
     # The half-year is skipped, so 2022 has no observation at all — an honest gap
     # rather than a fabricated growth rate.
     assert "missing_base_year:2022" in result.flags
+
+
+def test_the_pinned_qlib_expression_reproduces_the_decimal_peg() -> None:
+    """init.md rule 25: Qlib is the factor-expression engine, and the Decimal path is the
+    source of truth it must agree with.
+
+    Module 2 and module 7 have carried this cross-check since they landed; module 1
+    shipped without it, so a pinned-Qlib execution could reproduce every base factor
+    except the one `qlib_engine`'s docstring names first. Same panel through both paths,
+    same number, or this fails.
+    """
+    qlib = pytest.importorskip("qlib")
+    del qlib
+
+    from datetime import date
+
+    from factors.base.peg import PEG_EXPRESSION_DEFINITION, peg_from_rate
+    from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY, evaluate_expression
+    from truealpha_contracts.qlib_expression import QlibExpressionExecutionBinding
+
+    price, shares, net_income, growth = Decimal("170.00"), Decimal("2000000"), Decimal("40000000"), Decimal("0.35")
+
+    native = peg_from_rate(
+        [
+            _fact("price", price),
+            Fact(
+                entity_id=_ENTITY,
+                metric="shares_outstanding",
+                value=shares,
+                unit_family=UnitFamily.COUNT,
+                confidence=Decimal("0.9"),
+                as_of=_AS_OF,
+            ),
+            _fact("net_income", net_income),
+        ],
+        entity_id=_ENTITY,
+        as_of=_AS_OF,
+        growth_rate=growth,
+    )
+    assert native.value is not None, native.flags
+
+    session = date(2026, 6, 30)
+    _, outputs, _ = evaluate_expression(
+        PEG_EXPRESSION_DEFINITION,
+        BUILTIN_OPERATOR_REGISTRY,
+        panel={
+            "price": {_ENTITY: (float(price),)},
+            "shares_outstanding": {_ENTITY: (float(shares),)},
+            "net_income": {_ENTITY: (float(net_income),)},
+            "growth_rate": {_ENTITY: (float(growth),)},
+        },
+        instruments=(_ENTITY,),
+        sessions=(session,),
+        execution_binding=QlibExpressionExecutionBinding(
+            version="0.9.7",
+            release_commit="a" * 40,
+            runtime_artifact_sha256="b" * 64,
+            runtime_lock_sha256="c" * 64,
+            adapter_id="factors.qlib_engine.test",
+            adapter_implementation_sha256="d" * 64,
+        ),
+    )
+
+    # (170 * 2,000,000) / 40,000,000 = 8.5 multiple; / (0.35 * 100) = 0.242857…
+    assert outputs[(_ENTITY, session)] == pytest.approx(float(native.value), rel=1e-9)
