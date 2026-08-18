@@ -33,6 +33,7 @@ jobs:
       # check for app-web). Stdlib-only.
       - run: python3 tools/check_route_manifest.py
       - run: python3 tools/reachability_ratchet.py --check
+      - run: python3 tools/sql_literal_gate.py
       - run: uv run ruff check apps libs
       - run: uv run ruff format --check apps libs
       - run: uv run mypy
