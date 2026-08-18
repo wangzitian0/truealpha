@@ -344,3 +344,39 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
                 twin.model_copy(update={"instrument_id": "security:figi:other000", "listing_id": "listing:xnas:oth"}),
             ),
         )
+
+    # The INSERT itself must carry the snapshot's own counts — the first scheduled
+    # QQQ run passed every model check and then died on `values (..., 20, 21, 84, ...)`
+    # hardcoded in _put_snapshot's SQL, which the 0042 trigger rightly refused
+    # (obligation_count 408 <> observation_count 84). Pin the bound parameters.
+    from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
+
+    captured: list[tuple[str, tuple]] = []
+
+    class _Cursor:
+        def __init__(self, row):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn:
+        def transaction(self):
+            import contextlib
+
+            return contextlib.nullcontext()
+
+        def execute(self, sql, params=()):
+            captured.append((" ".join(sql.split()), tuple(params)))
+            if "insert into" in sql:
+                return _Cursor(("row",))
+            return _Cursor(None)
+
+    store = PostgresToptCoreRepository.__new__(PostgresToptCoreRepository)
+    store._connection = _Conn()
+    store._put_snapshot(snapshot)
+    head_sql, head_params = captured[0]
+    assert "insert into staging.topt_core_snapshots" in head_sql
+    assert not any(literal in head_sql for literal in (" 20,", " 21,", " 84,")), head_sql
+    # issuer_count, instrument_count, observation_count derive from the two-member snapshot:
+    assert head_params[8:11] == (2, 2, 8)

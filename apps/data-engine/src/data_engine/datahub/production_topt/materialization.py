@@ -608,7 +608,7 @@ class PostgresToptCoreRepository:
                     snapshot_id, content_sha256, run_id, release_manifest_id,
                     universe_id, universe_version, universe_sha256, cutoff,
                     issuer_count, instrument_count, observation_count, payload
-                ) values (%s, %s, %s, %s, %s, %s, %s, %s, 20, 21, 84, %s)
+                ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 on conflict (snapshot_id) do nothing returning snapshot_id
                 """,
                 (
@@ -620,6 +620,9 @@ class PostgresToptCoreRepository:
                     snapshot.universe_version,
                     snapshot.universe_sha256,
                     snapshot.cutoff,
+                    len({member.issuer_id for member in snapshot.members}),
+                    len(snapshot.members),
+                    _SEMANTICS_PER_LISTING * len(snapshot.members),
                     Jsonb(payload),
                 ),
             ).fetchone()
