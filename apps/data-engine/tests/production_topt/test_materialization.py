@@ -19,6 +19,7 @@ from data_engine.datahub.control_plane import AttemptLedger, expand_obligations,
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, ToptCoreIdentity
+from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
 from factors.production_topt import GppeV0Definition, ToptCoreAvailability
@@ -138,11 +139,18 @@ def _seed_complete_production_run(
     connection,
     *,
     stale_unchanged_first_observation: bool = False,
+    corpus: dict | None = None,
 ):
-    corpus = json.loads(CORPUS.read_text())
+    corpus = corpus if corpus is not None else json.loads(CORPUS.read_text())
     denominator = corpus["topt_denominator"]
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
-    list_version = frozen_topt_list_version(corpus)
+    # The same dispatch composition.plan_and_persist ships: a self-pinned corpus
+    # (universe-as-data, #539) resolves through corpus_list_version; only the
+    # checked-in TOPT fixture takes the frozen legacy path.
+    if "instrument_mapping_sha256" in denominator:
+        list_version = corpus_list_version(corpus)
+    else:
+        list_version = frozen_topt_list_version(corpus)
     policy = CaptureSchedulePolicy(
         policy_version="production-topt-integration:v1",
         demanded_cadence=timedelta(days=1),
@@ -943,3 +951,85 @@ def test_superseded_input_wins_and_lookahead_is_rejected(connection, monkeypatch
                 """,
                 (target.issuer_id, CUTOFF, CUTOFF + timedelta(seconds=1)),
             )
+
+
+# The seeder pins every observation's validity to exactly this day (its
+# valid_from/valid_to are CUTOFF - 2 days), so the corpus report_date — which
+# becomes the obligations' partition_key — must be that same day or the
+# selection query's validity window filters every row (review on #634).
+_SYNTHETIC_REPORT_DATE = (CUTOFF - timedelta(days=2)).date().isoformat()
+
+
+def _synthetic_corpus() -> dict:
+    """A 3-listing / 2-issuer universe that shares no dimension with TOPT (21/20)
+    or QQQ (102/101). One issuer is dual-class so issuer_count < instrument_count."""
+    fields = ["issuer_id", "instrument_id", "listing_id", "ticker"]
+    instruments = [
+        ["issuer:cik:0000000101", "security:figi:SYNTH001", "listing:xsyn:alfa", "ALFA"],
+        ["issuer:cik:0000000101", "security:figi:SYNTH002", "listing:xsyn:alfb", "ALF.B"],
+        ["issuer:cik:0000000202", "security:figi:SYNTH003", "listing:xsyn:brav", "BRAV"],
+    ]
+    return {
+        "topt_denominator": {
+            "universe_id": f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}",
+            "report_date": _SYNTHETIC_REPORT_DATE,
+            "instrument_count": 3,
+            "issuer_count": 2,
+            "instrument_tuple_fields": fields,
+            "instruments": instruments,
+            "instrument_mapping_sha256": canonical_sha256({"fields": fields, "instruments": instruments}),
+        }
+    }
+
+
+def test_a_synthetic_three_listing_universe_flows_end_to_end(connection) -> None:
+    """#627: size-generality is proven by RUNNING a differently-shaped universe
+    through the deployed path, not by deleting literals one hunt at a time. Five
+    TOPT constants (20/21/84) survived every model test because model and test
+    shared the same single-consumer premise (#609/#606/#612/0042/#621); this
+    universe shares no dimension with TOPT or QQQ, so any layer that re-acquires
+    a shape assumption — Python, SQL string, CHECK constraint, trigger — breaks
+    here first, in CI, against the real schema."""
+    (capture_repository, run, list_version, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection, corpus=_synthetic_corpus()
+    )
+    assert capture_repository.status(run.run_id).complete
+    assert list_version.universe.universe_id == f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}"
+
+    repository = PostgresToptCoreRepository(connection)
+    snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    assert len(snapshot.members) == 3
+    assert len({member.issuer_id for member in snapshot.members}) == 2
+    # The persisted row passed 0042's self-consistency trigger (4 observations per
+    # listing, issuer_count <= instrument_count) with counts that are neither 84 nor 408.
+    persisted = connection.execute(
+        "select issuer_count, instrument_count, observation_count from staging.topt_core_snapshots where run_id = %s",
+        (run.run_id,),
+    ).fetchone()
+    assert persisted == (2, 3, 12)
+
+    results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    assert len(results) == 2  # one row per issuer, derived from the snapshot's own membership
+
+    graded = quality_report.build_report(connection, run.run_id)
+    quality_report.persist(connection, graded)
+    assert graded["complete"] is True
+    assert graded["requested_count"] == 12
+
+    # The synthetic corpus is single-origin (its parser vintage is not in the fusion
+    # source map), so it registers under the corpus objectives — same relaxation the
+    # governed-read test documents. The pointer key is this universe's own, so the
+    # first advance is sequence 0 regardless of TOPT/QQQ state.
+    registration = register_run_evidence(
+        connection,
+        run_id=run.run_id,
+        release_manifest_id=release_manifest_id,
+        quality_report=graded,
+        objectives=_CORPUS_OBJECTIVES,
+    )
+    assert registration.accepted, registration.summary
+    head = connection.execute(
+        "select universe_id, sequence from mart.current_pointer_head where universe_id = %s",
+        (f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}",),
+    ).fetchone()
+    assert head == (f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}", registration.sequence)
