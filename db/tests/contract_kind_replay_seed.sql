@@ -24,28 +24,45 @@ begin;
 
 alter table staging.contract_objects disable trigger trg_contract_objects_append_only;
 
--- One row per clause of contract_objects_kind_identity_check. The hash is
--- arbitrary but must satisfy the table's own `contract_id ~ '^[a-z][a-z0-9-]*:[0-9a-f]{64}$'`
--- and `content_sha256 ~ '^[0-9a-f]{64}$'` checks.
+-- One row per clause of contract_objects_kind_identity_check.
+--
+-- The id is derived from the kind rather than written out, because the first
+-- version copied runtime_contract.sql's `repeat('5', 64)` style verbatim and
+-- collided with that file's own rows on contract_objects_pkey — caught by CI,
+-- which is the point of running it. Derived ids also cannot collide with a
+-- future contract test that picks the same filler.
+--
+-- They still satisfy the table's own shape checks:
+--   contract_id    ~ '^[a-z][a-z0-9-]*:[0-9a-f]{64}$'
+--   content_sha256 ~ '^[0-9a-f]{64}$'
 insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload)
-values
-    ('registry-snapshot:' || repeat('a', 64), 'registry_snapshot', repeat('a', 64), '{}'),
-    ('research-catalog:' || repeat('b', 64), 'research_catalog_manifest', repeat('b', 64), '{}'),
-    ('snapshot:' || repeat('c', 64), 'snapshot_manifest', repeat('c', 64), '{}'),
-    ('release-manifest:' || repeat('d', 64), 'release_manifest', repeat('d', 64), '{}'),
-    ('capture-scope:' || repeat('e', 64), 'capture_scope', repeat('e', 64), '{}'),
-    ('capture-manifest:' || repeat('f', 64), 'capture_manifest', repeat('f', 64), '{}'),
-    ('capture-evaluation:' || repeat('0', 64), 'capture_evaluation_report', repeat('0', 64), '{}'),
-    ('trace-bundle:' || repeat('1', 64), 'trace_bundle', repeat('1', 64), '{}'),
-    ('strategy-usage-audit:' || repeat('2', 64), 'strategy_usage_audit', repeat('2', 64), '{}'),
-    ('usage-frequency:' || repeat('3', 64), 'usage_frequency_slice', repeat('3', 64), '{}'),
-    ('strategy-data-quality-review:' || repeat('4', 64), 'strategy_data_quality_review', repeat('4', 64), '{}'),
-    ('graduation-attestation:' || repeat('5', 64), 'graduation_attestation', repeat('5', 64), '{}'),
-    ('concept-mapping:' || repeat('6', 64), 'concept-mapping', repeat('6', 64), '{}'),
-    -- The row shape that actually caused #615. `universe_plane` writes the ETF
-    -- into the kind and 0041 legitimises it with a LIKE, so the value carries
-    -- the ETF rather than being a fixed token.
-    ('universe-list:' || repeat('7', 64), 'universe-list:qqq', repeat('7', 64), '{}')
+select
+    seed.id_prefix || ':' || md5(seed.kind) || md5(seed.kind || 'replay-seed'),
+    seed.kind,
+    md5(seed.kind) || md5(seed.kind || 'replay-seed'),
+    '{}'::jsonb
+from (
+    values
+        ('registry-snapshot', 'registry_snapshot'),
+        ('research-catalog', 'research_catalog_manifest'),
+        ('snapshot', 'snapshot_manifest'),
+        ('release-manifest', 'release_manifest'),
+        ('capture-scope', 'capture_scope'),
+        ('capture-manifest', 'capture_manifest'),
+        ('capture-evaluation', 'capture_evaluation_report'),
+        ('trace-bundle', 'trace_bundle'),
+        ('strategy-usage-audit', 'strategy_usage_audit'),
+        ('usage-frequency', 'usage_frequency_slice'),
+        ('strategy-data-quality-review', 'strategy_data_quality_review'),
+        ('graduation-attestation', 'graduation_attestation'),
+        ('concept-mapping', 'concept-mapping'),
+        -- The row shape that actually caused #615: `universe_plane` writes the
+        -- ETF into the kind and 0041 legitimises it with a LIKE, so the value
+        -- carries the ETF rather than being a fixed token. runtime_contract.sql
+        -- seeds nine kinds and not this one, which is why it could not have
+        -- caught the incident.
+        ('universe-list', 'universe-list:qqq')
+) as seed(id_prefix, kind)
 on conflict (contract_id) do nothing;
 
 alter table staging.contract_objects enable trigger trg_contract_objects_append_only;
