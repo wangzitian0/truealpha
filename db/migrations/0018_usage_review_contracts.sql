@@ -1,43 +1,56 @@
 -- Issue #58: persist bounded usage views and reverse quality reviews only
 -- after the complete StrategyUsageAudit they reference has been stored.
 
+-- #615: append, never rebuild.
+--
+-- This block used to drop the kind constraint and re-add it from a literal
+-- list. 0038 and 0041 extend that same constraint ADDITIVELY — read what is
+-- there, append one clause, no-op when it is already present.
+-- `db/apply_migrations.sh` replays the WHOLE chain on every container boot, so
+-- on a database that has reached the end of the chain, rebuilding from a
+-- literal threw their clauses away and then validated the narrower list
+-- against rows that need the wider one.
+--
+-- That is what took llm-service down on 2026-08-17: one `universe-list:qqq`
+-- row, legal because 0041 allows it, made every boot abort here — 17 restart
+-- loops on production, 182 on staging, and Traefik drops an unhealthy backend,
+-- so /api/health, /health and /mcp all 404ed from app-web instead.
+-- Reproduced on an isolated database: fresh chain passes, insert the row,
+-- replay, abort. Fixed and verified the same way.
+--
+-- A first fix guarded this block with a plain "constraint exists -> return",
+-- which is right for 0017 (the creator) and wrong here: a fresh database then
+-- ended with 12 clauses instead of 14, silently dropping this migration's own
+-- two kinds. Caught by counting the clauses rather than by the chain passing.
 do $$
 declare
-    existing_constraint record;
+    existing_def text;
 begin
-    for existing_constraint in
-        select constraint_row.conname
-        from pg_constraint as constraint_row
-        join pg_class as table_row on table_row.oid = constraint_row.conrelid
-        join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
-        where schema_row.nspname = 'staging'
-          and table_row.relname = 'contract_objects'
-          and constraint_row.contype = 'c'
-          and pg_get_constraintdef(constraint_row.oid) like '%contract_kind%'
-    loop
-        execute format(
-            'alter table staging.contract_objects drop constraint %I',
-            existing_constraint.conname
-        );
-    end loop;
+    select pg_get_constraintdef(constraint_row.oid) into existing_def
+    from pg_constraint as constraint_row
+    join pg_class as table_row on table_row.oid = constraint_row.conrelid
+    join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
+    where schema_row.nspname = 'staging'
+      and table_row.relname = 'contract_objects'
+      and constraint_row.conname = 'contract_objects_kind_identity_check';
 
-    alter table staging.contract_objects
-    add constraint contract_objects_kind_identity_check check (
-        (contract_kind = 'registry_snapshot' and contract_id like 'registry-snapshot:%')
-        or (contract_kind = 'research_catalog_manifest' and contract_id like 'research-catalog:%')
-        or (contract_kind = 'snapshot_manifest' and contract_id like 'snapshot:%')
-        or (contract_kind = 'release_manifest' and contract_id like 'release-manifest:%')
-        or (contract_kind = 'capture_scope' and contract_id like 'capture-scope:%')
-        or (contract_kind = 'capture_manifest' and contract_id like 'capture-manifest:%')
-        or (contract_kind = 'capture_evaluation_report' and contract_id like 'capture-evaluation:%')
-        or (contract_kind = 'trace_bundle' and contract_id like 'trace-bundle:%')
-        or (contract_kind = 'strategy_usage_audit' and contract_id like 'strategy-usage-audit:%')
-        or (contract_kind = 'usage_frequency_slice' and contract_id like 'usage-frequency:%')
-        or (
-            contract_kind = 'strategy_data_quality_review'
-            and contract_id like 'strategy-data-quality-review:%'
-        )
-        or (contract_kind = 'graduation_attestation' and contract_id like 'graduation-attestation:%')
+    if existing_def is null then
+        raise exception 'contract_objects_kind_identity_check is missing; 0017 must apply first';
+    end if;
+
+    -- Idempotent: re-running must be a no-op, not a second pair of OR clauses.
+    if position('usage_frequency_slice' in existing_def) > 0 then
+        return;
+    end if;
+
+    execute 'alter table staging.contract_objects drop constraint contract_objects_kind_identity_check';
+    execute format(
+        'alter table staging.contract_objects add constraint contract_objects_kind_identity_check '
+        'check ((%s) or (contract_kind = %L and contract_id like %L) '
+        'or (contract_kind = %L and contract_id like %L))',
+        regexp_replace(existing_def, '^CHECK\s*\((.*)\)$', '\1'),
+        'usage_frequency_slice', 'usage-frequency:%',
+        'strategy_data_quality_review', 'strategy-data-quality-review:%'
     );
 end;
 $$;
