@@ -193,7 +193,14 @@ jobs:
           # route, tools/route_manifest.json) now reports git_sha, so this confirms
           # the deployed release is actually live -- not just that something answers.
           # Staging has no stable public URL yet (#11); scoped to prod only for now.
-          uv run --no-sync python tools/health_check.py \
+          # The job's env is dev-group-only (--no-install-workspace, line ~49), but
+          # health_check.py imports truealpha_runtime.deployed_release — every prod
+          # release since that import has FAILED at this step on ModuleNotFoundError
+          # while the deploy itself succeeded (v0.0.22 runs 32033840681/32035117182:
+          # the web shipped, the gate lied). --package installs the runtime member
+          # (which carries infra2-sdk); --with httpx satisfies default_http_get's
+          # lazy import, which the runtime's own deps do not pull.
+          uv run --package truealpha-runtime --with httpx python tools/health_check.py \
             "https://truealpha.club/api/health" \
             "$EXPECTED_RELEASE" \
             24
