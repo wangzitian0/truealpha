@@ -66,7 +66,12 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          for f in db/migrations/*.sql; do
+          # roles.sql is part of the pass, exactly as in the two above: the
+          # migrations rebuild views and reset grants, and roles.sql carries
+          # the permanent ones. Omitting it left the governed-research-access
+          # contract failing on "audit reader must receive only the filtered
+          # metadata view" — a permission state no boot ever has.
+          for f in db/migrations/*.sql db/roles.sql; do
             echo "== $f (3rd pass, with data)"
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
           done
