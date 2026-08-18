@@ -396,6 +396,36 @@ def build_report(
     }
 
 
+# The policy's first priority IS the primary; deriving it here means a re-prioritized
+# policy re-anchors served-day narrowing automatically (Copilot on #625).
+_PRIMARY_PRICE_SOURCE = RECONCILIATION_POLICY.source_priority[0]
+
+
+def _served_day_assertions(
+    entries: list[tuple[str, Any, Decimal, str, str, str, str, dict]],
+) -> list[tuple[str, Any, Decimal, str, str, str, str, dict]]:
+    """Only assertions from the served bar's trading day are comparable.
+
+    The mart serves the primary origin's newest bar, so that bar's day anchors the
+    cell. A second origin whose freshest bar is from a DIFFERENT day has not
+    published the served day at all — feeding that pair to the fusion engine
+    manufactures a value conflict out of a publication lag. 78/102 QQQ cells did
+    exactly this on 2026-08-18 (#622): Yahoo's overnight rebuild nulls the latest
+    session's close, its cells fell back to Friday, and Friday-vs-Monday graded
+    `conflict_abstained` as if the vendors disagreed about a price. Dropping the
+    other-day assertions lets the engine grade the day honestly instead:
+    single-origin -> INSUFFICIENT_INDEPENDENT_ORIGINS.
+
+    Anchor choice: the primary's newest day when the primary asserted anything
+    (that is the day whose value consumers read), else the newest day any origin
+    asserted (a primary-less cell is already insufficient; anchoring keeps the
+    grade attached to one day rather than a cross-day pair).
+    """
+    primary_days = [knowable_at for source_id, knowable_at, *_ in entries if source_id == _PRIMARY_PRICE_SOURCE]
+    anchor = max(primary_days, default=None) or max(knowable_at for _, knowable_at, *_ in entries)
+    return [entry for entry in entries if entry[1].date() == anchor.date()]
+
+
 def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) -> dict[str, dict[str, Any]]:
     """Run the accepted fusion engine over every market-price cell's assertions.
 
@@ -403,6 +433,9 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
     SourceAssertion; the declared policy reconciles them. Returns per-listing
     outcomes for the report payload. Single-assertion cells honestly resolve
     INSUFFICIENT_INDEPENDENT_ORIGINS — counting origins never reconciles values.
+    Assertions are first narrowed to the served bar's trading day
+    (`_served_day_assertions`) so a publication lag grades as a missing second
+    origin, never as a value conflict (#622).
     """
     status = conn.execute("select cutoff from mart.topt_capture_status where run_id = %s", (run_id,)).fetchone()
     if status is None:
@@ -450,6 +483,7 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
 
     outcomes: dict[str, dict[str, Any]] = {}
     for listing_id, entries in sorted(by_listing.items()):
+        entries = _served_day_assertions(entries)
         cell = ReconciliationCell(
             requirement_id=f"data-requirement:{canonical_sha256({'requirement': 'market-price:v1'})}",
             subject=SubjectRef(kind=SubjectKind.LISTING, id=listing_id),
