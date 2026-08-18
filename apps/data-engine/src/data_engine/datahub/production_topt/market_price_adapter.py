@@ -18,8 +18,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from truealpha_contracts import ObligationReasonCode, canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
@@ -170,6 +171,26 @@ class MarketPriceAdapter:
                 )
             )
         return tuple(found)
+
+
+def last_settled_session_date(cutoff: datetime) -> date:
+    """The newest US-session date whose CLOSE exists at `cutoff` — the only date a
+    daily close is honestly fetchable for.
+
+    Yahoo's chart endpoint includes the CURRENT session's in-progress bar, so a
+    mid-session capture that filters bars by calendar date asserts a not-yet-final
+    price as `close` (#637: the 2026-08-18 07:51 ET staging smoke captured all 21
+    cells this way, and every cell honestly degraded to single-origin because the
+    second origin serves only settled closes). A day's close is knowable from
+    16:00 America/New_York; before that, the newest settled session is the prior
+    calendar day (weekends/holidays resolve naturally — no bar exists for them, so
+    the fetcher's `<=` pick falls back to the last trading day). Derived from the
+    run's CUTOFF, never the wall clock, so a replayed tick reproduces its window.
+    """
+    at_market = cutoff.astimezone(ZoneInfo("America/New_York"))
+    if at_market.time() >= time(16, 0):
+        return at_market.date()
+    return at_market.date() - timedelta(days=1)
 
 
 def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:

@@ -77,6 +77,7 @@ from data_engine.datahub.production_topt.issuer_registry import resolve_issuer_c
 from data_engine.datahub.production_topt.market_price_adapter import (
     MarketPriceAdapter,
     MarketPriceTarget,
+    last_settled_session_date,
     yahoo_quote_fetcher,
 )
 from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
@@ -381,6 +382,9 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
     adapter re-derives it per cell and the generic executor never sees it at all.
     """
     cutoff_date = plan.cutoff.astimezone(UTC).date()
+    # Price targets get the last SETTLED session, not the calendar date: a
+    # mid-session run must not treat the in-progress bar as a close (#637).
+    price_cutoff_date = last_settled_session_date(plan.cutoff)
     tickers = {coordinate[3] for coordinate in plan.coordinates.values()}
     # A plane-published universe already RESOLVED its identities: issuer:cik ids
     # carry the CIK the refresh verified (with the EDGAR fallback for the SEC
@@ -416,7 +420,7 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
         if semantic_type == "market-price":
             price_targets[work_item_id] = MarketPriceTarget(
                 symbol=ticker,
-                cutoff=cutoff_date,
+                cutoff=price_cutoff_date,
                 issuer_id=issuer_id,
                 instrument_id=instrument_id,
                 listing_id=listing_id,

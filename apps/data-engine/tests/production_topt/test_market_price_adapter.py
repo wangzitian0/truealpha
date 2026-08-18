@@ -119,3 +119,33 @@ def test_end_to_end_through_executor() -> None:
         "raw_fetch",
         "normalized_observation",
     }
+
+
+def test_last_settled_session_date_excludes_the_running_session() -> None:
+    """#637: a daily close is knowable from 16:00 America/New_York, never during
+    the session — the 07:51 ET staging smoke asserted 21 in-progress bars as
+    closes and every cell honestly degraded to single-origin."""
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.production_topt.market_price_adapter import last_settled_session_date
+
+    pre_market = datetime(2026, 8, 18, 11, 51, tzinfo=UTC)  # 07:51 ET Tuesday
+    assert last_settled_session_date(pre_market).isoformat() == "2026-08-17"
+
+    mid_session = datetime(2026, 8, 18, 18, 30, tzinfo=UTC)  # 14:30 ET Tuesday
+    assert last_settled_session_date(mid_session).isoformat() == "2026-08-17"
+
+    after_close = datetime(2026, 8, 18, 22, 15, tzinfo=UTC)  # 18:15 ET Tuesday — the prod tick slot
+    assert last_settled_session_date(after_close).isoformat() == "2026-08-18"
+
+    at_the_bell = datetime(2026, 8, 18, 20, 0, tzinfo=UTC)  # 16:00 ET exactly
+    assert last_settled_session_date(at_the_bell).isoformat() == "2026-08-18"
+
+    # Winter (EST): 22:15 UTC is 17:15 ET — still after the close.
+    winter_tick = datetime(2026, 1, 13, 22, 15, tzinfo=UTC)
+    assert last_settled_session_date(winter_tick).isoformat() == "2026-01-13"
+
+    # A Saturday run settles to Friday-or-earlier via the fetcher's `<=` pick; the
+    # helper itself answers Saturday after any Friday close has long existed.
+    saturday_morning = datetime(2026, 8, 22, 11, 0, tzinfo=UTC)  # 07:00 ET Saturday
+    assert last_settled_session_date(saturday_morning).isoformat() == "2026-08-21"
