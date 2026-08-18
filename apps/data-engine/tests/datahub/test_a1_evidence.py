@@ -114,7 +114,7 @@ def test_a_report_meeting_every_objective_raises_no_objection() -> None:
         ("continuous_confidence", {"denominator_mean_confidence": "0.6999"}),
         # One canonical origin: nothing corroborated it (#344's missing second origin).
         (
-            "independent_origin_groups",
+            "corroborated_share",
             {
                 "reconciliation_cells": {
                     "listing:first": {"outcome": "insufficient_independent_origins", "origin_groups": 1}
@@ -124,11 +124,11 @@ def test_a_report_meeting_every_objective_raises_no_objection() -> None:
         # Two origins that DISAGREE (#535's after-hours shape). The cell abstains and
         # serves nothing, so its two origins corroborate nothing.
         (
-            "independent_origin_groups",
+            "corroborated_share",
             {"reconciliation_cells": {"listing:first": {"outcome": "conflict_abstained", "origin_groups": 2}}},
         ),
         # A report that graded no cell at all corroborates nothing either.
-        ("independent_origin_groups", {"reconciliation_cells": {}}),
+        ("corroborated_share", {"reconciliation_cells": {}}),
     ],
 )
 def test_a_report_missing_one_objective_objects_by_name(objective: str, overrides: dict[str, Any]) -> None:
@@ -138,8 +138,28 @@ def test_a_report_missing_one_objective_objects_by_name(objective: str, override
     assert unmet[0].required and unmet[0].observed
 
 
-def test_one_weak_cell_withholds_the_whole_run() -> None:
-    # The band is a property of every served cell, not of the majority of them.
+def test_one_abstained_cell_no_longer_freezes_a_corroborated_universe() -> None:
+    """#623's live shape: 20/21 agreed with one same-day abstain (LLY) is 0.952 —
+    above the accepted 0.95 share — so the head advances; the abstained cell is
+    served with its honest grade instead of holding everyone else's fresher data."""
+    cells = {f"listing:{i}": {"outcome": "agreed", "origin_groups": 2} for i in range(20)}
+    cells["listing:xnys:lly"] = {"outcome": "conflict_abstained", "origin_groups": 2}
+    assert unmet_objectives(_report(reconciliation_cells=cells)) == ()
+
+
+def test_a_mostly_uncorroborated_universe_still_holds_the_head() -> None:
+    """Take-5's shape (24/102 agreed = 0.235) stays refused under the share objective."""
+    cells = {f"listing:{i}": {"outcome": "agreed", "origin_groups": 2} for i in range(24)}
+    cells.update(
+        {f"listing:x{i}": {"outcome": "insufficient_independent_origins", "origin_groups": 1} for i in range(78)}
+    )
+    unmet = unmet_objectives(_report(reconciliation_cells=cells))
+    assert [item.objective for item in unmet] == ["corroborated_share"]
+
+
+def test_the_share_objective_scales_with_universe_size() -> None:
+    # In a two-cell universe one abstain is half the served surface (0.5 < 0.95) and
+    # still withholds the head — the share objective is not a fixed miss allowance.
     unmet = unmet_objectives(
         _report(
             reconciliation_cells={
@@ -148,7 +168,7 @@ def test_one_weak_cell_withholds_the_whole_run() -> None:
             }
         )
     )
-    assert [item.objective for item in unmet] == ["independent_origin_groups"]
+    assert [item.objective for item in unmet] == ["corroborated_share"]
 
 
 def test_a_malformed_report_fails_closed() -> None:
@@ -158,7 +178,7 @@ def test_a_malformed_report_fails_closed() -> None:
         "denominator_coverage",
         "availability",
         "continuous_confidence",
-        "independent_origin_groups",
+        "corroborated_share",
     }
     assert any(item.objective == "availability" for item in unmet_objectives(_report(availability="n/a")))
 
@@ -307,7 +327,7 @@ def test_a_run_missing_an_objective_leaves_the_head_and_still_persists_everythin
     registration = _register(connection, degraded_run, degraded)
 
     assert not registration.accepted
-    assert [item.objective for item in registration.unmet] == ["independent_origin_groups"]
+    assert [item.objective for item in registration.unmet] == ["corroborated_share"]
     # 1. the head did not move
     assert _head(connection, universe_id) == (accepted_run, 0)
     assert registration.sequence == 0  # the incumbent's sequence, not the refused run's

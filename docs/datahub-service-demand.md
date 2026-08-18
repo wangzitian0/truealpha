@@ -44,6 +44,12 @@ Its service objective is:
 - continuous confidence of at least 70 on the 0-100 presentation scale;
 - the `high` target band, which requires at least two canonical original-source
   groups; mirrors or resellers of the same origin do not increase this count;
+- a corroborated share of at least 95% of graded reconciliation cells reaching the
+  `high` band for the governed pointer to advance: a cell that abstained or lacks a
+  second origin is served with its honest grade, and only the share of corroborated
+  cells — not the weakest single cell — withholds the head. (Weakest-cell gating let
+  one symbol's 0.148%-vs-0.1%-tolerance miss freeze the whole universe's fresher,
+  fully corroborated data behind the previous head — truealpha#623, 2026-08-17.);
 - daily reports retaining denominator, terminal state, coverage, availability,
   freshness, confidence, source composition, conflicts, lineage, retries, and
   unavailable reasons;

@@ -60,6 +60,7 @@ _CORPUS_OBJECTIVES = ServiceObjectives(
     minimum_availability=ACCEPTED_SERVICE_OBJECTIVES.minimum_availability,
     minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
     minimum_independent_origin_groups=0,
+    minimum_corroborated_share=Decimal("0"),
 )
 
 
