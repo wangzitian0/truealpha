@@ -186,7 +186,11 @@ def _corroborated_share(cells: Any, *, minimum_origin_groups: int) -> Decimal:
     """
     if not isinstance(cells, Mapping) or not cells:
         return Decimal(0)
-    corroborated = sum(1 for cell in cells.values() if _cell_origin_groups(cell) >= minimum_origin_groups)
+    # Floor the bar at 1: `_cell_origin_groups` scores every non-AGREED cell 0, and a
+    # caller with `minimum_origin_groups=0` (the single-origin corpus objectives) must
+    # not turn that 0 into "corroborated" via `0 >= 0` (Copilot on #626).
+    minimum = max(minimum_origin_groups, 1)
+    corroborated = sum(1 for cell in cells.values() if _cell_origin_groups(cell) >= minimum)
     return Decimal(corroborated) / Decimal(len(cells))
 
 

@@ -374,3 +374,15 @@ def test_a_retried_tick_that_already_heads_the_pointer_advances_nothing(connecti
         ).fetchone()[0]
         == 1
     )
+
+
+def test_zero_minimum_origin_groups_never_counts_uncorroborated_cells() -> None:
+    """A single-origin objectives set (corpus: minimum_independent_origin_groups=0)
+    must not launder an abstained cell into the corroborated numerator through
+    `0 >= 0` (Copilot on #626) — corroboration is a property of AGREED cells only."""
+    from data_engine.datahub.a1_evidence import _corroborated_share
+
+    cells = {"listing:first": {"outcome": "conflict_abstained", "origin_groups": 2}}
+    assert _corroborated_share(cells, minimum_origin_groups=0) == Decimal(0)
+    agreed = {"listing:first": {"outcome": "agreed", "origin_groups": 1}}
+    assert _corroborated_share(agreed, minimum_origin_groups=0) == Decimal(1)

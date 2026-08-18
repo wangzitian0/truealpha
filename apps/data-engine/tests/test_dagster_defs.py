@@ -171,15 +171,15 @@ def test_a_withheld_pointer_names_the_failing_objective_in_op_metadata(monkeypat
         PointerRegistration(
             run_id="capture-run:" + "a" * 64,
             sequence=9,
-            unmet=(UnmetObjective(objective="independent_origin_groups", required="2", observed="0"),),
+            unmet=(UnmetObjective(objective="corroborated_share", required="0.95", observed="0.2353"),),
         ),
     )
 
     assert metadata["pointer_advanced"] is False
     assert metadata["pointer_sequence"] == 9  # the incumbent head, untouched
-    assert "independent_origin_groups" in metadata["unmet_service_objectives"]
-    assert "required >= 2" in metadata["unmet_service_objectives"]
-    assert "observed 0" in metadata["unmet_service_objectives"]
+    assert "corroborated_share" in metadata["unmet_service_objectives"]
+    assert "required >= 0.95" in metadata["unmet_service_objectives"]
+    assert "observed 0.2353" in metadata["unmet_service_objectives"]
 
 
 def test_an_accepted_pointer_reports_the_advance_it_made(monkeypatch) -> None:
