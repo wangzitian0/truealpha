@@ -396,7 +396,9 @@ def build_report(
     }
 
 
-_PRIMARY_PRICE_SOURCE = "yahoo-chart:v1"
+# The policy's first priority IS the primary; deriving it here means a re-prioritized
+# policy re-anchors served-day narrowing automatically (Copilot on #625).
+_PRIMARY_PRICE_SOURCE = RECONCILIATION_POLICY.source_priority[0]
 
 
 def _served_day_assertions(
