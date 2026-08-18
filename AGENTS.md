@@ -22,7 +22,8 @@ tests prove it, review and green CI gate the merge.
    workspace name (for example `[truealpha-factors]`) so lanes are visible. If two lanes
    need the same file, coordinate through the issue rather than racing; shared surfaces
    (migrations, registries, public exports, lockfiles) deserve a heads-up comment before
-   you touch them.
+   you touch them. A finding outside your lane is filed with its evidence and handed to
+   the owning lane — recording it is in scope, adopting it is not.
 4. **Before starting**: `git status --short --branch`, sync `main`, check open issues and
    PRs for the same work. The configured code-review process is every reviewer required by
    repository settings or explicitly requested on the PR. It is complete only when each has
@@ -47,10 +48,12 @@ tests prove it, review and green CI gate the merge.
    capability is invoked by a deployed path — reachable from the Dagster composition root
    (`dagster_defs.py`) or a deployed service/App entrypoint — on real captured data, with
    evidence posted on the issue: the deployed call site plus real-data output (SQL rows or
-   an HTTP response). Fixture data lives in tests only; fixture assets are named
-   `*_fixture` and are never scheduled or reachable from a deployed route. Code that
-   merely exists is not done: wire it into the deployed path or explicitly demote it on
-   the issue. Honest partial scope stays open with a scope note instead of closing.
+   an HTTP response). Reaching a read model is not reaching the reader: where a capability
+   has an owner-facing surface, name the page or response field that renders it (#284: PEG
+   reached `mart` and both read repositories while no page referenced it). Fixture data
+   lives in tests only; fixture assets are named `*_fixture` and are never scheduled or
+   reachable from a deployed route. Code that merely exists is not done: wire it into the
+   deployed path or explicitly demote it on the issue. Honest partial scope stays open with a scope note instead of closing.
    (vision.md: fixture-only tools or code existence are not completion evidence;
    drift audit #429, invariants I1–I4; root #434.)
 7. **Acceptance criteria are standing checks, and they cover the whole scope.** Two rules,
@@ -65,8 +68,14 @@ tests prove it, review and green CI gate the merge.
      turns red on the next regression. A one-time manual walk, a hand-run script, or a
      measurement taken on one production run satisfies rule 6's evidence requirement and
      still fails this one. State how the check is armed and where it lives.
-   Auto-closing an issue with `Closes #N` asserts both rules were evaluated. When an issue
-   carries a criterion a merge cannot prove — a user journey, a role-dependent view, a
+   - **A criterion must be able to fail where production calls.** A test that supplies an
+     argument the deployed caller omits proves the parameter, not the wiring — it is green
+     *because* it supplies what production does not. Assert through the deployed entry
+     point, and confirm the check goes red against the unfixed code before trusting it
+     (#284: two parser vintages computed nothing in either environment while every gate,
+     including the end-to-end test written to prove the path, stayed green).
+   Auto-closing an issue with `Closes #N` asserts all three rules were evaluated. When an
+   issue carries a criterion a merge cannot prove — a user journey, a role-dependent view, a
    deployed-environment state — reference it with a plain `#N` instead and close it by hand
    with a comment that walks the criteria in order.
 
@@ -109,6 +118,13 @@ Repository shape:
 - Point-in-time data distinguishes `valid_time` from `transaction_time` (knowable-at).
   Write `transaction_time` explicitly from a source property, never an insertion-clock
   default. `recorded_at` is ingestion audit time only.
+- A constant never stands in for a measurement. A run's shape (universe size, listing and
+  obligation counts), a record's time, and a field's freshness are derived from the run or
+  the source, never written down as a literal or a default. This is the repository's most
+  repeated defect shape, and each instance passes every test built on the founding
+  assumption: an insertion-clock `transaction_time`, a stamped `freshness`, a hardcoded
+  84-cell denominator that survived five serial fixes (#539), a growth window behind a
+  default-off flag (#284).
 - Never overwrite a point-in-time record. Restatements insert new rows and set
   `is_restatement`; they never update history in place. Parsed facts carry
   `mapping_version` so reparses remain distinguishable from restatements.
