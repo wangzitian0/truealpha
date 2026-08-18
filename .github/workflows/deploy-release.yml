@@ -45,8 +45,17 @@ jobs:
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
-      - name: Install the pinned SDK contract
-        run: uv sync --frozen --only-group dev --no-install-workspace
+      - name: Install the pinned SDK contract and the workspace
+        # --all-packages, not --no-install-workspace: three later steps run
+        # tools/*.py that import `truealpha_runtime`, and #585 moved the shared
+        # "what release is this environment serving" read into that workspace
+        # package. With the workspace excluded, `Confirm the deployed release is
+        # healthy` died at IMPORT time on the v0.0.22 production deploy —
+        # before it read or compared anything — and the surface walk was skipped
+        # as a consequence, so that release went out with no walk evidence
+        # (#616). --frozen still pins the SDK contract: verified that
+        # infra2-sdk resolves to 1.0.0 and uv.lock is unchanged.
+        run: uv sync --frozen --all-packages
       - name: Verify release evidence and render request
         id: request
         env:
