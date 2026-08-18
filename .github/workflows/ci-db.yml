@@ -50,6 +50,31 @@ jobs:
             echo "== $f (2nd pass)"
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
           done
+      # #615: the two passes above prove the DDL is syntactically re-runnable.
+      # They cannot prove it survives the data the system produces, because the
+      # database they replay over is EMPTY. 0017 and 0018 rebuilt the contract
+      # kind vocabulary from a literal list while 0038 and 0041 widen it, so on
+      # any database that had reached the end of the chain the replay narrowed
+      # the constraint and then failed to validate it — 17 llm-service restart
+      # loops on production and 182 on staging, from one legal row. Seed one
+      # object per legal kind, then replay a THIRD time.
+      - name: Seed one object per legal contract kind
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/contract_kind_replay_seed.sql
+      - name: Re-apply migrations over real rows (replay-with-data)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # roles.sql is part of the pass, exactly as in the two above: the
+          # migrations rebuild views and reset grants, and roles.sql carries
+          # the permanent ones. Omitting it left the governed-research-access
+          # contract failing on "audit reader must receive only the filtered
+          # metadata view" — a permission state no boot ever has.
+          for f in db/migrations/*.sql db/roles.sql; do
+            echo "== $f (3rd pass, with data)"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done
       - name: Assert runtime persistence contract
         env:
           PGPASSWORD: postgres

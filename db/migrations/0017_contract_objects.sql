@@ -24,6 +24,37 @@ do $$
 declare
     existing_constraint record;
 begin
+
+    -- #615: own the creation, never the recreation.
+    --
+    -- This block used to drop the kind constraint and re-add it from the
+    -- literal list below. 0038 and 0041 extend that same constraint
+    -- ADDITIVELY — they read what exists, append one clause, and no-op if it
+    -- is already there. `db/apply_migrations.sh` replays the WHOLE chain on
+    -- every container boot, so on any database that has reached the end of the
+    -- chain, this statement threw their clauses away and then validated the
+    -- narrower list against rows that need the wider one.
+    --
+    -- That is what took llm-service down on 2026-08-17. One `universe-list:qqq`
+    -- row — legal, 0041 allows it — made every boot abort here: 17 restart
+    -- loops on production, 182 on staging, and the service was unreachable
+    -- because Traefik drops an unhealthy backend. Reproduced on an isolated
+    -- database: fresh chain passes, insert the row, replay, abort.
+    --
+    -- Widening the vocabulary belongs in a NEW migration that appends, which is
+    -- what 0038 and 0041 already do correctly.
+    if exists (
+        select 1
+        from pg_constraint as constraint_row
+        join pg_class as table_row on table_row.oid = constraint_row.conrelid
+        join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
+        where schema_row.nspname = 'staging'
+          and table_row.relname = 'contract_objects'
+          and constraint_row.contype = 'c'
+          and constraint_row.conname = 'contract_objects_kind_identity_check'
+    ) then
+        return;
+    end if;
     alter table staging.contract_objects
         drop constraint if exists contract_objects_kind_identity_check;
     for existing_constraint in
