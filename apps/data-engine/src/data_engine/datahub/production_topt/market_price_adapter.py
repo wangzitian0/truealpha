@@ -188,9 +188,14 @@ def last_settled_session_date(cutoff: datetime) -> date:
     run's CUTOFF, never the wall clock, so a replayed tick reproduces its window.
     """
     at_market = cutoff.astimezone(ZoneInfo("America/New_York"))
-    if at_market.time() >= time(16, 0):
-        return at_market.date()
-    return at_market.date() - timedelta(days=1)
+    candidate = at_market.date() if at_market.time() >= time(16, 0) else at_market.date() - timedelta(days=1)
+    # Clamp to a weekday so the returned value IS a session date as named — a
+    # Saturday-evening cutoff must answer Friday, not Saturday (review on #638).
+    # Market holidays stay uncorrected without a calendar; the fetcher's `<=`
+    # max-pick falls back to the last real bar for those.
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
 
 
 def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:

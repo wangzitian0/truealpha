@@ -149,3 +149,16 @@ def test_last_settled_session_date_excludes_the_running_session() -> None:
     # helper itself answers Saturday after any Friday close has long existed.
     saturday_morning = datetime(2026, 8, 22, 11, 0, tzinfo=UTC)  # 07:00 ET Saturday
     assert last_settled_session_date(saturday_morning).isoformat() == "2026-08-21"
+
+
+def test_last_settled_session_date_never_returns_a_weekend() -> None:
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.production_topt.market_price_adapter import last_settled_session_date
+
+    saturday_evening = datetime(2026, 8, 22, 22, 0, tzinfo=UTC)  # 18:00 ET Saturday
+    assert last_settled_session_date(saturday_evening).isoformat() == "2026-08-21"
+    sunday_evening = datetime(2026, 8, 23, 22, 0, tzinfo=UTC)  # 18:00 ET Sunday
+    assert last_settled_session_date(sunday_evening).isoformat() == "2026-08-21"
+    monday_pre_market = datetime(2026, 8, 24, 11, 0, tzinfo=UTC)  # 07:00 ET Monday
+    assert last_settled_session_date(monday_pre_market).isoformat() == "2026-08-21"
