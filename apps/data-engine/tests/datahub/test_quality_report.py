@@ -296,3 +296,115 @@ def test_financial_branch_uses_its_own_numerator_for_the_domain_bound() -> None:
         pre_provision_profit="1000000",  # $25/employee — outside it
     )
     assert _plausibility_violations(fact) == ["per_employee_outside_domain"]
+
+
+def _price_entry(source_id: str, day: str, value: str):
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    origin = "origin:yahoo:v1" if source_id == "yahoo-chart:v1" else "origin:twelve-data:v1"
+    return (
+        source_id,
+        datetime.fromisoformat(day).replace(tzinfo=UTC),
+        Decimal("0.85"),
+        hashlib.sha256(f"{source_id}:{day}:{value}".encode()).hexdigest(),
+        "normalized-observation:" + hashlib.sha256(f"{source_id}{day}".encode()).hexdigest(),
+        "source-vintage:" + "a" * 64,
+        "raw-object:" + "b" * 64,
+        {"origin_group": origin, "value": value},
+    )
+
+
+def test_served_day_pairing_keeps_same_day_assertions_together() -> None:
+    from data_engine.datahub.quality_report import _served_day_assertions
+
+    same_day = [
+        _price_entry("yahoo-chart:v1", "2026-08-17", "1183.16"),
+        _price_entry("twelve-data:v1", "2026-08-17", "1184.91"),
+    ]
+    assert _served_day_assertions(same_day) == same_day
+
+
+def test_served_day_pairing_drops_the_other_days_assertion() -> None:
+    """#622: Yahoo's overnight rebuild nulls the latest close, its cell falls back to
+    Friday, and Friday-vs-Monday must grade as a missing second origin for the served
+    day — not as a value conflict. 78/102 QQQ cells on 2026-08-18."""
+    from data_engine.datahub.quality_report import _served_day_assertions
+
+    friday_yahoo = _price_entry("yahoo-chart:v1", "2026-08-14", "233.96")
+    monday_td = _price_entry("twelve-data:v1", "2026-08-17", "229.45")
+    assert _served_day_assertions([friday_yahoo, monday_td]) == [friday_yahoo]
+
+
+def test_served_day_pairing_anchors_on_newest_primary_day() -> None:
+    from data_engine.datahub.quality_report import _served_day_assertions
+
+    old_yahoo = _price_entry("yahoo-chart:v1", "2026-08-14", "233.96")
+    new_yahoo = _price_entry("yahoo-chart:v1", "2026-08-17", "234.10")
+    td = _price_entry("twelve-data:v1", "2026-08-17", "234.12")
+    assert _served_day_assertions([old_yahoo, new_yahoo, td]) == [new_yahoo, td]
+
+
+def test_served_day_pairing_without_primary_uses_newest_day() -> None:
+    from data_engine.datahub.quality_report import _served_day_assertions
+
+    stale_td = _price_entry("twelve-data:v1", "2026-08-14", "229.00")
+    fresh_td = _price_entry("twelve-data:v1", "2026-08-17", "229.45")
+    assert _served_day_assertions([stale_td, fresh_td]) == [fresh_td]
+
+
+def test_cross_day_pair_reconciles_insufficient_not_conflict() -> None:
+    """End-to-end through the real fusion engine: the narrowed single-origin cell
+    grades INSUFFICIENT_INDEPENDENT_ORIGINS, never CONFLICT_ABSTAINED."""
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.quality_report import RECONCILIATION_POLICY, _served_day_assertions
+    from truealpha_contracts import canonical_sha256
+    from truealpha_contracts.reconciliation import (
+        ReconciliationCell,
+        ReconciliationOutcome,
+        SourceAssertion,
+        reconcile_source_assertions,
+    )
+    from truealpha_contracts.universe import SubjectKind, SubjectRef
+
+    entries = _served_day_assertions(
+        [
+            _price_entry("yahoo-chart:v1", "2026-08-14", "233.96"),
+            _price_entry("twelve-data:v1", "2026-08-17", "229.45"),
+        ]
+    )
+    from decimal import Decimal
+
+    cell = ReconciliationCell(
+        requirement_id=f"data-requirement:{canonical_sha256({'requirement': 'market-price:v1'})}",
+        subject=SubjectRef(kind=SubjectKind.LISTING, id="listing:xnas:hon"),
+        field_name="close",
+        field_semantics_id=f"field-semantics:{canonical_sha256({'field': 'market-price-close:v1'})}",
+        unit="USD",
+        valid_from=datetime(2026, 8, 14, tzinfo=UTC).date(),
+        valid_to=datetime(2026, 8, 18, tzinfo=UTC).date(),
+    )
+    assertions = tuple(
+        SourceAssertion(
+            cell_id=cell.cell_id,
+            observation_id=obs_id,
+            source_id=source_id,
+            origin_group_id=extra["origin_group"],
+            knowable_at=knowable_at,
+            normalized_value_sha256=payload_sha,
+            numeric_value=Decimal(str(extra["value"])),
+            confidence_assessment_id=f"confidence-assessment:{payload_sha}",
+            confidence_score=confidence,
+            lineage_node_ids=(vintage_id, raw_object),
+            lineage_complete=True,
+        )
+        for source_id, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, extra in entries
+    )
+    result = reconcile_source_assertions(
+        cell=cell,
+        assertions=assertions,
+        policy=RECONCILIATION_POLICY,
+        cutoff=datetime(2026, 8, 18, 3, 51, tzinfo=UTC),
+    )
+    assert result.outcome == ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS
