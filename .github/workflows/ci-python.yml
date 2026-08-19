@@ -32,6 +32,9 @@ jobs:
       # #463 route-namespace manifest (llm-service side; ci-web runs the same
       # check for app-web). Stdlib-only.
       - run: python3 tools/check_route_manifest.py
+      # #284: the factor surface is frozen — public signatures (defaults included) and
+      # the datahub columns factors read. Stdlib only, no database, so it runs here.
+      - run: python3 tools/check_factor_contract.py
       - run: python3 tools/reachability_ratchet.py --check
       - run: python3 tools/sql_literal_gate.py
       - run: uv run ruff check apps libs
