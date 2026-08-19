@@ -52,6 +52,13 @@ def test_dispatch_and_wait_delegates_the_validated_request_to_the_sdk() -> None:
                         "id": 101,
                         "status": "completed",
                         "conclusion": "success",
+                        # infra2-sdk 1.2.0 correlates by the request_id the
+                        # receiver puts in the run title, so a fixture without
+                        # one is a run belonging to nobody and the SDK correctly
+                        # keeps waiting. The old fixture passed because the SDK
+                        # took whatever was newer than the watermark — which is
+                        # the defect that shut the release lane for a day.
+                        "display_title": (f"Deploy truealpha/app staging v1.2.3 abc [{request['request_id']}]"),
                         "html_url": f"https://github.com/{INFRA_REPOSITORY}/actions/runs/101",
                     }
                 ]
