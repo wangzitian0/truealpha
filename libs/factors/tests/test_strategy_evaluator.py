@@ -163,8 +163,19 @@ def test_in_band_issuer_is_not_rejected_above_band() -> None:
 _PEG_CUTOFF = datetime.fromisoformat("2026-03-31T00:00:00+00:00")
 
 
-def _peg_inputs(**overrides: str) -> IssuerInput:
-    """A complete issuer plus the two inputs module 1 adds."""
+# A four-year net-income series growing 25% a year, so the recency-weighted rate is also
+# 25% and the composed PEG stays the 0.5 these tests were written around. Since 0043 the
+# series crosses as periods rather than as a pre-computed scalar.
+_PEG_SERIES = {
+    "FY2099:FY:2022-01-01:2022-12-31": (Decimal("4096"), Decimal("0.9")),
+    "FY2099:FY:2023-01-01:2023-12-31": (Decimal("5120"), Decimal("0.9")),
+    "FY2099:FY:2024-01-01:2024-12-31": (Decimal("6400"), Decimal("0.9")),
+    "FY2099:FY:2025-01-01:2025-12-31": (Decimal("8000"), Decimal("0.9")),
+}
+
+
+def _peg_inputs(*, series: dict | None = None, **overrides: str) -> IssuerInput:
+    """A complete issuer plus the inputs module 1 adds."""
     records = {
         "gross_profit": (Decimal("40000"), Decimal("0.9")),
         "total_assets": (Decimal("100000"), Decimal("0.9")),
@@ -175,14 +186,33 @@ def _peg_inputs(**overrides: str) -> IssuerInput:
         # Market cap 100 x 1000 = 100,000 over net income 8,000 is a P/E of 12.5;
         # a 25% grower puts PEG at 0.5.
         "net_income": (Decimal("8000"), Decimal("0.9")),
-        "earnings_cagr_3y": (Decimal("0.25"), Decimal("0.9")),
     }
     for key, value in overrides.items():
         if value == "__absent__":
             records.pop(key, None)
         else:
             records[key] = (Decimal(value), Decimal("0.9"))
-    return IssuerInput(issuer_id="issuer:peg", records=records)
+    return IssuerInput(
+        issuer_id="issuer:peg",
+        records=records,
+        periodic_records={"net_income": _PEG_SERIES if series is None else series},
+    )
+
+
+# 5% a year: a slower grower on the same multiple, so a strictly larger PEG.
+_SLOW_SERIES = {
+    "FY2099:FY:2022-01-01:2022-12-31": (Decimal("6910.70"), Decimal("0.9")),
+    "FY2099:FY:2023-01-01:2023-12-31": (Decimal("7256.24"), Decimal("0.9")),
+    "FY2099:FY:2024-01-01:2024-12-31": (Decimal("7619.05"), Decimal("0.9")),
+    "FY2099:FY:2025-01-01:2025-12-31": (Decimal("8000"), Decimal("0.9")),
+}
+# Shrinking earnings: PEG is undefined, not negative.
+_DECLINING_SERIES = {
+    "FY2099:FY:2022-01-01:2022-12-31": (Decimal("12000"), Decimal("0.9")),
+    "FY2099:FY:2023-01-01:2023-12-31": (Decimal("10000"), Decimal("0.9")),
+    "FY2099:FY:2024-01-01:2024-12-31": (Decimal("9000"), Decimal("0.9")),
+    "FY2099:FY:2025-01-01:2025-12-31": (Decimal("8000"), Decimal("0.9")),
+}
 
 
 def test_the_decision_carries_peg_when_module_1s_inputs_are_present() -> None:
@@ -200,7 +230,7 @@ def test_a_missing_growth_rate_leaves_peg_absent_without_excluding_the_issuer() 
     eligible — otherwise landing the factor would silently move the portfolio.
     """
     decision = evaluate_cutoff(
-        [_peg_inputs(earnings_cagr_3y="__absent__")],
+        [_peg_inputs(series={})],
         definition=_definition(),
         cutoff_at=_PEG_CUTOFF,
         risk_free_rate=Decimal("0"),
@@ -216,7 +246,7 @@ def test_a_missing_growth_rate_leaves_peg_absent_without_excluding_the_issuer() 
 def test_a_non_positive_growth_rate_yields_no_peg_rather_than_a_negative_one() -> None:
     # A shrinking issuer must not read as "cheap" through a negative denominator.
     decision = evaluate_cutoff(
-        [_peg_inputs(earnings_cagr_3y="-0.1")],
+        [_peg_inputs(series=_DECLINING_SERIES)],
         definition=_definition(),
         cutoff_at=_PEG_CUTOFF,
         risk_free_rate=Decimal("0"),
@@ -240,7 +270,8 @@ def test_peg_rank_orders_by_peg_without_touching_selection() -> None:
         # Same everything except a weaker growth rate, so a higher (worse) PEG.
         IssuerInput(
             issuer_id="issuer:slow",
-            records={**_peg_inputs().records, "earnings_cagr_3y": (Decimal("0.05"), Decimal("0.9"))},
+            records=_peg_inputs().records,
+            periodic_records={"net_income": _SLOW_SERIES},
         ),
     ]
     decisions = rank_and_select(
@@ -260,7 +291,7 @@ def test_an_issuer_without_a_peg_gets_no_peg_rank() -> None:
     definition = _definition()
     decisions = rank_and_select(
         evaluate_cutoff(
-            [_peg_inputs(earnings_cagr_3y="__absent__")],
+            [_peg_inputs(series={})],
             definition=definition,
             cutoff_at=_PEG_CUTOFF,
             risk_free_rate=Decimal("0"),

@@ -17,7 +17,7 @@ never read (#429 invariant I2).
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -41,8 +41,13 @@ _STRATEGY_FINANCIAL_KEYS = (
     "revenue",
     "shares_outstanding",
     "net_income",
-    "earnings_cagr_3y",
 )
+
+# Keys whose value describes a fiscal PERIOD rather than an instant, so one issuer lands
+# several rows per cutoff — one per period — distinguished by `fiscal_period` (0043).
+# `earnings_cagr_3y` used to be here as a scalar; the series it was reduced from now
+# travels instead and `factors.base.peg` does the reducing (init.md rule 2).
+_STRATEGY_PERIODIC_KEYS = {"net_income": "net_income_by_period"}
 
 
 def load_strategy_definition() -> LargeModelValueV0Definition:
@@ -105,26 +110,36 @@ def seed_strategy_inputs_from_capture(
         # consume a figure that was not knowable then and no constraint would object. That
         # matters most for a derived multi-period input like `earnings_cagr_3y`, whose
         # basis spans several filings (#284).
-        inputs: list[tuple[str, str, Decimal, datetime]] = []
+        inputs: list[tuple[str, str, Decimal, datetime, str | None]] = []
         if issuer_id in financial:
             _listing, payload, confidence, observed_at = financial[issuer_id]
             for key in _STRATEGY_FINANCIAL_KEYS:
                 value = payload.get(key)
                 if value is not None:
-                    inputs.append((key, value, confidence, observed_at))
+                    inputs.append((key, value, confidence, observed_at, None))
+            for key, payload_key in _STRATEGY_PERIODIC_KEYS.items():
+                # The period tag mirrors staging's own encoding so `factors.base.peg`
+                # parses one shape wherever the series came from. Only the end date is
+                # known here, and an annual period's start is its end less a year; the
+                # factor re-checks the duration floor rather than trusting the tag.
+                for period_end, value in sorted((payload.get(payload_key) or {}).items()):
+                    end = date.fromisoformat(period_end)
+                    start = end.replace(year=end.year - 1) + timedelta(days=1)
+                    tag = f"FY{end.year}:FY:{start.isoformat()}:{end.isoformat()}"
+                    inputs.append((key, value, confidence, observed_at, tag))
         if issuer_id in price:
             _listing, payload, confidence, observed_at = price[issuer_id]
             close = payload.get("close")
             if close is not None:
-                inputs.append(("last_close", close, confidence, observed_at))
-        for input_key, value, confidence, knowable_at in inputs:
+                inputs.append(("last_close", close, confidence, observed_at, None))
+        for input_key, value, confidence, knowable_at, fiscal_period in inputs:
             connection.execute(
                 """
                 insert into staging.strategy_backtest_inputs
-                    (issuer_id, cutoff_at, input_key, value, confidence, knowable_at)
-                values (%s, %s, %s, %s, %s, %s)
+                    (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, fiscal_period)
+                values (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (issuer_id, cutoff, input_key, value, confidence, knowable_at),
+                (issuer_id, cutoff, input_key, value, confidence, knowable_at, fiscal_period),
             )
             written += 1
     return written

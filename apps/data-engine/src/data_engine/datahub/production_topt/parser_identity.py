@@ -36,6 +36,7 @@ PARSER_VERSION_HISTORY = (
     "production-topt-live-parser:v5",
     "production-topt-live-parser:v6",
     "production-topt-live-parser:v7",
+    "production-topt-live-parser:v8",
 )
 MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v1",
@@ -45,6 +46,7 @@ MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v5",
     "production-topt-live-map:v6",
     "production-topt-live-map:v7",
+    "production-topt-live-map:v8",
 )
 
 PARSER_VERSION = PARSER_VERSION_HISTORY[-1]
@@ -108,3 +110,17 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # Both land in one vintage because v7 was never deployed: no observation anywhere carries
 # it, so there is no v6/v7 boundary in the warehouse to keep clean between them, and (1) is
 # unobservable in production without (2).
+
+# v7 -> v8 (#284): the payload stops carrying `earnings_cagr_3y` and its two endpoints and
+# carries `net_income_by_period` instead -- the annual series itself. The rate is no longer
+# computed here at all; `factors.base.peg` reduces the series, which is where init.md rule 2
+# says factor arithmetic lives. It ran in this adapter only because the input transport had
+# no period axis and a series could not cross; migration 0043 gives it one.
+#
+# The published PEG values do NOT move: the moved arithmetic is bit-identical, verified
+# against the adapter implementation over the real JNJ, AVGO, steady, loss-year and
+# missing-year shapes before the old one was deleted. It still takes a version because a
+# v7 payload and a v8 payload answer different questions -- v7 asserts a rate, v8 asserts
+# the observations a rate is derived from -- and `knowable_at` now spans EVERY period in
+# the series rather than the window's two endpoints, which is a different claim about when
+# the payload became knowable (and the PIT obligation #284 named).

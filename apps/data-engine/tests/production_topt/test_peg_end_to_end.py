@@ -20,7 +20,7 @@ real database rather than asserting layer by layer.
 from __future__ import annotations
 
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import psycopg
@@ -84,16 +84,15 @@ def _company_facts() -> dict:
 
 def test_a_vendor_payload_becomes_a_peg_the_read_query_serves(connection) -> None:
     # 1. The adapter reduces the annual series the payload already carries.
-    bundle = build_bundle(_company_facts(), _CUTOFF.date(), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is not None, "the adapter must derive the growth basis"
+    bundle = build_bundle(_company_facts(), _CUTOFF.date(), OperatingBranch.NON_FINANCIAL)
+    assert bundle.net_income_by_period, "the adapter must carry the annual series"
     # Yearly rates 25%, 30% and 23.08%, weighted 1:2:3 toward the present -> 25.71%.
     # An endpoint CAGR would have said 25.99%; the owner-chosen weighting (2026-08-17)
     # discounts the older acceleration.
-    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2571")
     assert bundle.net_income == Decimal("16000")
     # The window endpoints travel with it, so the rate is auditable downstream.
-    assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
-    assert bundle.earnings_cagr_latest_period_end == date(2025, 12, 31)
+    assert min(bundle.net_income_by_period) == date(2022, 12, 31)
+    assert max(bundle.net_income_by_period) == date(2025, 12, 31)
     # The PIT obligation strategy participation adds: the rate cannot be knowable before
     # the filings behind it. 2025's figure was filed 2026-02-15.
     assert bundle.knowable_at is not None and bundle.knowable_at.date() >= date(2026, 2, 15)
@@ -109,7 +108,17 @@ def test_a_vendor_payload_becomes_a_peg_the_read_query_serves(connection) -> Non
             "shares_outstanding": (Decimal("1000"), Decimal("0.92")),
             "last_close": (Decimal("100"), Decimal("0.85")),
             "net_income": (bundle.net_income, Decimal("0.92")),
-            "earnings_cagr_3y": (bundle.earnings_cagr, Decimal("0.92")),
+        },
+        # The series crosses as periods since 0043, and the factor -- not this adapter --
+        # reduces it. Tagged exactly as the bridge tags it.
+        periodic_records={
+            "net_income": {
+                f"FY{end.year}:FY:{end.replace(year=end.year - 1) + timedelta(days=1)}:{end}": (
+                    value,
+                    Decimal("0.92"),
+                )
+                for end, value in bundle.net_income_by_period.items()
+            }
         },
     )
     [decision] = evaluate_cutoff(

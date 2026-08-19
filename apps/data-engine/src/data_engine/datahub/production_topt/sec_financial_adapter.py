@@ -25,10 +25,10 @@ port (#70), never as a branch in generic capture code.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation, localcontext
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from factors.production_topt import OperatingBranch
@@ -55,16 +55,6 @@ from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION,
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
 
-# Matches libs/factors' factor arithmetic so a rate derived here and a ratio computed
-# downstream cannot disagree on rounding.
-_DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
-
-# How far a candidate base period may sit from the requested window and still be used.
-# 52/53-week calendars drift by up to a week a year, and a fiscal year end moves within a
-# month or so after a calendar change; 45 days absorbs both while still refusing a 4-year
-# gap standing in for a 3-year window (which is 365 days out, not 45).
-_WINDOW_TOLERANCE_DAYS = 45
-
 # How far before the cutoff a share count may have been measured and still be used.
 #
 # For a multi-class issuer, company-facts drops the dimensional per-class share facts and
@@ -80,22 +70,6 @@ _WINDOW_TOLERANCE_DAYS = 45
 # fifteen. A tighter, better-calibrated bound belongs with the vintage-carrying read path
 # (#530) — this one only has to make an order-of-magnitude error impossible to publish.
 _MAX_SHARES_STALENESS_DAYS = 730
-
-# The PEG growth window (#284), and the reason `build_bundle` takes no value meaning "skip
-# the growth basis".
-#
-# It used to: `earnings_cagr_years: int | None = None`, where None returned an empty earnings
-# series. `sec_financial_fetcher` -- the ONLY deployed caller -- never passed it, so
-# `net_income` and `earnings_cagr_3y` shipped as payload keys whose value was structurally
-# null for all 20 issuers, in both environments, in runs that reported SUCCESS. Nothing was
-# red: the keys existed, the contract accepted them, the mart column existed, `peg` was
-# simply NULL everywhere. The only caller that passed the parameter was the end-to-end test
-# written to prove the path worked, which is how a test can be greener than production.
-#
-# So the window is a default rather than a request, and a caller that says nothing gets the
-# growth basis instead of silence. The payload key `earnings_cagr_3y` names this number;
-# `test_the_payload_key_names_the_window_it_measures` fails if the two ever disagree.
-EARNINGS_CAGR_YEARS = 3
 
 
 @dataclass(frozen=True)
@@ -128,20 +102,22 @@ class FinancialFactsBundle:
     # revenue" is a coincidence for some issuers and the substitution must be auditable
     # (#533). The adapter refuses it for industries the proxy was not approved for.
     gross_profit_is_revenue_proxy: bool = False
-    # Module 1 (PEG) needs multi-period earnings, and company-facts already carries every
-    # annual period. Deriving the compound rate HERE means PEG needs no new data plane:
-    # `staging.financial_facts` is empty in Production with no reachable writer (#530),
-    # and the two defects in that plane (#572) do not apply to this path -- net income is
-    # split-immune, and `annual_values_by_period_end` already refuses periods shorter than
-    # `_ANNUAL_MINIMUM_DAYS`, which is what makes a six-month row a growth observation.
     # The latest annual net income, which module 1's multiple divides the market cap by.
-    # Carried alongside the rate because both halves of PEG must sit on one earnings basis.
     net_income: Decimal | None = None
-    earnings_cagr: Decimal | None = None
-    # Both endpoints, so the window behind the rate is auditable rather than implied, and
-    # so a consumer can check the rate was not built from a filing later than the cutoff.
-    earnings_cagr_base_period_end: date | None = None
-    earnings_cagr_latest_period_end: date | None = None
+    # Every annual net-income period knowable at the cutoff, period end -> value.
+    #
+    # This adapter used to reduce that series to a single compound rate and ship the
+    # scalar, because `staging.strategy_backtest_inputs` was keyed (issuer, cutoff,
+    # input_key) with no period axis and a series simply could not cross. The reduction is
+    # factor arithmetic, so it was computation in L0 -- exactly what init.md rule 2 and the
+    # AGENTS.md red line forbid, and it was only there because the transport was too narrow
+    # to express the alternative. The period axis (0043) removes that excuse: the series
+    # crosses whole and `factors.base.peg` reduces it.
+    #
+    # `annual_values_by_period_end` has already applied the point-in-time filter and the
+    # `_ANNUAL_MINIMUM_DAYS` duration floor, so what travels is annual periods that were
+    # knowable at the cutoff -- the factor never re-selects a vintage (init.md rule 3).
+    net_income_by_period: Mapping[date, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -444,7 +420,6 @@ def build_bundle(
     *,
     raw_bytes: bytes | None = None,
     ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
-    earnings_cagr_years: int = EARNINGS_CAGR_YEARS,
 ) -> FinancialFactsBundle:
     """Extract the PIT financial-fact bundle from a company-facts payload.
 
@@ -485,7 +460,6 @@ def build_bundle(
     # series is here and the bundle simply stops discarding it.
     earnings_periods = resolve_field(facts, ruleset, "net_income", cutoff)
     net_income = _latest(earnings_periods) if earnings_periods else None
-    earnings_cagr, cagr_base, cagr_latest = _earnings_cagr(earnings_periods, earnings_cagr_years)
     # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
     # the branch only decides WHICH versioned extraction asserts the operating numerator:
     # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
@@ -497,7 +471,11 @@ def build_bundle(
         profit = insurance_pre_claims_profit(facts, cutoff, ruleset)
     else:
         profit, is_revenue_proxy = _gross_profit_resolved(facts, cutoff, ruleset)
-    resolved = [datum for datum in (profit, assets, shares, revenue, cagr_base, cagr_latest) if datum is not None]
+    # EVERY earnings period the series carries, not just the window's two ends. The rate
+    # downstream rests on all of them, so the payload is knowable only once the latest of
+    # them was filed — the PIT obligation #284 named and could not satisfy while only the
+    # endpoints travelled.
+    resolved = [datum for datum in (profit, assets, shares, revenue, *earnings_periods.values()) if datum is not None]
     knowable = max((datum.filed for datum in resolved), default=None)
     return FinancialFactsBundle(
         gross_profit=_v(profit),
@@ -517,9 +495,7 @@ def build_bundle(
         shares_period_end=shares_period_end,
         gross_profit_is_revenue_proxy=is_revenue_proxy,
         net_income=_v(net_income),
-        earnings_cagr=earnings_cagr,
-        earnings_cagr_base_period_end=None if cagr_base is None else cagr_base.period_end,
-        earnings_cagr_latest_period_end=None if cagr_latest is None else cagr_latest.period_end,
+        net_income_by_period={end: datum.value for end, datum in sorted(earnings_periods.items())},
     )
 
 
@@ -602,9 +578,10 @@ class SecFinancialFactAdapter:
             "revenue_period_end": _d(bundle.revenue_period_end),
             "shares_period_end": _d(bundle.shares_period_end),
             "net_income": _s(bundle.net_income),
-            "earnings_cagr_3y": _s(bundle.earnings_cagr),
-            "earnings_cagr_base_period_end": _d(bundle.earnings_cagr_base_period_end),
-            "earnings_cagr_latest_period_end": _d(bundle.earnings_cagr_latest_period_end),
+            # Sorted so the payload hash depends on the series, not on dict insertion order.
+            "net_income_by_period": {
+                end.isoformat(): _s(value) for end, value in sorted(bundle.net_income_by_period.items())
+            },
         }
         return FetchSuccess(
             raw=RawResponse(
@@ -622,61 +599,10 @@ class SecFinancialFactAdapter:
         )
 
 
-def _confidence(payload: dict[str, str | None]) -> Decimal:
+def _confidence(payload: Mapping[str, Any]) -> Decimal:
     """Per-source-class confidence prior (#207/#404); the calibrated formula is #337."""
     present = sum(payload.get(field) is not None for field in ("gross_profit", "total_assets", "shares_outstanding"))
     return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
-
-
-def _earnings_cagr(values: dict[date, _Datum], years: int) -> tuple[Decimal | None, _Datum | None, _Datum | None]:
-    """The recency-weighted annual growth rate over `years`, plus the window's endpoints.
-
-    Owner decision (2026-08-17): three years, weights rising toward the present. So this is
-    NOT an endpoint CAGR. An endpoint rate is not equal-weighted, it is zero-weighted on
-    everything between the two ends — a collapse and recovery inside the window leaves it
-    unchanged, which is exactly the shape a recency preference is meant to distinguish. The
-    rate is the weighted mean of the year-over-year rates, weighted 1..n oldest to newest.
-
-    Every year in the window must be present. Dropping a missing one would reweight the
-    survivors without saying so, and the published number would no longer be the thing its
-    `mapping_version` claims. A non-positive observation anywhere in the window resolves to
-    None for the same reason it does at the endpoints: a rate across a sign change is not a
-    growth rate, and here it would additionally dominate the mean.
-
-    Elapsed days, not calendar years, because the calendar year of a period END is not the
-    fiscal year. JNJ's FY2021 ends 2022-01-02, so matching on `end.year` selected a period
-    1456 days back and reported it as a three-year rate. Amazon fails differently: its
-    10-Qs publish trailing-twelve-month windows, so several "annual" periods share one
-    calendar year and a year-match picked among them arbitrarily.
-    """
-    if not values or years < 1:
-        return None, None, None
-    latest_end = max(values)
-
-    def nearest(target_days: int) -> date | None:
-        candidates = [end for end in values if end <= latest_end]
-        best = min(candidates, key=lambda end: abs((latest_end - end).days - target_days), default=None)
-        if best is None or abs((latest_end - best).days - target_days) > _WINDOW_TOLERANCE_DAYS:
-            return None
-        return best
-
-    # One observation per year boundary, newest first: 0, 1 .. years back.
-    steps = [nearest(round(offset * 365.25)) for offset in range(years + 1)]
-    if any(end is None for end in steps) or len({end for end in steps}) != years + 1:
-        return None, None, None
-    ordered = [values[end] for end in reversed(steps)]  # type: ignore[index]
-    base, latest = ordered[0], ordered[-1]
-    if any(datum.value <= 0 for datum in ordered):
-        return None, base, latest
-
-    with localcontext(_DECIMAL_CONTEXT):
-        weighted, total_weight = Decimal(0), Decimal(0)
-        for index in range(1, len(ordered)):
-            weight = Decimal(index)  # 1 for the oldest step, `years` for the newest
-            weighted += weight * (ordered[index].value / ordered[index - 1].value - Decimal(1))
-            total_weight += weight
-        rate = weighted / total_weight
-    return rate, base, latest
 
 
 def _fresh_shares(datum: _Datum | None, cutoff: date) -> _Datum | None:

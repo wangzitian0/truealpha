@@ -79,6 +79,15 @@ class FinancialFactPayload(_FrozenModel):
     # auditable and a consumer can confirm the rate was not built from a filing later than
     # the cutoff — the PIT obligation that strategy participation adds.
     net_income: Decimal | None = None
+    # The annual net-income SERIES, period end (ISO date) -> value. This is the field that
+    # lets a multi-period factor exist in `libs/factors` at all: the transport used to
+    # carry only the scalar below, so any factor needing history had to be pre-reduced in
+    # this adapter — computation in L0/L1, which init.md rule 2 and the AGENTS.md red line
+    # both forbid. The series travels; the factor reduces it.
+    net_income_by_period: dict[str, Decimal] | None = None
+    # Superseded by `net_income_by_period` at parser v8 and no longer written. Kept on the
+    # contract because observations captured under v5-v7 carry them and must still
+    # validate — a point-in-time payload is never rewritten.
     earnings_cagr_3y: Decimal | None = None
     earnings_cagr_base_period_end: date | None = None
     earnings_cagr_latest_period_end: date | None = None
@@ -97,6 +106,17 @@ class FinancialFactPayload(_FrozenModel):
     @classmethod
     def reject_binary_float(cls, value: Any) -> Any:
         return _reject_float(value)
+
+    @field_validator("net_income_by_period", mode="before")
+    @classmethod
+    def reject_binary_float_in_series(cls, value: Any) -> Any:
+        """The scalar validator above cannot see inside a mapping, and a series is where a
+        float would be easiest to smuggle in — one per period, none of them individually
+        obvious in a payload diff."""
+        if isinstance(value, dict):
+            for entry in value.values():
+                _reject_float(entry)
+        return value
 
 
 class MarketPricePayload(_FrozenModel):
