@@ -408,3 +408,29 @@ def test_cross_day_pair_reconciles_insufficient_not_conflict() -> None:
         cutoff=datetime(2026, 8, 18, 3, 51, tzinfo=UTC),
     )
     assert result.outcome == ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS
+
+
+def test_factor_availability_counts_subjects_with_complete_input_sets() -> None:
+    """#641 D4: the headline availability equal-weights all semantics (89 missing
+    financial-fact cells diluted 4:1 read as 0.78 while 12/101 issuers were
+    factor-computable). The factor-level view judges each subject by its factor's
+    OWN required semantics — and only those."""
+    from data_engine.datahub.quality_report import _factor_availability
+
+    usable = {
+        "listing:a": {"financial-fact": True, "market-price": True},
+        "listing:b": {"financial-fact": False, "market-price": True},  # headcount hole
+        "listing:c": {"financial-fact": True},  # price missing — irrelevant to GPPE
+    }
+    out = _factor_availability(usable)
+    gppe = out["gross_profit_per_employee"]
+    assert gppe["required_semantics"] == ["financial-fact"]
+    assert (gppe["complete_subjects"], gppe["universe_subjects"]) == (2, 3)
+    assert gppe["ratio"] == "0.6667"
+
+
+def test_factor_availability_with_no_graded_subjects_is_zero() -> None:
+    from data_engine.datahub.quality_report import _factor_availability
+
+    out = _factor_availability({})
+    assert out["gross_profit_per_employee"]["ratio"] == "0"

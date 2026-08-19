@@ -115,6 +115,40 @@ _FINANCIAL_FACT_OPERATING_NUMERATOR = {
 }
 
 
+# Which semantics each SERVED factor needs usable, per subject, before the factor
+# can produce a value for that subject (#641 D4). The headline `availability` is an
+# equal-weight average over ALL semantics, so 89 missing financial-fact cells hide
+# behind identity/membership/price at 4:1 — 0.78 while only 12 of 101 issuers were
+# factor-computable. This block states the consumer-relevant number.
+_FACTOR_REQUIRED_SEMANTICS: dict[str, tuple[str, ...]] = {
+    "gross_profit_per_employee": ("financial-fact",),
+}
+
+
+def _factor_availability(usable_by_subject: dict[str, dict[str, bool]]) -> dict[str, dict[str, Any]]:
+    """Per-factor availability over subjects: a subject counts only when EVERY
+    semantic the factor requires is usable for it. Subjects lacking any required
+    obligation count in the denominator — absence is a shortfall, not an exemption."""
+    out: dict[str, dict[str, Any]] = {}
+    for factor_id, required in _FACTOR_REQUIRED_SEMANTICS.items():
+        universe = [
+            subject for subject, semantics in usable_by_subject.items() if any(sem in semantics for sem in required)
+        ]
+        complete = [
+            subject for subject in universe if all(usable_by_subject[subject].get(sem, False) for sem in required)
+        ]
+        ratio = (
+            (Decimal(len(complete)) / Decimal(len(universe))).quantize(Decimal("0.0001")) if universe else Decimal(0)
+        )
+        out[factor_id] = {
+            "required_semantics": list(required),
+            "complete_subjects": len(complete),
+            "universe_subjects": len(universe),
+            "ratio": str(ratio),
+        }
+    return out
+
+
 def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> bool:
     """Does this observation's normalized payload carry the value its cell was requested for?
 
@@ -295,6 +329,7 @@ def build_report(
         """
         select ob.obligation_id,
                regexp_replace(ob.capture_requirement_id, ':v1$', '')      as semantic_type,
+               ob.subject_id                                              as obligation_subject,
                o.subject_id,
                o.observation_id,
                p.normalized_payload,
@@ -320,9 +355,11 @@ def build_report(
     pointers = _PointerDereferencer(object_store)
     cells: dict[str, _Cell] = {}
     plausibility: dict[str, dict[str, Any]] = {}
+    usable_by_subject: dict[str, dict[str, bool]] = {}
     for (
         obligation_id,
         semantic_type,
+        obligation_subject,
         subject_id,
         observation_id,
         payload,
@@ -334,6 +371,8 @@ def build_report(
         content_type,
     ) in rows:
         cell = cells.setdefault(obligation_id, _Cell())
+        subject_semantics = usable_by_subject.setdefault(str(obligation_subject), {})
+        subject_semantics.setdefault(semantic_type, False)
         if observation_id is None:
             continue
         cell.fresh = cell.fresh or freshness_state == "fresh"
@@ -341,6 +380,8 @@ def build_report(
             cell.confidence = confidence if cell.confidence is None else max(cell.confidence, confidence)
         if not cell.available:
             cell.available = _has_usable_value(semantic_type, payload)
+        if cell.available:
+            subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
             try:
                 violations = _plausibility_violations(FinancialFactPayload.model_validate(payload))
@@ -392,6 +433,7 @@ def build_report(
         "independent_reconciliation": ratio(independent),
         "lineage_completeness": ratio(lineage_complete),
         "denominator_mean_confidence": str(Decimal(mean_conf).quantize(Decimal("0.0001"))),
+        "factor_availability": _factor_availability(usable_by_subject),
         "complete": bool(status[7]),
     }
 
