@@ -366,3 +366,24 @@ def test_two_different_releases_never_queue_behind_each_other() -> None:
         "staging and prod for one version would serialise behind each other"
     )
     assert concurrency["cancel-in-progress"] is False, "a retry must wait for the in-flight deploy, never cancel it"
+
+
+def test_a_cache_step_can_actually_save() -> None:
+    """`actions/cache` needs `actions: write` to populate. With read-only it
+    restores, misses every time, and reports success — an optimisation that
+    measures as working and does nothing (review).
+
+    Checked per job rather than at the workflow level, because the grant belongs
+    on the job that caches and nowhere wider.
+    """
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for name, job in (workflow.get("jobs") or {}).items():
+            steps = job.get("steps") or []
+            if not any("actions/cache" in str(step.get("uses", "")) for step in steps):
+                continue
+            granted = {**(workflow.get("permissions") or {}), **(job.get("permissions") or {})}
+            assert granted.get("actions") == "write", (
+                f"{path.name} job {name!r} caches but has actions={granted.get('actions')!r}; "
+                f"the cache would restore and never save"
+            )
