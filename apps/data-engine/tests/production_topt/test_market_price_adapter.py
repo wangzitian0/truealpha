@@ -162,3 +162,21 @@ def test_last_settled_session_date_never_returns_a_weekend() -> None:
     assert last_settled_session_date(sunday_evening).isoformat() == "2026-08-21"
     monday_pre_market = datetime(2026, 8, 24, 11, 0, tzinfo=UTC)  # 07:00 ET Monday
     assert last_settled_session_date(monday_pre_market).isoformat() == "2026-08-21"
+
+
+def test_price_confidence_grades_by_session_lag() -> None:
+    """#641 D6: price confidence is a grade, not a constant — a bar that lags
+    the settled session says so."""
+    from datetime import date as _date
+    from decimal import Decimal as _D
+
+    from data_engine.datahub.production_topt.market_price_adapter import graded_price_confidence
+
+    monday, tuesday = _date(2026, 8, 17), _date(2026, 8, 18)
+    assert graded_price_confidence(as_of=tuesday, expected_session=tuesday) == _D("0.85")
+    assert graded_price_confidence(as_of=monday, expected_session=tuesday) == _D("0.75")
+    # Friday bar against Monday's settled session: the weekend is not a lag.
+    friday, next_monday = _date(2026, 8, 14), _date(2026, 8, 17)
+    assert graded_price_confidence(as_of=friday, expected_session=next_monday) == _D("0.75")
+    # Deep staleness floors at 0.50 rather than going negative.
+    assert graded_price_confidence(as_of=_date(2026, 7, 1), expected_session=tuesday) == _D("0.50")

@@ -127,8 +127,9 @@ class MarketPriceAdapter:
             ),
             normalized_sha256=canonical_sha256(payload),
             # A single public feed with no SLA (init.md's yfinance note) — the limitation
-            # is represented as lower confidence, never as a provenance branch downstream.
-            confidence=Decimal("0.85"),
+            # is represented as confidence, never as a provenance branch downstream;
+            # graded per cell against the target's settled session (#641 D6).
+            confidence=graded_price_confidence(as_of=quote.as_of, expected_session=target.cutoff),
             valid_from=quote.as_of,
             transaction_time=quote.knowable_at,
             record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
@@ -171,6 +172,26 @@ class MarketPriceAdapter:
                 )
             )
         return tuple(found)
+
+
+def graded_price_confidence(*, as_of: date, expected_session: date) -> Decimal:
+    """Per-cell price confidence (#641 D6) — a grade, not a constant.
+
+    Rule 15 mandates per-cell confidence; financial facts honor it (0.50-0.92
+    on the current heads) while every price cell asserted a flat 0.85. The
+    grade starts at that same 0.85 (the no-SLA primary, init.md's yfinance
+    note) and drops 0.10 per SESSION the served bar lags the last settled
+    session, floored at 0.50 — a capture that had to fall back (the vendor's
+    overnight null-close window #622, holidays) now says so in its confidence
+    instead of asserting the fresh-close grade for stale data.
+    """
+    lag_sessions = sum(
+        1
+        for offset in range(1, max((expected_session - as_of).days, 0) + 1)
+        if (as_of + timedelta(days=offset)).weekday() < 5
+    )
+    graded = Decimal("0.85") - Decimal("0.10") * lag_sessions
+    return max(graded, Decimal("0.50"))
 
 
 def last_settled_session_date(cutoff: datetime) -> date:
