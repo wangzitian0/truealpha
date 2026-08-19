@@ -70,6 +70,10 @@
       "live": true
     },
     {
+      "path": "/admin/datahub",
+      "live": true
+    },
+    {
       "path": "/admin/quality",
       "live": true
     },
