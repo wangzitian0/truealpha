@@ -38,6 +38,10 @@ concurrency:
 
 jobs:
   request:
+    permissions:
+      actions: write   # save the Playwright cache; read-only cannot populate it
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
@@ -273,6 +277,21 @@ jobs:
       # walk failure DOES fail the release: the deadlock this design avoids came
       # from the unconfigured case, not from a broken surface, and a release whose
       # surface is broken should not become prod evidence.
+      # The walk step measured 116s of a ~480s release, and nearly all of it was
+      # `playwright install` pulling a 110MB Chromium on every single run. The
+      # whole workflow had no cache of any kind. Keyed on the Playwright version
+      # in the lockfile, so a version bump misses the cache and re-downloads
+      # rather than running the wrong browser.
+      # actions/cache needs `actions: write` to SAVE. The workflow-level grant is
+      # `actions: read`, so without the job-level grant below the cache restores
+      # and never populates — the optimisation would report as working and do
+      # nothing, which is worse than not adding it (review).
+      - name: Cache the Playwright browser
+        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/app-web/bun.lock') }}
       - name: Walk the deployed surface
         if: ${{ steps.walk_credentials.outputs.ready == 'true' }}
         env:

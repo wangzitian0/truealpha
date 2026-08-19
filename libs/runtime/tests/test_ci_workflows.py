@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 # Loaded the way every test in this directory loads its subject — the tests are
 # not a package, and pytest's importlib mode does not put this directory on the
@@ -342,3 +343,47 @@ def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
         f"{offenders}. The script dies at import, before it can judge anything, and every "
         f"later step in the job is skipped (#616)"
     )
+
+
+def test_two_different_releases_never_queue_behind_each_other() -> None:
+    """`docs/release-protocol.md` tells an author the tag push is the only lock
+    and that parallel releases do not deadlock. That claim rests entirely on the
+    version being part of the concurrency key, which is one edit away from being
+    false — and a workflow-level `group: truealpha-release` would serialise every
+    release behind every other with no error anywhere to say so.
+
+    `cancel-in-progress: false` is the other half: a second dispatch of the same
+    release is usually a retry of a deploy whose outcome is unknown, and
+    cancelling the first would leave nobody watching it.
+    """
+    workflow = yaml.safe_load(source(RELEASE))
+    concurrency = workflow["concurrency"]
+    assert "inputs.version_ref" in concurrency["group"], (
+        f"the release concurrency key is {concurrency['group']!r} and does not include the "
+        f"version, so two different releases would serialise (docs/release-protocol.md)"
+    )
+    assert "inputs.deploy_type" in concurrency["group"], (
+        "staging and prod for one version would serialise behind each other"
+    )
+    assert concurrency["cancel-in-progress"] is False, "a retry must wait for the in-flight deploy, never cancel it"
+
+
+def test_a_cache_step_can_actually_save() -> None:
+    """`actions/cache` needs `actions: write` to populate. With read-only it
+    restores, misses every time, and reports success — an optimisation that
+    measures as working and does nothing (review).
+
+    Checked per job rather than at the workflow level, because the grant belongs
+    on the job that caches and nowhere wider.
+    """
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for name, job in (workflow.get("jobs") or {}).items():
+            steps = job.get("steps") or []
+            if not any("actions/cache" in str(step.get("uses", "")) for step in steps):
+                continue
+            granted = {**(workflow.get("permissions") or {}), **(job.get("permissions") or {})}
+            assert granted.get("actions") == "write", (
+                f"{path.name} job {name!r} caches but has actions={granted.get('actions')!r}; "
+                f"the cache would restore and never save"
+            )
