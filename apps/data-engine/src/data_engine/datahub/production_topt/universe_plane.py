@@ -139,8 +139,20 @@ def _resolve_cik_via_edgar(ticker: str, *, user_agent: str) -> int | None:
     return _parse_edgar_cik(body)
 
 
-def _resolve_figis(tickers: list[str], *, api_key: str = "") -> dict[str, str]:
-    """Share-class FIGIs via OpenFIGI mapping, batched within the anonymous limits."""
+def _resolve_figis(
+    connection: Connection[Any],
+    tickers: list[str],
+    *,
+    as_of: date,
+    api_key: str = "",
+) -> dict[str, str]:
+    """Share-class FIGIs via OpenFIGI mapping, batched within the anonymous limits.
+
+    Every response batch LANDS in raw before its mappings are used (#641 D3): the
+    `security:figi:*` identities that key the whole universe plane must be traceable
+    to the vendor bytes that asserted them — `DataSource.OPENFIGI`'s own contract
+    comment says exactly this, and the resolver simply never did it.
+    """
     resolved: dict[str, str] = {}
     jobs = [{"idType": "TICKER", "idValue": ticker, "exchCode": "US"} for ticker in tickers]
     headers = {"Content-Type": "application/json"}
@@ -153,7 +165,18 @@ def _resolve_figis(tickers: list[str], *, api_key: str = "") -> dict[str, str]:
             "https://api.openfigi.com/v3/mapping", data=json.dumps(chunk).encode(), headers=headers
         )
         with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-            results = json.load(response)
+            body = response.read()
+        fetched_at = datetime.now(UTC)
+        raw_store.insert_fetch(
+            connection,
+            source=DataSource.OPENFIGI,
+            source_record_id=f"figi-mapping:{as_of.isoformat()}:{start}",
+            body=body,
+            content_type="application/json",
+            fetched_at=fetched_at,
+            recorded_at=fetched_at,
+        )
+        results = json.loads(body)
         for job, result in zip(chunk, results):
             data = result.get("data") or []
             if data:
@@ -195,7 +218,7 @@ def refresh_etf_constituents(
     from data_engine.sources import sec
 
     cik_index = sec.ticker_cik_index()
-    figis = _resolve_figis([row["ticker"] for row in rows], api_key=openfigi_api_key)
+    figis = _resolve_figis(connection, [row["ticker"] for row in rows], as_of=as_of, api_key=openfigi_api_key)
     from data_engine.config import settings as _settings
 
     for row in rows:
