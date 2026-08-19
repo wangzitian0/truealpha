@@ -133,16 +133,55 @@ jobs:
     if: needs.changes.outputs.python == 'true' || github.ref_type == 'tag'
     needs: changes
     uses: ./.github/workflows/ci-python.yml
+    # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
+    # and a called workflow cannot exceed the caller's grant. Without `actions:
+    # write` the cache RESTORES and cannot SAVE: harmless while the key keeps
+    # hitting, and a hard job failure the first time the key changes. #645
+    # changed uv.lock, and `Post Run astral-sh/setup-uv` began failing on every
+    # run from that merge onward — every real step in the job green, the whole
+    # job red. Latent since caching was enabled; my lockfile change is what lit
+    # it (#616-adjacent, same shape: the step that reports the outcome broke
+    # while the work it reports on was fine).
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
 
   qlib:
     if: needs.changes.outputs.qlib == 'true' || github.ref_type == 'tag'
     needs: changes
     uses: ./.github/workflows/ci-qlib.yml
+    # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
+    # and a called workflow cannot exceed the caller's grant. Without `actions:
+    # write` the cache RESTORES and cannot SAVE: harmless while the key keeps
+    # hitting, and a hard job failure the first time the key changes. #645
+    # changed uv.lock, and `Post Run astral-sh/setup-uv` began failing on every
+    # run from that merge onward — every real step in the job green, the whole
+    # job red. Latent since caching was enabled; my lockfile change is what lit
+    # it (#616-adjacent, same shape: the step that reports the outcome broke
+    # while the work it reports on was fine).
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
 
   runtime:
     if: needs.changes.outputs.runtime == 'true' || github.ref_type == 'tag'
     needs: changes
     uses: ./.github/workflows/ci-runtime.yml
+    # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
+    # and a called workflow cannot exceed the caller's grant. Without `actions:
+    # write` the cache RESTORES and cannot SAVE: harmless while the key keeps
+    # hitting, and a hard job failure the first time the key changes. #645
+    # changed uv.lock, and `Post Run astral-sh/setup-uv` began failing on every
+    # run from that merge onward — every real step in the job green, the whole
+    # job red. Latent since caching was enabled; my lockfile change is what lit
+    # it (#616-adjacent, same shape: the step that reports the outcome broke
+    # while the work it reports on was fine).
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
 
   web:
     if: needs.changes.outputs.web == 'true' || github.ref_type == 'tag'
