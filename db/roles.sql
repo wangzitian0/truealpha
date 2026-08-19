@@ -151,4 +151,8 @@ grant select on staging.accepted_ruleset_head to app_ops_reader;
 grant select on staging.contract_objects to app_ops_reader;
 grant usage on schema mart to app_ops_reader;
 grant select on mart.current_pointer_head to app_ops_reader;
+-- The /admin/datahub dashboard (#641 D5) joins heads to their quality grades and
+-- lists recent capture runs — read-only views/tables, same posture as the rest.
+grant select on mart.datahub_quality_report to app_ops_reader;
+grant select on mart.topt_capture_status to app_ops_reader;
 grant app_ops_reader to app_service_login;
