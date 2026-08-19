@@ -131,9 +131,11 @@ def _factor_availability(usable_by_subject: dict[str, dict[str, bool]]) -> dict[
     obligation count in the denominator — absence is a shortfall, not an exemption."""
     out: dict[str, dict[str, Any]] = {}
     for factor_id, required in _FACTOR_REQUIRED_SEMANTICS.items():
-        universe = [
-            subject for subject, semantics in usable_by_subject.items() if any(sem in semantics for sem in required)
-        ]
+        # EVERY graded subject is in the denominator — a subject captured with no
+        # required-semantic obligation at all is a shortfall, not an exemption
+        # (review on #644: filtering to subjects that HAVE the semantic key
+        # contradicted exactly that promise).
+        universe = list(usable_by_subject)
         complete = [
             subject for subject in universe if all(usable_by_subject[subject].get(sem, False) for sem in required)
         ]

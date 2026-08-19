@@ -421,12 +421,13 @@ def test_factor_availability_counts_subjects_with_complete_input_sets() -> None:
         "listing:a": {"financial-fact": True, "market-price": True},
         "listing:b": {"financial-fact": False, "market-price": True},  # headcount hole
         "listing:c": {"financial-fact": True},  # price missing — irrelevant to GPPE
+        "listing:d": {"market-price": True},  # NO financial-fact obligation at all: still in the denominator
     }
     out = _factor_availability(usable)
     gppe = out["gross_profit_per_employee"]
     assert gppe["required_semantics"] == ["financial-fact"]
-    assert (gppe["complete_subjects"], gppe["universe_subjects"]) == (2, 3)
-    assert gppe["ratio"] == "0.6667"
+    assert (gppe["complete_subjects"], gppe["universe_subjects"]) == (2, 4)
+    assert gppe["ratio"] == "0.5000"
 
 
 def test_factor_availability_with_no_graded_subjects_is_zero() -> None:
