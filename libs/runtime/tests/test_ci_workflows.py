@@ -368,22 +368,64 @@ def test_two_different_releases_never_queue_behind_each_other() -> None:
     assert concurrency["cancel-in-progress"] is False, "a retry must wait for the in-flight deploy, never cancel it"
 
 
-def test_a_cache_step_can_actually_save() -> None:
+def test_anything_that_caches_can_actually_save() -> None:
     """`actions/cache` needs `actions: write` to populate. With read-only it
     restores, misses every time, and reports success — an optimisation that
-    measures as working and does nothing (review).
+    measures as working and does nothing.
 
-    Checked per job rather than at the workflow level, because the grant belongs
-    on the job that caches and nowhere wider.
+    The first version of this check scanned only `uses: actions/cache`, and the
+    half it missed is the half that broke: `setup-uv` with `enable-cache: true`
+    caches internally, `ci-required` granted no `actions` scope at all, and a
+    called workflow cannot exceed its caller's grant. That stayed invisible
+    while the cache key kept hitting. The moment #645 changed uv.lock, every
+    run failed in `Post Run astral-sh/setup-uv` with every real step green.
+
+    So the scan asks what a job DOES, not which action it names, and it
+    resolves the grant through `workflow_call` to the caller.
     """
-    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
-        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
-        for name, job in (workflow.get("jobs") or {}).items():
-            steps = job.get("steps") or []
-            if not any("actions/cache" in str(step.get("uses", "")) for step in steps):
+    workflows = {
+        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml"))
+    }
+
+    def caches(job: dict) -> bool:
+        for step in job.get("steps") or []:
+            if "actions/cache" in str(step.get("uses", "")):
+                return True
+            with_block = step.get("with") or {}
+            if str(with_block.get("enable-cache", "")).lower() == "true" or "cache" in with_block:
+                return True
+        return False
+
+    def granted(workflow: dict, job: dict) -> dict:
+        return {**(workflow.get("permissions") or {}), **(job.get("permissions") or {})}
+
+    def only_reusable(workflow: dict) -> bool:
+        """A workflow_call-only workflow has no permissions of its own — the
+        caller's grant is the effective one, and that is what gets checked. Its
+        jobs looked like offenders in the first version of this scan, which is a
+        false positive on the design working as intended."""
+        triggers = workflow.get(True) or workflow.get("on") or {}
+        return set(triggers) == {"workflow_call"} if isinstance(triggers, dict) else triggers == "workflow_call"
+
+    offenders = []
+    for name, workflow in workflows.items():
+        if only_reusable(workflow):
+            continue
+        for job_name, job in (workflow.get("jobs") or {}).items():
+            called = str(job.get("uses", ""))
+            if called.startswith("./.github/workflows/"):
+                # The caller caps what the called workflow can have, so the
+                # grant that matters is the caller's.
+                child = workflows.get(called.rsplit("/", 1)[-1])
+                if child and any(caches(inner) for inner in (child.get("jobs") or {}).values()):
+                    if granted(workflow, job).get("actions") != "write":
+                        offenders.append(f"{name}:{job_name} -> {called.rsplit('/', 1)[-1]}")
                 continue
-            granted = {**(workflow.get("permissions") or {}), **(job.get("permissions") or {})}
-            assert granted.get("actions") == "write", (
-                f"{path.name} job {name!r} caches but has actions={granted.get('actions')!r}; "
-                f"the cache would restore and never save"
-            )
+            if caches(job) and granted(workflow, job).get("actions") != "write":
+                offenders.append(f"{name}:{job_name}")
+
+    assert not offenders, (
+        f"these jobs cache without `actions: write`: {offenders}. The cache restores, never "
+        f"saves, and the job fails outright the first time its key changes"
+    )
