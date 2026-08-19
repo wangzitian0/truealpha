@@ -315,4 +315,30 @@ console.log(
 			`mart.topt_core_results.`,
 	);
 	console.log("ok  every declared decision field has a source column");
+
+	// Selecting a column is half the path. `decisionFromRow` hard-coded
+	// `confidence: null` under a stale comment, so the first cut of this join
+	// selected the value and threw it away one function later: the SQL was right,
+	// the page still rendered an em dash in every row, and the check above passed
+	// the whole time. A field has to survive the mapper too (review).
+	const mapper = source("src/server/mart/strategy-run-repository.ts")
+		.split("function decisionFromRow", 2)[1]
+		.split("\nfunction ", 2)[0];
+	// Assigned AND sourced from the row. Asking only "is it assigned" passes on
+	// `confidence: null`, which is the exact line that caused this — the guard
+	// would have been green on the defect it is named after. Asking for `row.` in
+	// the assignment itself is too strict the other way: `rank` is validated into
+	// a local first. So: the field must be assigned, and the mapper must read
+	// `row.<field>` somewhere. Both directions red-proven.
+	const dropped = declared.filter(
+		(field) =>
+			!new RegExp(`\\b${field}\\s*:`).test(mapper) ||
+			!mapper.includes(`row.${field}`),
+	);
+	assert(
+		dropped.length === 0,
+		`decisionFromRow never assigns ${dropped.join(", ")}. The SELECT returns the column and the ` +
+			`mapper discards it, so the page shows nothing while every scan of the SQL passes.`,
+	);
+	console.log("ok  every declared decision field survives decisionFromRow");
 }

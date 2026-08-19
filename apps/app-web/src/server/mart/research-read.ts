@@ -24,7 +24,10 @@ import type {
 	StrategyRunReport,
 	StrategyRunUnavailable,
 } from "@/contracts/strategyRun";
-import { MartStrategyRunRepository } from "./strategy-run-repository";
+import {
+	type DecisionProvenance,
+	MartStrategyRunRepository,
+} from "./strategy-run-repository";
 
 export type Availability =
 	| "available"
@@ -84,6 +87,21 @@ export interface RankingRow {
 /** The inputs behind one published number. Every field is nullable on purpose:
  *  an absent vintage is information ("we do not know when this was true"), and
  *  hiding it behind a dash is what let #529 stand. */
+/** An absent entry is information, not an error: a decision whose core result
+ *  was not joined has no known vintage, and the surface must say so rather than
+ *  imply freshness. */
+function provenanceOf(inputs: DecisionProvenance | undefined): Provenance {
+	return {
+		operatingPeriodEnd: inputs?.operating_period_end ?? null,
+		revenuePeriodEnd: inputs?.revenue_period_end ?? null,
+		sharesPeriodEnd: inputs?.shares_period_end ?? null,
+		universeVersion: inputs?.universe_version ?? null,
+		universeSha256: inputs?.universe_sha256 ?? null,
+		gppeDefinitionSha256: inputs?.gppe_definition_sha256 ?? null,
+		tierDefinitionSha256: inputs?.tier_definition_sha256 ?? null,
+	};
+}
+
 export interface Provenance {
 	operatingPeriodEnd: string | null;
 	revenuePeriodEnd: string | null;
@@ -113,19 +131,6 @@ export interface ComparisonRow {
 	// The period ends span 2025-08-31 to 2026-01-25 in the run serving /research
 	// today — five months behind one "current P/S" column, previously invisible.
 	provenance: Provenance;
-}
-
-/** The inputs behind one published number. Every field is nullable on purpose:
- *  an absent vintage is information ("we do not know when this was true"), and
- *  hiding it behind a dash is what let #529 stand. */
-export interface Provenance {
-	operatingPeriodEnd: string | null;
-	revenuePeriodEnd: string | null;
-	sharesPeriodEnd: string | null;
-	universeVersion: string | null;
-	universeSha256: string | null;
-	gppeDefinitionSha256: string | null;
-	tierDefinitionSha256: string | null;
 }
 
 export interface EntityDetail {
@@ -294,7 +299,14 @@ export class StrategyRunReadAdapter {
 		this.repository = repository ?? new MartStrategyRunRepository();
 	}
 
-	private report(context: AccessContext): Promise<StrategyRunReport> {
+	/** `provenance` is optional because `FixtureStrategyRunRepository` legitimately
+	 * has none — a checked-in preview has no mart row to join. An absent map
+	 * renders every vintage as "unknown", which is the honest answer. */
+	private report(
+		context: AccessContext,
+	): Promise<
+		StrategyRunReport & { provenance?: ReadonlyMap<string, DecisionProvenance> }
+	> {
 		const cached = this.reportCache.get(context.contextId);
 		if (cached !== undefined) return cached;
 		const promise = (async () => {
@@ -357,6 +369,7 @@ export class StrategyRunReadAdapter {
 		decision: StrategyRunDecision,
 		source: string,
 		corpusSha256: string,
+		inputs: DecisionProvenance | undefined,
 	): RankingRow {
 		const status = decisionAvailability(decision);
 		return {
@@ -379,15 +392,7 @@ export class StrategyRunReadAdapter {
 				decision.cutoff_at,
 				corpusSha256,
 			),
-			provenance: {
-				operatingPeriodEnd: decision.operating_period_end ?? null,
-				revenuePeriodEnd: decision.revenue_period_end ?? null,
-				sharesPeriodEnd: decision.shares_period_end ?? null,
-				universeVersion: decision.universe_version ?? null,
-				universeSha256: decision.universe_sha256 ?? null,
-				gppeDefinitionSha256: decision.gppe_definition_sha256 ?? null,
-				tierDefinitionSha256: decision.tier_definition_sha256 ?? null,
-			},
+			provenance: provenanceOf(inputs),
 		};
 	}
 
@@ -395,6 +400,7 @@ export class StrategyRunReadAdapter {
 		decision: StrategyRunDecision,
 		source: string,
 		corpusSha256: string,
+		inputs: DecisionProvenance | undefined,
 	): ComparisonRow {
 		// The row's own availability mirrors the decision (low_confidence/excluded must stay
 		// visible even when this one field is null) — matching toRankingRow. valueAvailability
@@ -417,15 +423,7 @@ export class StrategyRunReadAdapter {
 				decision.cutoff_at,
 				corpusSha256,
 			),
-			provenance: {
-				operatingPeriodEnd: decision.operating_period_end ?? null,
-				revenuePeriodEnd: decision.revenue_period_end ?? null,
-				sharesPeriodEnd: decision.shares_period_end ?? null,
-				universeVersion: decision.universe_version ?? null,
-				universeSha256: decision.universe_sha256 ?? null,
-				gppeDefinitionSha256: decision.gppe_definition_sha256 ?? null,
-				tierDefinitionSha256: decision.tier_definition_sha256 ?? null,
-			},
+			provenance: provenanceOf(inputs),
 		};
 	}
 
@@ -439,9 +437,16 @@ export class StrategyRunReadAdapter {
 		const decisions = report.decisions.filter(
 			(decision) => decision.cutoff_at === cutoff,
 		);
+		const provenance =
+			report.provenance ?? new Map<string, DecisionProvenance>();
 		const ordered = decisions.slice().sort(rankingOrder);
 		return ordered.map((decision) =>
-			this.toRankingRow(decision, report.source, report.corpus_sha256),
+			this.toRankingRow(
+				decision,
+				report.source,
+				report.corpus_sha256,
+				provenance.get(decision.issuer_id),
+			),
 		);
 	}
 
@@ -455,13 +460,20 @@ export class StrategyRunReadAdapter {
 		const decisions = report.decisions.filter(
 			(decision) => decision.cutoff_at === cutoff,
 		);
+		const provenance =
+			report.provenance ?? new Map<string, DecisionProvenance>();
 		const ordered = decisions
 			.slice()
 			.sort((a, b) =>
 				a.issuer_id < b.issuer_id ? -1 : a.issuer_id > b.issuer_id ? 1 : 0,
 			);
 		return ordered.map((decision) =>
-			this.toComparisonRow(decision, report.source, report.corpus_sha256),
+			this.toComparisonRow(
+				decision,
+				report.source,
+				report.corpus_sha256,
+				provenance.get(decision.issuer_id),
+			),
 		);
 	}
 
@@ -470,6 +482,8 @@ export class StrategyRunReadAdapter {
 		issuerId: string,
 	): Promise<EntityDetail | null> {
 		const report = await this.report(context);
+		const provenance =
+			report.provenance ?? new Map<string, DecisionProvenance>();
 		const rows = report.decisions
 			.filter((decision) => decision.issuer_id === issuerId)
 			.slice()
@@ -477,7 +491,12 @@ export class StrategyRunReadAdapter {
 				a.cutoff_at < b.cutoff_at ? -1 : a.cutoff_at > b.cutoff_at ? 1 : 0,
 			)
 			.map((decision) =>
-				this.toComparisonRow(decision, report.source, report.corpus_sha256),
+				this.toComparisonRow(
+					decision,
+					report.source,
+					report.corpus_sha256,
+					provenance.get(decision.issuer_id),
+				),
 			);
 		if (rows.length === 0) return null;
 		return { issuerId, rows };

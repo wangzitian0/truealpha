@@ -11,7 +11,9 @@
  * (#469). The shared semantics:
  *  - latest run per `strategy_key` by `executed_at desc, created_at desc, strategy_run_id desc`;
  *  - decisions ordered by `cutoff_at, issuer_id`;
- *  - `confidence` is always null (mart.strategy_decisions has no such column yet, #355);
+ *  - `confidence` and the input vintages come from mart.topt_core_results,
+ *    joined on (issuer_id, cutoff) — mart.strategy_decisions records the verdict
+ *    and nothing about what it was reached from;
  *  - a query error → `database_unavailable`; no run → `no_runs_recorded`;
  *    a row that no longer matches the DTO shape → `schema_mismatch`.
  *
@@ -33,10 +35,19 @@ import {
 
 import { withMartReadonly } from "./db";
 
-/** The shared contract report plus the mart row's run identity (#370 AC 3). */
+/** The shared contract report plus the mart row's run identity (#370 AC 3) and
+ * the inputs each decision was reached from.
+ *
+ * `provenance` lives HERE and not on `StrategyRunDecision` on purpose. That type
+ * is serialized byte-for-byte against the Python twin
+ * (`strategy-run-parity-conformance`: "two languages, one schema, one expected
+ * byte shape"), and the first cut of this change put display provenance inside
+ * it and diverged from the frozen canon. The extension type is where mart-only
+ * reads already belong. */
 export type MartStrategyRunReport = StrategyRunReport & {
 	strategy_run_id: string;
 	executed_at: string;
+	provenance: ReadonlyMap<string, DecisionProvenance>;
 };
 
 const LATEST_RUN_SQL = `
@@ -99,6 +110,23 @@ function decimalString(value: unknown, field: string): string | null {
 	if (value === null || value === undefined) return null;
 	if (typeof value === "string") return value;
 	throw new SchemaMismatchError(`${field} is not a numeric string`);
+}
+
+/** A `date` column arrives from node-pg as a Date at UTC midnight. Rendered as
+ * the calendar day it names, never as an instant: these are period ends —
+ * "the quarter this figure describes" — and a timezone-shifted 2025-12-31 that
+ * displays as 2025-12-30 would be a lie about the vintage. */
+function dateString(value: unknown): string | null {
+	if (value === null || value === undefined) return null;
+	if (value instanceof Date) return value.toISOString().slice(0, 10);
+	if (typeof value === "string") return value.slice(0, 10);
+	throw new SchemaMismatchError("period end is neither a date nor a string");
+}
+
+function textOrNull(value: unknown): string | null {
+	if (value === null || value === undefined) return null;
+	if (typeof value === "string") return value;
+	throw new SchemaMismatchError("expected a text column");
 }
 
 function outcomeOf(value: unknown): StrategyRunOutcome {
@@ -189,8 +217,12 @@ function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
 			"target_price_to_sales",
 		),
 		valuation_gap: decimalString(row.valuation_gap, "valuation_gap"),
-		// #355's mart.strategy_decisions has no confidence column yet.
-		confidence: null,
+		// Joined from mart.topt_core_results, because mart.strategy_decisions
+		// still has no confidence column (#355). This mapper hard-coded null,
+		// so the first cut of this change selected the column and then threw it
+		// away: the SQL was right, the page still rendered an em dash, and the
+		// guard I added passed because it only checked the SELECT (review).
+		confidence: decimalString(row.confidence, "confidence"),
 		exclusion_reason:
 			typeof row.exclusion_reason === "string" ? row.exclusion_reason : null,
 		rank: (rank as number | null) ?? null,
@@ -201,6 +233,40 @@ function decisionFromRow(row: Record<string, unknown>): StrategyRunDecision {
 		peg: decimalString(row.peg, "peg"),
 		// Module 1's own ordering (#284). Independent of `rank`: PEG does not select.
 		peg_rank: typeof row.peg_rank === "number" ? row.peg_rank : null,
+	};
+}
+
+/** The inputs a decision was reached from, keyed by issuer.
+ *
+ * Deliberately NOT on `StrategyRunDecision`. That type is the frozen,
+ * content-addressed contract the Python shipping consumer serializes
+ * byte-for-byte — `strategy-run-parity-conformance` compares the two, and the
+ * first cut of this change put display provenance inside it and diverged from
+ * the canon. "Two languages, one schema, one expected byte shape" is the
+ * contract; a read-model concern does not belong in it.
+ *
+ * The join stays in one query — this is the same rows, projected twice. */
+export interface DecisionProvenance {
+	operating_period_end: string | null;
+	revenue_period_end: string | null;
+	shares_period_end: string | null;
+	universe_version: string | null;
+	universe_sha256: string | null;
+	gppe_definition_sha256: string | null;
+	tier_definition_sha256: string | null;
+}
+
+export function provenanceFromRow(
+	row: Record<string, unknown>,
+): DecisionProvenance {
+	return {
+		operating_period_end: dateString(row.operating_period_end),
+		revenue_period_end: dateString(row.revenue_period_end),
+		shares_period_end: dateString(row.shares_period_end),
+		universe_version: textOrNull(row.universe_version),
+		universe_sha256: textOrNull(row.universe_sha256),
+		gppe_definition_sha256: textOrNull(row.gppe_definition_sha256),
+		tier_definition_sha256: textOrNull(row.tier_definition_sha256),
 	};
 }
 
@@ -252,6 +318,12 @@ export class MartStrategyRunRepository {
 				source: "mart",
 				corpus_sha256: corpusSha256,
 				decisions: decisionRows.map(decisionFromRow),
+				provenance: new Map(
+					decisionRows.map((row) => [
+						String(row.issuer_id),
+						provenanceFromRow(row),
+					]),
+				),
 				golden_mismatches: [],
 				// Run identity for the overview (#370 appended AC 3): lets the page prove it
 				// renders the same governed run the MCP strategy_run tool serves.

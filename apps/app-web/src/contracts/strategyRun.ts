@@ -72,24 +72,6 @@ export interface StrategyRunDecision {
 	peg?: string | null;
 	// Module 1 ordering (#284). Independent of `rank`; PEG does not participate in selection.
 	peg_rank?: number | null;
-	// Provenance of the inputs the decision was made FROM, joined from
-	// mart.topt_core_results. init.md: "every step downstream has to be traceable
-	// back to the original raw material — that's the reason the point-in-time
-	// principle exists". These are optional so a report produced before the join
-	// still validates.
-	//
-	// The period ends are the load-bearing ones. In the run serving /research
-	// right now they span 2025-08-31 to 2026-01-25: five months of spread behind
-	// one "current P/S" column, with nothing on the page saying so. #529 was
-	// exactly this — a rank-1 holding at 50% weight selected on a 2010 share
-	// count that the surface labelled fresh.
-	operating_period_end?: string | null;
-	revenue_period_end?: string | null;
-	shares_period_end?: string | null;
-	universe_version?: string | null;
-	universe_sha256?: string | null;
-	gppe_definition_sha256?: string | null;
-	tier_definition_sha256?: string | null;
 }
 
 export interface StrategyRunReport {
@@ -241,29 +223,12 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 			"target_weight",
 			"peg",
 			"peg_rank",
-			"operating_period_end",
-			"revenue_period_end",
-			"shares_period_end",
-			"universe_version",
-			"universe_sha256",
-			"gppe_definition_sha256",
-			"tier_definition_sha256",
 		],
 		path,
 		// Optional exactly where the interface says optional: PEG (#284) and the
 		// input provenance joined from mart.topt_core_results. A report produced
 		// before either existed still validates.
-		[
-			"peg",
-			"peg_rank",
-			"operating_period_end",
-			"revenue_period_end",
-			"shares_period_end",
-			"universe_version",
-			"universe_sha256",
-			"gppe_definition_sha256",
-			"tier_definition_sha256",
-		],
+		["peg", "peg_rank"],
 	);
 
 	const issuerId = object.issuer_id;
@@ -350,16 +315,6 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 			[0, 1],
 		),
 		exclusion_reason: object.exclusion_reason as string | null,
-		operating_period_end:
-			(object.operating_period_end as string | null) ?? null,
-		revenue_period_end: (object.revenue_period_end as string | null) ?? null,
-		shares_period_end: (object.shares_period_end as string | null) ?? null,
-		universe_version: (object.universe_version as string | null) ?? null,
-		universe_sha256: (object.universe_sha256 as string | null) ?? null,
-		gppe_definition_sha256:
-			(object.gppe_definition_sha256 as string | null) ?? null,
-		tier_definition_sha256:
-			(object.tier_definition_sha256 as string | null) ?? null,
 		rank: rank as number | null,
 		target_weight: asDecimalString(
 			object.target_weight,
