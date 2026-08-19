@@ -380,3 +380,26 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
     assert not any(literal in head_sql for literal in (" 20,", " 21,", " 84,")), head_sql
     # issuer_count, instrument_count, observation_count derive from the two-member snapshot:
     assert head_params[8:11] == (2, 2, 8)
+
+
+def test_figi_resolution_lands_its_response_bytes(connection, monkeypatch) -> None:
+    """#641 D3: the security:figi identities must be traceable to landed vendor
+    bytes — DataSource.OPENFIGI's contract comment always said so."""
+    import io
+    import json as _json
+    import urllib.request as _url
+
+    from data_engine.datahub.production_topt.universe_plane import _resolve_figis
+
+    body = _json.dumps([{"data": [{"shareClassFIGI": "BBG00TESTFIG1"}]}]).encode()
+    monkeypatch.setattr(_url, "urlopen", lambda req, timeout=0: io.BytesIO(body))
+    resolved = _resolve_figis(connection, ["ALFA"], as_of=date(2026, 8, 19), api_key="k")
+    assert resolved == {"ALFA": "bbg00testfig1"}
+    landed = connection.execute(
+        "select source, source_record_id, metadata->'request_jobs'->0->>'idValue'"
+        " from raw.fetches where source = 'openfigi'"
+        " and source_record_id = 'figi-mapping:2026-08-19:0'"
+    ).fetchone()
+    # The response bytes alone cannot pair FIGIs to tickers (OpenFIGI does not
+    # echo the query) — the landed row must carry the request batch too.
+    assert landed == ("openfigi", "figi-mapping:2026-08-19:0", "ALFA")
