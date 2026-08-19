@@ -21,7 +21,7 @@ thresholds, bands, selection count) from the versioned
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 
@@ -34,10 +34,10 @@ from truealpha_contracts.strategy import (
 )
 
 from factors.base.gross_profit_per_employee import gross_profit_per_employee
-from factors.base.peg import peg_from_rate
+from factors.base.peg import peg
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation
-from factors.types import Fact
+from factors.types import Fact, GrowthConvention
 
 # Input-key vocabulary of the golden corpus / DataHub factor inputs, mapped to the
 # canonical metric registry names the base factors consume.
@@ -49,6 +49,9 @@ _PS_KEYS = ("last_close", "shares_outstanding", "revenue")
 # net income rather than diluted EPS because it is present for 20 of 20 issuers against
 # 18, and it puts both halves of PEG on one earnings basis.
 _PEG_KEYS = ("last_close", "shares_outstanding", "net_income")
+# Owner decision 2026-08-17 (#284): three years, recency-weighted. The factor takes it
+# as a required argument so no default can quietly become the convention.
+_PEG_CAGR_YEARS = 3
 _METRIC_FOR_KEY = {"headcount": "employees_total", "last_close": "price"}
 
 # Fixed evaluation order for a missing required input -> its exact reason code.
@@ -68,10 +71,18 @@ class IssuerInput:
 
     ``records`` maps input key -> (value, confidence); a missing key means the
     input was unavailable at the cutoff.
+
+    ``periodic_records`` maps input key -> fiscal period -> (value, confidence) for the
+    inputs that describe a PERIOD rather than an instant. Additive and defaulted: the six
+    point-in-time inputs never had periods and still do not. It exists so a multi-period
+    factor can be expressed in ``libs/factors`` at all — before migration 0043 the
+    transport carried one value per key, so module 1's growth rate had to be reduced in
+    the capture adapter, which is factor arithmetic in L0 (init.md rule 2).
     """
 
     issuer_id: str
     records: Mapping[str, tuple[Decimal, Decimal]]
+    periodic_records: Mapping[str, Mapping[str, tuple[Decimal, Decimal]]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -108,6 +119,25 @@ def _quantize(value: Decimal, quantization: DecimalQuantization) -> Decimal:
 def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> list[Fact]:
     facts: list[Fact] = []
     for key in keys:
+        # A periodic input contributes one Fact PER PERIOD, carrying the period tag the
+        # factor parses. The scalar branch below still answers for the same key (the
+        # latest period), which is what keeps the coverage check and the multiple working
+        # off one vocabulary.
+        for period, (value, confidence) in sorted(issuer.periodic_records.get(key, {}).items()):
+            metric = _METRIC_FOR_KEY.get(key, key)
+            facts.append(
+                Fact(
+                    entity_id=issuer.issuer_id,
+                    metric=metric,
+                    value=value,
+                    unit_family=METRICS[metric].unit_family,
+                    confidence=confidence,
+                    as_of=as_of,
+                    fiscal_period=period,
+                )
+            )
+        if key in issuer.periodic_records:
+            continue
         record = issuer.records.get(key)
         if record is None:
             continue
@@ -166,12 +196,12 @@ def _evaluate_issuer(
     # Recorded, not selecting (#284 step 4): module 1 must not change who is eligible until
     # the owner decides how it enters selection, or landing the factor would silently move
     # the portfolio. So a missing or degenerate PEG leaves the decision otherwise untouched.
-    growth = issuer.records.get("earnings_cagr_3y")
-    peg_value = peg_from_rate(
+    peg_value = peg(
         _facts_for(issuer, _PEG_KEYS, as_of=as_of),
         entity_id=issuer.issuer_id,
+        growth_convention=GrowthConvention.HISTORICAL_CAGR,
         as_of=as_of,
-        growth_rate=None if growth is None else growth[0],
+        cagr_years=_PEG_CAGR_YEARS,
     ).value
 
     labor_efficiency = _quantize(gppe_result.value, labor_q)

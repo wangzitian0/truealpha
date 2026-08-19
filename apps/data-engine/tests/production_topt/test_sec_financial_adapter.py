@@ -9,7 +9,6 @@ from data_engine.datahub.production_topt.issuer_registry import (
     revenue_proxy_allowed_for_sic,
 )
 from data_engine.datahub.production_topt.sec_financial_adapter import (
-    EARNINGS_CAGR_YEARS,
     FinancialFactsBundle,
     HeadcountFact,
     SecFinancialFactAdapter,
@@ -883,38 +882,14 @@ def _earnings_facts(*pairs: tuple[str, str, object]) -> dict:
     return facts
 
 
-def test_the_bundle_derives_an_earnings_cagr_from_the_payload_it_already_fetched() -> None:
-    """PEG needs multi-period earnings, and company-facts already carries them.
-
-    `annual_values_by_period_end` builds every annual period keyed by period end and
-    the bundle then throws all but the latest away. Deriving the CAGR here means module
-    1 needs no new data plane: no `staging.financial_facts`, which is empty in
-    Production with no reachable writer (#530).
-    """
-    facts = _earnings_facts(
-        ("2022-01-01", "2022-12-31", 100),
-        ("2023-01-01", "2023-12-31", 120),
-        ("2024-01-01", "2024-12-31", 150),
-        ("2025-01-01", "2025-12-31", 200),
-    )
-    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is not None
-    # Yearly rates 20%, 25%, 33.33% weighted 1:2:3 -> (20 + 50 + 100) / 6 = 28.33%.
-    # An endpoint CAGR would have said 25.99%; the owner-chosen weighting favours the
-    # accelerating recent years.
-    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2833")
-    # Both endpoints are recorded so the window is auditable rather than implied.
-    assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
-    assert bundle.earnings_cagr_latest_period_end == date(2025, 12, 31)
-
-
-def test_the_cagr_is_never_knowable_before_the_filings_it_consumed() -> None:
+def test_the_series_is_never_knowable_before_the_filings_it_consumed() -> None:
     """The PIT obligation strategy participation adds (#284).
 
     `strategy_backtest_inputs_pit` only asserts `knowable_at <= cutoff_at`, so it would
-    accept a CAGR built from a restatement that was not public at the historical cutoff
-    — which makes a backtest look better for free. The bundle's `knowable_at` must be at
-    or after the latest filing behind the window.
+    accept a growth basis built from a restatement that was not public at the historical
+    cutoff — which makes a backtest look better for free. `knowable_at` must be at or
+    after the latest filing behind EVERY period in the series, not just the window's two
+    endpoints: the rate downstream rests on all of them.
     """
     facts = _earnings_facts(
         ("2022-01-01", "2022-12-31", 100),
@@ -922,134 +897,12 @@ def test_the_cagr_is_never_knowable_before_the_filings_it_consumed() -> None:
         ("2024-01-01", "2024-12-31", 150),
         ("2025-01-01", "2025-12-31", 200),
     )
-    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is not None
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL)
+    assert len(bundle.net_income_by_period) == 4
     assert bundle.knowable_at is not None
-    # The 2025 period was filed 2025-02-15 in this fixture; nothing may claim the CAGR
+    # The 2025 period was filed 2025-02-15 in this fixture; nothing may claim the series
     # was knowable before then.
     assert bundle.knowable_at.date() >= date(2025, 2, 15)
-
-
-def test_a_missing_base_period_yields_no_cagr_rather_than_a_shorter_window() -> None:
-    # Only 2024 and 2025 on file; a three-year window has no 2022 base. Silently
-    # computing a one-year rate would make issuers incomparable in one ranking.
-    facts = _earnings_facts(
-        ("2024-01-01", "2024-12-31", 150),
-        ("2025-01-01", "2025-12-31", 200),
-    )
-    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is None
-
-
-def test_no_cagr_is_derived_when_the_issuer_reports_no_net_income() -> None:
-    bundle = build_bundle(_facts(), date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is None
-    assert bundle.earnings_cagr_base_period_end is None
-
-
-def test_the_adapter_publishes_the_cagr_and_its_window_in_the_payload() -> None:
-    item = _work_item("a" * 64)
-    facts = _earnings_facts(
-        ("2022-01-01", "2022-12-31", 100),
-        ("2023-01-01", "2023-12-31", 120),
-        ("2024-01-01", "2024-12-31", 150),
-        ("2025-01-01", "2025-12-31", 200),
-    )
-    adapter = SecFinancialFactAdapter(
-        {item.work_item_id: _target()},
-        lambda cik, cutoff, branch: build_bundle(facts, cutoff, branch, earnings_cagr_years=3),
-    )
-    result = adapter.fetch(item)
-    assert isinstance(result, FetchSuccess)
-    payload = result.record.payload
-    assert payload["earnings_cagr_3y"] is not None
-    assert payload["earnings_cagr_base_period_end"] == "2022-12-31"
-    assert payload["earnings_cagr_latest_period_end"] == "2025-12-31"
-
-
-def test_the_window_is_measured_in_elapsed_time_not_calendar_years() -> None:
-    """JNJ's real shape: a fiscal year ending 2022-01-02 is FY2021, not FY2022.
-
-    Selecting the base period by `end.year == latest.year - years` made a 3.99-year span
-    read as a three-year one, overstating the rate. JNJ's periods end 2022-01-02,
-    2023-01-01, 2023-12-31, 2024-12-29 and 2025-12-28 — from 2025-12-28 a three-year
-    window is 2023-01-01 (1092 days), not 2022-01-02 (1456 days).
-    """
-    facts = _earnings_facts(
-        ("2021-01-04", "2022-01-02", 20_880),
-        ("2022-01-03", "2023-01-01", 17_940),
-        ("2023-01-02", "2023-12-31", 35_150),
-        ("2024-01-01", "2024-12-29", 14_070),
-        ("2024-12-30", "2025-12-28", 26_800),
-    )
-    bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr_latest_period_end == date(2025, 12, 28)
-    assert bundle.earnings_cagr_base_period_end == date(2023, 1, 1), (
-        "the base must be the period ~3 years back in elapsed time, not the one whose "
-        "calendar year happens to be latest.year - 3"
-    )
-
-
-def test_a_period_that_is_not_close_enough_to_the_window_is_refused() -> None:
-    # Only a 5-year-old base exists; stretching to it would report a 3-year rate for a
-    # 5-year span, which is a different number.
-    facts = _earnings_facts(
-        ("2020-01-01", "2020-12-31", 100),
-        ("2025-01-01", "2025-12-31", 200),
-    )
-    bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is None
-
-
-def test_the_growth_rate_weights_recent_years_more_heavily() -> None:
-    """Owner decision (2026-08-17): three years, but not equal weights — recent higher.
-
-    A plain endpoint CAGR is not equal-weighted, it is ZERO-weighted on the middle: only
-    the base and the latest observation enter it, so a collapse and recovery in between is
-    invisible. The rate is now the recency-weighted mean of the year-over-year rates inside
-    the window, weights rising linearly toward the present (1:2:3 over three steps).
-
-    Here the yearly rates are +10%, +20% and +50%. Equal weighting gives 26.67%; weighting
-    1:2:3 gives (1*10 + 2*20 + 3*50) / 6 = 33.33%, and an endpoint CAGR would give 24.6%.
-    """
-    facts = _earnings_facts(
-        ("2022-01-01", "2022-12-31", 100),
-        ("2023-01-01", "2023-12-31", 110),
-        ("2024-01-01", "2024-12-31", 132),
-        ("2025-01-01", "2025-12-31", 198),
-    )
-    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is not None
-    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.3333")
-
-
-def test_a_gap_inside_the_window_refuses_rather_than_skipping_a_year() -> None:
-    """Recency weighting needs every year in the window, not just the endpoints.
-
-    Silently dropping a missing year would change the weights without saying so — the
-    remaining rates would be reweighted and the number would no longer be the thing its
-    version claims. 2024 is absent here.
-    """
-    facts = _earnings_facts(
-        ("2022-01-01", "2022-12-31", 100),
-        ("2023-01-01", "2023-12-31", 110),
-        ("2025-01-01", "2025-12-31", 198),
-    )
-    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is None
-
-
-def test_a_loss_year_inside_the_window_makes_the_rate_undefined() -> None:
-    # A year-over-year rate across a sign change is not a growth rate, and it would
-    # dominate a weighted mean. Endpoint-only logic could not see this.
-    facts = _earnings_facts(
-        ("2022-01-01", "2022-12-31", 100),
-        ("2023-01-01", "2023-12-31", -50),
-        ("2024-01-01", "2024-12-31", 132),
-        ("2025-01-01", "2025-12-31", 198),
-    )
-    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is None
 
 
 def test_net_income_falls_back_to_profit_loss_for_the_latest_year() -> None:
@@ -1079,16 +932,19 @@ def test_net_income_falls_back_to_profit_loss_for_the_latest_year() -> None:
             ]
         }
     }
-    bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL, earnings_cagr_years=3)
-    assert bundle.earnings_cagr is not None, "the fallback must complete the window"
+    bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL)
     assert bundle.net_income == Decimal("160")
-    assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
-    # 2023 resolves to 100 from the preferred tag, not 999: rates are 25%, 30%, 23.08%,
-    # weighted 1:2:3 -> 25.71%.
-    assert bundle.earnings_cagr.quantize(Decimal("0.0001")) == Decimal("0.2571")
+    # The fallback completes the series, and 2023 resolves to 100 from the preferred tag
+    # rather than 999 — declaration order wins wherever both tags report a period.
+    assert bundle.net_income_by_period == {
+        date(2022, 12, 31): Decimal("80"),
+        date(2023, 12, 31): Decimal("100"),
+        date(2024, 12, 31): Decimal("130"),
+        date(2025, 12, 31): Decimal("160"),
+    }
 
 
-def test_the_deployed_fetcher_resolves_the_growth_basis_without_being_asked() -> None:
+def test_the_deployed_fetcher_resolves_the_growth_basis_without_being_asked() -> None:  # noqa: D103
     """The regression this arms: PEG's two inputs were structurally null in production.
 
     `build_bundle` took `earnings_cagr_years: int | None = None`, and `sec_financial_fetcher`
@@ -1124,30 +980,11 @@ def test_the_deployed_fetcher_resolves_the_growth_basis_without_being_asked() ->
 
     assert monkeypatched["cik"] == 7
     assert bundle.net_income == Decimal("200"), "the deployed path must resolve net income"
-    assert bundle.earnings_cagr is not None, "the deployed path must resolve the growth basis"
-    assert bundle.earnings_cagr_base_period_end == date(2022, 12, 31)
-    assert bundle.earnings_cagr_latest_period_end == date(2025, 12, 31)
-
-
-def test_the_payload_key_names_the_window_it_measures() -> None:
-    """`earnings_cagr_3y` is a literal in the payload, the `input_key` CHECK, the bridge's
-    key tuple and the evaluator's lookup. Changing `EARNINGS_CAGR_YEARS` without renaming
-    all of them would publish a 5-year rate under a key that says three."""
-    assert EARNINGS_CAGR_YEARS == 3
-    item = _work_item("c" * 64)
-    adapter = SecFinancialFactAdapter(
-        {item.work_item_id: _target()},
-        lambda cik, cutoff, branch: build_bundle(
-            _earnings_facts(
-                ("2022-01-01", "2022-12-31", 100),
-                ("2023-01-01", "2023-12-31", 120),
-                ("2024-01-01", "2024-12-31", 150),
-                ("2025-01-01", "2025-12-31", 200),
-            ),
-            cutoff,
-            branch,
-        ),
-    )
-    result = adapter.fetch(item)
-    assert isinstance(result, FetchSuccess)
-    assert f"earnings_cagr_{EARNINGS_CAGR_YEARS}y" in result.record.payload
+    # The whole series, not a scalar: the deployed path is what feeds the factor, and a
+    # factor that asked for history must receive history.
+    assert sorted(bundle.net_income_by_period) == [
+        date(2022, 12, 31),
+        date(2023, 12, 31),
+        date(2024, 12, 31),
+        date(2025, 12, 31),
+    ]

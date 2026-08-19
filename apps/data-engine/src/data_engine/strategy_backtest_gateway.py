@@ -60,29 +60,53 @@ class StrategyBacktestGateway:
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
 
-    def _rows_for_cutoff(self, cutoff_at: str | datetime) -> list[tuple[str, str, Any, Any]]:
-        # Latest vintage per (issuer, input_key) at the cutoff -- a restatement lands a
-        # new row and supersedes by recorded_at, never overwriting the prior one.
+    def _rows_for_cutoff(self, cutoff_at: str | datetime) -> list[tuple[str, str, Any, Any, str | None]]:
+        # Latest vintage per (issuer, input_key, fiscal_period) at the cutoff -- a
+        # restatement lands a new row and supersedes by recorded_at, never overwriting the
+        # prior one. The period is part of the identity since 0043: a metric legitimately
+        # appears once per period, and collapsing them would hand a factor one arbitrary
+        # year of a series it asked for whole.
         return self._connection.execute(
             """
-            select distinct on (issuer_id, input_key) issuer_id, input_key, value, confidence
+            select distinct on (issuer_id, input_key, fiscal_period)
+                   issuer_id, input_key, value, confidence, fiscal_period
             from staging.strategy_backtest_inputs
             where cutoff_at = %s
-            order by issuer_id, input_key, recorded_at desc
+            order by issuer_id, input_key, fiscal_period, recorded_at desc
             """,
             (cutoff_at,),
         ).fetchall()
 
     def issuer_inputs(self, cutoff_at: str | datetime) -> list[IssuerInput]:
         by_issuer: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
-        for issuer_id, input_key, value, confidence in self._rows_for_cutoff(cutoff_at):
-            by_issuer.setdefault(issuer_id, {})[input_key] = (Decimal(str(value)), Decimal(str(confidence)))
-        return [IssuerInput(issuer_id=issuer_id, records=records) for issuer_id, records in sorted(by_issuer.items())]
+        periodic: dict[str, dict[str, dict[str, tuple[Decimal, Decimal]]]] = {}
+        for issuer_id, input_key, value, confidence, fiscal_period in self._rows_for_cutoff(cutoff_at):
+            entry = (Decimal(str(value)), Decimal(str(confidence)))
+            if fiscal_period is None:
+                by_issuer.setdefault(issuer_id, {})[input_key] = entry
+                continue
+            periodic.setdefault(issuer_id, {}).setdefault(input_key, {})[fiscal_period] = entry
+            # The latest period also answers as the scalar, so `net_income` stays a
+            # required-input the coverage check and the multiple can both see.
+            scalars = by_issuer.setdefault(issuer_id, {})
+            if input_key not in scalars or fiscal_period > max(periodic[issuer_id][input_key]):
+                scalars[input_key] = periodic[issuer_id][input_key][max(periodic[issuer_id][input_key])]
+        return [
+            IssuerInput(
+                issuer_id=issuer_id,
+                records=records,
+                periodic_records=periodic.get(issuer_id, {}),
+            )
+            for issuer_id, records in sorted(by_issuer.items())
+        ]
 
     def snapshot_id(self, cutoff_at: str | datetime) -> str:
+        # The period is part of the snapshot identity: two runs that consumed different
+        # years of the same series are not the same snapshot, and before 0043 there was no
+        # way to say so.
         payload = sorted(
-            (issuer_id, input_key, str(value), str(confidence))
-            for issuer_id, input_key, value, confidence in self._rows_for_cutoff(cutoff_at)
+            (issuer_id, input_key, str(value), str(confidence), fiscal_period or "")
+            for issuer_id, input_key, value, confidence, fiscal_period in self._rows_for_cutoff(cutoff_at)
         )
         return f"strategy-snapshot:{canonical_sha256(payload)}"
 
