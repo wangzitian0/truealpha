@@ -58,9 +58,10 @@ export interface DatahubStats {
 const HEADS_SQL = `
   select h.universe_id, h.sequence, h.advanced_at::text as advanced_at, h.target_run_id,
          q.payload->>'availability' as availability,
-         (select count(*)::int from jsonb_each(q.payload->'reconciliation_cells') c
+         (select count(*)::int from jsonb_each(coalesce(q.payload->'reconciliation_cells', '{}'::jsonb)) c
            where c.value->>'outcome' = 'agreed') as agreed_cells,
-         (select count(*)::int from jsonb_each(q.payload->'reconciliation_cells')) as total_cells,
+         (select count(*)::int
+            from jsonb_each(coalesce(q.payload->'reconciliation_cells', '{}'::jsonb))) as total_cells,
          coalesce(q.payload->'factor_availability', '{}'::jsonb) as factor_availability
   from mart.current_pointer_head h
   left join mart.datahub_quality_report q on q.run_id = h.target_run_id
