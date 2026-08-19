@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { ProvenanceCell } from "@/components/provenance-cell";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadRanking } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
@@ -62,7 +63,7 @@ export default async function RankingsPage({
                   <th scope="col" className="px-4 py-3">PEG rank</th>
                   <th scope="col" className="px-4 py-3">Confidence</th>
                   <th scope="col" className="px-4 py-3">Availability</th>
-                  <th scope="col" className="px-4 py-3">Trace</th>
+                  <th scope="col" className="px-4 py-3">Inputs</th>
                 </tr>
               </thead>
               <tbody>
@@ -99,13 +100,7 @@ export default async function RankingsPage({
                       <AvailabilityBadge status={row.availability} />
                     </td>
                     <td className="px-4 py-3">
-                      <Link
-                        href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
-                        className="font-mono text-xs text-gray-400 hover:text-accent"
-                        data-evidence="true"
-                      >
-                        {row.traceId}
-                      </Link>
+                      <ProvenanceCell row={row} />
                     </td>
                   </tr>
                 ))}
