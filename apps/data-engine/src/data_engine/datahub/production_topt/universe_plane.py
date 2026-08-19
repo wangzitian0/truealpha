@@ -175,6 +175,11 @@ def _resolve_figis(
             content_type="application/json",
             fetched_at=fetched_at,
             recorded_at=fetched_at,
+            # OpenFIGI responses do not echo the query, so the response bytes alone
+            # cannot say which FIGI belongs to which ticker — the request batch rides
+            # in metadata (body stays vendor-verbatim) so the pairing is
+            # reconstructible from the landed row (review on #643).
+            metadata={"request_jobs": chunk},
         )
         results = json.loads(body)
         for job, result in zip(chunk, results):

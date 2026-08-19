@@ -396,7 +396,10 @@ def test_figi_resolution_lands_its_response_bytes(connection, monkeypatch) -> No
     resolved = _resolve_figis(connection, ["ALFA"], as_of=date(2026, 8, 19), api_key="k")
     assert resolved == {"ALFA": "bbg00testfig1"}
     landed = connection.execute(
-        "select source, source_record_id from raw.fetches where source = 'openfigi'"
+        "select source, source_record_id, metadata->'request_jobs'->0->>'idValue'"
+        " from raw.fetches where source = 'openfigi'"
         " and source_record_id = 'figi-mapping:2026-08-19:0'"
     ).fetchone()
-    assert landed == ("openfigi", "figi-mapping:2026-08-19:0")
+    # The response bytes alone cannot pair FIGIs to tickers (OpenFIGI does not
+    # echo the query) — the landed row must carry the request batch too.
+    assert landed == ("openfigi", "figi-mapping:2026-08-19:0", "ALFA")
