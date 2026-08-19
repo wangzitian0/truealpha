@@ -216,7 +216,9 @@ target financial-fact shape below shows that semantic boundary; migration work m
 preserve legacy IDs as versioned aliases rather than rewriting history.
 
 ```sql
--- Target Gate 0 shape; current migrations remain transitional until #57/#58 land.
+-- RETIRED 2026-08-19 (see the note below). Kept as the record of what was intended,
+-- not as a target. `staging.financial_facts` holds 0 rows in Production and its four
+-- writers are statically unreachable.
 create table staging.financial_facts (
     id                bigint generated always as identity primary key,
     subject_kind      text not null,          -- 'issuer' or 'security', registry-constrained
@@ -244,7 +246,39 @@ create index idx_financial_facts_asof
        (subject_kind, subject_id, metric, fiscal_period, transaction_time desc);
 ```
 
-The transitional checked-in DDL is not a second valid identity model.
+**`staging.financial_facts` is retired, and the reason is a layering error rather than a
+delivery failure.** It holds 0 rows in Production, and all four of its writers
+(`financial_facts_assets`, `sec_financial_facts`, `financial_facts_pipeline`,
+`mvp_medium_repository`) are statically unreachable from the composition root. It never
+acquired a writer because neither layer needed it where it sits:
+
+- **The datahub layer optimises for completeness and confidence.** Completeness is
+  row-level at OBLIGATION granularity (rule 15): a required `(scope, subject, domain,
+  partition)` cell either captured or did not. `raw.capture_*` plus
+  `staging.capture_normalized_observations` answer that for every cell, with per-cell
+  confidence, `parser_version` and `mapping_version`. Exploding one payload into one row
+  per metric adds nothing to "was the required cell captured".
+- **What this table uniquely offered — any metric, across periods, addressable by name —
+  is a FACTOR-layer need** (flexibility and traceability). But a factor may not read it:
+  rule 3 forbids factors from seeing `source`, `raw_ref`, or accession, and half of these
+  columns are exactly that. So the table sat in the datahub's schema solving the factor
+  layer's problem, in a shape the factor layer is not allowed to consume.
+
+The factor-input projection that does the job is `staging.strategy_backtest_inputs`
+(issuer, cutoff, `input_key`, `fiscal_period`, value, confidence, `knowable_at`). Its lack
+of a `source` column is REQUIRED by rule 3, not a gap; traceability is served by lineage
+recorded outside factor computation (rule 23) in `staging.evidence_nodes` /
+`evidence_edges`. Its remaining limit is that `input_key` is a `CHECK`-enumerated list
+rather than validated against the metric registry, which is what makes adding a metric a
+migration; closing that is what this table was reached for and is the actual work.
+
+Identity still matters and is unchanged: #57 must distinguish issuer, security and listing
+identities, migration work preserves legacy IDs as versioned aliases rather than rewriting
+history, and the transitional `unified_id` is not a second valid identity model. Note the
+open case: `mart.entity_display_resolution` currently resolves both
+`issuer:cik:0000320193` and `issuer:lei:HWUPKR0MPOU8FGXBT394` to AAPL, because the QQQ and
+TOPT universes mint issuer identities from different sources. Harmless while they run as
+separate pipelines; a prerequisite before they are one universe.
 
 **Source fusion (staging → snapshot → mart).** Staging is evidence, the durable
 snapshot is the selected fact set, and mart is its materialized projection. Multiple
