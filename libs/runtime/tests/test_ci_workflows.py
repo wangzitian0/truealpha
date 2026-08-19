@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 # Loaded the way every test in this directory loads its subject — the tests are
 # not a package, and pytest's importlib mode does not put this directory on the
@@ -342,3 +343,26 @@ def test_every_workflow_installs_what_the_tools_it_runs_import() -> None:
         f"{offenders}. The script dies at import, before it can judge anything, and every "
         f"later step in the job is skipped (#616)"
     )
+
+
+def test_two_different_releases_never_queue_behind_each_other() -> None:
+    """`docs/release-protocol.md` tells an author the tag push is the only lock
+    and that parallel releases do not deadlock. That claim rests entirely on the
+    version being part of the concurrency key, which is one edit away from being
+    false — and a workflow-level `group: truealpha-release` would serialise every
+    release behind every other with no error anywhere to say so.
+
+    `cancel-in-progress: false` is the other half: a second dispatch of the same
+    release is usually a retry of a deploy whose outcome is unknown, and
+    cancelling the first would leave nobody watching it.
+    """
+    workflow = yaml.safe_load(source(RELEASE))
+    concurrency = workflow["concurrency"]
+    assert "inputs.version_ref" in concurrency["group"], (
+        f"the release concurrency key is {concurrency['group']!r} and does not include the "
+        f"version, so two different releases would serialise (docs/release-protocol.md)"
+    )
+    assert "inputs.deploy_type" in concurrency["group"], (
+        "staging and prod for one version would serialise behind each other"
+    )
+    assert concurrency["cancel-in-progress"] is False, "a retry must wait for the in-flight deploy, never cancel it"
