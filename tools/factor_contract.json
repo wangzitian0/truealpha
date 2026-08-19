@@ -1,0 +1,79 @@
+{
+  "datahub_tables": {
+    "mart.strategy_decisions": [
+      "strategy_decision_id",
+      "content_sha256",
+      "strategy_run_id",
+      "issuer_id",
+      "cutoff_at",
+      "capital_adjusted_labor_efficiency",
+      "tier",
+      "current_price_to_sales",
+      "target_price_to_sales",
+      "valuation_gap",
+      "eligible",
+      "outcome",
+      "exclusion_reason",
+      "rank",
+      "target_weight",
+      "created_at",
+      "peg",
+      "peg_rank"
+    ],
+    "staging.strategy_backtest_inputs": [
+      "id",
+      "issuer_id",
+      "cutoff_at",
+      "input_key",
+      "value",
+      "confidence",
+      "knowable_at",
+      "recorded_at",
+      "fiscal_period"
+    ]
+  },
+  "factors": {
+    "gross_profit_per_employee": {
+      "function": "gross_profit_per_employee",
+      "kind": "base",
+      "module": 2,
+      "module_path": "libs/factors/src/factors/base/gross_profit_per_employee.py",
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal) -> FactorResult"
+    },
+    "peg": {
+      "function": "peg",
+      "kind": "base",
+      "module": 1,
+      "module_path": "libs/factors/src/factors/base/peg.py",
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, growth_convention: GrowthConvention, as_of: datetime, cagr_years: int) -> FactorResult"
+    },
+    "price_to_sales": {
+      "function": "price_to_sales",
+      "kind": "base",
+      "module": 6,
+      "module_path": "libs/factors/src/factors/base/price_to_sales.py",
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime) -> FactorResult"
+    },
+    "registered_composite_probe": {
+      "function": "registered_composite_probe",
+      "kind": "composite",
+      "module": 7,
+      "module_path": "libs/factors/src/factors/composite/registered_composite_probe.py",
+      "signature": "(*, subject: SubjectRef, inputs: tuple[FactorInputCapability, ...], output_key: str = 'registered-composite-probe') -> FactorOutputDraft"
+    },
+    "registered_semantic_probe": {
+      "function": "registered_semantic_probe",
+      "kind": "base",
+      "module": 7,
+      "module_path": "libs/factors/src/factors/base/registered_semantic_probe.py",
+      "signature": "(*, subject: SubjectRef, inputs: tuple[FactorInputCapability, ...], output_key: str = 'registered-semantic-probe') -> FactorOutputDraft"
+    },
+    "three_tier_valuation": {
+      "function": "three_tier_valuation",
+      "kind": "composite",
+      "module": 7,
+      "module_path": "libs/factors/src/factors/composite/three_tier_valuation.py",
+      "signature": "(inputs: Sequence[FactorResult], *, entity_id: str, as_of: datetime, definition: ThreeTierValuationDefinition) -> FactorResult"
+    }
+  }
+}
