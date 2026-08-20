@@ -403,3 +403,45 @@ def test_figi_resolution_lands_its_response_bytes(connection, monkeypatch) -> No
     # The response bytes alone cannot pair FIGIs to tickers (OpenFIGI does not
     # echo the query) — the landed row must carry the request batch too.
     assert landed == ("openfigi", "figi-mapping:2026-08-19:0", "ALFA")
+
+
+def test_canary_static_members_refresh_publish_resolve(connection, monkeypatch) -> None:
+    """#648: the canary source has no index API — the hand-picked membership lands
+    as the fetch body (versioned operator configuration), identities resolve through
+    the SAME paths as an index-fed source, and the published head resolves to a
+    corpus with the dual-class pair collapsed to one issuer (5 issuers / 6 listings)."""
+    from data_engine.datahub.production_topt import universe_plane as up
+
+    ciks = {
+        "AAPL": 320193,
+        "GOOGL": 1652044,
+        "GOOG": 1652044,
+        "ASML": 937966,
+        "HBAN": 49196,
+        "CINF": 20286,
+    }
+    from data_engine.sources import sec as sec_module
+
+    monkeypatch.setattr(sec_module, "ticker_cik_index", lambda: dict(ciks))
+    monkeypatch.setattr(
+        up,
+        "_resolve_figis",
+        lambda conn, tickers, *, as_of, api_key="": {t: f"bbg-canary-{t.lower()}" for t in tickers},
+    )
+    source = up.UNIVERSE_SOURCES["canary"]
+    landed = up.refresh_etf_constituents(connection, source, as_of=date(2026, 8, 20))
+    assert landed == 6  # six tickers, six listing rows; the issuer collapse happens at denominator build
+    fetch = connection.execute(
+        "select source from raw.fetches where source_record_id = 'index-constituents:canary:2026-08-20'"
+    ).fetchone()
+    assert fetch == ("release",)  # the membership itself is the landed evidence
+
+    contract_id, sequence = up.publish_universe_list(
+        connection, source, report_date=date(2026, 6, 30), note="canary first publish"
+    )
+    assert contract_id.startswith("universe-list:") and sequence >= 1
+    corpus = up.resolve_universe_corpus(connection, "universe-list:canary")
+    denominator = corpus["topt_denominator"]
+    assert denominator["instrument_count"] == 6
+    assert denominator["issuer_count"] == 5  # GOOGL+GOOG collapse to one issuer
+    assert denominator["universe_id"] == "universe:canary-us-2026-06-30"
