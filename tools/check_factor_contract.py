@@ -186,6 +186,29 @@ def main() -> int:
             "generic transport — init.md rule 22 forbids branching on record type; declare it on the registry"
         )
 
+    # --- I1: fusion is exercised at snapshot freeze, by declared priority ---
+    # init.md rule 12: "The winner is chosen by declared rules, NEVER by ingestion
+    # recency", and Section 6 orders it source-priority first, restatement recency second.
+    # The selection window today orders by `knowable_at desc, observation_id desc` alone --
+    # correct WITHIN a source, and silently "whoever published later" the moment a second
+    # source registers for the same obligation. Harmless while every metric resolves from
+    # SEC alone; a wrong number on the day fusion is first exercised.
+    selection = (
+        REPO / "apps" / "data-engine" / "src" / "data_engine" / "datahub" / "production_topt" / "materialization.py"
+    )
+    if selection.exists():
+        window = re.search(
+            r"row_number\(\) over\s*\(\s*partition by obligation\.obligation_id\s*order by(?P<order>.*?)\)",
+            selection.read_text(),
+            re.S,
+        )
+        if window and not re.search(r"priorit|source_rank|array_position", window.group("order"), re.I):
+            failures.append(
+                "snapshot selection orders by recency alone with no source-priority rank "
+                "(materialization.py `row_number() over (partition by obligation_id ...)`). "
+                "init.md rule 12 ranks the source FIRST and recency second"
+            )
+
     # --- I2: one encoder, one parser. Nobody re-implements the period-tag format ---
     for path in sorted((REPO / "libs").rglob("*.py")) + sorted((REPO / "apps").rglob("*.py")):
         if "test" in path.name or path.name == "fiscal_period.py":
@@ -203,15 +226,19 @@ def main() -> int:
     waived = {w["failure_contains"]: w for w in manifest.get("exemptions", [])}
     today = manifest["exemptions_evaluated_on"]
     deferred: list[str] = []
-    for failure in list(failures):
+    for index, failure in enumerate(list(failures)):
         for needle, waiver in waived.items():
-            if needle in failure:
-                if waiver["expires"] <= today:
-                    failure += f"  [EXEMPTION for {waiver['issue']} EXPIRED {waiver['expires']}]"
-                    break
+            if needle not in failure:
+                continue
+            if waiver["expires"] <= today:
+                # An expired deferral does not just stop deferring — it must SAY it
+                # expired, or the failure reads as a new regression and the next person
+                # re-litigates a decision that was already made and dated.
+                failures[index] = f"{failure}\n      [deferral for {waiver['issue']} EXPIRED {waiver['expires']}]"
+            else:
                 failures.remove(failure)
                 deferred.append(f"{failure}\n      deferred to {waiver['issue']} until {waiver['expires']}")
-                break
+            break
     for note in deferred:
         print(f"  DEFERRED {note}")
 

@@ -212,6 +212,30 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "factor-contract/an-expired-deferral-stops-deferring",
+      "guard": "tools/check_factor_contract.py",
+      "file": "tools/factor_contract.json",
+      "find": "\"exemptions_evaluated_on\": \"2026-08-20\"",
+      "replace": "\"exemptions_evaluated_on\": \"2027-01-01\"",
+      "command": [
+        "python3",
+        "tools/check_factor_contract.py"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "factor-contract/snapshot-selection-must-rank-the-source",
+      "guard": "tools/check_factor_contract.py",
+      "file": "tools/factor_contract.json",
+      "find": "\"failure_contains\": \"snapshot selection orders by recency alone\"",
+      "replace": "\"failure_contains\": \"a clause nothing produces\"",
+      "command": [
+        "python3",
+        "tools/check_factor_contract.py"
+      ],
+      "cwd": "."
     }
   ]
 }
