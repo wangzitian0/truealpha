@@ -342,3 +342,28 @@ console.log(
 	);
 	console.log("ok  every declared decision field survives decisionFromRow");
 }
+
+// ---------------------------------------------------------------------------
+// A module's availability badge must travel with its coverage.
+//
+// `overview()` decided availability with `decisions.some(...)`: one non-null row
+// out of 660 read as "available". PEG carries 28 of 660 — 4% — and the card said
+// available, which is #537's shape: a report that cannot report a problem.
+// ---------------------------------------------------------------------------
+{
+	const read = (relative: string) =>
+		readFileSync(join(process.cwd(), relative), "utf8");
+	const overview = read("src/server/mart/research-read.ts")
+		.split("async overview(", 2)[1]
+		.split("\n\tasync ", 2)[0];
+	assert(
+		!/decisions\.some\(/.test(overview),
+		"overview() decides availability with decisions.some(): one non-null row out of hundreds " +
+			"reads as available, which is how PEG showed available at 4% coverage",
+	);
+	assert(
+		/coverage:/.test(overview),
+		"overview() must report how many decisions carry the value, not only whether any does",
+	);
+	console.log("ok  module availability travels with its coverage");
+}
