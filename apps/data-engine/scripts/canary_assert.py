@@ -47,9 +47,10 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
     ).fetchone()
     if snapshot is None:
         bad.append("no frozen snapshot")
-    elif snapshot != (6, 7, 28):
-        # GOOGL+GOOG share one issuer: 6 < 7 proves dual-class identity survived.
-        bad.append(f"snapshot counts {snapshot} != (6, 7, 28)")
+    elif snapshot != (5, 6, 24):
+        # Six listings, five issuers: GOOGL+GOOG share one issuer, and 5 < 6 proves
+        # dual-class identity survived end to end.
+        bad.append(f"snapshot counts {snapshot} != (5, 6, 24)")
 
     branches = dict(
         connection.execute(
@@ -87,8 +88,8 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
     ).fetchone()
     if report is None or report[0] is None:
         bad.append("quality report missing factor_availability (#644)")
-    elif int(report[0]) != 7:
-        bad.append(f"factor_availability universe_subjects {report[0]} != 7")
+    elif int(report[0]) != 6:
+        bad.append(f"factor_availability universe_subjects {report[0]} != 6")
 
     return bad
 

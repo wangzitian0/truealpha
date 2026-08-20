@@ -83,8 +83,9 @@ UNIVERSE_SOURCES: dict[str, UniverseSource] = {
     # dual-class issuer -> issuer_count < instrument_count), ASML (foreign IFRS
     # filer -> the honest-unavailable path), HBAN (SIC 6021 -> FINANCIAL branch,
     # pre-provision numerator), CINF (SIC 6331 -> INSURANCE branch). The
-    # post-deploy canary run drives the REAL pipeline over these seven listings
-    # and asserts named expectations — deploy and verify become one fact.
+    # post-deploy canary run drives the REAL pipeline over these six listings
+    # (five issuers) and asserts named expectations — deploy and verify become
+    # one fact.
     "canary": UniverseSource(
         etf="canary",
         index_api="",

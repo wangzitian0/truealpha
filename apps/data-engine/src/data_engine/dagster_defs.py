@@ -268,7 +268,7 @@ CANARY_OBJECTIVES = ServiceObjectives(
 @dg.op
 def run_canary_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
     """#648: the post-deploy canary — the REAL pipeline over five hand-picked
-    issuers (seven listings, every operating branch), so 'deployed' and
+    issuers (six listings, every operating branch), so 'deployed' and
     'verified' become one fact. Trigger-only: no schedule in either environment;
     the deploy lane inserts a trigger row and then asserts the named oracles."""
     cutoff = datetime.fromisoformat(config.executed_at)

@@ -409,7 +409,7 @@ def test_canary_static_members_refresh_publish_resolve(connection, monkeypatch) 
     """#648: the canary source has no index API — the hand-picked membership lands
     as the fetch body (versioned operator configuration), identities resolve through
     the SAME paths as an index-fed source, and the published head resolves to a
-    corpus with the dual-class pair collapsed to one issuer (6 issuers / 7 listings)."""
+    corpus with the dual-class pair collapsed to one issuer (5 issuers / 6 listings)."""
     from data_engine.datahub.production_topt import universe_plane as up
 
     ciks = {
@@ -430,7 +430,7 @@ def test_canary_static_members_refresh_publish_resolve(connection, monkeypatch) 
     )
     source = up.UNIVERSE_SOURCES["canary"]
     landed = up.refresh_etf_constituents(connection, source, as_of=date(2026, 8, 20))
-    assert landed == 6  # six tickers... GOOGL+GOOG are distinct listings: expect 6 members? roster has 6 tickers
+    assert landed == 6  # six tickers, six listing rows; the issuer collapse happens at denominator build
     fetch = connection.execute(
         "select source from raw.fetches where source_record_id = 'index-constituents:canary:2026-08-20'"
     ).fetchone()
