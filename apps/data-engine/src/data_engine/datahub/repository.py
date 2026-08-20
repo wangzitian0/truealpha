@@ -582,6 +582,19 @@ class PostgresCaptureControlRepository:
             )
         return False
 
+    def bind_observation(self, capture_obligation_id: str, observation_id: str) -> None:
+        """Bind an EXISTING observation to an obligation (#635 cross-run reuse): the
+        observation, its payload and its vintage already sit committed under the run
+        that fetched them; reuse adds only the usage edge."""
+        self._connection.execute(
+            """
+            insert into staging.capture_observation_obligations (
+                capture_obligation_id, observation_id
+            ) values (%s, %s) on conflict do nothing
+            """,
+            (capture_obligation_id, observation_id),
+        )
+
     def put_obligation_result(self, capture_obligation_id: str, result: ListObligationResult) -> bool:
         expected = self._connection.execute(
             """

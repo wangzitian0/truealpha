@@ -500,7 +500,14 @@ class PostgresToptCoreRepository:
                 join raw.capture_schedule_policies policy using (schedule_policy_id)
                 join raw.capture_source_vintages vintage
                   on vintage.source_vintage_id = observation.source_vintage_id
-                 and vintage.source_request_id = work.source_request_id
+                 -- The request-identity guard keeps foreign observations out. A
+                 -- cross-run REUSED observation (#635) legitimately carries the
+                 -- SOURCE run's request, so the reuse arm admits exactly the
+                 -- anchor the attempt result names — nothing else widens.
+                 and (
+                     vintage.source_request_id = work.source_request_id
+                     or terminal_attempt.reused_source_vintage_id = observation.source_vintage_id
+                 )
                 where obligation.run_id = %s
                   and observation.source_vintage_id = coalesce(
                       terminal_attempt.source_vintage_id,
