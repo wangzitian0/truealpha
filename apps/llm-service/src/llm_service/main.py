@@ -81,14 +81,17 @@ def mcp_slash(request: Request) -> RedirectResponse:
     Built by hand rather than through root_path, because root_path also changes
     ROUTING and killed the endpoint it was meant to fix.
 
-    The scheme comes from ProxyHeadersMiddleware having already rewritten the
-    request; the host from the forwarded Host. Both degrade to the request's own
-    values when the peer is not the trusted proxy, which is the safe direction.
+    Path-only, so there is no host to get wrong. An absolute Location built from
+    `request.url.netloc` lets the Host header — or a forwarded one — choose where
+    the client is sent, and there is no allowlist here to stop it: a host-header
+    injection and an open redirect (review).
+
+    A relative Location also cannot drop TLS, since the client keeps the scheme
+    it already had. That is the property this whole change exists for, obtained
+    by not naming a scheme at all rather than by naming the right one.
     """
-    return RedirectResponse(
-        f"{request.url.scheme}://{request.url.netloc}{ROUTED_PREFIX}/mcp/",
-        status_code=307,
-    )
+    del request  # the Location is fixed; nothing about the request may steer it
+    return RedirectResponse(f"{ROUTED_PREFIX}/mcp/", status_code=307)
 
 
 app.mount("/mcp", mcp.streamable_http_app())

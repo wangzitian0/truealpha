@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from llm_service.main import app
+from llm_service.main import ROUTED_PREFIX, app
 
 
 def test_health():
@@ -65,16 +65,30 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
             },
         )
         untrusted = TestClient(app, client=("203.0.113.7", 50000)).get(
-            "/mcp", follow_redirects=False, headers={"X-Forwarded-Proto": "https"}
+            "/health/", follow_redirects=False, headers={"X-Forwarded-Proto": "https"}
         )
+        trusted_slash = client.get("/health/", follow_redirects=False, headers={"X-Forwarded-Proto": "https"})
 
     location = redirect.headers["location"]
     assert redirect.status_code == 307
-    assert location.startswith("https://"), f"redirect drops TLS: {location}"
-    assert "/api/mcp/" in location, f"redirect drops the routed prefix: {location}"
+    # Path-only. Asserting "starts with https" would REQUIRE the absolute form,
+    # which is what lets a forged Host choose the destination (review). A
+    # relative Location keeps the client's scheme without naming one.
+    assert "://" not in location, f"an absolute Location lets the Host header choose the destination: {location}"
+    assert location == f"{ROUTED_PREFIX}/mcp/", f"redirect is not the routed path: {location}"
     assert endpoint.status_code == 200, (
         f"the MCP endpoint answers {endpoint.status_code}; a redirect fix that breaks routing points clients at a 404"
     )
+    # The redirect is identical for any peer now, so the trust boundary is
+    # asserted where it remains observable: Starlette's own redirect_slashes
+    # still builds an ABSOLUTE Location, so an unhandled trailing slash shows
+    # what scheme the app believes it is serving.
     assert untrusted.headers["location"].startswith("http://"), (
         "an untrusted peer set the scheme — trusted_hosts is too wide"
+    )
+    # The negative alone proves nothing: with the middleware removed entirely
+    # every peer gets http and the assertion above still passes. The positive is
+    # what shows the boundary discriminates (found by red-proving it).
+    assert trusted_slash.headers["location"].startswith("https://"), (
+        "the proxy's X-Forwarded-Proto was ignored — ProxyHeadersMiddleware is not installed"
     )
