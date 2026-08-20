@@ -533,32 +533,6 @@ def _shortfall_text(status: ToptCaptureStatus) -> str:
     )
 
 
-def _already_recorded(connection: psycopg.Connection[Any], run_id: str) -> ToptCaptureStatus | None:
-    """This exact run identity, already committed carrying a degraded record.
-
-    Capture-control rows are append-only, content-addressed, and guarded by
-    `reject_mutation`: `raw.capture_obligation_results` holds at most one row per
-    obligation and refuses to be rewritten. So once a run's outcomes are committed, that
-    run's outcomes are history — a replay of the same tick that produces DIFFERENT
-    outcomes is a different run, and the store is right to refuse it.
-
-    It refuses deep inside the sink, though, as a content conflict on an attempt-result
-    identity, which is exactly the "refuse the run for a reason far from its cause" that
-    `persistence.py` warns about. Detecting it here — before a single vendor call — lets
-    the tick fail with the reason that was actually recorded.
-
-    A run recorded as COMPLETE is deliberately not caught: replaying one reproduces every
-    identity and re-materializes, which is the idempotent-retry property the composition
-    has always had.
-    """
-    status = PostgresCaptureControlRepository(connection).status(run_id)
-    if status.terminal_count == 0:
-        return None
-    if status.complete and status.success_count == status.obligation_count:
-        return None
-    return status
-
-
 def _record_and_refuse(
     connection: psycopg.Connection[Any],
     plan: PlannedRun,
@@ -620,12 +594,15 @@ def run_topt_pipeline(
     label_prefix: str = "production-topt",
     universe_head_kind: str | None = None,
 ) -> ToptPipelineResult:
-    """Capture → freeze → materialize → quality report, in the caller's transaction.
+    """Capture, then commit; freeze → materialize → report in the caller's transaction.
 
-    One exception to "the caller's transaction", and it is the point of #538: a run that
-    degrades commits its own record before raising, so the caller's abort cannot erase the
-    evidence of why the tick failed. Everything on the success path is still the caller's
-    to commit.
+    Two deliberate commits of our own (#538, #628), one principle: evidence outlives
+    failures. A run that DEGRADES commits its record before raising (#538). A run that
+    captures COMPLETELY commits the capture before freezing (#628) — a publish-side
+    failure then costs a retry of the cheap half, not the 39-minute vendor half, and
+    the retry RESUMES (re-freezing an existing run is idempotent). Consumers never see
+    a half-published run either way: reads resolve through the governed pointer, which
+    only advances in the caller's publish transaction.
     """
     if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ValueError("cutoff must be timezone-aware")
@@ -638,9 +615,19 @@ def run_topt_pipeline(
         label_prefix=label_prefix,
         universe_head_kind=universe_head_kind,
     )
-    recorded = _already_recorded(connection, plan.run_id)
-    if recorded is not None:
-        _record_and_refuse(connection, plan, recorded)
+    status = PostgresCaptureControlRepository(connection).status(plan.run_id)
+    # #628: a COMPLETE, fully successful capture that already sits committed is the
+    # resume case — the tick died (or was killed) between the capture commit below
+    # and the publish transaction. Resuming skips the vendor half entirely and
+    # re-freezes the existing run, which is idempotent end to end (freeze_snapshot
+    # early-returns on its own snapshot; materialize and the report persist
+    # conflict-tolerantly). This strengthens the idempotent-retry property the
+    # composition always claimed for complete replays: same identities, zero new
+    # vendor calls. Refusal stays for every OTHER recorded shape — those are
+    # #538's degraded histories, and their outcomes are append-only.
+    resumed = status.terminal_count > 0 and status.complete and status.success_count == status.obligation_count
+    if status.terminal_count > 0 and not resumed:
+        _record_and_refuse(connection, plan, status)
 
     sink = PostgresCaptureControlSink(
         connection,
@@ -651,21 +638,29 @@ def run_topt_pipeline(
         freshness_windows=plan.freshness_windows,
         default_freshness_max_age=plan.default_freshness_max_age,
     )
-    report = run_topt_capture(
-        plan.run_id,
-        plan.work_items,
-        build_routes(plan, connection),
-        writer or PostgresEvidenceGraphRepository(connection),
-        sink=sink,
-        cutoff=cutoff,
-        recorded_at=cutoff,
-        max_attempts=_MAX_ATTEMPTS,
-    )
-    status = PostgresCaptureControlRepository(connection).status(plan.run_id)
-    if report.halted:
-        _record_and_refuse(connection, plan, status, halt_reason=report.halt_reason)
-    if not status.complete or status.success_count != status.obligation_count:
-        _record_and_refuse(connection, plan, status)
+    if not resumed:
+        report = run_topt_capture(
+            plan.run_id,
+            plan.work_items,
+            build_routes(plan, connection),
+            writer or PostgresEvidenceGraphRepository(connection),
+            sink=sink,
+            cutoff=cutoff,
+            recorded_at=cutoff,
+            max_attempts=_MAX_ATTEMPTS,
+        )
+        status = PostgresCaptureControlRepository(connection).status(plan.run_id)
+        if report.halted:
+            _record_and_refuse(connection, plan, status, halt_reason=report.halt_reason)
+        if not status.complete or status.success_count != status.obligation_count:
+            _record_and_refuse(connection, plan, status)
+        # #628: the capture is durable the moment it is complete and successful. A
+        # freeze/materialize/report failure after this line loses NOTHING — the
+        # 39-minute QQQ captures that vanished with their transactions (take-2,
+        # take-3, the first scheduled run) are the incident class this closes.
+        # Consumer atomicity is unaffected: reads resolve through the governed
+        # pointer, which only advances in the caller's publish transaction.
+        connection.commit()
 
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
