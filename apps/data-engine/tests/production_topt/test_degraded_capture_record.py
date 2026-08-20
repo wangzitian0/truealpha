@@ -594,7 +594,11 @@ def test_a_fully_reused_run_still_exists_on_the_evidence_plane(tick_database_url
     and binding the release manifest to a missing node is an FK violation. The
     skip path now appends the node itself."""
     _arm(monkeypatch)
-    reuse_cutoff = datetime(2026, 4, 14, 22, 15, tzinfo=UTC)  # Tuesday, clear of every other cutoff
+    # Same settled session as the price fixture (2026-03-31) or the market-price
+    # semantic falls back to a fresh fetch and the all-UNCHANGED assertion below
+    # (rightly) fails. Sharing the reuse test's cutoff is safe: versions differ,
+    # and cross-test reuse inside the window is the feature itself.
+    reuse_cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
     _run_tick(tick_database_url, version="evidence-source", cutoff=reuse_cutoff)
     second = _run_tick(tick_database_url, version="evidence-target", cutoff=reuse_cutoff)
     # The reuse path must be the one under test: every terminal UNCHANGED proves the
