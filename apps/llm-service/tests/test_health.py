@@ -50,6 +50,15 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
             "the /mcp mount's session manager wiring broke app startup (#348)"
         )
         redirect = client.get("/mcp", follow_redirects=False, headers={"X-Forwarded-Proto": "https"})
+        # Without the slash, and with the method a real client uses. GET-only
+        # answered 405 here on staging, which is not "redirected badly" — it is
+        # not reachable at all.
+        post_no_slash = client.post(
+            "/mcp",
+            follow_redirects=False,
+            headers={"Accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
         endpoint = client.post(
             "/mcp/",
             headers={"Accept": "application/json, text/event-stream"},
@@ -76,6 +85,10 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
     # relative Location keeps the client's scheme without naming one.
     assert "://" not in location, f"an absolute Location lets the Host header choose the destination: {location}"
     assert location == f"{ROUTED_PREFIX}/mcp/", f"redirect is not the routed path: {location}"
+    assert post_no_slash.status_code == 307, (
+        f"POST without the trailing slash answers {post_no_slash.status_code}; the transport "
+        f"POSTs its JSON-RPC body and a GET-only handler makes that unreachable"
+    )
     assert endpoint.status_code == 200, (
         f"the MCP endpoint answers {endpoint.status_code}; a redirect fix that breaks routing points clients at a 404"
     )

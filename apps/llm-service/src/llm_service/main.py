@@ -68,7 +68,15 @@ app.add_middleware(
 )
 
 
-@app.get("/mcp", include_in_schema=False)
+# Every method the MCP transport uses, not GET alone. Streamable-HTTP POSTs the
+# JSON-RPC body, GETs the SSE stream and DELETEs the session, and a client that
+# omits the trailing slash must reach all three.
+#
+# Measured on staging: with GET only, `POST /api/mcp` answered 405. The code
+# this replaced answered 307 — to http, which is the defect — so restricting the
+# handler to GET turned "works but downgrades" into "does not work". A narrower
+# fix than the bug.
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
 def mcp_slash(request: Request) -> RedirectResponse:
     """Send /mcp to /mcp/ ourselves, with the prefix and the scheme intact.
 
