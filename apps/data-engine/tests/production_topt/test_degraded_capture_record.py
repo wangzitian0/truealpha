@@ -586,3 +586,36 @@ def test_reuse_never_looks_ahead_of_its_own_cutoff(tick_database_url, monkeypatc
         0,
         True,
     )
+
+
+def test_a_fully_reused_run_still_exists_on_the_evidence_plane(tick_database_url, monkeypatch) -> None:
+    """The first LIVE full-reuse canary failed at publish: the capture executor is
+    what appends the run's evidence node, a fully reused run skips the executor,
+    and binding the release manifest to a missing node is an FK violation. The
+    skip path now appends the node itself."""
+    _arm(monkeypatch)
+    # Same settled session as the price fixture (2026-03-31) or the market-price
+    # semantic falls back to a fresh fetch and the all-UNCHANGED assertion below
+    # (rightly) fails. Sharing the reuse test's cutoff is safe: versions differ,
+    # and cross-test reuse inside the window is the feature itself.
+    reuse_cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
+    _run_tick(tick_database_url, version="evidence-source", cutoff=reuse_cutoff)
+    second = _run_tick(tick_database_url, version="evidence-target", cutoff=reuse_cutoff)
+    # The reuse path must be the one under test: every terminal UNCHANGED proves the
+    # executor was skipped (a fresh-capture fallback would append the node too and
+    # quietly hollow this test out — review on #666).
+    assert _status_row(tick_database_url, second.run_id) == (
+        OBLIGATIONS,
+        OBLIGATIONS,
+        0,
+        OBLIGATIONS,
+        0,
+        0,
+        0,
+        True,
+    )
+    with psycopg.connect(tick_database_url) as reader:
+        node = reader.execute(
+            "select count(*) from staging.evidence_nodes where node_id = %s", (second.run_id,)
+        ).fetchone()[0]
+    assert node == 1

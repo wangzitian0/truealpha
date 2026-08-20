@@ -47,8 +47,12 @@ from typing import Any, NoReturn
 import psycopg
 from factors.production_topt import GppeV0Definition, OperatingBranch
 from truealpha_contracts import (
+    BitemporalStamp,
     CaptureEnvironment,
     EvidenceGraphWriter,
+    EvidenceNode,
+    EvidenceNodeKind,
+    EvidenceNodeRef,
     ObligationReasonCode,
     canonical_sha256,
 )
@@ -785,6 +789,17 @@ def run_topt_pipeline(
             if report.halted:
                 status = PostgresCaptureControlRepository(connection).status(plan.run_id)
                 _record_and_refuse(connection, plan, status, halt_reason=report.halt_reason)
+        else:
+            # The capture executor is what appends the run's evidence node; a FULLY
+            # reused run skips the executor, and the publish transaction later binds
+            # the release manifest to that node — which must exist (the first live
+            # full-reuse canary failed exactly here: FK on the bound_to edge).
+            run_ref = EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=plan.run_id)
+            run_stamp = BitemporalStamp(valid_from=cutoff.date(), transaction_time=cutoff, recorded_at=cutoff)
+            (writer or PostgresEvidenceGraphRepository(connection)).append(
+                [EvidenceNode(ref=run_ref, content_sha256=run_ref.content_sha256, stamp=run_stamp)],
+                [],
+            )
         status = PostgresCaptureControlRepository(connection).status(plan.run_id)
         if not status.complete or status.success_count + status.unchanged_count != status.obligation_count:
             # UNCHANGED is a resolution, not a shortfall — the freeze gate and the
