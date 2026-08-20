@@ -634,11 +634,14 @@ def _satisfy_from_recent_observations(
               on done.capture_obligation_id = src_ob.obligation_id
              and done.terminal_state in ('success', 'unchanged')
              and done.completed_at > %(cutoff)s - %(max_age)s::interval
+             and done.completed_at <= %(cutoff)s
             join raw.capture_attempt_results attempt on attempt.attempt_id = done.final_attempt_id
             join staging.capture_normalized_observations o
               on o.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
+             and o.subject_kind = m.subject_kind
              and o.subject_id = m.subject_id
              and o.semantic_type = m.semantic_type
+             and o.knowable_at <= %(cutoff)s
         )
         select a.target_obligation_id, a.semantic_type, a.anchor_vintage_id, a.knowable_at,
                bound.observation_id
@@ -647,6 +650,9 @@ def _satisfy_from_recent_observations(
           on link.capture_obligation_id = a.source_obligation_id
         join staging.capture_normalized_observations bound on bound.observation_id = link.observation_id
         where a.rn = 1
+          -- Look-ahead guard on the whole bound set, not just the anchor: nothing
+          -- knowable after THIS run's cutoff may ride into it (review on #664).
+          and bound.knowable_at <= %(cutoff)s
         """,
         {"run_id": plan.run_id, "cutoff": cutoff, "max_age": _REUSE_MAX_AGE},
     ).fetchall()

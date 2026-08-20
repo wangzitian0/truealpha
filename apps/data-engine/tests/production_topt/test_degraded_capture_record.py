@@ -562,3 +562,27 @@ def test_a_second_run_reuses_committed_observations_without_vendor_calls(tick_da
     )
     snapshots, gppe, core = _materialized(tick_database_url, second.run_id)
     assert (snapshots, gppe, core) == (1, 20, 20)
+
+
+def test_reuse_never_looks_ahead_of_its_own_cutoff(tick_database_url, monkeypatch) -> None:
+    """Review on #664: a run completed AFTER this run's cutoff must not satisfy it —
+    reuse without an upper bound would be a look-ahead violation. The earlier tick
+    here finds only future evidence and captures fresh (every terminal SUCCESS)."""
+    _arm(monkeypatch)
+    # After every fixture knowable date and >12h clear of the module's other
+    # cutoffs, so the ONLY reuse candidate in range is the deliberately-future one.
+    future_cutoff = datetime(2026, 4, 9, 22, 15, tzinfo=UTC)  # Thursday, post-close
+    _run_tick(tick_database_url, version="lookahead-source", cutoff=future_cutoff)
+
+    earlier_cutoff = future_cutoff - timedelta(hours=2)
+    result = _run_tick(tick_database_url, version="lookahead-target", cutoff=earlier_cutoff)
+    assert _status_row(tick_database_url, result.run_id) == (
+        OBLIGATIONS,
+        OBLIGATIONS,
+        OBLIGATIONS,
+        0,
+        0,
+        0,
+        0,
+        True,
+    )
