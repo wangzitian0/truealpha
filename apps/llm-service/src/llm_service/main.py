@@ -45,9 +45,21 @@ app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan, root_path=ROOT_
 # 0.0.0.0 --port 8000`, so the image's CMD has never run. Middleware ships with
 # the code and does not depend on how the process is launched.
 #
-# trusted_hosts="*": the only peer is Traefik on the compose network and the
-# container is not reachable from outside it.
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# Trust the proxy network, not everyone. `trusted_hosts="*"` would let any peer
+# that can reach this port set the scheme and host used to build redirects, and
+# "it is not reachable from outside" is an assumption about networking rather
+# than something this process can check (review).
+#
+# Measured on the VPS: llm-service sits on dokploy-network at 10.0.1.249 and
+# Traefik at 10.0.1.76 on the same network. Overridable so a preview or a
+# different topology declares its own, and a wrong value fails closed — the
+# headers are ignored and the redirect degrades to the pre-fix behaviour rather
+# than trusting a stranger.
+TRUSTED_PROXIES = os.environ.get("TRUSTED_PROXY_HOSTS", "10.0.1.0/24")
+app.add_middleware(
+    ProxyHeadersMiddleware,
+    trusted_hosts=[host.strip() for host in TRUSTED_PROXIES.split(",") if host.strip()],
+)
 
 
 @app.get("/mcp", include_in_schema=False)
