@@ -69,54 +69,18 @@ def main() -> int:
         if not _covered(route, llm["owns"]):
             failures.append(f"llm-service route {route!r} is outside its declared prefixes {llm['owns']}")
 
-    # The service is reached through a prefix Traefik strips, so it must declare
-    # that prefix or every redirect it generates points outside itself. On
-    # production, `GET /api/mcp` answered
-    #     307 -> http://truealpha.club/mcp/
-    # — TLS dropped (proxy-headers missing) and /api dropped (root-path missing),
-    # landing on app-web's 404. init.md principle 21 requires TLS on every
-    # non-local MCP endpoint, and a client follows a 307.
+    # The redirect/TLS property this file used to assert here has moved to
+    # `apps/llm-service/tests/test_health.py`, against the app itself.
     #
-    # Checked here rather than in a new tool because this file already owns the
-    # question "does what the service serves agree with what the proxy routes".
-    dockerfile = (REPO / "apps" / "llm-service" / "Dockerfile").read_text()
-    # The CMD line, not the first line mentioning uvicorn: the comment above it
-    # names the flags too, and matching that made this check green while the
-    # Dockerfile was missing --root-path. Fourth scanner this week to read its
-    # own prose as code.
-    command = next(
-        (line for line in dockerfile.splitlines() if line.lstrip().startswith("CMD") and "uvicorn" in line),
-        "",
-    )
-    if not command:
-        failures.append("no uvicorn CMD found in llm-service Dockerfile — this check lost its subject")
-    for flag, why in (
-        ("--proxy-headers", "redirect Locations are built with the request scheme, so TLS is dropped"),
-        ("--root-path", "redirect Locations lose the prefix Traefik strips, so they leave the service"),
-        # uvicorn IGNORES X-Forwarded-* from an untrusted peer, so dropping this
-        # silently reinstates the http Location even with --proxy-headers still
-        # present — the failure looks identical and the flag that matters is
-        # still there (review).
-        ("--forwarded-allow-ips", "uvicorn ignores X-Forwarded-* from untrusted peers, so proxy-headers does nothing"),
-    ):
-        if flag not in command:
-            failures.append(f"llm-service starts uvicorn without {flag}: {why}")
-
-    # `--root-path` must be the prefix the proxy strips. A mismatch is silent:
-    # routing keeps working and every generated URL is wrong.
+    # It was asserted against the Dockerfile's CMD — which production never
+    # runs. infra2's compose sets an inline entrypoint ending in
+    # `exec uvicorn ... --host 0.0.0.0 --port 8000`, so the image CMD is dead
+    # code. That check went green through CI, two review rounds and five red
+    # cases while proving nothing about the deployed service, and staging
+    # redeployed with the "fix" and answered exactly as before.
     #
-    # Parsed defensively (review): `--root-path` last on the line raised
-    # IndexError and crashed the check instead of reporting, and
-    # `--root-path=/api` is the same instruction spelled differently.
-    if "--root-path" in command:
-        after = command.split("--root-path", 1)[1]
-        after = after[1:] if after.startswith("=") else after
-        tokens = after.split()
-        declared = tokens[0].strip("\"]' ") if tokens else ""
-        if not declared or declared.startswith("-"):
-            failures.append("llm-service passes --root-path with no value")
-        elif declared != ROUTED_PREFIX:
-            failures.append(f"llm-service root-path {declared!r} is not the routed prefix {ROUTED_PREFIX!r}")
+    # A check on a file the runtime does not execute is worse than no check: it
+    # reports the property as held.
 
     names = list(manifest)
     for i, a in enumerate(names):
