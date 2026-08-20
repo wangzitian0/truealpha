@@ -45,6 +45,12 @@
       "failure_contains": "registered_semantic_probe",
       "issue": "#284",
       "reason": "correcting a module registration changes a published factor identity, so it is versioned separately"
+    },
+    {
+      "expires": "2026-10-01",
+      "failure_contains": "snapshot selection orders by recency alone",
+      "issue": "#530",
+      "reason": "adding the source-priority rank is value-neutral today (every obligation resolves from one source) but changes the selection contract, so it is the datahub axis's own versioned change"
     }
   ],
   "exemptions_evaluated_on": "2026-08-20",

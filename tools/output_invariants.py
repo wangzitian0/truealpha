@@ -187,6 +187,40 @@ INVARIANTS: tuple[Invariant, ...] = (
         """,
     ),
     Invariant(
+        id="fusion-selects-by-priority-not-recency",
+        claim=(
+            "where two sources assert the same obligation, the snapshot selected the "
+            "highest-priority source -- never whichever published later (init.md rule 12)"
+        ),
+        # Population is deliberately the CONTESTED groups only, so this reports EMPTY for
+        # as long as every obligation resolves from a single source. That is the honest
+        # state of fusion today -- unexercised, not proven -- and `--require-coverage`
+        # turns the same query into a failure the moment real data is expected to contest.
+        # An invariant that examined every group would pass forever while proving nothing.
+        # Contested = one obligation carrying observations from more than one parser
+        # family, i.e. two sources asserting the same cell. EVERY contested group is a
+        # violation today, because the selection window ranks by recency alone and has no
+        # source-priority term to break the tie with (deferred on #530). Population is the
+        # contested groups themselves, so this reports EMPTY -- "examined 0 rows, so it
+        # proved nothing" -- for as long as fusion stays unexercised. That is the honest
+        # state; an invariant over ALL groups would pass forever while proving nothing.
+        violations="""
+            select capture_obligation_id,
+                   string_agg(distinct split_part(parser_version, ':', 1), ',') as sources
+            from staging.capture_normalized_observations
+            group by capture_obligation_id
+            having count(distinct split_part(parser_version, ':', 1)) > 1
+        """,
+        population="""
+            select count(*) from (
+                select capture_obligation_id
+                from staging.capture_normalized_observations
+                group by capture_obligation_id
+                having count(distinct split_part(parser_version, ':', 1)) > 1
+            ) contested
+        """,
+    ),
+    Invariant(
         id="pointer-has-advanced-recently",
         claim=(
             "the governed pointer must advance with each accepted run — /research tells every "
