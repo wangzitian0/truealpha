@@ -17,12 +17,14 @@ never read (#429 invariant I2).
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
 import psycopg
 from factors.composite.strategy_evaluator import evaluate_cutoff
+from truealpha_contracts.fiscal_period import encode_annual
+from truealpha_contracts.metrics import METRICS
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 from data_engine.core_strategy_replay import _load_corpus, _to_decision
@@ -43,11 +45,9 @@ _STRATEGY_FINANCIAL_KEYS = (
     "net_income",
 )
 
-# Keys whose value describes a fiscal PERIOD rather than an instant, so one issuer lands
-# several rows per cutoff — one per period — distinguished by `fiscal_period` (0043).
-# `earnings_cagr_3y` used to be here as a scalar; the series it was reduced from now
-# travels instead and `factors.base.peg` does the reducing (init.md rule 2).
-_STRATEGY_PERIODIC_KEYS = {"net_income": "net_income_by_period"}
+# Which metrics are period-shaped comes from the registry, never from a list here:
+# init.md rule 22 forbids generic transport branching on record type.
+_STRATEGY_PERIODIC_KEYS = {name: f"{name}_by_period" for name, spec in METRICS.items() if spec.periodic}
 
 
 def load_strategy_definition() -> LargeModelValueV0Definition:
@@ -123,9 +123,10 @@ def seed_strategy_inputs_from_capture(
                 # known here, and an annual period's start is its end less a year; the
                 # factor re-checks the duration floor rather than trusting the tag.
                 for period_end, value in sorted((payload.get(payload_key) or {}).items()):
-                    end = date.fromisoformat(period_end)
-                    start = end.replace(year=end.year - 1) + timedelta(days=1)
-                    tag = f"FY{end.year}:FY:{start.isoformat()}:{end.isoformat()}"
+                    # One encoder, shared with the factor that parses it (init.md Section 6).
+                    # Building the tag here and matching it with a regex there is how a
+                    # format drifts into an empty series instead of an error.
+                    tag = encode_annual(date.fromisoformat(period_end))
                     inputs.append((key, value, confidence, observed_at, tag))
         if issuer_id in price:
             _listing, payload, confidence, observed_at = price[issuer_id]

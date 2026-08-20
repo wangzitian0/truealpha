@@ -1,4 +1,5 @@
 {
+  "_comment": "An exemption DEFERS a clause, it never disables one. Each carries the issue that resolves it and a date after which the gate fails anyway, mirroring tools/output_invariant_exemptions.json.",
   "datahub_tables": {
     "mart.strategy_decisions": [
       "strategy_decision_id",
@@ -32,6 +33,21 @@
       "fiscal_period"
     ]
   },
+  "exemptions": [
+    {
+      "expires": "2026-10-01",
+      "failure_contains": "input_key still carries an enumerated CHECK",
+      "issue": "#284",
+      "reason": "dropping the CHECK in favour of registry validation is a migration and its own versioned change; the factor axis owns it"
+    },
+    {
+      "expires": "2026-10-01",
+      "failure_contains": "registered_semantic_probe",
+      "issue": "#284",
+      "reason": "correcting a module registration changes a published factor identity, so it is versioned separately"
+    }
+  ],
+  "exemptions_evaluated_on": "2026-08-20",
   "factors": {
     "gross_profit_per_employee": {
       "function": "gross_profit_per_employee",

@@ -45,8 +45,8 @@ flags. Freezing these is a versioned owner decision (#284), not a factor-local o
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
-from re import compile as re_compile
 
+from truealpha_contracts.fiscal_period import parse_annual
 from truealpha_contracts.qlib_expression import (
     QlibCallNode,
     QlibFactorExpressionDefinition,
@@ -142,8 +142,6 @@ PEG_EXPRESSION_DEFINITION = QlibFactorExpressionDefinition(
 # came out at PEG 0.31 as though it were a hypergrowth name. So the DURATION is
 # checked against the same 350-day floor the SEC adapter already uses for exactly
 # this reason (`_ANNUAL_MINIMUM_DAYS`), which also absorbs 52/53-week calendars.
-_ANNUAL_PERIOD = re_compile(r":FY:(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2})$")
-_ANNUAL_MINIMUM_DAYS = 350
 
 # The context the growth arithmetic ran under in `sec_financial_adapter`. Kept
 # identical on the move so the published values do not shift by a rounding change
@@ -163,39 +161,6 @@ def _sole(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     if len(matches) > 1:
         raise ValueError(f"{entity_id}: multiple PIT-resolved facts for metric {metric!r}")
     return matches[0] if matches else None
-
-
-def _annual_series(facts: Sequence[Fact], entity_id: str, metric: str) -> list[tuple[int, Fact]]:
-    """Every ANNUAL period this metric was PIT-resolved for, keyed by the year the
-    period ENDED in, oldest first.
-
-    Unlike module 2, PEG consumes a SERIES of one metric, so multiple facts for the
-    same metric are expected rather than an error. One fact per period is still
-    required: two observations of the same period end would mean the caller passed
-    more than one vintage, and choosing between vintages is the staging layer's job,
-    not a factor's (init.md Section 6). Quarterly rows are skipped rather than
-    rejected — a filing legitimately carries both, and only the annual ones are
-    comparable across a multi-year window.
-    """
-    by_year: dict[int, Fact] = {}
-    for fact in facts:
-        if fact.entity_id != entity_id or fact.metric != metric or fact.value is None:
-            continue
-        if fact.fiscal_period is None:
-            continue
-        matched = _ANNUAL_PERIOD.search(fact.fiscal_period)
-        if matched is None:
-            continue
-        start, end = date.fromisoformat(matched.group(1)), date.fromisoformat(matched.group(2))
-        if (end - start).days < _ANNUAL_MINIMUM_DAYS:
-            # Tagged annual, but shorter than a year. Silently averaging it into a
-            # CAGR is how a half-year became a growth rate.
-            continue
-        year = end.year
-        if year in by_year:
-            raise ValueError(f"{entity_id}: multiple PIT-resolved {metric!r} facts for a period ending in {year}")
-        by_year[year] = fact
-    return sorted(by_year.items())
 
 
 def _annual_by_period_end(facts: Sequence[Fact], entity_id: str, metric: str) -> dict[date, Decimal]:
@@ -219,14 +184,12 @@ def _annual_by_period_end(facts: Sequence[Fact], entity_id: str, metric: str) ->
             continue
         if fact.fiscal_period is None:
             continue
-        matched = _ANNUAL_PERIOD.search(fact.fiscal_period)
-        if matched is None:
+        period = parse_annual(fact.fiscal_period)
+        if period is None:
+            # Unparseable, non-annual, or tagged annual but shorter than a year (#572) --
+            # all three mean the same thing here: not comparable across years.
             continue
-        start, end = date.fromisoformat(matched.group(1)), date.fromisoformat(matched.group(2))
-        if (end - start).days < _ANNUAL_MINIMUM_DAYS:
-            # Tagged annual, shorter than a year. Averaging it into a growth rate is how a
-            # six-month period became one (#572).
-            continue
+        end = period.end
         if end in by_end:
             raise ValueError(f"{entity_id}: multiple PIT-resolved {metric!r} facts for the period ending {end}")
         by_end[end] = fact.value

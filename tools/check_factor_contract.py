@@ -156,6 +156,65 @@ def main() -> int:
         if added:
             failures.append(f"{table}: new column(s) {added} are not in the freeze; add them deliberately")
 
+    # --- I4: the module number is an identity; init.md Section 7 is the authority ---
+    for name, spec in sorted(actual_factors.items()):
+        module, kind = spec.get("module"), spec.get("kind")
+        if not isinstance(module, int) or not 1 <= module <= 7:
+            failures.append(f"factor {name!r}: module {module!r} is outside init.md Section 7's 1-7")
+        elif module == 7 and kind != "composite":
+            failures.append(
+                f"factor {name!r}: module 7 is the composite (three-tier valuation); a base factor cannot claim it"
+            )
+
+    # --- I3: adding a metric is a registry edit, never a migration and never a branch ---
+    inputs_ddl = "\n".join(
+        path.read_text() for path in sorted(MIGRATIONS.glob("*.sql")) if "strategy_backtest_inputs" in path.read_text()
+    )
+    for match in re.finditer(r"input_key[^;]*?check\s*\(", inputs_ddl, re.I | re.S):
+        del match
+        failures.append(
+            "staging.strategy_backtest_inputs.input_key still carries an enumerated CHECK. "
+            "init.md rule 22: adding a metric is a registry edit, not a migration"
+        )
+        break
+    bridge = REPO / "apps" / "data-engine" / "src" / "data_engine" / "datahub" / "strategy_bridge.py"
+    # A LITERAL list of metric names is the violation; deriving the same mapping from the
+    # registry is the fix, so match the literal rather than the variable's name.
+    if bridge.exists() and re.search(r"^_STRATEGY_PERIODIC_KEYS\s*=\s*[({\[]\s*[\"']", bridge.read_text(), re.M):
+        failures.append(
+            "strategy_bridge._STRATEGY_PERIODIC_KEYS hard-codes which metrics are period-shaped inside "
+            "generic transport — init.md rule 22 forbids branching on record type; declare it on the registry"
+        )
+
+    # --- I2: one encoder, one parser. Nobody re-implements the period-tag format ---
+    for path in sorted((REPO / "libs").rglob("*.py")) + sorted((REPO / "apps").rglob("*.py")):
+        if "test" in path.name or path.name == "fiscal_period.py":
+            continue
+        text = path.read_text()
+        # The four-part tag specifically. `f"FY{fy}"` alone is an older, different
+        # single-segment tag on dead modules and is not this format.
+        if re.search(r"FY\{[^}]*\}:FY:|:FY:\(\?P?<?\\d\{4\}|:FY:\(\\d\{4\}", text):
+            failures.append(
+                f"{path.relative_to(REPO)} builds or matches the fiscal-period tag itself. "
+                "Use truealpha_contracts.fiscal_period — a format known only to a producer and a "
+                "regex fails as an empty series, not an error"
+            )
+
+    waived = {w["failure_contains"]: w for w in manifest.get("exemptions", [])}
+    today = manifest["exemptions_evaluated_on"]
+    deferred: list[str] = []
+    for failure in list(failures):
+        for needle, waiver in waived.items():
+            if needle in failure:
+                if waiver["expires"] <= today:
+                    failure += f"  [EXEMPTION for {waiver['issue']} EXPIRED {waiver['expires']}]"
+                    break
+                failures.remove(failure)
+                deferred.append(f"{failure}\n      deferred to {waiver['issue']} until {waiver['expires']}")
+                break
+    for note in deferred:
+        print(f"  DEFERRED {note}")
+
     if failures:
         print("factor contract FAILED — the frozen surface moved:\n")
         for failure in failures:

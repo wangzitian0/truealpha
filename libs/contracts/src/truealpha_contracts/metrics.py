@@ -51,6 +51,11 @@ class MetricSpec(BaseModel):
 
     name: str = Field(min_length=1)
     unit_family: UnitFamily
+    #: True when this metric describes a fiscal PERIOD, so one subject yields a series
+    #: rather than a scalar. Declared here because init.md rule 22 forbids generic
+    #: transport branching on record type -- the bridge asks the registry instead of
+    #: carrying its own list. The payload key is `<name>_by_period`.
+    periodic: bool = False
     source_priority: tuple[DataSource, ...] = Field(min_length=1)
     description: str = Field(min_length=1)
     # Gross profit is defined differently for financial vs non-financial
@@ -93,6 +98,7 @@ _SPECS = (
     MetricSpec(
         name="net_income",
         unit_family=UnitFamily.CURRENCY,
+        periodic=True,
         source_priority=(DataSource.SEC, DataSource.MOOMOO, DataSource.TWELVE_DATA),
         description="Net income attributable to the company for the fiscal period.",
     ),
