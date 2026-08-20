@@ -93,15 +93,29 @@ def main() -> int:
     for flag, why in (
         ("--proxy-headers", "redirect Locations are built with the request scheme, so TLS is dropped"),
         ("--root-path", "redirect Locations lose the prefix Traefik strips, so they leave the service"),
+        # uvicorn IGNORES X-Forwarded-* from an untrusted peer, so dropping this
+        # silently reinstates the http Location even with --proxy-headers still
+        # present — the failure looks identical and the flag that matters is
+        # still there (review).
+        ("--forwarded-allow-ips", "uvicorn ignores X-Forwarded-* from untrusted peers, so proxy-headers does nothing"),
     ):
         if flag not in command:
             failures.append(f"llm-service starts uvicorn without {flag}: {why}")
 
     # `--root-path` must be the prefix the proxy strips. A mismatch is silent:
     # routing keeps working and every generated URL is wrong.
+    #
+    # Parsed defensively (review): `--root-path` last on the line raised
+    # IndexError and crashed the check instead of reporting, and
+    # `--root-path=/api` is the same instruction spelled differently.
     if "--root-path" in command:
-        declared = command.split("--root-path", 1)[1].split()[0].strip("\"]' ")
-        if declared != ROUTED_PREFIX:
+        after = command.split("--root-path", 1)[1]
+        after = after[1:] if after.startswith("=") else after
+        tokens = after.split()
+        declared = tokens[0].strip("\"]' ") if tokens else ""
+        if not declared or declared.startswith("-"):
+            failures.append("llm-service passes --root-path with no value")
+        elif declared != ROUTED_PREFIX:
             failures.append(f"llm-service root-path {declared!r} is not the routed prefix {ROUTED_PREFIX!r}")
 
     names = list(manifest)
