@@ -7,4 +7,4 @@
 -- and mart.topt_gppe_invocations restored as 0 rows (43 live) with only two
 -- ERROR lines in a 12MB replay to say so. Pinning the function's search_path
 -- makes it caller-independent; the drill re-run must restore row-exact.
-alter function raw.canonical_sha256(jsonb) set search_path = public, pg_catalog;
+alter function raw.canonical_sha256(jsonb) set search_path = pg_catalog, public;
