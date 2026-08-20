@@ -461,3 +461,63 @@ def test_a_complete_run_still_materializes_and_reports_no_shortfall(tick_databas
     )
     snapshots, gppe, core = _materialized(tick_database_url, result.run_id)
     assert (snapshots, gppe, core) == (1, 20, 20)
+
+
+def test_a_freeze_failure_no_longer_erases_the_committed_capture(tick_database_url, monkeypatch) -> None:
+    """#628: three QQQ runs each captured everything over ~39 minutes and lost it all
+    when freeze failed inside the same transaction. The capture now commits the moment
+    it is complete and successful: a publish-side crash aborts only the cheap half."""
+    _arm(monkeypatch)
+    from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
+
+    def _boom(self, *, run_id: str, release_manifest_id: str):
+        raise RuntimeError("injected freeze failure (#628)")
+
+    monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", _boom)
+    with pytest.raises(RuntimeError, match="injected freeze failure"):
+        _run_tick(tick_database_url, version="freeze-dies")
+
+    # The tick's transaction aborted — but the capture survived it, complete and
+    # queryable on a fresh connection, with nothing frozen or served.
+    with psycopg.connect(tick_database_url) as reader:
+        # All ticks in this module share CUTOFF; the freeze-died run is the one that
+        # is complete yet has no snapshot.
+        run_id = reader.execute(
+            "select s.run_id from mart.topt_capture_status s"
+            " where s.complete and s.success_count = s.obligation_count"
+            " and not exists (select 1 from staging.topt_core_snapshots c where c.run_id = s.run_id)"
+        ).fetchone()[0]
+    status = _status_row(tick_database_url, run_id)
+    assert status is not None and status[7] is True and status[0] == status[2] == OBLIGATIONS
+    snapshots, gppe, core = _materialized(tick_database_url, run_id)
+    assert (snapshots, gppe, core) == (0, 0, 0)
+    return None
+
+
+def test_a_retry_after_freeze_failure_resumes_without_recapturing(tick_database_url, monkeypatch) -> None:
+    """#628's second half: the retry of a committed-capture/failed-publish tick RESUMES —
+    it freezes the EXISTING run instead of refusing (#538's refusal stays for degraded
+    histories) and never re-fetches a vendor byte."""
+    _arm(monkeypatch)
+    from data_engine.datahub.production_topt import capture_orchestration
+    from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
+
+    def _boom(self, *, run_id: str, release_manifest_id: str):
+        raise RuntimeError("injected freeze failure (#628)")
+
+    real_freeze = PostgresToptCoreRepository.freeze_snapshot
+    monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", _boom)
+    with pytest.raises(RuntimeError, match="injected freeze failure"):
+        _run_tick(tick_database_url, version="resume-after-freeze")
+    monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", real_freeze)
+
+    def _no_recapture(*args, **kwargs):
+        raise AssertionError("resume must not re-run capture")
+
+    monkeypatch.setattr(capture_orchestration, "run_topt_capture", _no_recapture)
+    monkeypatch.setattr(composition, "run_topt_capture", _no_recapture)
+
+    result = _run_tick(tick_database_url, version="resume-after-freeze")
+    assert result.core_result_count == 20
+    snapshots, gppe, core = _materialized(tick_database_url, result.run_id)
+    assert (snapshots, gppe, core) == (1, 20, 20)
