@@ -56,10 +56,15 @@ class UniverseSource:
     """One ETF/index universe: where its constituents come from and what it is called."""
 
     etf: str  # e.g. "qqq"
-    index_api: str  # the operator's constituents endpoint
+    index_api: str  # the operator's constituents endpoint ("" for a static-member source)
     universe_prefix: str  # e.g. "qqq-us" -> universe:qqq-us-<report_date>
     label: str
     mic: str = "xnas"
+    # A hand-picked membership (#648 canary): the list itself is versioned operator
+    # configuration and lands as the fetch body; CIK/FIGI still resolve through the
+    # same live SEC/OpenFIGI paths as an index-fed source, so identity lineage is
+    # identical either way. Empty means "fetch index_api".
+    static_members: tuple[str, ...] = ()
 
     @property
     def head_kind(self) -> str:
@@ -72,6 +77,20 @@ UNIVERSE_SOURCES: dict[str, UniverseSource] = {
         index_api="https://api.nasdaq.com/api/quote/list-type/nasdaq100",
         universe_prefix="qqq-us",
         label="Nasdaq-100 (QQQ) constituents, from the index operator's API",
+    ),
+    # #648: five hand-picked issuers, one per real code branch, all XNAS so the
+    # source-level MIC stays honest: AAPL (non-financial mega), GOOGL+GOOG (one
+    # dual-class issuer -> issuer_count < instrument_count), ASML (foreign IFRS
+    # filer -> the honest-unavailable path), HBAN (SIC 6021 -> FINANCIAL branch,
+    # pre-provision numerator), CINF (SIC 6331 -> INSURANCE branch). The
+    # post-deploy canary run drives the REAL pipeline over these seven listings
+    # and asserts named expectations — deploy and verify become one fact.
+    "canary": UniverseSource(
+        etf="canary",
+        index_api="",
+        universe_prefix="canary-us",
+        label="Deploy-verification canary: five issuers spanning every operating branch",
+        static_members=("AAPL", "GOOGL", "GOOG", "ASML", "HBAN", "CINF"),
     ),
 }
 
@@ -205,14 +224,23 @@ def refresh_etf_constituents(
     """
     fetched_at = datetime.now(UTC)
     as_of = as_of or fetched_at.date()
-    status, body = _get(source.index_api)
-    if status != 200:
-        raise RuntimeError(f"{source.etf} constituents endpoint answered {status}: {body[:120]!r}")
-    rows = parse_nasdaq_index_rows(body)
+    if source.static_members:
+        # The membership IS the operator's versioned configuration — land it as the
+        # fetch body so the denominator's raw lineage points at exactly what was
+        # decided, under DataSource.RELEASE like other release-derived assertions.
+        rows = [{"ticker": ticker, "name": ticker, "market_cap": None} for ticker in source.static_members]
+        body = json.dumps({"etf": source.etf, "members": list(source.static_members)}).encode()
+        fetch_source = DataSource.RELEASE
+    else:
+        status, body = _get(source.index_api)
+        if status != 200:
+            raise RuntimeError(f"{source.etf} constituents endpoint answered {status}: {body[:120]!r}")
+        rows = parse_nasdaq_index_rows(body)
+        fetch_source = DataSource.NASDAQ_INDEX
 
     fetch_id = raw_store.insert_fetch(
         connection,
-        source=DataSource.NASDAQ_INDEX,
+        source=fetch_source,
         source_record_id=f"index-constituents:{source.etf}:{as_of.isoformat()}",
         body=body,
         content_type="application/json",

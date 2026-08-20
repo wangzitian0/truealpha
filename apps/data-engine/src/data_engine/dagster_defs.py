@@ -248,6 +248,68 @@ def qqq_live_pipeline_job() -> None:
     run_qqq_live_tick()
 
 
+CANARY_JOB_NAME = "canary_live_pipeline"
+CANARY_UNIVERSE_HEAD = "universe-list:canary"
+# The canary judges itself by NAMED ORACLES (scripts/canary_assert.py), not by the
+# pointer: its five issuers span every operating branch, ASML's honest headcount
+# hole caps availability by design, and a post-deploy run may execute at any hour
+# (mid-session captures grade insufficient under #625). The floors here only stop
+# a catastrophic run from advancing the canary's own head; they are deliberately
+# NOT the verification bar.
+CANARY_OBJECTIVES = ServiceObjectives(
+    minimum_coverage=ACCEPTED_SERVICE_OBJECTIVES.minimum_coverage,
+    minimum_availability=Decimal("0.70"),
+    minimum_confidence_score=ACCEPTED_SERVICE_OBJECTIVES.minimum_confidence_score,
+    minimum_independent_origin_groups=ACCEPTED_SERVICE_OBJECTIVES.minimum_independent_origin_groups,
+    minimum_corroborated_share=Decimal("0"),
+)
+
+
+@dg.op
+def run_canary_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
+    """#648: the post-deploy canary — the REAL pipeline over five hand-picked
+    issuers (seven listings, every operating branch), so 'deployed' and
+    'verified' become one fact. Trigger-only: no schedule in either environment;
+    the deploy lane inserts a trigger row and then asserts the named oracles."""
+    cutoff = datetime.fromisoformat(config.executed_at)
+    version = live_version_for(cutoff)
+    with psycopg.connect(settings.database_url) as connection:
+        pipeline = run_topt_pipeline(
+            connection,
+            cutoff=cutoff,
+            version=version,
+            universe_head_kind=CANARY_UNIVERSE_HEAD,
+            label_prefix="production-canary",
+        )
+        registration = register_run_evidence(
+            connection,
+            run_id=pipeline.run_id,
+            release_manifest_id=pipeline.release_manifest_id,
+            quality_report=pipeline.quality,
+            objectives=CANARY_OBJECTIVES,
+        )
+        connection.commit()
+    context.log.info(
+        f"canary tick {config.executed_at}: capture {pipeline.run_id} "
+        f"(available {pipeline.quality['available_count']}/{pipeline.quality['requested_count']}), "
+        f"pointer_advanced={registration.accepted}"
+    )
+    context.add_output_metadata(
+        {
+            "capture_run_id": pipeline.run_id,
+            "quality_report_id": pipeline.quality_report_id,
+            "pointer_advanced": registration.accepted,
+            "unmet_service_objectives": registration.summary,
+        }
+    )
+    return pipeline.run_id
+
+
+@dg.job(name=CANARY_JOB_NAME)
+def canary_live_pipeline_job() -> None:
+    run_canary_live_tick()
+
+
 @dg.schedule(
     job=qqq_live_pipeline_job,
     cron_schedule=QQQ_LIVE_CRON,
@@ -269,7 +331,7 @@ def qqq_live_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
 
 
 @dg.sensor(
-    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job],
+    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job, canary_live_pipeline_job],
     minimum_interval_seconds=30,
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
@@ -293,10 +355,18 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
             run_key = f"manual:{dedupe_key}"
             # Dispatch by the request's declared job (#539 QQQ): the same thin
             # trigger drives either universe's pipeline.
-            op_name = "run_qqq_live_tick" if job_name == QQQ_LIVE_JOB_NAME else "run_topt_live_tick"
+            op_by_job = {
+                QQQ_LIVE_JOB_NAME: "run_qqq_live_tick",
+                CANARY_JOB_NAME: "run_canary_live_tick",
+            }
+            op_name = op_by_job.get(job_name, "run_topt_live_tick")
             yield dg.RunRequest(
                 run_key=run_key,
-                job_name=job_name if job_name in (TOPT_LIVE_JOB_NAME, QQQ_LIVE_JOB_NAME) else TOPT_LIVE_JOB_NAME,
+                job_name=(
+                    job_name
+                    if job_name in (TOPT_LIVE_JOB_NAME, QQQ_LIVE_JOB_NAME, CANARY_JOB_NAME)
+                    else TOPT_LIVE_JOB_NAME
+                ),
                 run_config=dg.RunConfig(
                     ops={op_name: ToptLiveTickConfig(executed_at=executed_at.astimezone(UTC).isoformat())}
                 ),
@@ -363,7 +433,7 @@ def universe_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRe
 
 
 defs = dg.Definitions(
-    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job, universe_refresh_pipeline_job],
+    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job, canary_live_pipeline_job, universe_refresh_pipeline_job],
     schedules=[topt_live_schedule, qqq_live_schedule, universe_refresh_schedule],
     sensors=[pipeline_trigger_sensor],
 )
