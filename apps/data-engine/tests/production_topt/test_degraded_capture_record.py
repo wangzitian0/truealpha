@@ -597,6 +597,19 @@ def test_a_fully_reused_run_still_exists_on_the_evidence_plane(tick_database_url
     reuse_cutoff = datetime(2026, 4, 14, 22, 15, tzinfo=UTC)  # Tuesday, clear of every other cutoff
     _run_tick(tick_database_url, version="evidence-source", cutoff=reuse_cutoff)
     second = _run_tick(tick_database_url, version="evidence-target", cutoff=reuse_cutoff)
+    # The reuse path must be the one under test: every terminal UNCHANGED proves the
+    # executor was skipped (a fresh-capture fallback would append the node too and
+    # quietly hollow this test out — review on #666).
+    assert _status_row(tick_database_url, second.run_id) == (
+        OBLIGATIONS,
+        OBLIGATIONS,
+        0,
+        OBLIGATIONS,
+        0,
+        0,
+        0,
+        True,
+    )
     with psycopg.connect(tick_database_url) as reader:
         node = reader.execute(
             "select count(*) from staging.evidence_nodes where node_id = %s", (second.run_id,)

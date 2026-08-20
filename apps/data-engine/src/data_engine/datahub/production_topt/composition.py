@@ -797,7 +797,7 @@ def run_topt_pipeline(
             run_ref = EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=plan.run_id)
             run_stamp = BitemporalStamp(valid_from=cutoff.date(), transaction_time=cutoff, recorded_at=cutoff)
             (writer or PostgresEvidenceGraphRepository(connection)).append(
-                [EvidenceNode(ref=run_ref, content_sha256=plan.run_id.split(":", 1)[1], stamp=run_stamp)],
+                [EvidenceNode(ref=run_ref, content_sha256=run_ref.content_sha256, stamp=run_stamp)],
                 [],
             )
         status = PostgresCaptureControlRepository(connection).status(plan.run_id)
