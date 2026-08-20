@@ -50,6 +50,18 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
             "the /mcp mount's session manager wiring broke app startup (#348)"
         )
         redirect = client.get("/mcp", follow_redirects=False, headers={"X-Forwarded-Proto": "https"})
+        # All three, not one. This handler covered GET only and a slashless
+        # POST answered 405 on staging; asserting POST alone would leave the
+        # same hole one method over, which is the shape being fixed (review).
+        slashless = {
+            method: client.request(
+                method,
+                "/mcp",
+                follow_redirects=False,
+                headers={"Accept": "application/json, text/event-stream"},
+            )
+            for method in ("GET", "POST", "DELETE")
+        }
         endpoint = client.post(
             "/mcp/",
             headers={"Accept": "application/json, text/event-stream"},
@@ -69,13 +81,28 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
         )
         trusted_slash = client.get("/health/", follow_redirects=False, headers={"X-Forwarded-Proto": "https"})
 
-    location = redirect.headers["location"]
-    assert redirect.status_code == 307
+    # Status first, and `.get`: a method the handler does not accept answers 405
+    # with no Location, and indexing turned that into a KeyError traceback
+    # instead of a sentence naming what broke.
+    assert redirect.status_code == 307, f"GET without the trailing slash answers {redirect.status_code}"
+    location = redirect.headers.get("location", "")
     # Path-only. Asserting "starts with https" would REQUIRE the absolute form,
     # which is what lets a forged Host choose the destination (review). A
     # relative Location keeps the client's scheme without naming one.
     assert "://" not in location, f"an absolute Location lets the Host header choose the destination: {location}"
     assert location == f"{ROUTED_PREFIX}/mcp/", f"redirect is not the routed path: {location}"
+    for method, answer in slashless.items():
+        assert answer.status_code == 307, (
+            f"{method} without the trailing slash answers {answer.status_code}; the "
+            f"streamable-HTTP transport POSTs its body, GETs the SSE stream and DELETEs the "
+            f"session, so any one missing makes a client unreachable"
+        )
+        # `.get`, not `[...]`: a method the handler does not accept answers 405
+        # with no Location at all, and indexing turned that into a KeyError
+        # traceback instead of a sentence naming the method.
+        assert answer.headers.get("location") == f"{ROUTED_PREFIX}/mcp/", (
+            f"{method} redirects to {answer.headers.get('location')!r}, not {ROUTED_PREFIX}/mcp/"
+        )
     assert endpoint.status_code == 200, (
         f"the MCP endpoint answers {endpoint.status_code}; a redirect fix that breaks routing points clients at a 404"
     )
