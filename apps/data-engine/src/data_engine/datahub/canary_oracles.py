@@ -81,14 +81,17 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
         bad.append("AAPL row missing from mart")
     else:
         availability, gppe = aapl
-        if availability != "available" or gppe is None:
+        if availability != "available":
             bad.append(f"AAPL not available (availability={availability})")
+        elif gppe is None:
+            bad.append("AAPL available but GPPE is NULL")
         elif not (_AAPL_GPPE_BAND[0] <= gppe <= _AAPL_GPPE_BAND[1]):
             bad.append(f"AAPL GPPE {gppe} outside {_AAPL_GPPE_BAND}")
 
     report = connection.execute(
         "select payload->'factor_availability'->'gross_profit_per_employee'->>'universe_subjects'"
-        " from mart.datahub_quality_report where run_id = %s",
+        " from mart.datahub_quality_report where run_id = %s"
+        " order by created_at desc limit 1",
         (run_id,),
     ).fetchone()
     if report is None or report[0] is None:
