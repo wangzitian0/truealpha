@@ -22,9 +22,22 @@ covers ONE table. Production carries seventeen value-whitelist constraints, and
 seeding every allowed value of each is a lot of fixture for a property the
 migration files already state.
 
-So this reads the files: for one constraint name, every re-add must be a
-superset of the re-adds before it. No database, no rows, and it holds for every
-table at once.
+So this reads the files: for one constraint name, no occurrence may omit a value
+a LATER occurrence allows. No database and no rows.
+
+WHAT IT DOES NOT COVER, stated because overstating it is how a guard becomes a
+false comfort (review): only `in ('a', 'b')` enumerations are parsed.
+`contract_objects_kind_identity_check` — the constraint behind the FIRST
+incident — is a chain of `(kind = 'x' and id like 'x:%')` ORs and is invisible
+here. That one is covered by the seeded replay #624 added to ci-db, and the two
+mechanisms are complements, not one superset:
+
+    in (...) enumerations        -> this file, statically, every such table
+    OR/LIKE vocabularies         -> ci-db's third pass over seeded rows
+    anything else                -> nothing yet
+
+`test_the_scan_sees_the_vocabularies_it_is_scanning` pins the parse so a regex
+that stops matching fails loudly instead of passing over an empty set.
 """
 
 from __future__ import annotations
