@@ -90,8 +90,26 @@ $$;
 -- The thin manual trigger dispatches by job_name since the QQQ pipeline landed;
 -- 0034's check pinned it to the single job of its era (Copilot High on #606 —
 -- without this, QQQ trigger rows cannot even be inserted).
-alter table staging.pipeline_trigger_requests
-    drop constraint if exists pipeline_trigger_requests_job_name_check;
-alter table staging.pipeline_trigger_requests
-    add constraint pipeline_trigger_requests_job_name_check
-    check (job_name in ('topt_live_pipeline', 'qqq_live_pipeline'));
+-- #615's shape again, on a second table, and the fix is to stop declaring the
+-- vocabulary here at all.
+--
+-- This block dropped the constraint and re-added a two-value list while 0045
+-- widens it to three. apply_migrations.sh replays the whole chain on every
+-- container boot, so on any database that reached the end of the chain this
+-- threw 0045's value away and then failed to validate against the canary rows
+-- that need it.
+--
+-- Measured before fixing: staging carries 1 canary_live_pipeline row and
+-- production 2. Staging's llm-service was crash-looping on exactly this
+-- (restarts=5) after the v0.0.27 deploy; production had not restarted since
+-- 2026-08-19 and would have failed on its next one.
+--
+-- Guarding the re-add with "constraint already exists -> return" was the first
+-- attempt and is not enough: on a FRESH database this file still installs the
+-- two-value list, and a reader of the chain still finds a narrower vocabulary
+-- than the one that ends up in effect. 0045 is the authority for this
+-- constraint and owns it alone.
+--
+-- The rows this migration's own feature needs (qqq_live_pipeline) are admitted
+-- by 0045's list, so nothing here regresses.
+
