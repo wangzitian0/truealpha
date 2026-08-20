@@ -134,9 +134,21 @@ if (admin !== null) {
     const reportCase = FIXTURE.report;
     const report = await repository.getLatest(reportCase.request_strategy_id, CONTEXT);
     assert("decisions" in report, `report case: expected a report, got ${JSON.stringify(report)}`);
-    // strategy_run_id/executed_at are the TS-only #370 extension; the shared
-    // contract surface is what must match the Python twin byte-for-byte.
-    const { strategy_run_id: _runId, executed_at: _executedAt, ...shared } = report;
+    // strategy_run_id/executed_at are the TS-only #370 extension, and
+    // `provenance` is the TS-only input-vintage read joined from
+    // mart.topt_core_results; the shared contract surface is what must match the
+    // Python twin byte-for-byte.
+    //
+    // Every name removed here has to be a mart-only read. Putting provenance on
+    // StrategyRunDecision instead — inside the shared surface — is what made
+    // this test fail in the first place, and the fix was to move the field, not
+    // to widen this list.
+    const {
+      strategy_run_id: _runId,
+      executed_at: _executedAt,
+      provenance: _provenance,
+      ...shared
+    } = report;
     assert(
       canonical(shared) === canonical(reportCase.expected_report),
       `report serialization diverges from the frozen canon:\n  ts:     ${canonical(shared)}\n  canon:  ${canonical(reportCase.expected_report)}`,
