@@ -20,3 +20,50 @@ def test_app_starts_with_the_mcp_mount_and_serves_health_under_its_lifespan():
     with TestClient(app) as client:
         resp = client.get("/health")
         assert resp.status_code == 200
+
+
+def test_mcp_redirect_keeps_tls_and_the_routed_prefix() -> None:
+    """`GET /api/mcp` must not hand a client a downgraded or off-service URL.
+
+    On production it answered
+
+        307 -> http://truealpha.club/mcp/
+
+    dropping TLS and the /api prefix in one hop and landing on app-web's 404.
+    init.md principle 21 requires TLS on every non-local MCP endpoint, and a
+    client follows a 307.
+
+    Both halves are asserted because each was fixed separately and the first
+    attempt only fixed one: ProxyHeadersMiddleware restores the scheme, and
+    Starlette's own redirect_slashes does NOT apply root_path to a Mount, so the
+    Location was https://.../mcp/ — TLS restored, prefix still gone.
+
+    The X-Forwarded-Proto header is what Traefik sends; nothing here can observe
+    the real proxy, so the header is the contract being pinned.
+    """
+    # client=(...) is Traefik's real address on dokploy-network, measured on the
+    # VPS. Without it the peer is untrusted and the headers are ignored — which
+    # is the middleware working, and is why this test failed the moment
+    # trusted_hosts stopped being "*".
+    response = TestClient(app, client=("10.0.1.76", 50000)).get(
+        "/mcp", follow_redirects=False, headers={"X-Forwarded-Proto": "https"}
+    )
+    location = response.headers["location"]
+    assert response.status_code == 307
+    assert location.startswith("https://"), f"redirect drops TLS: {location}"
+    assert "/api/mcp/" in location, f"redirect drops the routed prefix: {location}"
+
+
+def test_forwarded_headers_from_an_untrusted_peer_are_ignored() -> None:
+    """The point of narrowing `trusted_hosts` off "*".
+
+    A peer that is not the proxy must not be able to set the scheme used to
+    build redirects. This fails closed: the Location degrades to http, which is
+    the pre-fix behaviour, rather than honouring a stranger's header.
+    """
+    response = TestClient(app, client=("203.0.113.7", 50000)).get(
+        "/mcp", follow_redirects=False, headers={"X-Forwarded-Proto": "https"}
+    )
+    assert response.headers["location"].startswith("http://"), (
+        "an untrusted peer set the scheme — trusted_hosts is too wide"
+    )
