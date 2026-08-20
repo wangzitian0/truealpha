@@ -61,12 +61,15 @@ from truealpha_contracts.datahub import (
     CaptureRun,
     CaptureSchedulePolicy,
     CaptureWorkItem,
+    FetchAttemptOutcome,
+    ListObligationResult,
+    ObligationTerminalState,
     RetryPolicy,
     SourceRequest,
 )
 
 from data_engine.datahub import quality_report
-from data_engine.datahub.control_plane import expand_obligations, replay_retry_policy
+from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
@@ -584,6 +587,121 @@ def _record_and_refuse(
     )
 
 
+# #635: how far back a committed observation may satisfy a new obligation without
+# consulting the vendor. Deliberately much narrower than the semantic freshness
+# windows: those govern "still fresh to SERVE"; this governs "do not even CHECK the
+# vendor", and a change-detecting semantic (a new 10-Q, a replaced constituent)
+# must keep its daily look. Twelve hours covers the whole intra-day duplication
+# problem (TOPT 22:15 -> QQQ 23:20 -> canary at any hour) with zero staleness risk.
+_REUSE_MAX_AGE = timedelta(hours=12)
+
+
+def _satisfy_from_recent_observations(
+    connection: psycopg.Connection[Any], plan: PlannedRun, *, cutoff: datetime
+) -> frozenset[str]:
+    """Satisfy obligations from observations another run committed within the last
+    twelve hours (#635): the 13 TOPT∩QQQ overlap names were fetched once per
+    universe per day — same subject, same semantic, same vendor bytes. A satisfied
+    obligation gets the source obligation's FULL observation set bound to it (both
+    price origins ride along, so reconciliation is unaffected), a ledger attempt
+    finished UNCHANGED with the reused primary vintage, and its work item never
+    reaches a vendor. Only #628-committed evidence qualifies by construction —
+    an uncommitted capture is invisible to this query.
+    """
+    rows = connection.execute(
+        """
+        with mine as (
+            select ob.obligation_id, ob.subject_kind, ob.subject_id,
+                   regexp_replace(ob.capture_requirement_id, ':v1$', '') as semantic_type
+            from raw.capture_obligations ob where ob.run_id = %(run_id)s
+        ), anchors as (
+            select m.obligation_id as target_obligation_id,
+                   m.semantic_type,
+                   src_ob.obligation_id as source_obligation_id,
+                   o.observation_id as anchor_observation_id,
+                   o.source_vintage_id as anchor_vintage_id,
+                   o.knowable_at,
+                   row_number() over (
+                       partition by m.obligation_id
+                       order by done.completed_at desc, o.knowable_at desc, o.observation_id desc
+                   ) as rn
+            from mine m
+            join raw.capture_obligations src_ob
+              on src_ob.subject_kind = m.subject_kind and src_ob.subject_id = m.subject_id
+             and regexp_replace(src_ob.capture_requirement_id, ':v1$', '') = m.semantic_type
+             and src_ob.run_id <> %(run_id)s
+            join raw.capture_obligation_results done
+              on done.capture_obligation_id = src_ob.obligation_id
+             and done.terminal_state in ('success', 'unchanged')
+             and done.completed_at > %(cutoff)s - %(max_age)s::interval
+            join raw.capture_attempt_results attempt on attempt.attempt_id = done.final_attempt_id
+            join staging.capture_normalized_observations o
+              on o.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
+             and o.subject_id = m.subject_id
+             and o.semantic_type = m.semantic_type
+        )
+        select a.target_obligation_id, a.semantic_type, a.anchor_vintage_id, a.knowable_at,
+               bound.observation_id
+        from anchors a
+        join staging.capture_observation_obligations link
+          on link.capture_obligation_id = a.source_obligation_id
+        join staging.capture_normalized_observations bound on bound.observation_id = link.observation_id
+        where a.rn = 1
+        """,
+        {"run_id": plan.run_id, "cutoff": cutoff, "max_age": _REUSE_MAX_AGE},
+    ).fetchall()
+
+    settled = last_settled_session_date(cutoff)
+    by_target: dict[str, dict[str, Any]] = {}
+    for target_id, semantic_type, anchor_vintage, knowable_at, bound_observation in rows:
+        entry = by_target.setdefault(
+            target_id,
+            {"semantic": semantic_type, "vintage": anchor_vintage, "knowable_at": knowable_at, "observations": []},
+        )
+        entry["observations"].append(bound_observation)
+
+    repository = PostgresCaptureControlRepository(connection)
+    satisfied: set[str] = set()
+    for work_item_id, binding in plan.bindings.items():
+        candidate = by_target.get(binding.obligation.obligation_id)
+        if candidate is None:
+            continue
+        entry = candidate
+        # A reused price must BE the settled session's close — anything older is a
+        # fetch, not a reuse (the vendor may simply have published since).
+        if entry["semantic"] == "market-price" and entry["knowable_at"].date() != settled:
+            continue
+        ledger = AttemptLedger(work_item_id=work_item_id, retry_policy=plan.retry)
+        attempt = ledger.start(started_at=cutoff)
+        attempt_result = ledger.finish(
+            attempt=attempt,
+            completed_at=cutoff,
+            outcome=FetchAttemptOutcome.UNCHANGED,
+            status_code=None,
+            source_vintage_id=None,
+            reused_source_vintage_id=entry["vintage"],
+        )
+        repository.put_attempt(attempt)
+        repository.put_attempt_result(attempt_result)
+        for observation_id in entry["observations"]:
+            repository.bind_observation(binding.obligation.obligation_id, observation_id)
+        repository.put_obligation_result(
+            binding.obligation.obligation_id,
+            ListObligationResult(
+                # The result model carries the INNER list-obligation identity; the
+                # repository keys on the outer capture-list identity (same split the
+                # capture executor makes).
+                obligation_id=binding.obligation.obligation.obligation_id,
+                terminal_state=ObligationTerminalState.UNCHANGED,
+                completed_at=cutoff,
+                final_attempt_id=attempt.attempt_id,
+                reason_codes=("unchanged",),
+            ),
+        )
+        satisfied.add(work_item_id)
+    return frozenset(satisfied)
+
+
 def run_topt_pipeline(
     connection: psycopg.Connection[Any],
     *,
@@ -625,7 +743,11 @@ def run_topt_pipeline(
     # composition always claimed for complete replays: same identities, zero new
     # vendor calls. Refusal stays for every OTHER recorded shape — those are
     # #538's degraded histories, and their outcomes are append-only.
-    resumed = status.terminal_count > 0 and status.complete and status.success_count == status.obligation_count
+    resumed = (
+        status.terminal_count > 0
+        and status.complete
+        and status.success_count + status.unchanged_count == status.obligation_count
+    )
     if status.terminal_count > 0 and not resumed:
         _record_and_refuse(connection, plan, status)
 
@@ -639,20 +761,29 @@ def run_topt_pipeline(
         default_freshness_max_age=plan.default_freshness_max_age,
     )
     if not resumed:
-        report = run_topt_capture(
-            plan.run_id,
-            plan.work_items,
-            build_routes(plan, connection),
-            writer or PostgresEvidenceGraphRepository(connection),
-            sink=sink,
-            cutoff=cutoff,
-            recorded_at=cutoff,
-            max_attempts=_MAX_ATTEMPTS,
-        )
+        satisfied = _satisfy_from_recent_observations(connection, plan, cutoff=cutoff)
+        live_items = [item for item in plan.work_items if item.work_item_id not in satisfied]
+        if live_items:
+            # Route construction is itself vendor work (live CIK resolution); a run
+            # fully satisfied by reuse never builds routes at all.
+            report = run_topt_capture(
+                plan.run_id,
+                live_items,
+                build_routes(plan, connection),
+                writer or PostgresEvidenceGraphRepository(connection),
+                sink=sink,
+                cutoff=cutoff,
+                recorded_at=cutoff,
+                max_attempts=_MAX_ATTEMPTS,
+            )
+            if report.halted:
+                status = PostgresCaptureControlRepository(connection).status(plan.run_id)
+                _record_and_refuse(connection, plan, status, halt_reason=report.halt_reason)
         status = PostgresCaptureControlRepository(connection).status(plan.run_id)
-        if report.halted:
-            _record_and_refuse(connection, plan, status, halt_reason=report.halt_reason)
-        if not status.complete or status.success_count != status.obligation_count:
+        if not status.complete or status.success_count + status.unchanged_count != status.obligation_count:
+            # UNCHANGED is a resolution, not a shortfall — the freeze gate and the
+            # 0042 trigger have always accepted success+unchanged; #635's cross-run
+            # reuse terminals made composition's stricter predicate visible.
             _record_and_refuse(connection, plan, status)
         # #628: the capture is durable the moment it is complete and successful. A
         # freeze/materialize/report failure after this line loses NOTHING — the

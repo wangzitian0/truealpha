@@ -31,7 +31,7 @@ import hashlib
 import os
 import subprocess
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -282,12 +282,18 @@ def _arm(
     monkeypatch.setattr(composition, "build_routes", build)
 
 
-def _run_tick(url: str, *, version: str):
+def _run_tick(url: str, *, version: str, cutoff: datetime = CUTOFF):
     """One tick, shaped exactly like `dagster_defs.run_topt_live_tick`: a single
     connection, a single transaction, rolled back by the context manager when the tick
-    raises. Anything that survives this survived the abort."""
+    raises. Anything that survives this survived the abort.
+
+    Tests in this module share one database, and #635's cross-run reuse deliberately
+    satisfies obligations from any run committed within twelve hours of the cutoff —
+    so each test that must NOT see its predecessors' observations runs at its own
+    cutoff, more than the reuse window apart. The reuse test itself runs two ticks
+    at ONE cutoff, which is the feature."""
     with psycopg.connect(url) as tick:
-        result = run_topt_pipeline(tick, cutoff=CUTOFF, version=version)
+        result = run_topt_pipeline(tick, cutoff=cutoff, version=version)
         tick.commit()
         return result
 
@@ -383,7 +389,7 @@ def test_a_halted_run_persists_its_failed_cell(tick_database_url, monkeypatch) -
     _arm(monkeypatch, sabotage=(-1, ObligationReasonCode.AUTH_FAILED))
 
     with pytest.raises(CaptureNotPublishableError) as raised:
-        _run_tick(tick_database_url, version="degraded-halted")
+        _run_tick(tick_database_url, version="degraded-halted", cutoff=CUTOFF + timedelta(days=1))
 
     run_id = raised.value.run_id
     # The halting code colours the raised message; the persisted record keeps it on the
@@ -421,13 +427,13 @@ def test_replaying_a_recorded_tick_reports_the_record_instead_of_recapturing(tic
     """
     _arm(monkeypatch, sabotage=(0, ObligationReasonCode.FIELD_UNAVAILABLE))
     with pytest.raises(CaptureNotPublishableError) as first:
-        _run_tick(tick_database_url, version="degraded-replayed")
+        _run_tick(tick_database_url, version="degraded-replayed", cutoff=CUTOFF + timedelta(days=2))
 
     # The same tick again, this time with nothing sabotaged: the recorded outcome stands.
     calls: list[str] = []
     _arm(monkeypatch, spy=calls)
     with pytest.raises(CaptureNotPublishableError) as replayed:
-        _run_tick(tick_database_url, version="degraded-replayed")
+        _run_tick(tick_database_url, version="degraded-replayed", cutoff=CUTOFF + timedelta(days=2))
 
     assert replayed.value.run_id == first.value.run_id
     assert replayed.value.quality_report_id == first.value.quality_report_id
@@ -445,7 +451,7 @@ def test_a_complete_run_still_materializes_and_reports_no_shortfall(tick_databas
     """The control: recording degradation must not change what a healthy tick does."""
     _arm(monkeypatch)
 
-    result = _run_tick(tick_database_url, version="complete-control")
+    result = _run_tick(tick_database_url, version="complete-control", cutoff=CUTOFF + timedelta(days=3))
 
     assert result.core_result_count == 20
     assert "capture_shortfall" not in result.quality
@@ -475,7 +481,7 @@ def test_a_freeze_failure_no_longer_erases_the_committed_capture(tick_database_u
 
     monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", _boom)
     with pytest.raises(RuntimeError, match="injected freeze failure"):
-        _run_tick(tick_database_url, version="freeze-dies")
+        _run_tick(tick_database_url, version="freeze-dies", cutoff=CUTOFF + timedelta(days=4))
 
     # The tick's transaction aborted — but the capture survived it, complete and
     # queryable on a fresh connection, with nothing frozen or served.
@@ -508,7 +514,7 @@ def test_a_retry_after_freeze_failure_resumes_without_recapturing(tick_database_
     real_freeze = PostgresToptCoreRepository.freeze_snapshot
     monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", _boom)
     with pytest.raises(RuntimeError, match="injected freeze failure"):
-        _run_tick(tick_database_url, version="resume-after-freeze")
+        _run_tick(tick_database_url, version="resume-after-freeze", cutoff=CUTOFF + timedelta(days=5))
     monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", real_freeze)
 
     def _no_recapture(*args, **kwargs):
@@ -517,7 +523,42 @@ def test_a_retry_after_freeze_failure_resumes_without_recapturing(tick_database_
     monkeypatch.setattr(capture_orchestration, "run_topt_capture", _no_recapture)
     monkeypatch.setattr(composition, "run_topt_capture", _no_recapture)
 
-    result = _run_tick(tick_database_url, version="resume-after-freeze")
+    result = _run_tick(tick_database_url, version="resume-after-freeze", cutoff=CUTOFF + timedelta(days=5))
     assert result.core_result_count == 20
     snapshots, gppe, core = _materialized(tick_database_url, result.run_id)
+    assert (snapshots, gppe, core) == (1, 20, 20)
+
+
+def test_a_second_run_reuses_committed_observations_without_vendor_calls(tick_database_url, monkeypatch) -> None:
+    """#635: the 13 TOPT∩QQQ overlap names were fetched once per universe per day.
+    A run whose subjects were captured by ANY committed run within twelve hours
+    satisfies its obligations from those observations — every terminal UNCHANGED
+    with the reused primary vintage, both price origins re-bound (reconciliation
+    unaffected), and not a single vendor route consulted."""
+    _arm(monkeypatch)
+    # The offline price fixture's bar is knowable 2026-03-31; a reused price must BE
+    # the cutoff's settled session, so both ticks run after that session's close
+    # (22:15 UTC = 18:15 EDT) — the exact production shape (TOPT 22:15 -> QQQ 23:20).
+    reuse_cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
+    first = _run_tick(tick_database_url, version="reuse-source", cutoff=reuse_cutoff)
+
+    def _no_vendor(plan, *args, **kwargs):
+        leftover = sorted({binding.obligation.capture_requirement_id for binding in plan.bindings.values()})
+        raise AssertionError(f"reuse must not consult a vendor route; planned requirements: {leftover}")
+
+    monkeypatch.setattr(composition, "build_routes", _no_vendor)
+    second = _run_tick(tick_database_url, version="reuse-target", cutoff=reuse_cutoff)
+
+    assert second.run_id != first.run_id
+    assert _status_row(tick_database_url, second.run_id) == (
+        OBLIGATIONS,
+        OBLIGATIONS,
+        0,
+        OBLIGATIONS,
+        0,
+        0,
+        0,
+        True,
+    )
+    snapshots, gppe, core = _materialized(tick_database_url, second.run_id)
     assert (snapshots, gppe, core) == (1, 20, 20)
