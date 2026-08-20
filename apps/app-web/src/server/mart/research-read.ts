@@ -53,6 +53,20 @@ export interface ModuleOverviewRow {
 	note: string;
 	gate: string;
 	availability: Availability;
+	/** How many of this run's decisions actually carry the module's value.
+	 *
+	 * `availability` was decided by `decisions.some(...)`: ONE non-null row out
+	 * of 660 made a module read "available". PEG carries 28 of 660 — 4% — and
+	 * the card said available, which is the #537 shape (a report that cannot
+	 * report a problem). A status word cannot distinguish 4% from 100%, so the
+	 * count travels with it.
+	 *
+	 * Counting non-null values over rows already loaded for this page is
+	 * filtering, not metric arithmetic — the same thing /research/coverage
+	 * already does ("17 of 20 companies have every input"). No factor is
+	 * combined with another and nothing new is computed (init.md principle 2).
+	 */
+	coverage: { withValue: number; total: number } | null;
 }
 
 export interface RankingRow {
@@ -349,18 +363,21 @@ export class StrategyRunReadAdapter {
 	async overview(context: AccessContext): Promise<ModuleOverviewRow[]> {
 		const decisions = (await this.report(context)).decisions;
 		return MODULE_CATALOG.map((entry) => {
-			const materialized =
-				entry.field !== null &&
-				decisions.some(
-					(decision) =>
-						decision[entry.field as keyof StrategyRunDecision] !== null,
-				);
+			const withValue =
+				entry.field === null
+					? 0
+					: decisions.filter(
+							(decision) =>
+								decision[entry.field as keyof StrategyRunDecision] !== null,
+						).length;
 			return {
 				module: entry.module,
 				name: entry.name,
 				note: entry.note,
 				gate: entry.gate,
-				availability: materialized ? "available" : "unavailable",
+				availability: withValue > 0 ? "available" : "unavailable",
+				coverage:
+					entry.field === null ? null : { withValue, total: decisions.length },
 			};
 		});
 	}

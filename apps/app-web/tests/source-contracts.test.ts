@@ -342,3 +342,79 @@ console.log(
 	);
 	console.log("ok  every declared decision field survives decisionFromRow");
 }
+
+// ---------------------------------------------------------------------------
+// A module's availability badge must travel with its coverage.
+//
+// `overview()` decided availability with `decisions.some(...)`: one non-null row
+// out of 660 read as "available". PEG carries 28 of 660 — 4% — and the card said
+// available, which is #537's shape: a report that cannot report a problem.
+// ---------------------------------------------------------------------------
+{
+	const read = (relative: string) =>
+		readFileSync(join(process.cwd(), relative), "utf8");
+	const overview = read("src/server/mart/research-read.ts")
+		.split("async overview(", 2)[1]
+		.split("\n\tasync ", 2)[0];
+	assert(
+		!/decisions\.some\(/.test(overview),
+		"overview() decides availability with decisions.some(): one non-null row out of hundreds " +
+			"reads as available, which is how PEG showed available at 4% coverage",
+	);
+	assert(
+		/coverage:/.test(overview),
+		"overview() must report how many decisions carry the value, not only whether any does",
+	);
+	console.log("ok  module availability travels with its coverage");
+}
+
+// ---------------------------------------------------------------------------
+// A field the read model returns for display must reach a page.
+//
+// Twice in two PRs the data path was built and the surface ignored it: the
+// mart join selected `confidence` while `decisionFromRow` hard-coded null, and
+// `overview()` returned `coverage` while the module card rendered only the
+// badge. Both times typecheck passed, the suite passed, and the page showed
+// exactly what it showed before. An optional field nobody reads is invisible to
+// every check that looks at types.
+// ---------------------------------------------------------------------------
+{
+	const read = (relative: string) =>
+		readFileSync(join(process.cwd(), relative), "utf8");
+	const surface = [
+		...listFiles(join(process.cwd(), "src/app")),
+		...listFiles(join(process.cwd(), "src/components")),
+	]
+		.map((file) => executableCode(readFileSync(file, "utf8")))
+		.join("\n");
+
+	// Display-only fields the read model exposes. Each must be read somewhere a
+	// person can see, not merely typed.
+	for (const [field, why] of [
+		[
+			"coverage",
+			"a module card that shows availability without coverage said available at 4%",
+		],
+		[
+			"provenance",
+			"the input vintages are the point; a row that carries them and shows none is the old page",
+		],
+	] as const) {
+		// Any reading position counts: `row.provenance` and
+		// `const { provenance } = row` are both reads, and the first version of
+		// this check only accepted the dotted form — so it failed on
+		// provenance-cell.tsx, which destructures. Comments and string literals are
+		// stripped first, so a field mentioned only in prose does not count.
+		// A property access or a destructure — `row.coverage`, `{ coverage }`,
+		// `{ coverage: p }` — never a bare word. Matching the bare identifier
+		// passed on "coverage" because /research/coverage appears in an href, so
+		// the check was green with nothing rendering it (red-proven).
+		assert(
+			new RegExp(`[.{,]\\s*${field}\\b`).test(surface),
+			`ResearchReadModel returns ${field} and no page or component reads it — ${why}`,
+		);
+	}
+	console.log(
+		"ok  every display field the read model returns reaches a surface",
+	);
+}
