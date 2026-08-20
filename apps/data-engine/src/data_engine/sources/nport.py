@@ -1,67 +1,122 @@
-"""SEC N-PORT-P holdings parser (init.md module 5's confirmed source; #641 audit).
+"""SEC N-PORT-P: the confirmed ETF holdings-weight source (init.md Section 5,
+2026-07-07). Filed per fund series; the public copy is the last month of each
+fiscal quarter, so report periods lag ~1-3 months — fine for defining a research
+universe, not a live holdings feed.
 
-N-PORT is the design's ETF holdings-weight source — the samples were captured
-2026-07 and the parser never existed. Holdings carry NO ticker; identity resolves
-downstream via ISIN → OpenFIGI → shareClassFIGI, the same `security:figi:*` space
-the universe plane already keys on. CUSIP rides along as parsed fact (it is in the
-public filing's bytes) but is never an identity here.
-
-Decimal-safe: weights and values never pass through float.
+Pitfalls encoded here (verified on QQQ/ARKK/IVV/AGIX/MCHI):
+- the raw XML is always primary_doc.xml (the filing's primaryDocument field
+  points at the XSL-rendered HTML instead);
+- multi-series trusts (iShares, Vanguard, ARK) must be queried by series id via
+  browse-edgar, not by trust CIK, or every series' filings interleave;
+- foreign holdings carry CUSIP '000000000' and some lines have literal 'N/A'
+  name/cusip — normalized to None here; ISIN is the identifier that actually
+  resolves (561/563 MCHI lines have one).
 """
-
-from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from decimal import Decimal
+
+MF_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
+# browse-edgar accepts a series ID as CIK — required for multi-series trusts.
+BROWSE_URL = (
+    "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={series_id}&type=NPORT-P&count=1&output=atom"
+)
+ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/primary_doc.xml"
+
+NS = {"n": "http://www.sec.gov/edgar/nport"}
+_ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
+
+# SEC's own placeholders for "no such identifier", seen in real filings.
+_PLACEHOLDERS = {"", "N/A", "000000000"}
 
 
 @dataclass(frozen=True)
-class NportHolding:
-    name: str
-    title: str
-    isin: str | None
+class Holding:
+    name: str | None
     cusip: str | None
-    balance: Decimal
-    value_usd: Decimal
-    weight_pct: Decimal  # pctVal: percentage of fund net assets, as filed
+    isin: str | None
+    lei: str | None
+    balance: float | None  # share/contract count as filed
+    value_usd: float | None
+    pct_val: float | None  # percentage of net assets
+    asset_cat: str | None  # 'EC' = equity common; cash/derivative lines differ
 
 
-def _local(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1]
+def fund_series(client, ticker: str) -> tuple[int, str]:
+    """(trust CIK, series id) for a fund ticker via SEC's official mapping.
+    Raises KeyError if absent — notably SPY (a UIT) is not in this file; use an
+    equivalent management-company ETF (IVV/VOO) instead."""
+    resp = client.get(MF_TICKERS_URL)
+    resp.raise_for_status()
+    for cik, series_id, _class_id, symbol in resp.json()["data"]:
+        if symbol.upper() == ticker.upper():
+            return int(cik), series_id
+    raise KeyError(f"ticker not found in SEC mutual-fund/ETF mapping: {ticker}")
 
 
-def parse_nport_holdings(body: bytes) -> list[NportHolding]:
-    """Every <invstOrSec> in the filing, in document order. Fails loud on a holding
-    missing its weight or value — a partial parse silently understating a fund is
-    the #527 green-while-empty shape."""
-    root = ET.fromstring(body)
-    holdings: list[NportHolding] = []
-    for element in root.iter():
-        if _local(element.tag) != "invstOrSec":
-            continue
-        fields: dict[str, str] = {}
-        isin: str | None = None
-        for child in element.iter():
-            name = _local(child.tag)
-            if name == "isin":
-                isin = (child.get("value") or "").strip() or None
-            elif child.text and child.text.strip():
-                fields.setdefault(name, child.text.strip())
-        try:
-            holdings.append(
-                NportHolding(
-                    name=fields["name"],
-                    title=fields.get("title", fields["name"]),
-                    isin=isin,
-                    cusip=fields.get("cusip"),
-                    balance=Decimal(fields["balance"]),
-                    value_usd=Decimal(fields["valUSD"]),
-                    weight_pct=Decimal(fields["pctVal"]),
-                )
+def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
+    """(accession number with dashes stripped, filing date 'YYYY-MM-DD') of the
+    series' most recent NPORT-P. The filing date is the transaction time of
+    everything derived from the filing — the moment its contents became publicly
+    knowable — which is NOT the ingestion time (runtime contract)."""
+    resp = client.get(BROWSE_URL.format(series_id=series_id))
+    resp.raise_for_status()
+    atom = ET.fromstring(resp.content)
+    acc = atom.findtext(".//a:entry/a:content/a:accession-number", None, _ATOM_NS)
+    filing_date = atom.findtext(".//a:entry/a:content/a:filing-date", None, _ATOM_NS)
+    if acc is None or filing_date is None:
+        raise LookupError(f"no NPORT-P filing (with a filing date) found for series {series_id}")
+    return acc.replace("-", ""), filing_date
+
+
+def fetch_nport_xml(client, cik: int, accession: str) -> bytes:
+    resp = client.get(ARCHIVE_URL.format(cik=cik, accession=accession))
+    resp.raise_for_status()
+    return resp.content
+
+
+def _clean(value: str | None) -> str | None:
+    if value is None or value.strip() in _PLACEHOLDERS:
+        return None
+    return value.strip()
+
+
+def _number(value: str | None) -> float | None:
+    """Numeric fields get the same placeholder tolerance as name/cusip: a
+    literal 'N/A' (or otherwise non-numeric) downgrades that one field to None
+    instead of aborting the whole filing's parse."""
+    cleaned = _clean(value)
+    if cleaned is None:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def parse_nport(xml_bytes: bytes) -> tuple[dict, list[Holding]]:
+    """(gen_info, holdings). gen_info carries series_name and report_period
+    (the 'as of' date every weight in this filing describes)."""
+    root = ET.fromstring(xml_bytes)
+    gen = root.find(".//n:genInfo", NS)
+    info = {
+        "series_name": gen.findtext("n:seriesName", None, NS) if gen is not None else None,
+        "report_period": gen.findtext("n:repPdDate", None, NS) if gen is not None else None,
+    }
+    holdings = []
+    for sec in root.findall(".//n:invstOrSec", NS):
+        ids = sec.find("n:identifiers", NS)
+        isin_el = ids.find("n:isin", NS) if ids is not None else None
+        holdings.append(
+            Holding(
+                name=_clean(sec.findtext("n:name", None, NS)),
+                cusip=_clean(sec.findtext("n:cusip", None, NS)),
+                isin=_clean(isin_el.attrib.get("value")) if isin_el is not None else None,
+                lei=_clean(sec.findtext("n:lei", None, NS)),
+                balance=_number(sec.findtext("n:balance", None, NS)),
+                value_usd=_number(sec.findtext("n:valUSD", None, NS)),
+                pct_val=_number(sec.findtext("n:pctVal", None, NS)),
+                asset_cat=_clean(sec.findtext("n:assetCat", None, NS)),
             )
-        except KeyError as missing:
-            raise ValueError(f"N-PORT holding missing required field {missing}: {fields.get('name', '?')}") from None
-    if not holdings:
-        raise ValueError("N-PORT filing contains no holdings — wrong document or format drift")
-    return holdings
+        )
+    return info, holdings
