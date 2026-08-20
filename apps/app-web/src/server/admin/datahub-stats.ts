@@ -49,10 +49,17 @@ export interface CaptureRunRow {
   complete: boolean;
 }
 
+export interface ValidationRow {
+  check: string;
+  verdict: string;
+  detail: string;
+}
+
 export interface DatahubStats {
   heads: HeadStatusRow[];
   sources: SourceStatRow[];
   runs: CaptureRunRow[];
+  validation: ValidationRow[];
 }
 
 const HEADS_SQL = `
@@ -78,6 +85,48 @@ const SOURCES_SQL = `
   limit 12
 `;
 
+// #648/#635/#578 made the validation machinery real; this section makes it VISIBLE:
+// the latest canary run (the deploy verdict), yesterday's reuse savings (vendor
+// fetches avoided), the plausibility oracle's current violation count, and the
+// corroborated share of the newest graded run — the basic 校验能力, one glance.
+const VALIDATION_SQL = `
+  select 'canary' as check,
+         case when s.complete and s.failed_count = 0 then 'pass' else 'fail' end as verdict,
+         'latest ' || to_char(s.cutoff, 'MM-DD HH24:MI') || ' — ' || (s.success_count + s.unchanged_count)
+           || '/' || s.obligation_count || ' resolved' as detail
+  from mart.topt_capture_status s
+  where s.universe_id like 'universe:canary%'
+  order by s.cutoff desc limit 1
+`;
+const REUSE_SQL = `
+  select 'cross-run reuse (24h)' as check,
+         case when coalesce(sum(unchanged_count), 0) > 0 then 'active' else 'idle' end as verdict,
+         coalesce(sum(unchanged_count), 0) || ' vendor fetches avoided across '
+           || count(*) || ' runs' as detail
+  from mart.topt_capture_status where cutoff > now() - interval '24 hours'
+`;
+const PLAUSIBILITY_SQL = `
+  select 'plausibility oracle' as check,
+         case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict,
+         coalesce(q.payload->>'implausible_count', '0') || ' implausible cells in the newest report' as detail
+  from mart.datahub_quality_report q
+  join mart.topt_capture_status s using (run_id)
+  order by s.cutoff desc limit 1
+`;
+const CORROBORATION_SQL = `
+  select 'price corroboration' as check,
+         case when agreed = cells and cells > 0 then 'pass' else 'partial' end as verdict,
+         agreed || '/' || cells || ' cells agreed in the newest graded run' as detail
+  from (
+    select (select count(*) from jsonb_each(coalesce(q.payload->'reconciliation_cells', '{}'::jsonb)) c
+             where c.value->>'outcome' = 'agreed')::int as agreed,
+           (select count(*) from jsonb_each(coalesce(q.payload->'reconciliation_cells', '{}'::jsonb)))::int as cells
+    from mart.datahub_quality_report q
+    join mart.topt_capture_status s using (run_id)
+    order by s.cutoff desc limit 1
+  ) newest
+`;
+
 const RUNS_SQL = `
   select run_id, universe_id, cutoff::text as cutoff,
          obligation_count as obligations,
@@ -101,10 +150,14 @@ interface HeadDbRow extends Omit<HeadStatusRow, "factors"> {
 
 export async function loadDatahubStats(): Promise<DatahubStats> {
   return withOpsReader(async (client) => {
-    const [heads, sources, runs] = await Promise.all([
+    const [heads, sources, runs, canary, reuse, plausibility, corroboration] = await Promise.all([
       client.query<HeadDbRow>(HEADS_SQL),
       client.query<SourceStatRow>(SOURCES_SQL),
       client.query<CaptureRunRow>(RUNS_SQL),
+      client.query<ValidationRow>(VALIDATION_SQL),
+      client.query<ValidationRow>(REUSE_SQL),
+      client.query<ValidationRow>(PLAUSIBILITY_SQL),
+      client.query<ValidationRow>(CORROBORATION_SQL),
     ]);
     return {
       heads: heads.rows.map((row: HeadDbRow) => ({
@@ -125,6 +178,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       })),
       sources: sources.rows,
       runs: runs.rows,
+      validation: [...canary.rows, ...reuse.rows, ...plausibility.rows, ...corroboration.rows],
     };
   });
 }
