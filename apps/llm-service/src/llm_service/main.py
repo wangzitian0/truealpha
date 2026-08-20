@@ -25,12 +25,18 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 #: The prefix infra2's Traefik rule strips before forwarding here. Verified from
-#: behaviour, not assumed: a POST to /api/mcp/ reaches an app mounted at /mcp, so
-#: the prefix is already gone on arrival. Declared so every URL this app
-#: generates carries it back. `tools/route_manifest.json` is the contract (#463).
-ROOT_PATH = "/api"
+#: behaviour: a POST to /api/mcp/ reaches an app mounted at /mcp, so the prefix
+#: is already gone on arrival. `tools/route_manifest.json` is the contract (#463).
+#:
+#: Used ONLY to rebuild outgoing URLs. It is deliberately NOT FastAPI's
+#: `root_path`: that makes Starlette strip the prefix during matching, and since
+#: Traefik has already stripped it the app then looks for /api/mcp in a request
+#: that says /mcp and answers 404. Measured — v0.0.28 fixed the redirect and
+#: killed the endpoint, staging POST /api/mcp/ went 200 -> 404 while production
+#: without the change stayed 200.
+ROUTED_PREFIX = "/api"
 
-app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan, root_path=ROOT_PATH)
+app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
 
 # TLS terminates at Traefik, so requests arrive over http. Without this, Starlette
 # builds redirect Locations from the request scheme and `GET /api/mcp` answered
@@ -64,18 +70,28 @@ app.add_middleware(
 
 @app.get("/mcp", include_in_schema=False)
 def mcp_slash(request: Request) -> RedirectResponse:
-    """Send /mcp to /mcp/ ourselves, with the prefix and scheme intact.
+    """Send /mcp to /mcp/ ourselves, with the prefix and the scheme intact.
 
-    Starlette's own redirect_slashes handles this, and its Location keeps
-    neither: `root_path` is not applied to a Mount's redirect, so even with
-    ProxyHeadersMiddleware restoring the scheme the answer was
-    https://truealpha.club/mcp/ — TLS fixed, /api still gone, still app-web's
-    404. Measured both ways rather than assumed.
+    Starlette's own redirect_slashes keeps neither: its Location is built from
+    the request, which arrives over http with the prefix already stripped, so it
+    answered http://truealpha.club/mcp/ — TLS dropped and /api dropped in one
+    hop, landing on app-web's 404. init.md principle 21 requires TLS on every
+    non-local MCP endpoint and a client follows a 307.
 
-    Building it from `request.url_for` keeps the root_path this app declares, so
-    the Location is whatever the deployment actually routes.
+    Built by hand rather than through root_path, because root_path also changes
+    ROUTING and killed the endpoint it was meant to fix.
+
+    Path-only, so there is no host to get wrong. An absolute Location built from
+    `request.url.netloc` lets the Host header — or a forwarded one — choose where
+    the client is sent, and there is no allowlist here to stop it: a host-header
+    injection and an open redirect (review).
+
+    A relative Location also cannot drop TLS, since the client keeps the scheme
+    it already had. That is the property this whole change exists for, obtained
+    by not naming a scheme at all rather than by naming the right one.
     """
-    return RedirectResponse(f"{request.url_for('mcp_slash')}/", status_code=307)
+    del request  # the Location is fixed; nothing about the request may steer it
+    return RedirectResponse(f"{ROUTED_PREFIX}/mcp/", status_code=307)
 
 
 app.mount("/mcp", mcp.streamable_http_app())

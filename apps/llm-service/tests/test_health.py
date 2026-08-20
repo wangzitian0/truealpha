@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from llm_service.main import app
+from llm_service.main import ROUTED_PREFIX, app
 
 
 def test_health():
@@ -15,55 +15,80 @@ def test_health_reports_the_deployed_git_sha(monkeypatch):
     assert resp.json() == {"status": "ok", "git_sha": "abc1234"}
 
 
-def test_app_starts_with_the_mcp_mount_and_serves_health_under_its_lifespan():
-    """Proves the /mcp mount's session manager wiring doesn't break app startup (#348)."""
-    with TestClient(app) as client:
-        resp = client.get("/health")
-        assert resp.status_code == 200
+def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
+    """Three properties in one client, because they were traded for each other.
 
-
-def test_mcp_redirect_keeps_tls_and_the_routed_prefix() -> None:
-    """`GET /api/mcp` must not hand a client a downgraded or off-service URL.
-
-    On production it answered
+    On production `GET /api/mcp` answered
 
         307 -> http://truealpha.club/mcp/
 
-    dropping TLS and the /api prefix in one hop and landing on app-web's 404.
-    init.md principle 21 requires TLS on every non-local MCP endpoint, and a
+    dropping TLS and the /api prefix in one hop, landing on app-web's 404.
+    init.md principle 21 requires TLS on every non-local MCP endpoint and a
     client follows a 307.
 
-    Both halves are asserted because each was fixed separately and the first
-    attempt only fixed one: ProxyHeadersMiddleware restores the scheme, and
-    Starlette's own redirect_slashes does NOT apply root_path to a Mount, so the
-    Location was https://.../mcp/ — TLS restored, prefix still gone.
+    The first fix put the flags in the Dockerfile CMD, which infra2's compose
+    overrides — it shipped as v0.0.26 and changed nothing. The second set
+    FastAPI's `root_path`, which fixed the redirect and BROKE ROUTING: Starlette
+    strips root_path while matching, Traefik had already stripped it, and
+    staging's POST /api/mcp/ went 200 -> 404 while production stayed 200. A
+    redirect pointing at a 404 is worse than the downgrade it replaced.
 
-    The X-Forwarded-Proto header is what Traefik sends; nothing here can observe
-    the real proxy, so the header is the contract being pinned.
+    So all three are asserted together, in one client: the session manager runs
+    from the app lifespan and can only be started once per instance, which is
+    why this is one test and not three.
+
+    The request path is /mcp, not /api/mcp — Traefik strips the prefix before
+    forwarding, and the redirect rebuilds it by hand.
     """
-    # client=(...) is Traefik's real address on dokploy-network, measured on the
-    # VPS. Without it the peer is untrusted and the headers are ignored — which
-    # is the middleware working, and is why this test failed the moment
-    # trusted_hosts stopped being "*".
-    response = TestClient(app, client=("10.0.1.76", 50000)).get(
-        "/mcp", follow_redirects=False, headers={"X-Forwarded-Proto": "https"}
+    with TestClient(app, client=("10.0.1.76", 50000)) as client:
+        # Absorbed from test_app_starts_with_the_mcp_mount_and_serves_health_under
+        # _its_lifespan (#348): the MCP session manager is a module-level
+        # singleton whose run() may be entered ONCE per instance, so two tests
+        # each opening a lifespan fail on whichever runs second. Same client,
+        # same assertion.
+        assert client.get("/health").status_code == 200, (
+            "the /mcp mount's session manager wiring broke app startup (#348)"
+        )
+        redirect = client.get("/mcp", follow_redirects=False, headers={"X-Forwarded-Proto": "https"})
+        endpoint = client.post(
+            "/mcp/",
+            headers={"Accept": "application/json, text/event-stream"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"},
+                },
+            },
+        )
+        untrusted = TestClient(app, client=("203.0.113.7", 50000)).get(
+            "/health/", follow_redirects=False, headers={"X-Forwarded-Proto": "https"}
+        )
+        trusted_slash = client.get("/health/", follow_redirects=False, headers={"X-Forwarded-Proto": "https"})
+
+    location = redirect.headers["location"]
+    assert redirect.status_code == 307
+    # Path-only. Asserting "starts with https" would REQUIRE the absolute form,
+    # which is what lets a forged Host choose the destination (review). A
+    # relative Location keeps the client's scheme without naming one.
+    assert "://" not in location, f"an absolute Location lets the Host header choose the destination: {location}"
+    assert location == f"{ROUTED_PREFIX}/mcp/", f"redirect is not the routed path: {location}"
+    assert endpoint.status_code == 200, (
+        f"the MCP endpoint answers {endpoint.status_code}; a redirect fix that breaks routing points clients at a 404"
     )
-    location = response.headers["location"]
-    assert response.status_code == 307
-    assert location.startswith("https://"), f"redirect drops TLS: {location}"
-    assert "/api/mcp/" in location, f"redirect drops the routed prefix: {location}"
-
-
-def test_forwarded_headers_from_an_untrusted_peer_are_ignored() -> None:
-    """The point of narrowing `trusted_hosts` off "*".
-
-    A peer that is not the proxy must not be able to set the scheme used to
-    build redirects. This fails closed: the Location degrades to http, which is
-    the pre-fix behaviour, rather than honouring a stranger's header.
-    """
-    response = TestClient(app, client=("203.0.113.7", 50000)).get(
-        "/mcp", follow_redirects=False, headers={"X-Forwarded-Proto": "https"}
-    )
-    assert response.headers["location"].startswith("http://"), (
+    # The redirect is identical for any peer now, so the trust boundary is
+    # asserted where it remains observable: Starlette's own redirect_slashes
+    # still builds an ABSOLUTE Location, so an unhandled trailing slash shows
+    # what scheme the app believes it is serving.
+    assert untrusted.headers["location"].startswith("http://"), (
         "an untrusted peer set the scheme — trusted_hosts is too wide"
+    )
+    # The negative alone proves nothing: with the middleware removed entirely
+    # every peer gets http and the assertion above still passes. The positive is
+    # what shows the boundary discriminates (found by red-proving it).
+    assert trusted_slash.headers["location"].startswith("https://"), (
+        "the proxy's X-Forwarded-Proto was ignored — ProxyHeadersMiddleware is not installed"
     )
