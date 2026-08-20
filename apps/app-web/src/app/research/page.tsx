@@ -154,8 +154,20 @@ export default async function ResearchOverviewPage() {
 								</div>
 								<h2 className="mt-2 font-semibold">{module.name}</h2>
 								<p className="mt-1 text-sm text-gray-400">{module.note}</p>
-								<div className="mt-3">
+								<div className="mt-3 flex items-center gap-2">
 									<AvailabilityBadge status={module.availability} />
+									{/* A status word cannot tell 4% from 100%. The badge was
+									    decided by whether ANY decision carried a value, so PEG
+									    read "available" on 28 of 660 rows. */}
+									{module.coverage !== null && module.coverage.total > 0 && (
+										<span
+											className="text-xs text-gray-500 tabular-nums"
+											title={`${module.coverage.withValue} of ${module.coverage.total} decisions in this run carry a value`}
+										>
+											{coveragePercent(module.coverage)}% ·{" "}
+											{module.coverage.withValue}/{module.coverage.total}
+										</span>
+									)}
 								</div>
 							</li>
 						))}
@@ -181,4 +193,14 @@ export default async function ResearchOverviewPage() {
 			)}
 		</section>
 	);
+}
+
+/** Rounded for the label; the exact counts stay in the title and beside it.
+ *  Percent OF the run's own decisions — no metric is computed, this is the
+ *  filtered count the read model already returned (init.md principle 2). */
+function coveragePercent(coverage: {
+	withValue: number;
+	total: number;
+}): number {
+	return Math.round((coverage.withValue / coverage.total) * 100);
 }
