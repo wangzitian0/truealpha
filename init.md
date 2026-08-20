@@ -38,7 +38,7 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 19. **Every source has an expiring rights and budget go/no-go.** Before Production use, a named authorized owner records raw-retention, caching, derived-metric, report/card/publication, quotation, and attribution rights; quota/SLA behavior; approved vendor, API, storage, extraction, and human-review budgets; and a review expiry. Unknown rights, expired approval, or an over-budget full-catalog projection fails the gate. The only alternatives are to approve/fund a valid source or explicitly narrow `vision.md` and the Research Catalog.
 20. **Continuous operation requires natural source refreshes.** Before a soak begins, each required source class declares its cadence, maximum age, required naturally changed partitions/publication transitions, observation window, owner, and alert budget. Immediate retries, reparsing unchanged bytes, synthetic mutations, and replaying old fixtures do not count. Slow quarterly or annual sources keep graduation blocked unless their pre-approved natural-refresh requirement is observed.
 21. **Production graduation is a user-facing and independently reviewed event.** Every non-local MCP, App, `/chat`, report, and artifact endpoint requires TLS and authentication. Full-catalog load must pass approved capacity limits without starving Staging, backup, monitoring, or consumers. A destructive clean restore must meet declared database and raw-object RPO/RTO. A human approves a Production card deck against the content/visual/rights rubric, and an independent reviewer signs the final audit; automated green checks alone cannot graduate shadow output.
-22. **Extension is registry-driven and deliberately static.** Content-hashed `SourceRegistry` and `SemanticTypeRegistry` snapshots are authenticated by the signed release manifest. They resolve source adapters/normalizers and typed normalized models/factor-input projectors/repositories. Adding a source for an existing semantic type changes only source-owned code, registrations, policies, and tests. Adding a record type inside an existing domain changes only its typed model, storage/migration, projector, registration, and tests. Generic capture, manifest, snapshot, Dagster composition, factor execution, lineage, usage, and review code must not branch on source or record type. A new domain or new business meaning remains an explicit contract/factor/catalog change. V1 uses checked-in registrations at process start, not dynamic plugin discovery, runtime code loading, an event bus, or arbitrary JSON facts.
+22. **Extension is registry-driven and deliberately static.** Content-hashed `SourceRegistry` and `SemanticTypeRegistry` snapshots are authenticated by the signed release manifest. They resolve source adapters/normalizers and typed normalized models/factor-input projectors/repositories. Adding a source for an existing semantic type changes only source-owned code, registrations, policies, and tests. Adding a record type inside an existing domain changes only its typed model, storage/migration, projector, registration, and tests. Generic capture, manifest, snapshot, Dagster composition, factor execution, lineage, usage, and review code must not branch on source or record type. A new domain or new business meaning remains an explicit contract/factor/catalog change. V1 uses checked-in registrations at process start, not dynamic plugin discovery, runtime code loading, an event bus, or arbitrary JSON facts. **Concretely for metrics: adding one is a registry edit, never a migration and never an edit to generic transport code.** Two current violations are named so they are fixed rather than copied: `staging.strategy_backtest_inputs.input_key` carries an enumerated `CHECK` instead of validating against the metric registry, and `strategy_bridge._STRATEGY_PERIODIC_KEYS` hard-codes which metrics are period-shaped inside generic transport, which is the branch-on-record-type this rule forbids.
 23. **Data usage is automatic, idempotent infrastructure evidence.** Capture manifests, repositories, snapshot selection, and factor/strategy runners record append-only semantic-use identities outside factor code. Usage views distinguish planned demand, capture/normalization evidence, snapshot selection, factor consumption, and strategy consumption. Retries do not double-count one semantic use, missing telemetry is an error rather than zero use, and source attribution is recovered through lineage rather than exposed to a factor. V1 deliberately excludes page-view/query analytics so the App remains strictly `mart_readonly`.
 24. **Strategy quality review starts from expected data, not successful outputs.** The framework compiles source-neutral `DataRequirement` records from the immutable strategy, factor, and execution/return-rule graph for every scheduled cutoff and applicable subject, then left-joins actual capture, snapshot, consumption, lineage, rights, freshness, and quality evidence. Missing data that suppresses a candidate or produces no trade remains a failed expected cell with affected decisions; undeclared consumption or broken reverse lineage also fails. Observed low usage can prioritize remediation but can never relax applicability, retention, source policy, or an SLO retroactively.
 25. **Qlib is the selected factor-expression and backtest engine, not a data or semantic authority.** Serializable TrueAlpha definitions wrap versioned Qlib expressions and operators, and only adapters inside `libs/factors` may invoke Qlib. Qlib receives provenance-neutral inputs projected from durable PIT snapshots and the explicit post-decision market-event stream; it may not crawl or select vintages, resolve membership, infer confidence or lineage, combine adjusted prices with explicit actions, or replace Decimal monetary logic. Every run pins the Qlib build, adapter, operator registry, strategy, and input snapshot identities. Native `libs/factors` implementations remain valid for Decimal, graph, and other computations that do not fit Qlib's matrix-expression model.
@@ -293,14 +293,33 @@ requested domain-selection policy version. The financial selection shape is:
 3. Within the winning source, the latest `transaction_time` (restatement) wins; `id` breaks same-instant ties.
 4. `confidence` rides along as data for the factor — it never arbitrates between sources (static per-source confidence must not silently decide truth).
 
+**Where fusion is exercised (revised 2026-08-20).** The rule above outlived the table it
+was written against, so it is restated on the planes that carry data. Fusion is not
+homeless — it is UNEXERCISED, and the difference matters:
+
+- **Evidence lives on the observation plane.** `staging.capture_normalized_observations`
+  holds one row per `(obligation, semantic)` with its source, `parser_version`,
+  `mapping_version` and confidence. Two sources asserting the same subject are two rows.
+  That IS "every source's assertion side by side"; the granularity is the captured
+  payload, not one row per metric.
+- **Selection is exercised at snapshot freeze.** `staging.topt_core_snapshots` is the
+  durable "selected fact set", and every selected observation ID plus policy version is
+  persisted in its manifest before any factor runs.
+- **What is missing is a second source, not a plane.** Every financial metric resolves
+  from SEC alone today; Twelve Data is a second ORIGIN used for price reconciliation (a
+  disagreement measure), not a fusion candidate. So `source_priority` has never had to
+  choose. Registering a second source for an existing metric is what activates it, and by
+  rule 22 that must change only source-owned code and registrations.
+
 ```sql
-select distinct on (subject_kind, subject_id, metric, fiscal_period) *
-from staging.financial_facts
-where transaction_time <= :as_of_timestamp
-  and array_position(:source_priority, source) is not null   -- registry order for this metric
-order by subject_kind, subject_id, metric, fiscal_period,
-         array_position(:source_priority, source),           -- fusion rank first
-         transaction_time desc, id desc;
+-- Selection at snapshot freeze: highest-priority source first, then restatement recency.
+select distinct on (o.subject_id, o.semantic_type)  o.*
+from staging.capture_normalized_observations o
+where o.knowable_at <= :as_of_timestamp
+  and array_position(:source_priority, o.source) is not null  -- registry order for the metric
+order by o.subject_id, o.semantic_type,
+         array_position(:source_priority, o.source),          -- fusion rank first
+         o.knowable_at desc, o.observation_id desc;
 ```
 
 This SQL is a financial-domain illustration, not the public snapshot API or a generic
@@ -309,6 +328,28 @@ snapshot manifest before factor execution. Mart lineage points to that snapshot 
 exact selected records, which in turn chain through mapping/extraction IDs to `raw_ref`
 and immutable bytes. Changing any selection policy creates a new snapshot/materialization;
 old evidence and results remain addressable.
+
+**Factor-input projection (`staging.strategy_backtest_inputs`).** The provenance-neutral
+projection factors actually consume, and the only shape rule 3 permits them to see. Its
+axes are `issuer x cutoff x metric x fiscal_period x vintage`:
+
+- `input_key` names a metric. It MUST validate against the metric registry
+  (`libs/contracts` `metrics.py`), never against an enumerated `CHECK` — see rule 22.
+- `fiscal_period` is the period a value DESCRIBES, and is NULL for point-in-time
+  observations (price, share count, headcount) which describe an instant. A metric may
+  appear once per period per cutoff; that axis is what lets a multi-period factor live in
+  `libs/factors` instead of being pre-reduced in the capture layer.
+- **The period tag is a declared format, not a convention:**
+  `<filing fiscal year>:<kind>:<start ISO date>:<end ISO date>`, e.g.
+  `FY2025:FY:2025-01-01:2025-12-31`. The leading fiscal year is the FILING's, never the
+  period's — a filing stamps its comparatives with its own tag. Consumers key on the END
+  DATE. Writer and reader must share one encoder/parser; a format known only by a producer
+  and a regex fails silently, as an empty series rather than an error.
+- `vintage` is `recorded_at`-ordered supersession: a restatement appends and wins by
+  recency; history is never overwritten.
+- **There is deliberately NO `source` column.** Rule 3 forbids factors seeing source,
+  `raw_ref` or accession. Traceability is served by lineage recorded OUTSIDE factor
+  computation (rule 23): `staging.evidence_nodes` / `evidence_edges`.
 
 **Knowledge graph (replaces the old flat `symbol_mapping` table).** Entity resolution is not unique to companies — companies, ETFs, analysts, and supply-chain nodes all have the same "same real-world thing, different IDs per source" problem, so it's modeled once as a graph, implemented as plain Postgres tables (no separate graph engine — the query patterns needed here are shallow joins, not deep multi-hop traversal):
 
@@ -394,6 +435,8 @@ routes, identity-provider bindings, retention policy, replay execution, or shari
 ---
 
 ## 7. The Seven Analytics Modules
+
+**The module number is an identity, and `libs/factors`' `@factor(..., module=N)` must match this list.** Two registrations do not, and are recorded here so the correction is deliberate rather than silent: `price_to_sales` registers `module=6` (module 6 is pure-blood screening; P/S is not one of the seven -- it is an input to module 7), and `registered_semantic_probe` registers `kind="base", module=7` (module 7 is the composite). Correcting either changes a published identity, so each is its own versioned change.
 
 Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`libs/factors/composite`) — it reloads other modules' materialized mart outputs, and its confidence cannot exceed the minimum confidence consumed; a declared versioned policy may be stricter.
 
