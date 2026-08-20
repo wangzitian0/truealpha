@@ -228,7 +228,9 @@ def refresh_etf_constituents(
         # The membership IS the operator's versioned configuration — land it as the
         # fetch body so the denominator's raw lineage points at exactly what was
         # decided, under DataSource.RELEASE like other release-derived assertions.
-        rows = [{"ticker": ticker, "name": ticker, "market_cap": None} for ticker in source.static_members]
+        rows: list[ConstituentRow] = [
+            {"ticker": ticker, "name": ticker, "market_cap": None} for ticker in source.static_members
+        ]
         body = json.dumps({"etf": source.etf, "members": list(source.static_members)}).encode()
         fetch_source = DataSource.RELEASE
     else:
