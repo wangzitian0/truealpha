@@ -34,4 +34,23 @@ COPY db/migrations ./db/migrations
 COPY db/roles.sql ./db/roles.sql
 COPY db/apply_migrations.sh ./db/apply_migrations.sh
 EXPOSE 8000
-CMD ["sh", "-c", "sh ./db/apply_migrations.sh && exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000"]
+# --proxy-headers: TLS terminates at Traefik, so the request reaches uvicorn as
+# http. Without this, Starlette builds redirect Locations from the request scheme
+# and `GET /api/mcp` (no trailing slash) answered
+#   307 -> http://truealpha.club/mcp/
+# on production: TLS dropped AND the /api prefix dropped, landing on app-web's
+# 404. init.md principle 21 requires TLS on every non-local MCP endpoint, and a
+# 307 to http is a downgrade a client will follow.
+#
+# --forwarded-allow-ips: uvicorn ignores X-Forwarded-* from untrusted peers.
+# The only peer is Traefik on the compose network; the container is not
+# reachable from outside it.
+#
+# --root-path /api: proxy-headers alone fixes the scheme and leaves the prefix,
+# so the Location would still have been https://truealpha.club/mcp/ — TLS
+# restored, still a 404 on app-web. Traefik strips /api before forwarding, which
+# is why a POST to /api/mcp/ reaches a service mounted at /mcp; root-path is how
+# an app behind a stripped prefix declares it so generated URLs carry it back.
+# The value must match the prefix infra2 routes to this service — the contract
+# is tools/route_manifest.json (#463).
+CMD ["sh", "-c", "sh ./db/apply_migrations.sh && exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --root-path /api"]

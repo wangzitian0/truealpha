@@ -22,6 +22,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST = REPO / "tools" / "route_manifest.json"
+#: The prefix infra2's Traefik rule strips before forwarding to llm-service.
+#: Verified from behaviour, not assumed: a POST to /api/mcp/ reaches a service
+#: whose app is mounted at /mcp, so the prefix is gone by the time it arrives.
+ROUTED_PREFIX = "/api"
 APP_DIR = REPO / "apps" / "app-web" / "src" / "app"
 LLM_MAIN = REPO / "apps" / "llm-service" / "src" / "llm_service" / "main.py"
 
@@ -64,6 +68,41 @@ def main() -> int:
     for route in _llm_routes():
         if not _covered(route, llm["owns"]):
             failures.append(f"llm-service route {route!r} is outside its declared prefixes {llm['owns']}")
+
+    # The service is reached through a prefix Traefik strips, so it must declare
+    # that prefix or every redirect it generates points outside itself. On
+    # production, `GET /api/mcp` answered
+    #     307 -> http://truealpha.club/mcp/
+    # — TLS dropped (proxy-headers missing) and /api dropped (root-path missing),
+    # landing on app-web's 404. init.md principle 21 requires TLS on every
+    # non-local MCP endpoint, and a client follows a 307.
+    #
+    # Checked here rather than in a new tool because this file already owns the
+    # question "does what the service serves agree with what the proxy routes".
+    dockerfile = (REPO / "apps" / "llm-service" / "Dockerfile").read_text()
+    # The CMD line, not the first line mentioning uvicorn: the comment above it
+    # names the flags too, and matching that made this check green while the
+    # Dockerfile was missing --root-path. Fourth scanner this week to read its
+    # own prose as code.
+    command = next(
+        (line for line in dockerfile.splitlines() if line.lstrip().startswith("CMD") and "uvicorn" in line),
+        "",
+    )
+    if not command:
+        failures.append("no uvicorn CMD found in llm-service Dockerfile — this check lost its subject")
+    for flag, why in (
+        ("--proxy-headers", "redirect Locations are built with the request scheme, so TLS is dropped"),
+        ("--root-path", "redirect Locations lose the prefix Traefik strips, so they leave the service"),
+    ):
+        if flag not in command:
+            failures.append(f"llm-service starts uvicorn without {flag}: {why}")
+
+    # `--root-path` must be the prefix the proxy strips. A mismatch is silent:
+    # routing keeps working and every generated URL is wrong.
+    if "--root-path" in command:
+        declared = command.split("--root-path", 1)[1].split()[0].strip("\"]' ")
+        if declared != ROUTED_PREFIX:
+            failures.append(f"llm-service root-path {declared!r} is not the routed prefix {ROUTED_PREFIX!r}")
 
     names = list(manifest)
     for i, a in enumerate(names):
