@@ -134,7 +134,13 @@ jobs:
           # (exactly what the red-proof produced: #687 and #688 from one forced
           # failure). Per-environment issues are per-breakage, which is what
           # #680 asks for; the search just has to agree.
-          EXISTING=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number' || true)
+          # A failed LIST must not fall through to create — a rate limit would
+          # turn one breakage into duplicates (review). No pull_request trigger
+          # here, so the workflow-level issues grant stays acceptable.
+          if ! EXISTING=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number'); then
+            echo "::warning::issue listing failed; skipping escalation — the run is already red"
+            exit 0
+          fi
           if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
             gh issue comment -R "${{ github.repository }}" "$EXISTING" --body-file body.md
           else
