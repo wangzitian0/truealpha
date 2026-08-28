@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -29,7 +30,15 @@ from typing import Any
 
 
 def fetch_inspect(host: str, name_filter: str) -> list[dict[str, Any]]:
-    """One SSH round-trip: list matching containers, inspect them all."""
+    """One SSH round-trip: list matching containers, inspect them all.
+
+    The filter is validated against docker's own name alphabet instead of being
+    escaped: this string is interpolated into a remote shell line, and a
+    whitelist refuses the whole injection class rather than out-quoting it
+    (review).
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", name_filter):
+        raise SystemExit(f"runtime_truth: refusing name filter {name_filter!r} — [A-Za-z0-9_.-] only")
     script = (
         f"names=$(docker ps -a --filter name={name_filter} --format '{{{{.Names}}}}'); "
         f'[ -n "$names" ] && docker inspect $names || echo "[]"'
@@ -41,7 +50,9 @@ def fetch_inspect(host: str, name_filter: str) -> list[dict[str, Any]]:
         check=True,
     )
     parsed = json.loads(result.stdout)
-    assert isinstance(parsed, list)
+    if not isinstance(parsed, list):
+        # Not assert: external data, and `python -O` strips asserts (review).
+        raise SystemExit(f"runtime_truth: docker inspect returned {type(parsed).__name__}, not a list")
     return parsed
 
 
@@ -49,10 +60,18 @@ def effective_command(config: dict[str, Any]) -> tuple[str, bool]:
     """The process line the container actually runs, and whether a compose-level
     entrypoint makes the image CMD dead code.
 
-    Docker semantics: a non-empty Entrypoint runs with Cmd appended as its
-    arguments; when compose sets `entrypoint:`, the image's CMD is DROPPED
-    unless compose also sets `command:`. An inline shell entrypoint with empty
-    Cmd is exactly the v0.0.26 trap: everything in the image CMD is unreachable.
+    Two layers, stated separately because conflating them misleads (review):
+
+    - Dockerfile layer: ENTRYPOINT and CMD compose — a non-empty entrypoint
+      runs with the CMD appended as its arguments.
+    - Compose layer: setting `entrypoint:` on a service ALSO clears the image's
+      default CMD unless `command:` is set too (Compose spec: it "overrides the
+      default entrypoint ... and clears out any default command on the image").
+      The deployed containers here are the live proof — the llm image declares a
+      CMD, the container's Cmd is empty.
+
+    So a container with a compose entrypoint and empty Cmd is the v0.0.26 trap:
+    everything in the image CMD is unreachable.
     """
     entrypoint = config.get("Entrypoint") or []
     cmd = config.get("Cmd") or []

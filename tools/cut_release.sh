@@ -25,6 +25,9 @@ PROD_URL="https://truealpha.club"
 
 TAG="${1:?usage: cut_release.sh vX.Y.Z --prs \"N,N\" --message \"...\" [--prod] [--dry-run]}"
 shift
+# deploy-release.yml requires a stable vX.Y.Z tag; a malformed one would be
+# pushed (the lock!) and then rejected downstream, wasting the number (review).
+echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "cut_release: $TAG is not vX.Y.Z" >&2; exit 2; }
 PRS="" MESSAGE="" PROD=0 DRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -64,8 +67,13 @@ for PR in "${PR_LIST[@]}"; do
   PR=$(echo "$PR" | tr -d ' ')
   STATE=$(gh pr view "$PR" --repo "$REPO" --json state -q .state)
   [ "$STATE" = "MERGED" ] || fail "#$PR is $STATE, not MERGED — v0.0.29 was cut exactly this way"
-  UNRESOLVED=$(gh api graphql -f query="{repository(owner:\"wangzitian0\",name:\"truealpha\"){pullRequest(number:$PR){reviewThreads(last:50){nodes{isResolved}}}}}" \
-    -q '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length')
+  # totalCount alongside the page: with >50 threads the page could miss an
+  # unresolved one, so that case fails CLOSED instead of passing by omission
+  # (review).
+  THREADS=$(gh api graphql -f query="{repository(owner:\"wangzitian0\",name:\"truealpha\"){pullRequest(number:$PR){reviewThreads(last:50){totalCount nodes{isResolved}}}}}")
+  TOTAL=$(echo "$THREADS" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["repository"]["pullRequest"]["reviewThreads"]["totalCount"])')
+  [ "$TOTAL" -le 50 ] || fail "#$PR has $TOTAL review threads, more than one page — verify by hand"
+  UNRESOLVED=$(echo "$THREADS" | python3 -c 'import sys,json;n=json.load(sys.stdin)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"];print(sum(1 for x in n if not x["isResolved"]))')
   [ "$UNRESOLVED" = "0" ] || fail "#$PR has $UNRESOLVED unresolved review thread(s)"
   MERGE_SHA=$(gh pr view "$PR" --repo "$REPO" --json mergeCommit -q .mergeCommit.oid)
   git merge-base --is-ancestor "$MERGE_SHA" "$LOCAL_MAIN" || fail "#$PR merge commit $MERGE_SHA is not on main"
