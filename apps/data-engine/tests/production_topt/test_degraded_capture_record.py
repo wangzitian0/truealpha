@@ -27,6 +27,7 @@ colliding inside the sink after a wasted round of vendor calls.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
 import subprocess
@@ -637,3 +638,46 @@ def test_a_fully_reused_run_still_exists_on_the_evidence_plane(tick_database_url
             "select count(*) from staging.evidence_nodes where node_id = %s", (second.run_id,)
         ).fetchone()[0]
     assert node == 1
+
+
+def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypatch) -> None:
+    """#684's second half: every normalized payload embeds the capturing run's
+    (issuer, instrument, listing) trio, keyed by THAT run's corpus. A run whose
+    plan keys the same subject differently (TOPT's LEI vs the planes' CIK) must
+    capture fresh — reusing the foreign trio either mis-keys mart (pre-fix) or
+    trips the snapshot's payload-agreement check (the live canary FAILURE this
+    encodes). Same-keyed subjects keep sharing vendor bytes."""
+    _arm(monkeypatch)
+    cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
+    _run_tick(tick_database_url, version="coordinate-source", cutoff=cutoff)
+
+    probe = psycopg.connect(tick_database_url)
+    try:
+        plan = composition.plan_and_persist(probe, cutoff=cutoff, version="coordinate-target")
+        victim = sorted(plan.coordinates)[0]
+        issuer_id, instrument_id, listing_id, ticker = plan.coordinates[victim]
+        patched = dataclasses.replace(
+            plan,
+            coordinates={
+                **plan.coordinates,
+                victim: ("issuer:cik:0000999999", instrument_id, listing_id, ticker),
+            },
+        )
+        satisfied = composition._satisfy_from_recent_observations(probe, patched, cutoff=cutoff)
+
+        reused_by_subject: dict[str, dict[str, bool]] = {}
+        for work_item_id, binding in patched.bindings.items():
+            semantic = binding.obligation.capture_requirement_id.removesuffix(":v1")
+            cells = reused_by_subject.setdefault(binding.obligation.subject.id, {})
+            cells[semantic] = work_item_id in satisfied
+        assert reused_by_subject[victim]["market-price"] is False
+        assert reused_by_subject[victim]["financial-fact"] is False
+        others = [subject for subject in reused_by_subject if subject != victim]
+        assert others, "the corpus has more than one subject"
+        assert all(reused_by_subject[s]["market-price"] and reused_by_subject[s]["financial-fact"] for s in others)
+        assert not any(
+            cells.get("listing-identity") or cells.get("universe-membership") for cells in reused_by_subject.values()
+        )
+    finally:
+        probe.rollback()
+        probe.close()
