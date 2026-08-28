@@ -58,6 +58,10 @@ concurrency:
 
 permissions:
   contents: read
+  # #680: a scheduled failure files/updates a tracking issue. The 2026-08-24
+  # Monday run failed and sat unnoticed for 4 days — a red Actions tab pages
+  # nobody.
+  issues: write
 
 jobs:
   reproof:
@@ -73,4 +77,38 @@ jobs:
       # Every mutation restores its file, but the checkout is throwaway either
       # way — a run killed mid-edit cannot leave the repository altered.
       - name: Break each declared property and require its guard to notice
-        run: uv run --no-sync python tools/mutation_reproof.py
+        # tee so the escalation step below can NAME the failed properties in the
+        # issue instead of linking an opaque run. pipefail keeps the step's
+        # verdict the tool's own.
+        run: |
+          set -o pipefail
+          uv run --no-sync python tools/mutation_reproof.py 2>&1 | tee reproof.log
+      # #680: a failed SCHEDULED guard must reach a surface someone reads — the
+      # 08-24 failure sat 4 days because a red Actions tab pages nobody. Scoped
+      # to schedule + workflow_dispatch: a pull_request failure is already on
+      # the PR, and dispatch is how this escalation gets red-proven. Reports and
+      # never rescues: it runs only after the step above failed, so the run's
+      # conclusion stays failure (acceptance 3).
+      - name: Escalate a scheduled failure to an issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="mutation-reproof is red: a declared guard is inert"
+          {
+            echo "Scheduled/dispatched run failed: $RUN_URL"
+            echo
+            echo "Failed properties:"
+            echo '~~~'
+            grep -iE "inert|guard is" reproof.log | head -20 || echo "see run log"
+            echo '~~~'
+            echo
+            echo "Filed automatically (#680). One open issue per breakage: reruns comment here instead of filing again."
+          } > body.md
+          EXISTING=$(gh issue list --state open --search "in:title \"mutation-reproof is red\"" --json number --jq '.[0].number' || true)
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            gh issue comment "$EXISTING" --body-file body.md
+          else
+            gh issue create --title "$TITLE" --body-file body.md
+          fi
