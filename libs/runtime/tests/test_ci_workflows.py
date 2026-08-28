@@ -517,7 +517,16 @@ def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
 
     workflow = yaml.safe_load(source(REQUIRED))
     changes_job = (workflow.get("jobs") or {})["changes"]
-    filter_step = next(step for step in changes_job["steps"] if "filters" in (step.get("with") or {}))
+    # Default + assertion so a restructured changes job fails by naming the
+    # missing contract, not as a bare StopIteration.
+    filter_step = next(
+        (step for step in changes_job["steps"] if "filters" in (step.get("with") or {})),
+        None,
+    )
+    assert filter_step is not None, (
+        "ci-required's changes job no longer carries a paths-filter step; every lane "
+        "decision below reads from it (#673)"
+    )
     filters = yaml.safe_load(filter_step["with"]["filters"])
 
     for lane in ("python", "db", "web"):
