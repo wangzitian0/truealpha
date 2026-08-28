@@ -310,6 +310,29 @@ def canary_live_pipeline_job() -> None:
     run_canary_live_tick()
 
 
+# 23:47 UTC: 27 minutes after the QQQ tick, so the canary's overlap names (AAPL,
+# GOOGL, GOOG, ASML) reuse the night's committed observations under #635 and the
+# daily proof costs ~2 vendor calls (HBAN/CINF only). Seven deploy-free days in a
+# row meant seven days with ZERO full freeze→publish executions — a
+# deploy-triggered verifier only verifies when you deploy; this makes the full
+# chain prove itself nightly in BOTH environments (#648/#671).
+CANARY_DAILY_CRON = "47 23 * * *"
+
+
+@dg.schedule(
+    job=canary_live_pipeline_job,
+    cron_schedule=CANARY_DAILY_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def canary_daily_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    executed_at = context.scheduled_execution_time.isoformat()
+    return dg.RunRequest(
+        run_key=executed_at,
+        run_config=dg.RunConfig(ops={"run_canary_live_tick": ToptLiveTickConfig(executed_at=executed_at)}),
+    )
+
+
 @dg.schedule(
     job=qqq_live_pipeline_job,
     cron_schedule=QQQ_LIVE_CRON,
@@ -434,7 +457,7 @@ def universe_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRe
 
 defs = dg.Definitions(
     jobs=[topt_live_pipeline_job, qqq_live_pipeline_job, canary_live_pipeline_job, universe_refresh_pipeline_job],
-    schedules=[topt_live_schedule, qqq_live_schedule, universe_refresh_schedule],
+    schedules=[topt_live_schedule, qqq_live_schedule, universe_refresh_schedule, canary_daily_schedule],
     sensors=[pipeline_trigger_sensor],
 )
 
