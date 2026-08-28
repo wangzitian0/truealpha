@@ -86,8 +86,8 @@
       "id": "workflow-contract/unconfigured-walk-is-skipped",
       "guard": "libs/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/deploy-release.yml",
-      "find": "        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}\n",
-      "replace": "",
+      "find": "      - name: Walk the deployed surface\n        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}\n",
+      "replace": "      - name: Walk the deployed surface\n",
       "command": [
         "uv",
         "run",
@@ -102,8 +102,8 @@
       "id": "invariants/head-matches-the-consumer",
       "guard": "libs/runtime/tests/test_output_invariants.py",
       "file": "tools/output_invariants.py",
-      "find": "    where environment = 'production' and factor_id = 'gross_profit_per_employee'\n",
-      "replace": "",
+      "find": "    select target_run_id from mart.current_pointer_head\n    where environment = 'production' and factor_id = 'gross_profit_per_employee'\n",
+      "replace": "    select target_run_id from mart.current_pointer_head\n",
       "command": [
         "uv",
         "run",
