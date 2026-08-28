@@ -56,8 +56,9 @@ red-case sessions run on a branch that lacked the source change under test, and
 
 | tier | budget | must catch |
 |---|---|---|
-| local inner loop | ≤ 2 min | units + **runtime-shape**: proxy topology, effective entrypoint, migration replay over seeded rows, page-renders-field |
-| PR CI | ≤ 3 min wall | everything local catches, plus cross-package and the browser walk |
+| pre-push (laptop, scoped) | ≤ 60 s | unit tests of the **changed module only**, plus instant static checks (ruff on touched files, YAML parse). Nothing heavier runs on the laptop — it is measurably slower than the runners and thermally limited; full pytest sweeps, data-engine, browser suites, docker and mypy-wide all belong to the tiers below. |
+| remote inner loop | ≤ 2 min | **runtime-shape**: proxy topology, effective entrypoint, migration replay over seeded rows, page-renders-field — as a CI job and as a VPS-side target (`make parity-remote`, executing over SSH where docker already lives), never on the laptop |
+| PR CI | ≤ 3 min wall | everything the inner loops catch, plus cross-package and the browser walk |
 | merge → prod | ≤ 20 min | only environment-exclusive truths: real data, infra2 dispatch, deployed walk |
 | standing probes | ≤ 24 h | drift between repo assumptions and runtime truth |
 
@@ -70,7 +71,10 @@ pipeline, tracked like any other.
 app containers the way infra2 actually runs them: the same entrypoint contract
 (imported from infra2 as a versioned file, not re-guessed), a minimal Traefik in
 front that strips `/api` and terminates TLS, and Postgres migrated by the real
-chain then seeded with production-shaped rows. `make parity`, budget ≤ 90 s.
+chain then seeded with production-shaped rows. It runs in two places and neither
+is the laptop: a CI job, and the VPS docker engine over SSH (`make
+parity-remote`) — the same host where the isolated `probe615` databases already
+proved this pattern during the #615 and job_name incidents. Budget ≤ 90 s.
 This single harness would have caught, locally, every one of the four redirect
 releases and both migration crash-loops — the two most expensive defect families
 of the sprint. Cross-repo ask: infra2 publishes its entrypoint/compose contract
