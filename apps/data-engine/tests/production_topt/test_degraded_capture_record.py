@@ -655,7 +655,7 @@ def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypa
     try:
         plan = composition.plan_and_persist(probe, cutoff=cutoff, version="coordinate-target")
         victim = sorted(plan.coordinates)[0]
-        issuer_id, instrument_id, listing_id, ticker = plan.coordinates[victim]
+        _issuer_id, instrument_id, listing_id, ticker = plan.coordinates[victim]
         patched = dataclasses.replace(
             plan,
             coordinates={
