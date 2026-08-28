@@ -236,19 +236,6 @@
         "tools/check_factor_contract.py"
       ],
       "cwd": "."
-    },
-    {
-      "id": "redproof/deliberately-inert-680",
-      "guard": "libs/runtime/tests/test_mutation_reproof.py",
-      "file": "apps/app-web/src/server/mart/research-read.ts",
-      "find": "export type Availability =",
-      "replace": "const redproof680 = 1;\nexport type Availability =",
-      "command": [
-        "python3",
-        "-c",
-        "pass"
-      ],
-      "cwd": "."
     }
   ]
 }

@@ -56,10 +56,6 @@ jobs:
             deploy_type: staging
             url: https://truealpha-staging.truealpha.club/api/health
     steps:
-      # RED-PROOF ONLY (#680), reverted before merge: force the job red so the
-      # escalation step below demonstrably fires on a branch dispatch.
-      - name: red-proof forced failure
-        run: exit 1
       # Full history AND tags: the environments report release tags, and the
       # check resolves that tag to a commit to measure the gap. A shallow clone
       # makes every environment look unresolvable.
