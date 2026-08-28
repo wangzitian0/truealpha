@@ -106,9 +106,9 @@ jobs:
             echo
             echo "Filed automatically (#680). One open issue per breakage: reruns comment here instead of filing again."
           } > body.md
-          EXISTING=$(gh issue list --state open --search "in:title \"mutation-reproof is red\"" --json number --jq '.[0].number' || true)
+          EXISTING=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"mutation-reproof is red\"" --json number --jq '.[0].number' || true)
           if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-            gh issue comment "$EXISTING" --body-file body.md
+            gh issue comment -R "${{ github.repository }}" "$EXISTING" --body-file body.md
           else
-            gh issue create --title "$TITLE" --body-file body.md
+            gh issue create -R "${{ github.repository }}" --title "$TITLE" --body-file body.md
           fi
