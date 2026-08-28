@@ -433,6 +433,26 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
             context.log.info(outcome)
         connection.commit()
 
+    # Holdings ride a separate connection per fund (#628's lesson): an SEC outage
+    # must fail this half loudly without rolling back the published universes,
+    # and one fund's failure must not starve the next. Weekly retry is the
+    # policy — filings are quarterly with a ~60-day lag, a missed week is noise.
+    from data_engine.datahub.production_topt.nport_holdings import capture_fund_holdings
+
+    failures = []
+    for source in UNIVERSE_SOURCES.values():
+        if source.nport_ticker is None:
+            continue
+        try:
+            with psycopg.connect(settings.database_url) as connection:
+                context.log.info(str(capture_fund_holdings(connection, source.nport_ticker)))
+                connection.commit()
+        except Exception as error:  # noqa: BLE001 — per-fund isolation, re-raised below
+            context.log.error(f"nport[{source.nport_ticker}] failed: {error}")
+            failures.append(source.nport_ticker)
+    if failures:
+        raise RuntimeError(f"N-PORT holdings capture failed for: {', '.join(failures)}")
+
 
 @dg.job(name=UNIVERSE_REFRESH_JOB_NAME)
 def universe_refresh_pipeline_job() -> None:

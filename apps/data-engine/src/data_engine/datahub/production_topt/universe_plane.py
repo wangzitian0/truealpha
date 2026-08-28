@@ -65,6 +65,9 @@ class UniverseSource:
     # same live SEC/OpenFIGI paths as an index-fed source, so identity lineage is
     # identical either way. Empty means "fetch index_api".
     static_members: tuple[str, ...] = ()
+    # The fund ticker to pull N-PORT holdings for (#63 first tranche) — None for
+    # universes that are not a filing fund (the canary's static list has no N-PORT).
+    nport_ticker: str | None = None
 
     @property
     def head_kind(self) -> str:
@@ -77,6 +80,7 @@ UNIVERSE_SOURCES: dict[str, UniverseSource] = {
         index_api="https://api.nasdaq.com/api/quote/list-type/nasdaq100",
         universe_prefix="qqq-us",
         label="Nasdaq-100 (QQQ) constituents, from the index operator's API",
+        nport_ticker="QQQ",
     ),
     # #648: five hand-picked issuers, one per real code branch, all XNAS so the
     # source-level MIC stays honest: AAPL (non-financial mega), GOOGL+GOOG (one
