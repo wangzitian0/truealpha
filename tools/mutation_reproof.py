@@ -74,11 +74,19 @@ def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
     """Returns (the guard noticed, why not)."""
     target = REPO_ROOT / mutation.file
     original = target.read_text(encoding="utf-8")
-    if mutation.find not in original:
+    matches = original.count(mutation.find)
+    if matches == 0:
         # The anchor is gone, so this mutation no longer describes the code. That
         # is a finding, not a skip: the manifest and the source have drifted and
         # nobody would have known.
         return False, f"anchor not found in {mutation.file} — the mutation no longer applies"
+    if matches > 1:
+        # First-occurrence replacement on an ambiguous anchor breaks the WRONG
+        # occurrence and blames the guard: the 2026-08-24 maiden run reported the
+        # walk-skip guard inert when a new step had introduced a second identical
+        # `if:` line ahead of the one the mutation meant. Ambiguity is its own
+        # verdict, named at the cause.
+        return False, f"anchor matches {matches} times in {mutation.file} — pin it to a unique context"
     target.write_text(original.replace(mutation.find, mutation.replace, 1), encoding="utf-8")
     try:
         result = subprocess.run(
