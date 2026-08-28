@@ -452,7 +452,14 @@ def test_the_split_python_jobs_cover_every_testpath() -> None:
         for step in job.get("steps") or []:
             run = str(step.get("run", ""))
             if run.startswith("uv run pytest "):
-                covered.update(run.split()[3:])
+                # shlex, and flags filtered: a `-q` or `-k expr` token counted
+                # as a path would make the equality fail on correct workflows —
+                # or worse, mask a genuinely dropped package behind a flag
+                # token that happens to balance the set sizes (review).
+                import shlex
+
+                tokens = shlex.split(run)
+                covered.update(t for t in tokens[3:] if not t.startswith("-"))
     assert covered == testpaths, (
         f"the split ci-python jobs run pytest over {sorted(covered)} but pyproject declares "
         f"testpaths {sorted(testpaths)} — anything in the difference merges green with no CI "
@@ -476,7 +483,10 @@ def test_the_pr_trigger_covers_every_file_the_manifest_names() -> None:
     import json
 
     workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/mutation-reproof.yml").read_text(encoding="utf-8"))
-    trigger_paths = set(workflow[True]["pull_request"]["paths"])
+    # YAML 1.1 parses bare `on:` as boolean True; a YAML 1.2 loader keeps "on".
+    # The same dual lookup the reusable-workflow check above already uses.
+    triggers_block = workflow.get(True) or workflow.get("on") or {}
+    trigger_paths = set(triggers_block["pull_request"]["paths"])
     manifest = json.loads((REPO_ROOT / "tools/mutations.json").read_text(encoding="utf-8"))
     needed = {m["file"] for m in manifest["mutations"]} | {m["guard"] for m in manifest["mutations"]}
     needed |= {"tools/mutations.json", "tools/mutation_reproof.py"}
