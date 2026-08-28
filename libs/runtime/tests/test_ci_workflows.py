@@ -496,3 +496,42 @@ def test_the_pr_trigger_covers_every_file_the_manifest_names() -> None:
         f"paths do not include them — a PR editing those files merges with no re-proof "
         f"and the dead-guard latency regresses to the weekly run (#673)"
     )
+
+
+def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
+    """A tools-only PR used to run ZERO tests — A4 review finding (#673).
+
+    The `changes` job's python filter did not include `tools/**`, and the
+    `required` summariser treats a skipped job as success. Every deploy-gate
+    tool (health_check, walk_evidence, output_invariants, issue_close_guard,
+    mutation_reproof, ...) is tested from libs/runtime/tests via load_tool,
+    which only ci-python executes — so the gate tooling itself could merge
+    with no test running. `tools/` appeared exactly once in ci-required.yml
+    before the fix: inside a comment.
+
+    Pins three memberships (python/db/web each execute or read tools/) and
+    that the python filter covers the directory of every pytest testpath, so a
+    sixth package cannot land outside the filter the way tools/ did.
+    """
+    import tomllib
+
+    workflow = yaml.safe_load(source(REQUIRED))
+    changes_job = (workflow.get("jobs") or {})["changes"]
+    filter_step = next(step for step in changes_job["steps"] if "filters" in (step.get("with") or {}))
+    filters = yaml.safe_load(filter_step["with"]["filters"])
+
+    for lane in ("python", "db", "web"):
+        assert "tools/**" in filters[lane], (
+            f"the {lane} filter no longer includes tools/**; a tools-only PR skips that lane "
+            f"and `required` reads the skip as success (#673)"
+        )
+
+    testpaths = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["pytest"][
+        "ini_options"
+    ]["testpaths"]
+    for path in testpaths:
+        top = "/".join(path.split("/")[:2])
+        assert any(entry.startswith(top) for entry in filters["python"]), (
+            f"pytest testpath {path!r} is outside every python filter entry — PRs touching it "
+            f"skip ci-python and merge with that suite never running (#673)"
+        )

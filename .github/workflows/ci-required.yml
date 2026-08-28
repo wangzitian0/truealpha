@@ -54,10 +54,19 @@ jobs:
         with:
           filters: |
             db:
+              # ci-db executes tools/output_invariants.py against the migrated
+              # schema; editing that tool must re-run it.
+              - 'tools/**'
               - 'db/**'
               - '.github/workflows/ci-db.yml'
               - '.github/workflows/ci-required.yml'
             python:
+              # tools/*.py are the deploy gates themselves; their tests live in
+              # libs/runtime/tests via load_tool, which only ci-python runs. A
+              # tools-only PR used to match NO filter, and `required` treats a
+              # skipped job as success — so the gate tooling could merge with
+              # zero tests executed (A4 review finding, #673).
+              - 'tools/**'
               - 'apps/data-engine/**'
               - 'apps/llm-service/**'
               - 'libs/contracts/**'
@@ -89,6 +98,9 @@ jobs:
               - '.github/workflows/ci-runtime.yml'
               - '.github/workflows/ci-required.yml'
             web:
+              # ci-web runs the app-web half of tools/check_route_manifest.py
+              # and the walk seeds read tools/route_manifest.json.
+              - 'tools/**'
               - 'apps/app-web/**'
               - 'libs/contracts/conformance/**'
               - '.github/workflows/ci-web.yml'
