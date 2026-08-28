@@ -33,6 +33,9 @@ permissions:
   contents: read
   # walk_evidence.py reads this repository's own release runs.
   actions: read
+  # #680: a scheduled failure files/updates a tracking issue instead of dying
+  # quietly in the Actions tab.
+  issues: write
 
 jobs:
   freshness:
@@ -107,3 +110,39 @@ jobs:
             --deploy-type "${{ matrix.deploy_type }}" \
             --environment "${{ matrix.environment }}" \
             --url "${{ matrix.url }}"
+
+      # #680: same escalation as mutation-reproof, same reasons — the 08-24
+      # reproof failure sat 4 days because a red scheduled run pages nobody, and
+      # this workflow has the identical failure surface. Matrix legs share one
+      # issue through the title search. Reports, never rescues: the run's
+      # conclusion is already failure when this fires (acceptance 3).
+      - name: Escalate a scheduled failure to an issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="deploy-freshness is red: ${{ matrix.environment }} failed its standing checks"
+          {
+            echo "Scheduled/dispatched run failed for ${{ matrix.environment }}: $RUN_URL"
+            echo
+            echo "Filed automatically (#680). One open issue per breakage: reruns comment here instead of filing again."
+          } > body.md
+          # Search by the FULL per-environment title: the two matrix legs run in
+          # parallel, and an env-agnostic search let the staging leg comment on
+          # production's issue — or both legs create one each on first breakage
+          # (exactly what the red-proof produced: #687 and #688 from one forced
+          # failure). Per-environment issues are per-breakage, which is what
+          # #680 asks for; the search just has to agree.
+          # A failed LIST must not fall through to create — a rate limit would
+          # turn one breakage into duplicates (review). No pull_request trigger
+          # here, so the workflow-level issues grant stays acceptable.
+          if ! EXISTING=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number'); then
+            echo "::warning::issue listing failed; skipping escalation — the run is already red"
+            exit 0
+          fi
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            gh issue comment -R "${{ github.repository }}" "$EXISTING" --body-file body.md
+          else
+            gh issue create -R "${{ github.repository }}" --title "$TITLE" --body-file body.md
+          fi

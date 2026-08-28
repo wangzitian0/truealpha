@@ -63,6 +63,8 @@ jobs:
   reproof:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      failed: ${{ steps.collect.outputs.failed }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -73,4 +75,69 @@ jobs:
       # Every mutation restores its file, but the checkout is throwaway either
       # way — a run killed mid-edit cannot leave the repository altered.
       - name: Break each declared property and require its guard to notice
-        run: uv run --no-sync python tools/mutation_reproof.py
+        # tee so the escalation step below can NAME the failed properties in the
+        # issue instead of linking an opaque run. pipefail keeps the step's
+        # verdict the tool's own.
+        run: |
+          set -o pipefail
+          uv run --no-sync python tools/mutation_reproof.py 2>&1 | tee reproof.log
+      # #680: hand the failed properties to the escalate JOB below. Same job as
+      # the log; runs only when the step above failed. grep -m caps matches
+      # without a pipe — `grep | head` under the runner's pipefail exits
+      # non-zero on >N matches via SIGPIPE and falsely took the fallback
+      # (review).
+      - name: Collect failed properties
+        id: collect
+        if: failure()
+        run: |
+          {
+            echo 'failed<<PROPERTIES_EOF'
+            grep -m 20 -iE "inert|guard is" reproof.log || echo "see run log"
+            echo 'PROPERTIES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+  # #680: a failed SCHEDULED guard must reach a surface someone reads — the
+  # 08-24 failure sat 4 days because a red Actions tab pages nobody. A separate
+  # JOB so `issues: write` never reaches the pull_request-triggered reproof
+  # steps (review): this workflow runs on PRs, and the write grant is scoped to
+  # exactly the code that files the issue. Scoped to schedule + dispatch — a PR
+  # failure is already on the PR, and dispatch is how this gets red-proven.
+  # Reports, never rescues: it fires only after reproof failed, so the run's
+  # conclusion stays failure (acceptance 3).
+  escalate:
+    needs: reproof
+    if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILED: ${{ needs.reproof.outputs.failed }}
+        run: |
+          TITLE="mutation-reproof is red: a declared guard is inert"
+          {
+            echo "Scheduled/dispatched run failed: $RUN_URL"
+            echo
+            echo "Failed properties:"
+            echo '~~~'
+            echo "${FAILED:-see run log}"
+            echo '~~~'
+            echo
+            echo "Filed automatically (#680). One open issue per breakage: reruns comment here instead of filing again."
+          } > body.md
+          # A failed LIST must not fall through to create: that is how a rate
+          # limit turns one breakage into a duplicate issue (review). The run is
+          # already red; skipping loses nothing but this comment.
+          if ! EXISTING=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number'); then
+            echo "::warning::issue listing failed; skipping escalation — the run is already red"
+            exit 0
+          fi
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            gh issue comment -R "${{ github.repository }}" "$EXISTING" --body-file body.md
+          else
+            gh issue create -R "${{ github.repository }}" --title "$TITLE" --body-file body.md
+          fi
