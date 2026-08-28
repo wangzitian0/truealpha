@@ -604,26 +604,44 @@ def _satisfy_from_recent_observations(
     connection: psycopg.Connection[Any], plan: PlannedRun, *, cutoff: datetime
 ) -> frozenset[str]:
     """Satisfy obligations from observations another run committed within the last
-    twelve hours (#635): the 13 TOPT∩QQQ overlap names were fetched once per
-    universe per day — same subject, same semantic, same vendor bytes. A satisfied
+    twelve hours (#635): same subject, same semantic, same vendor bytes. A satisfied
     obligation gets the source obligation's FULL observation set bound to it (both
     price origins ride along, so reconciliation is unaffected), a ledger attempt
     finished UNCHANGED with the reused primary vintage, and its work item never
     reaches a vendor. Only #628-committed evidence qualifies by construction —
     an uncommitted capture is invisible to this query.
+
+    Reuse additionally requires IDENTITY-COORDINATE EQUALITY (#684, both halves):
+    every normalized payload embeds the (issuer_id, instrument_id, listing_id) of
+    the run that captured it, keyed by that run's corpus. TOPT keys issuers by LEI;
+    the plane-published universes key by CIK. Cross-keying reuse first smuggled
+    TOPT's LEI issuers into QQQ/canary mart rows (release semantics, fixed by
+    exclusion below), then — once identity derived fresh — tripped the snapshot's
+    payload-agreement check via reused VENDOR observations carrying the foreign
+    trio. An anchor now qualifies only when its payload trio equals THIS run's
+    plan coordinates for the subject, so equally-keyed universes still share
+    vendor bytes and differently-keyed ones capture fresh.
     """
+    coordinates_param = json.dumps(
+        [
+            {"subject_id": subject_id, "issuer_id": issuer_id, "instrument_id": instrument_id, "listing_id": listing_id}
+            for subject_id, (issuer_id, instrument_id, listing_id, _ticker) in plan.coordinates.items()
+        ]
+    )
     rows = connection.execute(
         """
         with mine as (
             select ob.obligation_id, ob.subject_kind, ob.subject_id,
-                   regexp_replace(ob.capture_requirement_id, ':v1$', '') as semantic_type
-            from raw.capture_obligations ob where ob.run_id = %(run_id)s
+                   regexp_replace(ob.capture_requirement_id, ':v1$', '') as semantic_type,
+                   coordinate.issuer_id, coordinate.instrument_id, coordinate.listing_id
+            from raw.capture_obligations ob
+            join jsonb_to_recordset(%(coordinates)s::jsonb)
+                 as coordinate(subject_id text, issuer_id text, instrument_id text, listing_id text)
+              on coordinate.subject_id = ob.subject_id
+            where ob.run_id = %(run_id)s
               -- Release-derived semantics never ride reuse: their payload IS the
-              -- source run's identity, keyed by THAT run's corpus. Reusing them
-              -- imported TOPT's LEI-keyed issuers into QQQ/canary mart rows for
-              -- eight days against their own CIK-keyed governed heads — caught by
-              -- the canary's exact-issuer oracles (#684). Deriving them fresh
-              -- costs no vendor call, so exclusion is pure correctness.
+              -- run's identity and must come from THIS run's own governed corpus
+              -- (#684). Deriving them fresh costs no vendor call.
               and not (regexp_replace(ob.capture_requirement_id, ':v1$', '') = any(%(release_semantics)s::text[]))
         ), anchors as (
             select m.obligation_id as target_obligation_id,
@@ -653,13 +671,28 @@ def _satisfy_from_recent_observations(
              and o.subject_id = m.subject_id
              and o.semantic_type = m.semantic_type
              and o.knowable_at <= %(cutoff)s
+            -- #684: the source run's identity keying rides in every normalized
+            -- payload; an anchor with a foreign trio must not qualify.
+            join staging.capture_observation_payloads anchor_payload
+              on anchor_payload.observation_id = o.observation_id
+             and anchor_payload.normalized_payload->>'issuer_id' = m.issuer_id
+             and anchor_payload.normalized_payload->>'instrument_id' = m.instrument_id
+             and anchor_payload.normalized_payload->>'listing_id' = m.listing_id
         )
         select a.target_obligation_id, a.semantic_type, a.anchor_vintage_id, a.knowable_at,
                bound.observation_id
         from anchors a
+        join mine m on m.obligation_id = a.target_obligation_id
         join staging.capture_observation_obligations link
           on link.capture_obligation_id = a.source_obligation_id
         join staging.capture_normalized_observations bound on bound.observation_id = link.observation_id
+        -- The whole BOUND set must carry this run's trio too (both price
+        -- origins come from the same capturing run, but fail closed).
+        join staging.capture_observation_payloads bound_payload
+          on bound_payload.observation_id = bound.observation_id
+         and bound_payload.normalized_payload->>'issuer_id' = m.issuer_id
+         and bound_payload.normalized_payload->>'instrument_id' = m.instrument_id
+         and bound_payload.normalized_payload->>'listing_id' = m.listing_id
         where a.rn = 1
           -- Look-ahead guard on the whole bound set, not just the anchor: nothing
           -- knowable after THIS run's cutoff may ride into it (review on #664).
@@ -670,6 +703,7 @@ def _satisfy_from_recent_observations(
             "cutoff": cutoff,
             "max_age": _REUSE_MAX_AGE,
             "release_semantics": sorted(_RELEASE_SEMANTICS),
+            "coordinates": coordinates_param,
         },
     ).fetchall()
 
