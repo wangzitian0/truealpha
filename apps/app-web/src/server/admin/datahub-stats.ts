@@ -137,7 +137,8 @@ const CAPACITY_TD_SQL = `
          case when count(*) > 560 then 'warn' else 'ok' end as verdict,
          count(*) || ' of 800 shared daily credits' as detail
   from raw.fetches
-  where source = 'twelvedata' and recorded_at > date_trunc('day', now() at time zone 'utc')
+  where source = 'twelvedata'
+    and recorded_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
 `;
 const CAPACITY_REUSE_SQL = `
   select 'reuse ratio (24h)' as check,

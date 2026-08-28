@@ -120,7 +120,9 @@ export default async function AdminDatahubPage() {
             {stats.capacity.map((row) => (
               <tr key={row.check} className="border-t border-border">
                 <td className="pr-4 font-mono">{row.check}</td>
-                <td className={`pr-4 ${row.verdict === "warn" ? "text-amber-400" : ""}`}>{row.verdict}</td>
+                <td className={`pr-4 ${["ok", "pass", "active"].includes(row.verdict) ? "" : "text-amber-400"}`}>
+                  {row.verdict}
+                </td>
                 <td className="text-gray-400">{row.detail}</td>
               </tr>
             ))}
