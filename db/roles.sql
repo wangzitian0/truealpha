@@ -159,4 +159,7 @@ grant select on mart.topt_capture_status to app_ops_reader;
 -- obligation results — read-only, same posture.
 grant select on raw.capture_obligations to app_ops_reader;
 grant select on raw.capture_obligation_results to app_ops_reader;
+-- The N-PORT holdings plane (#63): filed weights become the first non-admin
+-- read surface — read-only, same posture.
+grant select on staging.fund_holding_facts to app_ops_reader;
 grant app_ops_reader to app_service_login;
