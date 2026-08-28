@@ -517,11 +517,8 @@ def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
 
     workflow = yaml.safe_load(source(REQUIRED))
     changes_job = (workflow.get("jobs") or {})["changes"]
-    # Default + assertion, not a bare next(): a restructured changes job would
-    # otherwise fail as StopIteration instead of naming the broken contract
-    # (review on #679 — and the first attempt at this fix was a silent no-op
-    # edit whose anchor missed after a formatter pass, discovered only because
-    # the commit came back empty; hence the follow-up PR).
+    # Default + assertion so a restructured changes job fails by naming the
+    # missing contract, not as a bare StopIteration.
     filter_step = next(
         (step for step in changes_job["steps"] if "filters" in (step.get("with") or {})),
         None,
