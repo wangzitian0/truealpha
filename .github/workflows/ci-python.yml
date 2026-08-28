@@ -4,9 +4,39 @@ on:
   workflow_call:
 
 jobs:
-  check:
+  # A4 D3 (#673): one serial `check` job measured 259 s — lint, types, four tool
+  # gates and every package's tests end to end. Split so the wall clock is the
+  # slowest member, not the sum: gates ~60 s, core tests ~40 s, data-engine
+  # ~150 s (the pole). Same commands, same env, nothing dropped — the split is
+  # topology only. The MinIO/migration steps are duplicated into both test jobs
+  # deliberately: a composite action would dedupe them at the cost of one more
+  # indirection layer, and the duplication is two YAML blocks that ci-db's
+  # tests already cross-check.
+  gates:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --frozen
+      # #463 route-namespace manifest (llm-service side; ci-web runs the same
+      # check for app-web). Stdlib-only.
+      - run: python3 tools/check_route_manifest.py
+      # #284: the factor surface is frozen — public signatures (defaults included) and
+      # the datahub columns factors read. Stdlib only, no database, so it runs here.
+      - run: python3 tools/check_factor_contract.py
+      - run: python3 tools/reachability_ratchet.py --check
+      - run: python3 tools/sql_literal_gate.py
+      - run: uv run ruff check apps libs
+      - run: uv run ruff format --check apps libs
+      - run: uv run mypy
+      - run: uv run python libs/contracts/conformance/export_issue58.py --check
+
+  test-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Real Postgres + MinIO so the KG / raw-store / ledger integration tests run
     # in CI instead of skipping (they skip gracefully where unreachable).
     services:
@@ -29,18 +59,6 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
-      # #463 route-namespace manifest (llm-service side; ci-web runs the same
-      # check for app-web). Stdlib-only.
-      - run: python3 tools/check_route_manifest.py
-      # #284: the factor surface is frozen — public signatures (defaults included) and
-      # the datahub columns factors read. Stdlib only, no database, so it runs here.
-      - run: python3 tools/check_factor_contract.py
-      - run: python3 tools/reachability_ratchet.py --check
-      - run: python3 tools/sql_literal_gate.py
-      - run: uv run ruff check apps libs
-      - run: uv run ruff format --check apps libs
-      - run: uv run mypy
-      - run: uv run python libs/contracts/conformance/export_issue58.py --check
       # A docker-run step rather than a service container: GitHub services can't
       # override the container command, and the official minio image (the same
       # pin docker-compose.yml uses) needs `server /data`.
@@ -65,7 +83,7 @@ jobs:
             echo "== $f"
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
           done
-      - run: uv run pytest
+      - run: uv run pytest libs/contracts/tests libs/factors/tests libs/runtime/tests apps/llm-service/tests
         env:
           APP_ENV: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
@@ -75,6 +93,60 @@ jobs:
           S3_BUCKET: truealpha-raw
           # The services above exist so integration tests RUN here; a suite
           # that silently skips must fail, not pass green while covering nothing.
+          TRUEALPHA_REQUIRE_RUNTIME: "1"
+
+  test-data-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: truealpha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --frozen
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio_local_secret \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for attempt in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            echo "Waiting for MinIO ($attempt/30)"
+            sleep 1
+          done
+          echo "MinIO did not become healthy" >&2
+          docker logs minio >&2
+          exit 1
+      - name: Apply DB migrations
+        env:
+          PGPASSWORD: postgres
+        run: |
+          for f in db/migrations/*.sql db/roles.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+          done
+      - run: uv run pytest apps/data-engine/tests
+        env:
+          APP_ENV: ci
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+          S3_ENDPOINT: http://localhost:9000
+          S3_ACCESS_KEY: minio
+          S3_SECRET_KEY: minio_local_secret
+          S3_BUCKET: truealpha-raw
           TRUEALPHA_REQUIRE_RUNTIME: "1"
 
   # truealpha#454: dagster-webserver/dagster-daemon under `-m data_engine.dagster_defs`

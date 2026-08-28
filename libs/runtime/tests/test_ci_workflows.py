@@ -429,3 +429,70 @@ def test_anything_that_caches_can_actually_save() -> None:
         f"these jobs cache without `actions: write`: {offenders}. The cache restores, never "
         f"saves, and the job fails outright the first time its key changes"
     )
+
+
+def test_the_split_python_jobs_cover_every_testpath() -> None:
+    """A4 D3 (#673): `python / check` ran one serial `uv run pytest` (259 s
+    measured); the split runs explicit path lists in parallel jobs. Explicit
+    lists can rot: a sixth package added to pyproject's testpaths would run in
+    nobody's job and merge green while covered by nothing — the #472 shape,
+    coverage that exists on paper. So the union of the split jobs' pytest paths
+    must equal pyproject's testpaths exactly.
+    """
+    import tomllib
+
+    testpaths = set(
+        tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["pytest"]["ini_options"][
+            "testpaths"
+        ]
+    )
+    workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/ci-python.yml").read_text(encoding="utf-8"))
+    covered: set[str] = set()
+    for job in workflow["jobs"].values():
+        for step in job.get("steps") or []:
+            run = str(step.get("run", ""))
+            if run.startswith("uv run pytest "):
+                # shlex, and flags filtered: a `-q` or `-k expr` token counted
+                # as a path would make the equality fail on correct workflows —
+                # or worse, mask a genuinely dropped package behind a flag
+                # token that happens to balance the set sizes (review).
+                import shlex
+
+                tokens = shlex.split(run)
+                covered.update(t for t in tokens[3:] if not t.startswith("-"))
+    assert covered == testpaths, (
+        f"the split ci-python jobs run pytest over {sorted(covered)} but pyproject declares "
+        f"testpaths {sorted(testpaths)} — anything in the difference merges green with no CI "
+        f"coverage at all (#673)"
+    )
+
+
+def test_the_pr_trigger_covers_every_file_the_manifest_names() -> None:
+    """A4 D4a (#673): the reproof runs on PRs path-filtered to the exact union
+    of the manifest's file+guard sets — deliberately not a directory glob, which
+    would put a 2-4 minute job on most PRs' critical path and undo D3's 3-minute
+    wall. The cost of exactness is rot: a new mutation naming a file outside the
+    list would merge with no PR-time re-proof and fall back to the weekly run,
+    which is the 7-day latency this trigger exists to remove. So the list is
+    pinned to the manifest here.
+
+    Lives in THIS file, not test_mutation_reproof.py, because #583's boundary
+    scan forbids any other test from opening a workflow — it fired on the first
+    placement of this test, which is that guard doing its job.
+    """
+    import json
+
+    workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/mutation-reproof.yml").read_text(encoding="utf-8"))
+    # YAML 1.1 parses bare `on:` as boolean True; a YAML 1.2 loader keeps "on".
+    # The same dual lookup the reusable-workflow check above already uses.
+    triggers_block = workflow.get(True) or workflow.get("on") or {}
+    trigger_paths = set(triggers_block["pull_request"]["paths"])
+    manifest = json.loads((REPO_ROOT / "tools/mutations.json").read_text(encoding="utf-8"))
+    needed = {m["file"] for m in manifest["mutations"]} | {m["guard"] for m in manifest["mutations"]}
+    needed |= {"tools/mutations.json", "tools/mutation_reproof.py"}
+    missing = sorted(needed - trigger_paths)
+    assert not missing, (
+        f"tools/mutations.json names {missing} and mutation-reproof.yml's pull_request "
+        f"paths do not include them — a PR editing those files merges with no re-proof "
+        f"and the dead-guard latency regresses to the weekly run (#673)"
+    )

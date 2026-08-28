@@ -19,6 +19,42 @@ on:
     # before it is relied on rather than after.
     - cron: "0 6 * * 1"
   workflow_dispatch:
+  # A4 D4a (#673): a dead guard used to wait up to 7 days to be noticed. The
+  # PRs that can deaden one are exactly those touching a mutated file, its
+  # guard, the manifest, or this harness — so those PRs, and only those, pay
+  # the ~2-4 min re-proof at review time instead. The path list is the exact
+  # union of tools/mutations.json's file+guard sets, NOT a directory glob: a
+  # glob would put this job on most PRs' critical path and undo D3's 3-minute
+  # wall. libs/runtime/tests/test_ci_workflows.py fails when the manifest
+  # names a file this list misses, so the filter cannot rot silently.
+  pull_request:
+    paths:
+      - ".github/workflows/deploy-release.yml"
+      - "apps/app-web/src/app/login/page.tsx"
+      - "apps/app-web/src/app/research/coverage/page.tsx"
+      - "apps/app-web/src/app/research/rankings/page.tsx"
+      - "apps/app-web/src/server/admin/ops.ts"
+      - "apps/app-web/src/server/mart/research-read.ts"
+      - "apps/app-web/src/server/mart/strategy-run-repository.ts"
+      - "apps/app-web/tests/route-tree-freeze.test.ts"
+      - "apps/app-web/tests/source-contracts.test.ts"
+      - "apps/data-engine/src/data_engine/datahub/strategy_bridge.py"
+      - "db/migrations/0043_strategy_input_fiscal_period.sql"
+      - "libs/contracts/src/truealpha_contracts/fiscal_period.py"
+      - "libs/contracts/tests/test_fiscal_period.py"
+      - "libs/factors/src/factors/base/peg.py"
+      - "libs/runtime/tests/test_ci_workflows.py"
+      - "libs/runtime/tests/test_migration_chain.py"
+      - "libs/runtime/tests/test_output_invariants.py"
+      - "tools/check_factor_contract.py"
+      - "tools/factor_contract.json"
+      - "tools/mutation_reproof.py"
+      - "tools/mutations.json"
+      - "tools/output_invariants.py"
+
+concurrency:
+  group: mutation-reproof-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
