@@ -75,6 +75,9 @@ REPOSITORY_ROOT = next(
 )
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 OBLIGATIONS = 84
+# listing-identity + universe-membership per listing — the run's own identity,
+# excluded from cross-run reuse since #684.
+_RELEASE_OBLIGATIONS = 42
 _BANK_TICKER = "JPM"
 
 
@@ -530,36 +533,49 @@ def test_a_retry_after_freeze_failure_resumes_without_recapturing(tick_database_
 
 
 def test_a_second_run_reuses_committed_observations_without_vendor_calls(tick_database_url, monkeypatch) -> None:
-    """#635: the 13 TOPT∩QQQ overlap names were fetched once per universe per day.
-    A run whose subjects were captured by ANY committed run within twelve hours
-    satisfies its obligations from those observations — every terminal UNCHANGED
-    with the reused primary vintage, both price origins re-bound (reconciliation
-    unaffected), and not a single vendor route consulted."""
+    """#635 as amended by #684: the 13 TOPT∩QQQ overlap names were fetched once per
+    universe per day — VENDOR semantics reuse those observations, every terminal
+    UNCHANGED with the reused primary vintage and both price origins re-bound.
+    Release-derived semantics are the run's own identity and must NOT ride reuse
+    (reusing them imported a foreign corpus's issuer keying, #684): they execute
+    fresh, from this run's own coordinates, on every run."""
     _arm(monkeypatch)
     # The offline price fixture's bar is knowable 2026-03-31; a reused price must BE
     # the cutoff's settled session, so both ticks run after that session's close
     # (22:15 UTC = 18:15 EDT) — the exact production shape (TOPT 22:15 -> QQQ 23:20).
     reuse_cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
     first = _run_tick(tick_database_url, version="reuse-source", cutoff=reuse_cutoff)
-
-    def _no_vendor(plan, *args, **kwargs):
-        leftover = sorted({binding.obligation.capture_requirement_id for binding in plan.bindings.values()})
-        raise AssertionError(f"reuse must not consult a vendor route; planned requirements: {leftover}")
-
-    monkeypatch.setattr(composition, "build_routes", _no_vendor)
     second = _run_tick(tick_database_url, version="reuse-target", cutoff=reuse_cutoff)
 
     assert second.run_id != first.run_id
+    # 42 UNCHANGED can only come from the reuse path (vendor never executed);
+    # 42 fresh SUCCESS can only come from the executor deriving release semantics.
     assert _status_row(tick_database_url, second.run_id) == (
         OBLIGATIONS,
         OBLIGATIONS,
-        0,
-        OBLIGATIONS,
+        _RELEASE_OBLIGATIONS,
+        OBLIGATIONS - _RELEASE_OBLIGATIONS,
         0,
         0,
         0,
         True,
     )
+    # The #684 regression proper: identity semantics carry THIS run's own fresh
+    # vintage — never a reused one from whichever run captured the subject last.
+    with psycopg.connect(tick_database_url) as reader:
+        foreign_identity = reader.execute(
+            """
+            select count(*)
+            from raw.capture_obligations ob
+            join raw.capture_obligation_results done on done.capture_obligation_id = ob.obligation_id
+            join raw.capture_attempt_results attempt on attempt.attempt_id = done.final_attempt_id
+            where ob.run_id = %s
+              and regexp_replace(ob.capture_requirement_id, ':v1$', '') in ('listing-identity', 'universe-membership')
+              and (done.terminal_state <> 'success' or attempt.reused_source_vintage_id is not null)
+            """,
+            (second.run_id,),
+        ).fetchone()[0]
+    assert foreign_identity == 0
     snapshots, gppe, core = _materialized(tick_database_url, second.run_id)
     assert (snapshots, gppe, core) == (1, 20, 20)
 
@@ -601,14 +617,16 @@ def test_a_fully_reused_run_still_exists_on_the_evidence_plane(tick_database_url
     reuse_cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
     _run_tick(tick_database_url, version="evidence-source", cutoff=reuse_cutoff)
     second = _run_tick(tick_database_url, version="evidence-target", cutoff=reuse_cutoff)
-    # The reuse path must be the one under test: every terminal UNCHANGED proves the
-    # executor was skipped (a fresh-capture fallback would append the node too and
-    # quietly hollow this test out — review on #666).
+    # Post-#684 a maximally-reused run still executes its release semantics fresh,
+    # so the executor appends the run node on the normal path; every VENDOR
+    # terminal UNCHANGED proves reuse itself still worked. (The skip-path append
+    # this test was born from, #666, stays in composition as the guard for a
+    # hypothetical release-free plan.)
     assert _status_row(tick_database_url, second.run_id) == (
         OBLIGATIONS,
         OBLIGATIONS,
-        0,
-        OBLIGATIONS,
+        _RELEASE_OBLIGATIONS,
+        OBLIGATIONS - _RELEASE_OBLIGATIONS,
         0,
         0,
         0,
