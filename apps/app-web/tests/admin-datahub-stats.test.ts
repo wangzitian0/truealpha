@@ -49,10 +49,13 @@ const runRows = [
   __setTestOpsClient({
     query: async (sql: string) => {
       if (typeof sql === "string" && sql.includes("current_pointer_head")) return { rows: headRows } as never;
-      if (typeof sql === "string" && sql.includes("raw.fetches")) return { rows: sourceRows } as never;
+      // "as check" FIRST: capacity SQLs also mention raw.fetches, and matching the
+      // sources stub first fed them SourceStatRow shapes while the count-only
+      // assertion stayed green (review on #678).
       if (typeof sql === "string" && sql.includes("as check")) {
-        return { rows: [{ check: "canary", verdict: "pass", detail: "latest 08-20 — 24/24 resolved" }] } as never;
+        return { rows: [{ check: sql.slice(20, 44), verdict: "pass", detail: "stubbed" }] } as never;
       }
+      if (typeof sql === "string" && sql.includes("raw.fetches")) return { rows: sourceRows } as never;
       return { rows: runRows } as never;
     },
   } as never);
@@ -65,6 +68,11 @@ const runRows = [
   assert(stats.sources[0].fetches_total === 728, "source stats pass through");
   assert(stats.runs[0].resolved === 408, "run stats pass through");
   assert(stats.validation.length === 4, "four validation checks, one row each");
+  assert(stats.capacity.length === 4, "four capacity limits, one row each");
+  assert(
+    stats.capacity.every((row) => typeof row.verdict === "string" && typeof row.detail === "string"),
+    "capacity rows carry the validation shape, not a mis-stubbed one",
+  );
   assert(stats.validation[0].verdict === "pass", "validation verdicts pass through");
   __setTestOpsClient(null);
 }

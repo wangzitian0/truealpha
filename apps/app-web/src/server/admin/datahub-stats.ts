@@ -60,6 +60,7 @@ export interface DatahubStats {
   sources: SourceStatRow[];
   runs: CaptureRunRow[];
   validation: ValidationRow[];
+  capacity: ValidationRow[];
 }
 
 const HEADS_SQL = `
@@ -127,6 +128,50 @@ const CORROBORATION_SQL = `
   ) newest
 `;
 
+// #671: the SP500-era budget math, watched live. Twelve Data's shared free tier
+// (800/day) is the binding constraint; the reuse ratio is what keeps it flat as
+// universes multiply; DB size and capture-window duration are the growth and
+// runtime axes. Disk % needs a host exporter and stays on #671's ledger.
+const CAPACITY_TD_SQL = `
+  select 'twelvedata budget (this env, today utc)' as check,
+         case when count(*) > 560 then 'warn' else 'ok' end as verdict,
+         count(*) || ' of 800 shared daily credits' as detail
+  from raw.fetches
+  where source = 'twelvedata'
+    and recorded_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+`;
+const CAPACITY_REUSE_SQL = `
+  select 'reuse ratio (24h)' as check,
+         case when coalesce(sum(obligation_count), 0) = 0 then 'idle'
+              when sum(unchanged_count)::numeric / sum(obligation_count) >= 0.10 then 'ok'
+              else 'low' end as verdict,
+         coalesce(sum(unchanged_count), 0) || ' of ' || coalesce(sum(obligation_count), 0)
+           || ' obligations satisfied without a vendor call' as detail
+  from mart.topt_capture_status where cutoff > now() - interval '24 hours'
+`;
+const CAPACITY_DB_SQL = `
+  select 'database size' as check,
+         case when pg_database_size(current_database()) > 5e9 then 'warn' else 'ok' end as verdict,
+         pg_size_pretty(pg_database_size(current_database())) || ' (' ||
+           (select pg_size_pretty(sum(byte_length)) from raw.fetches) || ' raw bytes landed)' as detail
+`;
+const CAPACITY_DURATION_SQL = `
+  select 'capture window (newest run per universe)' as check,
+         case when max(window_minutes) > 150 then 'warn' else 'ok' end as verdict,
+         string_agg(split_part(universe_id, ':', 2) || ' ' || window_minutes || 'min', ', '
+                    order by universe_id) as detail
+  from (
+    select distinct on (s.universe_id) s.universe_id,
+           coalesce(round(extract(epoch from (max(r.completed_at) - min(r.completed_at))) / 60)::int, 0)
+             as window_minutes
+    from mart.topt_capture_status s
+    join raw.capture_obligations ob on ob.run_id = s.run_id
+    join raw.capture_obligation_results r on r.capture_obligation_id = ob.obligation_id
+    group by s.universe_id, s.run_id, s.cutoff
+    order by s.universe_id, s.cutoff desc
+  ) newest
+`;
+
 const RUNS_SQL = `
   select run_id, universe_id, cutoff::text as cutoff,
          obligation_count as obligations,
@@ -150,15 +195,20 @@ interface HeadDbRow extends Omit<HeadStatusRow, "factors"> {
 
 export async function loadDatahubStats(): Promise<DatahubStats> {
   return withOpsReader(async (client) => {
-    const [heads, sources, runs, canary, reuse, plausibility, corroboration] = await Promise.all([
-      client.query<HeadDbRow>(HEADS_SQL),
-      client.query<SourceStatRow>(SOURCES_SQL),
-      client.query<CaptureRunRow>(RUNS_SQL),
-      client.query<ValidationRow>(VALIDATION_SQL),
-      client.query<ValidationRow>(REUSE_SQL),
-      client.query<ValidationRow>(PLAUSIBILITY_SQL),
-      client.query<ValidationRow>(CORROBORATION_SQL),
-    ]);
+    const [heads, sources, runs, canary, reuse, plausibility, corroboration, td, reuseCap, dbSize, duration] =
+      await Promise.all([
+        client.query<HeadDbRow>(HEADS_SQL),
+        client.query<SourceStatRow>(SOURCES_SQL),
+        client.query<CaptureRunRow>(RUNS_SQL),
+        client.query<ValidationRow>(VALIDATION_SQL),
+        client.query<ValidationRow>(REUSE_SQL),
+        client.query<ValidationRow>(PLAUSIBILITY_SQL),
+        client.query<ValidationRow>(CORROBORATION_SQL),
+        client.query<ValidationRow>(CAPACITY_TD_SQL),
+        client.query<ValidationRow>(CAPACITY_REUSE_SQL),
+        client.query<ValidationRow>(CAPACITY_DB_SQL),
+        client.query<ValidationRow>(CAPACITY_DURATION_SQL),
+      ]);
     return {
       heads: heads.rows.map((row: HeadDbRow) => ({
         universe_id: row.universe_id,
@@ -179,6 +229,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       sources: sources.rows,
       runs: runs.rows,
       validation: [...canary.rows, ...reuse.rows, ...plausibility.rows, ...corroboration.rows],
+      capacity: [...td.rows, ...reuseCap.rows, ...dbSize.rows, ...duration.rows],
     };
   });
 }

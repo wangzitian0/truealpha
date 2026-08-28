@@ -107,6 +107,30 @@ export default async function AdminDatahubPage() {
       </div>
 
       <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Capacity</h2>
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="text-gray-500">
+              <th className="pr-4 font-normal">limit</th>
+              <th className="pr-4 font-normal">state</th>
+              <th className="font-normal">detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stats.capacity.map((row) => (
+              <tr key={row.check} className="border-t border-border">
+                <td className="pr-4 font-mono">{row.check}</td>
+                <td className={`pr-4 ${["ok", "pass", "active"].includes(row.verdict) ? "" : "text-amber-400"}`}>
+                  {row.verdict}
+                </td>
+                <td className="text-gray-400">{row.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="space-y-3">
         <h2 className="text-lg font-semibold">Sources</h2>
         <table className="w-full text-left text-sm">
           <thead>
