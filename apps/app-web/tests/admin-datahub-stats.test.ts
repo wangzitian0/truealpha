@@ -65,6 +65,7 @@ const runRows = [
   assert(stats.sources[0].fetches_total === 728, "source stats pass through");
   assert(stats.runs[0].resolved === 408, "run stats pass through");
   assert(stats.validation.length === 4, "four validation checks, one row each");
+  assert(stats.capacity.length === 4, "four capacity limits, one row each");
   assert(stats.validation[0].verdict === "pass", "validation verdicts pass through");
   __setTestOpsClient(null);
 }
