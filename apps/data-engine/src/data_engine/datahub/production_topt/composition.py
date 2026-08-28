@@ -618,6 +618,13 @@ def _satisfy_from_recent_observations(
             select ob.obligation_id, ob.subject_kind, ob.subject_id,
                    regexp_replace(ob.capture_requirement_id, ':v1$', '') as semantic_type
             from raw.capture_obligations ob where ob.run_id = %(run_id)s
+              -- Release-derived semantics never ride reuse: their payload IS the
+              -- source run's identity, keyed by THAT run's corpus. Reusing them
+              -- imported TOPT's LEI-keyed issuers into QQQ/canary mart rows for
+              -- eight days against their own CIK-keyed governed heads — caught by
+              -- the canary's exact-issuer oracles (#684). Deriving them fresh
+              -- costs no vendor call, so exclusion is pure correctness.
+              and not (regexp_replace(ob.capture_requirement_id, ':v1$', '') = any(%(release_semantics)s::text[]))
         ), anchors as (
             select m.obligation_id as target_obligation_id,
                    m.semantic_type,
@@ -658,7 +665,12 @@ def _satisfy_from_recent_observations(
           -- knowable after THIS run's cutoff may ride into it (review on #664).
           and bound.knowable_at <= %(cutoff)s
         """,
-        {"run_id": plan.run_id, "cutoff": cutoff, "max_age": _REUSE_MAX_AGE},
+        {
+            "run_id": plan.run_id,
+            "cutoff": cutoff,
+            "max_age": _REUSE_MAX_AGE,
+            "release_semantics": sorted(_RELEASE_SEMANTICS),
+        },
     ).fetchall()
 
     settled = last_settled_session_date(cutoff)
