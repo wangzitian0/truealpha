@@ -118,7 +118,7 @@ def test_rerun_of_same_filing_inserts_nothing(connection) -> None:
 
 def test_known_isin_resolves_to_existing_entity_not_a_mint(connection) -> None:
     _, holdings = nport.parse_nport(_XML)
-    target = next(h.isin for h in holdings if h.isin and h.pct_val and h.value_usd)
+    target = next(h.isin for h in holdings if h.isin is not None and h.pct_val is not None and h.value_usd is not None)
     er.ensure_entity(connection, "company:cik:320193", "company", "Pre-seeded Issuer")
     er.assert_identifier(
         connection,

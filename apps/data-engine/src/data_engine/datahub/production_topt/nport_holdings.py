@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from factors.shared import entity_resolution as er
 from truealpha_contracts.models import DataSource
@@ -30,6 +31,12 @@ from data_engine.sources import nport, sec
 
 # The filing itself is the assertion; same constant bootstrap_universe uses.
 CONF_FILING = 1.0
+
+
+def _exact(value: float | None) -> Decimal | None:
+    """Filed numbers land in NUMERIC columns; going through str strips the
+    binary-float representation error a raw float adapter would keep (#682)."""
+    return None if value is None else Decimal(str(value))
 
 
 @dataclass(frozen=True)
@@ -89,7 +96,9 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
     holdings = [h for h in all_holdings if h.asset_cat in (None, "EC") and h.pct_val is not None]
 
     fund_id = f"etf:series:{series_id}"
-    valid_from = info["report_period"] or filing_date
+    # One fallback, used everywhere report_period appears — outcome, valid_from
+    # and the fact rows must agree on the vintage they describe (review on #682).
+    report_period = info["report_period"] or filing_date
     er.ensure_entity(connection, fund_id, "etf", info["series_name"] or etf_ticker.upper())
     for id_type, id_value in (("ticker", etf_ticker.upper()), ("sec_series", series_id)):
         er.assert_identifier(
@@ -100,7 +109,7 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
             identifier_value=id_value,
             confidence=CONF_FILING,
             transaction_time=filing_dt,
-            valid_from=valid_from,
+            valid_from=report_period,
             raw_ref=filing_ref,
         )
 
@@ -122,7 +131,7 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
                 identifier_value=h.isin,
                 confidence=CONF_FILING,
                 transaction_time=filing_dt,
-                valid_from=valid_from,
+                valid_from=report_period,
                 raw_ref=filing_ref,
             )
             minted += 1
@@ -138,7 +147,7 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
                 confidence=CONF_FILING,
                 source="nport",
                 transaction_time=filing_dt,
-                valid_from=valid_from,
+                valid_from=report_period,
                 raw_ref=filing_ref,
             )
         result = connection.execute(
@@ -153,14 +162,14 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
                 fund_id,
                 holding_id,
                 h.name or h.isin,
-                info["report_period"] or filing_date,
+                report_period,
                 filing_dt,
                 h.cusip,
                 h.isin,
                 h.lei,
-                h.balance,
-                h.value_usd,
-                h.pct_val,
+                _exact(h.balance),
+                _exact(h.value_usd),
+                _exact(h.pct_val),
                 CONF_FILING,
                 filing_ref,
             ),
@@ -170,7 +179,7 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
     return HoldingsOutcome(
         etf=etf_ticker.upper(),
         accession=accession,
-        report_period=info["report_period"] or "",
+        report_period=report_period,
         filing_date=filing_date,
         raw_id=raw_id,
         equity_lines=len(holdings),
