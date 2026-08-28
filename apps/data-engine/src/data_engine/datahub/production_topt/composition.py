@@ -624,7 +624,7 @@ def _satisfy_from_recent_observations(
               -- eight days against their own CIK-keyed governed heads — caught by
               -- the canary's exact-issuer oracles (#684). Deriving them fresh
               -- costs no vendor call, so exclusion is pure correctness.
-              and not (regexp_replace(ob.capture_requirement_id, ':v1$', '') = any(%(release_semantics)s))
+              and not (regexp_replace(ob.capture_requirement_id, ':v1$', '') = any(%(release_semantics)s::text[]))
         ), anchors as (
             select m.obligation_id as target_obligation_id,
                    m.semantic_type,
