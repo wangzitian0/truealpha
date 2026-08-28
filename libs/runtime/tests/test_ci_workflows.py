@@ -535,6 +535,15 @@ def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
             f"and `required` reads the skip as success (#673)"
         )
 
+    # The same class one directory over, found by #689's own check run: this
+    # very file pins the shape of deploy-release, deploy-freshness,
+    # issue-close-guard and mutation-reproof, and a PR editing those workflows
+    # matched no python filter — so the tests pinning them were exactly the
+    # ones that did not run.
+    assert ".github/workflows/**" in filters["python"], (
+        "a workflow-only PR skips ci-python, and this file's workflow-shape tests are exactly what does not run (#673)"
+    )
+
     testpaths = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["pytest"][
         "ini_options"
     ]["testpaths"]
