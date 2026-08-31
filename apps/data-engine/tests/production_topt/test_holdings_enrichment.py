@@ -8,7 +8,7 @@ whole resolution must come from the landing zone and the injected SEC index."""
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
@@ -134,16 +134,23 @@ def test_sweep_repoints_from_landed_batches_without_a_vendor(connection) -> None
     assert outcome.repointed == 1
     assert outcome.unmapped == 1, "the foreign ISIN stays minted, retried next sweep"
 
-    target = er.resolve(connection, "isin", _NVDA_ISIN, as_of=datetime.now(UTC))
+    target = er.resolve(connection, "isin", _NVDA_ISIN, as_of=_AT + timedelta(days=1))
     assert target == "issuer:cik:0001045810", f"newest vintage re-points resolution, got {target}"
-    assert er.resolve(connection, "ticker", "NVDA", as_of=datetime.now(UTC)) == target
-    assert (er.resolve(connection, "isin", _FOREIGN_ISIN, as_of=datetime.now(UTC)) or "").startswith("company:isin:")
+    assert er.resolve(connection, "ticker", "NVDA", as_of=_AT + timedelta(days=1)) == target
+    assert (er.resolve(connection, "isin", _FOREIGN_ISIN, as_of=_AT + timedelta(days=1)) or "").startswith(
+        "company:isin:"
+    )
 
     same_as = connection.execute(
         "select to_id from staging.kg_edges where from_id = %s and relation_type = 'same_as'",
         (f"company:isin:{_NVDA_ISIN}",),
     ).fetchall()
     assert same_as == [("issuer:cik:0001045810",)], "immutable facts resolve forward through the merge hop"
+    vintage_time = connection.execute(
+        "select transaction_time from staging.kg_identifiers where identifier_value = %s and source = 'openfigi'",
+        (_NVDA_ISIN,),
+    ).fetchone()[0]
+    assert vintage_time == _AT, "the vintage carries the supplying batch's own clock (review on #695)"
 
 
 def test_second_sweep_is_a_no_op(connection) -> None:

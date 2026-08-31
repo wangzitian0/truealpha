@@ -58,24 +58,51 @@ class EnrichmentOutcome:
         )
 
 
-def figi_from_raw(connection, isins: list[str], *, store=None) -> tuple[dict[str, list[dict]], list[str]]:
-    """Rebuild the ISIN->records mapping from OpenFIGI batches already landed in
-    raw — newest batch wins per ISIN. Returns (mapping, still-missing ISINs).
-    Ticker-keyed OpenFIGI batches (the universe plane's) carry no `isins`
-    metadata and are skipped rather than misread."""
+@dataclass(frozen=True)
+class _RawMapping:
+    """One ISIN's records plus the batch that supplied them — the batch's own
+    clock and pointer, so nothing downstream borrows a newer batch's time."""
+
+    records: list[dict]
+    raw_ref: str
+    fetched_at: datetime
+
+
+def _scan_isin_batches(connection, isins: list[str], *, store=None) -> dict[str, _RawMapping]:
+    """Newest-batch-wins ISIN->records from the landing zone. Filtered in SQL:
+    only ISIN-keyed batches (the universe plane's ticker-keyed ones carry no
+    `isins` metadata) and only batches intersecting the requested set are read
+    and decoded (review on #695 — the scan must not grow with unrelated raw)."""
+    if not isins:
+        return {}
     rows = connection.execute(
-        "select id, metadata from raw.fetches where source = %s order by id",
-        (DataSource.OPENFIGI.value,),
+        """
+        select id, fetched_at, metadata from raw.fetches
+        where source = %s and metadata ? 'isins' and metadata->'isins' ?| %s::text[]
+        order by id
+        """,
+        (DataSource.OPENFIGI.value, isins),
     ).fetchall()
-    out: dict[str, list[dict]] = {}
-    for fetch_id, metadata in rows:
-        batch_isins = (metadata or {}).get("isins", [])
-        if not batch_isins:
-            continue
+    wanted = set(isins)
+    out: dict[str, _RawMapping] = {}
+    for fetch_id, fetched_at, metadata in rows:
+        batch_isins = metadata.get("isins", [])
         results = json.loads(raw_store.get_payload(connection, fetch_id, store=store))
         for isin, job in zip(batch_isins, results):
-            out[isin] = job.get("data", [])
-    return {i: out[i] for i in isins if i in out}, [i for i in isins if i not in out]
+            if isin in wanted:
+                out[isin] = _RawMapping(
+                    records=job.get("data", []),
+                    raw_ref=raw_store.raw_ref(fetch_id),
+                    fetched_at=fetched_at,
+                )
+    return out
+
+
+def figi_from_raw(connection, isins: list[str], *, store=None) -> tuple[dict[str, list[dict]], list[str]]:
+    """Rebuild the ISIN->records mapping from OpenFIGI batches already landed in
+    raw — newest batch wins per ISIN. Returns (mapping, still-missing ISINs)."""
+    found = _scan_isin_batches(connection, isins, store=store)
+    return {i: found[i].records for i in isins if i in found}, [i for i in isins if i not in found]
 
 
 def enrich_holding_identities(
@@ -102,8 +129,13 @@ def enrich_holding_identities(
     if not minted:
         return EnrichmentOutcome(0, 0, 0, 0, 0)
 
-    mapping, missing = figi_from_raw(connection, minted, store=store)
-    raw_ref_by_isin: dict[str, str] = {}
+    # Each ISIN keeps ITS OWN batch's clock and pointer — the vintage's
+    # transaction time is when THAT mapping became knowable, never a newer
+    # batch's (review on #695).
+    found = _scan_isin_batches(connection, minted, store=store)
+    mapping = {isin: entry.records for isin, entry in found.items()}
+    provenance = {isin: (entry.raw_ref, entry.fetched_at) for isin, entry in found.items()}
+    missing = [isin for isin in minted if isin not in found]
     fetched = 0
     if missing:
         client = http or sec.client()
@@ -119,23 +151,10 @@ def enrich_holding_identities(
                 store=store,
             )
             for isin in batch:
-                raw_ref_by_isin[isin] = raw_store.raw_ref(fetch_id)
+                provenance[isin] = (raw_store.raw_ref(fetch_id), at)
 
         mapping.update(openfigi.map_isins(client, missing, api_key=api_key, on_batch=persist_batch))
         fetched = len(missing)
-
-    # The identifier vintage's transaction time is when the mapping became
-    # knowable: this sweep's clock for live fetches, the newest landed batch's
-    # clock for raw reuse — never an unrelated now().
-    reused_at = connection.execute(
-        "select max(fetched_at) from raw.fetches where source = %s and metadata ? 'isins'",
-        (DataSource.OPENFIGI.value,),
-    ).fetchone()[0]
-    newest_raw = connection.execute(
-        "select max(id) from raw.fetches where source = %s and metadata ? 'isins'",
-        (DataSource.OPENFIGI.value,),
-    ).fetchone()[0]
-    fallback_ref = raw_store.raw_ref(newest_raw) if newest_raw is not None else "raw.fetches:0"
 
     index: dict[str, int] | None = ticker_cik
     repointed = unmapped = 0
@@ -153,8 +172,7 @@ def enrich_holding_identities(
             continue
         target = f"issuer:cik:{cik:010d}"
         minted_id = f"{_MINTED_PREFIX}{isin}"
-        transaction_time = at if isin in raw_ref_by_isin else (reused_at or at)
-        raw_ref = raw_ref_by_isin.get(isin, fallback_ref)
+        raw_ref, transaction_time = provenance[isin]
         er.ensure_entity(connection, target, "company", listing.name or ticker)
         for id_type, id_value in (("isin", isin), ("ticker", ticker)):
             er.assert_identifier(
