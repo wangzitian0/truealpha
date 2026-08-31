@@ -636,3 +636,11 @@ def test_release_script_reviews_the_pr_that_produced_the_release_sha() -> None:
         "EXPECTED_RELEASE fromJson is unguarded again — a failed request step will bury "
         "its error under a JToken template failure"
     )
+    confirm = step(RELEASE, "Confirm the deployed release is healthy")
+    assert "steps.request.outputs.json != ''" in str(confirm.get("if", "")), (
+        "the health confirmation no longer skips on an empty request output — with the env "
+        "guard falling back to '', health_check treats empty expected as don't-verify"
+    )
+    assert "refusing a vacuous health confirmation" in str(confirm.get("run", "")), (
+        "the health confirmation no longer fails closed on an empty EXPECTED_RELEASE"
+    )

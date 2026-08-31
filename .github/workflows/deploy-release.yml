@@ -197,14 +197,21 @@ jobs:
       # on deploy_type the way the prod-only health confirmation is.
       - uses: oven-sh/setup-bun@v2
       - name: Confirm the deployed release is healthy
-        if: ${{ inputs.deploy_type == 'prod' }}
+        # json != '' belongs in the condition AND the env stays guarded: the
+        # v0.0.34 incident showed step env templates are evaluated even when the
+        # implicit success() condition is false, so an unguarded fromJson('')
+        # errors on every failure path regardless of `if`. The guard alone is
+        # not enough either — health_check.py treats an empty expected version
+        # as "don't verify identity" (review), hence the assert in the script.
+        if: ${{ inputs.deploy_type == 'prod' && steps.request.outputs.json != '' }}
         env:
-          # Guarded: when the request step fails before writing its json output,
-          # an unguarded fromJson('') is a template error that buries the real
-          # failure under "Error reading JToken" (v0.0.34 first prod dispatch).
           EXPECTED_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).version_ref || '' }}
         run: |
           set -euo pipefail
+          if [ -z "$EXPECTED_RELEASE" ]; then
+            echo "::error::request step produced no version_ref — refusing a vacuous health confirmation"
+            exit 1
+          fi
           # infra2#508: llm-service's /health (reached through Traefik's /api prefix
           # route, tools/route_manifest.json) now reports git_sha, so this confirms
           # the deployed release is actually live -- not just that something answers.
