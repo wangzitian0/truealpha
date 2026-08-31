@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { loadFundHoldings } from "@/server/mart/fund-holdings";
+import { loadFundValuation } from "@/server/mart/fund-valuation";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
@@ -8,27 +8,25 @@ function formatPct(value: string | null): string {
   return value === null ? "—" : `${Number(value).toFixed(2)}%`;
 }
 
-function formatUsd(value: string | null): string {
-  if (value === null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(
-    Number(value),
-  );
+function formatRatio(value: string | null): string {
+  return value === null ? "—" : Number(value).toFixed(2);
 }
 
 export default async function HoldingsPage() {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Fholdings");
-  const funds = await loadFundHoldings();
+  const funds = await loadFundValuation();
 
   return (
     <section aria-labelledby="holdings-heading" className="space-y-6">
       <div>
         <h1 id="holdings-heading" className="text-2xl font-bold tracking-tight">
-          Fund holdings
+          Fund holdings &amp; valuation
         </h1>
         <p className="mt-2 text-sm text-gray-400">
-          Each fund&apos;s own filed N-PORT weights, newest vintage per fund — captured weekly from SEC EDGAR with the
-          filing date as the knowable moment. Weights are the fund&apos;s assertion, not a computation.
+          The fund&apos;s own filed N-PORT weights (newest vintage, captured weekly from SEC EDGAR), joined to the
+          governed TOPT valuation run per listing — a join over two materialized planes, computed nowhere. Coverage is
+          stated, never assumed: unresolved and unvalued weight stays visible.
         </p>
       </div>
 
@@ -42,8 +40,9 @@ export default async function HoldingsPage() {
             <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
               <h2 className="text-lg font-semibold">{fund.fundName}</h2>
               <span className="text-xs text-gray-400">
-                period {fund.reportPeriod} · filed {fund.filedOn} · {fund.lines.length} equity lines · weights sum{" "}
-                {fund.weightSumPct}%
+                period {fund.reportPeriod} · filed weight {fund.totalWeightPct}% · resolved {fund.resolvedWeightPct}% ·
+                valued {fund.valuedWeightPct}%
+                {fund.runId ? ` · run ${fund.runId.slice(0, 20)}…` : " · no governed valuation run yet"}
               </span>
             </div>
             <div className="overflow-x-auto rounded-lg border border-border">
@@ -51,18 +50,24 @@ export default async function HoldingsPage() {
                 <thead>
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-gray-400">
                     <th className="px-3 py-2">Holding</th>
-                    <th className="px-3 py-2">ISIN</th>
+                    <th className="px-3 py-2">Ticker</th>
                     <th className="px-3 py-2 text-right">Weight</th>
-                    <th className="px-3 py-2 text-right">Value</th>
+                    <th className="px-3 py-2 text-right">P/S</th>
+                    <th className="px-3 py-2 text-right">Target mid</th>
+                    <th className="px-3 py-2 text-right">Gap</th>
+                    <th className="px-3 py-2">Tier</th>
                   </tr>
                 </thead>
                 <tbody>
                   {fund.lines.map((line, index) => (
-                    <tr key={`${line.isin ?? line.holdingName}-${index}`} className="border-t border-border">
+                    <tr key={`${line.holdingName}-${index}`} className="border-t border-border">
                       <td className="px-3 py-1.5">{line.holdingName}</td>
-                      <td className="px-3 py-1.5 font-mono text-xs text-gray-400">{line.isin ?? "—"}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs text-gray-400">{line.ticker ?? "—"}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{formatPct(line.weightPct)}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{formatUsd(line.valueUsd)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.currentPs)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.targetPsMidpoint)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{formatRatio(line.valuationGap)}</td>
+                      <td className="px-3 py-1.5 text-xs">{line.tier ?? "—"}</td>
                     </tr>
                   ))}
                 </tbody>
