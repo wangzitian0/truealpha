@@ -133,11 +133,15 @@ INVARIANTS: tuple[Invariant, ...] = (
             "a head pointer with nothing behind it makes every consumer read fail, independently of "
             "whether the numbers behind it are right"
         ),
+        # Deliberately spans EVERY universe: a head with nothing behind it breaks its
+        # consumers whichever pipeline advanced it, so canary counts here exactly as the
+        # core does. The universe is projected rather than filtered, so a violation names
+        # which pipeline is dangling instead of leaving the reader to guess.
         sql="""
         select count(*) from mart.current_pointer_head h
         where not exists (select 1 from mart.topt_core_results r where r.run_id = h.target_run_id)
         """,
-        sample_sql="select target_run_id from mart.current_pointer_head limit 5",
+        sample_sql=("select universe_id, target_run_id from mart.current_pointer_head order by universe_id limit 5"),
     ),
 )
 

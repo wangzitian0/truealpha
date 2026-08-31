@@ -58,7 +58,10 @@ export async function loadQualityFunnel(principal: FunnelPrincipal | null): Prom
       );
       const ptr = await client.query(
         "select extract(epoch from (now() - advanced_at)) / 3600.0 as age " +
-          "from mart.current_pointer_head order by sequence desc limit 1",
+          // Per universe, not collapsed: `order by sequence desc limit 1` reported one
+          // universe's age and hid the rest, so a pipeline that stopped advancing looked
+          // identical to one that never ran.
+          "from mart.current_pointer_head order by universe_id",
       );
       return [
         { total: Number(cov.rows[0]?.total ?? 0), complete: Number(cov.rows[0]?.complete ?? 0) },
