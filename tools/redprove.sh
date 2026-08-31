@@ -63,9 +63,17 @@ done
 BACKUP=$(mktemp)
 cp "$FILE" "$BACKUP"
 restore() {
-  cp "$BACKUP" "$FILE"
-  cmp -s "$BACKUP" "$FILE" || echo "redprove: RESTORE FAILED for $FILE — fix by hand from $BACKUP" >&2
-  rm -f "$BACKUP"
+  # `|| true`: traps inherit set -e, and a failing cp would abort the trap
+  # before the message below ever printed.
+  cp "$BACKUP" "$FILE" || true
+  if cmp -s "$BACKUP" "$FILE"; then
+    rm -f "$BACKUP"
+  else
+    # Keep the backup — it is the only remaining copy of the original, and
+    # "fix by hand from $BACKUP" is a lie if this function just deleted it
+    # (review on #692).
+    echo "redprove: RESTORE FAILED for $FILE — fix by hand from $BACKUP" >&2
+  fi
 }
 trap restore EXIT
 
@@ -89,7 +97,10 @@ fi
 if ! echo "$OUTPUT" | grep -qE "$EXPECT"; then
   echo "redprove: guard failed but not on the expected assertion — something ELSE broke," >&2
   echo "          which proves nothing about the guard under test (the #655 Number() lesson)." >&2
-  echo "$OUTPUT" | grep -E "Error|error|FAIL|assert" | tail -5 >&2
+  # `|| true`: this is a best-effort diagnostic — under pipefail a no-match
+  # grep would kill the script HERE and replace exit 5 with exit 1 (review
+  # on #692; same class as the escalate grep|head SIGPIPE).
+  echo "$OUTPUT" | grep -E "Error|error|FAIL|assert" | tail -5 >&2 || true
   exit 5
 fi
 echo "redprove PASS: guard failed as expected —"
