@@ -451,6 +451,13 @@ def test_the_split_python_jobs_cover_every_testpath() -> None:
     for job in workflow["jobs"].values():
         for step in job.get("steps") or []:
             run = str(step.get("run", ""))
+            # A sharded lane (A4 B1) names its root on the pytest_shard.py line
+            # instead of on the pytest line, whose paths come from a shell
+            # array. The root counts as covered here because
+            # test_pytest_shard.py separately proves the shards partition that
+            # root exactly — neither check alone would be enough.
+            for root in re.findall(r"pytest_shard\.py\s+(\S+)", run):
+                covered.add(root)
             if run.startswith("uv run pytest "):
                 # shlex, and flags filtered: a `-q` or `-k expr` token counted
                 # as a path would make the equality fail on correct workflows —

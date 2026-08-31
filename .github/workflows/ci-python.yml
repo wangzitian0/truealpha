@@ -95,9 +95,20 @@ jobs:
           # that silently skips must fail, not pass green while covering nothing.
           TRUEALPHA_REQUIRE_RUNTIME: "1"
 
+  # A4 B1 (#673): this was ONE 207 s job — 168 s of pytest — and the pole of
+  # every PR's CI wall (run 33361977933; next-slowest job 163 s). The tree has
+  # no conftest.py and every fixture is defined in the file that uses it, so it
+  # shards without coupling. tools/pytest_shard.py owns the partition and
+  # libs/runtime/tests/test_pytest_shard.py proves it covers the tree exactly;
+  # a per-directory list here would rot the first time a directory is added.
+  # fail-fast is off so one red shard does not hide the other two.
   test-data-engine:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     services:
       postgres:
         image: postgres:16-alpine
@@ -139,7 +150,15 @@ jobs:
             echo "== $f"
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
           done
-      - run: uv run pytest apps/data-engine/tests
+      - name: Run tests (shard ${{ matrix.shard }} of 3)
+        run: |
+          set -euo pipefail
+          # The shard tool exits non-zero on an empty or out-of-range shard:
+          # `pytest` with no path arguments falls back to pyproject's testpaths
+          # and would silently run the WHOLE suite in a lane named for a shard.
+          mapfile -t FILES < <(python3 tools/pytest_shard.py apps/data-engine/tests --shard ${{ matrix.shard }} --of 3)
+          echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
+          uv run pytest "${FILES[@]}" --durations=10
         env:
           APP_ENV: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
