@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from psycopg import Connection
+from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
 
 
 class PostgresToptReadRepository:
@@ -39,8 +40,12 @@ class PostgresToptReadRepository:
             """
             select target_run_id from mart.current_pointer_head
             where environment = 'production' and factor_id = 'gross_profit_per_employee'
+              -- The universe is part of the governed key; dropping it serves whichever
+              -- pipeline advanced last (canary's 24 cells displaced the core's 84).
+              and universe_id like %s
             order by advanced_at desc limit 1
-            """
+            """,
+            (f"{SERVED_UNIVERSE_PREFIX}%",),
         ).fetchone()
         if row is None:  # fallback: no pointer advanced yet (#378)
             row = self._connection.execute(

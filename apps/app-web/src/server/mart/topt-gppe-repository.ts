@@ -28,6 +28,10 @@ export interface MartClientLike {
 const POINTER_HEAD_SQL = `
   select target_run_id as run_id from mart.current_pointer_head
   where environment = 'production' and factor_id = 'gross_profit_per_employee'
+    -- The universe is part of the governed key. Without it this served whichever pipeline
+    -- advanced last: the canary universe's 24-cell run displaced the 84-cell TOPT core,
+    -- which is how a module card came to read "available" at 4% coverage.
+    and universe_id like 'universe:topt-%'
   order by advanced_at desc limit 1
 `;
 
