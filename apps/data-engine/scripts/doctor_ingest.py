@@ -77,10 +77,15 @@ def check_opend() -> list[str]:
     from data_engine.config import settings
 
     try:
+        if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
+            return ["OpenD coordinates are not configured (MOOMOO_OPEND_HOST / _PORT)"]
         with socket.create_connection((settings.moomoo_opend_host, settings.moomoo_opend_port), timeout=3):
             return []
     except OSError as e:
-        return [f"OpenD not reachable at {settings.moomoo_opend_host}:{settings.moomoo_opend_port} ({e})"]
+        # The coordinates are secret-managed, so a diagnostic must not echo them into a
+        # log, a CI annotation or a pasted issue comment. The error type is what a reader
+        # needs; where it was dialling is something they can look up where it is governed.
+        return [f"OpenD not reachable at its configured address ({type(e).__name__})"]
 
 
 def main() -> None:
@@ -90,7 +95,9 @@ def main() -> None:
 
     from data_engine.config import settings
 
-    print(f"env: APP_ENV={settings.app_env}  db={settings.database_url.rsplit('@', 1)[-1]}  s3={settings.s3_endpoint}")
+    print(
+        f"env: APP_ENV={settings.app_env}  db={settings.database_url.rsplit('@', 1)[-1]}  s3={'configured' if settings.s3_endpoint else 'UNCONFIGURED'}"
+    )
     failed = False
     for name, problems, required in (
         ("postgres+schema", check_database(), True),

@@ -50,6 +50,10 @@ def _preflight_check(host: str, port: int, timeout: float = 3.0) -> None:
 
 @contextmanager
 def connect() -> Iterator["moomoo.OpenQuoteContext"]:
+    if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
+        # Refuse rather than dial a guess: an unconfigured gateway is a configuration
+        # error, and it must not present as a network timeout against some default host.
+        raise RuntimeError("MOOMOO_OPEND_HOST / MOOMOO_OPEND_PORT are not configured")
     _preflight_check(settings.moomoo_opend_host, settings.moomoo_opend_port)
     ctx = moomoo.OpenQuoteContext(host=settings.moomoo_opend_host, port=settings.moomoo_opend_port)
     try:
