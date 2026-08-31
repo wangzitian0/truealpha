@@ -227,9 +227,13 @@ def main() -> int:
             continue
         text = path.read_text()
         for block in re.finditer(r"from mart\.current_pointer_head(?P<body>.{0,600})", text, re.S):
-            body = block.group("body")
-            clause = body.split(";")[0]
-            if "universe_id" not in clause:
+            # Do NOT split on ";" to find the statement end: a semicolon inside a SQL
+            # comment truncates the window before the predicate and the gate passes a file
+            # it should fail. That happened here -- a comment reading "the governed key;
+            # dropping it..." hid the very predicate it was explaining. Comments are
+            # stripped instead, and the whole window is searched.
+            body = re.sub(r"--[^\n]*", "", block.group("body"))
+            if "universe_id" not in body:
                 failures.append(
                     f"{path.relative_to(REPO)} resolves mart.current_pointer_head without a "
                     "universe predicate — the universe is part of the governed key, and dropping "

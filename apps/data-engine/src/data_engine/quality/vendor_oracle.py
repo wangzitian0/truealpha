@@ -224,7 +224,14 @@ def mart_financial_facts(connection: Connection[Any]) -> tuple[tuple[str, Decima
     """(ticker, revenue, gross_profit) for the run the governed pointer currently heads."""
     rows = connection.execute(
         """
-        with head as (select target_run_id from mart.current_pointer_head limit 1),
+        -- `limit 1` with no ordering picked an arbitrary universe's head, so the oracle
+        -- re-derived whichever pipeline the planner happened to return. The universe is part
+        -- of the governed key.
+        with head as (
+            select target_run_id from mart.current_pointer_head
+            where universe_id like 'universe:topt-%'
+            order by sequence desc limit 1
+        ),
         payloads as (
             select observation.subject_id, observation.semantic_type, payload.normalized_payload
             from staging.capture_normalized_observations observation
