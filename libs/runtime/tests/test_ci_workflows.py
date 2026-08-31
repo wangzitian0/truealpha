@@ -681,6 +681,14 @@ def test_a_failing_shard_lane_fails_instead_of_running_the_whole_suite() -> None
         "the empty-selection check is gone — the second layer that keeps an empty FILES array "
         "from expanding into a whole-suite run"
     )
+    assert "--of ${{ strategy.job-total }}" in snippet, (
+        "the lane count is hard-coded again — a `--of N` that drifts from the matrix length "
+        "leaves every file at position kN+(N-1) assigned to a shard nobody runs, green forever "
+        "(the #527 green-while-empty shape this job exists to avoid)"
+    )
+    assert "--shard ${{ strategy.job-index }}" in snippet, (
+        "the shard index no longer comes from the matrix position it is running at"
+    )
     assert lane["strategy"]["fail-fast"] is False, (
         "fail-fast is on: one red shard would cancel the other two and hide their failures"
     )

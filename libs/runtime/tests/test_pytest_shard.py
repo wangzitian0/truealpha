@@ -132,18 +132,32 @@ def test_the_cli_prints_one_existing_path_per_line() -> None:
         assert Path(line).is_file(), f"shard printed {line!r}, which is not a file"
 
 
-def test_the_shards_are_balanced_by_work_not_by_file_count() -> None:
-    """Round-robin gave 24/24/24 files carrying 127/177/226 tests — measured
-    57 s / 107 s / 137 s on run 33365311320. The wall is the slowest lane, so
-    an unbalanced split buys a fraction of what it costs in runners."""
+def test_the_shards_carry_equal_test_counts() -> None:
+    """What this proves, and what it does NOT.
+
+    It proves the shards carry equal numbers of test FUNCTIONS. Round-robin by
+    file position did not: 24/24/24 files carrying 127/177/226 tests, measured
+    57 s / 107 s / 137 s (run 33365311320).
+
+    It does not prove balanced TIME, and the measurement says so plainly: with
+    counts at 177/177/176 the same lanes took 74 s / 155 s / 84 s (run
+    33366063687) — a 2.1x spread, because a Dagster materialisation test costs
+    9 s and a pure-function test costs a millisecond. Test count is a better
+    weight than file count and still a weak one. The honest reason not to chase
+    it further is that data-engine is no longer the pole: web/check (168 s) and
+    the liveness soak (178 s) both exceed the slowest shard.
+
+    If this lane becomes the wall again, the fix is measured per-file durations
+    (`--durations=0` into a committed weights file), not a third proxy.
+    """
     files = pytest_shard.collect(SHARDED_ROOT)
     loads = [
         sum(pytest_shard.test_functions(path) for path in pytest_shard.shard(files, index, 3)) for index in range(3)
     ]
     assert min(loads) > 0
     assert max(loads) / min(loads) <= 1.15, (
-        f"the three shards carry {loads} test functions — the slowest lane sets the CI wall, and "
-        f"this spread means the split is buying much less than the runners it costs"
+        f"the three shards carry {loads} test functions — unequal counts mean the packing "
+        f"regressed toward file-position round-robin (measured 127/177/226 before it)"
     )
 
 

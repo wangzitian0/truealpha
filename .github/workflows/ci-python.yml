@@ -102,6 +102,13 @@ jobs:
   # libs/runtime/tests/test_pytest_shard.py proves it covers the tree exactly;
   # a per-directory list here would rot the first time a directory is added.
   # fail-fast is off so one red shard does not hide the other two.
+  #
+  # The lane count lives in ONE place: the matrix. --shard/--of come from
+  # strategy.job-index/job-total, so `--of` cannot drift out of step with the
+  # matrix length. It could before: two independent literals, and raising only
+  # `--of` to 4 would leave every file at position 4k+3 assigned to a shard
+  # nobody runs — green, forever, which is the exact green-while-empty shape
+  # (#527) this whole job exists to avoid.
   test-data-engine:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -159,7 +166,7 @@ jobs:
           # `pytest "${FILES[@]}"` would expand to bare `pytest` — which falls
           # back to pyproject's testpaths and runs the WHOLE suite in a lane
           # named for one shard. The count check is the second layer.
-          FILE_LIST=$(python3 tools/pytest_shard.py apps/data-engine/tests --shard ${{ matrix.shard }} --of 3)
+          FILE_LIST=$(python3 tools/pytest_shard.py apps/data-engine/tests --shard ${{ strategy.job-index }} --of ${{ strategy.job-total }})
           mapfile -t FILES <<< "$FILE_LIST"
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "::error::shard ${{ matrix.shard }} selected no files — refusing to run bare pytest"
