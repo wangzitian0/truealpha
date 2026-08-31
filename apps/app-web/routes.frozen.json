@@ -38,6 +38,10 @@
       "live": true
     },
     {
+      "path": "/research/holdings",
+      "live": true
+    },
+    {
       "path": "/research/entities/[id]",
       "live": true
     },
