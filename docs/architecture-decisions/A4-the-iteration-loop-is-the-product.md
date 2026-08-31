@@ -82,9 +82,21 @@ for these services as an artifact this repo can pin and diff.
 
 **D2 — Thin tag verification.** The tag run re-verifies a SHA main already
 proved. Replace with: assert an identical-SHA green main run exists, publish
-images, done. Saves ~6 min and one serialization stage per release. This changes
-what `source_run_id` means in the deploy evidence, which infra2's verifier also
-reads — contract change, needs explicit sign-off on both sides.
+images, done. Saves ~4 min and one serialization stage per release.
+*Amended at implementation:* this turned out NOT to be a contract change. Both
+verifiers (`deploy-release.yml` and `production_evidence_policy.json`) pin the
+tag run's workflow path, push event, tag head_branch, `Release Images {tag}`
+title, head_sha and success conclusion — all of which the thin run still
+satisfies literally; none pins *which jobs* ran inside it. What changes is the
+run's meaning, from "the suite ran again on this ref" to "an identical-SHA
+green main run was verified, then images published" — strictly tighter, because
+a tag on a SHA that never went green on main now fails instead of re-running to
+green. No sign-off needed; landed unilaterally.
+*Operational note from the live red-proof:* cut a red-proof tag on a SHA
+**distinct from the PR head** (one throwaway commit past it is enough). A
+same-SHA tag attaches its failed `ci-required` check run to the PR, and branch
+protection counts both same-name runs — the merge box stays blocked until the
+head moves, even after the tag is deleted.
 
 **D3 — Split the CI pole.** `python / check` runs lint, types, and every
 package's tests serially (259 s). Split into a fast lint+types job (~40 s) and

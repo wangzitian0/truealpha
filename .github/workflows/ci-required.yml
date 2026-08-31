@@ -135,6 +135,36 @@ jobs:
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
 
+  # A4 D2 (#673): a tag names a SHA main already proved — ATTEST, do not re-run.
+  # Measured: 11 tags in the August sprint each re-ran the full suite on an
+  # identical, already-green SHA (~4-5 min apiece). The evidence contract is
+  # untouched — the tag run keeps its workflow path, push event, tag
+  # head_branch, "Release Images {tag}" title and success conclusion, so every
+  # clause deploy-release and production_evidence_policy.json pin still holds
+  # literally. What changes is the MEANING of this run's success: from "the
+  # tests ran again on this ref" to "an identical-SHA green main run was
+  # verified, and the images published". Strictly tighter in one case: a tag on
+  # a SHA that never reached main used to re-run tests and could go green — now
+  # it fails here, before any image is published.
+  tag_verified:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Assert an identical-SHA green main run exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COUNT=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci-required.yml/runs?head_sha=${{ github.sha }}&branch=main&event=push&status=success&per_page=1" --jq '.total_count')
+          if [ "${COUNT:-0}" -lt 1 ]; then
+            echo "::error::tag ${{ github.ref_name }} points at ${{ github.sha }}, which has no green main-push ci-required run — either it never reached main or main was red at it. A tag attests to a verified SHA; this one cannot."
+            exit 1
+          fi
+          echo "attested: main verified ${{ github.sha }} — a green push run exists for this exact SHA"
+
   security:
     needs: changes
     permissions:
@@ -143,12 +173,12 @@ jobs:
     uses: ./.github/workflows/security-gate.yml
 
   db:
-    if: needs.changes.outputs.db == 'true' || github.ref_type == 'tag'
+    if: github.ref_type != 'tag' && needs.changes.outputs.db == 'true'
     needs: changes
     uses: ./.github/workflows/ci-db.yml
 
   python:
-    if: needs.changes.outputs.python == 'true' || github.ref_type == 'tag'
+    if: github.ref_type != 'tag' && needs.changes.outputs.python == 'true'
     needs: changes
     uses: ./.github/workflows/ci-python.yml
     # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
@@ -166,7 +196,7 @@ jobs:
       actions: write
 
   qlib:
-    if: needs.changes.outputs.qlib == 'true' || github.ref_type == 'tag'
+    if: github.ref_type != 'tag' && needs.changes.outputs.qlib == 'true'
     needs: changes
     uses: ./.github/workflows/ci-qlib.yml
     # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
@@ -184,7 +214,7 @@ jobs:
       actions: write
 
   runtime:
-    if: needs.changes.outputs.runtime == 'true' || github.ref_type == 'tag'
+    if: github.ref_type != 'tag' && needs.changes.outputs.runtime == 'true'
     needs: changes
     uses: ./.github/workflows/ci-runtime.yml
     # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
@@ -202,7 +232,7 @@ jobs:
       actions: write
 
   web:
-    if: needs.changes.outputs.web == 'true' || github.ref_type == 'tag'
+    if: github.ref_type != 'tag' && needs.changes.outputs.web == 'true'
     needs: changes
     uses: ./.github/workflows/ci-web.yml
 
@@ -239,8 +269,9 @@ jobs:
       (needs.python.result == 'success' || needs.python.result == 'skipped') &&
       (needs.qlib.result == 'success' || needs.qlib.result == 'skipped') &&
       (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') &&
-      (needs.web.result == 'success' || needs.web.result == 'skipped')
-    needs: [changes, security, db, python, qlib, runtime, web]
+      (needs.web.result == 'success' || needs.web.result == 'skipped') &&
+      (needs.tag_verified.result == 'success' || needs.tag_verified.result == 'skipped')
+    needs: [changes, security, db, python, qlib, runtime, web, tag_verified]
     permissions:
       contents: read
       packages: write
@@ -254,7 +285,7 @@ jobs:
   required:
     name: ci-required
     if: always()
-    needs: [changes, security, db, python, qlib, runtime, web, images_check, images_release]
+    needs: [changes, security, db, python, qlib, runtime, web, images_check, images_release, tag_verified]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

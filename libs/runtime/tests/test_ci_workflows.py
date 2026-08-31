@@ -553,3 +553,56 @@ def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
             f"pytest testpath {path!r} is outside every python filter entry — PRs touching it "
             f"skip ci-python and merge with that suite never running (#673)"
         )
+
+
+def test_a_tag_run_attests_instead_of_re_running() -> None:
+    """A4 D2 (#673): a tag names a SHA main already proved.
+
+    Eleven August tags each re-ran the full suite on an identical, already-green
+    SHA. On a tag the suite lanes are now replaced by one attestation job before
+    the image publish (changes and the security lane still run; they cost
+    seconds); every clause the deploy evidence pins (workflow path, push event,
+    tag head_branch, title, success conclusion) is untouched, so this asserts
+    the mechanics that make that safe:
+
+    - the five suite lanes are EXPLICITLY off on tags — not left to whatever the
+      paths filter computes for a tag push, which is undefined behaviour;
+    - the attestation queries main's runs for THIS sha, green, push — drop any
+      of those qualifiers and a red or foreign run attests;
+    - both the image publish and the required summariser gate on it, so a tag on
+      an unverified SHA publishes nothing and the run is red.
+    """
+    workflow = yaml.safe_load(source(REQUIRED))
+    jobs = workflow["jobs"]
+
+    for lane in ("db", "python", "qlib", "runtime", "web"):
+        assert "github.ref_type != 'tag'" in str(jobs[lane]["if"]), (
+            f"the {lane} lane runs on tags again — the tag run is back to re-proving an already-green SHA (#673 D2)"
+        )
+
+    attest = jobs["tag_verified"]
+    assert attest["if"] == "github.ref_type == 'tag'"
+    # Find the query by content, not position — steps[0] would go stale on the
+    # first added checkout/setup step without any behaviour change (review).
+    queries = [
+        str(step.get("run", ""))
+        for step in attest["steps"]
+        if "/actions/workflows/ci-required.yml/runs?" in str(step.get("run", ""))
+    ]
+    assert len(queries) == 1, (
+        f"expected exactly one step querying ci-required runs in tag_verified, found {len(queries)}"
+    )
+    query = queries[0]
+    for qualifier in ("head_sha=${{ github.sha }}", "branch=main", "event=push", "status=success"):
+        assert qualifier in query, (
+            f"the attestation no longer requires {qualifier!r} — without it a red, foreign or "
+            f"different-SHA run can attest a tag"
+        )
+
+    assert "tag_verified" in jobs["images_release"]["needs"]
+    assert "needs.tag_verified.result == 'success' || needs.tag_verified.result == 'skipped'" in str(
+        jobs["images_release"]["if"]
+    ), "an unattested tag must not publish images"
+    assert "tag_verified" in jobs["required"]["needs"], (
+        "required does not aggregate tag_verified — an unattested tag run would summarise green"
+    )
