@@ -63,6 +63,7 @@ note "main is current at ${LOCAL_MAIN:0:8}"
 
 # 3. Every named PR: MERGED, zero unresolved threads, merge commit on main.
 IFS=',' read -ra PR_LIST <<< "$PRS"
+REVIEWED_PR=""
 for PR in "${PR_LIST[@]}"; do
   PR=$(echo "$PR" | tr -d ' ')
   STATE=$(gh pr view "$PR" --repo "$REPO" --json state -q .state)
@@ -77,8 +78,16 @@ for PR in "${PR_LIST[@]}"; do
   [ "$UNRESOLVED" = "0" ] || fail "#$PR has $UNRESOLVED unresolved review thread(s)"
   MERGE_SHA=$(gh pr view "$PR" --repo "$REPO" --json mergeCommit -q .mergeCommit.oid)
   git merge-base --is-ancestor "$MERGE_SHA" "$LOCAL_MAIN" || fail "#$PR merge commit $MERGE_SHA is not on main"
+  [ "$MERGE_SHA" = "$LOCAL_MAIN" ] && REVIEWED_PR="$PR"
   note "#$PR merged (${MERGE_SHA:0:8}), threads clear"
 done
+# Batch releases: deploy-release's prod gate pins the reviewed PR's
+# merge_commit_sha == the release SHA, so only the PR whose merge produced
+# main HEAD can be the reviewed change. v0.0.34's first prod dispatch failed
+# exactly here — this script passed PR_LIST[0] (#692) while HEAD was #693's
+# merge. Fail before the tag claims a version number, not at the prod gate.
+[ -n "$REVIEWED_PR" ] || fail "no named PR has its merge commit at main HEAD ${LOCAL_MAIN:0:8} — include the last-merged PR (the prod gate requires reviewed merge_commit_sha == release SHA)"
+note "reviewed change for prod: #$REVIEWED_PR (merge == HEAD)"
 
 # 4. main HEAD's ci-required is green — the tag inherits this SHA.
 MAIN_RUN=$(gh run list --repo "$REPO" --workflow ci-required.yml --limit 20 \
@@ -145,10 +154,9 @@ note "staging run $STAGING_RUN (walk evidence inside)"
 
 if [ "$PROD" = "1" ]; then
   echo "== prod =="
-  FIRST_PR=$(echo "${PR_LIST[0]}" | tr -d ' ')
   PROD_RUN=$(deploy prod \
     -f staging_run_url="https://github.com/$REPO/actions/runs/$STAGING_RUN" \
-    -f reviewed_change_url="https://github.com/$REPO/pull/$FIRST_PR" | tail -1)
+    -f reviewed_change_url="https://github.com/$REPO/pull/$REVIEWED_PR" | tail -1)
   probe "$PROD_URL"
   note "prod run $PROD_RUN"
 else

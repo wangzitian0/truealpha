@@ -606,3 +606,41 @@ def test_a_tag_run_attests_instead_of_re_running() -> None:
     assert "tag_verified" in jobs["required"]["needs"], (
         "required does not aggregate tag_verified — an unattested tag run would summarise green"
     )
+
+
+def test_release_script_reviews_the_pr_that_produced_the_release_sha() -> None:
+    """v0.0.34's first prod dispatch: deploy-release's prod gate pins the
+    reviewed PR's merge_commit_sha to the release SHA, but cut_release passed
+    PR_LIST[0] — in a batch, only the last-merged PR satisfies the gate. Pin
+    both halves of the fix:
+
+    - cut_release selects the reviewed PR by merge-commit == main HEAD and
+      fails closed before tagging when no named PR matches;
+    - the health-confirm step's fromJson is guarded, so a failed request step
+      reports its own error instead of "Error reading JToken" template noise.
+    """
+    script = (REPO_ROOT / "tools" / "cut_release.sh").read_text(encoding="utf-8")
+    assert '[ "$MERGE_SHA" = "$LOCAL_MAIN" ] && REVIEWED_PR="$PR"' in script, (
+        "cut_release no longer selects the reviewed PR by merge==HEAD"
+    )
+    assert '[ -n "$REVIEWED_PR" ] || fail' in script, (
+        "cut_release no longer fails closed before tagging when no named PR produced main HEAD"
+    )
+    assert 'reviewed_change_url="https://github.com/$REPO/pull/$REVIEWED_PR"' in script, (
+        "prod dispatch does not use the merge==HEAD PR as the reviewed change (the v0.0.34 PR_LIST[0] defect)"
+    )
+
+    deploy = source(RELEASE)
+    guarded = "steps.request.outputs.json != '' && fromJson(steps.request.outputs.json)"
+    assert guarded in deploy, (
+        "EXPECTED_RELEASE fromJson is unguarded again — a failed request step will bury "
+        "its error under a JToken template failure"
+    )
+    confirm = step(RELEASE, "Confirm the deployed release is healthy")
+    assert "steps.request.outputs.json != ''" in str(confirm.get("if", "")), (
+        "the health confirmation no longer skips on an empty request output — with the env "
+        "guard falling back to '', health_check treats empty expected as don't-verify"
+    )
+    assert "refusing a vacuous health confirmation" in str(confirm.get("run", "")), (
+        "the health confirmation no longer fails closed on an empty EXPECTED_RELEASE"
+    )

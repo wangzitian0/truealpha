@@ -17,6 +17,13 @@ Read the full diff once per category. Every entry names the PR where it bit.
 - A flag's value read by index: `--root-path` last on the line raised
   IndexError instead of a sentence (#677); `--root-path=/api` parsed as a
   different value.
+- A perl/sed delimiter that also appears in the pattern: `s|…\|\|…|…|`
+  unescapes `\|` at the delimiter layer, leaving a bare `|` alternation with an
+  EMPTY branch — the empty branch matches at position 0 of every line and the
+  replacement lands 310 times (v0.0.34 session, caught by redprove's inert
+  verdict). Pick a delimiter absent from both halves; in perl you can also wrap
+  the pattern in `\Q…\E` (quotemeta — perl-only, sed has no equivalent) and
+  match the shortest distinctive literal instead of the whole line.
 
 ## 2. Failure that names its contract (3)
 - Bare `next(...)` → StopIteration instead of "the changes job no longer

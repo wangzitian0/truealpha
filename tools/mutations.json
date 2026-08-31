@@ -70,8 +70,8 @@
       "id": "workflow-contract/health-gate-compares-a-release-ref",
       "guard": "libs/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/deploy-release.yml",
-      "find": "EXPECTED_RELEASE: ${{ fromJson(steps.request.outputs.json).version_ref }}",
-      "replace": "EXPECTED_RELEASE: ${{ fromJson(steps.request.outputs.json).source_sha }}",
+      "find": "EXPECTED_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).version_ref || '' }}",
+      "replace": "EXPECTED_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).source_sha || '' }}",
       "command": [
         "uv",
         "run",
