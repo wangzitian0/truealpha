@@ -26,22 +26,25 @@ export type FundHoldingsVintage = {
   lines: FundHoldingRow[];
 };
 
+// Newest (report_period, transaction_time) per fund — BOTH levels, because an
+// AMENDED filing re-states the same report_period under a later filing date and
+// the two line sets must never mix (review on #694).
 const NEWEST_VINTAGE_SQL = `
   with newest as (
-    select fund_id, max(report_period) as report_period
+    select distinct on (fund_id) fund_id, report_period, transaction_time
     from mart.fund_holdings
-    group by fund_id
+    order by fund_id, report_period desc, transaction_time desc
   )
   select h.fund_id,
          coalesce(h.fund_name, h.fund_id) as fund_name,
          to_char(h.report_period, 'YYYY-MM-DD') as report_period,
-         to_char(max(h.transaction_time) over (partition by h.fund_id), 'YYYY-MM-DD') as filed_on,
+         to_char(h.transaction_time, 'YYYY-MM-DD') as filed_on,
          h.holding_name,
          h.isin,
          h.percent_of_net_assets::text as weight_pct,
          h.value_usd::text as value_usd
   from mart.fund_holdings h
-  join newest using (fund_id, report_period)
+  join newest using (fund_id, report_period, transaction_time)
   order by h.fund_id, h.percent_of_net_assets desc nulls last, h.holding_name
 `;
 

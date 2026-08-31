@@ -33,7 +33,7 @@ async function reachable(): Promise<Client | null> {
   } catch (error) {
     await client.end().catch(() => {});
     if (REQUIRE_DB) throw new Error(`configured Postgres is unreachable: ${String(error)}`);
-    console.log("no local Postgres; skipping (CI runs this against a provisioned database)");
+    console.log("mart-fund-holdings: no local Postgres and TRUEALPHA_REQUIRE_RUNTIME unset — SKIP");
     return null;
   }
 }

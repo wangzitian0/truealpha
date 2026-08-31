@@ -57,8 +57,8 @@ export default async function HoldingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {fund.lines.map((line) => (
-                    <tr key={`${line.isin ?? line.holdingName}`} className="border-t border-border">
+                  {fund.lines.map((line, index) => (
+                    <tr key={`${line.isin ?? line.holdingName}-${index}`} className="border-t border-border">
                       <td className="px-3 py-1.5">{line.holdingName}</td>
                       <td className="px-3 py-1.5 font-mono text-xs text-gray-400">{line.isin ?? "—"}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{formatPct(line.weightPct)}</td>
