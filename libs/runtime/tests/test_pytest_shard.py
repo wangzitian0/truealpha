@@ -95,6 +95,24 @@ def test_more_shards_than_files_exits_nonzero() -> None:
     assert "is empty" in result.stderr or "out of range" in result.stderr
 
 
+def test_a_process_substitution_hides_the_failure_a_shard_lane_must_see() -> None:
+    """The shell semantics the CI lane's shape depends on, executed rather than
+    remembered: a process substitution's exit status is invisible to `set -e`
+    and pipefail, a command substitution's is not. The workflow-shape half of
+    this property lives in test_ci_workflows.py (#583); this is the WHY it
+    asserts against, and it fails here if bash ever changes."""
+
+    def run_snippet(capture: str) -> int:
+        script = f"set -euo pipefail\nFAILING='exit 2'\n{capture}\necho reached-pytest\n"
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True).returncode
+
+    assert run_snippet('mapfile -t FILES < <(sh -c "$FAILING")') == 0, (
+        "a process substitution now propagates failure — if bash changed this, the "
+        "workflow's defensive shape can be simplified"
+    )
+    assert run_snippet('LIST=$(sh -c "$FAILING")') != 0, "command substitution must abort under set -e"
+
+
 def test_the_cli_prints_one_existing_path_per_line() -> None:
     result = subprocess.run(
         [

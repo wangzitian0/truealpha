@@ -153,10 +153,18 @@ jobs:
       - name: Run tests (shard ${{ matrix.shard }} of 3)
         run: |
           set -euo pipefail
-          # The shard tool exits non-zero on an empty or out-of-range shard:
-          # `pytest` with no path arguments falls back to pyproject's testpaths
-          # and would silently run the WHOLE suite in a lane named for a shard.
-          mapfile -t FILES < <(python3 tools/pytest_shard.py apps/data-engine/tests --shard ${{ matrix.shard }} --of 3)
+          # Command substitution, NOT `mapfile < <(...)`: a process
+          # substitution's exit status is invisible to both `set -e` and
+          # pipefail, so a failing shard tool would leave FILES empty and
+          # `pytest "${FILES[@]}"` would expand to bare `pytest` — which falls
+          # back to pyproject's testpaths and runs the WHOLE suite in a lane
+          # named for one shard. The count check is the second layer.
+          FILE_LIST=$(python3 tools/pytest_shard.py apps/data-engine/tests --shard ${{ matrix.shard }} --of 3)
+          mapfile -t FILES <<< "$FILE_LIST"
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::shard ${{ matrix.shard }} selected no files — refusing to run bare pytest"
+            exit 1
+          fi
           echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
           uv run pytest "${FILES[@]}" --durations=10
         env:
