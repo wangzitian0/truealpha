@@ -92,6 +92,11 @@ run's meaning, from "the suite ran again on this ref" to "an identical-SHA
 green main run was verified, then images published" — strictly tighter, because
 a tag on a SHA that never went green on main now fails instead of re-running to
 green. No sign-off needed; landed unilaterally.
+*Operational note from the live red-proof:* cut a red-proof tag on a SHA
+**distinct from the PR head** (one throwaway commit past it is enough). A
+same-SHA tag attaches its failed `ci-required` check run to the PR, and branch
+protection counts both same-name runs — the merge box stays blocked until the
+head moves, even after the tag is deleted.
 
 **D3 — Split the CI pole.** `python / check` runs lint, types, and every
 package's tests serially (259 s). Split into a fast lint+types job (~40 s) and
