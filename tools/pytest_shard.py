@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -42,8 +43,52 @@ def collect(root: Path) -> list[Path]:
     return sorted(found)
 
 
+def test_functions(path: Path) -> int:
+    """How many test functions a file defines, parsed rather than grepped.
+
+    A substring count of ``def test_`` misses what pytest collects (methods on
+    ``Test*`` classes) and hits what it does not (the string inside a docstring
+    or an f-string) — review on #700. Parametrised cases still count as one,
+    which is the known imprecision of this weight; it is a balancing hint, not
+    a schedule.
+
+    A file that does not parse weighs 1 and is still assigned: pytest reports
+    the syntax error far better than this tool could, and refusing to shard
+    would turn one broken file into a CI job that runs nothing.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return 1
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and not node.name.startswith("Test"):
+            continue
+        for child in ast.iter_child_nodes(node) if isinstance(node, ast.ClassDef) else []:
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and child.name.startswith("test"):
+                count += 1
+    count += sum(
+        1
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test")
+    )
+    return count
+
+
 def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
     """The files belonging to shard ``index`` (0-based) of ``total``.
+
+    Greedy bin-packing weighted by test count, not round-robin by position.
+    Measured on run 33365311320, where round-robin gave three equal FILE counts
+    and wildly unequal work: 24/24/24 files carrying 127/177/226 tests, which
+    took 57 s / 107 s / 137 s. The wall is the slowest lane, so a balanced
+    split is the entire point of splitting. Packing by test count predicts
+    177/177/176 — within 1%.
+
+    Deterministic: files are placed heaviest-first with ties broken by path,
+    into the least-loaded bin with ties broken by index. The same tree always
+    produces the same assignment, so a lane's content does not churn between
+    runs of the same commit.
 
     Raises rather than returning an empty list on a bad index: a silently empty
     shard makes pytest exit 5 ("no tests collected") in a job whose name says it
@@ -53,7 +98,14 @@ def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
         raise ValueError(f"total shards must be >= 1, got {total}")
     if not 0 <= index < total:
         raise ValueError(f"shard index {index} is out of range for {total} shards")
-    return [path for position, path in enumerate(files) if position % total == index]
+
+    bins: list[list[Path]] = [[] for _ in range(total)]
+    load = [0] * total
+    for path in sorted(files, key=lambda p: (-test_functions(p), str(p))):
+        lightest = load.index(min(load))
+        bins[lightest].append(path)
+        load[lightest] += test_functions(path)
+    return sorted(bins[index])
 
 
 def main(argv: Sequence[str] | None = None) -> int:

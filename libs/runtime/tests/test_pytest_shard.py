@@ -55,9 +55,7 @@ def test_collection_misses_no_file_that_defines_tests() -> None:
     """
     collected = set(pytest_shard.collect(SHARDED_ROOT))
     orphans = [
-        path
-        for path in SHARDED_ROOT.rglob("*.py")
-        if path not in collected and "def test_" in path.read_text(encoding="utf-8")
+        path for path in SHARDED_ROOT.rglob("*.py") if path not in collected and pytest_shard.test_functions(path) > 0
     ]
     assert not orphans, (
         f"these files define test functions but match no pytest_shard pattern, so no shard "
@@ -83,9 +81,9 @@ def test_more_shards_than_files_exits_nonzero() -> None:
             str(REPO_ROOT / "tools" / "pytest_shard.py"),
             str(SHARDED_ROOT),
             "--shard",
-            "999",
+            str(len(pytest_shard.collect(SHARDED_ROOT))),
             "--of",
-            "1000",
+            str(len(pytest_shard.collect(SHARDED_ROOT)) + 1),
         ],
         capture_output=True,
         text=True,
@@ -128,7 +126,31 @@ def test_the_cli_prints_one_existing_path_per_line() -> None:
         text=True,
         check=True,
     )
-    lines = result.stdout.split()
+    lines = result.stdout.splitlines()
     assert lines, "shard 0 of 3 printed nothing"
     for line in lines:
         assert Path(line).is_file(), f"shard printed {line!r}, which is not a file"
+
+
+def test_the_shards_are_balanced_by_work_not_by_file_count() -> None:
+    """Round-robin gave 24/24/24 files carrying 127/177/226 tests — measured
+    57 s / 107 s / 137 s on run 33365311320. The wall is the slowest lane, so
+    an unbalanced split buys a fraction of what it costs in runners."""
+    files = pytest_shard.collect(SHARDED_ROOT)
+    loads = [
+        sum(pytest_shard.test_functions(path) for path in pytest_shard.shard(files, index, 3)) for index in range(3)
+    ]
+    assert min(loads) > 0
+    assert max(loads) / min(loads) <= 1.15, (
+        f"the three shards carry {loads} test functions — the slowest lane sets the CI wall, and "
+        f"this spread means the split is buying much less than the runners it costs"
+    )
+
+
+def test_the_assignment_is_stable_across_calls() -> None:
+    """A lane whose contents churn between calls makes a flaky failure
+    impossible to attribute to a shard."""
+    files = pytest_shard.collect(SHARDED_ROOT)
+    first = [pytest_shard.shard(files, index, 3) for index in range(3)]
+    second = [pytest_shard.shard(list(reversed(files)), index, 3) for index in range(3)]
+    assert first == second, "shard assignment depends on input order — it must depend only on content"
