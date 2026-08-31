@@ -26,5 +26,13 @@ left join staging.kg_entities fund_entity on fund_entity.id = facts.fund_id;
 
 -- Explicit rather than relying on default privileges: the live databases get
 -- migrations by hand (no tracking table), where the default-privilege owner is
--- not guaranteed to be the applying role.
-grant select on mart.fund_holdings to mart_readonly;
+-- not guaranteed to be the applying role. Conditional because CI applies
+-- migrations BEFORE db/roles.sql creates the role (roles.sql's blanket
+-- "all tables in schema mart" grant then covers the view there).
+do $$
+begin
+    if exists (select from pg_roles where rolname = 'mart_readonly') then
+        grant select on mart.fund_holdings to mart_readonly;
+    end if;
+end;
+$$;
