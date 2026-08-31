@@ -20,6 +20,9 @@ const LINES = [
     holding_name: "Valued Corp",
     ticker: "VAL",
     weight_pct: "60.0",
+    total_weight_pct: "99.5",
+    resolved_weight_pct: "90.0",
+    valued_weight_pct: "60.0",
     current_ps: "10.5",
     target_ps_midpoint: "12.0",
     valuation_gap: "0.14",
@@ -33,6 +36,9 @@ const LINES = [
     holding_name: "Resolved But Unvalued Corp",
     ticker: "RBU",
     weight_pct: "30.0",
+    total_weight_pct: "99.5",
+    resolved_weight_pct: "90.0",
+    valued_weight_pct: "60.0",
     current_ps: null,
     target_ps_midpoint: null,
     valuation_gap: null,
@@ -46,6 +52,9 @@ const LINES = [
     holding_name: "Unresolved Corp",
     ticker: null,
     weight_pct: "9.5",
+    total_weight_pct: "99.5",
+    resolved_weight_pct: "90.0",
+    valued_weight_pct: "60.0",
     current_ps: null,
     target_ps_midpoint: null,
     valuation_gap: null,
@@ -73,6 +82,7 @@ function fakeRunner(headRows: Record<string, unknown>[], capture: { runParam?: u
                   valuation_gap: null,
                   tier: null,
                   availability: null,
+                  valued_weight_pct: null,
                 }))
               : LINES;
           return { rows };
@@ -103,6 +113,7 @@ function fakeRunner(headRows: Record<string, unknown>[], capture: { runParam?: u
   assert(capture.runParam === "capture-run:none", "no governed run joins nothing instead of guessing one");
   assert(funds.length === 1 && funds[0].runId === null, "the absence of a run is reported, not hidden");
   assert(funds[0].valuedWeightPct === "0.00", "nothing is valued without a run");
+  assert(funds[0].totalWeightPct === "99.50", "the filed mass still reports without a run");
 }
 
 console.log("mart fund-valuation coverage arithmetic passed");

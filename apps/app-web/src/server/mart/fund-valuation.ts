@@ -66,15 +66,22 @@ const VALUED_LINES_SQL = `
          r.target_ps_midpoint::text as target_ps_midpoint,
          r.valuation_gap::text as valuation_gap,
          r.tier,
-         r.availability
+         r.availability,
+         sum(v.percent_of_net_assets) over (partition by v.fund_id)::text as total_weight_pct,
+         sum(v.percent_of_net_assets) filter (where v.ticker is not null)
+             over (partition by v.fund_id)::text as resolved_weight_pct,
+         sum(v.percent_of_net_assets) filter (where r.availability = 'available')
+             over (partition by v.fund_id)::text as valued_weight_pct
   from mart.fund_holdings_valuation v
   left join mart.topt_core_result_read r
     on r.listing_id = v.listing_id and r.run_id = $1
   order by v.fund_id, v.percent_of_net_assets desc nulls last, v.holding_name
 `;
 
-function pct(total: number): string {
-  return total.toFixed(2);
+/** The masses arrive as exact numerics summed in SQL (review on #699 — a JS
+ * float accumulator drifts); formatting is the only conversion. */
+function pct(value: unknown): string {
+  return typeof value === "string" ? Number(value).toFixed(2) : "0.00";
 }
 
 export async function loadFundValuation(
@@ -85,11 +92,14 @@ export async function loadFundValuation(
     if (head.rows.length === 0) {
       head = await client.query(QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL);
     }
-    const runId = head.rows.length > 0 ? String(head.rows[0].run_id) : null;
+    const rawRunId = head.rows.length > 0 ? head.rows[0].run_id : null;
+    // Fail toward "no run" on a malformed head row: String(null) would forge
+    // the literal "null" into the join parameter (review on #699).
+    const runId = typeof rawRunId === "string" && rawRunId.length > 0 ? rawRunId : null;
     // No governed run yet: the join matches nothing and every valuation column
     // renders as absent — the filed weights still show, honestly unvalued.
     const result = await client.query(VALUED_LINES_SQL, [runId ?? "capture-run:none"]);
-    const byFund = new Map<string, FundValuation & { valued: number; resolved: number; total: number }>();
+    const byFund = new Map<string, FundValuation>();
     for (const row of result.rows) {
       const fundId = String(row.fund_id);
       let fund = byFund.get(fundId);
@@ -99,20 +109,13 @@ export async function loadFundValuation(
           fundName: String(row.fund_name),
           reportPeriod: String(row.report_period),
           runId,
-          valuedWeightPct: "0",
-          resolvedWeightPct: "0",
-          totalWeightPct: "0",
+          valuedWeightPct: pct(row.valued_weight_pct),
+          resolvedWeightPct: pct(row.resolved_weight_pct),
+          totalWeightPct: pct(row.total_weight_pct),
           lines: [],
-          valued: 0,
-          resolved: 0,
-          total: 0,
         };
         byFund.set(fundId, fund);
       }
-      const weight = row.weight_pct === null ? 0 : Number(row.weight_pct);
-      fund.total += weight;
-      if (row.ticker !== null) fund.resolved += weight;
-      if (row.availability === "available") fund.valued += weight;
       fund.lines.push({
         holdingName: String(row.holding_name),
         ticker: row.ticker === null ? null : String(row.ticker),
@@ -124,13 +127,6 @@ export async function loadFundValuation(
         availability: row.availability === null ? null : String(row.availability),
       });
     }
-    return [...byFund.values()]
-      .map(({ valued, resolved, total, ...fund }) => ({
-        ...fund,
-        valuedWeightPct: pct(valued),
-        resolvedWeightPct: pct(resolved),
-        totalWeightPct: pct(total),
-      }))
-      .sort((a, b) => a.fundName.localeCompare(b.fundName));
+    return [...byFund.values()].sort((a, b) => a.fundName.localeCompare(b.fundName));
   });
 }
