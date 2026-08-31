@@ -101,6 +101,9 @@ typecheck:
 	uv run mypy
 	cd apps/app-web && bun run typecheck
 
+prepush:
+	@tools/prepush.sh $(BASE)
+
 test:
 	uv run pytest
 
