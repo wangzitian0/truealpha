@@ -41,18 +41,31 @@ def run_prepush(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def working_tree_is_clean() -> bool:
-    status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=REPO_ROOT, check=True)
-    return not status.stdout.strip()
+def test_an_empty_change_set_is_an_error_not_a_pass(tmp_path: Path) -> None:
+    """The no-op-edit shape: nothing to check must never read as 'clean'.
 
-
-def test_an_empty_change_set_is_an_error_not_a_pass() -> None:
-    """The no-op-edit shape: nothing to check must never read as 'clean'."""
-    if not working_tree_is_clean():
-        pytest.skip("working tree is dirty; this property is about the empty case")
-    result = run_prepush("HEAD")
-    assert result.returncode != 0, "prepush reported success over an empty change set"
-    assert "nothing changed" in result.stdout + result.stderr
+    Run in a throwaway worktree at HEAD rather than gating on the caller's tree
+    being clean. A skip-if-dirty version passed vacuously under
+    tools/redprove.sh — whose whole method is editing a file, which makes the
+    tree dirty — so the guard reported INERT while being perfectly fine. The
+    empty path exits before any `uv run`, so a bare worktree is enough.
+    """
+    tree = tmp_path / "clean"
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(tree), "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    try:
+        result = subprocess.run(["bash", str(PREPUSH), "HEAD"], capture_output=True, text=True, cwd=tree, check=False)
+        assert result.returncode != 0, "prepush reported success over an empty change set"
+        assert "nothing changed" in result.stdout + result.stderr
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(tree)], capture_output=True, cwd=REPO_ROOT, check=False
+        )
 
 
 def test_untracked_files_are_examined() -> None:
