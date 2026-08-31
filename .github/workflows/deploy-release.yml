@@ -199,7 +199,10 @@ jobs:
       - name: Confirm the deployed release is healthy
         if: ${{ inputs.deploy_type == 'prod' }}
         env:
-          EXPECTED_RELEASE: ${{ fromJson(steps.request.outputs.json).version_ref }}
+          # Guarded: when the request step fails before writing its json output,
+          # an unguarded fromJson('') is a template error that buries the real
+          # failure under "Error reading JToken" (v0.0.34 first prod dispatch).
+          EXPECTED_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).version_ref || '' }}
         run: |
           set -euo pipefail
           # infra2#508: llm-service's /health (reached through Traefik's /api prefix
