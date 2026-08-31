@@ -141,10 +141,13 @@ def enrich_holding_identities(
     repointed = unmapped = 0
     for isin in minted:
         listing = pick_listing(mapping.get(isin, []), isin)
-        ticker = sec_ticker(listing) if listing else None
-        if ticker is not None and index is None:
+        ticker = sec_ticker(listing) if listing is not None else None
+        if listing is None or ticker is None:
+            unmapped += 1
+            continue
+        if index is None:
             index = sec.ticker_cik_index(http) if http is not None else sec.ticker_cik_index()
-        cik = index.get(ticker) if ticker is not None and index is not None else None
+        cik = index.get(ticker)
         if cik is None:
             unmapped += 1
             continue
