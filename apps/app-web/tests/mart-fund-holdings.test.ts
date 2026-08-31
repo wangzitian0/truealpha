@@ -24,6 +24,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const FUND = "etf:series:TEST-HOLDINGS-READER";
 const HOLDING_A = "company:isin:TEST00000001";
 const HOLDING_B = "company:isin:TEST00000002";
+const ENRICHED_ISSUER = "issuer:cik:0009990001";
 
 async function reachable(): Promise<Client | null> {
   const client = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 3000 });
@@ -43,6 +44,7 @@ async function seed(client: Client): Promise<void> {
     [FUND, "etf", "Test Reader Fund"],
     [HOLDING_A, "company", "Alpha Holding"],
     [HOLDING_B, "company", "Beta Holding"],
+    [ENRICHED_ISSUER, "company", "Beta Holding Inc"],
   ]) {
     await client.query(
       "insert into staging.kg_entities (id, entity_type, display_name) values ($1, $2, $3) on conflict (id) do nothing",
@@ -60,6 +62,15 @@ async function seed(client: Client): Promise<void> {
   // newest vintage: two lines, weights deliberately out of name order
   await client.query(line, [FUND, HOLDING_B, "Beta Holding", "2026-06-30", "2026-08-01T00:00:00Z", "TEST00000002", 300, 55.5]);
   await client.query(line, [FUND, HOLDING_A, "Alpha Holding", "2026-06-30", "2026-08-01T00:00:00Z", "TEST00000001", 200, 44.25]);
+  // Beta's ISIN is enriched (isin + ticker vintages on the cik-keyed issuer);
+  // Alpha stays unresolved — the valuation view must answer both honestly.
+  const identifier = `
+    insert into staging.kg_identifiers
+      (entity_id, source, identifier_type, identifier_value, valid_time, transaction_time, confidence, raw_ref)
+    values ($1, 'test', $2, $3, daterange('2026-08-01', null, '[)'), '2026-08-01T00:00:00Z', 0.98, 'raw.fetches:0')
+    on conflict (source, identifier_type, identifier_value, transaction_time) do nothing`;
+  await client.query(identifier, [ENRICHED_ISSUER, "isin", "TEST00000002"]);
+  await client.query(identifier, [ENRICHED_ISSUER, "ticker", "TSTB"]);
 }
 
 const client = await reachable();
@@ -80,6 +91,15 @@ if (client) {
       fund.lines.every((row) => row.holdingName !== "Alpha Holding" || row.weightPct !== "60"),
       "the older vintage's weight never leaks into the newest answer",
     );
+
+    const valuation = await client.query(
+      "select holding_name, ticker, listing_id from mart.fund_holdings_valuation where fund_id = $1 order by holding_name",
+      [FUND],
+    );
+    assert(valuation.rows.length === 2, "valuation view answers the newest vintage only");
+    const [alpha, beta] = valuation.rows;
+    assert(alpha.ticker === null && alpha.listing_id === null, "unresolved ISIN carries no guessed listing");
+    assert(beta.ticker === "TSTB" && beta.listing_id === "listing:xnas:tstb", "enriched ISIN resolves to its listing");
 
     console.log("mart fund-holdings reader passed");
   } finally {
