@@ -7,10 +7,21 @@ class Settings(RuntimeSettings):
 
     # SEC requires a descriptive User-Agent including a contact email.
     sec_user_agent: str = ""
-    # moomoo OpenD gateway (must already be running and logged in — see
-    # data_engine/sources/moomoo.py). Not the moomoo account itself.
-    moomoo_opend_host: str = "127.0.0.1"
-    moomoo_opend_port: int = 11111
+    # moomoo OpenD gateway coordinates. Supplied by the environment ONLY — never a
+    # default here, for two reasons that happen to agree:
+    #
+    # 1. Owner directive: OpenD's location is managed as a secret. Its host, its port and
+    #    the fact of where it runs are deployment facts, not source. A tracked default is
+    #    a tracked disclosure however innocuous the value looks.
+    # 2. The old default was `127.0.0.1`, which is WRONG in every deployed context: inside
+    #    a container that is the container's own loopback, not the host's. A default that
+    #    cannot be correct anywhere it actually runs is worse than no default -- it turns
+    #    "nobody configured this" into a connection attempt against the wrong machine,
+    #    which surfaces as a timeout rather than as a missing configuration.
+    #
+    # Empty means unconfigured, and callers must refuse rather than dial a guess.
+    moomoo_opend_host: str = ""
+    moomoo_opend_port: int = 0
     # Self-imposed precautionary cap, NOT a real moomoo-side monthly quota —
     # moomoo's own docs only rate-limit fundamental/quote endpoints (bursts
     # per 30s); see init.md Section 5's 2026-07-10 correction. Kept as a

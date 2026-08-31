@@ -11,6 +11,10 @@ from truealpha_contracts import RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_runtime.config import RuntimeSettings, runtime_settings
 
 
+def _unconfigured(name: str) -> RuntimeError:
+    return RuntimeError(f"{name} is not configured; object storage refuses to dial a default")
+
+
 class StorageError(Exception):
     pass
 
@@ -35,7 +39,7 @@ class S3RawObjectStore:
         self.client = client or create_s3_client(
             S3Settings(
                 bucket=self.settings.s3_bucket,
-                endpoint_url=self.settings.s3_endpoint,
+                endpoint_url=self._require_endpoint(),
                 access_key_id=self.settings.s3_access_key,
                 secret_access_key=self.settings.s3_secret_key.get_secret_value(),
                 region_name=self.settings.s3_region,
@@ -44,6 +48,19 @@ class S3RawObjectStore:
                 read_timeout_seconds=self.settings.s3_connect_timeout_seconds,
             )
         )
+
+    def _require_endpoint(self) -> str:
+        """The configured endpoint, or a named configuration error.
+
+        Never a default. An unconfigured object store used to dial `localhost:9000` with
+        placeholder credentials, so "nobody configured S3 here" arrived as a connection
+        failure against the container's own loopback (#531). Refusing names the cause.
+        """
+        if not self.settings.s3_endpoint:
+            raise _unconfigured("S3_ENDPOINT")
+        if not self.settings.s3_access_key or not self.settings.s3_secret_key.get_secret_value():
+            raise _unconfigured("S3_ACCESS_KEY / S3_SECRET_KEY")
+        return self.settings.s3_endpoint
 
     def ensure_bucket(self, *, create: bool | None = None) -> None:
         allow_create = self.settings.may_create_bucket if create is None else create

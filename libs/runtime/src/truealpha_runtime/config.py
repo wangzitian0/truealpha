@@ -21,9 +21,25 @@ class RuntimeSettings(BaseSettings):
     database_url: str = "postgresql://postgres:postgres@localhost:5432/truealpha"
     database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
 
-    s3_endpoint: str | None = "http://localhost:9000"
-    s3_access_key: str = "minio"
-    s3_secret_key: SecretStr = SecretStr("minio_local_secret")
+    # Object-store coordinates and credentials come from the environment ONLY. No
+    # defaults, for two reasons that agree:
+    #
+    # 1. `s3_access_key` / `s3_secret_key` were credentials living in tracked source. The
+    #    values are local-dev placeholders, but the repository's own red line admits no
+    #    "harmless" credential in code, and a placeholder that is also the FALLBACK is
+    #    what gets used in an environment nobody configured.
+    # 2. `http://localhost:9000` cannot be correct anywhere this actually deploys: inside
+    #    a container it is that container's own loopback. Production injects no `S3_*`
+    #    variables at all (verified 2026-08-31), so it has been falling back to exactly
+    #    this triple -- which is #531, where object-storage writes failed and three runs
+    #    died. The default turned "nobody configured object storage" into "connection
+    #    refused", and a connection error sends you looking at the network.
+    #
+    # Empty means unconfigured. `storage.py` refuses rather than dialling a guess, so the
+    # failure names the missing configuration instead of impersonating an outage.
+    s3_endpoint: str | None = None
+    s3_access_key: str = ""
+    s3_secret_key: SecretStr = SecretStr("")
     s3_bucket: str = "truealpha-raw"
     s3_region: str = "us-east-1"
     s3_raw_prefix: str = "raw"
