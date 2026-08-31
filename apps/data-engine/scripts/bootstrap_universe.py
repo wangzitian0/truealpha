@@ -34,13 +34,13 @@ Usage:
 """
 
 import argparse
-import json
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from data_engine import db, raw_store, universe
 from data_engine.config import settings
+from data_engine.datahub.production_topt.holdings_enrichment import figi_from_raw
 from data_engine.sources import nport, openfigi
 from data_engine.sources.sec import TICKERS_URL
 from data_engine.sources.sec import client as sec_client
@@ -115,25 +115,6 @@ def fetch_etf(client, conn, ticker: str, fetched_at: datetime) -> EtfFetch:
         f"{len(holdings)} equity lines (dropped {len(all_holdings) - len(holdings)}) -> raw.fetches:{raw_id}"
     )
     return EtfFetch(raw_id=raw_id, cik=cik, series_id=series_id, filing_date=filing_date, info=info, holdings=holdings)
-
-
-def figi_from_raw(conn, isins: list[str]) -> tuple[dict[str, list[dict]], list[str]]:
-    """Rebuild the ISIN->records mapping from OpenFIGI batches already landed in
-    raw — newest batch wins per ISIN. Returns (mapping, still-missing ISINs).
-    This is what makes a KG rebuild cheap and offline: the keyless mapping run
-    takes minutes of rate-limit waiting that a re-run shouldn't re-spend when
-    the responses are already in the landing zone."""
-    rows = conn.execute(
-        "select id, metadata from raw.fetches where source = %s order by id",
-        (DataSource.OPENFIGI.value,),
-    ).fetchall()
-    out: dict[str, list[dict]] = {}
-    for fetch_id, metadata in rows:
-        batch_isins = metadata.get("isins", [])
-        results = json.loads(raw_store.get_payload(conn, fetch_id))
-        for isin, job in zip(batch_isins, results):
-            out[isin] = job.get("data", [])
-    return {i: out[i] for i in isins if i in out}, [i for i in isins if i not in out]
 
 
 def main() -> None:

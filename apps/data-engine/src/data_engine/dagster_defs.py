@@ -453,6 +453,18 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
                 f"nport[{source.nport_ticker}] failed:\n" + "".join(traceback.format_exception(error)).rstrip()
             )
             failures.append((source.nport_ticker, error))
+    # Identity enrichment sweeps AFTER every fund captured: re-points minted
+    # company:isin identities onto the plane's issuer:cik keying (#63 tranche 2).
+    # Its own connection for the same isolation reason as the captures.
+    from data_engine.datahub.production_topt.holdings_enrichment import enrich_holding_identities
+
+    try:
+        with psycopg.connect(settings.database_url) as connection:
+            context.log.info(str(enrich_holding_identities(connection, api_key=settings.openfigi_api_key)))
+            connection.commit()
+    except Exception as error:  # noqa: BLE001 — reported with the fund failures below
+        context.log.error("holdings enrichment failed:\n" + "".join(traceback.format_exception(error)).rstrip())
+        failures.append(("identity-enrichment", error))
     if failures:
         raise RuntimeError(
             f"N-PORT holdings capture failed for: {', '.join(ticker for ticker, _ in failures)}"
