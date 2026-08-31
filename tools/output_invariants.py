@@ -64,9 +64,14 @@ EXEMPTIONS_PATH = Path(__file__).with_name("output_invariant_exemptions.json")
 #
 # Mirrors apps/app-web/src/server/mart/topt-gppe-repository.ts's GOVERNED_HEAD_SQL.
 # test_output_invariants.py asserts the two stay in step.
-GOVERNED_HEAD = """
+# The universe belongs to the governed key. Without it these invariants measured whichever
+# pipeline advanced last -- after the canary universe landed, that is a 24-cell run, so
+# every invariant below silently changed population.
+SERVED_UNIVERSE_PREFIX = "universe:topt-"
+GOVERNED_HEAD = f"""
     select target_run_id from mart.current_pointer_head
     where environment = 'production' and factor_id = 'gross_profit_per_employee'
+      and universe_id like '{SERVED_UNIVERSE_PREFIX}%'
     order by advanced_at desc limit 1
 """
 # Mirrors strategy-run-repository.ts: latest per strategy_key, that ordering.
@@ -238,6 +243,7 @@ INVARIANTS: tuple[Invariant, ...] = (
               sequence::text
             from mart.current_pointer_head
             where environment = 'production' and factor_id = 'gross_profit_per_employee'
+              and universe_id like 'universe:topt-%'
               and now() - advanced_at > interval '36 hours'
             order by advanced_at desc limit 1
         """,

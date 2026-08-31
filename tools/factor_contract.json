@@ -51,6 +51,12 @@
       "failure_contains": "snapshot selection orders by recency alone",
       "issue": "#530",
       "reason": "adding the source-priority rank is value-neutral today (every obligation resolves from one source) but changes the selection contract, so it is the datahub axis's own versioned change"
+    },
+    {
+      "expires": "2026-09-15",
+      "failure_contains": "resolves mart.current_pointer_head without a universe predicate",
+      "issue": "#530",
+      "reason": "six consumers pinned 2026-08-31; the remainder (vendor_oracle, quality/invariants, topt_read fallback, admin/funnel) are the same one-line predicate and are being swept on the datahub axis"
     }
   ],
   "exemptions_evaluated_on": "2026-08-20",

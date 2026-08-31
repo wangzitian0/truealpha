@@ -115,8 +115,11 @@ export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<O
       }
 
       const pointerResult = await client.query(
-        "select target_run_id, sequence, advanced_at from mart.current_pointer_head " +
-          "order by sequence desc limit 1",
+        // An ops overview reports pointer freshness PER UNIVERSE. Collapsing with
+        // `order by sequence desc limit 1` showed one universe and hid the rest, so a
+        // canary that stopped advancing looked identical to one that never ran.
+        "select universe_id, target_run_id, sequence, advanced_at from mart.current_pointer_head " +
+          "order by universe_id",
       );
       const pointer =
         pointerResult.rows.length === 0

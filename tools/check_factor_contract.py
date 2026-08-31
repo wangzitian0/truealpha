@@ -209,6 +209,34 @@ def main() -> int:
                 "init.md rule 12 ranks the source FIRST and recency second"
             )
 
+    # --- The governed pointer is keyed by universe; a consumer may not drop the key ---
+    # `mart.current_pointer` has always been unique on
+    # (environment, universe_id, universe_version, factor_id, sequence), and the head view
+    # partitions the same way. Five consumers -- Python, TypeScript and this very tool --
+    # nonetheless resolved it with `where environment/factor_id ... order by advanced_at
+    # desc limit 1`, which serves whichever PIPELINE advanced last. Once the canary
+    # universe began running the real pipeline after each deploy, its 24-cell run displaced
+    # the 84-cell core everywhere, and a module card read "available" at 4% coverage.
+    for path in (
+        list((REPO / "apps").rglob("*.py"))
+        + list((REPO / "libs").rglob("*.py"))
+        + list((REPO / "apps").rglob("*.ts"))
+        + list((REPO / "tools").glob("*.py"))
+    ):
+        if "test" in path.name or "node_modules" in str(path):
+            continue
+        text = path.read_text()
+        for block in re.finditer(r"from mart\.current_pointer_head(?P<body>.{0,600})", text, re.S):
+            body = block.group("body")
+            clause = body.split(";")[0]
+            if "universe_id" not in clause:
+                failures.append(
+                    f"{path.relative_to(REPO)} resolves mart.current_pointer_head without a "
+                    "universe predicate — the universe is part of the governed key, and dropping "
+                    "it serves whichever pipeline advanced last"
+                )
+                break
+
     # --- I2: one encoder, one parser. Nobody re-implements the period-tag format ---
     for path in sorted((REPO / "libs").rglob("*.py")) + sorted((REPO / "apps").rglob("*.py")):
         if "test" in path.name or path.name == "fiscal_period.py":

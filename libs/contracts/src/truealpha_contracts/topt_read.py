@@ -13,6 +13,8 @@ import psycopg
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
+
 # Any of these mean the query returned rows that no longer match the shape this
 # repository expects (a renamed/unaliased column, a dropped field) -- a caller-facing
 # crash here would take down the whole MCP tool call for a schema drift that should
@@ -74,8 +76,10 @@ class PostgresToptGppeRepository:
                     """
                     select target_run_id as run_id from mart.current_pointer_head
                     where environment = 'production' and factor_id = 'gross_profit_per_employee'
+                    and universe_id like %s
                     order by advanced_at desc limit 1
-                    """
+                    """,
+                    (f"{SERVED_UNIVERSE_PREFIX}%",),
                 ).fetchone()
                 if head is None:
                     head = conn.execute(
