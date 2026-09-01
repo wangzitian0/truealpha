@@ -56,6 +56,9 @@ class _InMemoryObjectStore:
 _AT = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 _NVDA_ISIN = "US67066G1040"
 _FOREIGN_ISIN = "XS0000000001"  # maps to no US listing — must stay minted
+# Alphabet's two classes: same issuer CIK, DIFFERENT tickers per ISIN (#706).
+_GOOGL_ISIN = "US02079K3059"
+_GOOG_ISIN = "US02079K1079"
 _NVDA_RECORDS = [
     {
         "figi": "BBG000BLARC1",
@@ -66,6 +69,19 @@ _NVDA_RECORDS = [
         "marketSector": "Equity",
     }
 ]
+
+
+def _class_records(ticker: str) -> list[dict]:
+    return [
+        {
+            "figi": f"BBG00{ticker}",
+            "ticker": ticker,
+            "exchCode": "US",
+            "name": "ALPHABET INC",
+            "securityType": "Common Stock",
+            "marketSector": "Equity",
+        }
+    ]
 
 
 @pytest.fixture
@@ -126,7 +142,9 @@ def test_sweep_repoints_from_landed_batches_without_a_vendor(connection) -> None
     _seed_tranche_one(connection)
     _land_openfigi_batch(connection, store)
 
-    outcome = enrich_holding_identities(connection, ticker_cik={"NVDA": 1045810}, now=_AT, store=store)
+    outcome = enrich_holding_identities(
+        connection, ticker_cik={"NVDA": 1045810}, now=_AT, store=store, isins=[_NVDA_ISIN, _FOREIGN_ISIN]
+    )
 
     assert outcome.unresolved == 2
     assert outcome.reused_from_raw == 2, "both ISINs answer from the landing zone"
@@ -157,9 +175,13 @@ def test_second_sweep_is_a_no_op(connection) -> None:
     store = _InMemoryObjectStore()
     _seed_tranche_one(connection)
     _land_openfigi_batch(connection, store)
-    enrich_holding_identities(connection, ticker_cik={"NVDA": 1045810}, now=_AT, store=store)
+    enrich_holding_identities(
+        connection, ticker_cik={"NVDA": 1045810}, now=_AT, store=store, isins=[_NVDA_ISIN, _FOREIGN_ISIN]
+    )
 
-    again = enrich_holding_identities(connection, ticker_cik={"NVDA": 1045810}, now=_AT, store=store)
+    again = enrich_holding_identities(
+        connection, ticker_cik={"NVDA": 1045810}, now=_AT, store=store, isins=[_NVDA_ISIN, _FOREIGN_ISIN]
+    )
 
     assert again.repointed == 0, "a re-keyed identity never re-enters the sweep"
     assert again.unresolved == 1 and again.unmapped == 1, "only the still-minted foreign ISIN is considered"
@@ -168,6 +190,75 @@ def test_second_sweep_is_a_no_op(connection) -> None:
         (_NVDA_ISIN,),
     ).fetchone()[0]
     assert vintages == 1, "no duplicate identifier vintages sprayed by re-runs"
+
+
+def test_share_classes_keep_their_own_tickers(connection) -> None:
+    """#706: two ISINs of ONE issuer re-point to the same issuer entity, while
+    each minted per-ISIN entity carries ITS OWN ticker — the association the
+    valuation view reads so the GOOG line can never render as GOOGL."""
+    store = _InMemoryObjectStore()
+    er.ensure_entity(connection, "etf:series:S-TEST-DUAL", "etf", "Dual Class Test Fund")
+    for isin in (_GOOGL_ISIN, _GOOG_ISIN):
+        minted = f"company:isin:{isin}"
+        er.ensure_entity(connection, minted, "company", isin)
+        er.assert_identifier(
+            connection,
+            entity_id=minted,
+            source="nport",
+            identifier_type="isin",
+            identifier_value=isin,
+            confidence=1.0,
+            transaction_time=_AT,
+            valid_from="2026-06-30",
+            raw_ref="raw.fetches:0",
+        )
+        connection.execute(
+            """
+            insert into staging.fund_holding_facts
+                (fund_id, holding_id, holding_name, report_period, transaction_time,
+                 cusip, isin, lei, balance, value_usd, percent_of_net_assets, confidence, raw_ref)
+            values (%s, %s, 'Alphabet Inc.', '2026-06-30', %s, null, %s, null, 1, 100, 3.0, 1.0, 'raw.fetches:0')
+            on conflict do nothing
+            """,
+            ("etf:series:S-TEST-DUAL", minted, _AT, isin),
+        )
+    raw_store.insert_json_fetch(
+        connection,
+        source=DataSource.OPENFIGI,
+        source_record_id=f"mapping:{_GOOGL_ISIN}",
+        payload=[{"data": _class_records("GOOGL")}, {"data": _class_records("GOOG")}],
+        fetched_at=_AT,
+        metadata={"isins": [_GOOGL_ISIN, _GOOG_ISIN]},
+        store=store,
+    )
+
+    outcome = enrich_holding_identities(
+        connection,
+        ticker_cik={"GOOGL": 1652044, "GOOG": 1652044},
+        now=_AT,
+        store=store,
+        isins=[_GOOGL_ISIN, _GOOG_ISIN],
+    )
+
+    assert outcome.repointed == 2
+    for isin, expected in ((_GOOGL_ISIN, "GOOGL"), (_GOOG_ISIN, "GOOG")):
+        assert er.resolve(connection, "isin", isin, as_of=_AT + timedelta(days=1)) == "issuer:cik:0001652044"
+        own = connection.execute(
+            "select identifier_value from staging.kg_identifiers"
+            " where entity_id = %s and identifier_type = 'ticker'"
+            " order by transaction_time desc, confidence desc, id desc limit 1",
+            (f"company:isin:{isin}",),
+        ).fetchone()
+        assert own == (expected,), f"{isin} must keep its own ticker, got {own}"
+
+    again = enrich_holding_identities(
+        connection,
+        ticker_cik={"GOOGL": 1652044, "GOOG": 1652044},
+        now=_AT,
+        store=store,
+        isins=[_GOOGL_ISIN, _GOOG_ISIN],
+    )
+    assert again.repointed == 0 and again.unresolved <= 1, "the dual-class pair never re-enters the sweep"
 
 
 def test_figi_from_raw_skips_ticker_keyed_batches(connection) -> None:
