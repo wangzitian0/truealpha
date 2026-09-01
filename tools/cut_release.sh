@@ -54,11 +54,23 @@ fi
 note "tag $TAG is free"
 
 # 2. Local main must BE origin/main; tagging a stale or diverged checkout ships
-#    the wrong tree under the right name.
+#    the wrong tree under the right name. A stale checkout fast-forwards itself
+#    (v0.0.35 and v0.0.38 both died on "pull first" while a parallel lane merged
+#    mid-ceremony); only true divergence still fails.
 git fetch origin -q
+# Always, not only when stale (review on #721): the ceremony's git state must be
+# main's regardless of whether a fast-forward turns out to be needed.
+[ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] \
+  || fail "run the ceremony from a checkout ON main (currently $(git rev-parse --abbrev-ref HEAD))"
 LOCAL_MAIN=$(git rev-parse main)
 REMOTE_MAIN=$(git rev-parse origin/main)
-[ "$LOCAL_MAIN" = "$REMOTE_MAIN" ] || fail "local main $LOCAL_MAIN != origin/main $REMOTE_MAIN — pull first"
+if [ "$LOCAL_MAIN" != "$REMOTE_MAIN" ]; then
+  git merge-base --is-ancestor "$LOCAL_MAIN" "$REMOTE_MAIN" \
+    || fail "local main $LOCAL_MAIN diverged from origin/main $REMOTE_MAIN — resolve by hand"
+  git merge --ff-only -q "$REMOTE_MAIN"
+  LOCAL_MAIN=$(git rev-parse main)
+  note "main fast-forwarded to ${LOCAL_MAIN:0:8}"
+fi
 note "main is current at ${LOCAL_MAIN:0:8}"
 
 # 3. Every named PR: MERGED, zero unresolved threads, merge commit on main.
@@ -75,7 +87,13 @@ for PR in "${PR_LIST[@]}"; do
   TOTAL=$(echo "$THREADS" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["repository"]["pullRequest"]["reviewThreads"]["totalCount"])')
   [ "$TOTAL" -le 50 ] || fail "#$PR has $TOTAL review threads, more than one page — verify by hand"
   UNRESOLVED=$(echo "$THREADS" | python3 -c 'import sys,json;n=json.load(sys.stdin)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"];print(sum(1 for x in n if not x["isResolved"]))')
-  [ "$UNRESOLVED" = "0" ] || fail "#$PR has $UNRESOLVED unresolved review thread(s)"
+  if [ "$UNRESOLVED" != "0" ]; then
+    # Name them: three ceremonies in one week stalled on a bare count and the
+    # operator re-ran the GraphQL by hand each time to learn WHICH threads.
+    gh api graphql -f query="{repository(owner:\"wangzitian0\",name:\"truealpha\"){pullRequest(number:$PR){reviewThreads(last:50){nodes{isResolved comments(first:1){nodes{path body}}}}}}}" \
+      --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | "  unresolved: " + .comments.nodes[0].path + " — " + (.comments.nodes[0].body[0:110])' >&2 || true
+    fail "#$PR has $UNRESOLVED unresolved review thread(s) — listed above"
+  fi
   MERGE_SHA=$(gh pr view "$PR" --repo "$REPO" --json mergeCommit -q .mergeCommit.oid)
   git merge-base --is-ancestor "$MERGE_SHA" "$LOCAL_MAIN" || fail "#$PR merge commit $MERGE_SHA is not on main"
   [ "$MERGE_SHA" = "$LOCAL_MAIN" ] && REVIEWED_PR="$PR"
@@ -89,11 +107,21 @@ done
 [ -n "$REVIEWED_PR" ] || fail "no named PR has its merge commit at main HEAD ${LOCAL_MAIN:0:8} — include the last-merged PR (the prod gate requires reviewed merge_commit_sha == release SHA)"
 note "reviewed change for prod: #$REVIEWED_PR (merge == HEAD)"
 
-# 4. main HEAD's ci-required is green — the tag inherits this SHA.
-MAIN_RUN=$(gh run list --repo "$REPO" --workflow ci-required.yml --limit 20 \
-  --json databaseId,headSha,conclusion,event \
-  -q "[.[]|select(.headSha==\"$LOCAL_MAIN\" and .conclusion==\"success\")][0].databaseId")
-[ -n "$MAIN_RUN" ] && [ "$MAIN_RUN" != "null" ] || fail "no green ci-required run for main HEAD ${LOCAL_MAIN:0:8}"
+# 4. main HEAD's ci-required is green — the tag inherits this SHA. A freshly
+#    merged HEAD has CI still running; wait bounded instead of failing on the
+#    spot (v0.0.35's first attempt died here five minutes after its merge).
+MAIN_RUN=""
+for _ in $(seq 1 30); do
+  STATE=$(gh run list --repo "$REPO" --workflow ci-required.yml --limit 20 \
+    --json databaseId,headSha,status,conclusion \
+    -q "[.[]|select(.headSha==\"$LOCAL_MAIN\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
+  case "$STATE" in
+    *"completed success") MAIN_RUN=$(echo "$STATE" | awk '{print $1}'); break ;;
+    *completed*) fail "ci-required for main HEAD ${LOCAL_MAIN:0:8} finished non-green: $STATE" ;;
+  esac
+  sleep 30
+done
+[ -n "$MAIN_RUN" ] || fail "ci-required for main HEAD ${LOCAL_MAIN:0:8} not green after 15 minutes"
 note "main HEAD green (run $MAIN_RUN)"
 
 if [ "$DRY" = "1" ]; then
