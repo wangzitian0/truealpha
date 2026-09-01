@@ -31,6 +31,20 @@ Read the full diff once per category. Every entry names the PR where it bit.
   the pattern in `\Q…\E` (quotemeta — perl-only, sed has no equivalent) and
   match the shortest distinctive literal instead of the whole line.
 
+## 1b. Merging before the review exists (1, and it shipped)
+
+`gh pr merge` when `mergeStateStatus == CLEAN` and unresolved threads == 0 is
+NOT evidence of a clean review — AGENTS.md rule 4 says so explicitly, and #714
+proved it: merged at 04:31:32, Copilot's review arrived at 04:32:11. Thirty-nine
+seconds. One of the three findings in it was that
+`working-directory: apps/app-web` made a bare `tools/warm_surface.sh` resolve
+to `apps/app-web/tools/...`; `Deploy staging v0.0.38` died with exit 127 and
+another lane spent a PR fixing it (#717).
+
+Before merging, require that a review has been SUBMITTED for the current head,
+not merely that no thread is open. Zero threads on a PR nobody has reviewed
+looks identical to zero threads on a clean one.
+
 ## 2. Failure that names its contract (3)
 - Bare `next(...)` → StopIteration instead of "the changes job no longer
   carries a filters step" (#683).

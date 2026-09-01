@@ -783,6 +783,29 @@ def test_the_walk_warms_the_pages_it_is_about_to_open() -> None:
         "the walk no longer warms the app-web surface before opening it — the first navigation "
         "races the container swap again (#698)"
     )
+    # The path must RESOLVE from the step's own working-directory, not merely
+    # appear in the text. This is the defect that shipped: the step sets
+    # `working-directory: apps/app-web` for the walk, so a bare
+    # `tools/warm_surface.sh` resolved to apps/app-web/tools/warm_surface.sh
+    # and `Deploy staging v0.0.38` died with exit 127. The guard above asserted
+    # the call was present and said nothing about whether it could run —
+    # another lane found it in production and spent a PR on it (#717).
+    spec = step(RELEASE, "Walk the deployed surface")
+    workdir = str(spec.get("working-directory", ""))
+    for line in str(spec["run"]).splitlines():
+        if "warm_surface.sh" not in line or line.strip().startswith("#"):
+            continue
+        invocation = line.strip().split()[0].strip('"')
+        resolved = (
+            REPO_ROOT / invocation.replace("$GITHUB_WORKSPACE/", "")
+            if "$GITHUB_WORKSPACE" in invocation
+            else REPO_ROOT / workdir / invocation
+        )
+        assert resolved.exists(), (
+            f"the walk invokes {invocation!r} from working-directory {workdir!r}, which resolves to "
+            f"{resolved.relative_to(REPO_ROOT) if REPO_ROOT in resolved.parents else resolved} — "
+            f"that file does not exist, and the step dies with exit 127 on the next deploy (#717)"
+        )
     assert walk.index("warm_surface.sh") < walk.index("node e2e/walk-tree.mjs"), (
         "the warm-up runs after the walk, which is no warm-up at all"
     )
