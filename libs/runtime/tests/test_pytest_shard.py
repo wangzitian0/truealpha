@@ -1,0 +1,170 @@
+"""The sharded CI lanes must cover the tree they claim to run — A4 B1 (#673).
+
+`apps/data-engine/tests` runs as three parallel shards. The danger is not a
+wrong split, it is a split that quietly stops covering something: pytest exits
+0 over a shard whose files all vanished from the pattern, and three green jobs
+report a suite nobody ran (#527's green-while-empty, #472's coverage-on-paper).
+
+Two properties, proven here so the workflow can be trusted:
+
+- the shards PARTITION the collected files — union equals the whole tree and no
+  file is counted twice, for every shard count;
+- the collection itself misses nothing — checked against file CONTENT (files
+  defining test functions), not against the same glob, which would be circular.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+
+import pytest_shard  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SHARDED_ROOT = REPO_ROOT / "apps" / "data-engine" / "tests"
+
+
+@pytest.mark.parametrize("total", [1, 2, 3, 4, 7])
+def test_shards_partition_the_tree(total: int) -> None:
+    """Union of every shard == the whole collection, with no overlap."""
+    files = pytest_shard.collect(SHARDED_ROOT)
+    assert files, f"{SHARDED_ROOT} collected nothing — the pattern or the path is wrong"
+
+    seen: list[Path] = []
+    for index in range(total):
+        seen.extend(pytest_shard.shard(files, index, total))
+
+    assert sorted(seen) == files, (
+        f"{total} shards do not cover {SHARDED_ROOT} exactly: "
+        f"{len(files) - len(set(seen))} file(s) would run in no CI job at all"
+    )
+    assert len(seen) == len(set(seen)), "a file lands in more than one shard — wasted CI, not a defect"
+
+
+def test_collection_misses_no_file_that_defines_tests() -> None:
+    """Content-based, so it cannot agree with the glob by construction.
+
+    A file holding `def test_` that the shard patterns do not match is a file
+    pytest never collects — in the sharded lanes AND in a plain local run. It
+    is a real coverage hole either way, and this is where it surfaces.
+    """
+    collected = set(pytest_shard.collect(SHARDED_ROOT))
+    orphans = [
+        path for path in SHARDED_ROOT.rglob("*.py") if path not in collected and pytest_shard.test_functions(path) > 0
+    ]
+    assert not orphans, (
+        f"these files define test functions but match no pytest_shard pattern, so no shard "
+        f"runs them: {[str(p.relative_to(REPO_ROOT)) for p in orphans]}"
+    )
+
+
+def test_a_bad_shard_request_fails_instead_of_running_nothing() -> None:
+    files = pytest_shard.collect(SHARDED_ROOT)
+    with pytest.raises(ValueError, match="out of range"):
+        pytest_shard.shard(files, 3, 3)
+    with pytest.raises(ValueError, match="must be >= 1"):
+        pytest_shard.shard(files, 0, 0)
+
+
+def test_more_shards_than_files_exits_nonzero() -> None:
+    """An empty shard must not reach pytest: `pytest` with no path arguments
+    runs the WHOLE testpaths set, so an empty lane would silently re-run
+    everything and hide the very imbalance it was meant to expose."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools" / "pytest_shard.py"),
+            str(SHARDED_ROOT),
+            "--shard",
+            str(len(pytest_shard.collect(SHARDED_ROOT))),
+            "--of",
+            str(len(pytest_shard.collect(SHARDED_ROOT)) + 1),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2, result.stdout
+    assert "is empty" in result.stderr or "out of range" in result.stderr
+
+
+def test_a_process_substitution_hides_the_failure_a_shard_lane_must_see() -> None:
+    """The shell semantics the CI lane's shape depends on, executed rather than
+    remembered: a process substitution's exit status is invisible to `set -e`
+    and pipefail, a command substitution's is not. The workflow-shape half of
+    this property lives in test_ci_workflows.py (#583); this is the WHY it
+    asserts against, and it fails here if bash ever changes."""
+
+    def run_snippet(capture: str) -> int:
+        script = f"set -euo pipefail\nFAILING='exit 2'\n{capture}\necho reached-pytest\n"
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True).returncode
+
+    assert run_snippet('mapfile -t FILES < <(sh -c "$FAILING")') == 0, (
+        "a process substitution now propagates failure — if bash changed this, the "
+        "workflow's defensive shape can be simplified"
+    )
+    assert run_snippet('LIST=$(sh -c "$FAILING")') != 0, "command substitution must abort under set -e"
+
+
+def test_the_cli_prints_one_existing_path_per_line() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools" / "pytest_shard.py"),
+            str(SHARDED_ROOT),
+            "--shard",
+            "0",
+            "--of",
+            "3",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lines = result.stdout.splitlines()
+    assert lines, "shard 0 of 3 printed nothing"
+    for line in lines:
+        assert Path(line).is_file(), f"shard printed {line!r}, which is not a file"
+
+
+def test_the_shards_carry_equal_test_counts() -> None:
+    """What this proves, and what it does NOT.
+
+    It proves the shards carry equal numbers of test FUNCTIONS. Round-robin by
+    file position did not: 24/24/24 files carrying 127/177/226 tests, measured
+    57 s / 107 s / 137 s (run 33365311320).
+
+    It does not prove balanced TIME, and the measurement says so plainly: with
+    counts at 177/177/176 the same lanes took 74 s / 155 s / 84 s (run
+    33366063687) — a 2.1x spread, because a Dagster materialisation test costs
+    9 s and a pure-function test costs a millisecond. Test count is a better
+    weight than file count and still a weak one. The honest reason not to chase
+    it further is that data-engine is no longer the pole: web/check (168 s) and
+    the liveness soak (178 s) both exceed the slowest shard.
+
+    If this lane becomes the wall again, the fix is measured per-file durations
+    (`--durations=0` into a committed weights file), not a third proxy.
+    """
+    files = pytest_shard.collect(SHARDED_ROOT)
+    loads = [
+        sum(pytest_shard.test_functions(path) for path in pytest_shard.shard(files, index, 3)) for index in range(3)
+    ]
+    assert min(loads) > 0
+    assert max(loads) / min(loads) <= 1.15, (
+        f"the three shards carry {loads} test functions — unequal counts mean the packing "
+        f"regressed toward file-position round-robin (measured 127/177/226 before it)"
+    )
+
+
+def test_the_assignment_is_stable_across_calls() -> None:
+    """A lane whose contents churn between calls makes a flaky failure
+    impossible to attribute to a shard."""
+    files = pytest_shard.collect(SHARDED_ROOT)
+    first = [pytest_shard.shard(files, index, 3) for index in range(3)]
+    second = [pytest_shard.shard(list(reversed(files)), index, 3) for index in range(3)]
+    assert first == second, "shard assignment depends on input order — it must depend only on content"

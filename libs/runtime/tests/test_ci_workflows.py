@@ -51,6 +51,7 @@ RELEASE = "deploy-release.yml"
 FRESHNESS = "deploy-freshness.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
+PYTHON = "ci-python.yml"
 
 
 # --- the locator itself ------------------------------------------------------
@@ -451,6 +452,13 @@ def test_the_split_python_jobs_cover_every_testpath() -> None:
     for job in workflow["jobs"].values():
         for step in job.get("steps") or []:
             run = str(step.get("run", ""))
+            # A sharded lane (A4 B1) names its root on the pytest_shard.py line
+            # instead of on the pytest line, whose paths come from a shell
+            # array. The root counts as covered here because
+            # test_pytest_shard.py separately proves the shards partition that
+            # root exactly — neither check alone would be enough.
+            for root in re.findall(r"pytest_shard\.py\s+(\S+)", run):
+                covered.add(root)
             if run.startswith("uv run pytest "):
                 # shlex, and flags filtered: a `-q` or `-k expr` token counted
                 # as a path would make the equality fail on correct workflows —
@@ -643,4 +651,44 @@ def test_release_script_reviews_the_pr_that_produced_the_release_sha() -> None:
     )
     assert "refusing a vacuous health confirmation" in str(confirm.get("run", "")), (
         "the health confirmation no longer fails closed on an empty EXPECTED_RELEASE"
+    )
+
+
+def test_a_failing_shard_lane_fails_instead_of_running_the_whole_suite() -> None:
+    """A4 B1 (#673): the degraded path of the sharded data-engine lane.
+
+    Bare `pytest` with no path arguments falls back to pyproject's testpaths, so
+    an empty FILES array would make each of the three lanes run the ENTIRE suite
+    and still report green — the failure would be invisible and the split would
+    silently un-do itself. Two layers keep that impossible, and both are pinned
+    here: the shard tool is called in a command substitution (whose failure
+    `set -e` sees, unlike a process substitution — demonstrated executably in
+    test_pytest_shard.py), and an explicit count check refuses an empty
+    selection.
+    """
+    lane = job(PYTHON, "test-data-engine")
+    shard_steps = [str(spec.get("run", "")) for spec in lane["steps"] if "pytest_shard.py" in str(spec.get("run", ""))]
+    assert len(shard_steps) == 1, f"expected exactly one sharding step, found {len(shard_steps)}"
+    snippet = shard_steps[0]
+    assert "$(python3 tools/pytest_shard.py" in snippet, (
+        "the shard tool is no longer called in a command substitution — its exit status is "
+        "invisible again, and a failed shard runs the entire suite instead of failing"
+    )
+    assert "< <(python3 tools/pytest_shard.py" not in snippet, (
+        "process substitution is back: `set -e` cannot see the shard tool fail"
+    )
+    assert "refusing to run bare pytest" in snippet, (
+        "the empty-selection check is gone — the second layer that keeps an empty FILES array "
+        "from expanding into a whole-suite run"
+    )
+    assert "--of ${{ strategy.job-total }}" in snippet, (
+        "the lane count is hard-coded again — a `--of N` that drifts from the matrix length "
+        "leaves every file at position kN+(N-1) assigned to a shard nobody runs, green forever "
+        "(the #527 green-while-empty shape this job exists to avoid)"
+    )
+    assert "--shard ${{ strategy.job-index }}" in snippet, (
+        "the shard index no longer comes from the matrix position it is running at"
+    )
+    assert lane["strategy"]["fail-fast"] is False, (
+        "fail-fast is on: one red shard would cancel the other two and hide their failures"
     )
