@@ -31,6 +31,7 @@ on:
     paths:
       - ".github/workflows/deploy-release.yml"
       - "apps/app-web/src/app/login/page.tsx"
+      - "apps/llm-service/src/llm_service/main.py"
       - "apps/app-web/src/app/research/coverage/page.tsx"
       - "apps/app-web/src/app/research/rankings/page.tsx"
       - "apps/app-web/src/server/admin/ops.ts"
@@ -42,6 +43,7 @@ on:
       - "db/migrations/0043_strategy_input_fiscal_period.sql"
       - "libs/contracts/src/truealpha_contracts/fiscal_period.py"
       - "libs/contracts/tests/test_fiscal_period.py"
+      - "libs/runtime/tests/test_health_check.py"
       - "libs/factors/src/factors/base/peg.py"
       - "libs/runtime/tests/test_ci_workflows.py"
       - "libs/runtime/tests/test_migration_chain.py"

@@ -177,3 +177,40 @@ def test_same_kind_mismatch_still_gets_the_rollout_budget() -> None:
     exit_code = check_health(URL, expected_version="v0.0.19", http_get=http_get, max_attempts=3, sleep=lambda _: None)
     assert exit_code == 1
     assert attempts == 3, "a same-kind mismatch must keep the SDK's tolerance for a rollout"
+
+
+def test_the_data_engine_vintage_is_read_from_the_health_body() -> None:
+    """#712: the data engine has no HTTP surface, so nothing in the deploy verdict saw it.
+
+    Every post-deploy check exercised app-web or llm-service, which is how v0.0.37 promoted
+    web and llm to the tag while the data engine kept an older digest with every step green.
+    llm-service now reports the vintage from mart; this asserts the lane reads it.
+    """
+    import json as _json
+
+    _data_engine_parser = load_tool("health_check")._data_engine_parser
+
+    assert _data_engine_parser(_json.dumps({"status": "ok", "data_engine_parser": "p:v8"})) == "p:v8"
+    # Absent, empty and unparseable all mean the same thing to the caller: UNVERIFIED, and
+    # never a silent pass.
+    assert _data_engine_parser(_json.dumps({"status": "ok"})) == "unknown"
+    assert _data_engine_parser(_json.dumps({"data_engine_parser": ""})) == "unknown"
+    assert _data_engine_parser("not json") == "unknown"
+
+
+def test_llm_service_health_reports_the_data_engine_vintage() -> None:
+    """The producing half of the same contract — the reader above is useless without it.
+
+    Calls the handler rather than grepping its source: a text assertion passed when the
+    line was merely COMMENTED OUT, because the string it looked for was still in the file.
+    The mutation reproof caught that, which is what it is for.
+    """
+    llm = pytest.importorskip("llm_service.main")
+
+    body = llm.health()
+    assert "data_engine_parser" in body, "the deploy lane cannot verify what is not reported"
+    # No database in a unit test, so the honest answer is "unknown" -- and it must be a
+    # STRING, never an exception: health answers "is the service up", and a read it only
+    # reports must never be able to fail it.
+    assert isinstance(body["data_engine_parser"], str)
+    assert body["status"] == "ok"

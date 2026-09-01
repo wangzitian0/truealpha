@@ -109,4 +109,41 @@ app.mount("/mcp", mcp.streamable_http_app())
 def health() -> dict[str, str]:
     # git_sha lets tools/health_check.py confirm the deployed release tag is
     # actually live post-deploy, not just that something answers (#508).
-    return {"status": "ok", "git_sha": os.environ.get("GIT_COMMIT_SHA", "unknown")}
+    #
+    # data_engine_parser reports the vintage of the DATA ENGINE, which has no HTTP
+    # surface of its own and therefore had no deploy-time verification at all (#712).
+    # Every post-deploy check -- this endpoint, the surface walk, both canaries --
+    # exercised an HTTP surface, so a promotion could leave the app that computes every
+    # published number one release behind with every step green. That is exactly what
+    # v0.0.37 did: web and llm took the tag, the data engine kept an older digest.
+    #
+    # The identity is already in the database; nothing new is written. Reported here
+    # because this service already holds a mart-scoped connection, so the deploy lane can
+    # read it over a surface it already calls, with no new secret and no database access
+    # from the runner.
+    return {
+        "status": "ok",
+        "git_sha": os.environ.get("GIT_COMMIT_SHA", "unknown"),
+        "data_engine_parser": _data_engine_parser(),
+    }
+
+
+def _data_engine_parser() -> str:
+    """The parser vintage behind the newest observation, or "unknown".
+
+    Deliberately never raises and never fails the health check: this endpoint answers
+    "is the service up", and turning it into a database liveness probe would make an
+    unrelated outage look like a dead app. An unreadable identity reports "unknown",
+    which `tools/health_check.py` treats as un-assertable rather than as a pass.
+    """
+    try:
+        import psycopg
+        from truealpha_runtime import runtime_settings
+
+        with psycopg.connect(runtime_settings.database_url, connect_timeout=3) as connection:
+            row = connection.execute(
+                "select parser_version from staging.capture_normalized_observations order by recorded_at desc limit 1"
+            ).fetchone()
+        return str(row[0]) if row and row[0] else "unknown"
+    except Exception:  # noqa: BLE001 - health must not fail on a read it only reports
+        return "unknown"
