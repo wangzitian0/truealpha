@@ -201,8 +201,37 @@ async function assertFunnelSaysSomething(page, path, problems, role) {
   }
 }
 
+/** Navigate deterministically, and survive a saturated host without hiding a real outage.
+ *
+ * `waitUntil: "networkidle"` was the previous wait everywhere here. Playwright's own docs
+ * mark it DISCOURAGED, and on 2026-08-31 it failed a production deploy that was entirely
+ * healthy: every container had been up 21 hours, `https://truealpha.club/login` answered
+ * 200 in 0.38s, and the walk still timed out after 30s. The host runs 93 containers across
+ * four projects at load ~8.5 on 8 cores, so "500ms with no network activity" is a condition
+ * that may simply never occur -- the gate was measuring the neighbours' traffic.
+ *
+ * A gate that fails while the service is fine is worse than no gate: it trains everyone to
+ * re-run it. So: wait for a deterministic lifecycle event, then for the page's own main
+ * region to exist (the assertions below read rendered DOM, so `domcontentloaded` alone is
+ * not enough for an app-router page), and retry ONCE. A real outage fails both attempts and
+ * still fails fast; a saturation blip no longer costs a deploy.
+ */
+async function gotoStable(page, url) {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await page.waitForSelector("main, [role='main']", { state: "attached", timeout: 15000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 async function checkRoute(page, path, role) {
-  await page.goto(`${BASE}${path}`, { waitUntil: "networkidle" });
+  await gotoStable(page, `${BASE}${path}`);
   const finalPath = new URL(page.url()).pathname;
   const problems = [];
   if (finalPath === "/login" && path !== "/login") problems.push("bounced to /login while authenticated");
@@ -258,7 +287,7 @@ async function walkSignOutJourney(browser, { email, password }) {
   const page = await context.newPage();
   const problems = [];
 
-  await page.goto(`${BASE}/research`, { waitUntil: "networkidle" });
+  await gotoStable(page, `${BASE}/research`);
   const control = page.locator("[data-sign-out]");
   if ((await control.count()) === 0) {
     problems.push("no sign-out control on an authenticated page");
@@ -269,7 +298,7 @@ async function walkSignOutJourney(browser, { email, password }) {
     if (cookies.some((c) => c.name === "truealpha_session" && c.value !== "")) {
       problems.push("the session cookie survived sign-out");
     }
-    await page.goto(`${BASE}/research`, { waitUntil: "networkidle" });
+    await gotoStable(page, `${BASE}/research`);
     if (!new URL(page.url()).pathname.startsWith("/login")) {
       problems.push(`a protected route still rendered after sign-out (${new URL(page.url()).pathname})`);
     }
