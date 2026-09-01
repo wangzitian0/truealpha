@@ -718,3 +718,8 @@ def test_a_tag_run_can_never_be_cancelled_by_a_later_merge() -> None:
         f"merge landing during a tag run CANCELS it — the release publishes no images and fails "
         f"after the tag push, which the protocol treats as the lock"
     )
+    assert "github.event_name" in group, (
+        f"the concurrency key is {group!r}: the ref alone does not isolate a tag PUSH from a "
+        f"manual workflow_dispatch on the same tag, which would share the group and cancel the "
+        f"release run mid-publish"
+    )
