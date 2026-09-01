@@ -173,7 +173,7 @@ jobs:
             exit 1
           fi
           echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
-          uv run pytest "${FILES[@]}" --durations=10
+          uv run pytest "${FILES[@]}" --durations=0
         env:
           APP_ENV: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
