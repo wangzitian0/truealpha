@@ -1,4 +1,4 @@
-.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit strategy-smoke lint format typecheck test contract-conformance check clean
+.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit strategy-smoke lint format typecheck test prepush contract-conformance check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"

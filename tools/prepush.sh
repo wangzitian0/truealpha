@@ -35,7 +35,14 @@ if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
 fi
 
 BASE="${1:-origin/main}"
-cd "$(git rev-parse --show-toplevel)"
+# Explicit: `set -e` is deliberately off here (the run() helper needs to see
+# non-zero exits), so an unchecked `cd "$(git rev-parse ...)"` outside a work
+# tree would cd nowhere and then diff the wrong thing (review).
+if ! ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$ROOT" ]; then
+  echo "prepush: not inside a git working tree" >&2
+  exit 2
+fi
+cd "$ROOT"
 
 if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
   echo "prepush: no such ref $BASE" >&2
@@ -93,7 +100,10 @@ if [ "${#PY[@]}" -gt 0 ]; then
   run "ruff check (${#PY[@]} files)" uv run ruff check "${PY[@]}"
 fi
 for path in "${YML[@]}"; do
-  run "yaml parses: $path" python3 -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" "$path"
+  # uv's interpreter, not the system one: PyYAML is a workspace dependency and
+  # a bare `python3` may not have it, which would report FAIL on a valid file
+  # (review).
+  run "yaml parses: $path" uv run python -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" "$path"
 done
 for path in "${SH[@]}"; do
   run "bash -n: $path" bash -n "$path"

@@ -31,9 +31,22 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PREPUSH = REPO_ROOT / "tools" / "prepush.sh"
 
 
+def bash4() -> str:
+    """A bash >= 4, or a skip. `bash` on PATH is 3.2 on a stock macOS, where
+    the script correctly refuses to run — so a test that hard-codes `bash`
+    would exercise the version gate instead of the property it names (review)."""
+    for candidate in ("bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash"):
+        probe = subprocess.run(
+            [candidate, "-c", "echo ${BASH_VERSINFO[0]}"], capture_output=True, text=True, check=False
+        )
+        if probe.returncode == 0 and probe.stdout.strip().isdigit() and int(probe.stdout.strip()) >= 4:
+            return candidate
+    pytest.skip("no bash >= 4 available; tools/prepush.sh requires one and says so")
+
+
 def run_prepush(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(PREPUSH), *arguments],
+        [bash4(), str(PREPUSH), *arguments],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
@@ -107,3 +120,25 @@ def test_it_refuses_a_bash_too_old_to_run_it() -> None:
     script = PREPUSH.read_text(encoding="utf-8")
     assert 'BASH_VERSINFO[0]:-0}" -lt 4' in script, "the bash-version gate is gone"
     assert "brew install bash" in script, "the version failure no longer says how to fix it"
+
+
+def test_it_names_its_own_preconditions_instead_of_failing_cryptically() -> None:
+    """Review on #702, three of the four findings — each one turns a valid run
+    into a confusing failure, which is how a pre-push check stops being used:
+
+    - outside a git work tree, an unchecked `cd "$(git rev-parse ...)"` under
+      `set +e` cds nowhere and then diffs whatever is there;
+    - the YAML check must use uv's interpreter, since PyYAML is a workspace
+      dependency and a bare `python3` may not have it — reporting FAIL on a
+      perfectly valid workflow;
+    - `make prepush` must be .PHONY, or a file named `prepush` silences it.
+    """
+    script = PREPUSH.read_text(encoding="utf-8")
+    assert "not inside a git working tree" in script, "the work-tree precondition is unchecked again"
+    assert 'run "yaml parses: $path" uv run python' in script, (
+        "the YAML check is back on the system interpreter, which may lack PyYAML and will report FAIL on a valid file"
+    )
+    phony = next(
+        line for line in (REPO_ROOT / "Makefile").read_text(encoding="utf-8").splitlines() if line.startswith(".PHONY")
+    )
+    assert " prepush" in phony, "make prepush is not .PHONY — a file of that name would silence it"
