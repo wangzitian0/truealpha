@@ -43,7 +43,21 @@ another lane spent a PR fixing it (#717).
 
 Before merging, require that a review has been SUBMITTED for the current head,
 not merely that no thread is open. Zero threads on a PR nobody has reviewed
-looks identical to zero threads on a clean one.
+looks identical to zero threads on a clean one. Mechanised as
+`python tools/merge_ready.py <pr>` — it exits non-zero until a review whose
+`commit_id` IS the current head exists. Run it INSTEAD of eyeballing
+`mergeStateStatus`; that is the check both incidents passed.
+
+### What was measured, and what was dropped
+
+Round count is the dominant cost, but the pre-push adversarial agent review
+tried on 2026-09-01 was not the answer and has been dropped. Measured over
+four PRs: it cost ~13 min each (38 min of a 145-minute session, 26%) and
+prevented **zero** review rounds — Copilot found 3, 3 and 2 more findings
+after it on #711, #714 and #716, while #718, which skipped it, drew 3. A
+review round costs 3–6 min measured (#711: 3.1 and 3.4). Paying 13 to avoid 5,
+at a hit rate of zero, is a loss twice over; and on #714 its "nothing else
+worth blocking" is what made merging 39 seconds early feel safe.
 
 ## 2. Failure that names its contract (3)
 - Bare `next(...)` → StopIteration instead of "the changes job no longer
