@@ -14,6 +14,7 @@ that state on demand. A test that queried a live PR could not reproduce the
 
 from __future__ import annotations
 
+import datetime
 import json
 from typing import Any
 
@@ -28,6 +29,8 @@ OLDER = "1381abf3" * 5
 
 def responses(
     *,
+    head_age_minutes: float = 0.0,
+    head_in_commits: bool = True,
     state: str = "OPEN",
     merge_state: str = "CLEAN",
     reviews: list[dict[str, Any]] | None = None,
@@ -54,6 +57,10 @@ def responses(
     }
 
     def fake(arguments: list[str]) -> Any:
+        if arguments[0] == "pr" and "commits" in arguments:
+            pushed = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=head_age_minutes)
+            oid = HEAD if head_in_commits else "0" * 40
+            return {"commits": [{"oid": oid, "committedDate": pushed.isoformat().replace("+00:00", "Z")}]}
         if arguments[0] == "pr":
             return payloads["pr"]
         if "graphql" in arguments:
@@ -76,15 +83,17 @@ def test_zero_threads_with_no_review_of_this_head_blocks(monkeypatch) -> None:  
     """The #714 state exactly: green, no open threads, nothing reviewed yet."""
     monkeypatch.setattr(merge_ready, "gh_json", responses(reviews=[]))
     problems = merge_ready.blockers(1)
-    assert any("no review has been submitted for head" in p for p in problems), problems
+    assert any("nothing has reviewed" in p for p in problems), problems
 
 
 def test_a_review_of_an_earlier_push_does_not_count(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """A review of the previous commit says nothing about what is being merged
-    now — the live state of #722 while this was written."""
+    now — the live state of #722 while this was written. Blocked until the
+    settle window has passed; see the two tests at the end of this file for
+    both sides of that boundary."""
     monkeypatch.setattr(merge_ready, "gh_json", responses(reviews=[review(OLDER)]))
     problems = merge_ready.blockers(1)
-    assert any("no review has been submitted for head" in p for p in problems), problems
+    assert any("no review covers it yet" in p for p in problems), problems
 
 
 def test_unresolved_threads_block(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -128,3 +137,47 @@ def test_the_tool_reports_every_blocker_not_just_the_first(monkeypatch) -> None:
     """One round per blocker is the cost of stopping at the first."""
     monkeypatch.setattr(merge_ready, "gh_json", responses(reviews=[], merge_state="BLOCKED", unresolved=1))
     assert len(merge_ready.blockers(1)) == 3, json.dumps(merge_ready.blockers(1), indent=2)
+
+
+def test_a_fresh_push_with_no_review_of_it_blocks(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The incident shape: a review exists for an earlier commit, threads are
+    clear, and the head was pushed seconds ago with a review possibly in
+    flight. #714 and #718 both merged inside a minute of the push."""
+    monkeypatch.setattr(merge_ready, "gh_json", responses(reviews=[review(OLDER)], head_age_minutes=0.5))
+    problems = merge_ready.blockers(1)
+    assert any("no review covers it yet" in p for p in problems), problems
+
+
+def test_a_settled_push_merges_on_the_previous_review(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Copilot re-reviews on its own schedule and cannot be asked to — the
+    request API answers 422 and an @copilot comment does nothing. Requiring a
+    review OF THE HEAD unconditionally would deadlock every follow-up push, and
+    a tool that deadlocks gets bypassed. After the settle window, with every
+    thread resolved, the previous review carries it."""
+    monkeypatch.setattr(
+        merge_ready,
+        "gh_json",
+        responses(reviews=[review(OLDER)], head_age_minutes=merge_ready.SETTLE_MINUTES + 1),
+    )
+    assert merge_ready.blockers(1) == []
+
+
+def test_settling_never_substitutes_for_a_review_that_never_happened(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Time alone is not review. A PR nobody has looked at stays blocked no
+    matter how long it sits."""
+    monkeypatch.setattr(merge_ready, "gh_json", responses(reviews=[], head_age_minutes=600.0))
+    assert any("nothing has reviewed" in p for p in merge_ready.blockers(1))
+
+
+def test_an_unrecognisable_commit_list_blocks_rather_than_ages_out(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """If the head is not among the PR's listed commits, the shape is not what
+    this tool assumes. Treating an unknown age as OLD would wave the merge
+    through on a response it did not understand; it is treated as brand new so
+    the settle window blocks instead."""
+    monkeypatch.setattr(
+        merge_ready,
+        "gh_json",
+        responses(reviews=[review(OLDER)], head_age_minutes=600.0, head_in_commits=False),
+    )
+    problems = merge_ready.blockers(1)
+    assert any("no review covers it yet" in p for p in problems), problems

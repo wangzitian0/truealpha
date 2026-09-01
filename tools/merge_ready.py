@@ -37,12 +37,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import subprocess
 import sys
 from collections.abc import Sequence
 
 REPO = "wangzitian0/truealpha"
+# Double the observed review latency (2.2-6.0 min measured on this repo).
+SETTLE_MINUTES = 12.0
 
 
 def gh_json(arguments: Sequence[str]) -> object:
@@ -51,6 +54,19 @@ def gh_json(arguments: Sequence[str]) -> object:
         # Fail closed: an API error must never read as "nothing objected".
         raise SystemExit(f"merge_ready: gh {' '.join(arguments)} failed: {result.stderr.strip()[:200]}")
     return json.loads(result.stdout or "null")
+
+
+def head_age_minutes(number: int, head: str) -> float:
+    """Minutes since the head commit was pushed, from the commit itself."""
+    commits = gh_json(["pr", "view", str(number), "--repo", REPO, "--json", "commits"])
+    assert isinstance(commits, dict)
+    for entry in commits["commits"]:
+        if str(entry.get("oid")) == head:
+            pushed = datetime.datetime.fromisoformat(str(entry["committedDate"]).replace("Z", "+00:00"))
+            return (datetime.datetime.now(datetime.UTC) - pushed).total_seconds() / 60
+    # Head not among the listed commits: treat as brand new rather than old,
+    # so an unexpected shape blocks instead of waving a merge through.
+    return 0.0
 
 
 def blockers(number: int) -> list[str]:
@@ -72,12 +88,38 @@ def blockers(number: int) -> list[str]:
     assert isinstance(reviews, list)
     for_head = [r for r in reviews if isinstance(r, dict) and r.get("commit_id") == head]
     if not for_head:
-        seen = sorted({str(r.get("commit_id", ""))[:8] for r in reviews if isinstance(r, dict)})
-        problems.append(
-            f"no review has been submitted for head {head[:8]} (reviews exist for {seen or 'nothing'}) "
-            f"— zero unresolved threads on an unreviewed push is not a clean review (rule 4; #714 "
-            f"merged 39 s before its review and broke a staging deploy)"
-        )
+        # A review of the head is the strong form, but it cannot be REQUIRED:
+        # Copilot re-reviews on its own schedule and cannot be asked to
+        # (`POST /requested_reviewers` answers 422 — not a collaborator; an
+        # `@copilot review` comment does nothing). A tool that deadlocks gets
+        # bypassed, and a bypassed tool is worse than none, so the fallback is
+        # settling TIME: a review must exist for some commit, every thread must
+        # be resolved, and the head must have been pushed long enough ago for a
+        # pending review to have landed. Measured review latency on this repo:
+        # 2.2-6.0 min, so SETTLE_MINUTES is double the observed maximum.
+        # Both incidents merged inside 1 minute of the push and are caught by
+        # this alone.
+        if not reviews:
+            problems.append(
+                f"nothing has reviewed #{number} at all — zero unresolved threads on an unreviewed "
+                f"PR is not a clean review (rule 4; #714 merged 39 s before its review and broke a "
+                f"staging deploy)"
+            )
+        else:
+            age = head_age_minutes(number, head)
+            if age < SETTLE_MINUTES:
+                seen = sorted({str(r.get("commit_id", ""))[:8] for r in reviews if isinstance(r, dict)})
+                problems.append(
+                    f"head {head[:8]} was pushed {age:.1f} min ago and no review covers it yet "
+                    f"(reviews exist for {seen}); wait until {SETTLE_MINUTES} min so a pending "
+                    f"review can land, or push nothing further and re-run"
+                )
+            else:
+                print(
+                    f"merge_ready: NOTE — no review covers head {head[:8]}, but it has settled "
+                    f"{age:.0f} min with every thread resolved. Merging on the previous review.",
+                    file=sys.stderr,
+                )
     # Latest effective decision per reviewer, over reviews of THIS head.
     latest: dict[str, str] = {}
     for review in sorted(for_head, key=lambda r: str(r.get("submitted_at", ""))):
@@ -113,7 +155,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"merge_ready: {problem}", file=sys.stderr)
     if problems:
         return 1
-    print(f"merge_ready: #{arguments.number} is reviewed at its current head and clear to merge")
+    # Deliberately does not claim the head was reviewed — the settle-time path
+    # merges on the PREVIOUS review, and the NOTE above says so. A success line
+    # that overstates which check passed is the exact confusion this tool
+    # exists to remove.
+    print(f"merge_ready: #{arguments.number} clear to merge")
     return 0
 
 
