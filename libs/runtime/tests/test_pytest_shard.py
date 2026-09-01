@@ -15,6 +15,7 @@ Two properties, proven here so the workflow can be trusted:
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -133,36 +134,39 @@ def test_the_cli_prints_one_existing_path_per_line() -> None:
 
 
 def test_the_shards_carry_equal_measured_work() -> None:
-    """Balanced by the quantity that was actually measured, in seconds.
+    """Balanced in the unit that was actually measured: seconds from the harvest.
 
-    Three weights have now been tried against reality. File position gave
-    57/107/137 s. Test count gave 74/155/84 s while the counts were
-    177/177/176 — because a Dagster materialisation test costs 9 s and a
-    pure-function test costs a millisecond, and two files carry 42% of the
-    whole suite's time. The guard that asserted equal COUNTS was green through
-    all of that: it measured a proxy while claiming the property.
+    Deliberately NOT computed through `pytest_shard.weight_of`. The first
+    version did, reasoning that "it cannot drift from what the packer
+    optimises, because it is the same number" — which is exactly why it could
+    not detect the packer optimising the WRONG number. Degrading weight_of back
+    to a test count degraded both sides together and the assertion still
+    passed: an INERT verdict from redprove, and the fourth instance that day of
+    a guard measuring a stand-in while claiming the property.
 
-    So this asserts the packing weight itself, which is measured seconds when
-    the harvest has them. It cannot drift from what the packer optimises,
-    because it is the same number.
+    Reading the harvest directly means the packer and the check disagree the
+    moment the packer stops using measured time.
+
+    Three weights have been tried against reality: file position gave
+    57/107/137 s, test count gave 74/155/84 s at counts 177/177/176, and
+    measured seconds give 70/70/70. Two files carry 42% of the suite's 210 s,
+    which is why nothing derivable from the source could ever have predicted it.
     """
+    measured = json.loads((REPO_ROOT / "tools" / "pytest_shard_weights.json").read_text(encoding="utf-8"))[
+        "seconds_by_file"
+    ]
     files = pytest_shard.collect(SHARDED_ROOT)
-    repo_root = REPO_ROOT
-    weights = pytest_shard.load_weights(repo_root)
-    measured_tests = sum(pytest_shard.test_functions(repo_root / key) for key in weights if (repo_root / key).exists())
-    rate = (sum(weights.values()) / measured_tests) if measured_tests else 1.0
     loads = [
-        sum(pytest_shard.weight_of(path, weights, repo_root, rate) for path in pytest_shard.shard(files, index, 3))
+        sum(measured.get(str(path.relative_to(REPO_ROOT)), 0.0) for path in pytest_shard.shard(files, index, 3))
         for index in range(3)
     ]
     assert min(loads) > 0
-    # The bound is set by the heaviest single FILE, which cannot be split: with
-    # one 42 s file in a ~200 s suite, perfect thirds are unreachable. 1.6 is
-    # loose enough to stay true as files move and tight enough that a return to
-    # position or count packing (measured at 2.1x and 2.4x) fails.
-    assert max(loads) / min(loads) <= 1.6, (
-        f"the three shards carry {[round(x) for x in loads]} seconds of measured work — the "
-        f"slowest lane sets the CI wall, and this spread means the packing regressed to a proxy"
+    # The floor is the heaviest single FILE, which cannot be split: 42 s inside
+    # a 210 s suite. 1.4 is loose enough to survive files moving and tight
+    # enough that position packing (2.4x) or count packing (2.1x) fails.
+    assert max(loads) / min(loads) <= 1.4, (
+        f"the three shards carry {[round(x) for x in loads]} measured seconds — the slowest lane "
+        f"sets the CI wall, and this spread means the packing stopped using measured time"
     )
 
 
