@@ -75,6 +75,50 @@ def test_functions(path: Path) -> int:
     return count
 
 
+def load_weights(root: Path) -> dict[str, float]:
+    """Measured seconds per file, if a harvest exists beside this tool.
+
+    Two proxies have already been refuted by measurement: file position gave
+    57/107/137 s across three lanes, and test count gave 74/155/84 s while the
+    counts were 177/177/176 — a Dagster materialisation test costs 9 s and a
+    pure-function test costs a millisecond. Measured time is the only weight
+    that has not lied, so it is used when present.
+
+    Missing file -> empty mapping, and `weight_of` falls back to the test
+    count. A missing harvest must not be an error: the tool has to work in a
+    fresh clone, and a shard scheme that refuses to run is worse than one that
+    balances imprecisely.
+    """
+    path = Path(__file__).with_name("pytest_shard_weights.json")
+    if not path.exists():
+        return {}
+    import json
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    measured = raw.get("seconds_by_file", {})
+    if not isinstance(measured, dict):
+        raise ValueError(f"{path} has no seconds_by_file mapping")
+    return {str(key): float(value) for key, value in measured.items()}
+
+
+def weight_of(path: Path, weights: dict[str, float], repo_root: Path, rate: float) -> float:
+    """The packing weight for one file, in SECONDS either way.
+
+    Measured seconds when the harvest has them. Otherwise the file is new since
+    the harvest, and its test count is converted at `rate` — the measured
+    average seconds per test — rather than used raw. Mixing the two units is
+    not a rounding error: a 43-test file would outweigh a genuinely 41.8 s file
+    and the packing would be sorting by nothing meaningful.
+
+    Never zero for an unknown file: zero-weighting piles every newly added test
+    into one lane, which is the imbalance this whole mechanism replaced.
+    """
+    key = str(path.relative_to(repo_root)) if path.is_absolute() else str(path)
+    if key in weights:
+        return weights[key]
+    return float(test_functions(path)) * rate
+
+
 def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
     """The files belonging to shard ``index`` (0-based) of ``total``.
 
@@ -99,12 +143,20 @@ def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
     if not 0 <= index < total:
         raise ValueError(f"shard index {index} is out of range for {total} shards")
 
+    repo_root = Path(__file__).resolve().parent.parent
+    weights = load_weights(repo_root)
+    # Seconds per test, from the harvest itself, so an unmeasured file is
+    # estimated in the same unit as a measured one.
+    measured_tests = sum(test_functions(repo_root / key) for key in weights if (repo_root / key).exists())
+    rate = (sum(weights.values()) / measured_tests) if measured_tests else 1.0
+    weight = {path: weight_of(path, weights, repo_root, rate) for path in files}
+
     bins: list[list[Path]] = [[] for _ in range(total)]
-    load = [0] * total
-    for path in sorted(files, key=lambda p: (-test_functions(p), str(p))):
+    load = [0.0] * total
+    for path in sorted(files, key=lambda p: (-weight[p], str(p))):
         lightest = load.index(min(load))
         bins[lightest].append(path)
-        load[lightest] += test_functions(path)
+        load[lightest] += weight[path]
     return sorted(bins[index])
 
 
