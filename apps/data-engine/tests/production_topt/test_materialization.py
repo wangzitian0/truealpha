@@ -486,7 +486,16 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert sum(item.availability is ToptCoreAvailability.AVAILABLE for item in results) == 20
     assert {item.gppe for item in results if item.gppe is not None} == {Decimal("2000000"), Decimal("700000")}
     alphabet = next(item for item in results if item.issuer_id == "issuer:lei:5493006MHB84DD0ZWV18")
-    assert alphabet.current_ps == Decimal("8")
+    # #705: the previous pin was 8 — the dual-listed issuer summed price×shares
+    # per listing while every listing carries the COMPANY-total dei share count,
+    # so Alphabet valued the company twice. Identical share counts value once at
+    # the execution listing's price: 40 × 10M / 100M = 4, same as every
+    # single-class issuer built from the same fixture numbers.
+    assert alphabet.current_ps == Decimal("4")
+    single_class = next(
+        item for item in results if item.issuer_id != alphabet.issuer_id and item.current_ps is not None
+    )
+    assert alphabet.current_ps == single_class.current_ps, "dual listing must not change the company's P/S"
     financial = next(item for item in results if item.issuer_id == "issuer:lei:8I5DZWZKVSZI1NUHU748")
     # #394: the financial issuer now takes the uniform capital-adjusted path and flows
     # through the tier / P-S valuation like every other issuer -- no not-comparable

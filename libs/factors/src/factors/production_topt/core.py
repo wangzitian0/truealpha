@@ -812,14 +812,34 @@ def compute_topt_core(
     assert gppe_result.gppe is not None and gppe_result.capital_adjusted_gross_profit is not None
     assert snapshot.revenue is not None and snapshot.revenue.value is not None
     with localcontext(_DECIMAL_CONTEXT):
-        market_cap = sum(
-            (
-                component.market_price.value * component.shares_outstanding.value
+        # Every listing's financial payload carries dei:EntityCommonStockShares-
+        # Outstanding, which is the COMPANY total — identical on every class.
+        # Summing price×shares per listing therefore counts a dual-listed issuer
+        # once per class: Alphabet materialized at exactly 2× the P/S its own
+        # captured inputs compute (#705). Identical share counts across several
+        # listings are issuer-total by construction — value the company ONCE at
+        # the execution listing's price (class prices differ by basis points;
+        # per-class share counts are #63's instrument tranche, and when they
+        # arrive they will differ and take the summing branch again).
+        share_counts = {component.shares_outstanding.value for component in snapshot.market_value_components}
+        if len(snapshot.market_value_components) > 1 and len(share_counts) == 1:
+            execution = next(
+                component
                 for component in snapshot.market_value_components
-                if component.market_price.value is not None and component.shares_outstanding.value is not None
-            ),
-            start=Decimal("0"),
-        )
+                if component.listing_id == snapshot.listing_id
+            )
+            # The reasons gate above already refused any None price/share.
+            assert execution.market_price.value is not None and execution.shares_outstanding.value is not None
+            market_cap = execution.market_price.value * execution.shares_outstanding.value
+        else:
+            market_cap = sum(
+                (
+                    component.market_price.value * component.shares_outstanding.value
+                    for component in snapshot.market_value_components
+                    if component.market_price.value is not None and component.shares_outstanding.value is not None
+                ),
+                start=Decimal("0"),
+            )
         current_ps = market_cap / snapshot.revenue.value
         band = _tier_band(gppe_result.gppe, tier_definition)
         midpoint = (band.target_ps_lower + band.target_ps_upper) / Decimal("2")

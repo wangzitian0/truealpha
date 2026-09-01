@@ -88,6 +88,48 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
         elif not (_AAPL_GPPE_BAND[0] <= gppe <= _AAPL_GPPE_BAND[1]):
             bad.append(f"AAPL GPPE {gppe} outside {_AAPL_GPPE_BAND}")
 
+    # #705: a multi-listing issuer's P/S must equal the recomputation from any
+    # single listing's own captured payloads — every listing carries the
+    # company-total dei share count, so the old per-listing summation valued
+    # Alphabet twice and no plausibility band noticed. 1% tolerance covers
+    # numeric context differences, never a doubling.
+    alphabet = connection.execute(
+        """
+        with payload as (
+            select observation.semantic_type, payload.normalized_payload as body
+            from raw.capture_obligations obligation
+            join raw.capture_obligation_results done on done.capture_obligation_id = obligation.obligation_id
+            join raw.capture_attempt_results attempt on attempt.attempt_id = done.final_attempt_id
+            join staging.capture_normalized_observations observation
+              on observation.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
+             and observation.subject_id = obligation.subject_id
+             and observation.semantic_type = regexp_replace(obligation.capture_requirement_id, ':v1$', '')
+            join staging.capture_observation_payloads payload on payload.observation_id = observation.observation_id
+            where obligation.run_id = %s and obligation.subject_id = 'listing:xnas:googl'
+        )
+        select result.current_ps,
+               (select (body->>'revenue')::numeric from payload where semantic_type = 'financial-fact' limit 1),
+               (select (body->>'shares_outstanding')::numeric from payload where semantic_type = 'financial-fact' limit 1),
+               (select (body->>'close')::numeric from payload where semantic_type = 'market-price' limit 1)
+        from mart.topt_core_results result
+        where result.run_id = %s and result.issuer_id = 'issuer:cik:0001652044'
+        """,
+        (run_id, run_id),
+    ).fetchone()
+    if alphabet is None:
+        bad.append("Alphabet row missing from mart")
+    else:
+        current_ps, revenue, shares, close = alphabet
+        if None in (current_ps, revenue, shares, close) or not revenue:
+            bad.append(f"Alphabet recompute inputs incomplete: ps={current_ps} rev={revenue} sh={shares} px={close}")
+        else:
+            recomputed = close * shares / revenue
+            if recomputed == 0 or abs(current_ps - recomputed) / recomputed > Decimal("0.01"):
+                bad.append(
+                    f"Alphabet current_ps {current_ps} != recomputed {recomputed} "
+                    "from its own payloads (dual-class double count, #705)"
+                )
+
     report = connection.execute(
         "select payload->'factor_availability'->'gross_profit_per_employee'->>'universe_subjects'"
         " from mart.datahub_quality_report where run_id = %s"
