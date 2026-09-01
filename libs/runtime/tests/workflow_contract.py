@@ -76,18 +76,32 @@ def step(workflow: str, name: str) -> dict[str, Any]:
     return found[0]
 
 
-def step_text(workflow: str, name: str) -> str:
-    """A step's `run` body plus its `env` and `if`, as one searchable string.
+def spec_text(spec: dict[str, Any]) -> str:
+    """One parsed step rendered as a searchable string.
 
-    The unit an assertion is usually about: "this step checks X", "this step is
-    gated on Y". Built from the parsed step, so it cannot pick up a neighbour's
-    text the way a file split can.
+    Separate from `step_text` because a step name is only unique within a
+    workflow until two jobs legitimately share one — ci-web's split gave both
+    halves an `Apply DB migrations and roles`, and a scan that must cover every
+    step cannot go through a by-name lookup that (correctly) refuses a
+    duplicate.
     """
-    spec = step(workflow, name)
-    parts = [str(spec.get("run", "")), str(spec.get("if", ""))]
+    parts = [str(spec.get("run", "")), str(spec.get("if", "")), str(spec.get("name", ""))]
     parts += [f"{key}={value}" for key, value in (spec.get("env") or {}).items()]
     parts += [str(spec.get("uses", "")), str(spec.get("with", ""))]
     return "\n".join(part for part in parts if part)
+
+
+def step_text(workflow: str, name: str) -> str:
+    """One named step, rendered by `spec_text` — its `run`, `if`, `name`, `env`,
+    `uses` and `with`, as one searchable string.
+
+    The unit an assertion is usually about: "this step checks X", "this step is
+    gated on Y". Built from the parsed step, so it cannot pick up a neighbour's
+    text the way a file split can. Note the `name` is part of the rendering: an
+    assertion looking for a fragment that also appears in a step's title will
+    match it (review).
+    """
+    return spec_text(step(workflow, name))
 
 
 def triggers(workflow: str) -> dict[str, Any]:

@@ -246,6 +246,16 @@ jobs:
     if: github.ref_type != 'tag' && needs.changes.outputs.web == 'true'
     needs: changes
     uses: ./.github/workflows/ci-web.yml
+    # ci-web caches the playwright chromium download (19 s/run), and a called
+    # workflow cannot exceed its caller's grant. Without `actions: write` the
+    # cache RESTORES and never SAVES — it reports success while doing nothing,
+    # which is the failure mode test_anything_that_caches_can_actually_save
+    # exists to catch, and which stayed invisible on the uv caches until #645
+    # changed a lockfile.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
 
   images_check:
     if: >-
