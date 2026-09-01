@@ -31,6 +31,34 @@ Read the full diff once per category. Every entry names the PR where it bit.
   the pattern in `\Q…\E` (quotemeta — perl-only, sed has no equivalent) and
   match the shortest distinctive literal instead of the whole line.
 
+## 1b. Merging before the review exists (1, and it shipped)
+
+`gh pr merge` when `mergeStateStatus == CLEAN` and unresolved threads == 0 is
+NOT evidence of a clean review — AGENTS.md rule 4 says so explicitly, and #714
+proved it: merged at 04:31:32, Copilot's review arrived at 04:32:11. Thirty-nine
+seconds. One of the three findings in it was that
+`working-directory: apps/app-web` made a bare `tools/warm_surface.sh` resolve
+to `apps/app-web/tools/...`; `Deploy staging v0.0.38` died with exit 127 and
+another lane spent a PR fixing it (#717).
+
+Before merging, require that a review has been SUBMITTED for the current head,
+not merely that no thread is open. Zero threads on a PR nobody has reviewed
+looks identical to zero threads on a clean one. Mechanised as
+`python tools/merge_ready.py <pr>` — it exits non-zero until a review whose
+`commit_id` IS the current head exists. Run it INSTEAD of eyeballing
+`mergeStateStatus`; that is the check both incidents passed.
+
+### What was measured, and what was dropped
+
+Round count is the dominant cost, but the pre-push adversarial agent review
+tried on 2026-09-01 was not the answer and has been dropped. Measured over
+four PRs: it cost ~13 min each (38 min of a 145-minute session, 26%) and
+prevented **zero** review rounds — Copilot found 3, 3 and 2 more findings
+after it on #711, #714 and #716, while #718, which skipped it, drew 3. A
+review round costs 3–6 min measured (#711: 3.1 and 3.4). Paying 13 to avoid 5,
+at a hit rate of zero, is a loss twice over; and on #714 its "nothing else
+worth blocking" is what made merging 39 seconds early feel safe.
+
 ## 2. Failure that names its contract (3)
 - Bare `next(...)` → StopIteration instead of "the changes job no longer
   carries a filters step" (#683).

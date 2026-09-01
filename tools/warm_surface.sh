@@ -44,6 +44,14 @@ for path in "$@"; do
       break
     fi
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$ATTEMPT_TIMEOUT" "$BASE$path" 2>/dev/null) || code=000
+    # Recomputed AFTER the request: the attempt can consume most of the budget,
+    # and reporting the figure from before it tells whoever is reading a slow
+    # release the wrong number in exactly the case they are reading it (review
+    # on #714, which arrived after the merge). Clamped at 0 because an attempt
+    # can overrun what was left — "-9s of budget left" is not a thing an
+    # operator can act on (review on #722).
+    remaining=$((DEADLINE - SECONDS))
+    [ "$remaining" -lt 0 ] && remaining=0
     case "$code" in
       2*|3*)
         echo "warm: $path answered $code (${remaining}s of budget left)"

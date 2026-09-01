@@ -10,7 +10,8 @@ This reads the `--durations=0` output of a completed ci-required run, sums
 every phase per FILE (setup and teardown belong to the file's cost as much as
 call does), and writes `tools/pytest_shard_weights.json`.
 
-The harvest records the run it came from and the date. That is not decoration:
+The harvest records the run it came from — which dates it, since a run id is
+resolvable to its timestamp. That is not decoration:
 weights go stale silently — the lanes stay green and merely drift back out of
 balance — so `libs/runtime/tests/test_pytest_shard.py` asserts the harvest
 still covers most of the tree, which is the observable symptom of a harvest

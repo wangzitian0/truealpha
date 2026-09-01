@@ -17,6 +17,7 @@ passed for a reason unrelated to the property.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import threading
 import time
@@ -30,12 +31,17 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 WARM = REPO_ROOT / "tools" / "warm_surface.sh"
 
 
-def build_handler(status: int) -> type[BaseHTTPRequestHandler]:
+def build_handler(status: int, stall_seconds: float = 0.0) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_: object) -> None:
             return
 
         def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's contract
+            # A stall, not a refusal: a refused connection returns instantly and
+            # consumes none of the budget, so it cannot reproduce an attempt
+            # that OVERRUNS what was left — which is the case under test.
+            if stall_seconds:
+                time.sleep(stall_seconds)
             self.send_response(status)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -47,8 +53,8 @@ def build_handler(status: int) -> type[BaseHTTPRequestHandler]:
 def serve() -> Iterator[object]:
     servers: list[HTTPServer] = []
 
-    def start(status: int) -> str:
-        server = HTTPServer(("127.0.0.1", 0), build_handler(status))
+    def start(status: int, stall_seconds: float = 0.0) -> str:
+        server = HTTPServer(("127.0.0.1", 0), build_handler(status, stall_seconds))
         servers.append(server)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return f"http://127.0.0.1:{server.server_port}"
@@ -129,3 +135,19 @@ def test_misuse_does_not_fail_the_caller() -> None:
     result = subprocess.run(["bash", str(WARM)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, "even a usage error must not fail the release step"
     assert "usage" in result.stderr
+
+
+def test_the_budget_never_reports_a_negative_remainder(serve) -> None:  # type: ignore[no-untyped-def]
+    """An attempt can overrun what was left — a 1 s budget against a server
+    that stalls past the 2 s attempt timeout — and "-1s of budget left" is not
+    something an operator can act on (review on #722).
+
+    The server STALLS rather than refusing: a refused connection returns
+    instantly and consumes none of the budget, so it cannot produce the
+    overrun this is about. The first version of this test used a closed port
+    and redprove called it INERT.
+    """
+    result = run_warm(serve(503, stall_seconds=3.0), "/", budget="1")
+    assert result.returncode == 0, result.stderr
+    negatives = re.findall(r"(-\d+)s of budget left", result.stdout)
+    assert not negatives, f"reported {negatives} seconds remaining: {result.stdout!r}"

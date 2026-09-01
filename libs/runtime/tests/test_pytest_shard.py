@@ -156,10 +156,23 @@ def test_the_shards_carry_equal_measured_work() -> None:
         "seconds_by_file"
     ]
     files = pytest_shard.collect(SHARDED_ROOT)
-    loads = [
-        sum(measured.get(str(path.relative_to(REPO_ROOT)), 0.0) for path in pytest_shard.shard(files, index, 3))
-        for index in range(3)
-    ]
+    # A file missing from the harvest must NOT count as 0 s (review on #718,
+    # which arrived 35 s before I merged it). Zeroing does not reliably flatter
+    # or exaggerate — measured on a truncated harvest it did both, 4.06x under
+    # zeroing against 2.64x under estimation — and that is the actual defect:
+    # the verdict then depends on WHICH files happen to be missing rather than
+    # on how the work is distributed. It is
+    # estimated at the harvest's own seconds-per-test — computed here from the
+    # harvest, never through pytest_shard.weight_of, so the check still
+    # disagrees with a packer that stopped using measured time.
+    measured_tests = sum(pytest_shard.test_functions(REPO_ROOT / key) for key in measured if (REPO_ROOT / key).exists())
+    rate = (sum(measured.values()) / measured_tests) if measured_tests else 1.0
+
+    def seconds(path: Path) -> float:
+        key = str(path.relative_to(REPO_ROOT))
+        return measured[key] if key in measured else pytest_shard.test_functions(path) * rate
+
+    loads = [sum(seconds(path) for path in pytest_shard.shard(files, index, 3)) for index in range(3)]
     assert min(loads) > 0
     # The floor is the heaviest single FILE, which cannot be split: 42 s inside
     # a 210 s suite. 1.4 is loose enough to survive files moving and tight
@@ -176,7 +189,7 @@ def test_the_weights_still_describe_the_tree_they_weigh() -> None:
     back to a count-based estimate as the unmeasured share grows. The
     observable is coverage, so that is what is asserted.
     """
-    weights = pytest_shard.load_weights(REPO_ROOT)
+    weights = pytest_shard.load_weights()
     if not weights:
         pytest.skip("no harvest committed; the tool falls back to test counts by design")
     files = pytest_shard.collect(SHARDED_ROOT)

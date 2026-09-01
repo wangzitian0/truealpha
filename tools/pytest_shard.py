@@ -75,7 +75,7 @@ def test_functions(path: Path) -> int:
     return count
 
 
-def load_weights(root: Path) -> dict[str, float]:
+def load_weights() -> dict[str, float]:
     """Measured seconds per file, if a harvest exists beside this tool.
 
     Two proxies have already been refuted by measurement: file position gave
@@ -89,6 +89,9 @@ def load_weights(root: Path) -> dict[str, float]:
     fresh clone, and a shard scheme that refuses to run is worse than one that
     balances imprecisely.
     """
+    # Beside this file, deliberately: the harvest travels with the tool, and a
+    # caller-supplied root would let two callers disagree about which weights
+    # apply. The parameter this used to take was never read (review).
     path = Path(__file__).with_name("pytest_shard_weights.json")
     if not path.exists():
         return {}
@@ -144,7 +147,7 @@ def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
         raise ValueError(f"shard index {index} is out of range for {total} shards")
 
     repo_root = Path(__file__).resolve().parent.parent
-    weights = load_weights(repo_root)
+    weights = load_weights()
     # Seconds per test, from the harvest itself, so an unmeasured file is
     # estimated in the same unit as a measured one.
     measured_tests = sum(test_functions(repo_root / key) for key in weights if (repo_root / key).exists())
