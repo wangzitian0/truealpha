@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import sys
 from decimal import Decimal
+from hashlib import sha256
 
 import psycopg
 
@@ -30,6 +31,13 @@ _CANARY_UNIVERSE_LIKE = "universe:canary-us-%"
 # of magnitude off in either direction means a parse/unit/branch defect, which is
 # exactly what #528 shipped and no proxy gate caught.
 _AAPL_GPPE_BAND = (Decimal("300000"), Decimal("4000000"))
+
+
+#: The infra2-sdk release this repository pins in `pyproject.toml`. Asserted against what
+#: the deployed image actually loaded, because a pin only binds the resolver -- an image
+#: built from a stale lock, or one where the wheel failed to install, satisfies the pin on
+#: paper and loads something else.
+PINNED_INFRA2_SDK = "1.2.0"
 
 
 def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
@@ -98,6 +106,76 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
         bad.append("quality report missing factor_availability (#644)")
     elif int(report[0]) != 6:
         bad.append(f"factor_availability universe_subjects {report[0]} != 6")
+
+    bad.extend(_infra_failures(connection, run_id))
+    return bad
+
+
+def _infra_failures(connection: psycopg.Connection, run_id: str) -> list[str]:
+    """Infra oracles: dereference real bytes, and pin the SDK the image actually loaded.
+
+    Every other oracle here reads Postgres, so Postgres proves itself by their passing.
+    Object storage and the infra2 SDK do not: a run can complete, write correctly-shaped
+    `s3://` URIs, and leave nothing behind them. #531 is exactly that -- production injects
+    no `S3_*` variables, the client fell back to a default pointing at its own loopback,
+    and three runs died with what looked like a network fault.
+
+    A TCP or HTTP probe cannot catch this class. Only DEREFERENCING an object can: it
+    exercises the endpoint, the credentials, the bucket and the write in one assertion, and
+    hashing what comes back proves the bytes are the ones the database claims.
+    """
+    bad: list[str] = []
+
+    row = connection.execute(
+        """
+        select f.object_uri, f.payload_sha256, f.byte_length, f.content_type
+        from staging.capture_normalized_observations o
+        join raw.capture_obligations ob on ob.obligation_id = o.capture_obligation_id
+        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        join raw.fetches f on f.id = v.raw_fetch_id
+        where ob.run_id = %s and f.object_uri is not null
+        order by f.id desc limit 1
+        """,
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        bad.append("no fetch with an object_uri in this run — nothing to dereference (#531)")
+    else:
+        object_uri, expected_sha, expected_len, content_type = row
+        try:
+            from truealpha_contracts import RawObjectRef
+            from truealpha_runtime.storage import S3RawObjectStore
+
+            bucket, _, key = object_uri.removeprefix("s3://").partition("/")
+            payload = S3RawObjectStore().get(
+                RawObjectRef(
+                    bucket=bucket,
+                    key=key,
+                    sha256=expected_sha,
+                    byte_length=int(expected_len or 0),
+                    content_type=content_type or "application/octet-stream",
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - any failure here is the finding
+            bad.append(f"object storage unreachable or misconfigured: {type(error).__name__} ({object_uri})")
+        else:
+            actual = sha256(payload).hexdigest()
+            if actual != expected_sha:
+                bad.append(f"object bytes do not match the recorded checksum for {object_uri}")
+            elif expected_len is not None and len(payload) != int(expected_len):
+                bad.append(f"object byte_length {len(payload)} != recorded {expected_len} for {object_uri}")
+
+    # The SDK is a released contract, not a vendored copy: the image must have loaded the
+    # version this repository pins, or every shared dispatch/health primitive is a guess.
+    try:
+        from importlib.metadata import version as _installed
+
+        loaded = _installed("infra2-sdk")
+    except Exception as error:  # noqa: BLE001
+        bad.append(f"infra2-sdk is not importable in the deployed image: {type(error).__name__}")
+    else:
+        if loaded != PINNED_INFRA2_SDK:
+            bad.append(f"infra2-sdk {loaded} loaded, repository pins {PINNED_INFRA2_SDK}")
 
     return bad
 
