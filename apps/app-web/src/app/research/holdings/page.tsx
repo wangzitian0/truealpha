@@ -26,7 +26,9 @@ export default async function HoldingsPage() {
         <p className="mt-2 text-sm text-gray-400">
           The fund&apos;s own filed N-PORT weights (newest vintage, captured weekly from SEC EDGAR), joined to the
           governed TOPT valuation run per listing — a join over two materialized planes, computed nowhere. Coverage is
-          stated, never assumed: unresolved and unvalued weight stays visible.
+          stated, never assumed: unresolved and unvalued weight stays visible. Tier here is the datahub&apos;s
+          GPPE-band tier (mechanical thresholds over gross profit per employee); the Rankings page&apos;s tier is the
+          strategy&apos;s curated theme — same word, two vocabularies, deliberately not reconciled.
         </p>
       </div>
 
@@ -55,7 +57,7 @@ export default async function HoldingsPage() {
                     <th className="px-3 py-2 text-right">P/S</th>
                     <th className="px-3 py-2 text-right">Target mid</th>
                     <th className="px-3 py-2 text-right">Gap</th>
-                    <th className="px-3 py-2">Tier</th>
+                    <th className="px-3 py-2">GPPE tier</th>
                   </tr>
                 </thead>
                 <tbody>

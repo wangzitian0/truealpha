@@ -202,7 +202,11 @@ def test_identity_cell_freshness_and_confidence_are_not_dropped() -> None:
     assert available.confidence == Decimal("0.2")
 
 
-def test_current_ps_aggregates_all_share_classes_once_per_issuer() -> None:
+def test_current_ps_values_company_total_shares_once_per_issuer() -> None:
+    # #705: every listing's dei share count is the COMPANY total, so identical
+    # counts across classes are one company, not one per class — the old pin
+    # here was 8, encoding Alphabet valued twice. The execution listing's price
+    # values it once; the second class's differing price must not leak in.
     observation_ids = tuple(sorted((*OBSERVATION_IDS, *SECOND_LISTING_IDS)))
     components = (
         _component(),
@@ -211,6 +215,7 @@ def test_current_ps_aggregates_all_share_classes_once_per_issuer() -> None:
             listing_id="listing:example-b",
             financial_observation_id=SECOND_LISTING_IDS[0],
             market_observation_id=SECOND_LISTING_IDS[1],
+            price="50",
         ),
     )
     result = _compute(
@@ -221,8 +226,34 @@ def test_current_ps_aggregates_all_share_classes_once_per_issuer() -> None:
         )
     )
 
-    assert result.current_ps == Decimal("8")
+    assert result.current_ps == Decimal("4"), "40 x 10M / 100M — the company once, at the execution listing's price"
     assert result.input_observation_ids == observation_ids
+
+
+def test_current_ps_sums_distinct_per_class_share_counts() -> None:
+    # The #63 instrument tranche's world: per-CLASS counts differ, and the cap
+    # is genuinely the sum of class caps. 40x6M + 50x4M = 440M / 100M = 4.4.
+    observation_ids = tuple(sorted((*OBSERVATION_IDS, *SECOND_LISTING_IDS)))
+    components = (
+        _component(shares="6000000"),
+        _component(
+            instrument_id="instrument:example-b",
+            listing_id="listing:example-b",
+            financial_observation_id=SECOND_LISTING_IDS[0],
+            market_observation_id=SECOND_LISTING_IDS[1],
+            price="50",
+            shares="4000000",
+        ),
+    )
+    result = _compute(
+        _snapshot(
+            observation_ids=observation_ids,
+            cell_inputs=_cells(observation_ids),
+            market_value_components=components,
+        )
+    )
+
+    assert result.current_ps == Decimal("4.4")
 
 
 def test_financial_issuer_takes_the_uniform_capital_adjusted_path() -> None:

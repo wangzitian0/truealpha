@@ -27,9 +27,20 @@ permissions:
   contents: read
   pull-requests: read
 
+# The group key carries the ref AND the event, so a tag PUSH is alone in its own
+# group — which is what keeps `cancel-in-progress: true` safe here. The event is
+# load-bearing, not decoration: without it a manual workflow_dispatch on the
+# same tag ref shares the group and cancels the release run mid-publish
+# (review). Two dispatches still cancel each other, which is what you want. Main pushes DO now collapse: measured over the last 14
+# merges, 2 landed inside the ~6 min a main run takes, and each of those bursts
+# put ~16 extra jobs in the queue that every open PR was waiting behind. The
+# superseded run's verdict is not lost, only re-attributed: the newer run
+# covers the older SHA's code too, and cut_release refuses to tag until main
+# HEAD itself is green, so the evidence D2's tag_verified needs is always the
+# run that survived.
 concurrency:
-  group: ci-required-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-required-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 jobs:
   changes:
