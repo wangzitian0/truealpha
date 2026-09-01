@@ -692,3 +692,29 @@ def test_a_failing_shard_lane_fails_instead_of_running_the_whole_suite() -> None
     assert lane["strategy"]["fail-fast"] is False, (
         "fail-fast is on: one red shard would cancel the other two and hide their failures"
     )
+
+
+def test_a_tag_run_can_never_be_cancelled_by_a_later_merge() -> None:
+    """Post-merge batching (#673) turned `cancel-in-progress` on for every
+    event, so main pushes collapse instead of each burst queueing ~16 extra
+    jobs in front of every open PR.
+
+    That is only safe because the group key carries `github.ref`, which puts
+    each tag alone in its own group. Flatten the key — a constant, or
+    `github.workflow` — and the tag run becomes cancellable by the next merge:
+    no images published for that version, and a release that fails after the
+    tag has already been pushed, which is the one step the protocol calls a
+    lock. So the two settings are asserted together, as the single property
+    they actually form.
+    """
+    concurrency = yaml.safe_load(source(REQUIRED))["concurrency"]
+    group = str(concurrency["group"])
+    assert concurrency["cancel-in-progress"] is True, (
+        "main pushes no longer collapse — every burst of merges runs a full duplicate suite "
+        "while open PRs wait behind it"
+    )
+    assert "github.ref" in group, (
+        f"the concurrency key is {group!r}: with cancel-in-progress on and no ref in the key, a "
+        f"merge landing during a tag run CANCELS it — the release publishes no images and fails "
+        f"after the tag push, which the protocol treats as the lock"
+    )
