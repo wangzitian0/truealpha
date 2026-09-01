@@ -76,6 +76,21 @@ def step(workflow: str, name: str) -> dict[str, Any]:
     return found[0]
 
 
+def spec_text(spec: dict[str, Any]) -> str:
+    """One parsed step rendered as a searchable string.
+
+    Separate from `step_text` because a step name is only unique within a
+    workflow until two jobs legitimately share one — ci-web's split gave both
+    halves an `Apply DB migrations and roles`, and a scan that must cover every
+    step cannot go through a by-name lookup that (correctly) refuses a
+    duplicate.
+    """
+    parts = [str(spec.get("run", "")), str(spec.get("if", "")), str(spec.get("name", ""))]
+    parts += [f"{key}={value}" for key, value in (spec.get("env") or {}).items()]
+    parts += [str(spec.get("uses", "")), str(spec.get("with", ""))]
+    return "\n".join(part for part in parts if part)
+
+
 def step_text(workflow: str, name: str) -> str:
     """A step's `run` body plus its `env` and `if`, as one searchable string.
 
@@ -83,11 +98,7 @@ def step_text(workflow: str, name: str) -> str:
     gated on Y". Built from the parsed step, so it cannot pick up a neighbour's
     text the way a file split can.
     """
-    spec = step(workflow, name)
-    parts = [str(spec.get("run", "")), str(spec.get("if", ""))]
-    parts += [f"{key}={value}" for key, value in (spec.get("env") or {}).items()]
-    parts += [str(spec.get("uses", "")), str(spec.get("with", ""))]
-    return "\n".join(part for part in parts if part)
+    return spec_text(step(workflow, name))
 
 
 def triggers(workflow: str) -> dict[str, Any]:

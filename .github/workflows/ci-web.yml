@@ -3,10 +3,30 @@ name: ci-web
 on:
   workflow_call:
 
+# A4 (#673): two jobs, not one. The single `check` job was 168 s and a
+# typecheck error surfaced only after build + chromium + two browser walks had
+# also run. Splitting puts every cheap verdict first: a type error or a failing
+# DB test now reports at ~70 s instead of ~170 s, which is the fast-failure
+# half of the speed work. The green-path wall barely moves — on the current
+# profile data-engine (161 s) and the liveness soak (158 s) are co-equal poles
+# — and that is stated here rather than claimed away.
+#
+# Both jobs pay their own Postgres and `bun install`; the alternative is an
+# artifact hand-off costing about what it saves.
 jobs:
+  # Everything that can fail without a browser, so its verdict is the one a red
+  # PR shows soonest.
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    # Narrowed back down. The caller's grant is a ceiling for the WHOLE called
+    # workflow, not for the job that needs it: ci-required's web job now grants
+    # `actions: write` so `browser` can save the chromium cache, and without
+    # this block that token would also be held by a job whose main act is
+    # `bun install` from a lockfile (review). ci-python/qlib/runtime never hit
+    # this because they are single-job.
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: apps/app-web
@@ -77,6 +97,51 @@ jobs:
             echo "::error::a test printed a skip marker; the Postgres service exists so integration tests must RUN in CI" >&2
             exit 1
           fi
+
+  # The browser half: a production build, then the frozen route tree walked
+  # against two data states.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The only job here that needs it: actions/cache cannot SAVE read-only.
+    permissions:
+      contents: read
+      actions: write
+    defaults:
+      run:
+        working-directory: apps/app-web
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: truealpha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Apply DB migrations and roles
+        working-directory: .
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # #580: a second database, migrated identically and left empty, so
+          # the browser suite can walk the absent-state branch of every surface.
+          createdb -h localhost -U postgres truealpha_empty
+          for db in truealpha truealpha_empty; do
+            for f in db/migrations/*.sql db/roles.sql; do
+              echo "== $db $f"
+              psql -h localhost -U postgres -d "$db" -v ON_ERROR_STOP=1 -f "$f"
+            done
+          done
       - run: bun run build
 
       # #494 criterion 1: the frozen route tree, walked in a real browser, on
@@ -85,6 +150,19 @@ jobs:
       # target, so deleting the OPERATE chrome or a claim-ceiling banner merged
       # green. The three properties it asserts are the ones #494 exists to
       # protect; this is where they stop being a July screenshot.
+      # 19 s per run, unchanged between runs unless the playwright pin moves.
+      # The key is the LOCKFILE hash, not a version string parsed out of it: a
+      # parse is one rename away from keying on a constant, and a cache key
+      # that never changes is a cache that serves a stale browser forever.
+      # Requires `actions: write` on the caller's web job — without it this
+      # restores, never saves, and reports success while doing nothing
+      # (test_anything_that_caches_can_actually_save).
+      - name: Restore chromium
+        id: chromium_cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('apps/app-web/bun.lock', 'apps/app-web/bun.lockb', 'apps/app-web/package.json') }}
       - name: Install chromium for the walk-tree suite
         run: bunx playwright install --with-deps chromium
       # The seed is about what the walk COVERS, not about whether it passes —

@@ -43,6 +43,7 @@ job = _contract.job
 source = _contract.source
 step = _contract.step
 step_text = _contract.step_text
+spec_text = _contract.spec_text
 triggers = _contract.triggers
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -52,6 +53,7 @@ FRESHNESS = "deploy-freshness.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
+WEB = "ci-web.yml"
 
 
 # --- the locator itself ------------------------------------------------------
@@ -787,4 +789,108 @@ def test_the_walk_warms_the_pages_it_is_about_to_open() -> None:
     assert '"$TA_BASE_URL"' in walk.split("node e2e", 1)[0], (
         "the warm-up targets something other than the walk's own base URL — two definitions of "
         "where the deployment lives is one too many"
+    )
+
+
+def test_the_split_web_jobs_still_run_every_web_check() -> None:
+    """A4 (#673): ci-web was one 168 s job; it is now `check` (typecheck +
+    DB-backed tests, ~70 s) and `browser` (build + the two-state walk).
+
+    A split is where coverage goes missing — the python split needed a guard
+    for exactly this (#472's coverage-on-paper), and here the risk is sharper
+    because the halves are named for their tools rather than their subjects.
+    So: every check the single job performed must still be performed by
+    someone, and the browser walk must still be the thing that runs LAST in
+    its own job, after the build it depends on.
+    """
+    jobs = yaml.safe_load(source(WEB))["jobs"]
+    assert set(jobs) == {"check", "browser"}, f"ci-web's jobs changed to {sorted(jobs)}"
+
+    # Every field a check can live in, not just `run`: the arming variable sits
+    # in a step's `env`, and the first version of this scan reported it missing
+    # for that reason alone. `step_text` already spans run/if/env/uses/with — a
+    # scan reading fewer fields than a check can occupy both cries wolf and,
+    # worse, can pass on a fragment found in the wrong one.
+    # Every field a check can live in, not just `run`: the arming variable sits
+    # in a step's `env`, and the first version of this scan reported it missing
+    # for that reason alone.
+    everything = "\n".join(spec_text(spec) for job in jobs.values() for spec in job["steps"])
+    for fragment, what in (
+        ("bun run typecheck", "the TypeScript typecheck"),
+        ("tests/*.test.ts", "the DB-backed test loop (#373: 13 suites once ran nowhere)"),
+        ("bun run build", "the production build"),
+        ("walk-tree.mjs", "the frozen route-tree walk (#494)"),
+        ("check_route_manifest.py", "the route-namespace manifest (#463)"),
+        ("truealpha_empty", "the absent-state database (#580)"),
+        ("TRUEALPHA_REQUIRE_RUNTIME", "the arming variable that turns a skip into a failure (#468)"),
+    ):
+        assert fragment in everything, (
+            f"{what} runs in neither ci-web job — the split dropped it, and a dropped check merges green forever"
+        )
+
+    browser = "\n".join(str(spec.get("run", "")) for spec in jobs["browser"]["steps"])
+    assert browser.index("bun run build") < browser.index("walk-tree.mjs"), "the walk runs before the build it walks"
+
+
+def test_the_chromium_cache_can_actually_save() -> None:
+    """The 19 s playwright download is cached, and a cache without `actions:
+    write` restores, misses, and reports success — an optimisation that
+    measures as working and does nothing (#645's shape). The grant lives on the
+    CALLER because a called workflow cannot exceed it.
+    """
+    web_caller = yaml.safe_load(source(REQUIRED))["jobs"]["web"]
+    assert web_caller.get("permissions", {}).get("actions") == "write", (
+        "ci-required's web job does not grant actions: write, so ci-web's chromium cache can "
+        "never save — it will miss on every run and report success"
+    )
+    cache = step(WEB, "Restore chromium")
+    assert "hashFiles(" in str(cache["with"]["key"]), (
+        "the chromium cache key is not derived from the lockfile — a constant key serves a stale "
+        "browser forever, and a parsed version string is one rename from becoming constant"
+    )
+
+
+def test_no_job_holds_a_cache_grant_it_does_not_use() -> None:
+    """The mirror of test_anything_that_caches_can_actually_save, and the half
+    that was missing.
+
+    A caller's `permissions:` is a ceiling for the ENTIRE called workflow, not
+    for the job that needs it. ci-required grants ci-web `actions: write` so the
+    browser job can save the chromium cache — and without a narrowing block the
+    same token is held by a job whose main act is installing packages from a
+    lockfile, which is where a supply-chain compromise would land (review).
+    ci-python/qlib/runtime never exposed this because they are single-job.
+
+    So: in a called workflow whose caller grants `actions: write`, every job
+    that does NOT cache must pin its own permissions without it.
+    """
+    workflows = {
+        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml"))
+    }
+    granted = {
+        str(spec["uses"]).rsplit("/", 1)[-1]
+        for workflow in workflows.values()
+        for spec in (workflow.get("jobs") or {}).values()
+        if isinstance(spec, dict)
+        and str(spec.get("uses", "")).startswith("./.github/workflows/")
+        and (spec.get("permissions") or {}).get("actions") == "write"
+    }
+    assert granted, "no workflow_call grants actions: write any more — this check has lost its subject"
+
+    offenders = []
+    for name in sorted(granted):
+        for job_id, spec in (workflows[name].get("jobs") or {}).items():
+            uses_cache = any(
+                "actions/cache" in str(item.get("uses", "")) or "enable-cache" in str(item.get("with", ""))
+                for item in spec.get("steps") or []
+            )
+            holds_write = (spec.get("permissions") or {}).get("actions") == "write"
+            if not uses_cache and holds_write:
+                offenders.append(f"{name}:{job_id}")
+            if not uses_cache and spec.get("permissions") is None:
+                offenders.append(f"{name}:{job_id} (unpinned, so it inherits the caller's grant)")
+    assert not offenders, (
+        f"these jobs hold a cache-write token they never use: {offenders}. A caller grant is a "
+        f"ceiling for the whole called workflow; narrow it per job."
     )
