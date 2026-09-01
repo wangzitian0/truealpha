@@ -757,3 +757,34 @@ def test_a_tag_run_can_never_be_cancelled_by_a_later_merge() -> None:
         f"manual workflow_dispatch on the same tag, which would share the group and cancel the "
         f"release run mid-publish"
     )
+
+
+def test_the_walk_warms_the_pages_it_is_about_to_open() -> None:
+    """#698: the walk's first navigation raced the container swap — v0.0.34's
+    prod deploy timed out on `networkidle` at /research/rankings and a rerun on
+    the warm container passed with no code change (run 33356222058). The health
+    gate polls llm-service; app-web is a different container.
+
+    This asserts only the wiring — that the walk calls the warm-up first, with
+    its own base URL. Whether the warm-up can fail is a property of
+    `tools/warm_surface.sh`, and it is proven by RUNNING it in
+    test_warm_surface.py. The first version of this test asserted that by
+    slicing the YAML text, and the slice silently selected the whole script,
+    including the walk invocation: PyYAML strips a block scalar's common
+    indentation, so the separator (copied from how the line looks in the file)
+    was never found and `split` returned its input. It passed for a reason
+    unrelated to the property — the #583 shape, one function below the docstring
+    that describes it.
+    """
+    walk = str(step(RELEASE, "Walk the deployed surface")["run"])
+    assert "tools/warm_surface.sh" in walk, (
+        "the walk no longer warms the app-web surface before opening it — the first navigation "
+        "races the container swap again (#698)"
+    )
+    assert walk.index("warm_surface.sh") < walk.index("node e2e/walk-tree.mjs"), (
+        "the warm-up runs after the walk, which is no warm-up at all"
+    )
+    assert '"$TA_BASE_URL"' in walk.split("node e2e", 1)[0], (
+        "the warm-up targets something other than the walk's own base URL — two definitions of "
+        "where the deployment lives is one too many"
+    )
