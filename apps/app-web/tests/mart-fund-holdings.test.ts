@@ -71,6 +71,10 @@ async function seed(client: Client): Promise<void> {
     on conflict (source, identifier_type, identifier_value, transaction_time) do nothing`;
   await client.query(identifier, [ENRICHED_ISSUER, "isin", "TEST00000002"]);
   await client.query(identifier, [ENRICHED_ISSUER, "ticker", "TSTB"]);
+  // Alpha's ISIN gets a PER-ISIN ticker on its minted entity (#706): the view
+  // must prefer it over any issuer-level vintage, so share classes never
+  // collapse onto the issuer's newest ticker.
+  await client.query(identifier, [HOLDING_A, "ticker", "TSTA"]);
 }
 
 const client = await reachable();
@@ -98,8 +102,8 @@ if (client) {
     );
     assert(valuation.rows.length === 2, "valuation view answers the newest vintage only");
     const [alpha, beta] = valuation.rows;
-    assert(alpha.ticker === null && alpha.listing_id === null, "unresolved ISIN carries no guessed listing");
-    assert(beta.ticker === "TSTB" && beta.listing_id === "listing:xnas:tstb", "enriched ISIN resolves to its listing");
+    assert(alpha.ticker === "TSTA" && alpha.listing_id === "listing:xnas:tsta", "the per-ISIN ticker wins (#706)");
+    assert(beta.ticker === "TSTB" && beta.listing_id === "listing:xnas:tstb", "issuer fallback still resolves");
 
     console.log("mart fund-holdings reader passed");
   } finally {
