@@ -250,6 +250,15 @@ def test_share_classes_keep_their_own_tickers(connection) -> None:
             (f"company:isin:{isin}",),
         ).fetchone()
         assert own == (expected,), f"{isin} must keep its own ticker, got {own}"
+        issuer_row = connection.execute(
+            "select 1 from staging.kg_identifiers where entity_id = 'issuer:cik:0001652044'"
+            " and identifier_type = 'ticker' and identifier_value = %s",
+            (expected,),
+        ).fetchone()
+        assert issuer_row is not None, (
+            f"the issuer-level {expected} vintage must land TOO — the unique key"
+            " (source, type, value, time) swallowed whichever claim asserted second"
+        )
 
     again = enrich_holding_identities(
         connection,

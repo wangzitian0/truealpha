@@ -197,11 +197,18 @@ def enrich_holding_identities(
         # The per-ISIN ticker rides the minted entity — THIS ISIN's own listing
         # (#706): the issuer-level ticker below stays newest-wins and collapses
         # share classes by design; readers that must not collapse resolve here.
+        # Its OWN source name, because kg_identifiers is unique on
+        # (source, type, value, transaction_time): under source="openfigi" this
+        # row and the issuer-level row are the same tuple whenever both derive
+        # from the same landed batch, and whichever asserts second is silently
+        # swallowed — on prod that was this one, 0 rows landed while the sweep
+        # reported success. A listing-association claim is a different claim;
+        # it gets a different source.
         er.ensure_entity(connection, minted_id, "company", listing.name or isin)
         er.assert_identifier(
             connection,
             entity_id=minted_id,
-            source="openfigi",
+            source="openfigi-listing",
             identifier_type="ticker",
             identifier_value=ticker,
             confidence=CONF_OPENFIGI,
