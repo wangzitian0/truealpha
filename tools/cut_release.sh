@@ -58,13 +58,15 @@ note "tag $TAG is free"
 #    (v0.0.35 and v0.0.38 both died on "pull first" while a parallel lane merged
 #    mid-ceremony); only true divergence still fails.
 git fetch origin -q
+# Always, not only when stale (review on #721): the ceremony's git state must be
+# main's regardless of whether a fast-forward turns out to be needed.
+[ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] \
+  || fail "run the ceremony from a checkout ON main (currently $(git rev-parse --abbrev-ref HEAD))"
 LOCAL_MAIN=$(git rev-parse main)
 REMOTE_MAIN=$(git rev-parse origin/main)
 if [ "$LOCAL_MAIN" != "$REMOTE_MAIN" ]; then
   git merge-base --is-ancestor "$LOCAL_MAIN" "$REMOTE_MAIN" \
     || fail "local main $LOCAL_MAIN diverged from origin/main $REMOTE_MAIN — resolve by hand"
-  [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] \
-    || fail "run the ceremony from a checkout ON main (currently $(git rev-parse --abbrev-ref HEAD))"
   git merge --ff-only -q "$REMOTE_MAIN"
   LOCAL_MAIN=$(git rev-parse main)
   note "main fast-forwarded to ${LOCAL_MAIN:0:8}"
