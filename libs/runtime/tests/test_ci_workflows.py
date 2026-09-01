@@ -808,12 +808,9 @@ def test_the_split_web_jobs_still_run_every_web_check() -> None:
 
     # Every field a check can live in, not just `run`: the arming variable sits
     # in a step's `env`, and the first version of this scan reported it missing
-    # for that reason alone. `step_text` already spans run/if/env/uses/with — a
-    # scan reading fewer fields than a check can occupy both cries wolf and,
-    # worse, can pass on a fragment found in the wrong one.
-    # Every field a check can live in, not just `run`: the arming variable sits
-    # in a step's `env`, and the first version of this scan reported it missing
-    # for that reason alone.
+    # for that reason alone. A scan reading fewer fields than a check can
+    # occupy both cries wolf and, worse, can pass on a fragment found in the
+    # wrong one.
     everything = "\n".join(spec_text(spec) for job in jobs.values() for spec in job["steps"])
     for fragment, what in (
         ("bun run typecheck", "the TypeScript typecheck"),

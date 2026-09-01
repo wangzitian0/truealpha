@@ -92,11 +92,14 @@ def spec_text(spec: dict[str, Any]) -> str:
 
 
 def step_text(workflow: str, name: str) -> str:
-    """A step's `run` body plus its `env` and `if`, as one searchable string.
+    """One named step, rendered by `spec_text` — its `run`, `if`, `name`, `env`,
+    `uses` and `with`, as one searchable string.
 
     The unit an assertion is usually about: "this step checks X", "this step is
     gated on Y". Built from the parsed step, so it cannot pick up a neighbour's
-    text the way a file split can.
+    text the way a file split can. Note the `name` is part of the rendering: an
+    assertion looking for a fragment that also appears in a step's title will
+    match it (review).
     """
     return spec_text(step(workflow, name))
 
