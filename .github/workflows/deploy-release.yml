@@ -15,15 +15,15 @@ on:
         required: true
         type: string
       source_run_id:
-        description: Successful tag ci-required run id for this release.
-        required: true
+        description: Optional override — derived from the tag when blank.
+        required: false
         type: string
       staging_run_url:
-        description: Required for prod; this repo's own successful "Deploy staging <tag>" run URL.
+        description: Optional override — derived from this tag's successful staging deploy when blank.
         required: false
         type: string
       reviewed_change_url:
-        description: Required for prod; merged PR whose merge commit is the release SHA.
+        description: Optional override — derived from the PR whose merge commit is the release SHA when blank.
         required: false
         type: string
 
@@ -71,6 +71,46 @@ jobs:
           REVIEWED_CHANGE_URL: ${{ inputs.reviewed_change_url }}
         run: |
           set -euo pipefail
+          # The three evidence values are DERIVED, not pasted. Each is a fact GitHub
+          # already holds about this tag, so asking a human to look them up and paste them
+          # only creates a way to be wrong: 2 of the last 12 deploys died in under a
+          # minute on "reviewed change must be merged to main at the release SHA" -- half
+          # of all deploy failures, and neither was a real problem with the release. It
+          # also caused #613, where two concurrent deploys could not each obtain a
+          # receipt and prod deadlocked for both lanes.
+          #
+          # Inputs still WIN when supplied, so an operator can override a derivation that
+          # is wrong; empty means "work it out". The verification below is unchanged and
+          # still runs against whatever value is used -- derivation removes the typing,
+          # not the proof.
+          tag_sha="$(git rev-list -n 1 "refs/tags/${VERSION_REF}^{commit}" 2>/dev/null || true)"
+          if [[ -z "${SOURCE_RUN_ID}" && -n "$tag_sha" ]]; then
+            SOURCE_RUN_ID="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?event=push&branch=${VERSION_REF}" \
+              --jq "[.workflow_runs[] | select(.head_sha == \"$tag_sha\" and .conclusion == \"success\"
+                     and .path == \".github/workflows/ci-required.yml\")] | first | .id // empty")"
+            echo "derived source_run_id=${SOURCE_RUN_ID:-<none>}"
+          fi
+          if [[ -z "${REVIEWED_CHANGE_URL}" && "$DEPLOY_TYPE" == "prod" && -n "$tag_sha" ]]; then
+            pr="$(gh api "/repos/${GITHUB_REPOSITORY}/commits/${tag_sha}/pulls" \
+              --jq "[.[] | select(.merged_at != null and .base.ref == \"main\"
+                     and .merge_commit_sha == \"$tag_sha\")] | first | .number // empty")"
+            [[ -n "$pr" ]] && REVIEWED_CHANGE_URL="https://github.com/${GITHUB_REPOSITORY}/pull/${pr}"
+            echo "derived reviewed_change_url=${REVIEWED_CHANGE_URL:-<none>}"
+          fi
+          if [[ -z "${STAGING_RUN_URL}" && "$DEPLOY_TYPE" == "prod" ]]; then
+            # Derives what the operator used to paste by hand, and the requirement is
+            # unchanged: this repo's own successful "Deploy staging <tag>" run URL.
+            # Never an infra2 receiver run (infra2#571
+            # blocker 2), which is why the query is scoped to GITHUB_REPOSITORY and matched
+            # on this workflow's own run name. #613: two concurrent staging deploys can both
+            # report failure while both actually succeed, so the newest SUCCESSFUL run is
+            # the honest source rather than simply the newest.
+            staging_id="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs?event=workflow_dispatch" \
+              --jq "[.workflow_runs[] | select(.name == \"Deploy staging ${VERSION_REF}\"
+                     and .conclusion == \"success\")] | first | .id // empty")"
+            [[ -n "$staging_id" ]] && STAGING_RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${staging_id}"
+            echo "derived staging_run_url=${STAGING_RUN_URL:-<none>}"
+          fi
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
             echo "::error::release requests must run from main"
             exit 1
