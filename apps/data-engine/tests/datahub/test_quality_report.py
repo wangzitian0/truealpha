@@ -410,6 +410,79 @@ def test_cross_day_pair_reconciles_insufficient_not_conflict() -> None:
     assert result.outcome == ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS
 
 
+def test_deployed_tolerance_absorbs_real_vendor_spread_and_still_catches_errors() -> None:
+    """#719: the day #691 made both origins REAL, the consolidated-tape vs
+    primary-close spread surfaced (2026-08-31: AAPL 0.12%, AVGO 0.13%, MU
+    0.21%) and the v1 10bp tolerance abstained three cells, freezing the TOPT
+    pointer for four days on vendor microstructure noise. The deployed v2
+    policy must grade the OBSERVED pairs agreed — and a 1% spread must still
+    abstain, because that regime belongs to real errors."""
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from data_engine.datahub.quality_report import RECONCILIATION_POLICY, _served_day_assertions
+    from truealpha_contracts import canonical_sha256
+    from truealpha_contracts.reconciliation import (
+        ReconciliationCell,
+        ReconciliationOutcome,
+        SourceAssertion,
+        reconcile_source_assertions,
+    )
+    from truealpha_contracts.universe import SubjectKind, SubjectRef
+
+    observed = [
+        ("aapl", "317.23001", "316.85"),
+        ("avgo", "370.82001", "370.34"),
+        ("mu", "956.67999", "958.73"),
+        # A real-error regime spread — v2 must NOT absorb this.
+        ("bad", "300", "303"),
+    ]
+    outcomes = {}
+    for ticker, yahoo_close, td_close in observed:
+        entries = _served_day_assertions(
+            [
+                _price_entry("yahoo-chart:v1", "2026-08-31", yahoo_close),
+                _price_entry("twelve-data:v1", "2026-08-31", td_close),
+            ]
+        )
+        cell = ReconciliationCell(
+            requirement_id=f"data-requirement:{canonical_sha256({'requirement': 'market-price:v1'})}",
+            subject=SubjectRef(kind=SubjectKind.LISTING, id=f"listing:xnas:{ticker}"),
+            field_name="close",
+            field_semantics_id=f"field-semantics:{canonical_sha256({'field': 'market-price-close:v1'})}",
+            unit="USD",
+            valid_from=datetime(2026, 8, 31, tzinfo=UTC).date(),
+            valid_to=datetime(2026, 9, 1, tzinfo=UTC).date(),
+        )
+        assertions = tuple(
+            SourceAssertion(
+                cell_id=cell.cell_id,
+                observation_id=obs_id,
+                source_id=source_id,
+                origin_group_id=extra["origin_group"],
+                knowable_at=knowable_at,
+                normalized_value_sha256=payload_sha,
+                numeric_value=Decimal(str(extra["value"])),
+                confidence_assessment_id=f"confidence-assessment:{payload_sha}",
+                confidence_score=confidence,
+                lineage_node_ids=(vintage_id, raw_object),
+                lineage_complete=True,
+            )
+            for source_id, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, extra in entries
+        )
+        result = reconcile_source_assertions(
+            cell=cell,
+            assertions=assertions,
+            policy=RECONCILIATION_POLICY,
+            cutoff=datetime(2026, 9, 1, 4, 30, tzinfo=UTC),
+        )
+        outcomes[ticker] = result.outcome
+    assert outcomes["aapl"] == ReconciliationOutcome.AGREED
+    assert outcomes["avgo"] == ReconciliationOutcome.AGREED
+    assert outcomes["mu"] == ReconciliationOutcome.AGREED, "0.21% is the observed honest spread — must corroborate"
+    assert outcomes["bad"] == ReconciliationOutcome.CONFLICT_ABSTAINED, "1% stays a conflict"
+
+
 def test_factor_availability_counts_subjects_with_complete_input_sets() -> None:
     """#641 D4: the headline availability equal-weights all semantics (89 missing
     financial-fact cells diluted 4:1 read as 0.78 while 12/101 issuers were

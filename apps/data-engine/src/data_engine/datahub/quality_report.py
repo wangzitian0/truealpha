@@ -57,14 +57,26 @@ from data_engine.datahub.production_topt.twelve_data_origin import PARSER_VERSIO
 from data_engine.datahub.production_topt.twelve_data_origin import VALUE_KEY as TWELVE_DATA_VALUE_KEY
 
 # Declared fusion policy for the dual-origin market-price cells (init.md rule 12):
-# yahoo-chart is the pinned primary, twelve-data the independent second origin; a
-# 0.1% relative tolerance absorbs vendor rounding, and disagreement beyond it
-# abstains and reports rather than letting either source win silently.
+# yahoo-chart is the pinned primary, twelve-data the independent second origin;
+# disagreement beyond tolerance abstains and reports rather than letting either
+# source win silently.
+#
+# v1 -> v2 (#719): tolerance 0.1% -> 0.3%. The 0.1% calibration dated from the
+# era when cross-run reuse fed BOTH origins the same bound observation, so
+# "agreement" was byte-identity and the tolerance was never exercised. #691
+# (identity-coordinate reuse) made TOPT capture genuinely twice, and the honest
+# consolidated-tape vs primary-close spread surfaced immediately: 2026-08-31
+# AAPL 317.23/316.85 (0.12%), AVGO 370.82/370.34 (0.13%), MU 956.68/958.73
+# (0.21%) — three abstentions, corroborated share 18/21 < 0.95, and the TOPT
+# governed pointer refused for four days on vendor microstructure noise. 30bp
+# clears the observed spread with margin while a real error (splits, 2x, fat
+# fingers) still lands orders of magnitude outside it; the plausibility oracle
+# and the #705 recompute oracle own that regime.
 RECONCILIATION_POLICY = ReconciliationPolicy(
-    policy_version="market-price-fusion:v1",
+    policy_version="market-price-fusion:v2",
     source_priority=("yahoo-chart:v1", "twelve-data:v1"),
     absolute_tolerance=Decimal("0"),
-    relative_tolerance=Decimal("0.001"),
+    relative_tolerance=Decimal("0.003"),
     minimum_independent_origin_groups=2,
 )
 # Which origin group each parser vintage's observations belong to.
