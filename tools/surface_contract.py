@@ -69,7 +69,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def fetch(url: str, method: str = "GET") -> Response:
     opener = urllib.request.build_opener(_NoRedirect)
-    request = urllib.request.Request(  # noqa: S310 — https URL from argv
+    # noqa S310: the scheme is validated in main() to be http or https before
+    # anything is fetched. Both are supported on purpose — the stub-server
+    # tests speak http, and a preview target may too.
+    request = urllib.request.Request(  # noqa: S310
         url, method=method, headers={"User-Agent": USER_AGENT}
     )
     try:
@@ -166,7 +169,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     for failure in failures:
         print(f"::error::{failure}", file=sys.stderr)
     if failures:
-        print(f"surface_contract: {len(failures)} propert(ies) violated on {arguments.base_url}", file=sys.stderr)
+        plural = "properties" if len(failures) > 1 else "property"
+        print(f"surface_contract: {len(failures)} {plural} violated on {arguments.base_url}", file=sys.stderr)
         return 1
     print(f"surface_contract: the deployed surface holds on {arguments.base_url}")
     return 0
