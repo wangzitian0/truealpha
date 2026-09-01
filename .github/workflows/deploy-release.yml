@@ -314,4 +314,14 @@ jobs:
           set -euo pipefail
           bun install --frozen-lockfile
           bunx playwright install --with-deps chromium
+
+          # #698: the first navigation raced the container swap. The health
+          # gate above polls llm-service, a DIFFERENT container from app-web,
+          # so nothing was warming the pages the walk opens. The warm-up lives
+          # in a script because a shell function inlined here can only be
+          # checked by slicing YAML text — and the first attempt at that
+          # sliced the wrong region and passed anyway (review). It verifies
+          # nothing and cannot fail; the walk below is the gate.
+          tools/warm_surface.sh "$TA_BASE_URL" / /research/rankings
+
           node e2e/walk-tree.mjs
