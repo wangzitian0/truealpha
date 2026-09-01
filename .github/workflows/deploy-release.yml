@@ -322,6 +322,10 @@ jobs:
           # checked by slicing YAML text — and the first attempt at that
           # sliced the wrong region and passed anyway (review). It verifies
           # nothing and cannot fail; the walk below is the gate.
-          tools/warm_surface.sh "$TA_BASE_URL" / /research/rankings
+          # $GITHUB_WORKSPACE, not a bare relative path: this step sets
+          # working-directory: apps/app-web (the walk needs it), so `tools/…` resolved to
+          # apps/app-web/tools/ and every deploy died with exit 127 "No such file or
+          # directory" — for a script that was present at the repo root the whole time.
+          "$GITHUB_WORKSPACE/tools/warm_surface.sh" "$TA_BASE_URL" / /research/rankings
 
           node e2e/walk-tree.mjs
