@@ -52,9 +52,11 @@ jobs:
           - environment: production
             deploy_type: prod
             url: https://truealpha.club/api/health
+            base: https://truealpha.club
           - environment: staging
             deploy_type: staging
             url: https://truealpha-staging.truealpha.club/api/health
+            base: https://truealpha-staging.truealpha.club
     steps:
       # Full history AND tags: the environments report release tags, and the
       # check resolves that tag to a commit to measure the gap. A shallow clone
@@ -99,6 +101,21 @@ jobs:
           fi
           uv run --no-sync python tools/output_invariants.py \
             --database-url "$PROD_DATABASE_URL" --require-coverage
+
+      # A4 C1 (#673): the routing shape, against the REAL proxy. Four
+      # production releases went into one redirect and every defect in it was
+      # invisible to the TestClient that "covered" it — Traefik strips /api and
+      # Compose clears the image CMD, neither of which a simulated proxy has.
+      # `if: always()` because a stale deploy and a broken route are separate
+      # facts and the second must not be hidden by the first.
+      - name: Check ${{ matrix.environment }} routing shape
+        if: always()
+        run: |
+          set -euo pipefail
+          # matrix.base, not matrix.url: url is the health ENDPOINT and this
+          # probe builds its own paths from the base. Passing url would have
+          # requested /api/health/api/health and reported the surface down.
+          python3 tools/surface_contract.py "${{ matrix.base }}"
 
       - name: Check ${{ matrix.environment }} surface-walk evidence
         if: always()

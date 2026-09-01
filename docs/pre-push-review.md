@@ -17,6 +17,10 @@ Read the full diff once per category. Every entry names the PR where it bit.
 - A flag's value read by index: `--root-path` last on the line raised
   IndexError instead of a sentence (#677); `--root-path=/api` parsed as a
   different value.
+- A perl REPLACEMENT containing `${`: perl parses it as a scalar-dereference
+  block and dies "Not a SCALAR reference" — which redprove surfaces, but only
+  after the run is wasted. GitHub Actions expressions (`${{ ... }}`) hit this
+  every time; escape as `\${{`.
 - A perl REPLACEMENT containing `$(`: perl interpolates it as the `$(` special
   variable (real GID), so `s{x}{$(cmd}` substitutes a group id and the edit is
   nonsense. Escape it or pick a replacement without `$(` (B1 session — the red
