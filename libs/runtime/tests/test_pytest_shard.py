@@ -132,32 +132,56 @@ def test_the_cli_prints_one_existing_path_per_line() -> None:
         assert Path(line).is_file(), f"shard printed {line!r}, which is not a file"
 
 
-def test_the_shards_carry_equal_test_counts() -> None:
-    """What this proves, and what it does NOT.
+def test_the_shards_carry_equal_measured_work() -> None:
+    """Balanced by the quantity that was actually measured, in seconds.
 
-    It proves the shards carry equal numbers of test FUNCTIONS. Round-robin by
-    file position did not: 24/24/24 files carrying 127/177/226 tests, measured
-    57 s / 107 s / 137 s (run 33365311320).
+    Three weights have now been tried against reality. File position gave
+    57/107/137 s. Test count gave 74/155/84 s while the counts were
+    177/177/176 — because a Dagster materialisation test costs 9 s and a
+    pure-function test costs a millisecond, and two files carry 42% of the
+    whole suite's time. The guard that asserted equal COUNTS was green through
+    all of that: it measured a proxy while claiming the property.
 
-    It does not prove balanced TIME, and the measurement says so plainly: with
-    counts at 177/177/176 the same lanes took 74 s / 155 s / 84 s (run
-    33366063687) — a 2.1x spread, because a Dagster materialisation test costs
-    9 s and a pure-function test costs a millisecond. Test count is a better
-    weight than file count and still a weak one. The honest reason not to chase
-    it further is that data-engine is no longer the pole: web/check (168 s) and
-    the liveness soak (178 s) both exceed the slowest shard.
-
-    If this lane becomes the wall again, the fix is measured per-file durations
-    (`--durations=0` into a committed weights file), not a third proxy.
+    So this asserts the packing weight itself, which is measured seconds when
+    the harvest has them. It cannot drift from what the packer optimises,
+    because it is the same number.
     """
     files = pytest_shard.collect(SHARDED_ROOT)
+    repo_root = REPO_ROOT
+    weights = pytest_shard.load_weights(repo_root)
+    measured_tests = sum(pytest_shard.test_functions(repo_root / key) for key in weights if (repo_root / key).exists())
+    rate = (sum(weights.values()) / measured_tests) if measured_tests else 1.0
     loads = [
-        sum(pytest_shard.test_functions(path) for path in pytest_shard.shard(files, index, 3)) for index in range(3)
+        sum(pytest_shard.weight_of(path, weights, repo_root, rate) for path in pytest_shard.shard(files, index, 3))
+        for index in range(3)
     ]
     assert min(loads) > 0
-    assert max(loads) / min(loads) <= 1.15, (
-        f"the three shards carry {loads} test functions — unequal counts mean the packing "
-        f"regressed toward file-position round-robin (measured 127/177/226 before it)"
+    # The bound is set by the heaviest single FILE, which cannot be split: with
+    # one 42 s file in a ~200 s suite, perfect thirds are unreachable. 1.6 is
+    # loose enough to stay true as files move and tight enough that a return to
+    # position or count packing (measured at 2.1x and 2.4x) fails.
+    assert max(loads) / min(loads) <= 1.6, (
+        f"the three shards carry {[round(x) for x in loads]} seconds of measured work — the "
+        f"slowest lane sets the CI wall, and this spread means the packing regressed to a proxy"
+    )
+
+
+def test_the_weights_still_describe_the_tree_they_weigh() -> None:
+    """Staleness has no symptom. A harvest taken before a directory was added
+    stays valid-looking forever: every lane green, the balance quietly drifting
+    back to a count-based estimate as the unmeasured share grows. The
+    observable is coverage, so that is what is asserted.
+    """
+    weights = pytest_shard.load_weights(REPO_ROOT)
+    if not weights:
+        pytest.skip("no harvest committed; the tool falls back to test counts by design")
+    files = pytest_shard.collect(SHARDED_ROOT)
+    known = [path for path in files if str(path.relative_to(REPO_ROOT)) in weights]
+    coverage = len(known) / len(files)
+    assert coverage >= 0.9, (
+        f"the harvest covers {coverage:.0%} of {SHARDED_ROOT.name} ({len(known)}/{len(files)} "
+        f"files) — refresh it with tools/harvest_shard_weights.py <run-id> from any green run, "
+        f"or the packing is guessing for the rest"
     )
 
 

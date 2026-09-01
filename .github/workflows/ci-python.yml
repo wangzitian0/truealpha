@@ -173,7 +173,12 @@ jobs:
             exit 1
           fi
           echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
-          uv run pytest "${FILES[@]}" --durations=0
+          # --durations-min=0 as well as --durations=0: the min defaults to 5 ms,
+          # so an all-fast file prints NOTHING and a harvest cannot tell it from a
+          # file that did not exist yet. Both are log lines only, no time cost, and
+          # keeping them on means ANY green run can refresh the shard weights —
+          # which is what keeps them from going stale.
+          uv run pytest "${FILES[@]}" --durations=0 --durations-min=0
         env:
           APP_ENV: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha

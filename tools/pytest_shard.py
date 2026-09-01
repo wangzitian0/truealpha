@@ -101,18 +101,22 @@ def load_weights(root: Path) -> dict[str, float]:
     return {str(key): float(value) for key, value in measured.items()}
 
 
-def weight_of(path: Path, weights: dict[str, float], repo_root: Path) -> float:
-    """The packing weight for one file: measured seconds, else its test count.
+def weight_of(path: Path, weights: dict[str, float], repo_root: Path, rate: float) -> float:
+    """The packing weight for one file, in SECONDS either way.
 
-    A file with no measurement is NEW — it did not exist when the harvest ran —
-    so it gets the count-based estimate rather than zero. Weighting an unknown
-    file at zero would pile every new test into one lane, which is exactly the
-    imbalance this replaced.
+    Measured seconds when the harvest has them. Otherwise the file is new since
+    the harvest, and its test count is converted at `rate` — the measured
+    average seconds per test — rather than used raw. Mixing the two units is
+    not a rounding error: a 43-test file would outweigh a genuinely 41.8 s file
+    and the packing would be sorting by nothing meaningful.
+
+    Never zero for an unknown file: zero-weighting piles every newly added test
+    into one lane, which is the imbalance this whole mechanism replaced.
     """
     key = str(path.relative_to(repo_root)) if path.is_absolute() else str(path)
     if key in weights:
         return weights[key]
-    return float(test_functions(path))
+    return float(test_functions(path)) * rate
 
 
 def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
@@ -141,7 +145,11 @@ def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
 
     repo_root = Path(__file__).resolve().parent.parent
     weights = load_weights(repo_root)
-    weight = {path: weight_of(path, weights, repo_root) for path in files}
+    # Seconds per test, from the harvest itself, so an unmeasured file is
+    # estimated in the same unit as a measured one.
+    measured_tests = sum(test_functions(repo_root / key) for key in weights if (repo_root / key).exists())
+    rate = (sum(weights.values()) / measured_tests) if measured_tests else 1.0
+    weight = {path: weight_of(path, weights, repo_root, rate) for path in files}
 
     bins: list[list[Path]] = [[] for _ in range(total)]
     load = [0.0] * total
