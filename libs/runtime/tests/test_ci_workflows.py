@@ -694,6 +694,40 @@ def test_a_failing_shard_lane_fails_instead_of_running_the_whole_suite() -> None
     )
 
 
+def test_the_routing_probe_gets_a_base_not_an_endpoint() -> None:
+    """A4 C1 (#673). The freshness matrix carries `url` (the health ENDPOINT,
+    what walk_evidence and health_check want) and `base` (what
+    surface_contract builds its own paths from). Handing the probe `url`
+    requests /api/health/api/health and reports the surface down every day —
+    which is what the first draft of this step did, comment and all.
+    """
+    freshness = yaml.safe_load(source(FRESHNESS))["jobs"]["freshness"]
+    for entry in freshness["strategy"]["matrix"]["include"]:
+        assert entry["url"].startswith(entry["base"]), (
+            f"{entry['environment']}: url {entry['url']!r} is not under base {entry['base']!r}, so the "
+            f"two describe different deployments"
+        )
+        assert not entry["base"].endswith("/api/health"), (
+            f"{entry['environment']}: base is a health endpoint, not a base"
+        )
+    # The command line only: the step's own comment explains base-vs-url and
+    # naming both, so scanning the whole block would match the explanation
+    # rather than the invocation.
+    probe = str(step(FRESHNESS, "Check ${{ matrix.environment }} routing shape")["run"])
+    invocation = next(
+        (line for line in probe.splitlines() if "surface_contract.py" in line and not line.strip().startswith("#")),
+        None,
+    )
+    assert invocation is not None, (
+        "the routing-shape step no longer invokes tools/surface_contract.py — the daily probe for "
+        "the four-release redirect class is gone, and a bare next() would have said StopIteration"
+    )
+    assert "matrix.base" in invocation and "matrix.url" not in invocation, (
+        f"the routing probe is invoked as {invocation.strip()!r} — on matrix.url it requests "
+        f"/api/health/api/health and reports a healthy surface as down, every day"
+    )
+
+
 def test_a_tag_run_can_never_be_cancelled_by_a_later_merge() -> None:
     """Post-merge batching (#673) turned `cancel-in-progress` on for every
     event, so main pushes collapse instead of each burst queueing ~16 extra
