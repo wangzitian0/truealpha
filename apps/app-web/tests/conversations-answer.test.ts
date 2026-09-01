@@ -19,6 +19,7 @@ const FUND: FundValuation = {
   valuedWeightPct: "48.78",
   resolvedWeightPct: "99.70",
   totalWeightPct: "99.93",
+  weightedGap: "-0.31",
   lines: [
     { holdingName: "NVIDIA Corp.", ticker: "NVDA", weightPct: "7.60", currentPs: "20.1", targetPsMidpoint: "18.0", valuationGap: "-0.10", tier: "tier-1", availability: "available" },
     { holdingName: "Apple Inc.", ticker: "AAPL", weightPct: "6.67", currentPs: null, targetPsMidpoint: null, valuationGap: null, tier: null, availability: "unavailable" },

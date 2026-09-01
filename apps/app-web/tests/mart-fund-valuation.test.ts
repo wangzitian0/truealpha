@@ -23,6 +23,7 @@ const LINES = [
     total_weight_pct: "99.5",
     resolved_weight_pct: "90.0",
     valued_weight_pct: "60.0",
+    weighted_gap: "0.14",
     current_ps: "10.5",
     target_ps_midpoint: "12.0",
     valuation_gap: "0.14",
@@ -39,6 +40,7 @@ const LINES = [
     total_weight_pct: "99.5",
     resolved_weight_pct: "90.0",
     valued_weight_pct: "60.0",
+    weighted_gap: "0.14",
     current_ps: null,
     target_ps_midpoint: null,
     valuation_gap: null,
@@ -55,6 +57,7 @@ const LINES = [
     total_weight_pct: "99.5",
     resolved_weight_pct: "90.0",
     valued_weight_pct: "60.0",
+    weighted_gap: "0.14",
     current_ps: null,
     target_ps_midpoint: null,
     valuation_gap: null,
@@ -83,6 +86,7 @@ function fakeRunner(headRows: Record<string, unknown>[], capture: { runParam?: u
                   tier: null,
                   availability: null,
                   valued_weight_pct: null,
+                  weighted_gap: null,
                 }))
               : LINES;
           return { rows };
@@ -104,6 +108,7 @@ function fakeRunner(headRows: Record<string, unknown>[], capture: { runParam?: u
   assert(fund.totalWeightPct === "99.50", `total mass, got ${fund.totalWeightPct}`);
   assert(fund.resolvedWeightPct === "90.00", `resolved mass excludes null tickers, got ${fund.resolvedWeightPct}`);
   assert(fund.valuedWeightPct === "60.00", `valued mass counts only 'available', got ${fund.valuedWeightPct}`);
+  assert(fund.weightedGap === "0.14", `weighted gap rides the SQL aggregate, got ${fund.weightedGap}`);
   assert(fund.lines.length === 3 && fund.lines[0].holdingName === "Valued Corp", "row order preserved");
 }
 
@@ -113,6 +118,7 @@ function fakeRunner(headRows: Record<string, unknown>[], capture: { runParam?: u
   assert(capture.runParam === "capture-run:none", "no governed run joins nothing instead of guessing one");
   assert(funds.length === 1 && funds[0].runId === null, "the absence of a run is reported, not hidden");
   assert(funds[0].valuedWeightPct === "0.00", "nothing is valued without a run");
+  assert(funds[0].weightedGap === null, "no weighted gap without a run — absent, not zero");
   assert(funds[0].totalWeightPct === "99.50", "the filed mass still reports without a run");
 }
 

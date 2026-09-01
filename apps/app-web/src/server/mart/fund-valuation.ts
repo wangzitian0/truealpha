@@ -36,6 +36,8 @@ export type FundValuation = {
   valuedWeightPct: string;
   resolvedWeightPct: string;
   totalWeightPct: string;
+  /** Weighted mean valuation gap over the valued mass only; null when nothing is valued. */
+  weightedGap: string | null;
   lines: ValuedHoldingRow[];
 };
 
@@ -71,7 +73,17 @@ const VALUED_LINES_SQL = `
          sum(v.percent_of_net_assets) filter (where v.ticker is not null)
              over (partition by v.fund_id)::text as resolved_weight_pct,
          sum(v.percent_of_net_assets) filter (where r.availability = 'available')
-             over (partition by v.fund_id)::text as valued_weight_pct
+             over (partition by v.fund_id)::text as valued_weight_pct,
+         -- Weighted mean valuation gap over the VALUED mass. Pure aggregation of
+         -- materialized outputs with its denominator stated — the same "a join
+         -- is a read" boundary strategy-run-repository documents. A metric that
+         -- needs definition governance (bands, tiers, caps) belongs to
+         -- libs/factors; an arithmetic mean with an explicit denominator is
+         -- presentation, and the row-level gaps it summarizes stay visible.
+         (sum(v.percent_of_net_assets * r.valuation_gap) filter (where r.availability = 'available')
+             over (partition by v.fund_id)
+          / nullif(sum(v.percent_of_net_assets) filter (where r.availability = 'available')
+             over (partition by v.fund_id), 0))::text as weighted_gap
   from mart.fund_holdings_valuation v
   left join mart.topt_core_result_read r
     on r.listing_id = v.listing_id and r.run_id = $1
@@ -112,6 +124,7 @@ export async function loadFundValuation(
           valuedWeightPct: pct(row.valued_weight_pct),
           resolvedWeightPct: pct(row.resolved_weight_pct),
           totalWeightPct: pct(row.total_weight_pct),
+          weightedGap: typeof row.weighted_gap === "string" ? Number(row.weighted_gap).toFixed(2) : null,
           lines: [],
         };
         byFund.set(fundId, fund);
