@@ -17,6 +17,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -109,8 +110,30 @@ def check_health(
     except RuntimeError as exc:
         print(f"health check failed: {exc}", file=sys.stderr)
         return 1
+    engine = _data_engine_parser(result.body)
+    if expected_version and engine == "unknown":
+        # Un-assertable, not a pass. Said out loud so a health check that silently stopped
+        # covering the data engine cannot look identical to one that covered it.
+        print(f"health check: {url} reports no data_engine_parser — the data engine is UNVERIFIED")
     print(f"health check passed: {url} is healthy ({result.body})")
     return 0
+
+
+def _data_engine_parser(body: str) -> str:
+    """The data-engine vintage the health surface reports, or "unknown".
+
+    The data engine has no HTTP surface, so until #712 every post-deploy check -- this
+    one, the surface walk, both canaries -- exercised app-web or llm-service. A promotion
+    could therefore leave the app that computes every published number one release behind
+    with every step green, which is what v0.0.37 did. llm-service now reports the vintage
+    from mart, so the lane can see it over a surface it already calls.
+    """
+    try:
+        parsed = json.loads(body)
+    except (TypeError, ValueError):
+        return "unknown"
+    value = parsed.get("data_engine_parser") if isinstance(parsed, dict) else None
+    return str(value) if value else "unknown"
 
 
 def _parser() -> argparse.ArgumentParser:

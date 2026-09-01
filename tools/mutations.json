@@ -236,6 +236,21 @@
         "tools/check_factor_contract.py"
       ],
       "cwd": "."
+    },
+    {
+      "id": "health/data-engine-vintage-is-reported",
+      "guard": "libs/runtime/tests/test_health_check.py",
+      "file": "apps/llm-service/src/llm_service/main.py",
+      "find": "        \"data_engine_parser\": _data_engine_parser(),",
+      "replace": "        # \"data_engine_parser\": _data_engine_parser(),",
+      "command": [
+        "uv",
+        "run",
+        "pytest",
+        "libs/runtime/tests/test_health_check.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

@@ -5,14 +5,17 @@ from llm_service.main import ROUTED_PREFIX, app
 def test_health():
     resp = TestClient(app).get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok", "git_sha": "unknown"}
+    # data_engine_parser is asserted separately (libs/runtime test_health_check.py): it
+    # reports the DATA ENGINE's vintage, which has no HTTP surface of its own (#712). With
+    # no database in a unit test the honest answer is "unknown" -- and it must never raise.
+    assert resp.json() == {"status": "ok", "git_sha": "unknown", "data_engine_parser": "unknown"}
 
 
 def test_health_reports_the_deployed_git_sha(monkeypatch):
     """#508: tools/health_check.py needs this to confirm the deployed release is live."""
     monkeypatch.setenv("GIT_COMMIT_SHA", "abc1234")
     resp = TestClient(app).get("/health")
-    assert resp.json() == {"status": "ok", "git_sha": "abc1234"}
+    assert resp.json() == {"status": "ok", "git_sha": "abc1234", "data_engine_parser": "unknown"}
 
 
 def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
