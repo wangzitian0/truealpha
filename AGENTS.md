@@ -151,10 +151,12 @@ Repository shape:
   schema, and decoding settings; store semantic results and evidence spans. Replay never
   silently calls a model. Self-reported confidence is not calibrated evidence without an
   accepted sealed holdout policy.
-- Every moomoo request goes through `api_call_ledger`; no module calls the API directly.
-  The ledger is throttle and audit infrastructure, not a fictional monthly-call quota.
-  The relevant quote/fundamental endpoints use burst rate limits; do not confuse a
-  subscription tier ceiling with a call budget. See `init.md` Section 5.
+- Every external request — SEC, Twelve Data, yfinance, OpenFIGI, N-PORT, moomoo and the
+  LLM extraction provider — goes through the source gateway and `api_call_ledger` with a
+  declared capacity; no module calls a vendor or a model directly (init.md rule 6, owner
+  decision 2026-09-04). The ledger is throttle and audit infrastructure, not a fictional
+  monthly-call quota: moomoo's quote/fundamental endpoints use burst rate limits; do not
+  confuse a subscription tier ceiling with a call budget. See `init.md` Section 5.
 - Moomoo access is Quote API read-only. Every trading context and every order placement,
   modification, cancellation, or trade-unlock operation is forbidden. The public
   repository's security CI must reject trading APIs rather than relying on review alone.
