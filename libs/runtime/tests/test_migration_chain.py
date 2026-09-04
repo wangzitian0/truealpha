@@ -25,8 +25,8 @@ collision fails, so it cannot outlive its defect.
 
 Two naming forms are therefore legal (#731):
 
-* ``00NN_<slug>.sql`` — the legacy sequential form, FROZEN at ``0048``. No new
-  file may take it: the shared counter is the defect.
+* ``00NN_<slug>.sql`` — the legacy sequential form, FROZEN as the exact list
+  ``LEGACY_NAMES`` below. No new file may take it: the shared counter is the defect.
 * ``YYYYMMDDTHHMM_<lane>_<slug>.sql`` — the form every new migration uses. A
   minute-resolution UTC timestamp plus the lane name cannot collide across lanes
   working in parallel, and because ``"2"`` sorts after ``"0"`` every timestamped
@@ -49,8 +49,59 @@ MIGRATIONS = REPO_ROOT / "db/migrations"
 #: merge, which is cheap while the migration is unreleased and expensive after.
 KNOWN_COLLISIONS = {"0019", "0029", "0030", "0031", "0037", "0039", "0040"}
 
-#: The last ordinal the sequential form ever takes. `0049_anything.sql` is red.
-LEGACY_LAST_ORDINAL = "0048"
+#: Every file of the sequential form, frozen at the moment the form was retired
+#: (#731). The chain is closed on both sides: a sequential-form file not in this
+#: tuple is a new one and is red (that includes a third `0039_*.sql` under a known
+#: collision key); a name in this tuple missing from disk is a deployed migration
+#: that was renamed or deleted, which reorders every environment that ran it, and
+#: is red until the entry is removed here on purpose.
+LEGACY_NAMES: tuple[str, ...] = (
+    "0001_schemas.sql",
+    "0002_staging_core.sql",
+    "0003_ops.sql",
+    "0004_runtime_contracts.sql",
+    "0005_fund_holding_dual_lines.sql",
+    "0006_bitemporal_lineage.sql",
+    "0017_contract_objects.sql",
+    "0018_usage_review_contracts.sql",
+    "0019_filing_documents_stale_shape_cleanup.sql",
+    "0019_mvp_filing_document.sql",
+    "0020_headcount_extraction.sql",
+    "0021_mvp_medium_domains.sql",
+    "0022_app_identity.sql",
+    "0023_capture_control.sql",
+    "0024_access_policy_bindings.sql",
+    "0025_manual_topt_capture_reads.sql",
+    "0026_production_topt_core.sql",
+    "0027_core_strategy_replay_mart.sql",
+    "0028_evidence_graph.sql",
+    "0029_datahub_quality_report.sql",
+    "0029_principal_credentials.sql",
+    "0030_converge_topt_gppe_uniform.sql",
+    "0030_conversations.sql",
+    "0031_documents.sql",
+    "0031_strategy_run_snapshot_id.sql",
+    "0032_strategy_backtest_inputs.sql",
+    "0033_entity_display_resolution.sql",
+    "0034_pipeline_trigger_requests.sql",
+    "0035_strategy_input_coverage.sql",
+    "0036_operating_branch_insurance.sql",
+    "0037_issuer_cik_predecessors.sql",
+    "0037_issuer_headcount_facts.sql",
+    "0038_accepted_rulesets.sql",
+    "0039_peg_module_1.sql",
+    "0039_semantic_freshness_windows.sql",
+    "0040_peg_rank.sql",
+    "0040_topt_core_result_periods.sql",
+    "0041_etf_universe_plane.sql",
+    "0042_generalize_core_snapshot_invariants.sql",
+    "0043_strategy_input_fiscal_period.sql",
+    "0044_canonical_sha256_search_path.sql",
+    "0045_canary_trigger_job.sql",
+    "0046_fund_holdings_mart.sql",
+    "0047_fund_holdings_valuation.sql",
+    "0048_per_isin_ticker_crosswalk.sql",
+)
 
 #: The workspace names that prefix issue and PR titles (AGENTS.md rule 3), so a
 #: migration's filename says which lane owns it.
@@ -85,14 +136,22 @@ def _by_key() -> dict[str, list[str]]:
 
 
 def test_no_new_migration_number_collides() -> None:
+    """A new ordering key used more than once, or a known collision growing a third
+    file, both mean two lanes took the same slot again."""
     collisions = {key: names for key, names in _by_key().items() if len(names) > 1}
     fresh = set(collisions) - KNOWN_COLLISIONS
     assert not fresh, (
-        f"migration ordering key(s) {sorted(fresh)} are used twice: "
+        f"migration ordering key(s) {sorted(fresh)} are used more than once: "
         + "; ".join(f"{key} -> {collisions[key]}" for key in sorted(fresh))
-        + ". apply_migrations.sh replays the chain in glob order, so which of the two runs first "
+        + ". apply_migrations.sh replays the chain in glob order, so which of them runs first "
         "is decided by the alphabet of the suffix, not by intent. Rename the unreleased one "
         "(#576, #731)"
+    )
+    grown = {key: names for key, names in collisions.items() if key in KNOWN_COLLISIONS and len(names) > 2}
+    assert not grown, (
+        f"known collision(s) {sorted(grown)} grew a third file: "
+        + "; ".join(f"{key} -> {grown[key]}" for key in sorted(grown))
+        + ". The frozen set never extends; name the new migration by timestamp and lane (#731)"
     )
 
 
@@ -121,14 +180,24 @@ def test_every_migration_takes_one_of_the_two_legal_forms() -> None:
     )
 
 
-def test_the_sequential_form_is_frozen_at_the_last_legacy_ordinal() -> None:
-    """The shared counter is the defect; new migrations name themselves by
-    timestamp and lane so two parallel lanes cannot take the same slot."""
-    too_new = [name for name in _names() if (match := LEGACY_RE.match(name)) and match.group(1) > LEGACY_LAST_ORDINAL]
-    assert not too_new, (
-        f"{too_new} take the retired sequential form; name new migrations "
+def test_the_sequential_form_is_closed_on_both_sides() -> None:
+    """The shared counter is the defect, so the sequential form takes no new file —
+    not `0049_*` and not a second `0012_*` either. And a frozen name that has left
+    the disk was renamed or deleted after deployment, which reorders every
+    environment that ran it."""
+    on_disk = {name for name in _names() if LEGACY_RE.match(name)}
+    frozen = set(LEGACY_NAMES)
+    new = sorted(on_disk - frozen)
+    assert not new, (
+        f"{new} take the retired sequential form; name new migrations "
         f"`{datetime.now().strftime('%Y%m%dT%H%M')}_<lane>_<slug>.sql` instead "
         f"(lanes: {', '.join(LANES)}; see db/migrations/README.md, #731)"
+    )
+    gone = sorted(frozen - on_disk)
+    assert not gone, (
+        f"{gone} are frozen legacy migrations no longer on disk — a deployed migration must never be "
+        f"renamed or deleted (it reorders every environment that ran it); if this was deliberate, "
+        f"remove the entry from LEGACY_NAMES in the same change"
     )
 
 

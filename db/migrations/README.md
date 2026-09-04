@@ -1,6 +1,7 @@
 # Migration file names
 
-`db/apply_migrations.sh`, `db/docker-init.sh`, `Makefile db-migrate` and `ci-db.yml`
+`db/apply_migrations.sh`, `db/docker-init.sh`, `Makefile db-migrate` and
+`.github/workflows/ci-db.yml`
 all apply `db/migrations/*.sql` in shell glob order on every boot. The filename is
 the ordering key, and it is permanent once an environment has run it.
 
@@ -8,7 +9,7 @@ Two forms are legal; `libs/runtime/tests/test_migration_chain.py` enforces both.
 
 | form | status | example |
 |---|---|---|
-| `00NN_<slug>.sql` | frozen at `0048`, no new files | `0048_per_isin_ticker_crosswalk.sql` |
+| `00NN_<slug>.sql` | frozen as the exact 45-file list in the test, no new files | `0048_per_isin_ticker_crosswalk.sql` |
 | `YYYYMMDDTHHMM_<lane>_<slug>.sql` | every new migration | `20260905T0930_datahub_holdings_vintage.sql` |
 
 * The timestamp is the UTC minute you created the file (`date -u +%Y%m%dT%H%M`).
