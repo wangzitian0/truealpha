@@ -52,9 +52,7 @@ from data_engine.datahub.production_topt.materialization import (
     IdentityPayload,
     MarketPricePayload,
 )
-from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
-from data_engine.datahub.production_topt.twelve_data_origin import PARSER_VERSION as TWELVE_DATA_PARSER_VERSION
-from data_engine.datahub.production_topt.twelve_data_origin import VALUE_KEY as TWELVE_DATA_VALUE_KEY
+from data_engine.datahub.production_topt.source_registrations import RELEASE_SEMANTICS, SOURCE_BY_PARSER
 
 # Declared fusion policy for the dual-origin market-price cells (init.md rule 12):
 # yahoo-chart is the pinned primary, twelve-data the independent second origin;
@@ -92,16 +90,9 @@ RECONCILIATION_POLICY = ReconciliationPolicy(
 # Deriving from the history makes both failures unreachable: a vintage cannot be current
 # without being in the tuple, and cannot leave the tuple once shipped. A report over a
 # historical run keeps resolving its origin because the vintage it was captured under is
-# still listed.
-_SOURCE_BY_PARSER = {
-    **{vintage: ("yahoo-chart:v1", "origin:yahoo:v1", "close") for vintage in PARSER_VERSION_HISTORY},
-    TWELVE_DATA_PARSER_VERSION: ("twelve-data:v1", "origin:twelve-data:v1", TWELVE_DATA_VALUE_KEY),
-    # v1 asserted `price` — Twelve Data's last trade, extended hours included — against the
-    # primary's regular-session close, so every tick inside a session abstained (#535). Listed
-    # by hand because the second origin has no version history to derive from yet; the primary
-    # side above shows the shape that would make this maintenance unnecessary.
-    "twelve-data-parser:v1": ("twelve-data:v1", "origin:twelve-data:v1", "price"),
-}
+# still listed. Since #72 the derivation lives with the source registrations: every
+# registered origin declares its vintages, and this map is built from all of them.
+_SOURCE_BY_PARSER = SOURCE_BY_PARSER
 
 
 # What "a usable value" means for each requested semantic. The payload contracts are the
@@ -111,7 +102,7 @@ _SOURCE_BY_PARSER = {
 # and the branch's operating numerator). Reading the same fields is what stops the report
 # and the page disagreeing about one run — the report used to answer 84/84 for a tick the
 # mart scored 19 available / 1 unavailable.
-_IDENTITY_SEMANTICS = frozenset({"listing-identity", "universe-membership"})
+_IDENTITY_SEMANTICS = RELEASE_SEMANTICS
 # Mirrors `compute_topt_gppe`'s dispatch exactly: FINANCIAL scores through
 # pre-provision profit, every other branch through gross profit (the insurance
 # parse lands revenue-minus-claims INTO gross_profit). This map must stay total

@@ -43,19 +43,25 @@ from typing import Any
 
 from data_engine.config import settings
 from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin, MarketPriceQuote
+from data_engine.datahub.production_topt.source_registrations import (
+    TWELVE_DATA_MAPPING_VERSION,
+    TWELVE_DATA_ORIGIN,
+    TWELVE_DATA_PARSER_VERSION,
+    TWELVE_DATA_VALUE_KEY,
+)
 
-ORIGIN = "twelve-data"
+ORIGIN = TWELVE_DATA_ORIGIN
 # v1 -> v2 (#535): the asserted quantity changed from Twelve Data's last trade (the
 # in-progress daily bar, extended hours included) to the partition date's settled
 # end-of-day close, which is what the primary asserts. A different quantity under the
 # same parser identity would make the two indistinguishable in the warehouse.
-PARSER_VERSION = "twelve-data-parser:v2"
-MAPPING_VERSION = "twelve-data-map:v2"
+PARSER_VERSION = TWELVE_DATA_PARSER_VERSION
+MAPPING_VERSION = TWELVE_DATA_MAPPING_VERSION
 # The payload key this origin writes its number under. It is also the key
 # `quality_report._SOURCE_BY_PARSER` reads back for this parser vintage; the two are
 # asserted equal in the tests, because a silent drift between them drops the second
 # origin out of fusion without any error.
-VALUE_KEY = "close"
+VALUE_KEY = TWELVE_DATA_VALUE_KEY
 
 _EOD_URL = "https://api.twelvedata.com/eod"
 _TIME_SERIES_URL = "https://api.twelvedata.com/time_series"
