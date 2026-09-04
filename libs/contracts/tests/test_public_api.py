@@ -74,17 +74,18 @@ def test_no_code_imports_symbols_through_the_aggregate() -> None:
     aggregate; `from truealpha_contracts.models import Fact` names the owner. Importing a
     *submodule* through the package (`from truealpha_contracts import topt_read`) is
     fine and stays allowed."""
-    pattern = re.compile(r"^from truealpha_contracts import (\((?:[^)]*)\)|[^\n]+)$", re.M)
+    # Indented imports count too (`if TYPE_CHECKING:` blocks, function bodies), and an
+    # inline comment must not be read as an imported name (review on #742).
+    pattern = re.compile(r"^[ \t]*from truealpha_contracts import (\((?:[^)]*)\)|[^\n]+)$", re.M)
     submodules = _submodules()
     offenders: list[str] = []
     for top in ("apps", "libs", "tools"):
         for path in (REPO_ROOT / top).rglob("*.py"):
             if path == PACKAGE / "__init__.py" or "node_modules" in path.parts or ".venv" in path.parts:
                 continue
-            for match in pattern.finditer(path.read_text()):
-                imported = [
-                    n.strip().split(" as ")[0] for n in match.group(1).strip("()").replace("\n", " ").split(",")
-                ]
+            for match in pattern.finditer(path.read_text(encoding="utf-8")):
+                body = re.sub(r"#[^\n]*", "", match.group(1)).strip("()").replace("\n", " ")
+                imported = [n.strip().split(" as ")[0] for n in body.split(",")]
                 symbols = [n for n in imported if n and n not in submodules]
                 if symbols:
                     offenders.append(f"{path.relative_to(REPO_ROOT)}: {', '.join(symbols)}")
