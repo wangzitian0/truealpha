@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import re
 import time
-import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -40,6 +39,7 @@ from truealpha_contracts.models import DataSource
 
 from data_engine import raw_store
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
+from data_engine.sources import gateway
 
 _TUPLE_FIELDS = ["issuer_id", "instrument_id", "listing_id", "ticker"]
 _BROWSER_HEADERS = {
@@ -100,15 +100,21 @@ UNIVERSE_SOURCES: dict[str, UniverseSource] = {
 }
 
 
-def _get(url: str, headers: dict[str, str] | None = None) -> tuple[int, bytes]:
-    """Status-honest fetch: an HTTP error's body IS the vendor's answer (#557)."""
+def _get(
+    url: str,
+    headers: dict[str, str] | None = None,
+    *,
+    source: str = DataSource.NASDAQ_INDEX.value,
+    endpoint: str = "constituents",
+    caller: str = "universe_plane._get",
+) -> tuple[int | None, bytes]:
+    """Status-honest fetch: an HTTP error's body IS the vendor's answer (#557).
+
+    Through the external call ledger (#729): the operator's answer, good or bad, is a
+    recorded request before it is a landed row.
+    """
     request = urllib.request.Request(url, headers=headers or _BROWSER_HEADERS)
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-            return response.status, bytes(response.read())
-    except urllib.error.HTTPError as error:
-        with error:
-            return error.code, bytes(error.read())
+    return gateway.urlopen(source, endpoint, request, caller=caller, timeout=30)
 
 
 class ConstituentRow(TypedDict):
@@ -157,6 +163,9 @@ def _resolve_cik_via_edgar(ticker: str, *, user_agent: str) -> int | None:
     status, body = _get(
         f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={ticker}&type=10-K&output=atom&count=1",
         headers={"User-Agent": user_agent, "Accept": "application/atom+xml"},
+        source=DataSource.SEC.value,
+        endpoint="browse-edgar",
+        caller="universe_plane._resolve_cik_via_edgar",
     )
     if status != 200:
         return None
@@ -188,8 +197,16 @@ def _resolve_figis(
         request = urllib.request.Request(
             "https://api.openfigi.com/v3/mapping", data=json.dumps(chunk).encode(), headers=headers
         )
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-            body = response.read()
+        # A recorded request (#729) whose 4xx raises: the mapping is identity-critical
+        # and a partial answer must stop the refresh, not be silently parsed.
+        _status, body = gateway.urlopen(
+            DataSource.OPENFIGI.value,
+            "mapping",
+            request,
+            caller="universe_plane._resolve_figis",
+            timeout=30,
+            raise_for_status=True,
+        )
         fetched_at = datetime.now(UTC)
         raw_store.insert_fetch(
             connection,
@@ -239,7 +256,7 @@ def refresh_etf_constituents(
         body = json.dumps({"etf": source.etf, "members": list(source.static_members)}).encode()
         fetch_source = DataSource.RELEASE
     else:
-        status, body = _get(source.index_api)
+        status, body = _get(source.index_api, caller="universe_plane.refresh_etf_constituents")
         if status != 200:
             raise RuntimeError(f"{source.etf} constituents endpoint answered {status}: {body[:120]!r}")
         rows = parse_nasdaq_index_rows(body)

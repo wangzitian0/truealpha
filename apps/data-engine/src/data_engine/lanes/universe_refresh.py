@@ -8,6 +8,7 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
+from data_engine.sources import gateway
 
 # -- universe refresh (#539 owner requirement: automatic pulls) ------------------------
 
@@ -28,8 +29,17 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
         refresh_and_publish,
     )
 
+    # Every vendor call in the refresh is attributed to this Dagster run in the
+    # external call ledger (#729).
+    with gateway.run_scope(f"dagster:{context.run_id}"):
+        _refresh_universes(context, UNIVERSE_SOURCES, latest_quarter_end, refresh_and_publish)
+
+
+def _refresh_universes(
+    context: dg.OpExecutionContext, universe_sources, latest_quarter_end, refresh_and_publish
+) -> None:
     with psycopg.connect(settings.database_url) as connection:
-        for source in UNIVERSE_SOURCES.values():
+        for source in universe_sources.values():
             outcome = refresh_and_publish(
                 connection,
                 source,
@@ -47,7 +57,7 @@ def refresh_universes_op(context: dg.OpExecutionContext) -> None:
     from data_engine.datahub.production_topt.nport_holdings import capture_fund_holdings
 
     failures: list[tuple[str, Exception]] = []
-    for source in UNIVERSE_SOURCES.values():
+    for source in universe_sources.values():
         if source.nport_ticker is None:
             continue
         try:

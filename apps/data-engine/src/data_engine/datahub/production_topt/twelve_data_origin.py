@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
@@ -49,6 +48,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     TWELVE_DATA_PARSER_VERSION,
     TWELVE_DATA_VALUE_KEY,
 )
+from data_engine.sources import gateway
 
 ORIGIN = TWELVE_DATA_ORIGIN
 # v1 -> v2 (#535): the asserted quantity changed from Twelve Data's last trade (the
@@ -240,21 +240,21 @@ class TwelveDataQuoteFetcher:
 
     def _get(self, url: str, params: dict[str, str]) -> bytes:
         query = urllib.parse.urlencode({**params, "apikey": self._api_key})
-        try:
-            with urllib.request.urlopen(f"{url}?{query}", timeout=20) as response:  # noqa: S310
-                return bytes(response.read())
-        except urllib.error.HTTPError as error:
-            # Twelve Data answers "no end of day for this date" with HTTP 400 and a
-            # JSON error body — and urlopen RAISES on any non-2xx. Letting that raise
-            # propagate skipped the parser's error-body path and with it the
-            # last-settled-session fallback, so every tick inside an unsettled
-            # session lost the whole second origin (staging 2026-08-14 06:08: 21/21
-            # insufficient_independent_origins, zero twelvedata fetch rows, while
-            # the key was provisioned and the quota untouched). The body IS the
-            # vendor's answer: return it and let the parser refuse it, so the
-            # fallback gets its turn.
-            with error:
-                return bytes(error.read())
+        # Twelve Data answers "no end of day for this date" with HTTP 400 and a JSON
+        # error body — and urlopen RAISES on any non-2xx. Letting that raise propagate
+        # skipped the parser's error-body path and with it the last-settled-session
+        # fallback, so every tick inside an unsettled session lost the whole second
+        # origin (staging 2026-08-14 06:08: 21/21 insufficient_independent_origins, zero
+        # twelvedata fetch rows, while the key was provisioned and the quota untouched).
+        # The body IS the vendor's answer: the gateway returns it (status-honest) and the
+        # parser refuses it, so the fallback gets its turn. Since #729 that 400 is also a
+        # ledger row (`ok = false`, the vendor's message as `error`) — every weekend tick
+        # spends two credits per listing this way, and until the ledger existed nothing
+        # recorded it (raw.fetches only ever saw the landed successes).
+        _status, body = gateway.urlopen(
+            "twelvedata", url.rsplit("/", 1)[-1], f"{url}?{query}", caller="twelve_data_origin", timeout=20
+        )
+        return body
 
 
 def twelve_data_origin() -> CorroboratingOrigin | None:

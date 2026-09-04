@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from data_engine.config import settings
+from data_engine.sources import gateway
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
@@ -36,7 +37,7 @@ def ticker_cik_index(http: httpx.Client | None = None) -> dict[str, int]:
     if http is None:
         with client() as c:
             return ticker_cik_index(c)
-    resp = http.get(TICKERS_URL)
+    resp = gateway.http_get(http, "sec", "company_tickers", TICKERS_URL, caller="sec.ticker_cik_index")
     resp.raise_for_status()
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in resp.json().values()}
 
@@ -62,7 +63,9 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
     if http is None:
         with client() as c:
             return fetch_company_submissions(cik, c)
-    resp = http.get(SUBMISSIONS_URL.format(cik=cik))
+    resp = gateway.http_get(
+        http, "sec", "submissions", SUBMISSIONS_URL.format(cik=cik), caller="sec.fetch_company_submissions"
+    )
     resp.raise_for_status()
     return dict(resp.json())
 
@@ -76,7 +79,9 @@ def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> 
     corrected mapping would be replaying our own output.
     """
     if http is not None:
-        resp = http.get(COMPANY_FACTS_URL.format(cik=cik))
+        resp = gateway.http_get(
+            http, "sec", "companyfacts", COMPANY_FACTS_URL.format(cik=cik), caller="sec.fetch_company_facts_response"
+        )
         resp.raise_for_status()
         return resp.content, json.loads(resp.content.decode())
     with client() as c:

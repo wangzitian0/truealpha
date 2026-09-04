@@ -11,6 +11,8 @@ requests/min with 10 jobs each; with a free key 25 req/6s with 100 jobs each.
 
 import time
 
+from data_engine.sources import gateway
+
 MAPPING_URL = "https://api.openfigi.com/v3/mapping"
 
 
@@ -40,7 +42,11 @@ def map_isins(
         # incident / IP ban fails loudly instead of hanging the bootstrap
         # forever: 30 attempts x 10s = 5 minutes of sustained 429 per batch.
         for attempt in range(30):
-            resp = client.post(MAPPING_URL, json=jobs, headers=headers)
+            # Every attempt is a ledger row (#729): a 429 is a failed request that still
+            # counted against the vendor window, so it is recorded as one.
+            resp = gateway.http_post(
+                client, "openfigi", "mapping", MAPPING_URL, caller="openfigi.map_isins", json=jobs, headers=headers
+            )
             if resp.status_code != 429:
                 resp.raise_for_status()
                 break

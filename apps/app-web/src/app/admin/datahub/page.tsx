@@ -131,6 +131,98 @@ export default async function AdminDatahubPage() {
       </div>
 
       <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Traffic (external calls, today UTC)</h2>
+        <p className="text-sm text-gray-500">
+          One row per vendor from the external call ledger (#729). A request counts whether it succeeded,
+          answered an error status, or raised; <span className="font-mono">landed</span> is how many successful
+          answers dereference to bytes in raw.fetches. Failed requests carry the vendor&apos;s own error.
+        </p>
+        {stats.traffic.length === 0 && (
+          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No external calls recorded today.</p>
+        )}
+        {stats.traffic.length > 0 && (
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="text-gray-500">
+                <th className="pr-4 font-normal">source</th>
+                <th className="pr-4 font-normal">calls</th>
+                <th className="pr-4 font-normal">failed</th>
+                <th className="pr-4 font-normal">landed</th>
+                <th className="pr-4 font-normal">avg ms</th>
+                <th className="pr-4 font-normal">last call</th>
+                <th className="font-normal">last error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.traffic.map((row) => (
+                <tr key={row.source} className="border-t border-border">
+                  <td className="pr-4 font-mono">{row.source}</td>
+                  <td className="pr-4">{row.calls}</td>
+                  <td className={`pr-4 ${row.failed > 0 ? "text-amber-400" : ""}`}>{row.failed}</td>
+                  <td className="pr-4">
+                    {row.landed}/{row.calls - row.failed}
+                  </td>
+                  <td className="pr-4">{row.avg_ms ?? "—"}</td>
+                  <td className="pr-4 text-gray-400">{row.last_call}</td>
+                  <td className="text-gray-400">{row.last_error ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Recent external calls</h2>
+        <p className="text-sm text-gray-500">
+          The last 40 requests. <span className="font-mono">landed</span> names the raw.fetches row whose bytes this
+          answer became; a failed request shows its status and error instead.
+        </p>
+        {stats.recentCalls.length === 0 && (
+          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+            No ledger rows yet — the first tick after this deploy writes them.
+          </p>
+        )}
+        {stats.recentCalls.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-gray-500">
+                  <th className="pr-4 font-normal">at</th>
+                  <th className="pr-4 font-normal">source</th>
+                  <th className="pr-4 font-normal">endpoint</th>
+                  <th className="pr-4 font-normal">status</th>
+                  <th className="pr-4 font-normal">ms</th>
+                  <th className="pr-4 font-normal">landed</th>
+                  <th className="pr-4 font-normal">run</th>
+                  <th className="font-normal">error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.recentCalls.map((call) => (
+                  <tr key={call.id} className="border-t border-border">
+                    <td className="pr-4 text-gray-400">{call.called_at}</td>
+                    <td className="pr-4 font-mono">{call.source}</td>
+                    <td className="pr-4 font-mono">{call.endpoint}</td>
+                    <td className={`pr-4 ${call.ok ? "" : "text-amber-400"}`}>
+                      {call.ok ? "ok" : "failed"}
+                      {call.status_code !== null ? ` ${call.status_code}` : ""}
+                    </td>
+                    <td className="pr-4">{call.duration_ms ?? "—"}</td>
+                    <td className="pr-4 font-mono">
+                      {call.landed_fetch_id !== null ? `raw.fetches#${call.landed_fetch_id}` : "—"}
+                    </td>
+                    <td className="pr-4 font-mono text-gray-400">{call.run_key ? shortRun(call.run_key) : "—"}</td>
+                    <td className="text-gray-400">{call.error ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-3">
         <h2 className="text-lg font-semibold">Sources</h2>
         <table className="w-full text-left text-sm">
           <thead>
