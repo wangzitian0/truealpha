@@ -69,7 +69,8 @@ _TAG_SOUP = re.compile(r"us-gaap:|Member\b|xbrli:")
 # unambiguously name a subset are here.
 _CLAUSE_END = re.compile(r"[,;.]|\s(?:including|of which|of whom)\s", re.I)
 _PARTIAL = re.compile(
-    r"\b(part[- ]time|temporary|seasonal|contractors?|contingent|"
+    # "full-time and part-time employees" is the whole workforce, not the part-time subset.
+    r"\b((?<!full[- ]time and )(?<!full[- ]time or )part[- ]time|temporary|seasonal|contractors?|contingent|"
     r"in (?:our|the|its) [a-z ]{0,40}(?:segment|division|department|business|function|subsidiar)|"
     r"located in|based in|outside (?:of )?the united states)\b",
     re.I,
