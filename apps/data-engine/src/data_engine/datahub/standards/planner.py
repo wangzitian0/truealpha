@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
+from data_engine.datahub.production_topt.headcount import HEADCOUNT_SOURCE_PRIORITY
 from data_engine.datahub.production_topt.universe_corpus import load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 
@@ -83,15 +84,19 @@ def open_cells(
         if issuer.cik is None:
             cells.append(OpenCell(issuer, "no_fact", None, None))
             continue
+        # The SAME resolution the daily tick's reader applies (rule 12: declared source
+        # priority first, recency second): a cited extraction with an older filing date
+        # outranks a later-stamped seed, so the cell is closed, not refetched (review on
+        # #740).
         row = connection.execute(
             """
             select source, knowable_at
             from staging.issuer_headcount_facts
             where cik = %s and knowable_at <= %s
-            order by knowable_at desc, id desc
+            order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
             limit 1
             """,
-            (issuer.cik, cutoff),
+            (issuer.cik, cutoff, list(HEADCOUNT_SOURCE_PRIORITY)),
         ).fetchone()
         if row is None:
             cells.append(OpenCell(issuer, "no_fact", None, None))

@@ -56,8 +56,10 @@ class FakeConnection:
     def execute(self, sql: str, params: tuple = ()):
         text = " ".join(sql.split())
         if text.startswith("select source, knowable_at from staging.issuer_headcount_facts"):
-            cik, cutoff = params
-            rows = sorted((r for r in self.facts.get(cik, []) if r[1] <= cutoff), key=lambda r: r[1], reverse=True)
+            cik, cutoff, priority = params
+            eligible = [r for r in self.facts.get(cik, []) if r[1] <= cutoff]
+            rank = {source: index for index, source in enumerate(priority)}
+            rows = sorted(eligible, key=lambda r: (rank.get(r[0], len(priority)), -r[1].timestamp()))
             return _Result(rows[:1])
         if text.startswith("select 1 from staging.issuer_headcount_facts"):
             cik, _source, like = params
@@ -302,6 +304,18 @@ def test_open_cells_follow_the_three_rules() -> None:
     cells = {cell.issuer.cik: cell.reason for cell in open_cells(connection, issuers, standard=STANDARD, cutoff=CUTOFF)}
 
     assert cells == {2: "stale", 3: "seed_only", 4: "no_fact", 5: "no_fact"}
+
+
+def test_a_cited_fact_closes_the_cell_even_when_the_seed_is_stamped_later() -> None:
+    """Review on #740: the planner resolves the best fact the way the reader does —
+    declared source priority first — so a cited extraction filed before the seed's
+    declared 2026-01-01 stamp is not refetched every week as `seed_only`."""
+    cited_then_seed = [
+        (EXTRACTION_SOURCE, datetime(2025, 12, 18, tzinfo=UTC)),
+        ("manual-review", datetime(2026, 1, 1, tzinfo=UTC)),
+    ]
+    connection = FakeConnection({1730168: cited_then_seed})
+    assert open_cells(connection, [_issuer(1730168, "AVGO")], standard=STANDARD, cutoff=CUTOFF) == []
 
 
 def test_open_cells_refuses_a_naive_cutoff() -> None:
