@@ -7,19 +7,14 @@ import dagster as dg
 import psycopg
 
 from data_engine.config import settings
-from data_engine.lanes.capture import (
-    CANARY_JOB_NAME,
-    QQQ_LIVE_JOB_NAME,
-    TOPT_LIVE_JOB_NAME,
-    ToptLiveTickConfig,
-    canary_live_pipeline_job,
-    qqq_live_pipeline_job,
-    topt_live_pipeline_job,
-)
+from data_engine.lanes.capture import TICK_BY_JOB, TOPT_LIVE_JOB_NAME, ToptLiveTickConfig
+from data_engine.lanes.capture import defs as capture_defs
 
 
 @dg.sensor(
-    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job, canary_live_pipeline_job],
+    # Every declared tick is a manual-trigger target (#72 scope 4): the sensor's job
+    # list is the capture lane's, not a copy of it.
+    jobs=list(capture_defs.jobs or []),
     minimum_interval_seconds=30,
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
@@ -42,21 +37,14 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
         for request_id, executed_at, dedupe_key, job_name in pending:
             run_key = f"manual:{dedupe_key}"
             # Dispatch by the request's declared job (#539 QQQ): the same thin
-            # trigger drives either universe's pipeline.
-            op_by_job = {
-                QQQ_LIVE_JOB_NAME: "run_qqq_live_tick",
-                CANARY_JOB_NAME: "run_canary_live_tick",
-            }
-            op_name = op_by_job.get(job_name, "run_topt_live_tick")
+            # trigger drives any declared universe's pipeline; an unknown job name
+            # falls back to TOPT, as it always has.
+            tick = TICK_BY_JOB.get(job_name, TICK_BY_JOB[TOPT_LIVE_JOB_NAME])
             yield dg.RunRequest(
                 run_key=run_key,
-                job_name=(
-                    job_name
-                    if job_name in (TOPT_LIVE_JOB_NAME, QQQ_LIVE_JOB_NAME, CANARY_JOB_NAME)
-                    else TOPT_LIVE_JOB_NAME
-                ),
+                job_name=tick.job_name,
                 run_config=dg.RunConfig(
-                    ops={op_name: ToptLiveTickConfig(executed_at=executed_at.astimezone(UTC).isoformat())}
+                    ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at.astimezone(UTC).isoformat())}
                 ),
             )
             connection.execute(
