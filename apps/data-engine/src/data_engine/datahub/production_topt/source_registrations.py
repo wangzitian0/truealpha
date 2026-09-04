@@ -93,6 +93,17 @@ class OriginRegistration:
     capacity: CapacityDeclaration | None = None
 
 
+def _capacity_payload(capacity: CapacityDeclaration | None) -> dict[str, Any] | None:
+    if capacity is None:
+        return None
+    return {
+        "calls_per_window": capacity.calls_per_window,
+        "window_seconds": capacity.window_seconds,
+        "daily_budget": capacity.daily_budget,
+        "concurrency": capacity.concurrency,
+    }
+
+
 @dataclass(frozen=True)
 class SourceRegistration:
     source_id: str
@@ -128,10 +139,13 @@ class SourceRegistration:
                     "origin_id": o.origin_id,
                     "value_key": o.value_key,
                     "parser_versions": list(o.parser_versions),
+                    "capacity": _capacity_payload(o.capacity),
                 }
                 for o in self.origins
             ],
             "corroboration_class": self.corroboration_class,
+            "capacity": _capacity_payload(self.capacity),
+            "ledger_seat": self.ledger_seat,
             "session_bound": self.session_bound,
         }
 
@@ -251,14 +265,24 @@ def freshness_windows() -> dict[str, timedelta]:
     }
 
 
-def source_by_parser() -> dict[str, tuple[str, str, str]]:
+def source_by_parser(registrations: Sequence[SourceRegistration] = REGISTRATIONS) -> dict[str, tuple[str, str, str]]:
     """parser_version -> (origin_source, origin_id, value_key), over every registered
-    origin's history, so the quality report recognises every vintage ever written."""
+    origin's history, so the quality report recognises every vintage ever written.
+
+    A vintage claimed by two origins with different coordinates would mis-attribute
+    every historical observation written under it, silently; that is refused here,
+    at import, rather than discovered in a quality report (review on #743)."""
     mapping: dict[str, tuple[str, str, str]] = {}
-    for registration in REGISTRATIONS:
+    for registration in registrations:
         for origin in registration.origins:
             for vintage in origin.parser_versions:
-                mapping[vintage] = (origin.origin_source, origin.origin_id, origin.value_key)
+                coordinate = (origin.origin_source, origin.origin_id, origin.value_key)
+                if vintage in mapping and mapping[vintage] != coordinate:
+                    raise ValueError(
+                        f"parser vintage {vintage!r} is claimed by two origins with different coordinates: "
+                        f"{mapping[vintage]} and {coordinate} (#72)"
+                    )
+                mapping[vintage] = coordinate
     return mapping
 
 

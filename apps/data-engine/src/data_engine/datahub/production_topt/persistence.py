@@ -45,6 +45,7 @@ from truealpha_contracts.ports import RawObjectStore
 from data_engine import raw_store
 from data_engine.datahub.control_plane import AttemptLedger
 from data_engine.datahub.production_topt.executor import Corroboration, FetchSuccess, RawResponse
+from data_engine.datahub.production_topt.source_registrations import registration_for
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 
 # How a classified reason code lands in the attempt ledger. The reason code stays
@@ -372,9 +373,12 @@ class PostgresCaptureControlSink:
             "partition": obligation.partition,
             "origin": origin,
         }
+        # The registration that owns the cell's semantic signs the corroborating request
+        # too (#72): a second origin is part of the same source's declaration.
+        registration = registration_for(obligation.capture_requirement_id.removesuffix(":v1"))
         return SourceRequest(
-            source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': source})}",
-            source_policy_id=f"source-policy:{source}",
+            source_registry_entry_id=registration.entry_id,
+            source_policy_id=registration.policy_id,
             request_fingerprint_version=f"{source}:v1",
             canonical_request_sha256=canonical_sha256(coordinate),
             subject_refs=(obligation.subject,),

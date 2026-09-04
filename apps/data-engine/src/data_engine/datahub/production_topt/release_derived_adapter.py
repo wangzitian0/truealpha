@@ -11,9 +11,11 @@ bytes. A record knowable only after the cutoff is a look-ahead violation.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from truealpha_contracts.common import canonical_sha256
@@ -57,6 +59,11 @@ class ReleaseDerivedAdapter:
     def __init__(self, targets: dict[str, ReleaseDerivedRecord], *, cutoff: date) -> None:
         self._targets = targets
         self._cutoff = cutoff
+
+    @property
+    def targets(self) -> Mapping[str, ReleaseDerivedRecord]:
+        """The planned cells this adapter answers for, by work item id (read-only)."""
+        return MappingProxyType(self._targets)
 
     def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome:
         record = self._targets.get(work_item.work_item_id)

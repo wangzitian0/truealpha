@@ -217,6 +217,8 @@ def _capture_run(
     return schedule_policy, campaign, run
 
 
+# Fixture-only replay (tests): its requests carry a fixture label, deliberately not a
+# registration hash — no deployed path constructs requests here (#72 scopes it out).
 def _source_request(
     *,
     member: SubjectRef,

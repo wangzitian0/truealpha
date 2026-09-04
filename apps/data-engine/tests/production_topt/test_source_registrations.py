@@ -16,10 +16,13 @@ from pathlib import Path
 from data_engine.datahub.production_topt import source_registrations as registry
 from data_engine.datahub.production_topt.source_registrations import (
     REGISTRATIONS,
+    OriginRegistration,
     RouteCell,
     RouteContext,
+    SourceRegistration,
     registered_semantic_types,
     registration_for,
+    source_by_parser,
 )
 
 GENERIC = Path(__file__).resolve().parents[2] / "src" / "data_engine" / "datahub"
@@ -72,10 +75,9 @@ def test_release_route_builds_without_a_connection_or_a_vendor() -> None:
         RouteCell("wi-2", "universe-membership", "issuer:cik:1", "instrument:1", "listing:xnas:aaa", "AAA"),
     ]
     adapter = registration_for("listing-identity").resolve_route_builder()(context, cells)
-    assert adapter is not None
-    assert {"wi-1", "wi-2"} <= set(
-        getattr(adapter, "targets", {}) or getattr(adapter, "_targets", {}) or {"wi-1", "wi-2"}
-    )
+    assert set(adapter.targets) == {"wi-1", "wi-2"}
+    assert adapter.targets["wi-1"].semantic_type == "listing-identity"
+    assert adapter.targets["wi-2"].payload["ticker"] == "AAA"
 
 
 def test_registry_entry_ids_are_content_addressed_and_distinct() -> None:
@@ -125,3 +127,34 @@ def test_derived_enumerations_are_the_registry_objects() -> None:
     assert materialization._REQUIRED_TYPES == frozenset(registry.SEMANTIC_TYPES)
     assert quality_report._SOURCE_BY_PARSER is registry.SOURCE_BY_PARSER
     assert quality_report._IDENTITY_SEMANTICS is registry.RELEASE_SEMANTICS
+
+
+def test_a_parser_vintage_claimed_by_two_origins_is_refused() -> None:
+    """Silent overwrite would mis-attribute every historical observation written under
+    the vintage; the registry refuses the conflict at derivation time."""
+    import pytest
+
+    def registration(origin_id: str, value_key: str) -> SourceRegistration:
+        return SourceRegistration(
+            source_id=f"probe-{origin_id}",
+            version="v1",
+            semantic_types=("probe",),
+            freshness_max_age={},
+            route_builder="x:y",
+            origins=(OriginRegistration("probe:v1", origin_id, value_key, ("probe-parser:v1",)),),
+        )
+
+    with pytest.raises(ValueError, match="probe-parser:v1"):
+        source_by_parser((registration("origin:a", "close"), registration("origin:b", "close")))
+    # The same coordinate declared twice is not a conflict.
+    assert source_by_parser((registration("origin:a", "close"), registration("origin:a", "close")))
+
+
+def test_entry_id_covers_capacity_and_ledger_seat() -> None:
+    from dataclasses import replace
+
+    from data_engine.datahub.production_topt.source_registrations import CapacityDeclaration
+
+    base = REGISTRATIONS[-1]
+    assert replace(base, capacity=CapacityDeclaration(1, 1)).entry_id != base.entry_id
+    assert replace(base, ledger_seat="probe").entry_id != base.entry_id
