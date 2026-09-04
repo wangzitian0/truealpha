@@ -2,10 +2,10 @@
 """CLI wrapper: run `data_engine.core_strategy_replay.run()` and write reports.
 
 The replay logic itself lives in `data_engine.core_strategy_replay` (a plain
-importable module, no Dagster/CLI concerns) so both this script and the
-`materialize_core_strategy_replay_preview` Dagster asset
-(`data_engine.core_strategy_replay_assets`) call the same `run()` without one
-depending on the other. Re-exports the names `apps/data-engine/tests/
+importable module, no Dagster/CLI concerns) so this script calls the same
+`run()` the live strategy bridge builds on, without depending on it. (The
+retired `core_strategy_replay_assets` Dagster asset that also called it was
+deleted with the fixture generations, #731.) Re-exports the names `apps/data-engine/tests/
 test_strategy_smoke.py` already loads off this script module dynamically
 (`importlib.util.spec_from_file_location`), so that test needed no changes.
 

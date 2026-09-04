@@ -17,9 +17,9 @@ This is explicitly a **preview**, not #26's full acceptance evidence:
   persisted StrategyRun/Trade/PortfolioValuation record. Those remain real,
   tracked gaps toward #26's full acceptance.
 
-`run()` is the pure, side-effect-free entry point both the CLI script
-(`apps/data-engine/scripts/run_strategy_smoke.py`) and the Dagster asset
-(`data_engine.core_strategy_replay_assets`) call -- this module has no
+`run()` is the pure, side-effect-free entry point the CLI script
+(`apps/data-engine/scripts/run_strategy_smoke.py`) calls (the retired Dagster
+asset that also called it went with the fixture generations, #731) -- this module has no
 Dagster import and no file I/O of its own beyond reading the checked-in
 golden corpus, so it stays trivially testable and reusable from either
 caller without one depending on the other's concerns.
