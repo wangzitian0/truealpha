@@ -13,7 +13,8 @@ re-pull just skips the check and lands a new vintage.
 import json
 from datetime import UTC, datetime
 
-from truealpha_contracts import DataSource, RawCapture, RawObjectStore
+from truealpha_contracts.models import DataSource, RawCapture
+from truealpha_contracts.ports import RawObjectStore
 from truealpha_runtime import S3RawObjectStore
 
 _store: S3RawObjectStore | None = None

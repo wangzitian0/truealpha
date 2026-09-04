@@ -18,8 +18,9 @@ from data_engine.datahub.production_topt.release_derived_adapter import (
     ReleaseDerivedAdapter,
     ReleaseDerivedRecord,
 )
-from truealpha_contracts import EvidenceEdge, EvidenceNode, ObligationReasonCode
 from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from truealpha_contracts.evidence_graph import EvidenceEdge, EvidenceNode
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 _CUTOFF_D = date(2026, 3, 31)
 _CUTOFF = datetime(2026, 4, 1, tzinfo=UTC)

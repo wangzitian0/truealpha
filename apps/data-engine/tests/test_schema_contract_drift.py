@@ -10,7 +10,7 @@ explicitly, never inferred."""
 
 import pytest
 from data_engine.config import settings
-from truealpha_contracts import FinancialFact
+from truealpha_contracts.models import FinancialFact
 from truealpha_runtime.testing import skip_or_fail
 
 psycopg = pytest.importorskip("psycopg")

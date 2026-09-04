@@ -12,7 +12,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from factors.composite.registered_composite_probe import registered_composite_probe
-from truealpha_contracts import (
+from truealpha_contracts.data_quality import (
     STRATEGY_DATA_REQUIREMENTS,
     DataQualityReport,
     EvidenceCase,

@@ -44,15 +44,10 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
-from truealpha_contracts import (
-    ObligationReasonCode,
-    RawCapture,
-    RawIngestionEnvelope,
-    RawObjectRef,
-    canonical_sha256,
-)
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import ObligationTerminalState
-from truealpha_contracts.models import DataSource
+from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 # One TOPT issuer is a depository institution, one an insurer (SEC SIC 6021 / 63xx);

@@ -66,8 +66,9 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
 from factors.production_topt import OperatingBranch
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from truealpha_contracts import ObligationReasonCode, RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.datahub import CaptureWorkItem
+from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 REPOSITORY_ROOT = next(
     parent

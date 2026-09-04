@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
-from truealpha_contracts import DataSource
+from truealpha_contracts.models import DataSource
 from truealpha_runtime.testing import skip_or_fail
 
 psycopg = pytest.importorskip("psycopg")

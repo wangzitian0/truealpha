@@ -9,13 +9,13 @@ from typing import Any
 
 from psycopg import Connection
 from psycopg.types.json import Jsonb
-from truealpha_contracts import canonical_sha256
 from truealpha_contracts.capture_control import (
     CaptureCheckpoint,
     CaptureListObligation,
     CaptureListVersion,
     CaptureObligationWorkBinding,
 )
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import (
     CaptureCampaign,
     CaptureRun,

@@ -3,7 +3,6 @@ from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts import CaptureEnvironment
 from truealpha_contracts.catalog import (
     CanonicalQuestion,
     CatalogRequirementLevel,
@@ -17,7 +16,7 @@ from truealpha_contracts.catalog import (
     ResearchScopeFloor,
     ResearchScopeMinimums,
 )
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.execution import FactorInvocationTemplate, FactorKind
 from truealpha_contracts.readiness import (

@@ -9,9 +9,9 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from truealpha_contracts import (
+from truealpha_contracts.common import CaptureEnvironment
+from truealpha_contracts.evidence_graph import (
     BitemporalStamp,
-    CaptureEnvironment,
     CurrentPointer,
     CurrentPointerKey,
     EvidenceEdge,

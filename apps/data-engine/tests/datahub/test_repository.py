@@ -12,12 +12,12 @@ from data_engine.config import settings
 from data_engine.datahub import PostgresCaptureControlRepository, expand_obligations
 from data_engine.datahub.control_plane import AttemptLedger
 from data_engine.datahub.medium_replay import _capture_run, _source_request, frozen_topt_list_version
-from truealpha_contracts import canonical_sha256
 from truealpha_contracts.capture_control import (
     CaptureCheckpoint,
     CaptureObligationWorkBinding,
     CheckpointPhase,
 )
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import (
     CaptureWorkItem,
     FetchAttemptOutcome,

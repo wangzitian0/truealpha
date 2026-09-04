@@ -45,7 +45,7 @@ from data_engine.sources import nport, openfigi
 from data_engine.sources.sec import TICKERS_URL
 from data_engine.sources.sec import client as sec_client
 from factors.shared import entity_resolution as er
-from truealpha_contracts import DataSource
+from truealpha_contracts.models import DataSource
 
 DEFAULT_ETFS = ["IVV", "QQQ", "AGIX", "MCHI"]
 

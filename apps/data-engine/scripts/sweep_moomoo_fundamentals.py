@@ -33,7 +33,7 @@ from data_engine.config import settings
 from data_engine.sources import moomoo as mm
 from data_engine.sources.moomoo_ledger import BudgetExceededError, calls_this_month
 from factors.shared import entity_resolution as er
-from truealpha_contracts import DataSource
+from truealpha_contracts.models import DataSource
 
 CALLER = "sweep_moomoo_fundamentals"
 OWNER_PLATE_CHUNK = 50

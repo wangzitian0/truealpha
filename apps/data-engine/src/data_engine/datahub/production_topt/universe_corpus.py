@@ -16,8 +16,8 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from truealpha_contracts import canonical_sha256
 from truealpha_contracts.capture_control import CaptureListVersion
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 

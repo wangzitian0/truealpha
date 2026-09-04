@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts import (
+from truealpha_contracts.data_quality import (
     STRATEGY_DATA_REQUIREMENTS,
     DataQualityReport,
     EvidenceCase,

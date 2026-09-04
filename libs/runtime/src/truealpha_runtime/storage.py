@@ -6,7 +6,7 @@ from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 from infra2_sdk.runtime.s3 import S3Settings, create_s3_client
-from truealpha_contracts import RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 
 from truealpha_runtime.config import RuntimeSettings, runtime_settings
 

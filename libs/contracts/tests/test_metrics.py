@@ -1,9 +1,5 @@
-from truealpha_contracts import (
-    METRICS,
-    DataSource,
-    fusion_rank,
-    source_priority,
-)
+from truealpha_contracts.metrics import METRICS, fusion_rank, source_priority
+from truealpha_contracts.models import DataSource
 
 
 def test_every_module_core_metric_is_registered():

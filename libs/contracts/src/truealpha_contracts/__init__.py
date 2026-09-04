@@ -1,4 +1,11 @@
-"""Stable contracts shared by ingestion, factors, runtime, and backtests."""
+"""Stable contracts shared by ingestion, factors, runtime, and backtests.
+
+FROZEN as of 2026-09-04 (#731): this aggregate re-export list takes no new names.
+Import from the owning submodule (`from truealpha_contracts.datahub import ...`);
+`libs/contracts/tests/test_public_api.py` pins the list and rejects aggregate
+symbol imports elsewhere in the repository. 504 names, edited by every lane 23
+times in sixty days, was the single hottest merge-conflict surface in the repo.
+"""
 
 from truealpha_contracts.access import (
     AccessAction,

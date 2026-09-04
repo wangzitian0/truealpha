@@ -22,8 +22,8 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     sec_financial_fetcher,
 )
 from factors.production_topt import OperatingBranch
-from truealpha_contracts import ObligationReasonCode
 from truealpha_contracts.datahub import CaptureWorkItem
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 _CUTOFF = date(2026, 3, 31)
 

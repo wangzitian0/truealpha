@@ -22,9 +22,10 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from truealpha_contracts import ObligationReasonCode, canonical_sha256
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 from data_engine.datahub.production_topt.executor import (
     Corroboration,

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from botocore.exceptions import ClientError
-from truealpha_contracts import DataSource, RawCapture
+from truealpha_contracts.models import DataSource, RawCapture
 from truealpha_runtime import (
     DEPENDENCY_MANIFEST,
     DeploymentSettings,

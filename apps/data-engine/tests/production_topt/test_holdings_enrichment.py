@@ -19,8 +19,7 @@ from data_engine.datahub.production_topt.holdings_enrichment import (
     figi_from_raw,
 )
 from factors.shared import entity_resolution as er
-from truealpha_contracts import RawCapture, RawIngestionEnvelope, RawObjectRef
-from truealpha_contracts.models import DataSource
+from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope, RawObjectRef
 
 
 class _InMemoryObjectStore:

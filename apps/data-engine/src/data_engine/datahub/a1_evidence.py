@@ -31,7 +31,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import psycopg
-from truealpha_contracts import CaptureEnvironment
+from truealpha_contracts.common import CaptureEnvironment
 from truealpha_contracts.evidence_graph import (
     BitemporalStamp,
     CurrentPointer,
