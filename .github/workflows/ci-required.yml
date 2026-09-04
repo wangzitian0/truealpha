@@ -299,9 +299,14 @@ jobs:
     uses: ./.github/workflows/release-images.yml
     with:
       publish: true
-      app_web: true
-      llm_service: true
-      data_engine: true
+      # A tag publishes every image under its version (deploy-release.yml promotes all
+      # three by tag), and the manual force does the same by definition. A main push
+      # publishes only what changed: before #731 every uv.lock or libs/** merge rebuilt
+      # and republished app-web too, one image every three days for a dependency it
+      # does not use.
+      app_web: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
+      llm_service: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
+      data_engine: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
 
   required:
     name: ci-required
