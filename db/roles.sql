@@ -149,6 +149,9 @@ grant select on staging.etf_constituent_facts to app_ops_reader;
 grant select on staging.accepted_rulesets to app_ops_reader;
 grant select on staging.accepted_ruleset_head to app_ops_reader;
 grant select on staging.contract_objects to app_ops_reader;
+-- #729: the external call ledger — /admin/datahub's Capacity and Traffic sections read
+-- every vendor request (success or failure) and join it to the landed raw.fetches row.
+grant select on staging.api_call_ledger to app_ops_reader;
 grant usage on schema mart to app_ops_reader;
 grant select on mart.current_pointer_head to app_ops_reader;
 -- The /admin/datahub dashboard (#641 D5) joins heads to their quality grades and

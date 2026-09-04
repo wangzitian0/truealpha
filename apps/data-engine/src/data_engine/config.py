@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime import RuntimeSettings
@@ -58,6 +60,13 @@ class Settings(RuntimeSettings):
     # every market-price cell is honestly single-origin and reconciliation
     # reports insufficient_independent_origins rather than silently agreeing.
     twelve_data_api_key: str = ""
+    # Where `sources.gateway` writes the external call ledger (#729): 'postgres'
+    # (staging.api_call_ledger, autocommit, the only value a deployed process may
+    # run with) or 'off' for a local probe with no warehouse at all. There is no
+    # silent fallback between the two: a deployed tick that cannot record its
+    # vendor calls logs every unrecorded row at ERROR rather than pretending.
+    # `Literal` so a misspelt value fails at startup instead of behaving like 'postgres'.
+    external_call_ledger: Literal["postgres", "off"] = "postgres"
 
 
 settings = Settings()

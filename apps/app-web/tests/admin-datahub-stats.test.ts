@@ -33,6 +33,46 @@ const headRows = [
   },
 ];
 const sourceRows = [{ source: "yahoo", fetches_total: 728, fetches_24h: 123, last_fetch: "2026-08-18" }];
+// #729: the external call ledger — one vendor today, and one request each way.
+const trafficRows = [
+  {
+    source: "twelvedata",
+    calls: 42,
+    failed: 21,
+    landed: 21,
+    avg_ms: 310,
+    last_call: "2026-09-05 22:19:44+00",
+    last_error: "No data is available on the specified dates",
+  },
+];
+const recentCallRows = [
+  {
+    id: 2,
+    called_at: "2026-09-05 22:19:44+00",
+    source: "twelvedata",
+    endpoint: "time_series",
+    caller: "twelve_data_origin",
+    ok: true,
+    status_code: 200,
+    duration_ms: 290,
+    error: null,
+    run_key: "dagster:abc",
+    landed_fetch_id: 6540,
+  },
+  {
+    id: 1,
+    called_at: "2026-09-05 22:19:33+00",
+    source: "twelvedata",
+    endpoint: "eod",
+    caller: "twelve_data_origin",
+    ok: false,
+    status_code: 400,
+    duration_ms: 330,
+    error: "No data is available on the specified dates",
+    run_key: "dagster:abc",
+    landed_fetch_id: null,
+  },
+];
 const runRows = [
   {
     run_id: "capture-run:" + "9".repeat(64),
@@ -55,11 +95,24 @@ const runRows = [
       if (typeof sql === "string" && sql.includes("as check")) {
         return { rows: [{ check: sql.slice(20, 44), verdict: "pass", detail: "stubbed" }] } as never;
       }
+      // #729: the ledger reads also join raw.fetches, so they are matched BEFORE the
+      // sources stub, on the ledger table itself; per-source aggregate vs recent list.
+      if (typeof sql === "string" && sql.includes("api_call_ledger")) {
+        return { rows: sql.includes("group by l.source") ? trafficRows : recentCallRows } as never;
+      }
       if (typeof sql === "string" && sql.includes("raw.fetches")) return { rows: sourceRows } as never;
       return { rows: runRows } as never;
     },
   } as never);
   const stats = await loadDatahubStats();
+  assert(stats.traffic.length === 1 && stats.traffic[0].source === "twelvedata", "traffic rows pass through");
+  assert(stats.traffic[0].failed === 21, "failed requests are counted, not hidden behind landed rows");
+  assert(stats.recentCalls.length === 2, "recent calls pass through");
+  assert(stats.recentCalls[0].landed_fetch_id === 6540, "a successful call names the raw.fetches row it became");
+  assert(
+    stats.recentCalls[1].ok === false && stats.recentCalls[1].error !== null,
+    "a failed call carries the vendor's error",
+  );
   assert(stats.heads.length === 1, "one governed head");
   assert(stats.heads[0].availability === "0.7819", "capture-level headline rides along");
   assert(stats.heads[0].factors.length === 1, "factor grades unpacked from the payload map");

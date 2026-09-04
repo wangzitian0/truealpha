@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 from data_engine.config import settings
+from data_engine.sources import gateway
 from data_engine.sources import moomoo_ledger as ledger
 from factors.shared import entity_resolution as er
 from truealpha_runtime.testing import skip_or_fail
@@ -176,7 +177,9 @@ def test_fund_holding_dual_lines_coexist_and_rerun_conflicts_away(conn):
 
 def test_ledger_postgres_backend(conn, monkeypatch):
     monkeypatch.setattr(ledger.settings, "moomoo_ledger_backend", "postgres")
-    monkeypatch.setattr(ledger, "_pg_conn", conn)  # ride the test transaction, rolled back after
+    # The ledger connection lives in `sources.gateway` since #729 (moomoo was the ledger's
+    # first tenant); patching it there rides the test transaction, rolled back after.
+    monkeypatch.setattr(gateway, "_pg_conn", conn)
 
     # Assertions are delta-based: in postgres mode calls_this_month() also sums
     # the local json ledger (probe sessions must stay visible to a sweep's

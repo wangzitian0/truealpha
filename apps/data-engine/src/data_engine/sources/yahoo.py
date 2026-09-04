@@ -33,6 +33,8 @@ from typing import Any
 
 import httpx
 
+from data_engine.sources import gateway
+
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 USER_AGENT = "TrueAlpha research wangzitian.ai@icloud.com"
 
@@ -91,7 +93,11 @@ def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int 
     start = end - timedelta(days=period_days)
     params = {"period1": str(_epoch(start)), "period2": str(_epoch(end + timedelta(days=1))), "interval": "1d"}
     with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
-        resp = client.get(CHART_URL.format(symbol=symbol), params=params)
+        # Through the external call ledger (#729): the request, its status and the digest
+        # of the body it answered with are recorded before the bytes are parsed or landed.
+        resp = gateway.http_get(
+            client, "yahoo", "chart", CHART_URL.format(symbol=symbol), caller="yahoo.fetch_daily_chart", params=params
+        )
         resp.raise_for_status()
         body = resp.content
         # Decoded with parse_float=Decimal so the response is never routed through a

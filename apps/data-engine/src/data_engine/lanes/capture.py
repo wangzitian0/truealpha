@@ -29,6 +29,7 @@ from data_engine.datahub.strategy_bridge import (
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
 )
+from data_engine.sources import gateway
 
 TOPT_LIVE_JOB_NAME = "topt_live_pipeline"
 
@@ -211,8 +212,9 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     version = live_version_for(cutoff)
     # Lazy, run-time connection (DATABASE_URL). One transaction for the whole tick:
     # a mid-run failure leaves no partial run; the daemon's retry re-runs the tick
-    # against the same content-addressed identities.
-    with psycopg.connect(settings.database_url) as connection:
+    # against the same content-addressed identities. Every vendor call inside is
+    # attributed to this Dagster run in the external call ledger (#729).
+    with gateway.run_scope(f"dagster:{context.run_id}"), psycopg.connect(settings.database_url) as connection:
         pipeline = run_topt_pipeline(
             connection,
             cutoff=cutoff,

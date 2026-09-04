@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from data_engine.config import settings
+from data_engine.sources import gateway
+from data_engine.sources.gateway import _pg_execute  # one autocommit ledger connection, shared with the gateway
 
 LEDGER_PATH = Path(__file__).resolve().parents[3] / "data" / "moomoo_ledger.json"
 
@@ -60,41 +62,11 @@ def _save(state: dict) -> None:
 
 
 # --- postgres backend ---
-
-_pg_conn = None
-
-
-def _pg():
-    """Lazy, module-cached autocommit connection. Autocommit because a ledger row
-    must survive even if the caller's transaction rolls back — the call to moomoo
-    happened regardless of what the caller then does with the payload."""
-    global _pg_conn
-    if _pg_conn is None or _pg_conn.closed:
-        import psycopg
-
-        _pg_conn = psycopg.connect(settings.database_url, autocommit=True)
-    return _pg_conn
-
-
-def _pg_execute(sql: str, params=()):
-    """Execute on the cached connection, reconnecting once on failure. psycopg
-    marks a silently dropped connection closed only AFTER an operation fails on
-    it, so the first statement after a DB restart/network blip raises — one
-    fresh-connection retry covers that without hiding a genuinely down DB
-    (the retry's exception propagates)."""
-    global _pg_conn
-    import psycopg
-
-    try:
-        return _pg().execute(sql, params)
-    except psycopg.Error:
-        try:
-            if _pg_conn is not None:
-                _pg_conn.close()
-        finally:
-            _pg_conn = None
-        return _pg().execute(sql, params)
-
+#
+# The connection and the INSERT live in `sources.gateway` since #729: moomoo was the
+# ledger's first tenant, and every other vendor now writes the same table through the
+# same autocommit connection. This module keeps the moomoo-specific parts — the monthly
+# backstop, the burst throttle, and the json backend for probe sessions.
 
 _MONTH_START_UTC = "date_trunc('month', now() at time zone 'utc') at time zone 'utc'"
 
@@ -120,16 +92,41 @@ def calls_this_month() -> int:
     return _json_calls_this_month()
 
 
-def record(endpoint: str, caller: str, ok: bool) -> None:
-    """Record a call AFTER it happens — gate() below is what enforces the cap."""
+def record(
+    endpoint: str,
+    caller: str,
+    ok: bool,
+    *,
+    status_code: int | None = None,
+    error: str | None = None,
+    duration_ms: int | None = None,
+) -> None:
+    """Record a call AFTER it happens — gate() below is what enforces the cap.
+
+    A failed call carries the SDK's return code and message (#729: a failed request
+    records its error); in postgres mode the row goes through the gateway writer so a
+    moomoo call and a Twelve Data call are the same kind of ledger row. The postgres
+    write raises on failure here (unlike the gateway's own `emit`), because `_call`
+    deliberately drops an unaudited payload rather than let the gate undercount.
+    """
+    now = datetime.now(UTC)
     if settings.moomoo_ledger_backend == "postgres":
-        _pg_execute(
-            "insert into staging.api_call_ledger (source, endpoint, caller, ok) values ('moomoo', %s, %s, %s)",
-            (endpoint, caller, ok),
+        gateway.postgres_writer(
+            gateway.CallRecord(
+                source="moomoo",
+                endpoint=endpoint,
+                caller=caller,
+                called_at=now,
+                ok=ok,
+                status_code=status_code,
+                error=None if error is None else error[:500],
+                duration_ms=duration_ms,
+                run_key=gateway.current_run_key(),
+                capacity_window_id=gateway.capacity_window_id("moomoo", now),
+            )
         )
         return
     state = _load()
-    now = datetime.now(UTC)
     state["calls"].append(
         {
             "month": _month_key(now),
@@ -137,6 +134,9 @@ def record(endpoint: str, caller: str, ok: bool) -> None:
             "caller": caller,
             "called_at": now.isoformat(),
             "ok": ok,
+            "status_code": status_code,
+            "error": None if error is None else error[:500],
+            "duration_ms": duration_ms,
         }
     )
     _save(state)

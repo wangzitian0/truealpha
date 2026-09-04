@@ -55,12 +55,43 @@ export interface ValidationRow {
   detail: string;
 }
 
+/** #729: one vendor, today (UTC), from the external call ledger — every request,
+ * not only the ones that landed. `landed` counts the ok calls whose response bytes
+ * exist in raw.fetches (payload_sha256 join): the traceability the owner asked for. */
+export interface TrafficSourceRow {
+  source: string;
+  calls: number;
+  failed: number;
+  landed: number;
+  avg_ms: number | null;
+  last_call: string;
+  last_error: string | null;
+}
+
+/** #729: one external request. `landed_fetch_id` is the raw.fetches row its response
+ * bytes became (null for a failed call, or for a call whose bytes were not landed). */
+export interface RecentCallRow {
+  id: number;
+  called_at: string;
+  source: string;
+  endpoint: string;
+  caller: string;
+  ok: boolean;
+  status_code: number | null;
+  duration_ms: number | null;
+  error: string | null;
+  run_key: string | null;
+  landed_fetch_id: number | null;
+}
+
 export interface DatahubStats {
   heads: HeadStatusRow[];
   sources: SourceStatRow[];
   runs: CaptureRunRow[];
   validation: ValidationRow[];
   capacity: ValidationRow[];
+  traffic: TrafficSourceRow[];
+  recentCalls: RecentCallRow[];
 }
 
 const HEADS_SQL = `
@@ -132,13 +163,58 @@ const CORROBORATION_SQL = `
 // (800/day) is the binding constraint; the reuse ratio is what keeps it flat as
 // universes multiply; DB size and capture-window duration are the growth and
 // runtime axes. Disk % needs a host exporter and stays on #671's ledger.
+//
+// #729: the credit count reads the external call ledger, not raw.fetches. Landed rows
+// only ever counted the successes — every weekend tick spent two credits per listing
+// on a 400 + a fallback and the old row showed 0 of 800. Failed calls spent quota too.
 const CAPACITY_TD_SQL = `
   select 'twelvedata budget (this env, today utc)' as check,
-         case when count(*) > 560 then 'warn' else 'ok' end as verdict,
-         count(*) || ' of 800 shared daily credits' as detail
-  from raw.fetches
+         case when coalesce(sum(cost), 0) > 560 then 'warn' else 'ok' end as verdict,
+         coalesce(sum(cost), 0)::int || ' of 800 shared daily credits ('
+           || (count(*) filter (where not ok))::int || ' failed requests)' as detail
+  from staging.api_call_ledger
   where source = 'twelvedata'
-    and recorded_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+    and called_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+`;
+
+// #729: traffic, per source, today (UTC). Timestamps are rendered in UTC explicitly —
+// `timestamptz::text` follows the session TimeZone (review on #741). One row per vendor; a request is counted
+// whether it succeeded, answered 4xx/5xx, or raised — and `landed` says how many of the
+// successful ones dereference to bytes in raw.fetches.
+const TRAFFIC_SQL = `
+  select l.source,
+         count(*)::int as calls,
+         (count(*) filter (where not l.ok))::int as failed,
+         (count(*) filter (where l.ok and l.payload_sha256 is not null
+            and exists (select 1 from raw.fetches f
+                         where f.payload_sha256 = l.payload_sha256 and f.source = l.source)))::int as landed,
+         round(avg(l.duration_ms))::int as avg_ms,
+         to_char(max(l.called_at) at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as last_call,
+         (select e.error from staging.api_call_ledger e
+           where e.source = l.source and not e.ok
+             and e.called_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+           order by e.called_at desc limit 1) as last_error
+  from staging.api_call_ledger l
+  where l.called_at >= (date_trunc('day', now() at time zone 'utc') at time zone 'utc')
+  group by l.source
+  order by calls desc, l.source
+`;
+
+// #729: the last external requests, each traceable to the raw.fetches row its bytes
+// became — or carrying the error it failed with. Both joins match the source as well as
+// the digest: content addressing dedupes bytes, and two vendors could in principle
+// answer identical bytes (review on #741).
+const RECENT_CALLS_SQL = `
+  select l.id, to_char(l.called_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as called_at,
+         l.source, l.endpoint, l.caller, l.ok,
+         l.status_code, l.duration_ms, left(l.error, 160) as error, l.run_key,
+         case when l.ok and l.payload_sha256 is not null then
+           (select min(f.id) from raw.fetches f
+             where f.payload_sha256 = l.payload_sha256 and f.source = l.source)
+         end as landed_fetch_id
+  from staging.api_call_ledger l
+  order by l.called_at desc, l.id desc
+  limit 40
 `;
 const CAPACITY_REUSE_SQL = `
   select 'reuse ratio (24h)' as check,
@@ -195,20 +271,35 @@ interface HeadDbRow extends Omit<HeadStatusRow, "factors"> {
 
 export async function loadDatahubStats(): Promise<DatahubStats> {
   return withOpsReader(async (client) => {
-    const [heads, sources, runs, canary, reuse, plausibility, corroboration, td, reuseCap, dbSize, duration] =
-      await Promise.all([
-        client.query<HeadDbRow>(HEADS_SQL),
-        client.query<SourceStatRow>(SOURCES_SQL),
-        client.query<CaptureRunRow>(RUNS_SQL),
-        client.query<ValidationRow>(VALIDATION_SQL),
-        client.query<ValidationRow>(REUSE_SQL),
-        client.query<ValidationRow>(PLAUSIBILITY_SQL),
-        client.query<ValidationRow>(CORROBORATION_SQL),
-        client.query<ValidationRow>(CAPACITY_TD_SQL),
-        client.query<ValidationRow>(CAPACITY_REUSE_SQL),
-        client.query<ValidationRow>(CAPACITY_DB_SQL),
-        client.query<ValidationRow>(CAPACITY_DURATION_SQL),
-      ]);
+    const [
+      heads,
+      sources,
+      runs,
+      canary,
+      reuse,
+      plausibility,
+      corroboration,
+      td,
+      reuseCap,
+      dbSize,
+      duration,
+      traffic,
+      recentCalls,
+    ] = await Promise.all([
+      client.query<HeadDbRow>(HEADS_SQL),
+      client.query<SourceStatRow>(SOURCES_SQL),
+      client.query<CaptureRunRow>(RUNS_SQL),
+      client.query<ValidationRow>(VALIDATION_SQL),
+      client.query<ValidationRow>(REUSE_SQL),
+      client.query<ValidationRow>(PLAUSIBILITY_SQL),
+      client.query<ValidationRow>(CORROBORATION_SQL),
+      client.query<ValidationRow>(CAPACITY_TD_SQL),
+      client.query<ValidationRow>(CAPACITY_REUSE_SQL),
+      client.query<ValidationRow>(CAPACITY_DB_SQL),
+      client.query<ValidationRow>(CAPACITY_DURATION_SQL),
+      client.query<TrafficSourceRow>(TRAFFIC_SQL),
+      client.query<RecentCallRow>(RECENT_CALLS_SQL),
+    ]);
     return {
       heads: heads.rows.map((row: HeadDbRow) => ({
         universe_id: row.universe_id,
@@ -230,6 +321,8 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       runs: runs.rows,
       validation: [...canary.rows, ...reuse.rows, ...plausibility.rows, ...corroboration.rows],
       capacity: [...td.rows, ...reuseCap.rows, ...dbSize.rows, ...duration.rows],
+      traffic: traffic.rows,
+      recentCalls: recentCalls.rows,
     };
   });
 }

@@ -113,9 +113,15 @@ class Drift:
 
 
 def _http_json(url: str, user_agent: str) -> dict[str, Any]:
+    from data_engine.sources import gateway
+
     request = urllib.request.Request(url, headers={"User-Agent": user_agent})
-    with urllib.request.urlopen(request, timeout=90) as response:  # noqa: S310 - fixed SEC hosts
-        return json.loads(response.read().decode())
+    # The oracle's own SEC reads are external calls too (#729): recorded, and a 4xx
+    # raises as it always did here instead of being parsed as a document.
+    _status, body = gateway.urlopen(
+        "sec", "vendor-oracle", request, caller="quality.vendor_oracle", timeout=90, raise_for_status=True
+    )
+    return json.loads(body.decode())
 
 
 def ticker_cik_index(user_agent: str) -> dict[str, int]:

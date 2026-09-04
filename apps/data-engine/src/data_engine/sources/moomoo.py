@@ -15,6 +15,7 @@ init.md Section 5's 2026-07-10 correction.
 """
 
 import socket
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -79,11 +80,18 @@ def _call(ctx, endpoint: str, caller: str, fn):
     """
     gate(endpoint, caller)
     throttle()
+    started = time.monotonic()
     try:
         result = fn(ctx)
     except Exception as e:
         try:
-            record(endpoint, caller, ok=False)
+            record(
+                endpoint,
+                caller,
+                ok=False,
+                error=f"{type(e).__name__}: {e}",
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
         except Exception as ledger_err:
             # The ledger write failing must neither mask the original SDK error
             # nor escape as a raw psycopg error no sweep handler knows.
@@ -94,7 +102,14 @@ def _call(ctx, endpoint: str, caller: str, fn):
     ret, rest = result[0], result[1:]
     ok = ret == moomoo.RET_OK
     try:
-        record(endpoint, caller, ok)
+        record(
+            endpoint,
+            caller,
+            ok,
+            status_code=int(ret) if isinstance(ret, int) else None,
+            error=None if ok else str(rest[0] if rest else "unknown error"),
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
     except Exception as ledger_err:
         # Deliberately drop the payload: an unaudited-but-kept result would let
         # raw fill up while the gate undercounts. Surfacing this as the one

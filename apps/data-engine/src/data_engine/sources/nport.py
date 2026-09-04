@@ -16,6 +16,8 @@ Pitfalls encoded here (verified on QQQ/ARKK/IVV/AGIX/MCHI):
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
+from data_engine.sources import gateway
+
 MF_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
 # browse-edgar accepts a series ID as CIK — required for multi-series trusts.
 BROWSE_URL = (
@@ -46,7 +48,7 @@ def fund_series(client, ticker: str) -> tuple[int, str]:
     """(trust CIK, series id) for a fund ticker via SEC's official mapping.
     Raises KeyError if absent — notably SPY (a UIT) is not in this file; use an
     equivalent management-company ETF (IVV/VOO) instead."""
-    resp = client.get(MF_TICKERS_URL)
+    resp = gateway.http_get(client, "nport", "mf_tickers", MF_TICKERS_URL, caller="nport.fund_series")
     resp.raise_for_status()
     for cik, series_id, _class_id, symbol in resp.json()["data"]:
         if symbol.upper() == ticker.upper():
@@ -59,7 +61,9 @@ def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
     series' most recent NPORT-P. The filing date is the transaction time of
     everything derived from the filing — the moment its contents became publicly
     knowable — which is NOT the ingestion time (runtime contract)."""
-    resp = client.get(BROWSE_URL.format(series_id=series_id))
+    resp = gateway.http_get(
+        client, "nport", "browse", BROWSE_URL.format(series_id=series_id), caller="nport.latest_nport_accession"
+    )
     resp.raise_for_status()
     atom = ET.fromstring(resp.content)
     acc = atom.findtext(".//a:entry/a:content/a:accession-number", None, _ATOM_NS)
@@ -70,7 +74,9 @@ def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
 
 
 def fetch_nport_xml(client, cik: int, accession: str) -> bytes:
-    resp = client.get(ARCHIVE_URL.format(cik=cik, accession=accession))
+    resp = gateway.http_get(
+        client, "nport", "archive", ARCHIVE_URL.format(cik=cik, accession=accession), caller="nport.fetch_nport_xml"
+    )
     resp.raise_for_status()
     return resp.content
 
