@@ -74,8 +74,9 @@ class ToptLiveTickConfig(dg.Config):
 
 
 def _production_only(app_env: str) -> dg.DefaultScheduleStatus:
-    """Production-only by owner directive ("staging 跑 topt 够了"): staging keeps the
-    schedule STOPPED and the job runs there only via the manual trigger."""
+    """Production-only, by owner directive (2026-08-17: staging needs the TOPT tick and
+    nothing more): outside production the schedule defaults to STOPPED and the job runs
+    there only through the manual trigger."""
     return (
         dg.DefaultScheduleStatus.RUNNING
         if app_env.strip().lower() in ("production", "prod")
