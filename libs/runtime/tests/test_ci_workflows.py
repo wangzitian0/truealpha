@@ -84,8 +84,17 @@ def test_manual_image_release_is_explicit_and_waits_for_required_jobs() -> None:
         assert f"needs.{dependency}.result == 'success' || needs.{dependency}.result == 'skipped'" in condition, (
             f"images_release must wait for {dependency}"
         )
-    for image in ("publish", "app_web", "llm_service", "data_engine"):
-        assert release["with"][image] is True
+    assert release["with"]["publish"] is True
+    # #731: a main push publishes only the images whose filter matched; a tag and
+    # the manual force publish all three. Before this, every uv.lock or libs/**
+    # merge republished app-web for a dependency it does not use.
+    for image in ("app_web", "llm_service", "data_engine"):
+        expression = str(release["with"][image])
+        assert "github.ref_type == 'tag'" in expression, f"{image}: a tag must publish every image"
+        assert "inputs.force_images" in expression, f"{image}: the manual force must publish every image"
+        assert f"needs.changes.outputs.image_{image} == 'true'" in expression, (
+            f"{image}: a main push must publish only what its filter matched"
+        )
 
     text = source(REQUIRED)
     assert text.index("  images_release:\n") < text.index("\n  required:\n"), (

@@ -22,11 +22,7 @@ import psycopg
 from data_engine import dagster_defs
 from data_engine.dagster_defs import (
     CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME,
-    QQQ_LIVE_JOB_NAME,
-    STANDARD_BACKFILL_JOB_NAME,
     TOPT_LIVE_CRON,
-    TOPT_LIVE_JOB_NAME,
-    UNIVERSE_REFRESH_JOB_NAME,
     ToptLiveTickConfig,
     defs,
     fixture_canary_definitions,
@@ -35,28 +31,64 @@ from data_engine.dagster_defs import (
 )
 from data_engine.datahub.a1_evidence import PointerRegistration, UnmetObjective
 from data_engine.datahub.production_topt.composition import ToptPipelineResult, live_version_for
+from data_engine.lanes import LANE_MODULES, capture, lane_definitions
 
 
-def test_defs_loads_and_exposes_only_the_live_pipeline() -> None:
-    # `dagster -m data_engine.dagster_defs` resolves this object; it must build with
-    # no database and expose exactly the real-source pipeline — the fixture canary
-    # is NOT part of the deployed composition (#429 I2).
+def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
+    """`dagster -m data_engine.dagster_defs` resolves `defs`; it must build with no
+    database and be exactly what the registered lanes declare — no job listed by name
+    anywhere in the root (#731), and the fixture canary NOT part of it (#429 I2)."""
     assert isinstance(defs, dg.Definitions)
-    assert defs.get_job_def(TOPT_LIVE_JOB_NAME) is not None
-    assert defs.get_schedule_def(topt_live_schedule.name) is not None
-    deployed_jobs = {job.name for job in defs.jobs}
-    # Two real-source pipelines since the QQQ universe landed (#539); the
-    # fixture canary stays out of the deployed composition (#429 I2).
-    from data_engine.dagster_defs import CANARY_JOB_NAME
+    lanes = lane_definitions()
+    assert set(lanes) == set(LANE_MODULES)
 
-    assert deployed_jobs == {
-        TOPT_LIVE_JOB_NAME,
-        QQQ_LIVE_JOB_NAME,
-        CANARY_JOB_NAME,
-        UNIVERSE_REFRESH_JOB_NAME,
-        STANDARD_BACKFILL_JOB_NAME,
-    }
-    assert CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME not in deployed_jobs
+    def names(definitions: dg.Definitions, attribute: str) -> set[str]:
+        return {item.name for item in getattr(definitions, attribute) or ()}
+
+    for attribute in ("jobs", "schedules", "sensors"):
+        declared = set().union(*(names(lane, attribute) for lane in lanes.values()))
+        assert names(defs, attribute) == declared, f"root {attribute} != union of lane {attribute}"
+    assert names(defs, "jobs"), "the lanes declare no job at all"
+    assert CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME not in names(defs, "jobs")
+    # Sensors target jobs from another lane (triggers -> capture); the merged
+    # repository must resolve them, which only the repository build proves.
+    defs.get_repository_def()
+
+
+def test_every_lane_module_is_registered() -> None:
+    """A module under data_engine/lanes that LANE_MODULES does not name would load
+    nowhere: its jobs exist in the image and run never. Registration is one line,
+    and this makes forgetting it red."""
+    from pathlib import Path
+
+    package = Path(capture.__file__).parent
+    on_disk = {f"data_engine.lanes.{path.stem}" for path in package.glob("*.py") if path.stem != "__init__"}
+    assert on_disk == set(LANE_MODULES), (
+        f"lane modules on disk {sorted(on_disk)} != registered {sorted(LANE_MODULES)}; "
+        "add the module to data_engine.lanes.LANE_MODULES or delete it"
+    )
+
+
+#: Definitions a lane module imports from another lane in order to target them
+#: (a sensor's `jobs=`), and therefore does not own or list. Anything else a
+#: module builds must be in its own `defs`.
+IMPORTED_NOT_OWNED: dict[str, set[str]] = {"data_engine.lanes.triggers": {"jobs"}}
+
+
+def test_every_definition_a_lane_module_declares_is_in_its_defs() -> None:
+    """The other half of "no frozen list": a job, schedule or sensor built in a lane
+    module but left out of that module's `defs` is deployed nowhere. Assert over the
+    objects the module actually built, not over a list someone remembered to update."""
+    kinds = {"jobs": dg.JobDefinition, "schedules": dg.ScheduleDefinition, "sensors": dg.SensorDefinition}
+    for module_name, lane in lane_definitions().items():
+        module = __import__(module_name, fromlist=["defs"])
+        for attribute, kind in kinds.items():
+            if attribute in IMPORTED_NOT_OWNED.get(module_name, set()):
+                continue
+            built = {value.name for value in vars(module).values() if isinstance(value, kind)}
+            listed = {item.name for item in getattr(lane, attribute) or ()}
+            missing = built - listed
+            assert not missing, f"{module_name} builds {attribute} {sorted(missing)} but its defs omit them"
 
 
 def test_deployed_module_contains_no_fixture_seeding() -> None:
@@ -146,7 +178,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     test. `register_run_evidence` returns the given verdict verbatim."""
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _FakeConnection())
     monkeypatch.setattr(
-        dagster_defs,
+        capture,
         "run_topt_pipeline",
         lambda *args, **kwargs: ToptPipelineResult(
             run_id="capture-run:" + "a" * 64,
@@ -156,14 +188,14 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
             quality=dict(_QUALITY),
         ),
     )
-    monkeypatch.setattr(dagster_defs, "seed_strategy_inputs_from_capture", lambda *a, **k: 21)
-    monkeypatch.setattr(dagster_defs, "persist_strategy_input_coverage", lambda *a, **k: (20, 20))
+    monkeypatch.setattr(capture, "seed_strategy_inputs_from_capture", lambda *a, **k: 21)
+    monkeypatch.setattr(capture, "persist_strategy_input_coverage", lambda *a, **k: (20, 20))
     monkeypatch.setattr(
-        dagster_defs,
+        capture,
         "run_strategy_replay_for_cutoff",
         lambda *a, **k: ("strategy-run:" + "d" * 64, 20, "snapshot:" + "e" * 64),
     )
-    monkeypatch.setattr(dagster_defs, "register_run_evidence", lambda *a, **k: registration)
+    monkeypatch.setattr(capture, "register_run_evidence", lambda *a, **k: registration)
 
 
 def _run_tick(monkeypatch, registration: PointerRegistration):
