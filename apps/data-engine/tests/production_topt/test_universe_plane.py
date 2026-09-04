@@ -191,7 +191,6 @@ def test_build_routes_trusts_the_universes_embedded_ciks(connection, monkeypatch
     carries: the first QQQ run failed in build_routes on the same SEC crosswalk
     hole (AEP) the refresh had already resolved via EDGAR. With issuer:cik ids in
     the plan, the crosswalk is not even consulted."""
-    from data_engine.datahub.production_topt import composition
     from data_engine.datahub.production_topt.composition import build_routes, plan_and_persist
 
     source = UNIVERSE_SOURCES["qqq"]
@@ -233,10 +232,16 @@ def test_build_routes_trusts_the_universes_embedded_ciks(connection, monkeypatch
     def crosswalk_must_not_be_needed():
         raise AssertionError("plane universes must not consult the SEC crosswalk")
 
-    monkeypatch.setattr(composition.sec, "ticker_cik_index", crosswalk_must_not_be_needed)
+    # #72: the crosswalk and the classification registry are consulted by the SEC
+    # source's own route builder, which imports them at call time from their modules —
+    # so the modules are where a fake must land, not the composition root.
+    from data_engine.datahub.production_topt import issuer_registry
+    from data_engine.sources import sec as sec_module
+
+    monkeypatch.setattr(sec_module, "ticker_cik_index", crosswalk_must_not_be_needed)
     # Branch classification fetches SEC submissions per CIK — real network, not
     # this test's subject; the embedded-CIK path is.
-    monkeypatch.setattr(composition, "resolve_issuer_classifications", lambda cik_by_ticker: {})
+    monkeypatch.setattr(issuer_registry, "resolve_issuer_classifications", lambda cik_by_ticker: {})
     plan = plan_and_persist(
         connection,
         cutoff=datetime(2026, 8, 17, 12, 30, tzinfo=UTC),

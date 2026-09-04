@@ -29,8 +29,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import psycopg
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef, ResolutionKind
@@ -47,6 +48,10 @@ from data_engine.datahub.production_topt.executor import (
     RawResponse,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
+
+if TYPE_CHECKING:
+    from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
+
 
 # Concept lists are NOT here any more: they are a published, content-addressed ruleset
 # (`concept_mapping.DEFAULT_RULESET`, superseded at runtime by the governed pointer), so
@@ -644,3 +649,135 @@ def sec_financial_fetcher(
     except httpx.HTTPError as error:
         raise SourceUnavailableError(str(error)) from error
     return build_bundle(facts, cutoff, branch, raw_bytes=body, ruleset=ruleset)
+
+
+# -- registry route (#72) -----------------------------------------------------------------
+
+
+def _sec_ticker(ticker: str) -> str:
+    # SEC's company_tickers file uses a hyphen for share-class tickers (BRK.B -> BRK-B).
+    return ticker.replace(".", "-")
+
+
+def predecessor_ciks(
+    connection: psycopg.Connection[Any],
+    listing_ids: Sequence[str],
+    issuer_by_listing: dict[str, str] | None = None,
+) -> dict[str, int]:
+    """#496: each listing's predecessor company-facts CIK, consulted only when
+    the index-mapped CIK's taxonomy is empty (post-reorganization holdco).
+
+    Two registry sources, both our own versioned data, owner-signed rows first:
+    1. `staging.issuer_cik_predecessors` — the explicit registry (migration
+       0037; every row carries reason + approved_by);
+    2. the capture lineage — the most recent vintage whose observation carried
+       a revenue value (generic, self-maintaining once the A1 spine has seen
+       an issuer parse successfully; empty for issuers that never did).
+    """
+    resolved: dict[str, int] = {}
+    if issuer_by_listing:
+        registry = dict(
+            connection.execute(
+                "select issuer_id, predecessor_cik from staging.issuer_cik_predecessors where issuer_id = any(%s)",
+                (sorted(set(issuer_by_listing.values())),),
+            ).fetchall()
+        )
+        for listing_id, issuer_id in issuer_by_listing.items():
+            if issuer_id in registry:
+                resolved[listing_id] = int(registry[issuer_id])
+
+    rows = connection.execute(
+        """
+        select distinct on (o.subject_id) o.subject_id, v.source_record_id
+        from staging.capture_normalized_observations o
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        where o.subject_id = any(%s)
+          and o.semantic_type = 'financial-fact'
+          and p.normalized_payload->>'revenue' is not null
+          and v.source_record_id like 'companyfacts:CIK%%'
+        order by o.subject_id, o.knowable_at desc
+        """,
+        (list(listing_ids),),
+    ).fetchall()
+    for subject_id, record_id in rows:
+        digits = record_id.removeprefix("companyfacts:CIK")
+        if digits.isdigit():
+            resolved.setdefault(subject_id, int(digits))
+    return resolved
+
+
+def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinancialFactAdapter:
+    """The SEC company-facts source's own routing (#72). Source-facing resolution —
+    CIKs, issuer classification, predecessor CIKs, the governed concept ruleset — is
+    done once here, so no cell re-derives it and the composition root never sees it.
+
+    A plane-published universe already RESOLVED its identities: issuer:cik ids carry
+    the CIK the refresh verified (with the EDGAR fallback for the SEC crosswalk's own
+    holes — AEP is in neither crosswalk file). Trust the governed head first; only
+    LEI-style issuers (the hand-curated TOPT corpus) still consult the crosswalk. The
+    first QQQ run failed HERE, on the same AEP hole the refresh had already worked
+    around — one identity resolution, one place.
+    """
+    from functools import partial
+
+    from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
+    from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
+    from data_engine.datahub.production_topt.issuer_registry import resolve_issuer_classifications
+    from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION
+    from data_engine.sources import sec
+
+    connection = context.connection
+    tickers = {coordinate[3] for coordinate in context.coordinates.values()}
+    cik_by_ticker: dict[str, int] = {}
+    for issuer_id, _, _, ticker in context.coordinates.values():
+        if issuer_id.startswith("issuer:cik:"):
+            cik_by_ticker[ticker] = int(issuer_id.removeprefix("issuer:cik:"))
+    unresolved = sorted(tickers - set(cik_by_ticker))
+    if unresolved:
+        index = sec.ticker_cik_index()
+        for ticker in unresolved:
+            if _sec_ticker(ticker) in index:
+                cik_by_ticker[ticker] = index[_sec_ticker(ticker)]
+    missing = sorted(tickers - set(cik_by_ticker))
+    if missing:
+        raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
+    classifications = resolve_issuer_classifications(cik_by_ticker)
+    listing_ids = [coordinate[2] for coordinate in context.coordinates.values()]
+    issuer_by_listing = {coordinate[2]: coordinate[0] for coordinate in context.coordinates.values()}
+    predecessors = predecessor_ciks(connection, listing_ids, issuer_by_listing) if connection is not None else {}
+
+    targets: dict[str, SecTarget] = {}
+    for cell in cells:
+        cik = cik_by_ticker[cell.ticker]
+        targets[cell.work_item_id] = SecTarget(
+            cik=cik,
+            cutoff=context.cutoff_date,
+            issuer_id=cell.issuer_id,
+            instrument_id=cell.instrument_id,
+            listing_id=cell.listing_id,
+            operating_branch=(
+                classifications[cik].operating_branch if cik in classifications else OperatingBranch.NON_FINANCIAL
+            ),
+            # #533: only the industries whose cost of revenue is ~zero may substitute
+            # revenue for an untagged gross profit. Absent from the registry means no.
+            revenue_proxy_allowed=cik in classifications and classifications[cik].revenue_proxy_allowed,
+            # only meaningful when it differs from the mapped CIK — the fallback would
+            # otherwise refetch the same empty document.
+            predecessor_cik=(
+                predecessors.get(cell.listing_id) if predecessors.get(cell.listing_id) not in (None, cik) else None
+            ),
+        )
+    # Resolved once per run through the governed pointer, so every cell in the run is
+    # parsed by ONE ruleset and the observations can name it.
+    ruleset = resolve_ruleset(connection)
+    return SecFinancialFactAdapter(
+        targets,
+        partial(sec_financial_fetcher, ruleset=ruleset),
+        # No connection means no headcount plane to read, so every issuer resolves
+        # `missing_headcount` — an honest gap. Silently substituting a built-in table
+        # would put the deployed denominator back in the code, which is what the fact
+        # table exists to end (#70).
+        headcount_extractor=None if connection is None else PostgresHeadcountExtractor(connection),
+        mapping_version=f"{MAPPING_VERSION}+{ruleset.content_sha256[:12]}",
+    )

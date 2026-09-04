@@ -11,10 +11,12 @@ bytes. A record knowable only after the cutoff is a look-ahead violation.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
@@ -29,8 +31,12 @@ from data_engine.datahub.production_topt.executor import (
     RawResponse,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
+from data_engine.datahub.production_topt.source_registrations import RELEASE_SEMANTICS as _RELEASE_SEMANTICS
 
-_RELEASE_SEMANTICS = frozenset({"listing-identity", "universe-membership"})
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,11 @@ class ReleaseDerivedAdapter:
     def __init__(self, targets: dict[str, ReleaseDerivedRecord], *, cutoff: date) -> None:
         self._targets = targets
         self._cutoff = cutoff
+
+    @property
+    def targets(self) -> Mapping[str, ReleaseDerivedRecord]:
+        """The planned cells this adapter answers for, by work item id (read-only)."""
+        return MappingProxyType(self._targets)
 
     def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome:
         record = self._targets.get(work_item.work_item_id)
@@ -83,3 +94,26 @@ class ReleaseDerivedAdapter:
                 payload=record.payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION
             ),
         )
+
+
+# -- registry route (#72) -----------------------------------------------------------------
+
+
+def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> ReleaseDerivedAdapter:
+    """Identity and membership are release-frozen configuration: the record IS the
+    coordinate, knowable from the partition start."""
+    targets = {
+        cell.work_item_id: ReleaseDerivedRecord(
+            semantic_type=cell.semantic_type,
+            subject_id=cell.listing_id,
+            payload={
+                "issuer_id": cell.issuer_id,
+                "instrument_id": cell.instrument_id,
+                "listing_id": cell.listing_id,
+                "ticker": cell.ticker,
+            },
+            knowable_at=context.partition_start,
+        )
+        for cell in cells
+    }
+    return ReleaseDerivedAdapter(targets, cutoff=context.cutoff_date)

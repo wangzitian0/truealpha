@@ -54,6 +54,14 @@ def _imports(tree: ast.AST, modules: dict[str, Path]) -> set[str]:
             for alias in node.names:
                 if alias.name.startswith("data_engine"):
                     found.add(alias.name)
+    # Registry entry points (#72): a source registration names its route builder as
+    # "data_engine.<module>:<function>", resolved at plan time. That string IS a wiring
+    # — the composition root reaches the adapter through it — so the walk follows it.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            module_name, sep, attribute = node.value.partition(":")
+            if sep and module_name in modules and attribute.isidentifier():
+                found.add(module_name)
     return found
 
 

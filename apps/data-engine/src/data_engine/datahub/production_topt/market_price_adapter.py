@@ -20,6 +20,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from truealpha_contracts.common import canonical_sha256
@@ -36,6 +37,9 @@ from data_engine.datahub.production_topt.executor import (
     RawResponse,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
+
+if TYPE_CHECKING:
+    from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
 
 
 @dataclass(frozen=True)
@@ -258,4 +262,33 @@ def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
         close=bar.close,
         as_of=bar.date,
         knowable_at=knowable_at,
+    )
+
+
+# -- registry route (#72) -----------------------------------------------------------------
+
+
+def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> MarketPriceAdapter:
+    """The market-price source's own routing: one target per planned cell, the Yahoo
+    primary and the Twelve Data second origin. Named by the `yahoo-chart` registration
+    in `source_registrations.py`; the composition root never sees these types."""
+    from data_engine.datahub.production_topt.twelve_data_origin import twelve_data_origin
+
+    targets = {
+        cell.work_item_id: MarketPriceTarget(
+            symbol=cell.ticker,
+            # Price targets get the last SETTLED session, not the calendar date: a
+            # mid-session run must not treat the in-progress bar as a close (#637).
+            cutoff=context.price_cutoff_date,
+            issuer_id=cell.issuer_id,
+            instrument_id=cell.instrument_id,
+            listing_id=cell.listing_id,
+        )
+        for cell in cells
+    }
+    second_origin = twelve_data_origin()
+    return MarketPriceAdapter(
+        targets,
+        yahoo_quote_fetcher,
+        corroborating_origins=() if second_origin is None else (second_origin,),
     )

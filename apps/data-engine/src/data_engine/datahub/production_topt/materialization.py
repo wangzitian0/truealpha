@@ -27,19 +27,17 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts.common import canonical_sha256
 
+from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TYPES
+
 # Snapshot invariants are SELF-consistent, never universe literals: the frozen
 # TOPT 20 and a 102-listing plane universe freeze through the same checks
 # (#539 — the first QQQ run captured all 408 obligations in 39 minutes and
 # then died on a hardcoded 84 here).
-_SEMANTICS_PER_LISTING = 4
-_REQUIRED_TYPES = frozenset(
-    {
-        "financial-fact",
-        "listing-identity",
-        "market-price",
-        "universe-membership",
-    }
-)
+# Derived from the source registrations (#72): the required set is whatever the
+# registered sources own, so a registered fifth semantic is required here without an
+# edit, and an unregistered one cannot be demanded.
+_REQUIRED_TYPES = frozenset(SEMANTIC_TYPES)
+_SEMANTICS_PER_LISTING = len(_REQUIRED_TYPES)
 
 
 class _FrozenModel(BaseModel):

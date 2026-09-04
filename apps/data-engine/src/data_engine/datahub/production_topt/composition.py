@@ -37,15 +37,14 @@ re-capturing; recovery is the next tick (or an explicit new `executed_at`), not 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from functools import partial
 from typing import Any, NoReturn
 
 import psycopg
-from factors.production_topt import GppeV0Definition, OperatingBranch
+from factors.production_topt import GppeV0Definition
 from truealpha_contracts.capture_control import (
     CaptureListObligation,
     CaptureObligationWorkBinding,
@@ -76,39 +75,33 @@ from data_engine.datahub.control_plane import AttemptLedger, expand_obligations,
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
-from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import SourceFetchPort
-from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
-from data_engine.datahub.production_topt.issuer_registry import resolve_issuer_classifications
-from data_engine.datahub.production_topt.market_price_adapter import (
-    MarketPriceAdapter,
-    MarketPriceTarget,
-    last_settled_session_date,
-    yahoo_quote_fetcher,
-)
+from data_engine.datahub.production_topt.market_price_adapter import last_settled_session_date
 from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
-from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION
 from data_engine.datahub.production_topt.persistence import (
     CaptureTimeline,
     ObligationBinding,
     PostgresCaptureControlSink,
 )
-from data_engine.datahub.production_topt.release_derived_adapter import (
-    ReleaseDerivedAdapter,
-    ReleaseDerivedRecord,
-)
 from data_engine.datahub.production_topt.sec_financial_adapter import (
-    SecFinancialFactAdapter,
-    SecTarget,
-    sec_financial_fetcher,
+    predecessor_ciks,  # noqa: F401 — re-exported for its callers
 )
-from data_engine.datahub.production_topt.twelve_data_origin import twelve_data_origin
+from data_engine.datahub.production_topt.source_registrations import (
+    FRESHNESS_WINDOWS,
+    REGISTRATIONS,
+    RELEASE_SEMANTICS,
+    RouteCell,
+    RouteContext,
+    registered_semantic_types,
+    registration_for,
+)
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
-from data_engine.sources import sec
 
-SEMANTIC_TYPES = ("market-price", "listing-identity", "universe-membership", "financial-fact")
-_RELEASE_SEMANTICS = frozenset({"listing-identity", "universe-membership"})
+# The four semantics, their owners, freshness windows and routes are declared once in
+# source_registrations.py (#72); this module derives, never enumerates.
+SEMANTIC_TYPES = registered_semantic_types()
+_RELEASE_SEMANTICS = RELEASE_SEMANTICS
 _RELEASE_PAYLOAD = {"kind": "production-topt-live-release"}
 _MAX_ATTEMPTS = 3
 _RISK_FREE_RATE = Decimal("0.05")
@@ -158,11 +151,6 @@ def _load_capture_corpus(corpus_filename: str = "corpus.v1.json") -> dict[str, A
     return json.loads(raw)
 
 
-def _sec_ticker(ticker: str) -> str:
-    # SEC's company_tickers file uses a hyphen for share-class tickers (BRK.B -> BRK-B).
-    return ticker.replace(".", "-")
-
-
 def _source_request(obligation: CaptureListObligation, *, ordinal: int, source: str) -> SourceRequest:
     coordinate: dict[str, Any] = {
         "ordinal": ordinal,
@@ -170,9 +158,12 @@ def _source_request(obligation: CaptureListObligation, *, ordinal: int, source: 
         "requirement": obligation.capture_requirement_id,
         "partition": obligation.partition,
     }
+    # The registration that owns the cell's semantic signs the request (#72): the
+    # entry id is the content hash of what that source declared, not of the run label.
+    registration = registration_for(obligation.capture_requirement_id.removesuffix(":v1"))
     return SourceRequest(
-        source_registry_entry_id=f"source-registry-entry:{canonical_sha256({'source': source})}",
-        source_policy_id=f"source-policy:{source}",
+        source_registry_entry_id=registration.entry_id,
+        source_policy_id=registration.policy_id,
         request_fingerprint_version=f"{source}:v1",
         canonical_request_sha256=canonical_sha256(coordinate),
         subject_refs=(obligation.subject,),
@@ -249,17 +240,16 @@ def plan_and_persist(
         # - identity/universe: release-frozen configuration; a year covers the
         #   universe's own refresh cadence (#67), and the release manifest is the
         #   staleness authority, not the capture.
-        semantic_freshness_max_age={
-            "market-price": timedelta(days=5),
-            "financial-fact": timedelta(days=730),
-            "listing-identity": timedelta(days=365),
-            "universe-membership": timedelta(days=365),
-        },
+        semantic_freshness_max_age=FRESHNESS_WINDOWS,
         provider_availability_cadence="scheduled:v1",
         retry=replay_retry_policy(_MAX_ATTEMPTS),
     )
     campaign = CaptureCampaign(
         campaign_policy_id=f"capture-policy:{source_label}",
+        # Still the literal (#72 slice 2): `materialization.freeze_snapshot` refuses any
+        # campaign not stamped "production" and `a1_evidence` writes the same literal, so
+        # the stamp changes at all three sites together, with `settings.capture_environment`
+        # as the single source — not here alone.
         environment=CaptureEnvironment.PRODUCTION,
         cutoff=cutoff,
         universe_refs=(list_version.universe,),
@@ -333,164 +323,46 @@ def plan_and_persist(
     )
 
 
-def predecessor_ciks(
-    connection: psycopg.Connection[Any],
-    listing_ids: Sequence[str],
-    issuer_by_listing: dict[str, str] | None = None,
-) -> dict[str, int]:
-    """#496: each listing's predecessor company-facts CIK, consulted only when
-    the index-mapped CIK's taxonomy is empty (post-reorganization holdco).
-
-    Two registry sources, both our own versioned data, owner-signed rows first:
-    1. `staging.issuer_cik_predecessors` — the explicit registry (migration
-       0037; every row carries reason + approved_by);
-    2. the capture lineage — the most recent vintage whose observation carried
-       a revenue value (generic, self-maintaining once the A1 spine has seen
-       an issuer parse successfully; empty for issuers that never did).
-    """
-    resolved: dict[str, int] = {}
-    if issuer_by_listing:
-        registry = dict(
-            connection.execute(
-                "select issuer_id, predecessor_cik from staging.issuer_cik_predecessors where issuer_id = any(%s)",
-                (sorted(set(issuer_by_listing.values())),),
-            ).fetchall()
-        )
-        for listing_id, issuer_id in issuer_by_listing.items():
-            if issuer_id in registry:
-                resolved[listing_id] = int(registry[issuer_id])
-
-    rows = connection.execute(
-        """
-        select distinct on (o.subject_id) o.subject_id, v.source_record_id
-        from staging.capture_normalized_observations o
-        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-        where o.subject_id = any(%s)
-          and o.semantic_type = 'financial-fact'
-          and p.normalized_payload->>'revenue' is not null
-          and v.source_record_id like 'companyfacts:CIK%%'
-        order by o.subject_id, o.knowable_at desc
-        """,
-        (list(listing_ids),),
-    ).fetchall()
-    for subject_id, record_id in rows:
-        digits = record_id.removeprefix("companyfacts:CIK")
-        if digits.isdigit():
-            resolved.setdefault(subject_id, int(digits))
-    return resolved
-
-
 def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = None) -> dict[str, SourceFetchPort]:
-    """Resolve every planned work item to the adapter that owns its semantic.
+    """Resolve every planned work item to the adapter that owns its semantic (#72).
 
-    Source-facing resolution (CIKs, issuer classification) happens once here, so no
-    adapter re-derives it per cell and the generic executor never sees it at all.
+    Generic: group the cells by the registration that owns their semantic and let
+    each source's own `build_route` construct its targets and adapter. Source-facing
+    resolution (CIKs, classifications, rulesets, second origins) lives in the source's
+    module; this root sees only cells and ports.
     """
-    cutoff_date = plan.cutoff.astimezone(UTC).date()
-    # Price targets get the last SETTLED session, not the calendar date: a
-    # mid-session run must not treat the in-progress bar as a close (#637).
-    price_cutoff_date = last_settled_session_date(plan.cutoff)
-    tickers = {coordinate[3] for coordinate in plan.coordinates.values()}
-    # A plane-published universe already RESOLVED its identities: issuer:cik ids
-    # carry the CIK the refresh verified (with the EDGAR fallback for the SEC
-    # crosswalk's own holes — AEP is in neither crosswalk file). Trust the
-    # governed head first; only LEI-style issuers (the hand-curated TOPT corpus)
-    # still consult the crosswalk. The first QQQ run failed HERE, on the same
-    # AEP hole the refresh had already worked around — one identity resolution,
-    # one place.
-    cik_by_ticker: dict[str, int] = {}
-    for issuer_id, _, _, ticker in plan.coordinates.values():
-        if issuer_id.startswith("issuer:cik:"):
-            cik_by_ticker[ticker] = int(issuer_id.removeprefix("issuer:cik:"))
-    unresolved = sorted(tickers - set(cik_by_ticker))
-    if unresolved:
-        index = sec.ticker_cik_index()
-        for ticker in unresolved:
-            if _sec_ticker(ticker) in index:
-                cik_by_ticker[ticker] = index[_sec_ticker(ticker)]
-    missing = sorted(tickers - set(cik_by_ticker))
-    if missing:
-        raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
-    classifications = resolve_issuer_classifications(cik_by_ticker)
-    listing_ids = [coordinate[2] for coordinate in plan.coordinates.values()]
-    issuer_by_listing = {coordinate[2]: coordinate[0] for coordinate in plan.coordinates.values()}
-    predecessors = predecessor_ciks(connection, listing_ids, issuer_by_listing) if connection is not None else {}
-
-    price_targets: dict[str, MarketPriceTarget] = {}
-    sec_targets: dict[str, SecTarget] = {}
-    release_targets: dict[str, ReleaseDerivedRecord] = {}
+    context = RouteContext(
+        cutoff=plan.cutoff,
+        cutoff_date=plan.cutoff.astimezone(UTC).date(),
+        # Price targets get the last SETTLED session, not the calendar date: a
+        # mid-session run must not treat the in-progress bar as a close (#637).
+        price_cutoff_date=last_settled_session_date(plan.cutoff),
+        partition_start=plan.timeline.partition_start,
+        coordinates=plan.coordinates,
+        connection=connection,
+    )
+    cells_by_source: dict[str, list[RouteCell]] = {}
     for work_item_id, binding in plan.bindings.items():
         semantic_type = binding.obligation.capture_requirement_id.removesuffix(":v1")
+        registration = registration_for(semantic_type)
         issuer_id, instrument_id, listing_id, ticker = plan.coordinates[binding.obligation.subject.id]
-        if semantic_type == "market-price":
-            price_targets[work_item_id] = MarketPriceTarget(
-                symbol=ticker,
-                cutoff=price_cutoff_date,
-                issuer_id=issuer_id,
-                instrument_id=instrument_id,
-                listing_id=listing_id,
-            )
-        elif semantic_type == "financial-fact":
-            cik = cik_by_ticker[ticker]
-            sec_targets[work_item_id] = SecTarget(
-                cik=cik,
-                cutoff=cutoff_date,
-                issuer_id=issuer_id,
-                instrument_id=instrument_id,
-                listing_id=listing_id,
-                operating_branch=(
-                    classifications[cik].operating_branch if cik in classifications else OperatingBranch.NON_FINANCIAL
-                ),
-                # #533: only the industries whose cost of revenue is ~zero may substitute
-                # revenue for an untagged gross profit. Absent from the registry means no.
-                revenue_proxy_allowed=cik in classifications and classifications[cik].revenue_proxy_allowed,
-                # only meaningful when it differs from the mapped CIK — the
-                # fallback would otherwise refetch the same empty document.
-                predecessor_cik=(
-                    predecessors.get(listing_id) if predecessors.get(listing_id) not in (None, cik) else None
-                ),
-            )
-        elif semantic_type in _RELEASE_SEMANTICS:
-            release_targets[work_item_id] = ReleaseDerivedRecord(
+        cells_by_source.setdefault(registration.source_id, []).append(
+            RouteCell(
+                work_item_id=work_item_id,
                 semantic_type=semantic_type,
-                subject_id=listing_id,
-                payload={
-                    "issuer_id": issuer_id,
-                    "instrument_id": instrument_id,
-                    "listing_id": listing_id,
-                    "ticker": ticker,
-                },
-                knowable_at=plan.timeline.partition_start,
+                issuer_id=issuer_id,
+                instrument_id=instrument_id,
+                listing_id=listing_id,
+                ticker=ticker,
             )
-        else:  # pragma: no cover - the frozen denominator declares exactly four semantics
-            raise ValueError(f"no adapter owns the {semantic_type} semantic")
-
-    second_origin = twelve_data_origin()
-    price_adapter = MarketPriceAdapter(
-        price_targets,
-        yahoo_quote_fetcher,
-        corroborating_origins=() if second_origin is None else (second_origin,),
-    )
-    # Resolved once per run through the governed pointer, so every cell in the run is
-    # parsed by ONE ruleset and the observations can name it.
-    ruleset = resolve_ruleset(connection)
-    financial_adapter = SecFinancialFactAdapter(
-        sec_targets,
-        partial(sec_financial_fetcher, ruleset=ruleset),
-        # No connection means no headcount plane to read, so every issuer resolves
-        # `missing_headcount` — an honest gap. Silently substituting a built-in table
-        # would put the deployed denominator back in the code, which is what the fact
-        # table exists to end (#70).
-        headcount_extractor=None if connection is None else PostgresHeadcountExtractor(connection),
-        mapping_version=f"{MAPPING_VERSION}+{ruleset.content_sha256[:12]}",
-    )
-    release_adapter = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
-
+        )
     routes: dict[str, SourceFetchPort] = {}
-    routes.update(dict.fromkeys(price_targets, price_adapter))
-    routes.update(dict.fromkeys(sec_targets, financial_adapter))
-    routes.update(dict.fromkeys(release_targets, release_adapter))
+    for registration in REGISTRATIONS:
+        cells = cells_by_source.pop(registration.source_id, [])
+        if not cells:
+            continue
+        adapter = registration.resolve_route_builder()(context, cells)
+        routes.update(dict.fromkeys((cell.work_item_id for cell in cells), adapter))
     return routes
 
 
@@ -722,9 +594,10 @@ def _satisfy_from_recent_observations(
         if candidate is None:
             continue
         entry = candidate
-        # A reused price must BE the settled session's close — anything older is a
-        # fetch, not a reuse (the vendor may simply have published since).
-        if entry["semantic"] == "market-price" and entry["knowable_at"].date() != settled:
+        # A reused session-bound observation must BE the settled session's — anything
+        # older is a fetch, not a reuse (the vendor may simply have published since).
+        # Which semantics are session-bound is the source's declaration (#72).
+        if registration_for(entry["semantic"]).session_bound and entry["knowable_at"].date() != settled:
             continue
         ledger = AttemptLedger(work_item_id=work_item_id, retry_policy=plan.retry)
         attempt = ledger.start(started_at=cutoff)

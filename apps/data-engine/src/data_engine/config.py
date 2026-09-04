@@ -1,9 +1,22 @@
 from pydantic import Field
+from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime import RuntimeSettings
 
 
 class Settings(RuntimeSettings):
     """Data-source settings layered on the shared runtime contract."""
+
+    @property
+    def capture_environment(self) -> CaptureEnvironment:
+        """The environment every capture campaign is stamped with (#72).
+
+        Derived from the resolved runtime tier, never a literal: until #72 the
+        composition root wrote `PRODUCTION` on every campaign, so staging ticks recorded
+        production lineage. The tier vocabulary and the capture vocabulary are the same
+        six names by design (init.md §3.1), so an unknown tier raises here instead of
+        being stamped as something it is not.
+        """
+        return CaptureEnvironment(self.environment_tier.value)
 
     # SEC requires a descriptive User-Agent including a contact email.
     sec_user_agent: str = ""
