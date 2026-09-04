@@ -258,3 +258,23 @@ def test_the_two_environments_never_tick_at_the_same_instant() -> None:
     assert live_topt_cron("prod") == production
     assert live_topt_cron("PRODUCTION") == production
     assert live_topt_cron("dev") == staging, "unrecognized envs share the lower-stakes slot"
+
+
+# -- #72 scope 4: ticks are declarations; the factory builds what they say -------------------
+
+
+def test_every_declared_tick_is_deployed_under_its_own_names_and_is_a_trigger_target() -> None:
+    """A universe is one entry in `capture.TICKS`. Each entry must reach the deployed
+    root as a job whose only op carries the declared op name (operators launch by it,
+    the sensor dispatches by it), and the manual-trigger sensor must target it."""
+    from data_engine.lanes import triggers
+
+    sensor_targets = {job.name for job in triggers.pipeline_trigger_sensor.jobs}
+    for tick in capture.TICKS:
+        job = defs.get_job_def(tick.job_name)
+        assert {node.name for node in job.graph.node_defs} == {tick.op_name}, tick.key
+        if tick.cron is not None:
+            schedule = defs.get_schedule_def(tick.schedule_name)
+            assert schedule.cron_schedule == tick.cron and schedule.job.name == tick.job_name
+        assert tick.job_name in sensor_targets, f"{tick.key} is not a manual-trigger target"
+    assert capture.TICK_BY_JOB == {tick.job_name: tick for tick in capture.TICKS}

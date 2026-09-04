@@ -13,8 +13,10 @@ wall clock: distinct ticks -> distinct content-addressed runs; a retried tick
 reproduces the same identities (idempotent retry).
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 import dagster as dg
 import psycopg
@@ -71,93 +73,38 @@ class ToptLiveTickConfig(dg.Config):
     executed_at: str
 
 
-@dg.op
-def run_topt_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
-    cutoff = datetime.fromisoformat(config.executed_at)
-    version = live_version_for(cutoff)
-
-    # Lazy, run-time connection (DATABASE_URL). One transaction for the whole tick:
-    # a mid-run failure leaves no partial run; the daemon's retry re-runs the tick
-    # against the same content-addressed identities.
-    with psycopg.connect(settings.database_url) as connection:
-        pipeline = run_topt_pipeline(connection, cutoff=cutoff, version=version)
-        seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
-        # #496: the L2 funnel metric, same transaction as the seed it measures.
-        l2_complete, l2_total = persist_strategy_input_coverage(connection, pipeline.run_id, cutoff=cutoff)
-        strategy_run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
-            connection, cutoff=cutoff, executed_at=cutoff, risk_free_rate=Decimal("0.05")
-        )
-        # #378: register the run on the A1 evidence plane and advance the governed
-        # pointer inside the same transaction, so consumers resolve THIS run through
-        # mart.current_pointer_head the moment the tick commits. #536: the advance is
-        # gated on THIS run's report — a run that misses a declared service objective
-        # commits its run, report and evidence but does not become the served head.
-        registration = register_run_evidence(
-            connection,
-            run_id=pipeline.run_id,
-            release_manifest_id=pipeline.release_manifest_id,
-            quality_report=pipeline.quality,
-        )
-        connection.commit()
-
-    tick = (
-        f"topt live tick {config.executed_at}: capture {pipeline.run_id} "
-        f"(available {pipeline.quality['available_count']}/{pipeline.quality['requested_count']}, "
-        f"reconciliation {pipeline.quality['independent_reconciliation']}), "
-        f"{seeded} strategy inputs, strategy run {strategy_run_id} ({decision_count} decisions)"
-    )
-    if registration.accepted:
-        context.log.info(f"{tick}; pointer sequence {registration.sequence}")
-    else:
-        # #536 acceptance: which objective failed is readable from the run log and the
-        # op's output metadata, without opening the database.
-        context.log.warning(
-            f"{tick}; POINTER WITHHELD at sequence {registration.sequence} "
-            f"— unmet service objectives: {registration.summary}"
-        )
-    context.add_output_metadata(
-        {
-            "capture_run_id": pipeline.run_id,
-            "quality_report_id": pipeline.quality_report_id,
-            "independent_reconciliation": pipeline.quality["independent_reconciliation"],
-            "strategy_inputs_seeded": seeded,
-            "l2_input_coverage": f"{l2_complete}/{l2_total}",
-            "strategy_run_id": strategy_run_id,
-            "decision_count": decision_count,
-            "snapshot_id": snapshot_id,
-            "pointer_advanced": registration.accepted,
-            "pointer_sequence": registration.sequence,
-            "unmet_service_objectives": registration.summary,
-        }
-    )
-    return pipeline.run_id
-
-
-@dg.job(name=TOPT_LIVE_JOB_NAME)
-def topt_live_pipeline_job() -> None:
-    run_topt_live_tick()
-
-
-@dg.schedule(
-    job=topt_live_pipeline_job,
-    cron_schedule=TOPT_LIVE_CRON,
-    execution_timezone="UTC",
-    # ENABLED by default: #27's appended acceptance (issue comment, 2026-07-20)
-    # requires the schedule running in Staging; enabling it is the deliberate,
-    # owner-authorized operator action recorded there — not an accidental default.
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def topt_live_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    executed_at = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(
-        # run_key == the tick time: the daemon dedupes a re-evaluated tick to a
-        # single run, so an identical tick retry is idempotent.
-        run_key=executed_at,
-        run_config=dg.RunConfig(ops={"run_topt_live_tick": ToptLiveTickConfig(executed_at=executed_at)}),
+def _production_only(app_env: str) -> dg.DefaultScheduleStatus:
+    """Production-only, by owner directive (2026-08-17: staging needs the TOPT tick and
+    nothing more): outside production the schedule defaults to STOPPED and the job runs
+    there only through the manual trigger."""
+    return (
+        dg.DefaultScheduleStatus.RUNNING
+        if app_env.strip().lower() in ("production", "prod")
+        else dg.DefaultScheduleStatus.STOPPED
     )
 
 
-# -- QQQ universe pipeline (#539 owner directive 2026-08-17) ---------------------------
+@dataclass(frozen=True)
+class UniverseTick:
+    """One universe's scheduled tick, declared (#72 scope 4). The factory below turns a
+    declaration into the op, the job and (when `cron` is set) the schedule; a new
+    universe is one entry in `TICKS`, not sixty copied lines."""
+
+    key: str
+    job_name: str
+    op_name: str
+    schedule_name: str
+    log_label: str
+    #: None means the hand-curated TOPT corpus; otherwise a governed universe head.
+    universe_head_kind: str | None
+    label_prefix: str
+    objectives: ServiceObjectives | None
+    #: TOPT additionally seeds the strategy inputs and runs the frozen strategy;
+    #: data-only universes serve prices, facts and valuation context, not selections.
+    run_strategy: bool
+    cron: str | None
+    default_status: dg.DefaultScheduleStatus = dg.DefaultScheduleStatus.RUNNING
+
 
 QQQ_LIVE_JOB_NAME = "qqq_live_pipeline"
 # 23:20 UTC: after prod TOPT (22:15, ~7 min) and staging TOPT (22:45, ~7 min), so the
@@ -166,7 +113,6 @@ QQQ_LIVE_JOB_NAME = "qqq_live_pipeline"
 # throttle runs ~15-30 minutes and finishes before midnight UTC.
 QQQ_LIVE_CRON = "20 23 * * *"
 QQQ_UNIVERSE_HEAD = "universe-list:qqq"
-
 # Phase-1 service objectives for the QQQ universe, declared where the gate reads them
 # rather than silently reusing TOPT's demand: ~90 of 101 issuers have no headcount
 # fact yet (#564 fills them; the plane accepts inserts, never deploys) and a handful
@@ -187,54 +133,6 @@ QQQ_PHASE1_OBJECTIVES = ServiceObjectives(
     minimum_corroborated_share=Decimal("0.90"),
 )
 
-
-@dg.op
-def run_qqq_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
-    """The QQQ data pipeline: capture → freeze → materialize → report → governed pointer.
-
-    Deliberately NO strategy replay: the strategy definition is TOPT-scoped versioned
-    configuration; QQQ phase 1 serves data (prices, facts, GPPE where headcount exists,
-    valuation context), not selections.
-    """
-    cutoff = datetime.fromisoformat(config.executed_at)
-    version = live_version_for(cutoff)
-    with psycopg.connect(settings.database_url) as connection:
-        pipeline = run_topt_pipeline(
-            connection,
-            cutoff=cutoff,
-            version=version,
-            universe_head_kind=QQQ_UNIVERSE_HEAD,
-            label_prefix="production-qqq",
-        )
-        registration = register_run_evidence(
-            connection,
-            run_id=pipeline.run_id,
-            release_manifest_id=pipeline.release_manifest_id,
-            quality_report=pipeline.quality,
-            objectives=QQQ_PHASE1_OBJECTIVES,
-        )
-        connection.commit()
-    context.log.info(
-        f"qqq live tick {config.executed_at}: capture {pipeline.run_id} "
-        f"(available {pipeline.quality['available_count']}/{pipeline.quality['requested_count']}), "
-        f"pointer_advanced={registration.accepted}"
-    )
-    context.add_output_metadata(
-        {
-            "capture_run_id": pipeline.run_id,
-            "quality_report_id": pipeline.quality_report_id,
-            "pointer_advanced": registration.accepted,
-            "unmet_service_objectives": registration.summary,
-        }
-    )
-    return pipeline.run_id
-
-
-@dg.job(name=QQQ_LIVE_JOB_NAME)
-def qqq_live_pipeline_job() -> None:
-    run_qqq_live_tick()
-
-
 CANARY_JOB_NAME = "canary_live_pipeline"
 CANARY_UNIVERSE_HEAD = "universe-list:canary"
 # The canary judges itself by NAMED ORACLES (scripts/canary_assert.py), not by the
@@ -251,52 +149,6 @@ CANARY_OBJECTIVES = ServiceObjectives(
     minimum_corroborated_share=Decimal("0"),
 )
 
-
-@dg.op
-def run_canary_live_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
-    """#648: the post-deploy canary — the REAL pipeline over five hand-picked
-    issuers (six listings, every operating branch), so 'deployed' and
-    'verified' become one fact. Trigger-only: no schedule in either environment;
-    the deploy lane inserts a trigger row and then asserts the named oracles."""
-    cutoff = datetime.fromisoformat(config.executed_at)
-    version = live_version_for(cutoff)
-    with psycopg.connect(settings.database_url) as connection:
-        pipeline = run_topt_pipeline(
-            connection,
-            cutoff=cutoff,
-            version=version,
-            universe_head_kind=CANARY_UNIVERSE_HEAD,
-            label_prefix="production-canary",
-        )
-        registration = register_run_evidence(
-            connection,
-            run_id=pipeline.run_id,
-            release_manifest_id=pipeline.release_manifest_id,
-            quality_report=pipeline.quality,
-            objectives=CANARY_OBJECTIVES,
-        )
-        connection.commit()
-    context.log.info(
-        f"canary tick {config.executed_at}: capture {pipeline.run_id} "
-        f"(available {pipeline.quality['available_count']}/{pipeline.quality['requested_count']}), "
-        f"pointer_advanced={registration.accepted}"
-    )
-    context.add_output_metadata(
-        {
-            "capture_run_id": pipeline.run_id,
-            "quality_report_id": pipeline.quality_report_id,
-            "pointer_advanced": registration.accepted,
-            "unmet_service_objectives": registration.summary,
-        }
-    )
-    return pipeline.run_id
-
-
-@dg.job(name=CANARY_JOB_NAME)
-def canary_live_pipeline_job() -> None:
-    run_canary_live_tick()
-
-
 # 23:47 UTC: 27 minutes after the QQQ tick, so the canary's overlap names (AAPL,
 # GOOGL, GOOG, ASML) reuse the night's committed observations under #635 and the
 # daily proof costs ~2 vendor calls (HBAN/CINF only). Seven deploy-free days in a
@@ -306,41 +158,176 @@ def canary_live_pipeline_job() -> None:
 CANARY_DAILY_CRON = "47 23 * * *"
 
 
-@dg.schedule(
-    job=canary_live_pipeline_job,
-    cron_schedule=CANARY_DAILY_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def canary_daily_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    executed_at = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(
-        run_key=executed_at,
-        run_config=dg.RunConfig(ops={"run_canary_live_tick": ToptLiveTickConfig(executed_at=executed_at)}),
-    )
-
-
-@dg.schedule(
-    job=qqq_live_pipeline_job,
-    cron_schedule=QQQ_LIVE_CRON,
-    execution_timezone="UTC",
-    # Production-only by owner directive ("staging 跑 topt 够了"): staging keeps the
-    # schedule STOPPED and QQQ runs there only via the manual trigger.
-    default_status=(
-        dg.DefaultScheduleStatus.RUNNING
-        if settings.app_env.strip().lower() in ("production", "prod")
-        else dg.DefaultScheduleStatus.STOPPED
+TICKS: tuple[UniverseTick, ...] = (
+    UniverseTick(
+        key="topt",
+        job_name=TOPT_LIVE_JOB_NAME,
+        op_name="run_topt_live_tick",
+        schedule_name="topt_live_schedule",
+        log_label="topt live tick",
+        universe_head_kind=None,
+        label_prefix="production-topt",
+        objectives=None,
+        run_strategy=True,
+        cron=TOPT_LIVE_CRON,
+        # ENABLED by default: #27's appended acceptance (issue comment, 2026-07-20)
+        # requires the schedule running in Staging; enabling it is the deliberate,
+        # owner-authorized operator action recorded there — not an accidental default.
+        default_status=dg.DefaultScheduleStatus.RUNNING,
+    ),
+    UniverseTick(
+        key="qqq",
+        job_name=QQQ_LIVE_JOB_NAME,
+        op_name="run_qqq_live_tick",
+        schedule_name="qqq_live_schedule",
+        log_label="qqq live tick",
+        universe_head_kind=QQQ_UNIVERSE_HEAD,
+        label_prefix="production-qqq",
+        objectives=QQQ_PHASE1_OBJECTIVES,
+        run_strategy=False,
+        cron=QQQ_LIVE_CRON,
+        default_status=_production_only(settings.app_env),
+    ),
+    UniverseTick(
+        key="canary",
+        job_name=CANARY_JOB_NAME,
+        op_name="run_canary_live_tick",
+        schedule_name="canary_daily_schedule",
+        log_label="canary tick",
+        universe_head_kind=CANARY_UNIVERSE_HEAD,
+        label_prefix="production-canary",
+        objectives=CANARY_OBJECTIVES,
+        run_strategy=False,
+        cron=CANARY_DAILY_CRON,
+        default_status=dg.DefaultScheduleStatus.RUNNING,
     ),
 )
-def qqq_live_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    executed_at = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(
-        run_key=executed_at,
-        run_config=dg.RunConfig(ops={"run_qqq_live_tick": ToptLiveTickConfig(executed_at=executed_at)}),
-    )
 
+
+def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: UniverseTick) -> str:
+    """The one tick body every universe runs: capture → freeze → materialize → report →
+    governed pointer, plus the strategy replay where the declaration asks for it."""
+    cutoff = datetime.fromisoformat(config.executed_at)
+    version = live_version_for(cutoff)
+    # Lazy, run-time connection (DATABASE_URL). One transaction for the whole tick:
+    # a mid-run failure leaves no partial run; the daemon's retry re-runs the tick
+    # against the same content-addressed identities.
+    with psycopg.connect(settings.database_url) as connection:
+        pipeline = run_topt_pipeline(
+            connection,
+            cutoff=cutoff,
+            version=version,
+            universe_head_kind=tick.universe_head_kind,
+            label_prefix=tick.label_prefix,
+        )
+        strategy: dict[str, Any] = {}
+        if tick.run_strategy:
+            seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
+            # #496: the L2 funnel metric, same transaction as the seed it measures.
+            l2_complete, l2_total = persist_strategy_input_coverage(connection, pipeline.run_id, cutoff=cutoff)
+            strategy_run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
+                connection, cutoff=cutoff, executed_at=cutoff, risk_free_rate=Decimal("0.05")
+            )
+            strategy = {
+                "strategy_inputs_seeded": seeded,
+                "l2_input_coverage": f"{l2_complete}/{l2_total}",
+                "strategy_run_id": strategy_run_id,
+                "decision_count": decision_count,
+                "snapshot_id": snapshot_id,
+            }
+        # #378: register the run on the A1 evidence plane and advance the governed
+        # pointer inside the same transaction, so consumers resolve THIS run through
+        # mart.current_pointer_head the moment the tick commits. #536: the advance is
+        # gated on THIS run's report — a run that misses a declared service objective
+        # commits its run, report and evidence but does not become the served head.
+        registration = register_run_evidence(
+            connection,
+            run_id=pipeline.run_id,
+            release_manifest_id=pipeline.release_manifest_id,
+            quality_report=pipeline.quality,
+            **({"objectives": tick.objectives} if tick.objectives is not None else {}),
+        )
+        connection.commit()
+
+    summary = (
+        f"{tick.log_label} {config.executed_at}: capture {pipeline.run_id} "
+        f"(available {pipeline.quality['available_count']}/{pipeline.quality['requested_count']}"
+    )
+    if tick.run_strategy:
+        summary += (
+            f", reconciliation {pipeline.quality['independent_reconciliation']}), "
+            f"{strategy['strategy_inputs_seeded']} strategy inputs, strategy run "
+            f"{strategy['strategy_run_id']} ({strategy['decision_count']} decisions)"
+        )
+    else:
+        summary += ")"
+    if registration.accepted:
+        context.log.info(f"{summary}; pointer sequence {registration.sequence}")
+    else:
+        # #536 acceptance: which objective failed is readable from the run log and the
+        # op's output metadata, without opening the database.
+        context.log.warning(
+            f"{summary}; POINTER WITHHELD at sequence {registration.sequence} "
+            f"— unmet service objectives: {registration.summary}"
+        )
+    metadata: dict[str, Any] = {
+        "capture_run_id": pipeline.run_id,
+        "quality_report_id": pipeline.quality_report_id,
+        "independent_reconciliation": pipeline.quality["independent_reconciliation"],
+        **strategy,
+        "pointer_advanced": registration.accepted,
+        "pointer_sequence": registration.sequence,
+        "unmet_service_objectives": registration.summary,
+    }
+    context.add_output_metadata(metadata)
+    return pipeline.run_id
+
+
+def build_tick(tick: UniverseTick) -> tuple[dg.OpDefinition, dg.JobDefinition, dg.ScheduleDefinition | None]:
+    """Op, job and schedule for one declaration. Op and job names are the declaration's:
+    operators launch by them and the trigger sensor dispatches by them."""
+
+    @dg.op(name=tick.op_name)
+    def tick_op(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
+        return _run_tick(context, config, tick)
+
+    @dg.job(name=tick.job_name)
+    def tick_job() -> None:
+        tick_op()
+
+    schedule = None
+    if tick.cron is not None:
+
+        @dg.schedule(
+            name=tick.schedule_name,
+            job=tick_job,
+            cron_schedule=tick.cron,
+            execution_timezone="UTC",
+            default_status=tick.default_status,
+        )
+        def tick_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+            executed_at = context.scheduled_execution_time.isoformat()
+            return dg.RunRequest(
+                # run_key == the tick time: the daemon dedupes a re-evaluated tick to a
+                # single run, so an identical tick retry is idempotent.
+                run_key=executed_at,
+                run_config=dg.RunConfig(ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at)}),
+            )
+
+        schedule = tick_schedule
+    return tick_op, tick_job, schedule
+
+
+_BUILT = {tick.key: build_tick(tick) for tick in TICKS}
+TICK_BY_JOB: dict[str, UniverseTick] = {tick.job_name: tick for tick in TICKS}
+
+# The names operators, tests and the trigger sensor address, unchanged from the
+# hand-written era.
+run_topt_live_tick, topt_live_pipeline_job, topt_live_schedule = _BUILT["topt"]
+run_qqq_live_tick, qqq_live_pipeline_job, qqq_live_schedule = _BUILT["qqq"]
+run_canary_live_tick, canary_live_pipeline_job, canary_daily_schedule = _BUILT["canary"]
 
 defs = dg.Definitions(
-    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job, canary_live_pipeline_job],
-    schedules=[topt_live_schedule, qqq_live_schedule, canary_daily_schedule],
+    jobs=[job for _, job, _ in _BUILT.values()],
+    schedules=[schedule for _, _, schedule in _BUILT.values() if schedule is not None],
 )

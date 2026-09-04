@@ -127,3 +127,31 @@ def _cleanup(connection) -> None:
         "launched_run_key = 'test-cleanup' where dedupe_key like 'test-sensor-%' and consumed_at is null"
     )
     connection.commit()
+
+
+@pytest.mark.parametrize(
+    "tick", [t for t in __import__("data_engine.lanes.capture", fromlist=["TICKS"]).TICKS], ids=lambda t: t.key
+)
+def test_sensor_dispatches_every_declared_tick_to_its_own_op(connection, monkeypatch, tick) -> None:
+    """#72 scope 4: dispatch is derived from the declarations, so a new universe is
+    triggerable without editing the sensor. Each declared job name must launch its
+    own job with the config keyed by its own op name."""
+    import uuid
+
+    dedupe_key = f"test-tick-{tick.key}-{uuid.uuid4().hex[:12]}"
+    request_id = connection.execute(
+        "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) "
+        "values (%s, %s, %s, %s) returning request_id",
+        (tick.job_name, _EXECUTED_AT, "test", dedupe_key),
+    ).fetchone()[0]
+    connection.commit()
+    try:
+        monkeypatch.setattr(psycopg, "connect", lambda *a, **k: _reuse(connection))
+        requests = list(pipeline_trigger_sensor(dg.build_sensor_context()))
+        assert len(requests) == 1 and requests[0].job_name == tick.job_name
+        assert set(requests[0].run_config["ops"]) == {tick.op_name}
+        assert requests[0].run_config["ops"][tick.op_name]["config"]["executed_at"] == _EXECUTED_AT.isoformat()
+        assert request_id is not None
+    finally:
+        connection.rollback()
+        _cleanup(connection)
