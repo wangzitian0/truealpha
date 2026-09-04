@@ -125,7 +125,7 @@ def _resolve(
         return ExtractionOutcome(0, "error", detail="issuer has no CIK in the universe plane or the SEC crosswalk")
     if standard.evidence is not EvidenceRequirement.FILING_SPAN:
         return ExtractionOutcome(cell.issuer.cik, "error", detail=f"no adapter for evidence {standard.evidence}")
-    return extract_headcount(
+    outcome = extract_headcount(
         cell.issuer.cik,
         connection=connection,
         http=http,
@@ -135,6 +135,21 @@ def _resolve(
         write=mode == "backfill",
         store=store,
     )
+    if outcome.status == "no_annual_filing" and cell.issuer.predecessor_cik is not None:
+        # #496: the same fallback the daily tick applies — the holdco's filings still
+        # live under the predecessor; the fact is recorded under the issuer's current CIK.
+        outcome = extract_headcount(
+            cell.issuer.predecessor_cik,
+            connection=connection,
+            http=http,
+            gateway=gateway,
+            standard=standard,
+            cutoff=cutoff,
+            write=mode == "backfill",
+            store=store,
+            record_cik=cell.issuer.cik,
+        )
+    return outcome
 
 
 def _cell_record(cell: OpenCell, outcome: ExtractionOutcome) -> dict[str, Any]:

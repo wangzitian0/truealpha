@@ -235,8 +235,15 @@ def extract_headcount(
     write: bool,
     store: RawObjectStore | None = None,
     now: datetime | None = None,
+    record_cik: int | None = None,
 ) -> ExtractionOutcome:
-    """Enumerate, select by rule, and — in write mode — land the cited fact."""
+    """Enumerate, select by rule, and — in write mode — land the cited fact.
+
+    `cik` is where the filing is fetched from; `record_cik` (default: the same) is the
+    issuer the fact is recorded under — they differ for a post-reorganization holding
+    company whose filings still sit under the predecessor CIK (#496).
+    """
+    record_cik = cik if record_cik is None else record_cik
     try:
         document = latest_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
     except CapacityExceeded as error:
@@ -262,8 +269,8 @@ def extract_headcount(
     )
     if status != "resolved" or not write or chosen is None:
         return outcome
-    if _already_recorded(connection, cik, document.accession):
-        return ExtractionOutcome(cik, "already_recorded", accession=document.accession, value=chosen.value)
+    if _already_recorded(connection, record_cik, document.accession):
+        return ExtractionOutcome(record_cik, "already_recorded", accession=document.accession, value=chosen.value)
 
     landed_at = now or datetime.now(UTC)
     raw_id = insert_fetch(
@@ -278,13 +285,14 @@ def extract_headcount(
         store=store,
         recorded_at=landed_at,
     )
+    filing_cik = "" if record_cik == cik else f" filing_cik={cik}"
     evidence_ref = (
-        f"accession={document.accession} form={document.form} filed={document.filing_date.isoformat()} "
+        f"accession={document.accession} form={document.form} filed={document.filing_date.isoformat()}{filing_cik} "
         f"raw=raw.fetches:{raw_id} extractor={RULE_SINGLE_CANDIDATE} span={chosen.sentence[:400]!r}"
     )
     fact_id = record_headcount(
         connection,
-        cik=cik,
+        cik=record_cik,
         headcount=Decimal(chosen.value),
         knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
         period_end=parse_as_of(chosen.as_of),
@@ -293,7 +301,7 @@ def extract_headcount(
         confidence=confidence_for(standard.confidence_policy_id, RULE_SINGLE_CANDIDATE),
     )
     return ExtractionOutcome(
-        cik,
+        record_cik,
         "resolved",
         value=chosen.value,
         as_of=parse_as_of(chosen.as_of),
