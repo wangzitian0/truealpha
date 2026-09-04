@@ -421,6 +421,16 @@ def test_a_gateway_call_around_an_adapter_is_one_row_with_the_adapters_detail(ca
     assert row[5] == 200 and row[9] == hashlib.sha256(body).hexdigest() and row[8] == sec.TICKERS_URL
 
 
+def test_a_gateway_call_that_returns_the_body_records_its_digest() -> None:
+    """`filing_extraction._get_bytes` returns the bytes, not a response: the row still
+    names them (Copilot on #741)."""
+    ledger = _Ledger()
+    gw = _gateway(ledger, gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
+    assert gw.call("sec", "archive", lambda: b"<xml/>") == b"<xml/>"
+    (row,) = ledger.rows
+    assert row[9] == hashlib.sha256(b"<xml/>").hexdigest() and row[10] == 6
+
+
 def test_a_call_inside_a_full_window_waits_for_the_window_to_roll() -> None:
     clock, slept = [0.0], []
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 2, 100), clock, slept)

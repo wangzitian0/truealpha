@@ -551,10 +551,15 @@ class SourceGateway:
         self._spent_today[source] = (day, spent + 1)
         with record_call(source, endpoint, caller=self.caller, writer=self._write) as record:
             result = fn()
-            status = getattr(result, "status_code", None)
-            body = getattr(result, "content", None)
-            if status is not None or isinstance(body, bytes):
-                record.observe(status_code=status, body=body)
+            if isinstance(result, bytes | str):
+                # A helper that returns the body itself (`_get_bytes` in the standards
+                # lane): the bytes are what the ledger must dereference to.
+                record.observe(body=result)
+            else:
+                status = getattr(result, "status_code", None)
+                body = getattr(result, "content", None)
+                if status is not None or isinstance(body, bytes):
+                    record.observe(status_code=status, body=body)
             return result
 
     def _write(self, record: CallRecord) -> None:
