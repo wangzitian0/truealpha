@@ -11,7 +11,9 @@ registered in `data_engine.lanes.LANE_MODULES` (capture ticks + schedules, the w
 universe refresh, the manual-trigger sensor). A lane adds or retires a job in its own
 module; nothing here lists a job by name, and `test_dagster_defs.py` asserts the root
 is exactly the union of what the lanes declare. The names re-exported below keep the
-operator commands and tests that address `data_engine.dagster_defs` working.
+operator commands and tests that address `data_engine.dagster_defs` working, and they
+are also what makes each lane statically reachable for `tools/reachability_ratchet.py`
+(`LANE_MODULES` is resolved by `import_module`, which an AST walk cannot follow).
 
 No fixture data is seeded anywhere in the deployed composition (#429 invariant I2);
 the retired fixture-seeded canary lives in `fixture_canary_definitions()` — an
@@ -35,6 +37,7 @@ from data_engine.lanes.capture import (
     run_topt_live_tick,
     topt_live_schedule,
 )
+from data_engine.lanes.standards import STANDARD_BACKFILL_JOB_NAME
 from data_engine.lanes.triggers import pipeline_trigger_sensor
 from data_engine.lanes.universe_refresh import UNIVERSE_REFRESH_JOB_NAME
 
@@ -43,6 +46,7 @@ __all__ = [
     "CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME",
     "LANE_MODULES",
     "QQQ_LIVE_JOB_NAME",
+    "STANDARD_BACKFILL_JOB_NAME",
     "TOPT_LIVE_CRON",
     "TOPT_LIVE_JOB_NAME",
     "UNIVERSE_REFRESH_JOB_NAME",
