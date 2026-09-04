@@ -208,8 +208,10 @@ const RECENT_CALLS_SQL = `
   select l.id, to_char(l.called_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as called_at,
          l.source, l.endpoint, l.caller, l.ok,
          l.status_code, l.duration_ms, left(l.error, 160) as error, l.run_key,
-         (select min(f.id) from raw.fetches f
-           where f.payload_sha256 = l.payload_sha256 and f.source = l.source) as landed_fetch_id
+         case when l.ok and l.payload_sha256 is not null then
+           (select min(f.id) from raw.fetches f
+             where f.payload_sha256 = l.payload_sha256 and f.source = l.source)
+         end as landed_fetch_id
   from staging.api_call_ledger l
   order by l.called_at desc, l.id desc
   limit 40

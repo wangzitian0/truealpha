@@ -160,7 +160,7 @@ export default async function AdminDatahubPage() {
                   <td className="pr-4">{row.calls}</td>
                   <td className={`pr-4 ${row.failed > 0 ? "text-amber-400" : ""}`}>{row.failed}</td>
                   <td className="pr-4">
-                    {row.landed}/{row.calls - row.failed}
+                    {row.calls - row.failed > 0 ? `${row.landed}/${row.calls - row.failed}` : "—"}
                   </td>
                   <td className="pr-4">{row.avg_ms ?? "—"}</td>
                   <td className="pr-4 text-gray-400">{row.last_call}</td>
