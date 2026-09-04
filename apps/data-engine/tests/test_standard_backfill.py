@@ -235,9 +235,10 @@ def test_stacked_workforce_qualifiers_from_the_first_real_probe_are_candidates()
             "As of September 27, 2025, the Company had approximately 166,000 full-time equivalent employees.",
             "As of October 26, 2025, we employed approximately 36,500 regular full-time employees spanning 25 countries.",
             "As of December 31, 2025, we had approximately 28,000 staff members.",
+            "As of December 31, 2025, we employed approximately 1,556,000 full-time and part-time employees.",
         )
     )
-    assert sorted(c.value for c in candidates(text)) == [28000, 36500, 166000]
+    assert sorted(c.value for c in candidates(text)) == [28000, 36500, 166000, 1556000]
     assert all(not c.partial for c in candidates(text))
 
 

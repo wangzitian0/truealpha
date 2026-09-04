@@ -45,14 +45,15 @@ _PLAUSIBLE = (10, 5_000_000)
 # "we had approximately 33,000 employees", "employed 341,000 employees worldwide",
 # "approximately 166,000 full-time equivalent employees" (AAPL), "employed approximately
 # 36,500 regular full-time employees" (AMAT), "had approximately 28,000 staff members"
-# (AMGN) — the last three were misses on the first real QQQ probe (2026-09-04), so the
-# workforce qualifier may stack up to three words. Deliberately loose: a missed candidate
+# (AMGN), "employed approximately 1,556,000 full-time and part-time employees" (AMZN) —
+# all misses on the first real QQQ probe (2026-09-04), so the workforce qualifier may
+# stack up to three words joined by "and"/"or". Deliberately loose: a missed candidate
 # is unrecoverable downstream, whereas a spurious one is discarded by selection.
 _HEADCOUNT = re.compile(
     r"(?:had|employed|have|of|total of)\s+"
     r"(?:approximately\s+|about\s+|over\s+|more than\s+|nearly\s+)?"
     r"([\d][\d,]{2,12})\s+"
-    r"(?:(?:full[- ]time|part[- ]time|regular|global|salaried|equivalent|permanent)\s+){0,3}"
+    r"(?:(?:full[- ]time|part[- ]time|regular|global|salaried|equivalent|permanent)(?:\s+(?:and|or)\s+|\s+)){0,3}"
     r"(?:employees|persons|people|associates|team members|staff members|colleagues)",
     re.I,
 )
