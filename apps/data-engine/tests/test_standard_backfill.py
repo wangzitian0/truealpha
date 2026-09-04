@@ -47,6 +47,7 @@ class FakeConnection:
 
     def __init__(self, facts: dict[int, list[tuple[str, datetime]]] | None = None) -> None:
         self.facts = facts or {}
+        self.predecessors: dict[str, int] = {}
         self.headcount_rows: list[tuple] = []
         self.ledger_rows: list[tuple] = []
         self.raw_rows: list[tuple] = []
@@ -66,6 +67,9 @@ class FakeConnection:
             accession = like.removeprefix("accession=").split(" ")[0]
             hits = [r for r in self.headcount_rows if r[0] == cik and f"accession={accession} " in r[5]]
             return _Result([(1,)] if hits else [])
+        if text.startswith("select issuer_id, predecessor_cik from staging.issuer_cik_predecessors"):
+            (issuer_ids,) = params
+            return _Result([(i, c) for i, c in self.predecessors.items() if i in issuer_ids])
         if text.startswith("select count(*) from staging.api_call_ledger"):
             return _Result([(0,)])
         if text.startswith("insert into staging.api_call_ledger"):
@@ -491,6 +495,55 @@ def test_run_over_a_universe_plans_only_open_cells_and_persists_the_report(monke
     assert metrics["employees_total:universe-list:qqq:backfill:resolved"] == 1
     assert metrics["employees_total:universe-list:qqq:backfill:open_cells"] == 2
     assert any("LLY" in line and "needs_model_selection" in line for line in lines)
+
+
+def test_a_holdco_with_no_filing_under_its_new_cik_falls_back_to_the_predecessor(monkeypatch) -> None:
+    """XOM on the first TOPT probe (2026-09-04): index CIK 2115436 has no 10-K yet; the
+    owner-signed registry names 34088. The fact lands under 2115436 — the CIK the daily
+    tick reads — with the filing CIK on the evidence."""
+    connection = FakeConnection()
+    connection.predecessors = {"issuer:lei:XOM": 34088}
+    http = FakeHttp(
+        {
+            2115436: [("8-K", "2026-01-05", "0002115436-26-000001", b"<html>event</html>")],
+            34088: [
+                (
+                    "10-K",
+                    "2026-02-25",
+                    "0000034088-26-000009",
+                    _html("At year-end 2025 we had approximately 61,000 employees."),
+                )
+            ],
+        }
+    )
+    from data_engine.datahub.standards import planner as planner_module
+
+    monkeypatch.setattr(
+        planner_module,
+        "load_corpus",
+        lambda _f: {"topt_denominator": {"instruments": [["issuer:lei:XOM", "security:x", "listing:xnys:xom", "XOM"]]}},
+    )
+    issuers = planner_module.universe_issuers(connection, "topt")
+    assert issuers[0].cik is None and issuers[0].predecessor_cik == 34088
+    issuers = planner_module.resolve_missing_ciks(issuers, {"XOM": 2115436})
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u: issuers)
+
+    report = run_standard_backfill(
+        connection,
+        universe="topt",
+        standard_name="employees_total",
+        cutoff=CUTOFF,
+        mode="backfill",
+        http=http,
+        gateway=_gateway(connection),
+        store=FakeStore(),
+        log=lambda _l: None,
+    )
+
+    assert dict(report.outcomes) == {"resolved": 1}
+    (row,) = connection.headcount_rows
+    assert row[0] == 2115436 and row[1] == Decimal(61000)
+    assert "filing_cik=34088" in row[5] and "accession=000003408826000009" in row[5]
 
 
 def test_probe_run_writes_only_the_ledger_and_the_report(monkeypatch) -> None:

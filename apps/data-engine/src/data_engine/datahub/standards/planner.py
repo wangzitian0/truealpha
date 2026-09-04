@@ -10,7 +10,7 @@ vendor spend is proportional to what is actually missing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
@@ -32,6 +32,10 @@ class UniverseIssuer:
     ticker: str
     listing_id: str
     cik: int | None
+    # #496: a post-reorganization holding company (XOM's 2115436) files nothing under its
+    # new CIK for a while; the owner-signed registry names the CIK whose filings still
+    # describe the issuer. Consulted only when the current CIK has no annual filing.
+    predecessor_cik: int | None = None
 
 
 @dataclass(frozen=True)
@@ -57,7 +61,18 @@ def universe_issuers(connection: Any, universe: str) -> list[UniverseIssuer]:
             continue
         cik = int(issuer_id.removeprefix("issuer:cik:")) if issuer_id.startswith("issuer:cik:") else None
         issuers[issuer_id] = UniverseIssuer(issuer_id=issuer_id, ticker=ticker, listing_id=listing_id, cik=cik)
-    return list(issuers.values())
+    predecessors = dict(
+        connection.execute(
+            "select issuer_id, predecessor_cik from staging.issuer_cik_predecessors where issuer_id = any(%s)",
+            (sorted(issuers),),
+        ).fetchall()
+    )
+    return [
+        replace(issuer, predecessor_cik=int(predecessors[issuer.issuer_id]))
+        if issuer.issuer_id in predecessors
+        else issuer
+        for issuer in issuers.values()
+    ]
 
 
 def resolve_missing_ciks(issuers: list[UniverseIssuer], ticker_index: dict[str, int]) -> list[UniverseIssuer]:
@@ -69,7 +84,7 @@ def resolve_missing_ciks(issuers: list[UniverseIssuer], ticker_index: dict[str, 
             resolved.append(issuer)
             continue
         cik = ticker_index.get(issuer.ticker.replace(".", "-"))
-        resolved.append(UniverseIssuer(issuer.issuer_id, issuer.ticker, issuer.listing_id, cik))
+        resolved.append(replace(issuer, cik=cik))
     return resolved
 
 
