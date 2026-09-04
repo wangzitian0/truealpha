@@ -25,7 +25,8 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any, Literal
 
-from truealpha_contracts import DataSource, RawObjectStore
+from truealpha_contracts.models import DataSource
+from truealpha_contracts.ports import RawObjectStore
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
 from data_engine.datahub.production_topt.headcount import record_headcount
