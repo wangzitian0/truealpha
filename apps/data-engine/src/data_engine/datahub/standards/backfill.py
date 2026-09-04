@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-from truealpha_contracts import RawObjectStore
+from truealpha_contracts.ports import RawObjectStore
 from truealpha_contracts.standards import STANDARDS, EvidenceRequirement, MetricStandard
 
 from data_engine.datahub.standards.filing_extraction import ExtractionOutcome, extract_headcount
