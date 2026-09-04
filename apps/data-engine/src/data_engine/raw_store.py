@@ -142,7 +142,7 @@ def get_payload(conn, fetch_id: int, *, store: RawObjectStore | None = None) -> 
     """Read a fetch's bytes back through its pointer row — checksum-verified by
     the object store. This is how offline rebuilds (--figi-from-raw) reuse
     landed responses instead of re-spending API calls."""
-    from truealpha_contracts import RawObjectRef
+    from truealpha_contracts.models import RawObjectRef
 
     row = conn.execute(
         "select object_uri, payload_sha256, byte_length, content_type from raw.fetches where id = %s",

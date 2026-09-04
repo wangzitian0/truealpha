@@ -185,7 +185,7 @@ def _infra_failures(connection: psycopg.Connection, run_id: str) -> list[str]:
     else:
         object_uri, expected_sha, expected_len, content_type = row
         try:
-            from truealpha_contracts import RawObjectRef
+            from truealpha_contracts.models import RawObjectRef
             from truealpha_runtime.storage import S3RawObjectStore
 
             bucket, _, key = object_uri.removeprefix("s3://").partition("/")
