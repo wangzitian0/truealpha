@@ -228,8 +228,42 @@ def test_a_segment_qualified_count_is_marked_partial_and_does_not_block_the_tota
     assert status == "resolved" and chosen is not None and chosen.value == 392400
 
 
+def test_stacked_workforce_qualifiers_from_the_first_real_probe_are_candidates() -> None:
+    """AAPL, AMAT and AMGN were no_candidate on the first real QQQ probe (2026-09-04)."""
+    text = filing_plain_text(
+        _html(
+            "As of September 27, 2025, the Company had approximately 166,000 full-time equivalent employees.",
+            "As of October 26, 2025, we employed approximately 36,500 regular full-time employees spanning 25 countries.",
+            "As of December 31, 2025, we had approximately 28,000 staff members.",
+        )
+    )
+    assert sorted(c.value for c in candidates(text)) == [28000, 36500, 166000]
+    assert all(not c.partial for c in candidates(text))
+
+
+def test_a_holding_company_total_and_a_subsidiary_count_defer_to_the_model() -> None:
+    """AEP on the first real probe: 17,581 across subsidiaries vs 6,994 at the service
+    company — two company-wide-looking statements, one judgement."""
+    text = filing_plain_text(
+        _html(
+            "As of December 31, 2025, the subsidiaries of AEP had a total of 17,581 employees.",
+            "As of December 31, 2025, AEPSC had 6,994 employees.",
+        )
+    )
+    status, chosen = select_total(candidates(text))
+    assert status == "needs_model_selection" and chosen is None
+
+
 def test_a_filing_with_no_statement_is_no_candidate_never_a_number() -> None:
     assert select_total(candidates(filing_plain_text(_html("We make things.")))) == ("no_candidate", None)
+
+
+def test_only_subset_counts_is_no_candidate_not_a_model_question() -> None:
+    """Review on #740: when every statement is partial there is no company-wide total
+    to choose; deferring to a model would imply the filing has one."""
+    found = candidates(filing_plain_text(_html(BRK_SEGMENT, "We employed approximately 300 part-time employees.")))
+    assert found and all(c.partial for c in found)
+    assert select_total(found) == ("no_candidate", None)
 
 
 def test_officer_counts_and_absurd_values_are_not_candidates() -> None:

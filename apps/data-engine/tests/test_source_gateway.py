@@ -83,6 +83,28 @@ def test_capacity_one_defers_the_second_call_of_the_day() -> None:
     assert len(ledger.rows) == 1
 
 
+def test_the_daily_count_resets_when_the_utc_day_rolls_over() -> None:
+    """Review on #740: a long-lived gateway must not carry yesterday's count into today."""
+    ledger = _Ledger(spent_today=0)
+    clock, slept = [0.0], []
+    day = [datetime(2026, 9, 4, 23, 59, tzinfo=UTC)]
+    gateway = SourceGateway(
+        ledger,
+        caller="test",
+        capacities={"sec": SourceCapacity("sec", 1.0, 100, 2)},
+        clock=lambda: clock[0],
+        sleep=lambda s: slept.append(s),
+        now=lambda: day[0],
+    )
+    gateway.call("sec", "a", lambda: None)
+    gateway.call("sec", "b", lambda: None)
+    with pytest.raises(CapacityExceeded):
+        gateway.call("sec", "c", lambda: None)
+    day[0] = datetime(2026, 9, 5, 0, 1, tzinfo=UTC)  # midnight passed; the ledger says 0 today
+    gateway.call("sec", "d", lambda: None)  # allowed again
+    assert [r[1] for r in ledger.rows] == ["a", "b", "d"]
+
+
 def test_an_undeclared_source_cannot_be_called() -> None:
     gateway = _gateway(_Ledger(), SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
     with pytest.raises(CapacityExceeded, match="no declared capacity"):

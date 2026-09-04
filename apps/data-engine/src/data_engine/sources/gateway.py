@@ -19,7 +19,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, TypeVar
 
 T = TypeVar("T")
@@ -68,7 +68,9 @@ class SourceGateway:
     sleep: Callable[[float], None] = time.sleep
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
     _windows: dict[str, deque[float]] = field(default_factory=dict)
-    _spent_today: dict[str, int] = field(default_factory=dict)
+    # (utc day, calls) per source: a gateway that lives across midnight re-reads the
+    # ledger for the new day instead of carrying yesterday's count into it.
+    _spent_today: dict[str, tuple[date, int]] = field(default_factory=dict)
 
     def capacity(self, source: str) -> SourceCapacity:
         try:
@@ -89,17 +91,19 @@ class SourceGateway:
             self._record(source, endpoint, ok)
 
     def _check_daily_budget(self, source: str, capacity: SourceCapacity) -> None:
-        if source not in self._spent_today:
-            day_start = self.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        now = self.now()
+        today = now.date()
+        cached = self._spent_today.get(source)
+        if cached is None or cached[0] != today:
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
             row = self.connection.execute(
                 "select count(*) from staging.api_call_ledger where source = %s and called_at >= %s",
                 (source, day_start),
             ).fetchone()
-            self._spent_today[source] = int(row[0]) if row else 0
-        if self._spent_today[source] >= capacity.daily_budget:
-            raise CapacityExceeded(
-                source, f"daily budget {capacity.daily_budget} spent ({self._spent_today[source]} calls today)"
-            )
+            cached = (today, int(row[0]) if row else 0)
+            self._spent_today[source] = cached
+        if cached[1] >= capacity.daily_budget:
+            raise CapacityExceeded(source, f"daily budget {capacity.daily_budget} spent ({cached[1]} calls today)")
 
     def _throttle(self, source: str, capacity: SourceCapacity) -> None:
         window = self._windows.setdefault(source, deque())
@@ -116,7 +120,8 @@ class SourceGateway:
         window.append(now)
 
     def _record(self, source: str, endpoint: str, ok: bool) -> None:
-        self._spent_today[source] = self._spent_today.get(source, 0) + 1
+        day, spent = self._spent_today.get(source, (self.now().date(), 0))
+        self._spent_today[source] = (day, spent + 1)
         self.connection.execute(
             "insert into staging.api_call_ledger (source, endpoint, caller, ok) values (%s, %s, %s, %s)",
             (source, endpoint, self.caller, ok),

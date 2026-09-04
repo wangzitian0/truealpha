@@ -43,14 +43,17 @@ RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"
 _PLAUSIBLE = (10, 5_000_000)
 
 # "we had approximately 33,000 employees", "employed 341,000 employees worldwide",
-# "approximately 164,000 full-time employees". Deliberately loose: a missed candidate is
-# unrecoverable downstream, whereas a spurious one is discarded by selection.
+# "approximately 166,000 full-time equivalent employees" (AAPL), "employed approximately
+# 36,500 regular full-time employees" (AMAT), "had approximately 28,000 staff members"
+# (AMGN) — the last three were misses on the first real QQQ probe (2026-09-04), so the
+# workforce qualifier may stack up to three words. Deliberately loose: a missed candidate
+# is unrecoverable downstream, whereas a spurious one is discarded by selection.
 _HEADCOUNT = re.compile(
-    r"(?:had|employed|have|of)\s+"
+    r"(?:had|employed|have|of|total of)\s+"
     r"(?:approximately\s+|about\s+|over\s+|more than\s+|nearly\s+)?"
     r"([\d][\d,]{2,12})\s+"
-    r"(?:full[- ]time\s+|part[- ]time\s+|regular\s+|global\s+|salaried\s+)?"
-    r"(?:employees|persons|people|associates|team members|colleagues)",
+    r"(?:(?:full[- ]time|part[- ]time|regular|global|salaried|equivalent|permanent)\s+){0,3}"
+    r"(?:employees|persons|people|associates|team members|staff members|colleagues)",
     re.I,
 )
 _AS_OF = re.compile(r"[Aa]s of ([A-Z][a-z]+ \d{1,2},? \d{4})")
@@ -167,7 +170,9 @@ def select_total(found: list[FilingCandidate]) -> tuple[ExtractionStatus, Filing
     """The deterministic half of selection: one company-wide statement, or defer."""
     totals = [candidate for candidate in found if not candidate.partial]
     distinct = {candidate.value for candidate in totals}
-    if not found:
+    if not totals:
+        # Nothing, or only subset counts (a segment, a region, contractors): the filing
+        # states no company-wide total, so there is nothing for a model to choose either.
         return "no_candidate", None
     if len(distinct) == 1:
         return "resolved", totals[0]
