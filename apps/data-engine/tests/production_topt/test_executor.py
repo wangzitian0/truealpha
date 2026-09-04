@@ -11,9 +11,10 @@ from data_engine.datahub.production_topt.executor import (
     RawResponse,
     ToptCaptureExecutor,
 )
-from truealpha_contracts import EvidenceEdge, EvidenceNode, ObligationReasonCode
 from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from truealpha_contracts.evidence_graph import EvidenceEdge, EvidenceNode
 from truealpha_contracts.models import DataSource
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 _RUN = "capture-run:" + "a" * 64
 _CUTOFF = datetime(2026, 4, 1, tzinfo=UTC)

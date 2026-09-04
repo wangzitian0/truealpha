@@ -35,7 +35,7 @@ from typing import Any, TypedDict
 
 from psycopg import Connection
 from psycopg.types.json import Jsonb
-from truealpha_contracts import canonical_sha256
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import DataSource
 
 from data_engine import raw_store

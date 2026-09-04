@@ -2,7 +2,6 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts import SubjectKind, SubjectRef, UniverseRef
 from truealpha_contracts.capture_control import (
     CaptureCheckpoint,
     CaptureListObligation,
@@ -12,6 +11,7 @@ from truealpha_contracts.capture_control import (
     CheckpointPhase,
 )
 from truealpha_contracts.datahub import ListObligation, RecapturePredicate
+from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 SHA = "a" * 64
 AT = datetime(2026, 4, 1, tzinfo=UTC)

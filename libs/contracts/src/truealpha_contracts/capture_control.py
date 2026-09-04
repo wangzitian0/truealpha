@@ -9,8 +9,9 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts import SubjectRef, UniverseRef, canonical_sha256
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import ListObligation, RecapturePredicate
+from truealpha_contracts.universe import SubjectRef, UniverseRef
 
 
 def _freeze(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:

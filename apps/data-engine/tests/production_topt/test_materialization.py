@@ -23,16 +23,9 @@ from data_engine.datahub.production_topt.universe_corpus import corpus_list_vers
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
 from factors.production_topt import GppeV0Definition, ToptCoreAvailability
-from truealpha_contracts import (
-    BitemporalStamp,
-    CaptureEnvironment,
-    EvidenceNode,
-    EvidenceNodeKind,
-    EvidenceNodeRef,
-    canonical_sha256,
-)
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.capture_control import CaptureObligationWorkBinding
+from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.datahub import (
     CaptureCampaign,
     CaptureRun,
@@ -45,6 +38,7 @@ from truealpha_contracts.datahub import (
     SourceRequest,
     SourceVintage,
 )
+from truealpha_contracts.evidence_graph import BitemporalStamp, EvidenceNode, EvidenceNodeKind, EvidenceNodeRef
 from truealpha_contracts.strategy_run import StrategyRunReport
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 from truealpha_contracts.topt_read import PostgresToptGppeRepository, ToptGppeReport, ToptGppeUnavailable

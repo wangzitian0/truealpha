@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from truealpha_contracts import SubjectKind, SubjectRef, canonical_sha256
 from truealpha_contracts.capture_control import (
     CaptureCheckpoint,
     CaptureListObligation,
@@ -16,6 +15,7 @@ from truealpha_contracts.capture_control import (
     CaptureRecapturePlan,
     CheckpointPhase,
 )
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import (
     AssessmentFreshness,
     CaptureWorkItem,
@@ -23,6 +23,7 @@ from truealpha_contracts.datahub import (
     ObligationTerminalState,
     RecapturePredicate,
 )
+from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 from data_engine.datahub.control_plane import (
     AttemptLedger,

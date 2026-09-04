@@ -10,14 +10,7 @@ from typing import Any
 import pytest
 import truealpha_contracts
 from pydantic import ValidationError
-from truealpha_contracts import (
-    CaptureEnvironment,
-    ProvenanceNeutralInput,
-    SubjectKind,
-    SubjectRef,
-    UniverseRef,
-    canonical_sha256,
-)
+from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.datahub import (
     AssessmentApplicability,
     AssessmentAvailability,
@@ -51,6 +44,8 @@ from truealpha_contracts.datahub import (
     SourceRequest,
     SourceVintage,
 )
+from truealpha_contracts.execution import ProvenanceNeutralInput
+from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64

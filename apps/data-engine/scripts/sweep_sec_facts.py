@@ -21,7 +21,7 @@ import httpx
 from data_engine import db, raw_store
 from data_engine.sources import sec
 from factors.shared import entity_resolution as er
-from truealpha_contracts import DataSource
+from truealpha_contracts.models import DataSource
 
 PACE_SECONDS = 0.25
 

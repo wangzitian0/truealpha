@@ -5,7 +5,6 @@ from decimal import ROUND_UP, Decimal, Inexact, localcontext
 
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts import SubjectKind, SubjectRef
 from truealpha_contracts.datahub import AssessmentFreshness, ObligationTerminalState
 from truealpha_contracts.reconciliation import (
     DataHubQualityCell,
@@ -18,6 +17,7 @@ from truealpha_contracts.reconciliation import (
     VersionedDataHubQualityReport,
     reconcile_source_assertions,
 )
+from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64

@@ -52,7 +52,7 @@ def check_object_storage() -> list[str]:
     import psycopg
     from data_engine import raw_store
     from data_engine.config import settings
-    from truealpha_contracts import DataSource
+    from truealpha_contracts.models import DataSource
 
     try:
         with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:

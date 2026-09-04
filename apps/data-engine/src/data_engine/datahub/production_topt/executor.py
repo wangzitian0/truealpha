@@ -18,7 +18,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
-from truealpha_contracts import (
+from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from truealpha_contracts.evidence_graph import (
     BitemporalStamp,
     EvidenceEdge,
     EvidenceGraphWriter,
@@ -26,13 +28,9 @@ from truealpha_contracts import (
     EvidenceNodeKind,
     EvidenceNodeRef,
     EvidenceRelation,
-    ObligationDisposition,
-    ObligationReasonCode,
-    canonical_sha256,
-    disposition_for,
 )
-from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
 from truealpha_contracts.models import DataSource
+from truealpha_contracts.obligation_reason_codes import ObligationDisposition, ObligationReasonCode, disposition_for
 
 _HEX64 = 64
 

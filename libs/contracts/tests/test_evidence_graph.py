@@ -2,9 +2,9 @@ from datetime import UTC, date, datetime
 
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts import (
+from truealpha_contracts.common import CaptureEnvironment
+from truealpha_contracts.evidence_graph import (
     BitemporalStamp,
-    CaptureEnvironment,
     CurrentPointer,
     CurrentPointerKey,
     EvidenceEdge,

@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from truealpha_contracts import CaptureEnvironment, SubjectKind, SubjectRef, canonical_sha256
 from truealpha_contracts.capture_control import (
     CaptureListObligation,
     CaptureListVersion,
     CaptureObligationWorkBinding,
 )
+from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.datahub import (
     CaptureCampaign,
     CaptureRun,
@@ -36,6 +36,7 @@ from truealpha_contracts.datahub import (
     SourceRequest,
     SourceVintage,
 )
+from truealpha_contracts.universe import SubjectKind, SubjectRef
 
 from data_engine.datahub.control_plane import (
     AttemptLedger,

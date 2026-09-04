@@ -35,7 +35,7 @@ import psycopg
 from factors.production_topt import OperatingBranch
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
-from truealpha_contracts import canonical_sha256
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import RawObjectRef
 from truealpha_contracts.reconciliation import (
     ReconciliationCell,

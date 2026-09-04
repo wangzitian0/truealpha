@@ -26,7 +26,7 @@ import argparse
 import json
 from pathlib import Path
 
-from truealpha_contracts import canonical_sha256
+from truealpha_contracts.common import canonical_sha256
 
 _TUPLE_FIELDS = ["issuer_id", "instrument_id", "listing_id", "ticker"]
 

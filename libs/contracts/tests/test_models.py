@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts import (
+from truealpha_contracts.models import (
     AnalystRatingEvent,
     AsOfQuery,
     BacktestDataset,

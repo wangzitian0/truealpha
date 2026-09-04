@@ -9,8 +9,8 @@ from data_engine.datahub.production_topt.release_derived_adapter import (
     ReleaseDerivedAdapter,
     ReleaseDerivedRecord,
 )
-from truealpha_contracts import ObligationReasonCode
 from truealpha_contracts.datahub import CaptureWorkItem
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 _CUTOFF = date(2026, 3, 31)
 _KNOWN = datetime(2026, 3, 1, tzinfo=UTC)

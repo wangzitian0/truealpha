@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from truealpha_contracts import canonical_sha256
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import FetchAttemptOutcome
 
 from data_engine.datahub.control_plane import AttemptLedger, replay_retry_policy

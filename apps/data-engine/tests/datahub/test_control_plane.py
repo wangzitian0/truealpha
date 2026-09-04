@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 from data_engine.datahub import AttemptLedger, expand_obligations
-from truealpha_contracts import SubjectKind, SubjectRef, UniverseRef
 from truealpha_contracts.capture_control import CaptureListVersion
 from truealpha_contracts.datahub import FetchAttemptOutcome, RetryPolicy
+from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 ROOT = Path(__file__).parents[1]
 CORPUS = ROOT / "fixtures" / "capture_control" / "corpus.v1.json"

@@ -15,8 +15,9 @@ from data_engine.datahub.production_topt.market_price_adapter import (
     MarketPriceTarget,
     SourceUnavailableError,
 )
-from truealpha_contracts import EvidenceEdge, EvidenceNode, ObligationReasonCode
 from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from truealpha_contracts.evidence_graph import EvidenceEdge, EvidenceNode
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 _CUTOFF = date(2026, 3, 31)
 

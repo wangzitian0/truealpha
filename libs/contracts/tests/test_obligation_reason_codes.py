@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts import (
+from truealpha_contracts.obligation_reason_codes import (
     ObligationDisposition,
     ObligationReasonCode,
     ObligationReasonCodeRegistry,

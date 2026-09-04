@@ -359,7 +359,7 @@ def test_cross_day_pair_reconciles_insufficient_not_conflict() -> None:
     from datetime import UTC, datetime
 
     from data_engine.datahub.quality_report import RECONCILIATION_POLICY, _served_day_assertions
-    from truealpha_contracts import canonical_sha256
+    from truealpha_contracts.common import canonical_sha256
     from truealpha_contracts.reconciliation import (
         ReconciliationCell,
         ReconciliationOutcome,
@@ -421,7 +421,7 @@ def test_deployed_tolerance_absorbs_real_vendor_spread_and_still_catches_errors(
     from decimal import Decimal
 
     from data_engine.datahub.quality_report import RECONCILIATION_POLICY, _served_day_assertions
-    from truealpha_contracts import canonical_sha256
+    from truealpha_contracts.common import canonical_sha256
     from truealpha_contracts.reconciliation import (
         ReconciliationCell,
         ReconciliationOutcome,

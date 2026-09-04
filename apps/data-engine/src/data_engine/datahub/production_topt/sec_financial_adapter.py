@@ -32,10 +32,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from factors.production_topt import OperatingBranch
-from truealpha_contracts import ObligationReasonCode, canonical_sha256
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef, ResolutionKind
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
+from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.executor import (

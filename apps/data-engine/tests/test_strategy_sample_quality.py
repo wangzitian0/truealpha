@@ -7,7 +7,7 @@ from data_engine.quality.strategy_samples import (
     _verified_evidence,
     audit_strategy_samples,
 )
-from truealpha_contracts import ReadinessLevel
+from truealpha_contracts.data_quality import ReadinessLevel
 
 SAMPLE_ROOT = Path(__file__).parents[1] / "samples"
 
