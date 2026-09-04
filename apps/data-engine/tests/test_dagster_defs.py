@@ -23,6 +23,7 @@ from data_engine import dagster_defs
 from data_engine.dagster_defs import (
     CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME,
     QQQ_LIVE_JOB_NAME,
+    STANDARD_BACKFILL_JOB_NAME,
     TOPT_LIVE_CRON,
     TOPT_LIVE_JOB_NAME,
     UNIVERSE_REFRESH_JOB_NAME,
@@ -48,7 +49,13 @@ def test_defs_loads_and_exposes_only_the_live_pipeline() -> None:
     # fixture canary stays out of the deployed composition (#429 I2).
     from data_engine.dagster_defs import CANARY_JOB_NAME
 
-    assert deployed_jobs == {TOPT_LIVE_JOB_NAME, QQQ_LIVE_JOB_NAME, CANARY_JOB_NAME, UNIVERSE_REFRESH_JOB_NAME}
+    assert deployed_jobs == {
+        TOPT_LIVE_JOB_NAME,
+        QQQ_LIVE_JOB_NAME,
+        CANARY_JOB_NAME,
+        UNIVERSE_REFRESH_JOB_NAME,
+        STANDARD_BACKFILL_JOB_NAME,
+    }
     assert CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME not in deployed_jobs
 
 

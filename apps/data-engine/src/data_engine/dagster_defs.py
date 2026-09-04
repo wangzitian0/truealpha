@@ -26,6 +26,7 @@ The retired fixture-seeded canary lives in `fixture_canary_definitions()` — an
 explicitly named, tests-only composition that is NOT part of the deployed `defs`.
 """
 
+import json
 import traceback
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -36,6 +37,7 @@ import psycopg
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
 from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
+from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
     run_strategy_replay_for_cutoff,
@@ -492,9 +494,96 @@ def universe_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRe
     return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
 
 
+# -- standard backfill (#735 / #733: the standard→wide-row loop, slow plane) ------------
+
+STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
+# Sunday 09:07 UTC: after Saturday's universe refresh has published any membership
+# change, well clear of every capture window. Weekly matches the cadence of the
+# disclosures it fills (annual filings); the planner makes a quiet week cost nothing
+# because a closed cell is never re-fetched.
+STANDARD_BACKFILL_CRON = "7 9 * * 0"
+STANDARD_BACKFILL_UNIVERSES = ("universe-list:qqq", "topt")
+
+
+class StandardBackfillConfig(dg.Config):
+    """`executed_at` is the cutoff (tick time, ISO 8601), never the wall clock. `mode`
+    is `backfill` (land cited facts) or `probe` (report only — the source-research
+    instrument). `max_issuers` bounds a manual run; 0 means every open cell."""
+
+    executed_at: str
+    universe: str = "universe-list:qqq"
+    standard: str = "employees_total"
+    mode: str = "backfill"
+    max_issuers: int = 0
+
+
+@dg.op
+def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfillConfig) -> str:
+    cutoff = datetime.fromisoformat(config.executed_at)
+    if config.mode not in ("backfill", "probe"):
+        raise ValueError(f"mode must be backfill or probe, got {config.mode!r}")
+    with psycopg.connect(settings.database_url) as connection:
+        report = _run_standard_backfill(
+            connection,
+            universe=config.universe,
+            standard_name=config.standard,
+            cutoff=cutoff,
+            mode=config.mode,  # type: ignore[arg-type]
+            max_issuers=config.max_issuers,
+            log=context.log.info,
+        )
+    summary = report.summary()
+    context.add_output_metadata(
+        {
+            "universe": config.universe,
+            "standard": config.standard,
+            "mode": config.mode,
+            "issuers": report.issuers,
+            "open_cells": report.open,
+            "open_by_reason": str(dict(report.open_by_reason)),
+            "outcomes": str(dict(report.outcomes)),
+        }
+    )
+    return json.dumps(summary, sort_keys=True)
+
+
+@dg.job(name=STANDARD_BACKFILL_JOB_NAME)
+def standard_backfill_pipeline_job() -> None:
+    run_standard_backfill()
+
+
+@dg.schedule(
+    job=standard_backfill_pipeline_job,
+    cron_schedule=STANDARD_BACKFILL_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
+    executed_at = context.scheduled_execution_time.isoformat()
+    for universe in STANDARD_BACKFILL_UNIVERSES:
+        yield dg.RunRequest(
+            run_key=f"{executed_at}:{universe}",
+            run_config=dg.RunConfig(
+                ops={"run_standard_backfill": StandardBackfillConfig(executed_at=executed_at, universe=universe)}
+            ),
+        )
+
+
 defs = dg.Definitions(
-    jobs=[topt_live_pipeline_job, qqq_live_pipeline_job, canary_live_pipeline_job, universe_refresh_pipeline_job],
-    schedules=[topt_live_schedule, qqq_live_schedule, universe_refresh_schedule, canary_daily_schedule],
+    jobs=[
+        topt_live_pipeline_job,
+        qqq_live_pipeline_job,
+        canary_live_pipeline_job,
+        universe_refresh_pipeline_job,
+        standard_backfill_pipeline_job,
+    ],
+    schedules=[
+        topt_live_schedule,
+        qqq_live_schedule,
+        universe_refresh_schedule,
+        canary_daily_schedule,
+        standard_backfill_schedule,
+    ],
     sensors=[pipeline_trigger_sensor],
 )
 

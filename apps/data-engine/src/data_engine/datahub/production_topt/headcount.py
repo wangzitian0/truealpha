@@ -26,6 +26,10 @@ from psycopg import Connection
 
 from data_engine.datahub.production_topt.sec_financial_adapter import HeadcountFact
 
+#: Fusion order for the headcount plane (rule 12). Sources absent from the list rank
+#: last, so an unknown producer can never outrank a cited one by being newer.
+HEADCOUNT_SOURCE_PRIORITY: tuple[str, ...] = ("10k-extraction", "manual-review")
+
 
 class PostgresHeadcountExtractor:
     """`HeadcountExtractor` over the PIT fact table.
@@ -45,15 +49,20 @@ class PostgresHeadcountExtractor:
 
     def __call__(self, cik: int, cutoff: date) -> HeadcountFact | None:
         boundary = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
+        # init.md rule 12: the winner is chosen by declared source priority, never by
+        # recency. A cited extraction outranks the reviewed seed even when the seed's
+        # declared knowable_at is later (the seed's 2026-01-01 is an as-of stamp, not
+        # a publication); among facts of one source the latest knowable one wins. The
+        # knowable_at <= cutoff filter keeps the read point-in-time either way.
         row = self._connection.execute(
             """
             select headcount, knowable_at
             from staging.issuer_headcount_facts
             where cik = %s and knowable_at <= %s
-            order by knowable_at desc, id desc
+            order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
             limit 1
             """,
-            (cik, boundary),
+            (cik, boundary, list(HEADCOUNT_SOURCE_PRIORITY)),
         ).fetchone()
         if row is None:
             return None
