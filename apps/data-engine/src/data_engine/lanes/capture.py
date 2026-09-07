@@ -24,6 +24,7 @@ import psycopg
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
 from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
+from data_engine.datahub.production_topt.plausibility_gate import judge_run
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
     run_strategy_replay_for_cutoff,
@@ -233,10 +234,30 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             strategy = {
                 "strategy_inputs_seeded": seeded,
                 "l2_input_coverage": f"{l2_complete}/{l2_total}",
+                "l2_complete": l2_complete,
                 "strategy_run_id": strategy_run_id,
                 "decision_count": decision_count,
                 "snapshot_id": snapshot_id,
             }
+        # #544: plausibility policy v1, in the same transaction, before the pointer can
+        # advance. A refused run raises here; the `with` unwinds without a commit, so the
+        # transaction rolls back and mart.current_pointer stays on the previous accepted
+        # run — nothing of an implausible run is materialized. Deferred violations (the
+        # nightly suite's exemption file, issue + expiry) are logged and let through.
+        verdict = judge_run(
+            connection,
+            run_id=pipeline.run_id,
+            strategy_run_id=strategy.get("strategy_run_id"),
+            l2_complete=strategy.get("l2_complete"),
+        )
+        for line in verdict.lines():
+            context.log.info(line)
+        if verdict.refused:
+            raise dg.Failure(
+                f"plausibility policy {verdict.policy_version} refused {pipeline.run_id}: "
+                + "; ".join(f"{v.rule} {v.listing_id or ''} — {v.detail}" for v in verdict.violations)
+                + " (#544; the tick rolls back and the pointer stays on the previous accepted run)"
+            )
         # #378: register the run on the A1 evidence plane and advance the governed
         # pointer inside the same transaction, so consumers resolve THIS run through
         # mart.current_pointer_head the moment the tick commits. #536: the advance is

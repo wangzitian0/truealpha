@@ -196,6 +196,12 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
         lambda *a, **k: ("strategy-run:" + "d" * 64, 20, "snapshot:" + "e" * 64),
     )
     monkeypatch.setattr(capture, "register_run_evidence", lambda *a, **k: registration)
+    # #544: the plausibility gate reads mart through the connection; these tests fake the
+    # connection, so the gate is stubbed to a passing verdict (its own tests are
+    # production_topt/test_plausibility_gate.py, against a real database).
+    from data_engine.datahub.production_topt.plausibility_gate import Verdict
+
+    monkeypatch.setattr(capture, "judge_run", lambda *a, **k: Verdict("v1", None, (), ()))
 
 
 def _run_tick(monkeypatch, registration: PointerRegistration):
