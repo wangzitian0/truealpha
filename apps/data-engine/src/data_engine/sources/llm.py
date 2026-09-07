@@ -33,7 +33,7 @@ from data_engine.sources.gateway import record_call
 
 SOURCE = "filing-extraction-model"
 ENDPOINT = "chat.completions"
-PROMPT_VERSION = "headcount-select:v1"
+PROMPT_VERSION = "headcount-select:v2"  # v1 named the schema without showing it; every answer came back null
 
 INSTRUCTIONS = (
     "You select the company-wide total employee headcount from candidate sentences taken "
@@ -42,7 +42,9 @@ INSTRUCTIONS = (
     "department, segment, subsidiary, region, or for part-time, temporary or contractor "
     "workers are NOT the total. A holding company's 'no employees' statement is not the total "
     "when a subsidiaries-wide figure exists. If no candidate states the company-wide total, "
-    "answer null. Respond ONLY with JSON matching the schema."
+    "answer null. Respond ONLY with a JSON object of exactly this shape: "
+    '{"value": <the chosen candidate\'s integer, or null>, "candidate_index": <its [index], or null>, '
+    '"reason": <one short sentence>}'
 )
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
