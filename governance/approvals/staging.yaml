@@ -1,0 +1,5 @@
+# Reviewed human decision (#759). See production.yaml for the contract.
+scope: production-topt-live
+capture_approved_by: wangzitian0
+recorded_on: "2026-09-07"
+references: ["#759"]

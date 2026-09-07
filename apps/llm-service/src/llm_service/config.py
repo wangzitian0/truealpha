@@ -1,3 +1,4 @@
+from pydantic import Field
 from truealpha_runtime import RuntimeSettings
 
 
@@ -12,6 +13,17 @@ class Settings(RuntimeSettings):
     deployed route.
     """
 
+    database_url: str = Field(
+        default="postgresql://postgres:postgres@localhost:5432/truealpha",
+        json_schema_extra={
+            "source": "runtime",
+            "group": "postgres",
+            "provided_by": "truealpha/postgres:POSTGRES_PASSWORD",
+            # app stack: reaches postgres over the compose network
+            "composed_from": "postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha",
+        },
+    )
+
     # MCP streamable-HTTP transport security (FastMCP DNS-rebinding protection).
     # This MCP surface is service-identity only -- there is no browser session or
     # cookie/credential a rebinding attack could ride (see mcp_server.py), and it is
@@ -19,9 +31,9 @@ class Settings(RuntimeSettings):
     # pinning is off by default; a deployment that wants it can enable protection and
     # list its public host(s). Default-on FastMCP protection rejects any non-localhost
     # Host with "421 Invalid Host header", which is what blocked external callers.
-    mcp_dns_rebinding_protection: bool = False
-    mcp_allowed_hosts: list[str] = []
-    mcp_allowed_origins: list[str] = []
+    mcp_dns_rebinding_protection: bool = Field(default=False, json_schema_extra={"source": "code", "group": "mcp"})
+    mcp_allowed_hosts: list[str] = Field(default_factory=list, json_schema_extra={"source": "code", "group": "mcp"})
+    mcp_allowed_origins: list[str] = Field(default_factory=list, json_schema_extra={"source": "code", "group": "mcp"})
 
 
 settings = Settings()

@@ -1,0 +1,48 @@
+{
+  "contract_version": 2,
+  "source": "apps/app-web",
+  "fields": [
+    {
+      "field": "database_url",
+      "env": "DATABASE_URL",
+      "required": true,
+      "has_default": false,
+      "sensitive": true,
+      "group": "postgres",
+      "source": "runtime",
+      "provided_by": "truealpha/postgres:POSTGRES_PASSWORD",
+      "composed_from": "postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha",
+      "description": "Superuser DSN until the app_service_login cutover (#432 Stage A)."
+    },
+    {
+      "field": "secret_key",
+      "env": "SECRET_KEY",
+      "required": true,
+      "has_default": false,
+      "sensitive": true,
+      "group": "auth",
+      "source": "runtime",
+      "description": "HS256 session signing key; the image refuses to serve without one (#447)."
+    },
+    {
+      "field": "access_token_expire_minutes",
+      "env": "ACCESS_TOKEN_EXPIRE_MINUTES",
+      "group": "auth",
+      "source": "code"
+    },
+    {
+      "field": "node_env",
+      "env": "NODE_ENV",
+      "group": "runtime",
+      "source": "code",
+      "injected": true
+    },
+    {
+      "field": "app_env",
+      "env": "APP_ENV",
+      "group": "runtime",
+      "source": "code",
+      "injected": true
+    }
+  ]
+}

@@ -250,3 +250,15 @@ def resolve_accepted_release(
     if manifest.artifact(artifact_role).digest != artifact_digest:
         raise ValueError("release manifest artifact digest does not match the requested run")
     return manifest
+
+
+# --- live release identity (#759, infra2#622) ---------------------------------------------
+# The production TOPT live release is identified by a content hash of a constant payload:
+# anyone holding this repository at a release SHA computes the same value, so it belongs to
+# the ``release`` source class of the environment manifest and is never typed into a store.
+
+LIVE_RELEASE_PAYLOAD: dict[str, str] = {"kind": "production-topt-live-release"}
+
+
+def live_release_manifest_id() -> str:
+    return f"release-manifest:{canonical_sha256(LIVE_RELEASE_PAYLOAD)}"

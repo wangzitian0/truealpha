@@ -15,11 +15,20 @@ class RuntimeSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
-    app_env: str = "dev"
-    git_commit_sha: str = "unknown"
+    app_env: str = Field(default="dev", json_schema_extra={"source": "code", "injected": True, "group": "runtime"})
+    git_commit_sha: str = Field(default="unknown", json_schema_extra={"source": "release", "group": "runtime"})
 
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/truealpha"
-    database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    # Composed by each service from the postgres service's password: the host and port
+    # depend on the service's network topology, so the subclasses declare `composed_from`.
+    database_url: str = Field(
+        default="postgresql://postgres:postgres@localhost:5432/truealpha",
+        json_schema_extra={
+            "source": "runtime",
+            "group": "postgres",
+            "provided_by": "truealpha/postgres:POSTGRES_PASSWORD",
+        },
+    )
+    database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60, json_schema_extra={"source": "code"})
 
     # Object-store coordinates and credentials come from the environment ONLY. No
     # defaults, for two reasons that agree:
@@ -37,13 +46,17 @@ class RuntimeSettings(BaseSettings):
     #
     # Empty means unconfigured. `storage.py` refuses rather than dialling a guess, so the
     # failure names the missing configuration instead of impersonating an outage.
-    s3_endpoint: str | None = None
-    s3_access_key: str = ""
-    s3_secret_key: SecretStr = SecretStr("")
-    s3_bucket: str = "truealpha-raw"
-    s3_region: str = "us-east-1"
-    s3_raw_prefix: str = "raw"
-    s3_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    s3_endpoint: str | None = Field(default=None, json_schema_extra={"source": "code", "injected": True, "group": "s3"})
+    s3_access_key: str = Field(
+        default="", json_schema_extra={"source": "runtime", "empty_ok": True, "sensitive": True, "group": "s3"}
+    )
+    s3_secret_key: SecretStr = Field(
+        default=SecretStr(""), json_schema_extra={"source": "runtime", "empty_ok": True, "group": "s3"}
+    )
+    s3_bucket: str = Field(default="truealpha-raw", json_schema_extra={"source": "code", "group": "s3"})
+    s3_region: str = Field(default="us-east-1", json_schema_extra={"source": "code", "group": "s3"})
+    s3_raw_prefix: str = Field(default="raw", json_schema_extra={"source": "code", "group": "s3"})
+    s3_connect_timeout_seconds: int = Field(default=5, ge=1, le=60, json_schema_extra={"source": "code", "group": "s3"})
 
     @field_validator("database_url")
     @classmethod

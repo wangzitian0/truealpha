@@ -70,6 +70,7 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
 )
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
+from truealpha_contracts.release import LIVE_RELEASE_PAYLOAD, live_release_manifest_id
 
 from data_engine.datahub import quality_report
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
@@ -103,7 +104,6 @@ from data_engine.datahub.repository import PostgresCaptureControlRepository, Top
 # source_registrations.py (#72); this module derives, never enumerates.
 SEMANTIC_TYPES = registered_semantic_types()
 _RELEASE_SEMANTICS = RELEASE_SEMANTICS
-_RELEASE_PAYLOAD = {"kind": "production-topt-live-release"}
 _MAX_ATTEMPTS = 3
 _RISK_FREE_RATE = Decimal("0.05")
 
@@ -275,12 +275,12 @@ def plan_and_persist(
     repository.bind_campaign_list(campaign.campaign_id, list_version.list_version_id)
     repository.put_run(run)
 
-    release_sha256 = canonical_sha256(_RELEASE_PAYLOAD)
-    release_manifest_id = f"release-manifest:{release_sha256}"
+    release_sha256 = canonical_sha256(LIVE_RELEASE_PAYLOAD)
+    release_manifest_id = live_release_manifest_id()
     connection.execute(
         "insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload) "
         "values (%s, 'release_manifest', %s, %s) on conflict (contract_id) do nothing",
-        (release_manifest_id, release_sha256, psycopg.types.json.Jsonb(_RELEASE_PAYLOAD)),
+        (release_manifest_id, release_sha256, psycopg.types.json.Jsonb(LIVE_RELEASE_PAYLOAD)),
     )
     # The run records which data-engine build produced it (#712): the compose injects the
     # image digest and the git sha into every data-engine process, and until now nothing
