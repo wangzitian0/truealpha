@@ -125,6 +125,20 @@ def judge_redirect(source_url: str, base_scheme: str, status: int, location: str
 
 
 def check(base: str) -> list[str]:
+    """Every property, or the one verdict that makes the rest unaskable.
+
+    Any request the surface does not answer — refused, hung up, timed out — is the
+    first property violated, whichever request it was (review on #752: the health
+    call was guarded and the MCP calls after it were not, so an edge that answered
+    /api/health and then hung up on /api/mcp still died with a traceback).
+    """
+    try:
+        return _check(base)
+    except SurfaceUnreachable as unreachable:
+        return [f"the surface is not serving: {unreachable}"]
+
+
+def _check(base: str) -> list[str]:
     """Every violated property, named. Empty means the surface holds.
 
     Deliberately NOT a version check. `tools/health_check.py` owns "is the
@@ -138,10 +152,7 @@ def check(base: str) -> list[str]:
     scheme = urlparse(base).scheme
     failures: list[str] = []
 
-    try:
-        alive = fetch(f"{base}/api/health")
-    except SurfaceUnreachable as unreachable:
-        return [f"the surface is not serving: {unreachable}"]
+    alive = fetch(f"{base}/api/health")
     if alive.status != 200:
         return [
             f"GET {base}/api/health answered {alive.status}, not 200 — the surface is not serving, "

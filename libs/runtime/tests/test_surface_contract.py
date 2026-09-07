@@ -173,8 +173,12 @@ def test_a_surface_that_does_not_answer_is_a_verdict_not_a_traceback() -> None:
     probe = socket.socket()
     probe.bind(("127.0.0.1", 0))
     port = probe.getsockname()[1]
-    probe.close()  # nothing listens here now: connection refused, an OSError, not a URLError
-    failures = surface_contract.check(f"http://127.0.0.1:{port}")
+    # Bound but never listening: the kernel refuses the connection (an OSError, not a
+    # URLError) and nothing else can take the port meanwhile (review on #752).
+    try:
+        failures = surface_contract.check(f"http://127.0.0.1:{port}")
+    finally:
+        probe.close()
     assert len(failures) == 1
     assert (
         failures[0].startswith("the surface is not serving: GET http://127.0.0.1:") and "did not answer" in failures[0]
@@ -204,3 +208,43 @@ def test_a_server_that_hangs_up_without_answering_is_also_a_verdict() -> None:
     finally:
         listener.close()
     assert len(failures) == 1 and failures[0].startswith("the surface is not serving: GET"), failures
+
+
+def test_a_surface_that_answers_health_and_then_hangs_up_is_still_a_verdict() -> None:
+    """The guard has to cover EVERY request, not the first one (review on #752): an
+    edge that serves /api/health and closes the connection on /api/mcp is the exact
+    shape of a half-deployed release, and it must read as a sentence, not a traceback."""
+    import socket
+    import threading
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    port = listener.getsockname()[1]
+    served: list[str] = []
+
+    def serve() -> None:
+        while True:
+            connection, _ = listener.accept()
+            with connection:
+                request = connection.recv(4096).decode("latin-1")
+                path = request.split(" ", 2)[1] if " " in request else ""
+                served.append(path)
+                if path == "/api/health":
+                    body = b'{"status": "ok"}'
+                    connection.sendall(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                        + str(len(body)).encode()
+                        + b"\r\nConnection: close\r\n\r\n"
+                        + body
+                    )
+                # any other path: hang up without a response
+
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        failures = surface_contract.check(f"http://127.0.0.1:{port}")
+    finally:
+        listener.close()
+    assert served[0] == "/api/health" and len(served) >= 2, served
+    assert len(failures) == 1
+    assert failures[0].startswith("the surface is not serving: ") and "did not answer" in failures[0]
