@@ -133,8 +133,9 @@ async def test_research_card_renders_from_a_freshly_built_report() -> None:
 def test_default_research_report_repository_is_mart_backed_with_fixture_opt_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#369: mirrors test_default_repository_is_mart_backed_with_fixture_opt_out — the
-    research-report reader flips with the same strategy_run_backend flag."""
+    """#369 / #434 criterion 3: the research-report reader defaults to the mart reader,
+    exactly like the strategy-run reader, and there is no flag to select the fixture —
+    a fixture reader exists only by explicit injection in a test."""
     from llm_service import mcp_server
     from llm_service.mcp_server import _default_research_report_repository
     from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
