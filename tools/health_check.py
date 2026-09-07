@@ -125,7 +125,7 @@ def check_health(
     elif (
         expected_version
         and identifier_kind(expected_version) == "commit sha"
-        and not expected_version.startswith(git_sha)
+        and not _same_commit(expected_version, git_sha)
     ):
         print(
             f"health check: DATA ENGINE MISMATCH — app {expected_version} but the newest run was produced by "
@@ -145,6 +145,12 @@ def check_health(
         print(f"health check: data engine build {git_sha} ({digest}) produced the newest run")
     print(f"health check passed: {url} is healthy ({result.body})")
     return 0
+
+
+def _same_commit(expected: str, reported: str) -> bool:
+    """Either side may carry the short form of the same commit (7 vs 40 chars), so the
+    match is a two-way prefix, the same rule the SDK applies to the app's own sha."""
+    return bool(expected) and bool(reported) and (expected.startswith(reported) or reported.startswith(expected))
 
 
 def _data_engine_identity(body: str) -> tuple[str, str]:

@@ -280,3 +280,22 @@ def test_a_tag_against_a_data_engine_sha_is_named_not_comparable(capsys: pytest.
     out = capsys.readouterr().out
     assert "not comparable until the data engine is promoted by the same release" in out
     assert "produced the newest run\n" not in out
+
+
+def test_a_short_and_a_full_sha_of_one_commit_agree(capsys: pytest.CaptureFixture[str]) -> None:
+    """Review on #753: the app lane may pass the 40-char sha while the data engine
+    stamped the 7-char form, or the reverse. Same commit, no MISMATCH."""
+    full = "abc1234" + "0" * 33
+    body = {
+        "status": "ok",
+        "git_sha": full,
+        "data_engine_parser": "p:v8",
+        "data_engine_git_sha": "abc1234",
+        "data_engine_image_digest": "sha256:00f7",
+    }
+    exit_code = check_health(
+        URL, expected_version=full, http_get=_responses((200, json.dumps(body))), sleep=lambda _: None
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "MISMATCH" not in out and "produced the newest run" in out

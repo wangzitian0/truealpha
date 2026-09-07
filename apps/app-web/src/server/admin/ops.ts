@@ -85,8 +85,9 @@ export interface OpsPointerRow {
 }
 
 /** #712: which data-engine build produced the newest run, from
- * `mart.data_engine_identity`. `null` when no run has recorded its identity yet
- * (every run before 2026-09-07 reads "unknown"/"unknown" rather than null). */
+ * `mart.data_engine_identity`. `null` when the view has no rows (no run recorded
+ * yet) or when the database predates the view (the 2026-09-07 migration); a run
+ * recorded before the identity was stamped reads "unknown"/"unknown", not null. */
 export interface OpsDataEngineBuild {
   gitSha: string;
   imageDigest: string;
