@@ -91,8 +91,17 @@ def check_health(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     http_get: HttpGet | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    expected_data_engine_digest: str = "",
 ) -> int:
-    """Poll url until healthy; print the outcome; return a shell exit code."""
+    """Poll url until healthy; print the outcome; return a shell exit code.
+
+    `expected_data_engine_digest` (#712) turns the data-engine identity from a report into
+    a verdict: after the app is healthy, the surface must report that exact
+    `data_engine_image_digest` — the build the release's registry tag names — before the
+    poll budget runs out. The promoted build stamps it with its boot canary
+    (`data_engine.boot_canary`), so "the newest run was produced by the old build" is
+    exactly the state this waits through, and "it never was" is the red.
+    """
     http_get = http_get or default_http_get()
     try:
         result = poll_until_healthy(
@@ -110,6 +119,18 @@ def check_health(
     except RuntimeError as exc:
         print(f"health check failed: {exc}", file=sys.stderr)
         return 1
+    if expected_data_engine_digest:
+        verdict = _await_data_engine(
+            url,
+            expected_data_engine_digest,
+            http_get=http_get,
+            sleep=sleep,
+            max_attempts=max_attempts,
+            first_body=result.body,
+        )
+        if verdict is not None:
+            print(f"health check failed: {verdict}", file=sys.stderr)
+            return 1
     engine = _data_engine_parser(result.body)
     if expected_version and engine == "unknown":
         # Un-assertable, not a pass. Said out loud so a health check that silently stopped
@@ -145,6 +166,75 @@ def check_health(
         print(f"health check: data engine build {git_sha} ({digest}) produced the newest run")
     print(f"health check passed: {url} is healthy ({result.body})")
     return 0
+
+
+def _await_data_engine(
+    url: str,
+    expected_digest: str,
+    *,
+    http_get: HttpGet,
+    sleep: Callable[[float], None],
+    max_attempts: int,
+    first_body: str,
+) -> str | None:
+    """None when the surface reports `expected_digest`; else the sentence for the red."""
+    body = first_body
+    for attempt in range(1, max(1, max_attempts) + 1):
+        git_sha, digest = _data_engine_identity(body)
+        if digest == expected_digest:
+            print(
+                f"health check: data engine build {git_sha} ({digest}) produced the newest run — "
+                f"matches the release (attempt {attempt})"
+            )
+            return None
+        if attempt == max_attempts:
+            break
+        sleep(INTERVAL_SECONDS)
+        try:
+            status_code, body = http_get(url)
+        except Exception as exc:  # noqa: BLE001 - one bad poll is not a verdict
+            status_code, body = 0, f"{exc.__class__.__name__}: {exc}"
+        if status_code != 200:
+            body = ""
+    git_sha, digest = _data_engine_identity(body)
+    return (
+        f"DATA ENGINE MISMATCH — the release expects data-engine digest {expected_digest} but "
+        f"{url} reports {digest} (build {git_sha}) after {max_attempts} attempts; the promoted "
+        f"build has not produced a run, or a different build is running (#712)"
+    )
+
+
+def resolve_data_engine_digest(tag: str, *, http_get: HttpGet | None = None) -> str:
+    """The registry digest of `ghcr.io/wangzitian0/truealpha-data-engine:<tag>`.
+
+    Read through the anonymous Registry v2 manifest API with the OCI accept set, the
+    same digest `docker pull image@…` and infra2's runner pin from the tag — so the gate
+    and the promotion agree by construction, not by a copied string.
+    """
+    import urllib.request
+
+    image = "wangzitian0/truealpha-data-engine"
+    accept = ", ".join(
+        [
+            "application/vnd.oci.image.index.v1+json",
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.list.v2+json",
+            "application/vnd.docker.distribution.manifest.v2+json",
+        ]
+    )
+    token_url = f"https://ghcr.io/token?scope=repository:{image}:pull"
+    with urllib.request.urlopen(token_url, timeout=15) as response:  # noqa: S310 - fixed https host
+        token = json.loads(response.read().decode()).get("token", "")
+    request = urllib.request.Request(
+        f"https://ghcr.io/v2/{image}/manifests/{tag}",
+        method="HEAD",
+        headers={"Accept": accept, "Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
+        digest = response.headers.get("Docker-Content-Digest", "")
+    if not digest.startswith("sha256:") or len(digest) != 71:
+        raise RuntimeError(f"registry returned no usable digest for {image}:{tag} ({digest!r})")
+    return digest
 
 
 def _same_commit(expected: str, reported: str) -> bool:
@@ -189,15 +279,38 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("url")
     parser.add_argument("expected_version", nargs="?", default="")
     parser.add_argument("max_attempts", nargs="?", type=int, default=DEFAULT_MAX_ATTEMPTS)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--expect-data-engine-digest",
+        default="",
+        help="#712: fail unless /health reports this data_engine_image_digest (sha256:…) within the budget",
+    )
+    group.add_argument(
+        "--expect-data-engine-tag",
+        default="",
+        help="#712: resolve this release tag's data-engine digest from ghcr.io and require it",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    expected_digest = args.expect_data_engine_digest
+    if args.expect_data_engine_tag:
+        try:
+            expected_digest = resolve_data_engine_digest(args.expect_data_engine_tag)
+        except Exception as exc:  # noqa: BLE001 - an unresolvable tag is a red, not a pass
+            print(
+                f"health check failed: cannot resolve the data-engine digest for {args.expect_data_engine_tag}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"health check: release {args.expect_data_engine_tag} names data-engine digest {expected_digest}")
     return check_health(
         args.url,
         expected_version=args.expected_version,
         max_attempts=args.max_attempts,
+        expected_data_engine_digest=expected_digest,
     )
 
 

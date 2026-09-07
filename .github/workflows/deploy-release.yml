@@ -236,6 +236,23 @@ jobs:
       # The surface walk below runs for BOTH environments, so bun is not gated
       # on deploy_type the way the prod-only health confirmation is.
       - uses: oven-sh/setup-bun@v2
+      - name: Confirm the staging release carries its data engine
+        if: ${{ inputs.deploy_type == 'staging' && steps.request.outputs.json != '' }}
+        env:
+          EXPECTED_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).version_ref || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXPECTED_RELEASE" ]; then
+            echo "::error::request step produced no version_ref — refusing a vacuous data-engine confirmation"
+            exit 1
+          fi
+          # #712: staging is where a release first proves the engine came with the app.
+          uv run --package truealpha-runtime --with httpx python tools/health_check.py \
+            "https://truealpha-staging.truealpha.club/api/health" \
+            "$EXPECTED_RELEASE" \
+            36 \
+            --expect-data-engine-tag "$EXPECTED_RELEASE"
+
       - name: Confirm the deployed release is healthy
         # json != '' belongs in the condition AND the env stays guarded: the
         # v0.0.34 incident showed step env templates are evaluated even when the
@@ -263,10 +280,14 @@ jobs:
           # the web shipped, the gate lied). --package installs the runtime member
           # (which carries infra2-sdk); --with httpx satisfies default_http_get's
           # lazy import, which the runtime's own deps do not pull.
+          # #712: the data engine is promoted by the same request (infra2 companion of
+          # truealpha/app) and proves itself with a boot canary; the gate demands the
+          # release tag's registry digest on /health. 36 x 10 s: pull + boot + one tick.
           uv run --package truealpha-runtime --with httpx python tools/health_check.py \
             "https://truealpha.club/api/health" \
             "$EXPECTED_RELEASE" \
-            24
+            36 \
+            --expect-data-engine-tag "$EXPECTED_RELEASE"
 
       # #560 (W4): the health gate proves the release is LIVE; this proves it is
       # USABLE. Every web property #494/#371/#495/#540 guard is asserted in
