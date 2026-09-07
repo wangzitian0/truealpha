@@ -14,6 +14,7 @@ import {
 	loadEntityDisplayMap,
 } from "@/server/mart/entity-resolution";
 import { loadStrategyRunPage } from "@/server/strategy-page";
+import { describeServedRunAge } from "./served-run-age";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,8 @@ export default async function ResearchOverviewPage() {
 		strategy.kind === "ready" &&
 		"governed" in strategy.report &&
 		strategy.report.governed === true;
+	// #575 scope 2: the age of what is served, rendered — on the invariant's threshold.
+	const age = latestCutoff ? describeServedRunAge(latestCutoff) : null;
 
 	return (
 		<section aria-labelledby="overview-heading" className="space-y-8">
@@ -52,6 +55,24 @@ export default async function ResearchOverviewPage() {
 							? `Data as of ${latestCutoff} — the run the governed capture head resolves to; MCP and chat read the same one.`
 							: `Data as of ${latestCutoff} — the newest recorded run; no governed capture head resolves a strategy run on this database yet.`
 						: "No strategy run recorded yet."}
+					{age && (
+						<span
+							data-testid="served-run-age"
+							data-stale={age.stale ? "true" : "false"}
+							className={
+								age.stale
+									? "ml-2 rounded px-2 py-0.5 text-xs font-medium bg-amber-500/15 text-amber-300"
+									: "ml-2 rounded px-2 py-0.5 text-xs font-medium bg-gray-500/15 text-gray-300"
+							}
+							title={
+								age.stale
+									? "Older than one scheduled cycle plus slack (36 h) — the same threshold the nightly pointer invariant raises."
+									: "Within one scheduled cycle."
+							}
+						>
+							{age.stale ? `stale · ${age.label}` : age.label}
+						</span>
+					)}
 				</p>
 			</div>
 
