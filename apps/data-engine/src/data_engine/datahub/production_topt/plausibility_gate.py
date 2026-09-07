@@ -21,6 +21,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from data_engine.datahub.a1_evidence import POINTER_FACTOR_ID
 from factors.composite.plausibility_policy import (
     POLICY_VERSION,
     RULE_SIGN_PER_BRANCH,
@@ -47,10 +48,17 @@ _ROWS_SQL = """
 
 # The previous accepted run for the SAME universe: the head is keyed by universe
 # (check_factor_contract), and a canary head must never stand in for the core's.
+# The full governed key (review on #764): (environment, universe_id, universe_version,
+# factor_id). The environment literal is the one every head consumer carries today —
+# #756 measures it; until then this stays in step with POINTER_HEAD_SQL and
+# tools/output_invariants.GOVERNED_HEAD rather than diverging from them.
 _PREVIOUS_HEAD_SQL = """
     select head.target_run_id
     from mart.current_pointer_head head
-    where head.universe_id = %s and head.universe_version = %s
+    where head.environment = 'production'
+      and head.factor_id = %s
+      and head.universe_id = %s
+      and head.universe_version = %s
     order by head.advanced_at desc
     limit 1
 """
@@ -137,7 +145,7 @@ def judge_run(
     if universe is None:
         raise RuntimeError(f"run {run_id} has no frozen snapshot; the gate judges materialized runs only")
     universe_id, universe_version = str(universe[0]), str(universe[1])
-    previous_row = connection.execute(_PREVIOUS_HEAD_SQL, (universe_id, universe_version)).fetchone()
+    previous_row = connection.execute(_PREVIOUS_HEAD_SQL, (POINTER_FACTOR_ID, universe_id, universe_version)).fetchone()
     previous_run_id = str(previous_row[0]) if previous_row and previous_row[0] != run_id else None
     previous = _rows(connection, previous_run_id) if previous_run_id else []
     outcomes = (

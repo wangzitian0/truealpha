@@ -234,6 +234,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             strategy = {
                 "strategy_inputs_seeded": seeded,
                 "l2_input_coverage": f"{l2_complete}/{l2_total}",
+                "l2_complete": l2_complete,
                 "strategy_run_id": strategy_run_id,
                 "decision_count": decision_count,
                 "snapshot_id": snapshot_id,
@@ -247,7 +248,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             connection,
             run_id=pipeline.run_id,
             strategy_run_id=strategy.get("strategy_run_id"),
-            l2_complete=int(str(strategy["l2_input_coverage"]).split("/")[0]) if strategy else None,
+            l2_complete=strategy.get("l2_complete"),
         )
         for line in verdict.lines():
             context.log.info(line)
