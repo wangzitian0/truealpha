@@ -162,3 +162,45 @@ def test_the_probe_identifies_itself_to_the_edge(serve) -> None:  # type: ignore
             f"so the daily run would report a healthy surface as down"
         )
         assert "truealpha" in agent.lower(), f"the probe does not identify itself: {agent!r}"
+
+
+def test_a_surface_that_does_not_answer_is_a_verdict_not_a_traceback() -> None:
+    """2026-09-02, production: `/api/health` answered HTTP 0 (connection refused) and
+    the probe died with a traceback instead of a sentence. An unanswered surface is
+    the first property violated — reported with the URL and the reason."""
+    import socket
+
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()  # nothing listens here now: connection refused, an OSError, not a URLError
+    failures = surface_contract.check(f"http://127.0.0.1:{port}")
+    assert len(failures) == 1
+    assert (
+        failures[0].startswith("the surface is not serving: GET http://127.0.0.1:") and "did not answer" in failures[0]
+    )
+
+
+def test_a_server_that_hangs_up_without_answering_is_also_a_verdict() -> None:
+    """The other shape of HTTP 0: the edge accepts the TCP connection and closes it
+    without a response (`http.client.RemoteDisconnected`, an OSError that urllib does
+    not wrap in URLError)."""
+    import socket
+    import threading
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def hang_up() -> None:
+        connection, _ = listener.accept()
+        connection.close()
+
+    thread = threading.Thread(target=hang_up, daemon=True)
+    thread.start()
+    try:
+        failures = surface_contract.check(f"http://127.0.0.1:{port}")
+    finally:
+        listener.close()
+    assert len(failures) == 1 and failures[0].startswith("the surface is not serving: GET"), failures

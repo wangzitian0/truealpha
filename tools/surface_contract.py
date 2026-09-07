@@ -82,8 +82,19 @@ def fetch(url: str, method: str = "GET") -> Response:
         # 4xx/5xx are results here, not failures: which rejection arrives is
         # exactly what distinguishes a healthy endpoint from a regressed one.
         return Response(error.code, error.headers.get("Location", ""), error.read())
-    except urllib.error.URLError as error:
-        raise SystemExit(f"surface_contract: {method} {url} did not answer: {error.reason}") from None
+    except OSError as error:
+        # URLError, ConnectionRefusedError, RemoteDisconnected, socket timeouts: an
+        # endpoint that did not answer is a verdict about the surface, not a crash of
+        # the probe. On 2026-09-02 a production `HTTP 0` surfaced as a traceback here
+        # because only URLError was caught; the freshness run went red for the wrong
+        # reason (#725 category 2: a failure names its contract).
+        reason = getattr(error, "reason", None) or error
+        raise SurfaceUnreachable(f"{method} {url} did not answer: {reason}") from None
+
+
+class SurfaceUnreachable(Exception):
+    """The surface under test did not answer at all — reported as the first failed
+    property, never as a traceback."""
 
 
 def judge_redirect(source_url: str, base_scheme: str, status: int, location: str) -> list[str]:
@@ -127,7 +138,10 @@ def check(base: str) -> list[str]:
     scheme = urlparse(base).scheme
     failures: list[str] = []
 
-    alive = fetch(f"{base}/api/health")
+    try:
+        alive = fetch(f"{base}/api/health")
+    except SurfaceUnreachable as unreachable:
+        return [f"the surface is not serving: {unreachable}"]
     if alive.status != 200:
         return [
             f"GET {base}/api/health answered {alive.status}, not 200 — the surface is not serving, "
