@@ -329,6 +329,10 @@ def test_the_release_digest_gate_waits_for_the_promoted_build_to_produce_a_run(
     out = capsys.readouterr().out
     assert "matches the release (attempt 3)" in out
     assert len(naps) == 2
+    # the lines after the verdict describe the body the verdict was reached on: the new
+    # build, not the first poll's (staging v0.0.47 reported the previous build here)
+    assert "data engine build v0.0.47 (sha256:" + "1" * 64 + ") produced the newest run" in out
+    assert "v0.0.46" not in out.split("matches the release")[1]
 
 
 def test_the_release_digest_gate_is_red_when_the_build_never_shows(
