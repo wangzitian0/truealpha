@@ -68,5 +68,15 @@ class Settings(RuntimeSettings):
     # `Literal` so a misspelt value fails at startup instead of behaving like 'postgres'.
     external_call_ledger: Literal["postgres", "off"] = "postgres"
 
+    # The filing-extraction model provider (#70 scope 1, owner decision 2026-09-07: the
+    # Zhipu GLM coding plan). Empty key = no provider seated: the loop keeps every
+    # multi-candidate filing as `needs_model_selection`, never guesses. The base URL is an
+    # OpenAI-compatible chat-completions root; the model is a versioned parameter that
+    # travels into every invocation record.
+    llm_api_key: str = ""
+    llm_base_url: str = "https://open.bigmodel.cn/api/coding/paas/v4"
+    llm_model: str = "glm-4.7"
+    llm_provider: str = "zhipu-glm-coding-plan"
+
 
 settings = Settings()
