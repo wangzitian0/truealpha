@@ -20,7 +20,8 @@ class Settings(RuntimeSettings):
         """
         return CaptureEnvironment(self.environment_tier.value)
 
-    # SEC requires a descriptive User-Agent including a contact email.
+    # The shared runtime contract owns DATABASE_URL; this service composes it for the
+    # host-network topology (host loopback port), which is why the override lives here.
     database_url: str = Field(
         default="postgresql://postgres:postgres@localhost:5432/truealpha",
         json_schema_extra={
@@ -31,6 +32,7 @@ class Settings(RuntimeSettings):
             "composed_from": "postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",
         },
     )
+    # SEC requires a descriptive User-Agent including a contact email.
     sec_user_agent: str = Field(
         default="", json_schema_extra={"source": "human", "injected": True, "scope": "project", "group": "sec"}
     )
