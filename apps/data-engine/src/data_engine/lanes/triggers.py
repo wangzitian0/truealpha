@@ -1,5 +1,11 @@
-"""The DB-mediated manual trigger (#495): a sensor over the capture lane's jobs
-(#731 split of `data_engine.dagster_defs`; behaviour unchanged)."""
+"""Sensors that launch the capture lane's jobs on request rather than on schedule.
+
+Two requesters: the DB-mediated manual trigger (#495; a `staging.pipeline_trigger_requests`
+row from the admin page or an operator) and, since 2026-09-07, a promoted build itself
+(#712; `boot_canary_sensor` asks for one canary tick per image digest so the release gate
+can read the build identity that run stamps). Split from `data_engine.dagster_defs` in
+#731.
+"""
 
 import os
 from datetime import UTC, datetime

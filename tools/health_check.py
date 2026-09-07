@@ -177,9 +177,16 @@ def _await_data_engine(
     max_attempts: int,
     first_body: str,
 ) -> str | None:
-    """None when the surface reports `expected_digest`; else the sentence for the red."""
+    """None when the surface reports `expected_digest`; else the sentence for the red.
+
+    `attempts` is normalised once (at least one) and used for the loop, the stop and
+    the message, so they cannot disagree (review on #760). A poll that fails or answers
+    non-200 keeps the last body that did answer: the verdict names the last identity
+    actually seen, never a blank one.
+    """
+    attempts = max(1, max_attempts)
     body = first_body
-    for attempt in range(1, max(1, max_attempts) + 1):
+    for attempt in range(1, attempts + 1):
         git_sha, digest = _data_engine_identity(body)
         if digest == expected_digest:
             print(
@@ -187,24 +194,25 @@ def _await_data_engine(
                 f"matches the release (attempt {attempt})"
             )
             return None
-        if attempt == max_attempts:
+        if attempt == attempts:
             break
         sleep(INTERVAL_SECONDS)
         try:
-            status_code, body = http_get(url)
+            status_code, polled = http_get(url)
         except Exception as exc:  # noqa: BLE001 - one bad poll is not a verdict
-            status_code, body = 0, f"{exc.__class__.__name__}: {exc}"
-        if status_code != 200:
-            body = ""
+            print(f"health check: poll {attempt + 1} failed ({exc.__class__.__name__}: {exc}); keeping the last answer")
+            continue
+        if status_code == 200:
+            body = polled
     git_sha, digest = _data_engine_identity(body)
     return (
         f"DATA ENGINE MISMATCH — the release expects data-engine digest {expected_digest} but "
-        f"{url} reports {digest} (build {git_sha}) after {max_attempts} attempts; the promoted "
+        f"{url} reports {digest} (build {git_sha}) after {attempts} attempts; the promoted "
         f"build has not produced a run, or a different build is running (#712)"
     )
 
 
-def resolve_data_engine_digest(tag: str, *, http_get: HttpGet | None = None) -> str:
+def resolve_data_engine_digest(tag: str) -> str:
     """The registry digest of `ghcr.io/wangzitian0/truealpha-data-engine:<tag>`.
 
     Read through the anonymous Registry v2 manifest API with the OCI accept set, the
