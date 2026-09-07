@@ -22,7 +22,7 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 3. **Factors never know their data's provenance.** Factors consume provenance-neutral typed semantic records: an opaque `input_id`, typed subject identity, value/unit/currency where relevant, valid period, confidence, and the snapshot cutoff. They must not receive or branch on `source`, `raw_ref`, accession, or extractor metadata. The runner uses the opaque IDs to record exact consumed-input lineage outside factor computation.
 4. **LLM surfaces read only authorized typed `mart` projections.** MCP and `/chat` call bounded `ResearchQueryService` methods over a `mart_readonly` repository; they never execute arbitrary model-generated SQL or recompute factors. A trusted server adapter derives `AccessContext` from the browser session, delegated MCP OAuth credential, or service identity and authorizes the exact resource before the repository issues mart SQL or retrieves an artifact. Tool arguments never supply tenant, principal, role, entitlement, or publication authority. The database role has a `statement_timeout` (5s recommended), and repositories enforce pagination and row caps. The App implements the same semantic read contract and authorization decision directly against mart.
 5. **The App reads the database directly** (querying the mart and app schemas through server-only typed repositories), not through FastAPI. FastAPI's scope is narrowed to LLM-call orchestration only. Direct database access does not bypass authorization: publication policy is checked before a mart query, and forced owner RLS is a second boundary for private app rows.
-6. **Every moomoo call must go through the global call-budget gateway** — no module decides for itself whether to call. End-user access only reads completed materialized results and never triggers a source call, so user entitlements do not allocate or bypass source quota. Pipeline-wide source budgeting and scheduling remain separate from consumer authorization; any future user-funded source-demand product requires a new architecture decision. **This is a public repo: moomoo trading contexts/order calls are hard-forbidden (quote/read-only data only) and no real credential ever gets committed — see `CLAUDE.md`'s hard constraints and `.github/workflows/security-gate.yml`.**
+6. **Every external call — data vendors and model providers alike — goes through the global source gateway with a declared capacity** — no module decides for itself whether to call. Each source declares its capacity (rate window, daily/monthly budget, concurrency) in the registry, every call is recorded in `api_call_ledger`, and a call that would exceed the declared capacity is refused or queued rather than fired: capacity is part of the capture logic, not an afterthought inside one adapter. This applies to SEC, Twelve Data, yfinance, OpenFIGI, N-PORT, moomoo and the LLM extraction provider alike (owner decision 2026-09-04; until then only moomoo was gated). End-user access only reads completed materialized results and never triggers a source or model call, so user entitlements do not allocate or bypass source quota. Pipeline-wide source budgeting and scheduling remain separate from consumer authorization; any future user-funded source-demand product requires a new architecture decision. **This is a public repo: moomoo trading contexts/order calls are hard-forbidden (quote/read-only data only) and no real credential ever gets committed — see `CLAUDE.md`'s hard constraints and `.github/workflows/security-gate.yml`.**
 7. **Schema changes must raise an active alert.** Core point-in-time tables use dlt's frozen/contract mode, not the default auto-evolve.
 8. **Scheduling has exactly one authority: Dagster.** Local reconnaissance may use one-shot scripts, but Dagster is introduced with the first executable Gate 1 snapshot/factor slice and is the only authority for real recurring runs — see Section 8.
 9. **Observability is centered on the Dagster UI** — on the condition that Dagster's own runtime metadata is persisted (see Section 6), not left on its default local storage.
@@ -33,7 +33,7 @@ Data sources (SEC / yfinance / Twelve Data / moomoo) are the raw material; the s
 14. **Applicability is frozen before execution and scope cannot shrink to obtain green status.** Required/optional/not-applicable cells are approved before a run. Removing a subject, invocation, theme, scenario, or required cell creates a new catalog/SLO version, records product-owner approval, and narrows the claim; it cannot retroactively make a failed gate pass. The supported workflow must also onboard an issuer and theme that were absent from development evidence without changing factor or consumer code.
 15. **Capture completeness is row-level, not job-level.** A versioned `CaptureScope` enumerates every required `(scope, subject or instrument, domain, partition or vintage)` cell. Its `CaptureManifest` records raw capture, normalized record, confidence, times, mapping/policy versions, quality result, and lineage for every cell. Missing required cells fail even when Dagster is green or raw payload counts look plausible. #58/#61 own the contracts, #27/#51/#67 emit the evidence at their bounded scopes, and #68 independently audits the complete Production shadow candidate before #54 may record authoritative graduation.
 16. **V1 total return uses unadjusted bars plus explicit corporate-action lifecycle events.** The simulator applies declaration/knowability, ex, effective, record, and pay semantics exactly once through a monotonic event clock. Adjusted-close data may be retained for reconciliation but cannot be combined with separately applied splits or dividends.
-17. **Financial issuers require a real comparison branch.** The research specification must define and independently review a financial-sector operating-efficiency semantic/proxy and comparison rule. Blanket exclusion may be a strategy eligibility choice, but it cannot satisfy the gross-profit-per-employee module or the Vision's financial/non-financial handling requirement.
+17. **Every issuer decomposes into an operating component and a financial component; both are computed, and both land in one wide mart row** (owner decision 2026-09-04, restating #59 round 2). Every company's net assets earn a return, so the split is not a sector branch: operating real profit = operating gross profit − risk-free return on the capital that earns it; financial real profit = investment/financial returns − risk-free return on the assets that earn them; each divided by headcount where the module calls for labor efficiency. The research specification defines and independently reviews the per-class proxies (a bank's pre-provision profit stands in for operating gross profit where cost of revenue is not reported) and the comparison rule that reads the two components side by side. Blanket exclusion of financial issuers may be a strategy eligibility choice, but it cannot satisfy the gross-profit-per-employee module or the Vision's financial/non-financial handling requirement — and a uniform formula that makes an entire issuer class structurally negative does not satisfy it either (v0.2.0's uniform charge, #528). Whether a negative component is a valid low signal is recorded per component with the versioned definition, and the output invariants assert exactly what the definition says.
 18. **Independent holdouts must be executable and blind.** A named custodian controls labels; implementation code, parameters, catalog, and thresholds are content-hashed before authors see labels or results. In a solo workflow, independence requires an external evaluator or a newly sampled post-freeze corpus. Failed results or changed logic require a new version and a fresh untouched holdout; self-reviewed public fixtures are development goldens only.
 19. **Every source has an expiring rights and budget go/no-go.** Before Production use, a named authorized owner records raw-retention, caching, derived-metric, report/card/publication, quotation, and attribution rights; quota/SLA behavior; approved vendor, API, storage, extraction, and human-review budgets; and a review expiry. Unknown rights, expired approval, or an over-budget full-catalog projection fails the gate. The only alternatives are to approve/fund a valid source or explicitly narrow `vision.md` and the Research Catalog.
 20. **Continuous operation requires natural source refreshes.** Before a soak begins, each required source class declares its cadence, maximum age, required naturally changed partitions/publication transitions, observation window, owner, and alert budget. Immediate retries, reparsing unchanged bytes, synthetic mutations, and replaying old fixtures do not count. Slow quarterly or annual sources keep graduation blocked unless their pre-approved natural-refresh requirement is observed.
@@ -90,7 +90,7 @@ read/audit slices over the same immutable manifests and lineage, not alternative
 
 - **Tier 0 (needed now)**: Postgres + S3-compatible raw archive + the ingestion part of data-engine (dlt adapters)
 - **Tier 1 (Gate 1 onward)**: `libs/factors`, the mart schema, and Dagster asset execution; the first real recurring run already uses Dagster
-- **Tier 2 (Gate 1 Staging through Gate 4 Production)**: persistent Dagster scheduling/UI plus Dokploy environments; Production stays isolated shadow output until the Gate 4 graduation decision
+- **Tier 2 (Gate 1 Staging through Gate 4 Production)**: persistent Dagster scheduling/UI plus Dokploy environments; Production serves the App and MCP today without a recorded graduation (#54); until #54 records it, its outputs are ungraduated shadow output that happens to be reachable, and every Gate 4 requirement still stands
 - **Tier 3 (Gate 3 consumption, deployed proof in Gate 4)**: MCP first, then reports/cards and the App; `llm-service`'s self-built `/chat` and `app-web` chat UI remain the last consumption surface
 
 The four application units exchange structured data only through Postgres. The
@@ -130,7 +130,7 @@ target active rollout, not a claim that every environment has passed its gate:
 | Local | `local_dev`, `local_test` | Development and fixture replay | Fixtures by default; developer-owned Compose Postgres + MinIO |
 | GitHub CI | `github_ci` | Code, DDL, image, security, and runtime-contract validation | Ephemeral fixtures/mocks; no real source credentials |
 | Staging | `staging` | Real pipeline, point-in-time replay, and bounded backtest validation | Real sources; isolated canary universe and credentials |
-| Production | `production` | Isolated canary/shadow first; authoritative research only after Gate 4 graduation | Exact approved Research Catalog/universe; isolated credentials and storage |
+| Production | `production` | Serving since 2026-07 (App behind login, MCP, daily TOPT/QQQ/canary ticks) but **ungraduated**: authoritative research only after #54 records Gate 4 graduation | Exact approved Research Catalog/universe; isolated credentials and storage; rule-19 source attestations still missing (#60) |
 
 `preview` remains a logical tier but no preview environment is provisioned until
 the Web application needs per-PR visual review.
@@ -189,6 +189,7 @@ executable connectivity and negative-network proof.
 | SEC EDGAR | Official structured financial data | `data.sec.gov/api/xbrl/companyfacts/CIK##########.json`; User-Agent must include an email. Financial companies have no gross-profit field, needs an industry branch. Headcount is free text, needs extraction with a fallback. |
 | yfinance | Fallback source for daily price data | Unofficial, no SLA, fallback only |
 | Twelve Data | Official source for daily price/fundamentals | One of the primary sources for price data |
+| LLM extraction provider | External source for prose-only fields (headcount, segment classification, disclosed relationships) | Not provisioned as of 2026-09-04 (`libs/factors/shared/extraction.py` is a stub; #70). Enters like any other source: a `SourceRegistry` entry, a rule-19 rights/budget record, a declared capacity (requests per window, tokens per day) enforced through the rule-6 gateway and `api_call_ledger`, and an append-only invocation record per Section 9. Never called from a factor or a consumer surface; replay reads the stored result. |
 | moomoo | Rate-limited (bursts/30s), not a monthly quota — see below | Historical per-analyst rating events are confirmed. Historical public availability for backtest eligibility still requires independent evidence; vendor backfill/update time is not a substitute. ETF weights and company-level supply-chain edges are not sourced from moomoo. |
 | Historical analyst ratings — fallback | Required only if moomoo history or usage rights fail the production source gate | Any fallback must preserve analyst identity, recommendation time, independently defensible public availability, vendor revision time, target/rating semantics, and usage/retention rights. |
 | ETF holdings weight data | **Confirmed (2026-07-07): SEC EDGAR N-PORT-P** | Monthly per-series filings, per-holding `pctVal` + CUSIP (verified on QQQ and ARKK; 2026-07-11 also on IVV, AGIX, MCHI). Pitfalls: the raw XML is `primary_doc.xml` (the filing's `primaryDocument` field points at the XSL-rendered HTML); multi-series trusts (e.g. ARK) must be queried by series ID via browse-edgar, not by trust CIK; foreign holdings carry CUSIP `000000000`, so `same_as` resolution needs an ISIN/name fallback. **SPY is a UIT and absent from SEC's fund-ticker mapping — proxy the S&P 500 with IVV/VOO.** The publicly available filing is the last month of each fiscal quarter (~1-3 months behind) — fine for defining a universe, not a live holdings feed. |
@@ -408,7 +409,7 @@ grant select on schema mart to mart_readonly;
 -- MCP/chat never accept arbitrary model-generated SQL
 ```
 
-Other tables: `api_call_ledger` (moomoo quota ledger), `ingestion_health_log` (only business-specific metrics the Dagster UI doesn't already cover).
+Other tables: `api_call_ledger` (the external call ledger for every source and the model provider — rule 6; moomoo was its first tenant), `ingestion_health_log` (only business-specific metrics the Dagster UI doesn't already cover).
 
 **Data-accountability projections.** Generic runner and strategy materialization write
 idempotent input-to-output and output-to-decision lineage. `mart.data_usage_frequency`
@@ -441,7 +442,7 @@ routes, identity-provider bindings, retention policy, replay execution, or shari
 Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`libs/factors/composite`) — it reloads other modules' materialized mart outputs, and its confidence cannot exceed the minimum confidence consumed; a declared versioned policy may be stricter.
 
 1. **PEG**: switchable growth-rate conventions
-2. **Gross profit per employee**: financial/non-financial branch, headcount gaps explicitly flagged rather than silently dropped
+2. **Gross profit per employee**: operating and financial components computed for every issuer and merged into one wide row (rule 17, #59 round 2; v0.2.0 still publishes one uniform capital-adjusted number, #528), headcount gaps explicitly flagged rather than silently dropped
 3. **Supply-chain relationship graph + confidence-gated scenario exposure**: graph first (KG `supplies_to` edges); path propagation must declare a versioned shock/exposure scenario, direction, materiality/sensitivity, and confidence kill condition. It may be described as causal only after independent causal evidence, not merely because an edge is high-confidence.
 4. **Analyst backtesting**: moomoo historical rating depth is confirmed, but only events with independently defensible public availability may enter PIT scoring; backfilled rows remain unavailable before that time
 5. **ETF virtual company**: SEC N-PORT-P is the confirmed holdings-weight source; calculations must respect report/filing lag, fund-series identity, instrument type, unresolved weight, currency, and period alignment
@@ -503,10 +504,15 @@ fresh untouched evidence. PIT rules, append-only restatements, fixed denominator
 environment-scoped rights/budgets, row-complete capture, recovery, and human approvals
 remain mandatory at their applicable evidence scale.
 
-Gate epics still close in order as product decisions. Each gate is an issue-tracked
-milestone whose acceptance criteria live in its issue and whose evidence (captured
-corpora, evaluation records, handoff documents) is content-hashed under `governance/` for
-replayability. Graduation additionally requires the independent capture audit, the final
+The gate rows above are claims; they are checked, not closed in order. The gate epics
+(#56, #29, #30, #31, #32) remain the registry of what each gate claims, but since
+2026-07-17 (`governance/README.md`) delivery is not sequenced through them: each claim is
+proven or refuted by a standing check on the axis roots (#434 factor chain, #530 datahub
+completeness, #284 factor flexibility, #544 backtest reproducibility, #70 extraction,
+#581 production invariants, #712 release identity) under `AGENTS.md` rules 6 and 7, and
+a gate epic closes by hand when every claim in its row has such a check. Evidence
+(captured corpora, evaluation records, handoff documents) is content-hashed under
+`governance/` for replayability. Graduation additionally requires the independent capture audit, the final
 Vision audit, and recorded human approval. Day-to-day delivery is conventional: one issue,
 one pull request, tests and review before merge, as defined in `AGENTS.md`. The
 capability dependency graph under `governance/capabilities/` is planning information, not
@@ -537,27 +543,48 @@ merge enforcement.
 
 ## 11. Current Baseline and Next Gate
 
-The initial reconnaissance established the monorepo, four schemas, factor registry
-skeleton, runtime contracts, path-filtered CI, SEC/price/filing/N-PORT samples, KG
-identity smoke cases, and the first typed corpus audit. It also confirmed SEC N-PORT-P
-as the delayed ETF-holdings source and moomoo historical analyst events as a candidate
-input whose PIT public-availability and usage rights still need proof.
+**Baseline as of 2026-09-04, measured on the deployed environments rather than on tracker
+state.** The reconnaissance baseline this section used to describe (monorepo, four schemas,
+registry skeleton, samples, first corpus audit) is history; what exists now is a running
+system with named gaps.
 
-That baseline is enough for bounded experimental code and tiny-corpus discovery; it is
-not a release gate. The current earliest incomplete acceptance gate is Gate 0, the
-[Semantic & Data Closure epic #56](https://github.com/wangzitian0/truealpha/issues/56):
+What runs daily on the Dagster schedule in both Staging and Production:
 
-1. freeze issuer/security/listing, currency, time, return, universe, and research semantics (#57 and #59);
-2. close executable snapshot, extraction, invocation, replay, and lineage contracts (#58);
-3. prove longitudinal source coverage and permitted Production usage (#60); and
-4. define module applicability, usable coverage, freshness, soak, and graduation SLOs (#61).
+- real-source capture for the TOPT 20, the QQQ 101 and a 5-issuer canary universe (SEC
+  company-facts, Twelve Data, yfinance corroboration, N-PORT holdings), immutable raw bytes in
+  object storage with `raw.fetches` pointers, row-level capture control and a quality report
+  per run;
+- module 2 (GPPE, v0.2.0 uniform), module 7 (three-tier valuation), P/S, module 1 (PEG,
+  historical convention only) and the `large_model_value_v0` strategy, materialized into
+  `mart.topt_core_results` and `mart.strategy_*` behind a governed `current_pointer` that
+  advances with each accepted tick;
+- the App (`/research/*`, `/admin/*`, behind login), the MCP endpoint, and a `/chat` v0 that
+  answers one question class deterministically — all reading `mart` only.
 
-No interface is called v1-frozen, and no sample-readiness boolean is promoted into a
-strategy or Production claim, until those issues produce their specified independent
-and executable evidence. Later milestones are ordered acceptance fan-ins, not global
-implementation locks. Provisional lower-gate work is ordinary issue→PR work; it remains
-excluded from the accepted `ReleaseManifest` registry/configuration bindings and cannot
-close a higher gate. This permits the Gate 1 headcount
-slice (#70) and similar fixture work
-to expose defects early while preserving the blind Core holdout (#71), additive registry/
-catalog proof (#72), and independent Production capture audit (#68).
+What is verified and what is not, with the owning issue:
+
+| claim | state on 2026-09-04 | owner |
+|---|---|---|
+| the chain is non-empty and scheduled | TOPT 17/20 scored daily; PEG 14/20; pointer advances each tick | #434 (root) |
+| the published numbers are possible | JPM GPPE is negative under the uniform charge; no invariant has run against Production | #528, #581, #544 |
+| the denominator is real | every headcount is a manual seed; the extraction primitive is a stub; QQQ is 12/101 available | #70 (root) |
+| the vintage is a measurement | `valid_from` / `freshness_state` are near-constant | #530 |
+| every source is admitted (rule 19) | all attestations `missing` | #60 |
+| one release promotes all three images (§3.1) | data-engine is promoted from `main` by a separate manual dispatch | #712, infra2#622 |
+| every external call is gated (rule 6) | only moomoo goes through `api_call_ledger`; the model provider has no seat | #729 |
+| non-local endpoints are authenticated (rule 21) | MCP answers without a credential | #728 |
+| Production is graduated | no: #54 has not run; restore drill (#650) and sealed holdouts (#65) outstanding | #54 |
+
+**Next gate.** Not "Gate 0": the semantic and contract closure it named is in force in code
+(registries, PIT contracts, capture control, the frozen factor contract), and the
+batch/lease machine that would have closed it formally was retired on 2026-07-17. The next
+gate is the one whose claims are false in the table: make the numbers right and provably
+so (#434's standing criteria), fill the prose-only inputs through the gated extraction
+source (#70), admit the sources (#60). Gate epics #56 and #29 close by hand when their rows
+have standing checks; #54 remains the only path to calling Production output authoritative.
+
+Provisional lower-gate work is ordinary issue→PR work; it remains excluded from the
+accepted `ReleaseManifest` registry/configuration bindings and cannot close a higher gate.
+Sealed holdouts under #71's protocol (#65), additive registry/catalog proof (#72), and the
+independent Production capture audit (#68) keep their meaning: they are what separates
+"serving" from "graduated".
