@@ -156,7 +156,7 @@ def test_returns_the_latest_run_with_real_decisions(connection) -> None:
     assert decision.outcome.value == "selected"
     assert decision.tier == ValuationTier.LARGE_MODEL_NATIVE
     assert str(decision.valuation_gap) == "0.5"
-    assert decision.confidence is None  # #355's schema has no confidence column yet
+    assert decision.confidence is None  # no mart.topt_core_results row at this cutoff; the join yields null
 
 
 def test_decisions_are_ordered_by_cutoff_then_issuer_matching_the_fixture(connection) -> None:

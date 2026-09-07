@@ -118,8 +118,8 @@
       "id": "invariants/strategy-ordering-must-match-the-consumer",
       "guard": "libs/runtime/tests/test_output_invariants.py",
       "file": "apps/app-web/src/server/mart/strategy-run-repository.ts",
-      "find": "order by executed_at desc, created_at desc, strategy_run_id desc",
-      "replace": "order by created_at desc",
+      "find": "order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc",
+      "replace": "order by r.created_at desc",
       "command": [
         "uv",
         "run",

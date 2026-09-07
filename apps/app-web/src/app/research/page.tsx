@@ -32,6 +32,13 @@ export default async function ResearchOverviewPage() {
 	const evaluated =
 		strategy.kind === "ready" ? strategy.report.decisions.length : 0;
 	const latestCutoff = selections[0]?.cutoff_at ?? null;
+	// #575: say which run this is. The mart repository ranks the run the governed capture
+	// head resolves to first and falls back to the newest recorded run; the sentence must
+	// not call the fallback "governed".
+	const governed =
+		strategy.kind === "ready" &&
+		"governed" in strategy.report &&
+		strategy.report.governed === true;
 
 	return (
 		<section aria-labelledby="overview-heading" className="space-y-8">
@@ -41,7 +48,9 @@ export default async function ResearchOverviewPage() {
 				</h1>
 				<p className="mt-2 text-gray-400">
 					{latestCutoff
-						? `Data as of ${latestCutoff} — the governed run every surface (web, MCP, chat) resolves.`
+						? governed
+							? `Data as of ${latestCutoff} — the run the governed capture head resolves to; MCP and chat read the same one.`
+							: `Data as of ${latestCutoff} — the newest recorded run; no governed capture head resolves a strategy run on this database yet.`
 						: "No strategy run recorded yet."}
 				</p>
 			</div>

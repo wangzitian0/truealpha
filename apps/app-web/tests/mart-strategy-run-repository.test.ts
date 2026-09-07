@@ -100,7 +100,7 @@ if (admin !== null) {
     assert(first.outcome === "excluded" && first.eligible === false, "adm is an excluded, ineligible decision");
     assert(first.exclusion_reason === "insufficient_confidence", "adm carries its exclusion reason");
     assert(first.tier === null && first.valuation_gap === null, "adm's null numerics stay null");
-    assert(first.confidence === null, "mart.strategy_decisions has no confidence column (#355)");
+    assert(first.confidence === null, "no mart.topt_core_results row at this cutoff; the join yields null");
 
     assert(second.issuer_id === "issuer:zeta", `expected issuer:zeta second, got ${second.issuer_id}`);
     assert(second.outcome === "selected" && second.tier === "tech", "zeta is a selected tech decision");

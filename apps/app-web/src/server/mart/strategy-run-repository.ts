@@ -9,7 +9,8 @@
  * half seed the same rows on one real schema and assert both serializations
  * equal the frozen canon in libs/contracts/conformance/strategy_run_parity.json
  * (#469). The shared semantics:
- *  - latest run per `strategy_key` by `executed_at desc, created_at desc, strategy_run_id desc`;
+ *  - the run the governed capture head resolves to per `strategy_key` (#575), else the
+ *    newest by `executed_at desc, created_at desc, strategy_run_id desc`;
  *  - decisions ordered by `cutoff_at, issuer_id`;
  *  - `confidence` and the input vintages come from mart.topt_core_results,
  *    joined on (issuer_id, cutoff) — mart.strategy_decisions records the verdict
@@ -47,15 +48,25 @@ import { withMartReadonly } from "./db";
 export type MartStrategyRunReport = StrategyRunReport & {
 	strategy_run_id: string;
 	executed_at: string;
+	/** True when the governed capture head resolves this run (#575); false when the
+	 * page is showing the newest recorded run because no head resolves one. The
+	 * overview says which, instead of calling every run "the governed run". */
+	governed: boolean;
 	provenance: ReadonlyMap<string, DecisionProvenance>;
 };
 
-const LATEST_RUN_SQL = `
-  select strategy_run_id, corpus_sha256, executed_at
-  from mart.strategy_runs
-  where strategy_key = $1
-  order by executed_at desc, created_at desc, strategy_run_id desc
-  limit 1
+// The run the governed capture head resolves to comes first (#575); only when no
+// head resolves a run for this strategy does the newest recorded run stand in. The
+// join lives in mart.governed_strategy_run; this statement is the Python twin's
+// LATEST_RUN_SQL modulo placeholder syntax, and libs/contracts pins the two texts.
+export const LATEST_RUN_SQL = `
+    select r.strategy_run_id, r.corpus_sha256, r.executed_at,
+           exists (select 1 from mart.governed_strategy_run g
+                   where g.strategy_run_id = r.strategy_run_id) as is_governed
+    from mart.strategy_runs r
+    where r.strategy_key = $1
+    order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
+    limit 1
 `;
 
 // cutoff_at is formatted in SQL to Python's datetime.isoformat semantics
@@ -332,6 +343,7 @@ export class MartStrategyRunRepository {
 					runRow.executed_at instanceof Date
 						? runRow.executed_at.toISOString()
 						: String(runRow.executed_at),
+				governed: runRow.is_governed === true,
 			};
 		} catch (error) {
 			if (error instanceof SchemaMismatchError) {

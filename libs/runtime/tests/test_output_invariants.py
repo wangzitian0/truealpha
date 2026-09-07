@@ -202,7 +202,7 @@ def test_the_strategy_run_matches_the_consumer_that_serves_it() -> None:
     """
     ts = (REPO_ROOT / "apps/app-web/src/server/mart/strategy-run-repository.ts").read_text()
     consumer = ts.split("LATEST_RUN_SQL", 1)[1].split("`", 2)[1]
-    assert "where strategy_key = $1" in " ".join(consumer.split())
+    assert "where r.strategy_key = $1" in " ".join(consumer.split())
     assert f"strategy_key = '{_module.DASHBOARD_STRATEGY}'" in " ".join(_module.LATEST_STRATEGY_RUN.split())
     served, judged = _run_ordering(consumer), _run_ordering(_module.LATEST_STRATEGY_RUN)
     assert served == judged, (
