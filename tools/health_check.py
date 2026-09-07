@@ -119,8 +119,9 @@ def check_health(
     except RuntimeError as exc:
         print(f"health check failed: {exc}", file=sys.stderr)
         return 1
+    body = result.body
     if expected_data_engine_digest:
-        verdict = _await_data_engine(
+        verdict, body = _await_data_engine(
             url,
             expected_data_engine_digest,
             http_get=http_get,
@@ -131,12 +132,15 @@ def check_health(
         if verdict is not None:
             print(f"health check failed: {verdict}", file=sys.stderr)
             return 1
-    engine = _data_engine_parser(result.body)
+    # Every line below reads the body the verdict was reached on, not the first poll: the
+    # first live run (staging v0.0.47) matched the release on attempt 11 and then reported
+    # the previous build from attempt 1 (review of the run log).
+    engine = _data_engine_parser(body)
     if expected_version and engine == "unknown":
         # Un-assertable, not a pass. Said out loud so a health check that silently stopped
         # covering the data engine cannot look identical to one that covered it.
         print(f"health check: {url} reports no data_engine_parser — the data engine is UNVERIFIED")
-    git_sha, digest = _data_engine_identity(result.body)
+    git_sha, digest = _data_engine_identity(body)
     # #712: the identity is reported and compared out loud. It does not gate yet — the app
     # lane and the data engine are still promoted separately, so a mismatch is the honest
     # state of most days until one release promotes all three images; hiding it was the
@@ -164,7 +168,7 @@ def check_health(
         )
     else:
         print(f"health check: data engine build {git_sha} ({digest}) produced the newest run")
-    print(f"health check passed: {url} is healthy ({result.body})")
+    print(f"health check passed: {url} is healthy ({body})")
     return 0
 
 
@@ -176,8 +180,9 @@ def _await_data_engine(
     sleep: Callable[[float], None],
     max_attempts: int,
     first_body: str,
-) -> str | None:
-    """None when the surface reports `expected_digest`; else the sentence for the red.
+) -> tuple[str | None, str]:
+    """(None, body) when the surface reports `expected_digest`; else (the sentence for
+    the red, the last body that answered).
 
     `attempts` is normalised once (at least one) and used for the loop, the stop and
     the message, so they cannot disagree (review on #760). A poll that fails or answers
@@ -193,7 +198,7 @@ def _await_data_engine(
                 f"health check: data engine build {git_sha} ({digest}) produced the newest run — "
                 f"matches the release (attempt {attempt})"
             )
-            return None
+            return None, body
         if attempt == attempts:
             break
         sleep(INTERVAL_SECONDS)
@@ -209,7 +214,7 @@ def _await_data_engine(
         f"DATA ENGINE MISMATCH — the release expects data-engine digest {expected_digest} but "
         f"{url} reports {digest} (build {git_sha}) after {attempts} attempts; the promoted "
         f"build has not produced a run, or a different build is running (#712)"
-    )
+    ), body
 
 
 def resolve_data_engine_digest(tag: str) -> str:
