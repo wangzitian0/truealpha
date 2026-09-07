@@ -82,8 +82,19 @@ def fetch(url: str, method: str = "GET") -> Response:
         # 4xx/5xx are results here, not failures: which rejection arrives is
         # exactly what distinguishes a healthy endpoint from a regressed one.
         return Response(error.code, error.headers.get("Location", ""), error.read())
-    except urllib.error.URLError as error:
-        raise SystemExit(f"surface_contract: {method} {url} did not answer: {error.reason}") from None
+    except OSError as error:
+        # URLError, ConnectionRefusedError, RemoteDisconnected, socket timeouts: an
+        # endpoint that did not answer is a verdict about the surface, not a crash of
+        # the probe. On 2026-09-02 a production `HTTP 0` surfaced as a traceback here
+        # because only URLError was caught; the freshness run went red for the wrong
+        # reason (#725 category 2: a failure names its contract).
+        reason = getattr(error, "reason", None) or error
+        raise SurfaceUnreachable(f"{method} {url} did not answer: {reason}") from None
+
+
+class SurfaceUnreachable(Exception):
+    """The surface under test did not answer at all — reported as the first failed
+    property, never as a traceback."""
 
 
 def judge_redirect(source_url: str, base_scheme: str, status: int, location: str) -> list[str]:
@@ -114,6 +125,20 @@ def judge_redirect(source_url: str, base_scheme: str, status: int, location: str
 
 
 def check(base: str) -> list[str]:
+    """Every property, or the one verdict that makes the rest unaskable.
+
+    Any request the surface does not answer — refused, hung up, timed out — is the
+    first property violated, whichever request it was (review on #752: the health
+    call was guarded and the MCP calls after it were not, so an edge that answered
+    /api/health and then hung up on /api/mcp still died with a traceback).
+    """
+    try:
+        return _check(base)
+    except SurfaceUnreachable as unreachable:
+        return [f"the surface is not serving: {unreachable}"]
+
+
+def _check(base: str) -> list[str]:
     """Every violated property, named. Empty means the surface holds.
 
     Deliberately NOT a version check. `tools/health_check.py` owns "is the
