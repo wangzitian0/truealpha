@@ -133,18 +133,19 @@ async def test_research_card_renders_from_a_freshly_built_report() -> None:
 def test_default_research_report_repository_is_mart_backed_with_fixture_opt_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#369: mirrors test_default_repository_is_mart_backed_with_fixture_opt_out — the
-    research-report reader flips with the same strategy_run_backend flag."""
+    """#369 / #434 criterion 3: the research-report reader defaults to the mart reader,
+    exactly like the strategy-run reader, and there is no flag to select the fixture —
+    a fixture reader exists only by explicit injection in a test."""
     from llm_service import mcp_server
     from llm_service.mcp_server import _default_research_report_repository
     from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
     from truealpha_contracts.research_report_mart import MartResearchReadRepository
 
-    monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "fixture")
-    assert isinstance(_default_research_report_repository(), FixtureResearchReadRepository)
-
-    monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "mart")
+    # #434 exit criterion 3: there is no flag. The default is the mart reader, and the
+    # fixture reader is reachable only by explicit injection in a test.
+    assert not hasattr(mcp_server.settings, "strategy_run_backend")
     assert isinstance(_default_research_report_repository(), MartResearchReadRepository)
+    assert FixtureResearchReadRepository is not None  # the test double still exists, for tests
 
 
 @pytest.mark.anyio
@@ -248,8 +249,6 @@ def test_default_repository_is_mart_backed_with_fixture_opt_out(monkeypatch: pyt
     # The shipped default, with no override, is the real mart read.
     assert isinstance(_default_repository(), PostgresStrategyRunRepository)
 
-    monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "fixture")
-    assert isinstance(_default_repository(), FixtureStrategyRunRepository)
-
-    monkeypatch.setattr(mcp_server.settings, "strategy_run_backend", "mart")
-    assert isinstance(_default_repository(), PostgresStrategyRunRepository)
+    # #434 exit criterion 3: no runtime flag can select the fixture any more.
+    assert not hasattr(mcp_server.settings, "strategy_run_backend")
+    assert FixtureStrategyRunRepository is not None  # injected by tests only

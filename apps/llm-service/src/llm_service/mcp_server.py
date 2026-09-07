@@ -35,10 +35,8 @@ from truealpha_contracts.research_report import (
     ResearchReportRequest,
     build_research_report,
 )
-from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.strategy_run import StrategyRunReadRepository, StrategyRunReport, StrategyRunUnavailable
-from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 from truealpha_contracts.topt_read import (
     PostgresToptGppeRepository,
@@ -100,22 +98,16 @@ def _service_access_context() -> AccessContext:
 
 
 def _default_repository() -> StrategyRunReadRepository:
-    """#362: `settings.strategy_run_backend` selects the fixture or the real
-    mart-backed repository; now defaults to `mart` (a real writer populates it
-    via #414/#417) — `fixture` remains selectable for tests/offline previews."""
-    if settings.strategy_run_backend == "mart":
-        return PostgresStrategyRunRepository(database_url=settings.database_url)
-    return FixtureStrategyRunRepository()
+    """The real mart read, always (#362 made it the default; #434 exit criterion 3
+    removed the `strategy_run_backend` flag that could still select the fixture in a
+    deployed process). Tests inject a repository through `build_mcp_server`."""
+    return PostgresStrategyRunRepository(database_url=settings.database_url)
 
 
 def _default_research_report_repository() -> ResearchReadPort:
-    """#369: mirrors `_default_repository`'s `strategy_run_backend` flag exactly, since
-    `MartResearchReadRepository`/`FixtureResearchReadRepository` wrap the same underlying
-    strategy-run data source this flag already governs — both tools flip to real mart
-    reads together, not independently."""
-    if settings.strategy_run_backend == "mart":
-        return MartResearchReadRepository(database_url=settings.database_url)
-    return FixtureResearchReadRepository()
+    """#369: the research-report reader wraps the same strategy-run source as
+    `_default_repository`, so it is the mart reader, always."""
+    return MartResearchReadRepository(database_url=settings.database_url)
 
 
 def build_mcp_server(
