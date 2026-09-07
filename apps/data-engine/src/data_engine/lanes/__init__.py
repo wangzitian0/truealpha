@@ -23,6 +23,8 @@ LANE_MODULES: tuple[str, ...] = (
     "data_engine.lanes.universe_refresh",
     # the DB-mediated manual trigger (#495): a sensor over the capture lane's jobs
     "data_engine.lanes.triggers",
+    # data quality: the output-invariant suite against this environment's own database
+    "data_engine.lanes.quality",
     # the standard→wide-row loop's slow plane (#735 / #733): weekly backfill + probe
     "data_engine.lanes.standards",
 )

@@ -36,6 +36,10 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV DAGSTER_HOME=/opt/dagster
 RUN mkdir -p /opt/dagster /var/lib/dagster
 COPY apps/data-engine/dagster.yaml /opt/dagster/dagster.yaml
+# The output-invariant suite and its exemptions ride along so the quality lane can run
+# them inside the environment (#674 / #725 A): a GitHub runner cannot reach the
+# loopback Postgres, and a check that only ever examined the CI fixture proved nothing.
+COPY tools/output_invariants.py tools/output_invariant_exemptions.json /app/tools/
 
 # Default to the webserver role; the compose pins each role's command explicitly.
 EXPOSE 3001

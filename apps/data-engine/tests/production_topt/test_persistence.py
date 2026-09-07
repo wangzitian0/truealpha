@@ -16,6 +16,7 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -845,3 +846,104 @@ def test_the_oracle_catches_the_fixtures_own_impossible_numbers(connection) -> N
     assert report["implausible_count"] == len(cells) == 21
     reasons = {tuple(cell["violated"]) for cell in cells.values()}
     assert reasons == {("gross_profit_exceeds_revenue",), ("per_employee_outside_domain",)}
+
+
+# -- the fusion invariant judges what the snapshot SELECTED (#581, 2026-09-07) -----------
+
+
+def _output_invariants_tool():
+    """The suite as a module (it is a tool, not a package), registered so its dataclasses
+    resolve their annotations."""
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[4] / "tools" / "output_invariants.py"
+    spec = importlib.util.spec_from_file_location("output_invariants_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class _Borrowed:
+    """Lend the test's transaction to the tool's `with connect(url) as connection`
+    without letting the exit commit or close it."""
+
+    def __init__(self, connection) -> None:
+        self._connection = connection
+
+    def __enter__(self):
+        return self._connection
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+def test_fusion_invariant_judges_the_selected_observation_not_the_contest(connection, capsys) -> None:
+    """Before 2026-09-07 the invariant listed every obligation with two parsers as a
+    violation — every market-price cell once the second origin landed, 3,102 on
+    production — while the snapshots had selected the primary for all of them. Now it
+    holds when the primary is selected and turns red when a selected observation is
+    not the primary's."""
+    tool = _output_invariants_tool()
+    fusion = next(
+        invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"
+    )
+    plan = _capture(connection, version="test-fusion-selection", corroborate=True)
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    assert snapshot.run_id == plan.run_id
+    # The invariant judges the governed heads only: point the pointer at this run
+    # (sequence 0, the shape register_run_evidence writes on a first advance).
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, 'production', %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+
+    run = lambda: tool.check(  # noqa: E731
+        "postgresql://borrowed", invariants=(fusion,), exemptions={}, connect=lambda _url: _Borrowed(connection)
+    )
+    assert run() == 0
+    report = capsys.readouterr().out
+    assert "fusion-selects-by-priority-not-recency: 21 row(s) examined" in report, report
+
+    # Flip ONE selected market-price observation to a parser family that is not the primary
+    # (a third family, so the obligation stays contested and the selection is what changes).
+    # Observations are append-only by trigger (a write path can never produce this state),
+    # so the red case bypasses the trigger for this transaction only; it rolls back.
+    connection.execute("set local session_replication_role = replica")
+    flipped = connection.execute(
+        """
+        with selected as (
+            select sel.observation_id
+            from staging.topt_core_snapshots s
+            cross join lateral jsonb_array_elements(s.payload->'members') member
+            cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
+            where s.run_id = %s
+        )
+        update staging.capture_normalized_observations o
+           set parser_version = 'probe-parser:v1'
+         where o.observation_id = (
+            select selected.observation_id from selected
+            join staging.capture_normalized_observations x on x.observation_id = selected.observation_id
+            where x.semantic_type = 'market-price' limit 1
+         )
+        returning o.observation_id
+        """,
+        (plan.run_id,),
+    ).fetchall()
+    assert len(flipped) == 1
+    assert run() == 1
+    assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err

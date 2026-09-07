@@ -83,6 +83,44 @@ LATEST_STRATEGY_RUN = f"""
 """
 
 
+def _expected_input_keys() -> tuple[str, ...]:
+    """The keys the strategy consumes: the definition's required inputs plus PEG's
+    ranking inputs, read from the code that consumes them. Before 2026-09-07 this was a
+    literal list that still named `earnings_cagr_3y`, which parser v8 replaced with the
+    per-period net-income series — the invariant failed on production for a key nothing
+    consumed, i.e. the check drifted, not the data (#725 item H)."""
+    try:
+        from data_engine.datahub.strategy_bridge import load_strategy_definition
+        from factors.composite.strategy_evaluator import _PEG_KEYS
+
+        return tuple(sorted(set(load_strategy_definition().required_input_keys()) | set(_PEG_KEYS)))
+    except ImportError:  # the tool also runs where data_engine is not installed (a bare fixture DB job)
+        return (
+            "gross_profit",
+            "headcount",
+            "last_close",
+            "net_income",
+            "revenue",
+            "shares_outstanding",
+            "total_assets",
+        )
+
+
+def _primary_market_price_parser() -> str:
+    """The declared primary origin's parser family for market-price (the registration's
+    first origin); a literal only where the registry is not importable."""
+    try:
+        from data_engine.datahub.production_topt.source_registrations import registration_for
+
+        return registration_for("market-price").origins[0].parser_versions[-1].split(":")[0]
+    except ImportError:
+        return "production-topt-live-parser"
+
+
+EXPECTED_INPUT_KEYS = _expected_input_keys()
+PRIMARY_MARKET_PRICE_PARSER = _primary_market_price_parser()
+
+
 @dataclass(frozen=True)
 class Invariant:
     id: str
@@ -171,9 +209,7 @@ INVARIANTS: tuple[Invariant, ...] = (
         # would only prove the list agrees with itself; the value here is a second,
         # independent statement of what the deployed run is supposed to produce.
         violations="""
-            with expected(input_key) as (values
-                ('gross_profit'), ('total_assets'), ('headcount'), ('revenue'),
-                ('shares_outstanding'), ('last_close'), ('net_income'), ('earnings_cagr_3y')
+            with expected(input_key) as (values __EXPECTED_VALUES__
             ), latest as (
                 select max(cutoff_at) as cutoff_at from staging.strategy_backtest_inputs
             )
@@ -209,20 +245,64 @@ INVARIANTS: tuple[Invariant, ...] = (
         # contested groups themselves, so this reports EMPTY -- "examined 0 rows, so it
         # proved nothing" -- for as long as fusion stays unexercised. That is the honest
         # state; an invariant over ALL groups would pass forever while proving nothing.
+        # What the snapshot SELECTED, not merely what was contested: before 2026-09-07 this
+        # query listed every obligation with two parsers as a violation, which is every
+        # market-price cell once the second origin landed (3,102 on production) — while the
+        # snapshots had selected the primary parser for all of them. The population is the
+        # selected observations on contested obligations; a violation is one whose parser is
+        # not the declared primary for its semantic (the registration's first origin).
         violations="""
-            select capture_obligation_id,
-                   string_agg(distinct split_part(parser_version, ':', 1), ',') as sources
-            from staging.capture_normalized_observations
-            group by capture_obligation_id
-            having count(distinct split_part(parser_version, ':', 1)) > 1
+            with selected as (
+                -- what consumers see today: the snapshots of the governed heads only, not
+                -- every snapshot ever frozen (review on #750)
+                select s.run_id, sel.observation_id
+                from mart.current_pointer_head head
+                -- the head is keyed by universe (check_factor_contract); the snapshot must be
+                -- the one frozen for THAT universe, not merely the run the pointer names
+                join staging.topt_core_snapshots s
+                  on s.run_id = head.target_run_id
+                 and s.universe_id = head.universe_id
+                 and s.universe_version = head.universe_version
+                cross join lateral jsonb_array_elements(s.payload->'members') member
+                cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
+            ), contested as (
+                select uo.capture_obligation_id
+                from staging.capture_observation_obligations uo
+                join staging.capture_normalized_observations o on o.observation_id = uo.observation_id
+                group by uo.capture_obligation_id
+                having count(distinct split_part(o.parser_version, ':', 1)) > 1
+            )
+            select selected.run_id, o.semantic_type, split_part(o.parser_version, ':', 1) as selected_parser
+            from selected
+            join staging.capture_normalized_observations o on o.observation_id = selected.observation_id
+            join staging.capture_observation_obligations uo on uo.observation_id = o.observation_id
+            join contested on contested.capture_obligation_id = uo.capture_obligation_id
+            where o.semantic_type = 'market-price'
+              and split_part(o.parser_version, ':', 1) <> '{PRIMARY_MARKET_PRICE_PARSER}'
         """,
         population="""
-            select count(*) from (
-                select capture_obligation_id
-                from staging.capture_normalized_observations
-                group by capture_obligation_id
-                having count(distinct split_part(parser_version, ':', 1)) > 1
-            ) contested
+            with selected as (
+                select sel.observation_id
+                from mart.current_pointer_head head
+                -- the head is keyed by universe (check_factor_contract); the snapshot must be
+                -- the one frozen for THAT universe, not merely the run the pointer names
+                join staging.topt_core_snapshots s
+                  on s.run_id = head.target_run_id
+                 and s.universe_id = head.universe_id
+                 and s.universe_version = head.universe_version
+                cross join lateral jsonb_array_elements(s.payload->'members') member
+                cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
+            ), contested as (
+                select uo.capture_obligation_id
+                from staging.capture_observation_obligations uo
+                join staging.capture_normalized_observations o on o.observation_id = uo.observation_id
+                group by uo.capture_obligation_id
+                having count(distinct split_part(o.parser_version, ':', 1)) > 1
+            )
+            select count(*)
+            from selected
+            join staging.capture_observation_obligations uo on uo.observation_id = selected.observation_id
+            join contested on contested.capture_obligation_id = uo.capture_obligation_id
         """,
     ),
     Invariant(
@@ -253,6 +333,22 @@ INVARIANTS: tuple[Invariant, ...] = (
         """,
     ),
 )
+
+
+def _render(invariant: Invariant) -> Invariant:
+    """The two derived facts enter the SQL as literals, once, here — never at query time."""
+    values = ", ".join(f"('{key}')" for key in EXPECTED_INPUT_KEYS)
+    return Invariant(
+        id=invariant.id,
+        claim=invariant.claim,
+        violations=invariant.violations.replace("__EXPECTED_VALUES__", values).replace(
+            "{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER
+        ),
+        population=invariant.population,
+    )
+
+
+INVARIANTS = tuple(_render(invariant) for invariant in INVARIANTS)
 
 
 @dataclass(frozen=True)
