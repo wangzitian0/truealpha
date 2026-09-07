@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -947,3 +947,70 @@ def test_fusion_invariant_judges_the_selected_observation_not_the_contest(connec
     assert len(flipped) == 1
     assert run() == 1
     assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
+
+
+def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> None:
+    """#575: both strategy-run twins served `order by executed_at desc limit 1` — a bare
+    mutable latest. Prod 2026-09-05: a manual replay at 03:10Z displaced the governed
+    22:15Z run on every surface for a day. The rule now ranks the run the governed
+    capture head resolves to first (mart.governed_strategy_run, keyed by the head's
+    snapshot cutoff) and falls back to recency only when no head resolves a run.
+    Red against the old rule: the later fake run below would win."""
+    from data_engine.datahub.strategy_bridge import (
+        run_strategy_replay_for_cutoff,
+        seed_strategy_inputs_from_capture,
+    )
+    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
+
+    plan = _capture(connection, version="test-governed-strategy-run")
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
+    governed_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
+        connection, cutoff=CUTOFF, executed_at=CUTOFF, risk_free_rate=Decimal("0.05")
+    )
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, 'production', %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+    strategy_key = connection.execute(
+        "select strategy_key from mart.strategy_runs where strategy_run_id = %s", (governed_run_id,)
+    ).fetchone()[0]
+
+    # The view resolves exactly this run for the head.
+    resolved = connection.execute(
+        "select strategy_run_id, universe_id from mart.governed_strategy_run where target_run_id = %s", (plan.run_id,)
+    ).fetchall()
+    assert resolved == [(governed_run_id, snapshot.universe_id)]
+
+    # A newer run that no head resolves — the manual replay shape — must not displace it.
+    later_sha = hashlib.sha256(b"later-unresolved-run").hexdigest()
+    connection.execute(
+        """
+        insert into mart.strategy_runs (strategy_run_id, content_sha256, strategy_key, strategy_version,
+                                        definition_content_sha256, corpus_sha256, claim_ceiling, executed_at)
+        values (%s, %s, %s, 'v0', %s, %s, 'preview', %s)
+        """,
+        (f"strategy-run:{later_sha}", later_sha, strategy_key, later_sha, later_sha, CUTOFF + timedelta(days=1)),
+    )
+    row = connection.execute(LATEST_RUN_SQL, (strategy_key,)).fetchone()
+    assert row[0] == governed_run_id and row[3] is True, row
+    recency_only = connection.execute(
+        "select strategy_run_id from mart.strategy_runs where strategy_key = %s order by executed_at desc limit 1",
+        (strategy_key,),
+    ).fetchone()[0]
+    # Any newer run — the fake one, or a stale row another test left on a shared database
+    # — is what recency alone would have served. The governed rule above ignored them all.
+    assert recency_only != governed_run_id, "the red case: recency alone would serve an unresolved run"

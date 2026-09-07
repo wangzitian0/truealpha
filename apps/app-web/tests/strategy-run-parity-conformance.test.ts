@@ -143,10 +143,13 @@ if (admin !== null) {
     // StrategyRunDecision instead — inside the shared surface — is what made
     // this test fail in the first place, and the fix was to move the field, not
     // to widen this list.
+    // `governed` (#575) is the same kind of mart-only read: whether the governed
+    // capture head resolves this run, for the overview sentence.
     const {
       strategy_run_id: _runId,
       executed_at: _executedAt,
       provenance: _provenance,
+      governed: _governed,
       ...shared
     } = report;
     assert(
