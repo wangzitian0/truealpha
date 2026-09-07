@@ -175,7 +175,9 @@ def test_a_prior_invocation_is_replayed_without_calling_the_provider(seated):
         transport=transport,
     )
     assert selection.replayed and selection.value == 17581 and selection.invocation_id.endswith("a" * 64)
-    assert selection.served_model == "glm-served-earlier" and selection.extractor.startswith("model:glm-served-earlier:")
+    assert selection.served_model == "glm-served-earlier" and selection.extractor.startswith(
+        "model:glm-served-earlier:"
+    )
     assert conn.inserts == [] and list(seated) == []
 
 

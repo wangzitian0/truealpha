@@ -1,3 +1,5 @@
+-- Ordered one minute after 20260907T1430_factors_model_invocations.sql, which creates the
+-- table this file alters (files apply in glob order).
 -- #70 / #735 (init.md §9): the provider routes legacy model names to its current
 -- models — every production invocation on 2026-09-07 asked for glm-4.7 and the response
 -- said glm-5.3-flash. `model` stays what we asked for (it is part of the request digest
