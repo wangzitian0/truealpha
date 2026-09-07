@@ -4,7 +4,13 @@
   "rule": "init.md §1 rule 19 — every source has an expiring rights and budget go/no-go before Production use",
   "source_id": "filing-extraction-model",
   "provider": "Zhipu AI — GLM coding plan (open.bigmodel.cn/api/coding/paas/v4; api.z.ai mirror)",
-  "models_verified": ["glm-4.6", "glm-4.7", "glm-5.1"],
+  "models_verified": [
+    "glm-5.3",
+    "glm-5.3-flash",
+    "glm-5.1",
+    "glm-4.7",
+    "glm-4.6"
+  ],
   "verified_on": "2026-09-07",
   "verification": "chat.completions HTTP 200 with thinking disabled and JSON output; the AEP two-candidate case selected 17,581 (subsidiaries-wide) over 6,994 (service company) with a correct reason; 305 tokens, 1.9 s",
   "use": "selection among enumerated candidate spans for prose-only standards (employees_total first; segment revenue and supply-chain relationships later) — never free-form extraction from a whole filing, never a consumer-facing surface",
@@ -22,7 +28,12 @@
   },
   "credential": {
     "vault_path": "secret/truealpha/<staging|production>/data_engine",
-    "keys": ["LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_PROVIDER"],
+    "keys": [
+      "LLM_API_KEY",
+      "LLM_BASE_URL",
+      "LLM_MODEL",
+      "LLM_PROVIDER"
+    ],
     "never": "in code, fixtures, logs or issue text"
   },
   "approval": {
@@ -30,5 +41,13 @@
     "status": "PENDING — this record is the go/no-go the owner signs by merging the PR that adds it; unsigned, the loop keeps every multi-candidate filing as needs_model_selection",
     "review_expiry": "2026-12-31"
   },
-  "refs": ["truealpha#70", "truealpha#735", "truealpha#749", "truealpha#60", "truealpha#729"]
+  "refs": [
+    "truealpha#70",
+    "truealpha#735",
+    "truealpha#749",
+    "truealpha#60",
+    "truealpha#729"
+  ],
+  "model_requested": "glm-5.3",
+  "routing_note": "2026-09-07: /models lists glm-4.5 … glm-5.3, glm-5.3-flash; the plan routes legacy names to current models (requests for glm-4.7/4.6/5-turbo answered by glm-5.3-flash, glm-5/5.1 by glm-5.3). All 16 production invocations that asked for glm-4.7 were served by glm-5.3-flash. Replaying those 16 requests against explicit glm-5.3 and glm-5.3-flash reproduced every recorded decision (16/16, 5,663 prompt tokens each). The seat now requests glm-5.3 explicitly and records response.model as served_model."
 }

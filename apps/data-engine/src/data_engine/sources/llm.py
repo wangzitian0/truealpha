@@ -85,10 +85,15 @@ class ModelSelection:
     completion_tokens: int | None
     invocation_id: str
     replayed: bool
+    # What the provider says it answered with (response.model). The coding plan routes
+    # legacy names to its current models — glm-4.7 was served by glm-5.3-flash — so the
+    # extractor names the served model, and `model` stays the requested name that is part
+    # of the request digest.
+    served_model: str | None = None
 
     @property
     def extractor(self) -> str:
-        return f"model:{self.model}:{self.prompt_sha256[:12]}"
+        return f"model:{self.served_model or self.model}:{self.prompt_sha256[:12]}"
 
 
 def is_configured() -> bool:
@@ -126,7 +131,8 @@ def _replay(connection: Any, *, cik: int, accession: str, model: str, request_sh
     a vendor error is recorded but never replayed as an answer (review on #754)."""
     row = connection.execute(
         """
-        select invocation_id, decision, response_sha256, prompt_tokens, completion_tokens, request_sha256, provider
+        select invocation_id, decision, response_sha256, prompt_tokens, completion_tokens, request_sha256, provider,
+               served_model
         from staging.model_invocations
         where subject_cik = %s and accession = %s and request_sha256 = %s and model = %s
           and status_code is not null and status_code < 400
@@ -150,6 +156,7 @@ def _replay(connection: Any, *, cik: int, accession: str, model: str, request_sh
         completion_tokens=row[4],
         invocation_id=row[0],
         replayed=True,
+        served_model=row[7],
     )
 
 
@@ -202,6 +209,7 @@ def select_headcount(
     completed_at = now()
     prompt_tokens = usage.get("prompt_tokens")
     completion_tokens = usage.get("completion_tokens")
+    served_model = str(payload["model"]) if payload.get("model") else None
     decision: dict[str, Any]
     if status >= 400:
         # A vendor error is still an invocation that happened: recorded with its status and
@@ -234,6 +242,7 @@ def select_headcount(
         completion_tokens=completion_tokens,
         invocation_id=invocation_id,
         replayed=False,
+        served_model=served_model,
     )
     if persist and connection is not None:
         connection.execute(
@@ -241,8 +250,10 @@ def select_headcount(
             insert into staging.model_invocations
                 (invocation_id, provider, model, base_url_host, standard, subject_cik, accession,
                  prompt_version, prompt_sha256, schema_sha256, request_sha256, response_sha256, status_code,
-                 prompt_tokens, completion_tokens, cost, decision, request, response, started_at, completed_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s)
+                 prompt_tokens, completion_tokens, cost, decision, request, response, started_at, completed_at,
+                 served_model)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s,
+                    %s)
             on conflict (invocation_id) do nothing
             """,
             (
@@ -267,6 +278,7 @@ def select_headcount(
                 _jsonb_or_null(body),
                 started_at,
                 completed_at,
+                served_model,
             ),
         )
     if status >= 400:
