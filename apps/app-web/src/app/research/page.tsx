@@ -67,7 +67,7 @@ export default async function ResearchOverviewPage() {
 							title={
 								age.stale
 									? "Older than one scheduled cycle plus slack (36 h) — the same threshold the nightly pointer invariant raises."
-									: "Within one scheduled cycle."
+									: "Within one scheduled cycle plus slack (36 h)."
 							}
 						>
 							{age.stale ? `stale · ${age.label}` : age.label}

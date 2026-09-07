@@ -31,5 +31,8 @@ const now = new Date("2026-09-08T10:15:00Z");
 	const future = describeServedRunAge("2026-09-09T00:00:00Z", now);
 	assert(future !== null && future.hours === 0 && !future.stale, "a cutoff in the future clamps to 0 h");
 }
-assert(STALE_AFTER_HOURS === 36, "the page and tools/output_invariants.py share one threshold");
+assert(
+	STALE_AFTER_HOURS === 36,
+	"this side of the duplicated 36 h threshold (the other is tools/output_invariants.py pointer-has-advanced-recently) — change both or neither",
+);
 console.log("#575 served-run age passed");
