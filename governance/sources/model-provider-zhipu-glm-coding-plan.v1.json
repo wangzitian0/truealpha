@@ -1,0 +1,34 @@
+{
+  "record": "source-rights-budget",
+  "version": 1,
+  "rule": "init.md §1 rule 19 — every source has an expiring rights and budget go/no-go before Production use",
+  "source_id": "filing-extraction-model",
+  "provider": "Zhipu AI — GLM coding plan (open.bigmodel.cn/api/coding/paas/v4; api.z.ai mirror)",
+  "models_verified": ["glm-4.6", "glm-4.7", "glm-5.1"],
+  "verified_on": "2026-09-07",
+  "verification": "chat.completions HTTP 200 with thinking disabled and JSON output; the AEP two-candidate case selected 17,581 (subsidiaries-wide) over 6,994 (service company) with a correct reason; 305 tokens, 1.9 s",
+  "use": "selection among enumerated candidate spans for prose-only standards (employees_total first; segment revenue and supply-chain relationships later) — never free-form extraction from a whole filing, never a consumer-facing surface",
+  "rights": {
+    "raw_retention": "request and response bodies stored in staging.model_invocations (append-only) as the evidence of each decision",
+    "derived_metric": "the chosen value lands as a fact with the model extractor id and the invocation id on its evidence_ref",
+    "publication": "published numbers carry confidence 0.90 (policy headcount-confidence:v1, entry model-selection) and the three §8 status dimensions once #747 lands",
+    "quotation_attribution": "not applicable — the evidence quoted is the issuer's own filing text, not the provider's output",
+    "note": "the coding plan is sold for coding assistants; the owner accepts this use under the plan's terms or moves to the metered general endpoint (which returned 429 'insufficient balance' on 2026-09-07)"
+  },
+  "budget": {
+    "capacity_declared": "gateway seat filing-extraction-model: 30 calls / 60 s window, 2000 calls / day (placeholder until the plan's published limits are recorded here)",
+    "expected_load": "≈ 20 calls per weekly backfill today (17 deferred filings + new listings); ≈ 300 tokens each",
+    "cost_field": "staging.api_call_ledger.cost = total tokens per call; staging.model_invocations.cost the same"
+  },
+  "credential": {
+    "vault_path": "secret/truealpha/<staging|production>/data_engine",
+    "keys": ["LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_PROVIDER"],
+    "never": "in code, fixtures, logs or issue text"
+  },
+  "approval": {
+    "owner": "zitian",
+    "status": "PENDING — this record is the go/no-go the owner signs by merging the PR that adds it; unsigned, the loop keeps every multi-candidate filing as needs_model_selection",
+    "review_expiry": "2026-12-31"
+  },
+  "refs": ["truealpha#70", "truealpha#735", "truealpha#749", "truealpha#60", "truealpha#729"]
+}

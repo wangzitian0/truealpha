@@ -115,7 +115,11 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
 
 
 def confidence_for(policy_id: str, extractor: str) -> Decimal:
+    """Every model-selected value shares one policy entry: the confidence is the policy's
+    statement about the *class* of chooser (a model choosing among enumerated spans), not
+    about a particular model revision — that identity travels in the invocation record."""
+    key = "model-selection" if extractor.startswith("model:") else extractor
     try:
-        return CONFIDENCE_POLICIES[policy_id][extractor]
+        return CONFIDENCE_POLICIES[policy_id][key]
     except KeyError as error:
         raise KeyError(f"confidence policy {policy_id!r} has no entry for extractor {extractor!r}") from error

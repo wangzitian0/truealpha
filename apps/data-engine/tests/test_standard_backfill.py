@@ -48,6 +48,7 @@ class FakeConnection:
     def __init__(self, facts: dict[int, list[tuple[str, datetime]]] | None = None) -> None:
         self.facts = facts or {}
         self.predecessors: dict[str, int] = {}
+        self.model_invocations: list[tuple] = []
         self.headcount_rows: list[tuple] = []
         self.ledger_rows: list[tuple] = []
         self.raw_rows: list[tuple] = []
@@ -67,6 +68,11 @@ class FakeConnection:
             accession = like.removeprefix("accession=").split(" ")[0]
             hits = [r for r in self.headcount_rows if r[0] == cik and f"accession={accession} " in r[5]]
             return _Result([(1,)] if hits else [])
+        if text.startswith("select invocation_id, decision"):
+            return _Result([])
+        if text.startswith("insert into staging.model_invocations"):
+            self.model_invocations.append(params)
+            return _Result([])
         if text.startswith("select issuer_id, predecessor_cik from staging.issuer_cik_predecessors"):
             (issuer_ids,) = params
             return _Result([(i, c) for i, c in self.predecessors.items() if i in issuer_ids])
@@ -544,6 +550,98 @@ def test_a_holdco_with_no_filing_under_its_new_cik_falls_back_to_the_predecessor
     (row,) = connection.headcount_rows
     assert row[0] == 2115436 and row[1] == Decimal(61000)
     assert "filing_cik=34088" in row[5] and "accession=000003408826000009" in row[5]
+
+
+def test_a_seated_model_resolves_a_multi_candidate_filing_with_its_invocation_on_the_evidence(monkeypatch) -> None:
+    """#70 scope 2: LLY's two totals go to the model; the chosen value must be a candidate,
+    the fact carries the model extractor id, the invocation id and the policy's confidence."""
+    import json
+
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    answer = json.dumps(
+        {
+            "choices": [
+                {"message": {"content": json.dumps({"value": 50000, "candidate_index": 1, "reason": "company-wide"})}}
+            ],
+            "usage": {"prompt_tokens": 200, "completion_tokens": 40, "total_tokens": 240},
+        }
+    ).encode()
+    connection, store = FakeConnection(), FakeStore()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=store,
+        now=CUTOFF,
+        model_transport=lambda *_: (200, answer),
+        issuer_label="LLY",
+    )
+
+    assert outcome.status == "resolved" and outcome.value == 50000
+    assert outcome.extractor.startswith("model:glm-test:")
+    (row,) = connection.headcount_rows
+    assert row[1] == Decimal(50000) and row[6] == Decimal("0.90")
+    assert "extractor=model:glm-test:" in row[5] and "invocation=model-invocation:" in row[5]
+    assert len(connection.model_invocations) == 1
+
+
+def test_a_declining_model_leaves_the_cell_honestly_open(monkeypatch) -> None:
+    import json
+
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    answer = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"value": None, "candidate_index": None, "reason": "both are segments"})
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 100},
+        }
+    ).encode()
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+        model_transport=lambda *_: (200, answer),
+    )
+    assert outcome.status == "model_declined" and "both are segments" in outcome.detail
+    assert connection.headcount_rows == []
+
+
+def test_without_a_seated_model_the_cell_stays_needs_model_selection(monkeypatch) -> None:
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+    )
+    assert outcome.status == "needs_model_selection" and connection.headcount_rows == []
 
 
 def test_probe_run_writes_only_the_ledger_and_the_report(monkeypatch) -> None:

@@ -134,6 +134,7 @@ def _resolve(
         cutoff=cutoff,
         write=mode == "backfill",
         store=store,
+        issuer_label=f"{cell.issuer.ticker} ({cell.issuer.issuer_id})",
     )
     if outcome.status == "no_annual_filing" and cell.issuer.predecessor_cik is not None:
         # #496: the same fallback the daily tick applies — the holdco's filings still
@@ -148,6 +149,7 @@ def _resolve(
             write=mode == "backfill",
             store=store,
             record_cik=cell.issuer.cik,
+            issuer_label=f"{cell.issuer.ticker} ({cell.issuer.issuer_id})",
         )
     return outcome
 
@@ -164,6 +166,7 @@ def _cell_record(cell: OpenCell, outcome: ExtractionOutcome) -> dict[str, Any]:
         "accession": outcome.accession,
         "filing_date": outcome.filing_date.isoformat() if outcome.filing_date else None,
         "candidates": [c.value for c in outcome.candidates],
+        "extractor": outcome.extractor,
         "fact_id": outcome.fact_id,
         "detail": outcome.detail,
     }
@@ -172,7 +175,12 @@ def _cell_record(cell: OpenCell, outcome: ExtractionOutcome) -> dict[str, Any]:
 def _cell_line(cell: OpenCell, outcome: ExtractionOutcome) -> str:
     head = f"  {cell.issuer.ticker:<6} cik={cell.issuer.cik} open={cell.reason:<9} -> {outcome.status}"
     if outcome.status in ("resolved", "already_recorded"):
-        return f"{head} value={outcome.value} accession={outcome.accession} filed={outcome.filing_date} fact_id={outcome.fact_id}"
+        return (
+            f"{head} value={outcome.value} accession={outcome.accession} filed={outcome.filing_date} "
+            f"fact_id={outcome.fact_id} extractor={outcome.extractor}"
+        )
+    if outcome.status == "model_declined":
+        return f"{head} candidates={[c.value for c in outcome.candidates]} {outcome.detail}"
     if outcome.status == "needs_model_selection":
         return f"{head} candidates={[c.value for c in outcome.candidates]} accession={outcome.accession}"
     return f"{head} {outcome.detail}"

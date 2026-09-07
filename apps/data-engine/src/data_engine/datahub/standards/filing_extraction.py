@@ -31,6 +31,7 @@ from truealpha_contracts.standards import MetricStandard, confidence_for
 
 from data_engine.datahub.production_topt.headcount import record_headcount
 from data_engine.raw_store import insert_fetch
+from data_engine.sources import llm
 from data_engine.sources.gateway import CapacityExceeded, SourceGateway
 
 ANNUAL_FORMS = ("10-K", "20-F")
@@ -81,6 +82,7 @@ ExtractionStatus = Literal[
     "resolved",
     "already_recorded",
     "needs_model_selection",
+    "model_declined",
     "no_candidate",
     "no_annual_filing",
     "deferred_capacity",
@@ -236,8 +238,11 @@ def extract_headcount(
     store: RawObjectStore | None = None,
     now: datetime | None = None,
     record_cik: int | None = None,
+    select_with_model: bool = True,
+    model_transport: llm.Transport | None = None,
+    issuer_label: str | None = None,
 ) -> ExtractionOutcome:
-    """Enumerate, select by rule, and — in write mode — land the cited fact.
+    """Enumerate, select by rule or by the seated model, and — in write mode — land the fact.
 
     `cik` is where the filing is fetched from; `record_cik` (default: the same) is the
     issuer the fact is recorded under — they differ for a post-reorganization holding
@@ -255,9 +260,39 @@ def extract_headcount(
 
     found = candidates(filing_plain_text(document.body))
     status, chosen = select_total(found)
+    extractor = RULE_SINGLE_CANDIDATE
+    model_detail = ""
+    if status == "needs_model_selection" and select_with_model and llm.is_configured():
+        # Precision is the model's half (#70 scope 2): it chooses among the enumerated
+        # company-wide statements, or declines. A declined or non-candidate answer stays
+        # an honest refusal on the cell. In write mode the invocation is recorded (answer
+        # or refusal); in probe mode only the ledger row is — probe writes nothing else.
+        totals = [c for c in found if not c.partial]
+        selection = llm.select_headcount(
+            connection if write else None,
+            cik=cik,
+            accession=document.accession,
+            form=document.form,
+            issuer_label=issuer_label or f"CIK {cik}",
+            candidates=[llm.Candidate(c.value, c.sentence) for c in totals],
+            caller=f"standard-backfill:{standard.metric}",
+            standard=standard.metric,
+            persist=write,
+            transport=model_transport,
+        )
+        model_detail = f" model={selection.model} invocation={selection.invocation_id}" + (
+            " (replayed)" if selection.replayed else ""
+        )
+        if selection.value is not None:
+            chosen = next(c for c in totals if c.value == selection.value)
+            status, extractor = "resolved", selection.extractor
+        else:
+            status = "model_declined"
+            model_detail += f" reason={selection.reason!r}"
     outcome = ExtractionOutcome(
         cik,
         status,
+        extractor=extractor,
         value=chosen.value if chosen else None,
         as_of=parse_as_of(chosen.as_of) if chosen else None,
         sentence=chosen.sentence if chosen else None,
@@ -265,7 +300,7 @@ def extract_headcount(
         accession=document.accession,
         form=document.form,
         filing_date=document.filing_date,
-        detail=f"{len(found)} candidate(s), {len({c.value for c in found if not c.partial})} distinct total(s)",
+        detail=f"{len(found)} candidate(s), {len({c.value for c in found if not c.partial})} distinct total(s){model_detail}",
     )
     if status != "resolved" or not write or chosen is None:
         return outcome
@@ -288,7 +323,8 @@ def extract_headcount(
     filing_cik = "" if record_cik == cik else f" filing_cik={cik}"
     evidence_ref = (
         f"accession={document.accession} form={document.form} filed={document.filing_date.isoformat()}{filing_cik} "
-        f"raw=raw.fetches:{raw_id} extractor={RULE_SINGLE_CANDIDATE} span={chosen.sentence[:400]!r}"
+        f"raw=raw.fetches:{raw_id} extractor={extractor}{model_detail.replace(' model=', ' model=', 1)} "
+        f"span={chosen.sentence[:400]!r}"
     )
     fact_id = record_headcount(
         connection,
@@ -298,11 +334,12 @@ def extract_headcount(
         period_end=parse_as_of(chosen.as_of),
         source=EXTRACTION_SOURCE,
         evidence_ref=evidence_ref,
-        confidence=confidence_for(standard.confidence_policy_id, RULE_SINGLE_CANDIDATE),
+        confidence=confidence_for(standard.confidence_policy_id, extractor),
     )
     return ExtractionOutcome(
         record_cik,
         "resolved",
+        extractor=extractor,
         value=chosen.value,
         as_of=parse_as_of(chosen.as_of),
         sentence=chosen.sentence,
