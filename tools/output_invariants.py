@@ -94,7 +94,7 @@ def _expected_input_keys() -> tuple[str, ...]:
         from factors.composite.strategy_evaluator import _PEG_KEYS
 
         return tuple(sorted(set(load_strategy_definition().required_input_keys()) | set(_PEG_KEYS)))
-    except Exception:  # noqa: BLE001 — the tool also runs where data_engine is not installed
+    except ImportError:  # the tool also runs where data_engine is not installed (a bare fixture DB job)
         return (
             "gross_profit",
             "headcount",
@@ -113,7 +113,7 @@ def _primary_market_price_parser() -> str:
         from data_engine.datahub.production_topt.source_registrations import registration_for
 
         return registration_for("market-price").origins[0].parser_versions[-1].split(":")[0]
-    except Exception:  # noqa: BLE001
+    except ImportError:
         return "production-topt-live-parser"
 
 
@@ -253,8 +253,11 @@ INVARIANTS: tuple[Invariant, ...] = (
         # not the declared primary for its semantic (the registration's first origin).
         violations="""
             with selected as (
+                -- what consumers see today: the snapshots of the governed heads only, not
+                -- every snapshot ever frozen (review on #750)
                 select s.run_id, sel.observation_id
-                from staging.topt_core_snapshots s
+                from mart.current_pointer_head head
+                join staging.topt_core_snapshots s on s.run_id = head.target_run_id
                 cross join lateral jsonb_array_elements(s.payload->'members') member
                 cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
             ), contested as (
@@ -275,7 +278,8 @@ INVARIANTS: tuple[Invariant, ...] = (
         population="""
             with selected as (
                 select sel.observation_id
-                from staging.topt_core_snapshots s
+                from mart.current_pointer_head head
+                join staging.topt_core_snapshots s on s.run_id = head.target_run_id
                 cross join lateral jsonb_array_elements(s.payload->'members') member
                 cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
             ), contested as (

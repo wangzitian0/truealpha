@@ -893,6 +893,24 @@ def test_fusion_invariant_judges_the_selected_observation_not_the_contest(connec
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     assert snapshot.run_id == plan.run_id
+    # The invariant judges the governed heads only: point the pointer at this run
+    # (sequence 0, the shape register_run_evidence writes on a first advance).
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, 'production', %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
 
     run = lambda: tool.check(  # noqa: E731
         "postgresql://borrowed", invariants=(fusion,), exemptions={}, connect=lambda _url: _Borrowed(connection)
