@@ -21,7 +21,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from data_engine.datahub.a1_evidence import POINTER_FACTOR_ID
 from factors.composite.plausibility_policy import (
     POLICY_VERSION,
     RULE_SIGN_PER_BRANCH,
@@ -29,6 +28,8 @@ from factors.composite.plausibility_policy import (
     Violation,
     evaluate,
 )
+
+from data_engine.datahub.a1_evidence import POINTER_FACTOR_ID
 
 #: The nightly suite's exemption file, as the image carries it (Dockerfile) or in the repo.
 _EXEMPTIONS_IMAGE = Path("/app/tools/output_invariant_exemptions.json")
