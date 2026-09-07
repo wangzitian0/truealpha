@@ -814,8 +814,9 @@ def test_operating_branch_for_sic_maps_insurers() -> None:
 def test_predecessor_cik_fallback_fires_only_on_an_empty_taxonomy() -> None:
     """#496: the mapped CIK's document exists but asserts nothing (knowable_at
     None) -> the adapter refetches through the SAME injected fetcher with the
-    lineage-resolved predecessor. A payload with ANY eligible fact never falls
-    back, and no predecessor means honest nulls."""
+    lineage-resolved predecessor. A payload with an income fact never falls
+    back, and no predecessor means honest nulls. (A payload with balance-sheet
+    facts but NO income fact also falls back since 2026-09-07 — the case below.)"""
     calls: list[int] = []
     empty = FinancialFactsBundle(
         gross_profit=None,
@@ -988,3 +989,74 @@ def test_the_deployed_fetcher_resolves_the_growth_basis_without_being_asked() ->
         date(2024, 12, 31),
         date(2025, 12, 31),
     ]
+
+
+def test_predecessor_fallback_also_fires_when_the_holdco_reports_no_income_fact() -> None:
+    """XOM after its 2026 reorganization (production, 2026-09-06 head run): the new holdco
+    CIK 2115436 files a balance sheet and a share count but no revenue, gross profit or
+    pre-provision profit, so every published XOM number stayed unavailable although the
+    owner-signed predecessor (34088) carries the company's income history. The fallback
+    now keys on "asserts no income fact", not on "asserts nothing"; it still does not fire
+    when the mapped CIK reports income, and it keeps the mapped document when the
+    predecessor has no income either."""
+    calls: list[int] = []
+    balance_only = FinancialFactsBundle(
+        gross_profit=None,
+        total_assets=Decimal("464482000000"),
+        shares_outstanding=Decimal("4111911960"),
+        revenue=None,
+        pre_provision_profit=None,
+        raw_bytes=b'{"holdco": true}',
+        knowable_at=datetime(2026, 2, 15, tzinfo=UTC),
+    )
+    with_income = FinancialFactsBundle(
+        gross_profit=Decimal("5"),
+        total_assets=Decimal("9"),
+        shares_outstanding=Decimal("3"),
+        revenue=Decimal("7"),
+        pre_provision_profit=None,
+        raw_bytes=b'{"predecessor": true}',
+        knowable_at=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+
+    def fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        calls.append(cik)
+        return balance_only if cik == 2115436 else with_income
+
+    item = _work_item("b" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+    )
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher, mapping_version="test:v1")
+    outcome = adapter.fetch(item)
+    assert calls == [2115436, 34088]
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.raw.body == b'{"predecessor": true}'
+    assert outcome.record.payload["revenue"] == "7"
+
+    # The mapped CIK reporting income never falls back.
+    calls.clear()
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: with_income, mapping_version="test:v1"
+    )
+    adapter.fetch(item)
+
+    # A predecessor without income does not replace the mapped document.
+    calls.clear()
+
+    def sparse_both(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        calls.append(cik)
+        return balance_only
+
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, sparse_both, mapping_version="test:v1")
+    outcome = adapter.fetch(item)
+    assert calls == [2115436, 34088]
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.raw.body == b'{"holdco": true}'
+    assert outcome.record.payload["revenue"] is None

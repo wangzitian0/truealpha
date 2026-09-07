@@ -509,6 +509,16 @@ def _v(datum: _Datum | None) -> Decimal | None:
     return None if datum is None else datum.value
 
 
+def _asserts_income(bundle: FinancialFactsBundle) -> bool:
+    """A document that carries any income-statement fact. The gross-profit-per-employee
+    numerator and the price-to-sales denominator both come from here; a document without
+    one leaves every published number for the issuer unavailable, which is the state the
+    predecessor fallback exists to end."""
+    return bundle.knowable_at is not None and any(
+        value is not None for value in (bundle.revenue, bundle.gross_profit, bundle.pre_provision_profit)
+    )
+
+
 class SecFinancialFactAdapter:
     """`SourceFetchPort` for financial-fact, backed by an injected company-facts fetcher."""
 
@@ -534,13 +544,19 @@ class SecFinancialFactAdapter:
             return FetchFailure(ObligationReasonCode.CONTRACT_VIOLATION)
         try:
             bundle = self._fetcher(target.cik, target.cutoff, target.operating_branch)
-            if bundle is not None and bundle.knowable_at is None and target.predecessor_cik is not None:
-                # #496 predecessor-CIK fallback: the mapped CIK's document
-                # exists but asserts nothing (empty taxonomy after a corporate
-                # reorganization); the issuer's own capture lineage names the
-                # CIK that last parsed successfully. Both payloads end up
-                # archived (the empty one deduped from prior runs).
-                bundle = self._fetcher(target.predecessor_cik, target.cutoff, target.operating_branch)
+            if bundle is not None and target.predecessor_cik is not None and not _asserts_income(bundle):
+                # #496 predecessor-CIK fallback: the mapped CIK's document exists but
+                # asserts no income-statement fact — an empty taxonomy right after a
+                # corporate reorganization, or (XOM from 2026-09, #745's residual) a holdco
+                # whose first filings carry the balance sheet and share count but no
+                # revenue or profit. The issuer's own predecessor CIK (owner-signed
+                # registry, or the capture lineage) is the same company's filing history,
+                # so its document is used whole: one raw source per observation, and the
+                # fallback disables itself the day the holdco reports income. Both
+                # payloads end up archived (the sparse one deduped from prior runs).
+                fallback = self._fetcher(target.predecessor_cik, target.cutoff, target.operating_branch)
+                if fallback is not None and _asserts_income(fallback):
+                    bundle = fallback
         except SourceUnavailableError:
             return FetchFailure(ObligationReasonCode.TRANSIENT_NETWORK)
         except TimeoutError:
