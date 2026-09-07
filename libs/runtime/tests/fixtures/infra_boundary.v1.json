@@ -11,7 +11,7 @@
     "request_type": "DeployRequest",
     "release_url": "https://github.com/wangzitian0/infra2-sdk/releases/tag/v1.3.2",
     "wheel_url": "https://github.com/wangzitian0/infra2-sdk/releases/download/v1.3.2/infra2_sdk-1.3.2-py3-none-any.whl",
-    "wheel_sha256": "1ea60d4312bf26cbeee7c1601169932f5ab8b68ab94639856e52a438ee79c4cd",
+    "wheel_sha256": "bf93d1d0ebed85619f41ae35f3be95854b32da539e1942804458dd9f32585667",
     "extras": [
       "http"
     ]
