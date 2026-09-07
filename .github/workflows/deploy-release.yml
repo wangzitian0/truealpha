@@ -239,19 +239,22 @@ jobs:
       - name: Confirm the staging release carries its data engine
         if: ${{ inputs.deploy_type == 'staging' && steps.request.outputs.json != '' }}
         env:
-          EXPECTED_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).version_ref || '' }}
+          # Named apart from the prod step's EXPECTED_RELEASE on purpose: the reproof
+          # property `workflow-contract/health-gate-compares-a-release-ref` anchors on
+          # that line and must find it once.
+          STAGING_RELEASE: ${{ steps.request.outputs.json != '' && fromJson(steps.request.outputs.json).version_ref || '' }}
         run: |
           set -euo pipefail
-          if [ -z "$EXPECTED_RELEASE" ]; then
+          if [ -z "$STAGING_RELEASE" ]; then
             echo "::error::request step produced no version_ref — refusing a vacuous data-engine confirmation"
             exit 1
           fi
           # #712: staging is where a release first proves the engine came with the app.
           uv run --package truealpha-runtime --with httpx python tools/health_check.py \
             "https://truealpha-staging.truealpha.club/api/health" \
-            "$EXPECTED_RELEASE" \
+            "$STAGING_RELEASE" \
             36 \
-            --expect-data-engine-tag "$EXPECTED_RELEASE"
+            --expect-data-engine-tag "$STAGING_RELEASE"
 
       - name: Confirm the deployed release is healthy
         # json != '' belongs in the condition AND the env stays guarded: the
