@@ -45,7 +45,7 @@ export default async function AdminOverviewPage() {
     );
   }
 
-  const { runs, pointer, quotaToday } = outcome.data;
+  const { runs, pointers, dataEngine, appGitSha, quotaToday } = outcome.data;
 
   return (
     <section aria-labelledby="ops-heading" className="space-y-8">
@@ -60,16 +60,34 @@ export default async function AdminOverviewPage() {
       </div>
 
       <dl className="grid grid-cols-2 gap-3 md:grid-cols-3">
-        <div className="rounded-lg border border-border bg-card px-4 py-3">
-          <dt className="text-xs uppercase tracking-wide text-gray-500">Pointer freshness</dt>
-          <dd className="mt-1 text-lg font-semibold tabular-nums">
-            {pointer === null ? "—" : `${hoursSince(pointer.advancedAt)} ago`}
-          </dd>
-          {pointer !== null && (
+        {pointers.length === 0 && (
+          <div className="rounded-lg border border-border bg-card px-4 py-3">
+            <dt className="text-xs uppercase tracking-wide text-gray-500">Pointer freshness</dt>
+            <dd className="mt-1 text-lg font-semibold tabular-nums">—</dd>
+            <p className="mt-1 text-xs text-gray-500">no governed head on this database</p>
+          </div>
+        )}
+        {pointers.map((pointer) => (
+          <div key={pointer.universeId} className="rounded-lg border border-border bg-card px-4 py-3">
+            <dt className="text-xs uppercase tracking-wide text-gray-500">
+              Pointer · {pointer.universeId}
+            </dt>
+            <dd className="mt-1 text-lg font-semibold tabular-nums">{hoursSince(pointer.advancedAt)} ago</dd>
             <p className="mt-1 truncate text-xs text-gray-500" title={pointer.targetRunId}>
               seq {pointer.sequence} · {pointer.targetRunId}
             </p>
-          )}
+          </div>
+        ))}
+        <div className="rounded-lg border border-border bg-card px-4 py-3">
+          <dt className="text-xs uppercase tracking-wide text-gray-500">Data engine build</dt>
+          <dd className="mt-1 truncate text-lg font-semibold tabular-nums" title={dataEngine?.imageDigest}>
+            {dataEngine === null ? "unknown" : dataEngine.gitSha.slice(0, 12)}
+          </dd>
+          <p className="mt-1 truncate text-xs text-gray-500" title={dataEngine?.runId}>
+            {dataEngine === null
+              ? "no run has recorded its build yet"
+              : `newest run ${hoursSince(dataEngine.createdAt)} ago · app ${appGitSha.slice(0, 12)}`}
+          </p>
         </div>
         {quotaToday.map((entry) => (
           <div key={entry.source} className="rounded-lg border border-border bg-card px-4 py-3">

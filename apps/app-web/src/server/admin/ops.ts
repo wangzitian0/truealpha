@@ -1,8 +1,9 @@
 /**
  * #495 (surface 2b): the /admin ops overview loader — administrator-only,
  * read-only SQL through the dedicated `app_ops_reader` role (db/roles.sql):
- * run history from `dagster.runs`, pointer freshness from
- * `mart.current_pointer_head`, per-source quota burn from `raw.fetches`.
+ * run history from `dagster.runs`, pointer freshness per universe from
+ * `mart.current_pointer_head`, the data-engine build behind the newest run from
+ * `mart.data_engine_identity` (#712), per-source quota burn from `raw.fetches`.
  * Lives under `src/server/admin/` so the #493 boundary test keeps it
  * un-importable from research routes.
  *
@@ -73,9 +74,33 @@ export interface OpsRunRow {
   durationSeconds: number | null;
 }
 
+/** One governed head per universe. The page renders every row: the ops question is
+ * "did EACH pipeline advance", and a single collapsed row answered it for whichever
+ * universe happened to sort first (the canary, alphabetically) while the core stalled. */
+export interface OpsPointerRow {
+  universeId: string;
+  targetRunId: string;
+  sequence: number;
+  advancedAt: string;
+}
+
+/** #712: which data-engine build produced the newest run, from
+ * `mart.data_engine_identity`. `null` when the view has no rows (no run recorded
+ * yet) or when the database predates the view (the 2026-09-07 migration); a run
+ * recorded before the identity was stamped reads "unknown"/"unknown", not null. */
+export interface OpsDataEngineBuild {
+  gitSha: string;
+  imageDigest: string;
+  runId: string;
+  createdAt: string;
+}
+
 export interface OpsOverview {
   runs: OpsRunRow[] | "unavailable";
-  pointer: { targetRunId: string; sequence: number; advancedAt: string } | null;
+  pointers: OpsPointerRow[];
+  dataEngine: OpsDataEngineBuild | null;
+  /** The app's own build, from the deployer-set GIT_COMMIT_SHA; "unknown" when unset. */
+  appGitSha: string;
   quotaToday: { source: string; fetches: number }[];
 }
 
@@ -121,14 +146,34 @@ export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<O
         "select universe_id, target_run_id, sequence, advanced_at from mart.current_pointer_head " +
           "order by universe_id",
       );
-      const pointer =
-        pointerResult.rows.length === 0
-          ? null
-          : {
-              targetRunId: String(pointerResult.rows[0].target_run_id),
-              sequence: Number(pointerResult.rows[0].sequence),
-              advancedAt: new Date(pointerResult.rows[0].advanced_at).toISOString(),
-            };
+      const pointers: OpsPointerRow[] = pointerResult.rows.map((row) => ({
+        universeId: String(row.universe_id),
+        targetRunId: String(row.target_run_id),
+        sequence: Number(row.sequence),
+        advancedAt: new Date(row.advanced_at).toISOString(),
+      }));
+
+      let dataEngine: OpsDataEngineBuild | null = null;
+      try {
+        const identityResult = await client.query(
+          "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity " +
+            "order by created_at desc limit 1",
+        );
+        const row = identityResult.rows[0];
+        dataEngine =
+          row === undefined
+            ? null
+            : {
+                gitSha: String(row.git_sha),
+                imageDigest: String(row.image_digest),
+                runId: String(row.run_id),
+                createdAt: new Date(row.created_at).toISOString(),
+              };
+      } catch {
+        // The view arrives with the 2026-09-07 migration; a database that predates it
+        // reports the build as unknown rather than failing the whole overview.
+        dataEngine = null;
+      }
 
       const quotaResult = await client.query(
         "select source, count(*)::int as fetches from raw.fetches " +
@@ -139,7 +184,7 @@ export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<O
         fetches: Number(row.fetches),
       }));
 
-      return { runs, pointer, quotaToday };
+      return { runs, pointers, dataEngine, appGitSha: process.env.GIT_COMMIT_SHA || "unknown", quotaToday };
     });
     return { kind: "ready", data };
   } catch (error) {

@@ -214,3 +214,88 @@ def test_llm_service_health_reports_the_data_engine_vintage() -> None:
     # reports must never be able to fail it.
     assert isinstance(body["data_engine_parser"], str)
     assert body["status"] == "ok"
+
+
+def test_the_data_engine_build_is_reported_next_to_the_app(capsys: pytest.CaptureFixture[str]) -> None:
+    """#712: the gate says which data-engine build produced the newest run, in the same
+    log line a reader checks for the app's sha. Report-only for now — the two lanes are
+    still promoted separately, so a mismatch is the honest state most days."""
+    body = {
+        "status": "ok",
+        "git_sha": "abc1234",
+        "data_engine_parser": "p:v8",
+        "data_engine_git_sha": "abc1234",
+        "data_engine_image_digest": "sha256:00f7",
+    }
+    exit_code = check_health(
+        URL, expected_version="abc1234", http_get=_responses((200, json.dumps(body))), sleep=lambda _: None
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "data engine build abc1234 (sha256:00f7) produced the newest run" in out
+    assert "MISMATCH" not in out
+
+
+def test_a_data_engine_behind_the_app_is_said_out_loud(capsys: pytest.CaptureFixture[str]) -> None:
+    body = {
+        "status": "ok",
+        "git_sha": "abc1234",
+        "data_engine_parser": "p:v8",
+        "data_engine_git_sha": "0ld0000",
+        "data_engine_image_digest": "sha256:0000",
+    }
+    exit_code = check_health(
+        URL, expected_version="abc1234", http_get=_responses((200, json.dumps(body))), sleep=lambda _: None
+    )
+    assert exit_code == 0, "report-only until one release promotes all three images (#712)"
+    out = capsys.readouterr().out
+    assert "DATA ENGINE MISMATCH" in out and "0ld0000" in out and "#712" in out
+
+
+def test_a_health_body_without_an_identity_reads_unknown_not_matched(capsys: pytest.CaptureFixture[str]) -> None:
+    body = {"status": "ok", "git_sha": "abc1234", "data_engine_parser": "p:v8"}
+    exit_code = check_health(
+        URL, expected_version="abc1234", http_get=_responses((200, json.dumps(body))), sleep=lambda _: None
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "data engine build is UNKNOWN" in out
+    assert "produced the newest run" not in out
+
+
+def test_a_tag_against_a_data_engine_sha_is_named_not_comparable(capsys: pytest.CaptureFixture[str]) -> None:
+    """The app lane stamps the release tag, the data-engine lane the commit it was
+    promoted from (#712). The gate must not print a build line that reads as agreement."""
+    body = {
+        "status": "ok",
+        "git_sha": "v0.0.45",
+        "data_engine_parser": "p:v8",
+        "data_engine_git_sha": "4cf7291",
+        "data_engine_image_digest": "sha256:00f7",
+    }
+    exit_code = check_health(
+        URL, expected_version="v0.0.45", http_get=_responses((200, json.dumps(body))), sleep=lambda _: None
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "not comparable until the data engine is promoted by the same release" in out
+    assert "produced the newest run\n" not in out
+
+
+def test_a_short_and_a_full_sha_of_one_commit_agree(capsys: pytest.CaptureFixture[str]) -> None:
+    """Review on #753: the app lane may pass the 40-char sha while the data engine
+    stamped the 7-char form, or the reverse. Same commit, no MISMATCH."""
+    full = "abc1234" + "0" * 33
+    body = {
+        "status": "ok",
+        "git_sha": full,
+        "data_engine_parser": "p:v8",
+        "data_engine_git_sha": "abc1234",
+        "data_engine_image_digest": "sha256:00f7",
+    }
+    exit_code = check_health(
+        URL, expected_version=full, http_get=_responses((200, json.dumps(body))), sleep=lambda _: None
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "MISMATCH" not in out and "produced the newest run" in out

@@ -121,29 +121,53 @@ def health() -> dict[str, str]:
     # because this service already holds a mart-scoped connection, so the deploy lane can
     # read it over a surface it already calls, with no new secret and no database access
     # from the runner.
+    parser, git_sha, image_digest = _data_engine_facts()
     return {
         "status": "ok",
         "git_sha": os.environ.get("GIT_COMMIT_SHA", "unknown"),
-        "data_engine_parser": _data_engine_parser(),
+        "data_engine_parser": parser,
+        # #712: the build that produced the newest run, from mart.data_engine_identity —
+        # a deploy identity, not a parser vintage, so a stale data engine is visible.
+        "data_engine_git_sha": git_sha,
+        "data_engine_image_digest": image_digest,
     }
 
 
-def _data_engine_parser() -> str:
-    """The parser vintage behind the newest observation, or "unknown".
+def _data_engine_facts() -> tuple[str, str, str]:
+    """(parser vintage behind the newest observation, git sha, image digest of the build
+    behind the newest run), each "unknown" when unreadable.
+
+    One connection for both reads (review on #753: the endpoint is polled, and two
+    connections per poll is churn for nothing). Each read is guarded on its own, so a
+    database that predates `mart.data_engine_identity` still reports the parser.
 
     Deliberately never raises and never fails the health check: this endpoint answers
     "is the service up", and turning it into a database liveness probe would make an
     unrelated outage look like a dead app. An unreadable identity reports "unknown",
     which `tools/health_check.py` treats as un-assertable rather than as a pass.
     """
+    parser, git_sha, image_digest = "unknown", "unknown", "unknown"
     try:
         import psycopg
         from truealpha_runtime import runtime_settings
 
         with psycopg.connect(runtime_settings.database_url, connect_timeout=3) as connection:
-            row = connection.execute(
-                "select parser_version from staging.capture_normalized_observations order by recorded_at desc limit 1"
-            ).fetchone()
-        return str(row[0]) if row and row[0] else "unknown"
+            try:
+                row = connection.execute(
+                    "select parser_version from staging.capture_normalized_observations "
+                    "order by recorded_at desc limit 1"
+                ).fetchone()
+                parser = str(row[0]) if row and row[0] else "unknown"
+            except psycopg.Error:
+                connection.rollback()
+            try:
+                row = connection.execute(
+                    "select git_sha, image_digest from mart.data_engine_identity order by created_at desc limit 1"
+                ).fetchone()
+                if row is not None:
+                    git_sha, image_digest = str(row[0] or "unknown"), str(row[1] or "unknown")
+            except psycopg.Error:
+                connection.rollback()
     except Exception:  # noqa: BLE001 - health must not fail on a read it only reports
-        return "unknown"
+        pass
+    return parser, git_sha, image_digest

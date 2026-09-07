@@ -115,8 +115,56 @@ def check_health(
         # Un-assertable, not a pass. Said out loud so a health check that silently stopped
         # covering the data engine cannot look identical to one that covered it.
         print(f"health check: {url} reports no data_engine_parser — the data engine is UNVERIFIED")
+    git_sha, digest = _data_engine_identity(result.body)
+    # #712: the identity is reported and compared out loud. It does not gate yet — the app
+    # lane and the data engine are still promoted separately, so a mismatch is the honest
+    # state of most days until one release promotes all three images; hiding it was the
+    # defect. The line is what the deploy log shows a reader who asks "which data engine".
+    if git_sha == "unknown":
+        print(f"health check: {url} reports no data-engine identity — the data engine build is UNKNOWN")
+    elif (
+        expected_version
+        and identifier_kind(expected_version) == "commit sha"
+        and not _same_commit(expected_version, git_sha)
+    ):
+        print(
+            f"health check: DATA ENGINE MISMATCH — app {expected_version} but the newest run was produced by "
+            f"data-engine {git_sha} ({digest}); #712"
+        )
+    elif expected_version and identifier_kind(expected_version) != identifier_kind(git_sha):
+        # The app lane stamps the release TAG and the data-engine lane stamps the commit
+        # it was promoted from; the two are not comparable until one release promotes
+        # all three images. Said plainly instead of printing a build line that looks
+        # like agreement.
+        print(
+            f"health check: app reports {identifier_kind(expected_version)} {expected_version!r}, the data engine "
+            f"that produced the newest run reports {identifier_kind(git_sha)} {git_sha!r} ({digest}) — not "
+            f"comparable until the data engine is promoted by the same release (#712)"
+        )
+    else:
+        print(f"health check: data engine build {git_sha} ({digest}) produced the newest run")
     print(f"health check passed: {url} is healthy ({result.body})")
     return 0
+
+
+def _same_commit(expected: str, reported: str) -> bool:
+    """Either side may carry the short form of the same commit (7 vs 40 chars), so the
+    match is a two-way prefix, the same rule the SDK applies to the app's own sha."""
+    return bool(expected) and bool(reported) and (expected.startswith(reported) or reported.startswith(expected))
+
+
+def _data_engine_identity(body: str) -> tuple[str, str]:
+    """(git_sha, image_digest) the health surface reports for the data engine, or unknown."""
+    try:
+        parsed = json.loads(body)
+    except (TypeError, ValueError):
+        return ("unknown", "unknown")
+    if not isinstance(parsed, dict):
+        return ("unknown", "unknown")
+    return (
+        str(parsed.get("data_engine_git_sha") or "unknown"),
+        str(parsed.get("data_engine_image_digest") or "unknown"),
+    )
 
 
 def _data_engine_parser(body: str) -> str:
