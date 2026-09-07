@@ -42,8 +42,9 @@ class _R:
         return self.rows[0] if self.rows else None
 
 
-def _answer(value, index, reason="x", total=305):
+def _answer(value, index, reason="x", total=305, served="glm-served"):
     body = {
+        "model": served,
         "choices": [{"message": {"content": json.dumps({"value": value, "candidate_index": index, "reason": reason})}}],
         "usage": {"prompt_tokens": 244, "completion_tokens": 61, "total_tokens": total},
     }
@@ -95,13 +96,17 @@ def test_a_candidate_choice_is_recorded_with_its_token_cost_and_persisted(seated
     )
 
     assert selection.value == 17581 and selection.candidate_index == 0 and not selection.replayed
-    assert selection.extractor.startswith("model:glm-test:")
+    # The extractor names the model the provider says it answered with, not the requested
+    # alias: on 2026-09-07 every prod ask for glm-4.7 came back `"model": "glm-5.3-flash"`.
+    assert selection.served_model == "glm-served" and selection.model == "glm-test"
+    assert selection.extractor.startswith("model:glm-served:")
     assert calls == [("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions", "Bearer ", "glm-test")]
     (record,) = seated
     assert record.source == "filing-extraction-model" and record.cost == Decimal(305) and record.ok
     (row,) = conn.inserts
     assert row[0] == selection.invocation_id and row[5] == 4904 and row[6] == "000000490426000013"
     assert json.loads(row[16])["value"] == 17581 and row[15] == Decimal(305)
+    assert row[2] == "glm-test" and row[21] == "glm-served"
 
 
 def test_a_value_that_is_not_a_candidate_is_a_refusal_not_a_fact(seated):
@@ -152,6 +157,7 @@ def test_a_prior_invocation_is_replayed_without_calling_the_provider(seated):
         61,
         "c" * 64,
         "zhipu-glm-coding-plan",
+        "glm-served-earlier",
     )
     conn = _Conn(replay_row=row)
 
@@ -169,6 +175,9 @@ def test_a_prior_invocation_is_replayed_without_calling_the_provider(seated):
         transport=transport,
     )
     assert selection.replayed and selection.value == 17581 and selection.invocation_id.endswith("a" * 64)
+    assert selection.served_model == "glm-served-earlier" and selection.extractor.startswith(
+        "model:glm-served-earlier:"
+    )
     assert conn.inserts == [] and list(seated) == []
 
 

@@ -112,7 +112,7 @@ class Settings(RuntimeSettings):
     llm_base_url: str = Field(
         default="https://open.bigmodel.cn/api/coding/paas/v4", json_schema_extra={"source": "code", "group": "llm"}
     )
-    llm_model: str = Field(default="glm-4.7", json_schema_extra={"source": "code", "group": "llm"})
+    llm_model: str = Field(default="glm-5.3", json_schema_extra={"source": "code", "group": "llm"})
     llm_provider: str = Field(default="zhipu-glm-coding-plan", json_schema_extra={"source": "code", "group": "llm"})
 
 
