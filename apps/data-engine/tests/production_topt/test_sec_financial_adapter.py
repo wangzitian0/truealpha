@@ -811,7 +811,7 @@ def test_operating_branch_for_sic_maps_insurers() -> None:
     assert operating_branch_for_sic("7389") is OperatingBranch.NON_FINANCIAL
 
 
-def test_predecessor_cik_fallback_fires_only_on_an_empty_taxonomy() -> None:
+def test_predecessor_cik_fallback_fires_when_the_mapped_document_asserts_no_income() -> None:
     """#496: the mapped CIK's document exists but asserts nothing (knowable_at
     None) -> the adapter refetches through the SAME injected fetcher with the
     lineage-resolved predecessor. A payload with an income fact never falls
@@ -1040,12 +1040,17 @@ def test_predecessor_fallback_also_fires_when_the_holdco_reports_no_income_fact(
     assert outcome.raw.body == b'{"predecessor": true}'
     assert outcome.record.payload["revenue"] == "7"
 
-    # The mapped CIK reporting income never falls back.
+    # The mapped CIK reporting income never falls back: exactly one fetch, of the mapped CIK.
     calls.clear()
-    adapter = SecFinancialFactAdapter(
-        {item.work_item_id: target}, lambda cik, cutoff, branch: with_income, mapping_version="test:v1"
-    )
-    adapter.fetch(item)
+
+    def income_first(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        calls.append(cik)
+        return with_income
+
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, income_first, mapping_version="test:v1")
+    outcome = adapter.fetch(item)
+    assert calls == [2115436]
+    assert isinstance(outcome, FetchSuccess)
 
     # A predecessor without income does not replace the mapped document.
     calls.clear()

@@ -514,9 +514,7 @@ def _asserts_income(bundle: FinancialFactsBundle) -> bool:
     numerator and the price-to-sales denominator both come from here; a document without
     one leaves every published number for the issuer unavailable, which is the state the
     predecessor fallback exists to end."""
-    return bundle.knowable_at is not None and any(
-        value is not None for value in (bundle.revenue, bundle.gross_profit, bundle.pre_provision_profit)
-    )
+    return any(value is not None for value in (bundle.revenue, bundle.gross_profit, bundle.pre_provision_profit))
 
 
 class SecFinancialFactAdapter:
@@ -552,8 +550,9 @@ class SecFinancialFactAdapter:
                 # revenue or profit. The issuer's own predecessor CIK (owner-signed
                 # registry, or the capture lineage) is the same company's filing history,
                 # so its document is used whole: one raw source per observation, and the
-                # fallback disables itself the day the holdco reports income. Both
-                # payloads end up archived (the sparse one deduped from prior runs).
+                # fallback disables itself the day the holdco reports income. Only the
+                # selected document's bytes are archived with the observation: the sparse
+                # mapped-CIK payload is discarded when the predecessor replaces it.
                 fallback = self._fetcher(target.predecessor_cik, target.cutoff, target.operating_branch)
                 if fallback is not None and _asserts_income(fallback):
                     bundle = fallback
