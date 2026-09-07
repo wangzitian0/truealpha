@@ -257,7 +257,12 @@ INVARIANTS: tuple[Invariant, ...] = (
                 -- every snapshot ever frozen (review on #750)
                 select s.run_id, sel.observation_id
                 from mart.current_pointer_head head
-                join staging.topt_core_snapshots s on s.run_id = head.target_run_id
+                -- the head is keyed by universe (check_factor_contract); the snapshot must be
+                -- the one frozen for THAT universe, not merely the run the pointer names
+                join staging.topt_core_snapshots s
+                  on s.run_id = head.target_run_id
+                 and s.universe_id = head.universe_id
+                 and s.universe_version = head.universe_version
                 cross join lateral jsonb_array_elements(s.payload->'members') member
                 cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
             ), contested as (
@@ -279,7 +284,12 @@ INVARIANTS: tuple[Invariant, ...] = (
             with selected as (
                 select sel.observation_id
                 from mart.current_pointer_head head
-                join staging.topt_core_snapshots s on s.run_id = head.target_run_id
+                -- the head is keyed by universe (check_factor_contract); the snapshot must be
+                -- the one frozen for THAT universe, not merely the run the pointer names
+                join staging.topt_core_snapshots s
+                  on s.run_id = head.target_run_id
+                 and s.universe_id = head.universe_id
+                 and s.universe_version = head.universe_version
                 cross join lateral jsonb_array_elements(s.payload->'members') member
                 cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
             ), contested as (
