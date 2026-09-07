@@ -74,12 +74,19 @@ GOVERNED_HEAD = f"""
       and universe_id like '{SERVED_UNIVERSE_PREFIX}%'
     order by advanced_at desc limit 1
 """
-# Mirrors strategy-run-repository.ts: latest per strategy_key, that ordering.
+# Mirrors strategy-run-repository.ts (#575): the run the governed capture head resolves
+# to first, recency after — the same ORDER BY text, which test_output_invariants compares
+# to the consumer's. Wrapped so the subquery stays single-column.
 DASHBOARD_STRATEGY = "large_model_value_v0"
 LATEST_STRATEGY_RUN = f"""
-    select strategy_run_id from mart.strategy_runs
-    where strategy_key = '{DASHBOARD_STRATEGY}'
-    order by executed_at desc, created_at desc, strategy_run_id desc limit 1
+    select strategy_run_id from (
+        select r.strategy_run_id, r.executed_at, r.created_at,
+               exists (select 1 from mart.governed_strategy_run g
+                       where g.strategy_run_id = r.strategy_run_id) as is_governed
+        from mart.strategy_runs r
+        where r.strategy_key = '{DASHBOARD_STRATEGY}'
+        order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc limit 1
+    ) served
 """
 
 
