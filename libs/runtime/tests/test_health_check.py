@@ -299,3 +299,135 @@ def test_a_short_and_a_full_sha_of_one_commit_agree(capsys: pytest.CaptureFixtur
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "MISMATCH" not in out and "produced the newest run" in out
+
+
+def test_the_release_digest_gate_waits_for_the_promoted_build_to_produce_a_run(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#712: with an expected data-engine digest, the identity is a verdict. The first
+    polls still show the previous build (its run is the newest until the boot canary
+    lands); the gate waits, then passes on the first body that names the release's digest."""
+    old = {
+        "status": "ok",
+        "git_sha": "v0.0.47",
+        "data_engine_parser": "p:v8",
+        "data_engine_git_sha": "v0.0.46",
+        "data_engine_image_digest": "sha256:" + "0" * 64,
+    }
+    new = dict(old, data_engine_git_sha="v0.0.47", data_engine_image_digest="sha256:" + "1" * 64)
+    responses = _responses((200, json.dumps(old)), (200, json.dumps(old)), (200, json.dumps(new)))
+    naps: list[float] = []
+    exit_code = check_health(
+        URL,
+        expected_version="v0.0.47",
+        max_attempts=5,
+        http_get=responses,
+        sleep=naps.append,
+        expected_data_engine_digest="sha256:" + "1" * 64,
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "matches the release (attempt 3)" in out
+    assert len(naps) == 2
+
+
+def test_the_release_digest_gate_is_red_when_the_build_never_shows(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    old = {
+        "status": "ok",
+        "git_sha": "v0.0.47",
+        "data_engine_parser": "p:v8",
+        "data_engine_git_sha": "v0.0.46",
+        "data_engine_image_digest": "sha256:" + "0" * 64,
+    }
+    responses = _responses(*([(200, json.dumps(old))] * 4))
+    exit_code = check_health(
+        URL,
+        expected_version="v0.0.47",
+        max_attempts=3,
+        http_get=responses,
+        sleep=lambda _: None,
+        expected_data_engine_digest="sha256:" + "1" * 64,
+    )
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "DATA ENGINE MISMATCH" in err and "after 3 attempts" in err and "#712" in err
+
+
+def test_without_an_expected_digest_the_identity_stays_a_report(capsys: pytest.CaptureFixture[str]) -> None:
+    body = {
+        "status": "ok",
+        "git_sha": "v0.0.47",
+        "data_engine_parser": "p:v8",
+        "data_engine_git_sha": "v0.0.46",
+        "data_engine_image_digest": "sha256:" + "0" * 64,
+    }
+    assert (
+        check_health(
+            URL, expected_version="v0.0.47", http_get=_responses((200, json.dumps(body))), sleep=lambda _: None
+        )
+        == 0
+    )
+    assert "MISMATCH" not in capsys.readouterr().err
+
+
+def test_the_tag_resolver_reads_the_registry_digest_and_refuses_junk(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import urllib.request
+
+    resolve = load_tool("health_check").resolve_data_engine_digest
+    digest = "sha256:" + "a" * 64
+
+    class _Response(io.BytesIO):
+        def __init__(self, payload: bytes, headers: dict[str, str]):
+            super().__init__(payload)
+            self.headers = headers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            self.close()
+
+    seen: list[str] = []
+
+    def fake_urlopen(request, timeout=0):
+        url = request if isinstance(request, str) else request.full_url
+        seen.append(url)
+        if "ghcr.io/token" in url:
+            return _Response(b'{"token": "anon"}', {})
+        assert request.get_method() == "HEAD"
+        assert request.get_header("Authorization") == "Bearer anon"
+        return _Response(b"", {"Docker-Content-Digest": digest})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert resolve("v0.0.47") == digest
+    assert seen[1].endswith("/v2/wangzitian0/truealpha-data-engine/manifests/v0.0.47")
+
+    def junk_urlopen(request, timeout=0):
+        url = request if isinstance(request, str) else request.full_url
+        if "ghcr.io/token" in url:
+            return _Response(b'{"token": "anon"}', {})
+        return _Response(b"", {"Docker-Content-Digest": "sha256:nope"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", junk_urlopen)
+    with pytest.raises(RuntimeError, match="no usable digest"):
+        resolve("v0.0.47")
+
+
+def test_the_cli_turns_a_tag_into_a_digest_expectation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tool = load_tool("health_check")
+    monkeypatch.setattr(tool, "resolve_data_engine_digest", lambda tag: "sha256:" + "b" * 64)
+    seen: dict[str, object] = {}
+
+    def fake_check(url, **kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(tool, "check_health", fake_check)
+    assert tool.main([URL, "v0.0.47", "12", "--expect-data-engine-tag", "v0.0.47"]) == 0
+    assert seen["expected_data_engine_digest"] == "sha256:" + "b" * 64 and seen["max_attempts"] == 12
+    assert "names data-engine digest" in capsys.readouterr().out

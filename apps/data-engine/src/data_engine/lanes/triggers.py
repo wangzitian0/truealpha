@@ -1,13 +1,20 @@
-"""The DB-mediated manual trigger (#495): a sensor over the capture lane's jobs
-(#731 split of `data_engine.dagster_defs`; behaviour unchanged)."""
+"""Sensors that launch the capture lane's jobs on request rather than on schedule.
 
-from datetime import UTC
+Two requesters: the DB-mediated manual trigger (#495; a `staging.pipeline_trigger_requests`
+row from the admin page or an operator) and, since 2026-09-07, a promoted build itself
+(#712; `boot_canary_sensor` asks for one canary tick per image digest so the release gate
+can read the build identity that run stamps). Split from `data_engine.dagster_defs` in
+#731.
+"""
+
+import os
+from datetime import UTC, datetime
 
 import dagster as dg
 import psycopg
 
 from data_engine.config import settings
-from data_engine.lanes.capture import TICK_BY_JOB, TOPT_LIVE_JOB_NAME, ToptLiveTickConfig
+from data_engine.lanes.capture import CANARY_JOB_NAME, TICK_BY_JOB, TOPT_LIVE_JOB_NAME, ToptLiveTickConfig
 from data_engine.lanes.capture import defs as capture_defs
 
 
@@ -55,4 +62,40 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
         connection.commit()
 
 
-defs = dg.Definitions(sensors=[pipeline_trigger_sensor])
+@dg.sensor(
+    jobs=[job for job in (capture_defs.jobs or []) if job.name == CANARY_JOB_NAME],
+    minimum_interval_seconds=30,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+)
+def boot_canary_sensor(context: dg.SensorEvaluationContext):
+    """#712: a promoted build proves itself with one canary tick, unasked.
+
+    The run plan stamps the build that produced it (`mart.data_engine_identity`),
+    llm-service `/health` reports that build, and the release gate compares it with
+    the tag's registry digest. Until this sensor the run came from an operator
+    (`trigger_canary.sh`) or from the next scheduled tick hours later, so the gate could
+    only report. Now: the first evaluation on a build (the compose injects
+    `TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST`) launches the canary with `run_key =
+    boot:<digest>`. Dagster dedupes run keys per sensor across ticks and restarts, and
+    the cursor remembers the digest, so three containers and any restart produce one
+    run per build. Local and CI carry no digest and skip.
+    """
+    digest = (os.environ.get("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST") or "").strip()
+    if not digest.startswith("sha256:"):
+        yield dg.SkipReason("no data-engine image digest in the environment (local/CI)")
+        return
+    if context.cursor == digest:
+        yield dg.SkipReason(f"boot canary already requested for {digest[:19]}…")
+        return
+    tick = TICK_BY_JOB[CANARY_JOB_NAME]
+    executed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+    context.update_cursor(digest)
+    yield dg.RunRequest(
+        run_key=f"boot:{digest}",
+        job_name=tick.job_name,
+        run_config=dg.RunConfig(ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at)}),
+        tags={"truealpha/boot_canary": digest, "truealpha/build": os.environ.get("GIT_COMMIT_SHA", "unknown")},
+    )
+
+
+defs = dg.Definitions(sensors=[pipeline_trigger_sensor, boot_canary_sensor])
