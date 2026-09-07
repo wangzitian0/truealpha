@@ -33,6 +33,9 @@ jobs:
       - run: uv run ruff format --check apps libs
       - run: uv run mypy
       - run: uv run python libs/contracts/conformance/export_issue58.py --check
+      # #759 environment manifests: fresh against the settings models and past the
+      # infra2-sdk offline gate. No infrastructure involved.
+      - run: uv run python tools/env_manifest.py --check
 
   test-core:
     runs-on: ubuntu-latest
