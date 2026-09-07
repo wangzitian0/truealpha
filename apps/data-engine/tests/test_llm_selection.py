@@ -26,6 +26,7 @@ class _Conn:
     def execute(self, sql, params=()):
         text = " ".join(sql.split())
         if text.startswith("select invocation_id, decision"):
+            assert "status_code < 400" in text and "request_sha256 = %s" in text
             return _R([self.replay_row] if self.replay_row else [])
         if text.startswith("insert into staging.model_invocations"):
             self.inserts.append(params)
@@ -197,10 +198,11 @@ def test_probe_mode_neither_replays_nor_records(seated):
     assert selection.value == 17581 and not selection.replayed and conn.inserts == []
 
 
-def test_a_vendor_error_is_a_failed_ledger_row_and_raises(seated):
+def test_a_vendor_error_is_a_failed_ledger_row_a_recorded_refusal_and_raises(seated):
+    conn = _Conn()
     with pytest.raises(RuntimeError, match="HTTP 429"):
         select_headcount(
-            _Conn(),
+            conn,
             cik=1,
             accession="a",
             form="10-K",
@@ -211,3 +213,38 @@ def test_a_vendor_error_is_a_failed_ledger_row_and_raises(seated):
         )
     (record,) = seated
     assert record.ok is False and record.status_code == 429
+    (row,) = conn.inserts  # the error is an invocation that happened
+    assert row[12] == 429 and json.loads(row[16])["value"] is None and "HTTP 429" in json.loads(row[16])["reason"]
+
+
+def test_replay_is_keyed_on_the_exact_request_so_a_changed_candidate_set_is_asked_afresh(seated):
+    """Review on #754: same filing, different candidates (or schema/decoding) = a new ask."""
+    asked = []
+    conn = _Conn()  # no stored row matches any request digest
+
+    def transport(url, headers, body):
+        asked.append(json.loads(body)["messages"][1]["content"])
+        return 200, _answer(17581, 0)
+
+    select_headcount(
+        conn,
+        cik=4904,
+        accession="acc",
+        form="10-K",
+        issuer_label="AEP",
+        candidates=AEP,
+        caller="t",
+        transport=transport,
+    )
+    select_headcount(
+        conn,
+        cik=4904,
+        accession="acc",
+        form="10-K",
+        issuer_label="AEP",
+        candidates=AEP[:1],
+        caller="t",
+        transport=transport,
+    )
+    assert len(asked) == 2 and asked[0] != asked[1]
+    assert conn.inserts[0][10] != conn.inserts[1][10]  # request_sha256 differs

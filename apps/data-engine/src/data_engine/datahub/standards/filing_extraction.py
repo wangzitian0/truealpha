@@ -265,7 +265,8 @@ def extract_headcount(
     if status == "needs_model_selection" and select_with_model and llm.is_configured():
         # Precision is the model's half (#70 scope 2): it chooses among the enumerated
         # company-wide statements, or declines. A declined or non-candidate answer stays
-        # an honest refusal on the cell; the invocation is recorded either way.
+        # an honest refusal on the cell. In write mode the invocation is recorded (answer
+        # or refusal); in probe mode only the ledger row is — probe writes nothing else.
         totals = [c for c in found if not c.partial]
         selection = llm.select_headcount(
             connection if write else None,

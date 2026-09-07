@@ -5,8 +5,10 @@
 --   * a changed instruction, schema or model is a NEW invocation (a new vintage), and
 --   * a published value can be traced from its fact row (`evidence_ref` names the
 --     invocation id) to the exact answer the model gave.
--- The response body is kept as text (jsonb where it parses) because the vendor's answer is
--- the evidence; the request is kept because the instructions are part of the identity.
+-- The request and the response are kept as jsonb because the vendor's answer is the
+-- evidence and the instructions are part of the identity; a non-JSON vendor body (an HTML
+-- error page) leaves `response` null and survives through `response_sha256` plus the
+-- ledger's error text. Vendor errors are recorded (status_code >= 400) and never replayed.
 create table if not exists staging.model_invocations (
     id                 bigint generated always as identity primary key,
     invocation_id      text not null unique

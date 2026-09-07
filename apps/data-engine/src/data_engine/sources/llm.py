@@ -119,15 +119,20 @@ def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[
     return int(status or 0), response
 
 
-def _replay(connection: Any, *, cik: int, accession: str, model: str) -> ModelSelection | None:
+def _replay(connection: Any, *, cik: int, accession: str, model: str, request_sha256: str) -> ModelSelection | None:
+    """An identical prior ask — same subject, filing, instructions, candidates, decoding
+    settings and model, i.e. the same request digest — that the provider answered (status
+    < 400). A changed candidate set or schema is a different request and is asked afresh;
+    a vendor error is recorded but never replayed as an answer (review on #754)."""
     row = connection.execute(
         """
         select invocation_id, decision, response_sha256, prompt_tokens, completion_tokens, request_sha256, provider
         from staging.model_invocations
-        where subject_cik = %s and accession = %s and prompt_sha256 = %s and model = %s
+        where subject_cik = %s and accession = %s and request_sha256 = %s and model = %s
+          and status_code is not null and status_code < 400
         order by id desc limit 1
         """,
-        (cik, accession, PROMPT_SHA256, model),
+        (cik, accession, request_sha256, model),
     ).fetchone()
     if row is None:
         return None
@@ -164,38 +169,47 @@ def select_headcount(
 ) -> ModelSelection:
     """Ask the seated model to choose among enumerated candidates; record the invocation.
 
-    `persist=False` (probe mode) neither replays nor records — it only asks. With a
-    connection and `persist=True`, an identical prior invocation is replayed instead of
-    re-asked (§9: replay never silently calls the model again).
+    `persist=False` (probe mode) neither replays nor records an invocation — it only asks,
+    and the call still lands in the ledger. With a connection and `persist=True`, every ask
+    is recorded (answers and vendor errors alike) and an identical prior ANSWERED ask is
+    replayed instead of re-asked (§9: replay never silently calls the model again).
     """
     if not is_configured():
         raise ModelNotConfigured("LLM_API_KEY is not set; no provider seated (#70 scope 1)")
     model = settings.llm_model
-    if persist and connection is not None:
-        replayed = _replay(connection, cik=cik, accession=accession, model=model)
-        if replayed is not None:
-            return replayed
-
     request_body = build_request(issuer_label, form, candidates, model=model)
     request_bytes = json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
     request_sha256 = hashlib.sha256(request_bytes).hexdigest()
+    if persist and connection is not None:
+        replayed = _replay(connection, cik=cik, accession=accession, model=model, request_sha256=request_sha256)
+        if replayed is not None:
+            return replayed
+
     url = settings.llm_base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"}
     started_at = now()
+    usage: dict[str, Any] = {}
+    payload: dict[str, Any] = {}
     with record_call(SOURCE, ENDPOINT, caller=caller, request_uri=url, cost=0) as call:
         status, body = (transport or _gateway_transport)(url, headers, request_bytes)
         call.observe(status_code=status, body=body)
         if status >= 400:
             call.fail(f"HTTP {status}: {body[:200]!r}")
-            raise RuntimeError(f"{SOURCE}: HTTP {status}: {body[:200]!r}")
-        payload = json.loads(body.decode())
-        usage = payload.get("usage") or {}
-        prompt_tokens = usage.get("prompt_tokens")
-        completion_tokens = usage.get("completion_tokens")
-        call.cost = Decimal(int(usage.get("total_tokens") or 0))
+        else:
+            payload = json.loads(body.decode())
+            usage = payload.get("usage") or {}
+            call.cost = Decimal(int(usage.get("total_tokens") or 0))
     completed_at = now()
-    content = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    decision = _parse_decision(content, candidates)
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    decision: dict[str, Any]
+    if status >= 400:
+        # A vendor error is still an invocation that happened: recorded with its status and
+        # body as a refusal, excluded from replay so the next run asks again.
+        decision = {"value": None, "candidate_index": None, "reason": f"HTTP {status}: {body[:200]!r}"}
+    else:
+        content = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        decision = _parse_decision(content, candidates)
     response_sha256 = hashlib.sha256(body).hexdigest()
     invocation_id = "model-invocation:" + canonical_sha256(
         {
@@ -250,12 +264,23 @@ def select_headcount(
                 Decimal(int(usage.get("total_tokens") or 0)),
                 json.dumps(decision, sort_keys=True),
                 json.dumps(request_body, sort_keys=True, ensure_ascii=False),
-                body.decode(errors="replace"),
+                _jsonb_or_null(body),
                 started_at,
                 completed_at,
             ),
         )
+    if status >= 400:
+        raise RuntimeError(f"{SOURCE}: HTTP {status}: {body[:200]!r}")
     return selection
+
+
+def _jsonb_or_null(body: bytes) -> str | None:
+    """The response column is jsonb: a non-JSON vendor body (an HTML error page) is kept
+    only through its digest and the ledger's error text, not forced into the column."""
+    try:
+        return json.dumps(json.loads(body.decode()), ensure_ascii=False)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
 
 
 def _parse_decision(content: str, candidates: Sequence[Candidate]) -> dict[str, Any]:
