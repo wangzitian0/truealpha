@@ -1,22 +1,16 @@
-from typing import Literal
-
 from truealpha_runtime import RuntimeSettings
 
 
 class Settings(RuntimeSettings):
     """Runtime settings layered on the shared runtime contract.
 
-    `strategy_run_backend` defaults to `mart` -- the real
-    `mart.strategy_runs`/`strategy_decisions` read (#362, retiring the
-    checked-in golden fixture as the default consumer path). A real writer now
-    populates the mart (the #414 replay writer and the #417 materialization
-    asset), so the MCP `strategy_run` tool reads captured evidence, returning an
-    honest `StrategyRunUnavailable(reason="no_runs_recorded")` only when the mart
-    has genuinely not been materialized yet. `fixture` remains available for
-    tests and offline previews, but is no longer the default.
+    There is no fixture backend to select (#434 exit criterion 3, 2026-09-07): the MCP
+    tools read the real `mart` and nothing else. The checked-in golden fixture lives in
+    tests only (`truealpha_contracts.strategy_run_fixture`, injected through
+    `build_mcp_server(repository=...)`), never behind a runtime flag a deployed process
+    could flip. CLAUDE.md: fixture data lives in tests only and is never reachable from a
+    deployed route.
     """
-
-    strategy_run_backend: Literal["fixture", "mart"] = "mart"
 
     # MCP streamable-HTTP transport security (FastMCP DNS-rebinding protection).
     # This MCP surface is service-identity only -- there is no browser session or
