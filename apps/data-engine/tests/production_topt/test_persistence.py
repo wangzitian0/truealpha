@@ -1014,3 +1014,27 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
     # Any newer run — the fake one, or a stale row another test left on a shared database
     # — is what recency alone would have served. The governed rule above ignored them all.
     assert recency_only != governed_run_id, "the red case: recency alone would serve an unresolved run"
+
+
+def test_the_run_plan_records_which_data_engine_build_produced_it(connection, monkeypatch) -> None:
+    """#712: the compose injects GIT_COMMIT_SHA and TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST into
+    every data-engine process; the run plan now carries them and
+    `mart.data_engine_identity` projects them for /health and /admin. Read back through the
+    view, which is what the consumers read, not through the payload column."""
+    monkeypatch.setenv("GIT_COMMIT_SHA", "4cf7291deadbeef")
+    monkeypatch.setenv("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST", "sha256:00f7")
+    stamped = plan_and_persist(connection, cutoff=CUTOFF, version="test-identity-stamped")
+    row = connection.execute(
+        "select git_sha, image_digest from mart.data_engine_identity where run_id = %s", (stamped.run_id,)
+    ).fetchone()
+    assert row == ("4cf7291deadbeef", "sha256:00f7")
+
+    # A process without the env (local, a CI job that forgot to pass it) is recorded as
+    # unknown, never as a stale value carried from somewhere else.
+    monkeypatch.delenv("GIT_COMMIT_SHA")
+    monkeypatch.delenv("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST")
+    bare = plan_and_persist(connection, cutoff=CUTOFF + timedelta(minutes=1), version="test-identity-bare")
+    row = connection.execute(
+        "select git_sha, image_digest from mart.data_engine_identity where run_id = %s", (bare.run_id,)
+    ).fetchone()
+    assert row == ("unknown", "unknown")

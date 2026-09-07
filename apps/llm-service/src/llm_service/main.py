@@ -121,11 +121,34 @@ def health() -> dict[str, str]:
     # because this service already holds a mart-scoped connection, so the deploy lane can
     # read it over a surface it already calls, with no new secret and no database access
     # from the runner.
+    identity = _data_engine_identity()
     return {
         "status": "ok",
         "git_sha": os.environ.get("GIT_COMMIT_SHA", "unknown"),
         "data_engine_parser": _data_engine_parser(),
+        # #712: the build that produced the newest run, from mart.data_engine_identity —
+        # a deploy identity, not a parser vintage, so a stale data engine is visible.
+        "data_engine_git_sha": identity[0],
+        "data_engine_image_digest": identity[1],
     }
+
+
+def _data_engine_identity() -> tuple[str, str]:
+    """(git_sha, image_digest) of the data-engine build behind the newest run, or
+    ("unknown", "unknown"). Same discipline as _data_engine_parser: never raises."""
+    try:
+        import psycopg
+        from truealpha_runtime import runtime_settings
+
+        with psycopg.connect(runtime_settings.database_url, connect_timeout=3) as connection:
+            row = connection.execute(
+                "select git_sha, image_digest from mart.data_engine_identity order by created_at desc limit 1"
+            ).fetchone()
+        if row is None:
+            return ("unknown", "unknown")
+        return (str(row[0] or "unknown"), str(row[1] or "unknown"))
+    except Exception:  # noqa: BLE001 - health must not fail on a read it only reports
+        return ("unknown", "unknown")
 
 
 def _data_engine_parser() -> str:

@@ -49,8 +49,17 @@ function assert(condition: unknown, message: string): asserts condition {
         };
       }
       if (sql.includes("current_pointer_head")) {
+        // Two universes, canary first as Postgres orders them: the loader must keep both.
         return {
-          rows: [{ target_run_id: "capture-run:e".padEnd(20, "e"), sequence: 7, advanced_at: "2026-07-27T22:19:00Z" }],
+          rows: [
+            { universe_id: "canary", target_run_id: "capture-run:c".padEnd(20, "c"), sequence: 3, advanced_at: "2026-07-20T22:19:00Z" },
+            { universe_id: "topt-core", target_run_id: "capture-run:e".padEnd(20, "e"), sequence: 7, advanced_at: "2026-07-27T22:19:00Z" },
+          ],
+        };
+      }
+      if (sql.includes("data_engine_identity")) {
+        return {
+          rows: [{ run_id: "capture-run:e".padEnd(20, "e"), git_sha: "4cf7291deadbeef", image_digest: "sha256:00f7", created_at: "2026-07-27T22:15:03Z" }],
         };
       }
       if (sql.includes("raw.fetches")) {
@@ -64,7 +73,12 @@ function assert(condition: unknown, message: string): asserts condition {
   assert(outcome.kind === "ready", `expected ready, got ${outcome.kind}`);
   assert(queries[0] === "set role app_ops_reader", "the ops role must be assumed first");
   assert(outcome.data.runs !== "unavailable" && outcome.data.runs[0].durationSeconds === 252, "duration = end - start");
-  assert(outcome.data.pointer !== null && outcome.data.pointer.sequence === 7, "pointer shape");
+  assert(outcome.data.pointers.length === 2, "one pointer row per universe, none collapsed");
+  assert(
+    outcome.data.pointers[1].universeId === "topt-core" && outcome.data.pointers[1].sequence === 7,
+    "the core universe survives next to the canary",
+  );
+  assert(outcome.data.dataEngine !== null && outcome.data.dataEngine.gitSha === "4cf7291deadbeef", "data-engine build shape");
   assert(outcome.data.quotaToday[0].source === "twelve-data" && outcome.data.quotaToday[0].fetches === 21, "quota shape");
 }
 
@@ -74,6 +88,7 @@ function assert(condition: unknown, message: string): asserts condition {
     query: async (sql: string) => {
       if (sql.includes("dagster.runs")) throw new Error('relation "dagster.runs" does not exist');
       if (sql.includes("current_pointer_head")) return { rows: [] };
+      if (sql.includes("data_engine_identity")) throw new Error('relation "mart.data_engine_identity" does not exist');
       if (sql.includes("raw.fetches")) return { rows: [] };
       return { rows: [] };
     },
@@ -81,7 +96,8 @@ function assert(condition: unknown, message: string): asserts condition {
   const outcome = await loadOpsOverview({ principalKind: "administrator" });
   assert(outcome.kind === "ready", "a missing dagster schema must not fail the page");
   assert(outcome.data.runs === "unavailable", "runs must degrade to unavailable, not an empty lie");
-  assert(outcome.data.pointer === null, "no pointer row -> null");
+  assert(outcome.data.pointers.length === 0, "no pointer row -> no cards, not a fabricated one");
+  assert(outcome.data.dataEngine === null, "a database without the identity view reports the build as unknown");
 }
 
 __setTestOpsClient(null);

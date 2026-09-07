@@ -37,6 +37,7 @@ re-capturing; recovery is the next tick (or an explicit new `executed_at`), not 
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -281,7 +282,17 @@ def plan_and_persist(
         "values (%s, 'release_manifest', %s, %s) on conflict (contract_id) do nothing",
         (release_manifest_id, release_sha256, psycopg.types.json.Jsonb(_RELEASE_PAYLOAD)),
     )
-    run_plan = {"run_id": run.run_id, "release_manifest_id": release_manifest_id}
+    # The run records which data-engine build produced it (#712): the compose injects the
+    # image digest and the git sha into every data-engine process, and until now nothing
+    # read them. `mart.data_engine_identity` projects this for llm-service's /health and
+    # the admin page, so "which data engine is running" is a fact the UI can show and the
+    # deploy lane can compare, instead of a parser vintage that happened to match.
+    run_plan = {
+        "run_id": run.run_id,
+        "release_manifest_id": release_manifest_id,
+        "data_engine_git_sha": os.environ.get("GIT_COMMIT_SHA") or "unknown",
+        "data_engine_image_digest": os.environ.get("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST") or "unknown",
+    }
     connection.execute(
         "insert into raw.production_topt_run_plans (run_id, release_manifest_id, content_sha256, payload) "
         "values (%s, %s, %s, %s) on conflict (run_id) do nothing",
