@@ -201,24 +201,6 @@
       "ci": "forbidden"
     },
     {
-      "field": "strategy_run_backend",
-      "env": "STRATEGY_RUN_BACKEND",
-      "aliases": [],
-      "required": false,
-      "injected": false,
-      "has_default": true,
-      "sensitive": false,
-      "group": "Application",
-      "description": "",
-      "source": "code",
-      "empty_ok": false,
-      "scope": "env",
-      "provided_by": "",
-      "composed_from": "",
-      "mirror_to_1password": false,
-      "ci": "forbidden"
-    },
-    {
       "field": "mcp_dns_rebinding_protection",
       "env": "MCP_DNS_REBINDING_PROTECTION",
       "aliases": [],
