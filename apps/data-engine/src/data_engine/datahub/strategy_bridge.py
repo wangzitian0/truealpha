@@ -32,15 +32,19 @@ from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION a
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import write_replay
 
-# Every registered metric except `price` surfaces here as a scalar financial-fact input
-# key, via the registry's own spelling of it (init.md rule 22, #770 finding 2) -- adding
-# metric N+1 to `truealpha_contracts.metrics.METRICS` needs no edit here. `price` is
-# excluded because it never travels through the financial-fact payload this loop reads:
-# it has its own bucket keyed by `close` below, seeded as `last_close` for the strategy
-# vocabulary. A metric with no field on `FinancialFactPayload` yet (`cost_of_revenue`,
-# `operating_income`, `eps_diluted`) simply reads back `None` from `payload.get(...)` and
-# is skipped, same as any other missing field -- registering it here needs a payload
-# field, not a change to this tuple.
+# Every registered metric except `price` surfaces here as the scalar half of its
+# financial-fact input -- one row with `fiscal_period` NULL, via the registry's own
+# spelling of the metric (init.md rule 22, #770 finding 2) -- adding metric N+1 to
+# `truealpha_contracts.metrics.METRICS` needs no edit here. A PERIODIC metric such as
+# `net_income` still belongs in this tuple too: this is what lands its latest value as a
+# point-in-time scalar (mirroring pre-0043 behavior), while `_STRATEGY_PERIODIC_KEYS`
+# below separately lands its whole annual series. `price` is excluded because it never
+# travels through the financial-fact payload this loop reads: it has its own bucket
+# keyed by `close` below, seeded as `last_close` for the strategy vocabulary. A metric
+# with no field on `FinancialFactPayload` yet (`cost_of_revenue`, `operating_income`,
+# `eps_diluted`) simply reads back `None` from `payload.get(...)` and is skipped, same as
+# any other missing field -- registering it here needs a payload field, not a change to
+# this tuple.
 _STRATEGY_FINANCIAL_KEYS = tuple(sorted(input_key_for_metric(name) for name in METRICS if name != "price"))
 
 # Which metrics are period-shaped comes from the registry, never from a list here:

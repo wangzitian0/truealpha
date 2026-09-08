@@ -37,12 +37,12 @@ def connection():
         active.close()
 
 
-def test_a_metric_never_enumerated_in_0032_lands_with_no_migration(connection) -> None:
-    """The direct proof of #770's acceptance criterion: `net_income` was added to the
-    transport (#284, migration 0043) after 0032's CHECK was written, and was never added
-    to that CHECK's enumeration -- only usable today because the CHECK behind it is gone.
-    A synthetic key never enumerated by 0032 EITHER must insert exactly as cleanly, with
-    no migration accompanying this test."""
+def test_a_never_enumerated_metric_lands_with_no_migration(connection) -> None:
+    """The direct proof of #770's acceptance criterion. Before this PR, landing a new
+    metric meant widening the enumerated CHECK in a migration -- 0032 enumerated the
+    original six, and 0039 already had to add `net_income`/`earnings_cagr_3y` to it the
+    same way. A synthetic key that has never been enumerated by ANY migration must insert
+    exactly as cleanly as those, with no migration accompanying this test."""
     cutoff = datetime(2026, 1, 1, tzinfo=UTC)
     connection.execute(
         """
