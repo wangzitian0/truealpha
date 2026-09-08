@@ -1,9 +1,9 @@
 # A3 — Source governance: corroboration classes, admission, and expansion order
 
-Status: Accepted for Decisions 1-2 (corroboration classes and the admission checklist are
-how sources have been added since 2026-08-17; codifies #579). **Decision 3's expansion
-order is a product-sequencing call reserved to the owner** and stays frozen until #530's
-vintage plane is deployed and proven. Header corrected 2026-09-08.
+Status: Accepted. Decisions 1-2 (corroboration classes, admission checklist) are how
+sources have been added since 2026-08-17 and codify #579; Decision 3's expansion order was
+approved by the owner on 2026-09-08 (N-PORT holdings before analyst forecasts) and remains
+gated on #530's vintage plane being deployed and proven. Header corrected 2026-09-08.
 Date: 2026-08-17
 
 ## Context
@@ -48,12 +48,19 @@ contain its deployed writer, or it does not merge (#527/#532/#576 measured the a
 
 ## Decision 3 — expansion order is by corroboration added, not data added
 
-Frozen until #530's vintage plane is deployed and proven on a scheduled tick. Then:
+Approved by the owner 2026-09-08. Gated on #530's vintage plane being deployed and proven
+on a scheduled tick, then:
 
 1. **#63 N-PORT holdings first** — independent share counts attack the worst measured lie
    class (a 2010 share count served as fresh, ranking the #1 position);
 2. #62 analyst forecasts last — a new class-C-at-best plane that adds no corroboration to
    anything existing.
+
+   Consequence recorded 2026-09-08: milestone #773's deliverable 7 (module 4, analyst track
+   record) rides on #62 and therefore sorts after the #63-backed work inside that milestone.
+   The ordering is the corroboration rule, not a scheduling preference: an ETF holdings plane
+   gives an independent share count that falsifies the class that produced #529's 2010 count,
+   while a forecast plane has nothing to check it against.
 
 Correctness before coverage, coverage before scale; width is a reward, not a starting point.
 
