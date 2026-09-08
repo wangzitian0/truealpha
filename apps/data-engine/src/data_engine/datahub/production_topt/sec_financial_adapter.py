@@ -124,6 +124,11 @@ class FinancialFactsBundle:
     # `_ANNUAL_MINIMUM_DAYS` duration floor, so what travels is annual periods that were
     # knowable at the cutoff -- the factor never re-selects a vintage (init.md rule 3).
     net_income_by_period: Mapping[date, Decimal] = field(default_factory=dict)
+    # Per input, the filing that asserted it — period end, filed date, accession, form,
+    # fiscal year/period (#530 item 4). Keys are the payload's input names; a missing key
+    # means the input resolved to nothing. `net_income_periods` maps each annual period
+    # end (ISO) to its vintage so PEG's series is evidenced per period, not per bundle.
+    vintages: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -187,6 +192,13 @@ class _Datum:
     value: Decimal
     filed: date
     period_end: date
+    # The filing that asserted this figure (company-facts `accn`/`form`/`fy`/`fp`): the
+    # vintage #530 item 4 wants on the row, so `source_evidence_status` (#747) can name
+    # the document instead of inferring it from a date. None only for synthetic fixtures.
+    accession: str | None = None
+    form: str | None = None
+    fy: int | None = None
+    fp: str | None = None
 
 
 def annual_values_by_period_end(
@@ -228,8 +240,22 @@ def annual_values_by_period_end(
             continue
         existing = values.get(end)
         if existing is None or filed > existing.filed:
-            values[end] = _Datum(value=value, filed=filed, period_end=end)
+            fy_raw = entry.get("fy")
+            values[end] = _Datum(
+                value=value,
+                filed=filed,
+                period_end=end,
+                accession=_text_or_none(entry.get("accn")),
+                form=_text_or_none(entry.get("form")),
+                fy=int(fy_raw) if isinstance(fy_raw, int) or (isinstance(fy_raw, str) and fy_raw.isdigit()) else None,
+                fp=_text_or_none(entry.get("fp")),
+            )
     return values
+
+
+def _text_or_none(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 def _latest(values: dict[date, _Datum]) -> _Datum | None:
@@ -286,10 +312,17 @@ def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date
     if not shared:
         return None
     end = max(shared)
+    # The difference is knowable once BOTH filings are; it is attributed to the later one,
+    # which is the document a reader has to open to see the newer side.
+    later = base[end] if base[end].filed >= subtracted[end].filed else subtracted[end]
     return _Datum(
         value=base[end].value - subtracted[end].value,
-        filed=max(base[end].filed, subtracted[end].filed),
+        filed=later.filed,
         period_end=end,
+        accession=later.accession,
+        form=later.form,
+        fy=later.fy,
+        fp=later.fp,
     )
 
 
@@ -483,6 +516,21 @@ def build_bundle(
     # endpoints travelled.
     resolved = [datum for datum in (profit, assets, shares, revenue, *earnings_periods.values()) if datum is not None]
     knowable = max((datum.filed for datum in resolved), default=None)
+    vintages: dict[str, Any] = {
+        name: _vintage(datum)
+        for name, datum in (
+            ("gross_profit", profit),
+            ("total_assets", assets),
+            ("shares_outstanding", shares),
+            ("revenue", revenue),
+            ("net_income", net_income),
+        )
+        if datum is not None
+    }
+    if earnings_periods:
+        vintages["net_income_periods"] = {
+            end.isoformat(): _vintage(datum) for end, datum in sorted(earnings_periods.items())
+        }
     return FinancialFactsBundle(
         gross_profit=_v(profit),
         total_assets=_v(assets),
@@ -502,7 +550,20 @@ def build_bundle(
         gross_profit_is_revenue_proxy=is_revenue_proxy,
         net_income=_v(net_income),
         net_income_by_period={end: datum.value for end, datum in sorted(earnings_periods.items())},
+        vintages=vintages,
     )
+
+
+def _vintage(datum: _Datum) -> dict[str, Any]:
+    """The filing identity of one resolved figure, JSON-ready and key-sorted."""
+    return {
+        "accession": datum.accession,
+        "filed": datum.filed.isoformat(),
+        "form": datum.form,
+        "fp": datum.fp,
+        "fy": datum.fy,
+        "period_end": datum.period_end.isoformat(),
+    }
 
 
 def _v(datum: _Datum | None) -> Decimal | None:
@@ -603,6 +664,9 @@ class SecFinancialFactAdapter:
             "net_income_by_period": {
                 end.isoformat(): _s(value) for end, value in sorted(bundle.net_income_by_period.items())
             },
+            # #530 item 4: the filing behind each input, on the row. `mart.topt_core_meta_info`
+            # surfaces it per observation, so a served number names its document.
+            "vintage": {key: bundle.vintages[key] for key in sorted(bundle.vintages)},
         }
         return FetchSuccess(
             raw=RawResponse(

@@ -83,6 +83,11 @@ class FinancialFactPayload(_FrozenModel):
     # this adapter — computation in L0/L1, which init.md rule 2 and the AGENTS.md red line
     # both forbid. The series travels; the factor reduces it.
     net_income_by_period: dict[str, Decimal] | None = None
+    # #530 item 4: per input name, the filing that asserted it ({accession, form, fy, fp,
+    # filed, period_end}); `net_income_periods` nests one per annual period end. Served
+    # through `mart.topt_core_meta_info` so a number names its document. Absent on
+    # observations written before parser v9's adapter.
+    vintage: dict[str, Any] | None = None
     # Superseded by `net_income_by_period` at parser v8 and no longer written. Kept on the
     # contract because observations captured under v5-v7 carry them and must still
     # validate — a point-in-time payload is never rewritten.
