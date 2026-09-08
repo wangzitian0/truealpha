@@ -100,8 +100,16 @@ class ReleaseDerivedAdapter:
 
 
 def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> ReleaseDerivedAdapter:
-    """Identity and membership are release-frozen configuration: the record IS the
-    coordinate, knowable from the partition start."""
+    """Identity and membership are release-frozen configuration, but the coordinate is
+    not knowable before the universe that scopes it was actually published (#530
+    item 2). A governed universe (QQQ, resolved from `staging.accepted_ruleset_head`)
+    carries its own `recorded_at`, forwarded here as `context.universe_published_at`;
+    that IS the real knowable-at. The hand-curated TOPT corpus has no publication event
+    of its own — only its `report_date`, which is already the partition start — so it
+    keeps that basis. Either way the look-ahead guard still applies: a universe head
+    published after the cutoff is refused exactly like any other future fact."""
+    knowable_at = context.universe_published_at or context.partition_start
+    knowable_at_basis = "universe-head" if context.universe_published_at is not None else "report-date"
     targets = {
         cell.work_item_id: ReleaseDerivedRecord(
             semantic_type=cell.semantic_type,
@@ -111,8 +119,9 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> ReleaseDer
                 "instrument_id": cell.instrument_id,
                 "listing_id": cell.listing_id,
                 "ticker": cell.ticker,
+                "knowable_at_basis": knowable_at_basis,
             },
-            knowable_at=context.partition_start,
+            knowable_at=knowable_at,
         )
         for cell in cells
     }

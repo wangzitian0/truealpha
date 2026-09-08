@@ -181,7 +181,11 @@ def _routes(
                 semantic_type=semantic_type,
                 subject_id=listing_id,
                 payload=payload,
-                knowable_at=plan.timeline.partition_start,
+                # #530 item 2: a governed universe's rows are knowable when its head was
+                # published; the hand-curated TOPT corpus these fixtures plan against has
+                # no publication event, so `plan.universe_published_at` is None here and
+                # this falls back to the partition start exactly as `build_route` does.
+                knowable_at=plan.universe_published_at or plan.timeline.partition_start,
             )
 
     second_origin = CorroboratingOrigin(

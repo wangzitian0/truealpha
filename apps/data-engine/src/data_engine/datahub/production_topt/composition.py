@@ -188,6 +188,10 @@ class PlannedRun:
     retry: RetryPolicy
     freshness_windows: Mapping[str, timedelta]
     default_freshness_max_age: timedelta
+    # The governed universe head's own publication time (#530 item 2): set for a
+    # governed universe (QQQ, canary — resolved via `universe_head_kind`), None for
+    # the hand-curated TOPT corpus, whose only freshness signal is its report_date.
+    universe_published_at: datetime | None
 
 
 def plan_and_persist(
@@ -212,6 +216,11 @@ def plan_and_persist(
     else:
         corpus = _load_capture_corpus(corpus_filename)
     denominator = corpus["topt_denominator"]
+    # Governed universes carry the head's own publication time; the hand-curated
+    # corpus has none, and release-derived rows fall back to the partition start
+    # (#530 item 2).
+    published_at_raw = corpus.get("published_at")
+    universe_published_at = datetime.fromisoformat(published_at_raw) if published_at_raw else None
     coordinates = {
         str(row[2]): (str(row[0]), str(row[1]), str(row[2]), str(row[3])) for row in denominator["instruments"]
     }
@@ -331,6 +340,7 @@ def plan_and_persist(
         retry=policy.retry,
         freshness_windows=policy.semantic_freshness_max_age,
         default_freshness_max_age=policy.freshness_max_age,
+        universe_published_at=universe_published_at,
     )
 
 
@@ -349,6 +359,7 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
         # mid-session run must not treat the in-progress bar as a close (#637).
         price_cutoff_date=last_settled_session_date(plan.cutoff),
         partition_start=plan.timeline.partition_start,
+        universe_published_at=plan.universe_published_at,
         coordinates=plan.coordinates,
         connection=connection,
     )
