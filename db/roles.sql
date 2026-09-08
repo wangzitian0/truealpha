@@ -159,6 +159,8 @@ grant select on mart.data_engine_identity to app_ops_reader;
 -- The /admin/datahub dashboard (#641 D5) joins heads to their quality grades and
 -- lists recent capture runs — read-only views/tables, same posture as the rest.
 grant select on mart.datahub_quality_report to app_ops_reader;
+-- #748: the weekly question-coverage report rendered on /admin/datahub.
+grant select on mart.question_coverage_report to app_ops_reader;
 grant select on mart.topt_capture_status to app_ops_reader;
 -- The Capacity section (#671) derives capture-window durations from the
 -- obligation results — read-only, same posture.

@@ -133,33 +133,43 @@ const QUESTION_COVERAGE_SQL = `
   order by universe_id, created_at desc
 `;
 
-function questionCoverageRows(rows: QuestionCoverageDbRow[]): QuestionCoverageRow[] {
-  return rows.map((row) => ({
-    universe_id: row.universe_id,
-    cutoff: row.cutoff,
-    generated_at: row.payload.generated_at ?? row.created_at,
-    requirements_sha256: row.payload.requirements_sha256 ?? "",
-    questions: Object.entries(row.payload.questions ?? {}).map(([question, entry]) => {
-      const unavailable = entry.unavailable ?? {};
-      const total = Object.values(unavailable).reduce((sum, n) => sum + n, 0);
-      const topReasons = Object.entries(unavailable)
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .slice(0, 3)
-        .map(([reason, n]) => `${reason}=${n}`)
-        .join(", ");
-      return {
-        question,
-        text: entry.text ?? "",
-        column: entry.column ?? null,
-        tracking_issue: entry.tracking_issue ?? "",
-        answered: entry.answered ?? 0,
-        unavailable_total: total,
-        top_reasons: topReasons,
-        missing: entry.missing ?? 0,
-        denominator: entry.denominator ?? 0,
-      };
-    }),
-  }));
+function questionCoverageRows(
+  rows: QuestionCoverageDbRow[],
+): QuestionCoverageRow[] {
+  return rows.map((row) => {
+    const payload = row.payload ?? {};
+    return {
+      universe_id: row.universe_id,
+      cutoff: row.cutoff,
+      generated_at: payload.generated_at ?? row.created_at,
+      requirements_sha256: payload.requirements_sha256 ?? "",
+      questions: Object.entries(payload.questions ?? {}).map(
+        ([question, entry]) => {
+          const unavailable = entry.unavailable ?? {};
+          const total = Object.values(unavailable).reduce(
+            (sum, n) => sum + n,
+            0,
+          );
+          const topReasons = Object.entries(unavailable)
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .slice(0, 3)
+            .map(([reason, n]) => `${reason}=${n}`)
+            .join(", ");
+          return {
+            question,
+            text: entry.text ?? "",
+            column: entry.column ?? null,
+            tracking_issue: entry.tracking_issue ?? "",
+            answered: entry.answered ?? 0,
+            unavailable_total: total,
+            top_reasons: topReasons,
+            missing: entry.missing ?? 0,
+            denominator: entry.denominator ?? 0,
+          };
+        },
+      ),
+    };
+  });
 }
 
 export interface DatahubStats {
@@ -391,18 +401,30 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
         availability: row.availability,
         agreed_cells: row.agreed_cells,
         total_cells: row.total_cells,
-        factors: Object.entries(row.factor_availability ?? {}).map(([factorId, grade]) => ({
-          factor_id: factorId,
-          required_semantics: grade.required_semantics,
-          complete_subjects: grade.complete_subjects,
-          universe_subjects: grade.universe_subjects,
-          ratio: grade.ratio,
-        })),
+        factors: Object.entries(row.factor_availability ?? {}).map(
+          ([factorId, grade]) => ({
+            factor_id: factorId,
+            required_semantics: grade.required_semantics,
+            complete_subjects: grade.complete_subjects,
+            universe_subjects: grade.universe_subjects,
+            ratio: grade.ratio,
+          }),
+        ),
       })),
       sources: sources.rows,
       runs: runs.rows,
-      validation: [...canary.rows, ...reuse.rows, ...plausibility.rows, ...corroboration.rows],
-      capacity: [...td.rows, ...reuseCap.rows, ...dbSize.rows, ...duration.rows],
+      validation: [
+        ...canary.rows,
+        ...reuse.rows,
+        ...plausibility.rows,
+        ...corroboration.rows,
+      ],
+      capacity: [
+        ...td.rows,
+        ...reuseCap.rows,
+        ...dbSize.rows,
+        ...duration.rows,
+      ],
       traffic: traffic.rows,
       recentCalls: recentCalls.rows,
     };

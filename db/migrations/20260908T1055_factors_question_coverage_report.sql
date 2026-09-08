@@ -16,3 +16,17 @@ create index if not exists ix_question_coverage_report_universe
     on mart.question_coverage_report (universe_id, created_at desc);
 comment on table mart.question_coverage_report is
     '#748: weekly per-universe coverage of the six init.md questions, compiled from QUESTION_REQUIREMENTS (expected) left-joined with the wide row''s §8 status dimensions (observed); requirements_sha256 pins the expectation the counts were made under.';
+
+-- Read roles: mart_readonly (blanket grant in roles.sql only covers tables that existed when
+-- the role was created) and app_ops_reader (the /admin/datahub dashboard's ops reader).
+-- Conditional because CI applies migrations before db/roles.sql creates the roles.
+do $$
+begin
+    if exists (select from pg_roles where rolname = 'mart_readonly') then
+        grant select on mart.question_coverage_report to mart_readonly;
+    end if;
+    if exists (select from pg_roles where rolname = 'app_ops_reader') then
+        grant select on mart.question_coverage_report to app_ops_reader;
+    end if;
+end;
+$$;

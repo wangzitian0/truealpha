@@ -32,7 +32,14 @@ const headRows = [
     },
   },
 ];
-const sourceRows = [{ source: "yahoo", fetches_total: 728, fetches_24h: 123, last_fetch: "2026-08-18" }];
+const sourceRows = [
+  {
+    source: "yahoo",
+    fetches_total: 728,
+    fetches_24h: 123,
+    last_fetch: "2026-08-18",
+  },
+];
 // #729: the external call ledger — one vendor today, and one request each way.
 const trafficRows = [
   {
@@ -85,48 +92,143 @@ const runRows = [
   },
 ];
 
+const coverageRows = [
+  {
+    universe_id: "universe:topt-us-2026-03-31",
+    cutoff: "2026-03-31 00:00:00+00",
+    created_at: "2026-09-13 09:07:00+00",
+    payload: {
+      generated_at: "2026-09-13T09:07:00+00:00",
+      requirements_sha256: "a".repeat(64),
+      questions: {
+        q1: {
+          text: "leverage?",
+          column: "mart.topt_gppe_results.gppe",
+          tracking_issue: "#528",
+          answered: 18,
+          unavailable: { missing_gross_profit: 2 },
+          missing: 0,
+          denominator: 20,
+        },
+        q3: {
+          text: "supply chain?",
+          column: null,
+          tracking_issue: "#772",
+          answered: 0,
+          unavailable: {},
+          missing: 20,
+          denominator: 20,
+        },
+      },
+    },
+  },
+];
+
 {
   __setTestOpsClient({
     query: async (sql: string) => {
-      if (typeof sql === "string" && sql.includes("current_pointer_head")) return { rows: headRows } as never;
+      if (typeof sql === "string" && sql.includes("current_pointer_head"))
+        return { rows: headRows } as never;
       // "as check" FIRST: capacity SQLs also mention raw.fetches, and matching the
       // sources stub first fed them SourceStatRow shapes while the count-only
       // assertion stayed green (review on #678).
       if (typeof sql === "string" && sql.includes("as check")) {
-        return { rows: [{ check: sql.slice(20, 44), verdict: "pass", detail: "stubbed" }] } as never;
+        return {
+          rows: [
+            { check: sql.slice(20, 44), verdict: "pass", detail: "stubbed" },
+          ],
+        } as never;
       }
       // #729: the ledger reads also join raw.fetches, so they are matched BEFORE the
       // sources stub, on the ledger table itself; per-source aggregate vs recent list.
       if (typeof sql === "string" && sql.includes("api_call_ledger")) {
-        return { rows: sql.includes("group by l.source") ? trafficRows : recentCallRows } as never;
+        return {
+          rows: sql.includes("group by l.source")
+            ? trafficRows
+            : recentCallRows,
+        } as never;
       }
-      if (typeof sql === "string" && sql.includes("raw.fetches")) return { rows: sourceRows } as never;
+      if (typeof sql === "string" && sql.includes("question_coverage_report"))
+        return { rows: coverageRows } as never;
+      if (typeof sql === "string" && sql.includes("raw.fetches"))
+        return { rows: sourceRows } as never;
       return { rows: runRows } as never;
     },
   } as never);
   const stats = await loadDatahubStats();
-  assert(stats.traffic.length === 1 && stats.traffic[0].source === "twelvedata", "traffic rows pass through");
-  assert(stats.traffic[0].failed === 21, "failed requests are counted, not hidden behind landed rows");
+  assert(
+    stats.traffic.length === 1 && stats.traffic[0].source === "twelvedata",
+    "traffic rows pass through",
+  );
+  assert(
+    stats.questionCoverage.length === 1,
+    "the newest coverage report per universe is surfaced",
+  );
+  const q1 = stats.questionCoverage[0].questions.find(
+    (q) => q.question === "q1",
+  );
+  assert(
+    q1 !== undefined &&
+      q1.answered === 18 &&
+      q1.unavailable_total === 2 &&
+      q1.top_reasons === "missing_gross_profit=2",
+    "q1 flattened with its top reasons",
+  );
+  const q3 = stats.questionCoverage[0].questions.find(
+    (q) => q.question === "q3",
+  );
+  assert(
+    q3 !== undefined &&
+      q3.missing === 20 &&
+      q3.column === null &&
+      q3.tracking_issue === "#772",
+    "a question without a column is missing and names its owner",
+  );
+  assert(
+    stats.traffic[0].failed === 21,
+    "failed requests are counted, not hidden behind landed rows",
+  );
   assert(stats.recentCalls.length === 2, "recent calls pass through");
-  assert(stats.recentCalls[0].landed_fetch_id === 6540, "a successful call names the raw.fetches row it became");
+  assert(
+    stats.recentCalls[0].landed_fetch_id === 6540,
+    "a successful call names the raw.fetches row it became",
+  );
   assert(
     stats.recentCalls[1].ok === false && stats.recentCalls[1].error !== null,
     "a failed call carries the vendor's error",
   );
   assert(stats.heads.length === 1, "one governed head");
-  assert(stats.heads[0].availability === "0.7819", "capture-level headline rides along");
-  assert(stats.heads[0].factors.length === 1, "factor grades unpacked from the payload map");
-  assert(stats.heads[0].factors[0].factor_id === "gross_profit_per_employee", "factor id from the map key");
-  assert(stats.heads[0].factors[0].ratio === "0.1275", "the honest number the 0.78 headline hid");
+  assert(
+    stats.heads[0].availability === "0.7819",
+    "capture-level headline rides along",
+  );
+  assert(
+    stats.heads[0].factors.length === 1,
+    "factor grades unpacked from the payload map",
+  );
+  assert(
+    stats.heads[0].factors[0].factor_id === "gross_profit_per_employee",
+    "factor id from the map key",
+  );
+  assert(
+    stats.heads[0].factors[0].ratio === "0.1275",
+    "the honest number the 0.78 headline hid",
+  );
   assert(stats.sources[0].fetches_total === 728, "source stats pass through");
   assert(stats.runs[0].resolved === 408, "run stats pass through");
   assert(stats.validation.length === 4, "four validation checks, one row each");
   assert(stats.capacity.length === 4, "four capacity limits, one row each");
   assert(
-    stats.capacity.every((row) => typeof row.verdict === "string" && typeof row.detail === "string"),
+    stats.capacity.every(
+      (row) =>
+        typeof row.verdict === "string" && typeof row.detail === "string",
+    ),
     "capacity rows carry the validation shape, not a mis-stubbed one",
   );
-  assert(stats.validation[0].verdict === "pass", "validation verdicts pass through");
+  assert(
+    stats.validation[0].verdict === "pass",
+    "validation verdicts pass through",
+  );
   __setTestOpsClient(null);
 }
 
