@@ -19,7 +19,10 @@
       "target_weight",
       "created_at",
       "peg",
-      "peg_rank"
+      "peg_rank",
+      "availability_status",
+      "source_evidence_status",
+      "factor_validation_status"
     ],
     "staging.strategy_backtest_inputs": [
       "id",

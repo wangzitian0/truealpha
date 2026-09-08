@@ -1036,3 +1036,54 @@ def test_a_synthetic_three_listing_universe_flows_end_to_end(connection) -> None
         (f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}",),
     ).fetchone()
     assert head == (f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}", registration.sequence)
+
+
+def test_every_materialized_row_carries_the_three_status_dimensions(connection) -> None:
+    """#747 / init.md §8: the producer writes availability, source-evidence and validation
+    status on every core and GPPE row, derived from what it consumed. On the seeded run
+    every observation dereferences to a landed raw fetch, no sealed holdout exists (#65),
+    and the headcount travels without its evidence (`vintage.headcount` is a follow-up), so
+    a row with a headcount is `degraded` and a row without one is `verified`."""
+    (
+        _capture_repository,
+        run,
+        _list_version,
+        release_manifest_id,
+        *_rest,
+    ) = _seed_complete_production_run(connection)
+    repository = PostgresToptCoreRepository(connection)
+    snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    assert results
+    core_rows = connection.execute(
+        """
+        select r.availability_status, r.source_evidence_status, r.factor_validation_status,
+               r.availability, r.freshness, r.confidence, r.payload->>'headcount'
+        from mart.topt_core_results r
+        where r.result_id = any(%s)
+        """,
+        ([result.result_id for result in results],),
+    ).fetchall()
+    assert len(core_rows) == len(results)
+    for availability_status, evidence, validation, availability, freshness, confidence, headcount in core_rows:
+        assert availability_status in {"available", "unavailable", "stale", "excluded", "low_confidence", "error"}
+        if availability == "unavailable":
+            assert availability_status == "unavailable"
+        elif freshness == "stale":
+            assert availability_status == "stale"
+        assert validation == "not_evaluated"
+        assert evidence in {"verified", "degraded"}, "a seeded run never carries a dangling pointer"
+    gppe_rows = connection.execute(
+        """
+        select availability_status, source_evidence_status, factor_validation_status
+        from mart.topt_gppe_results where invocation_id = %s
+        """,
+        (results[0].gppe_invocation_id,),
+    ).fetchall()
+    assert len(gppe_rows) == len(results)
+    assert {row[2] for row in gppe_rows} == {"not_evaluated"}
+    assert all(row[0] and row[1] for row in gppe_rows)
+    # The dimensions are not part of the identity: a repeated materialization of the same
+    # snapshot returns the same ids (the existing idempotence test) and re-derives the same columns.
+    repeated = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    assert [item.result_id for item in repeated] == [item.result_id for item in results]

@@ -32,9 +32,14 @@ from typing import Any
 
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.execution import InputEvidenceStatus
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 from data_engine.core_strategy_replay import CORPUS_SHA256, Decision
+from data_engine.datahub.production_topt.status_dimensions import (
+    decision_availability_status,
+    factor_validation_status_for,
+)
 
 CLAIM_CEILING = "preview"
 
@@ -98,8 +103,27 @@ def write_strategy_run(
     return run_id
 
 
-def write_strategy_decision(connection: Connection[Any], decision: Decision, *, strategy_run_id: str) -> str:
+def write_strategy_decision(
+    connection: Connection[Any],
+    decision: Decision,
+    *,
+    strategy_run_id: str,
+    definition: LargeModelValueV0Definition | None = None,
+) -> str:
     payload = {"strategy_run_id": strategy_run_id, **decision.to_json()}
+    # #747 (§8): the three dimensions, written by this producer and not part of the identity.
+    # Source evidence is `degraded` by construction today: the replay reads
+    # `staging.strategy_backtest_inputs`, which carries knowable_at but no raw pointer
+    # (#530 items 5–6); it flips to `verified` when the inputs resolve from the vintage plane.
+    availability_status = decision_availability_status(
+        eligible=decision.eligible,
+        exclusion_reason=decision.exclusion_reason,
+        value_present=decision.capital_adjusted_labor_efficiency is not None,
+    )
+    source_evidence_status = InputEvidenceStatus.DEGRADED
+    factor_validation_status = factor_validation_status_for(
+        () if definition is None else (f"{definition.strategy_id}:{definition.content_sha256}",)
+    )
     content_sha256 = canonical_sha256(payload)
     decision_id = f"strategy-decision:{content_sha256}"
     cutoff_at = datetime.fromisoformat(decision.cutoff_at.replace("Z", "+00:00"))
@@ -108,8 +132,9 @@ def write_strategy_decision(connection: Connection[Any], decision: Decision, *, 
         insert into mart.strategy_decisions (
             strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
             capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
-            valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg, peg_rank
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg, peg_rank,
+            availability_status, source_evidence_status, factor_validation_status
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         on conflict (strategy_decision_id) do nothing
         returning strategy_decision_id
         """,
@@ -131,6 +156,9 @@ def write_strategy_decision(connection: Connection[Any], decision: Decision, *, 
             decision.target_weight,
             decision.peg,
             decision.peg_rank,
+            availability_status.value,
+            source_evidence_status.value,
+            factor_validation_status.value,
         ),
     ).fetchone()
     if inserted is not None:
@@ -158,6 +186,7 @@ def write_replay(
 
     run_id = write_strategy_run(connection, definition, executed_at=executed_at, snapshot_id=snapshot_id)
     decision_ids = tuple(
-        write_strategy_decision(connection, decision, strategy_run_id=run_id) for decision in decisions
+        write_strategy_decision(connection, decision, strategy_run_id=run_id, definition=definition)
+        for decision in decisions
     )
     return run_id, decision_ids
