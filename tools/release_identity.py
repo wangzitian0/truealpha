@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 import yaml
-from data_engine.release_identity import measure
+from data_engine import release_identity
 
 ROOT = Path(__file__).resolve().parent.parent
 ENVIRONMENTS = ("production", "staging")
@@ -41,8 +41,22 @@ def approval(env: str) -> dict[str, object]:
 
 
 def release_values(env: str, *, version_ref: str) -> dict[str, str]:
+    """The two values infra2 injects for `version_ref`, measured from THIS checkout.
+
+    Both inputs are anchored on `ROOT`, never on the working directory (Copilot review on
+    #786). `data_engine.release_identity`'s defaults are relative because inside the image
+    the repository path and the working directory are the same thing; a deploy runner that
+    shells this tool out without `cd`ing first is a different case, and letting it fall
+    through to CWD would either fail with a misleading "not in the image" or -- worse --
+    measure some other tree and print an id that looks perfectly well-formed.
+    """
+    identity = release_identity.measure(
+        git_commit_sha=version_ref,
+        migrations_path=ROOT / release_identity.MIGRATIONS_PATH,
+        env_manifest_path=ROOT / release_identity.ENV_MANIFEST_PATH,
+    )
     return {
-        "RELEASE_MANIFEST_ID": measure(git_commit_sha=version_ref).manifest_id,
+        "RELEASE_MANIFEST_ID": identity.manifest_id,
         "CAPTURE_APPROVED_BY": str(approval(env)["capture_approved_by"]).strip(),
     }
 

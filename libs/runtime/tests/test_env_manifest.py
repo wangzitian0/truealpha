@@ -92,6 +92,18 @@ def test_release_values_are_measured_for_a_named_release() -> None:
         release_identity.approval("preview")
 
 
+def test_the_release_identity_tool_does_not_depend_on_the_working_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Copilot review on #786 (Medium): the tool anchored `governance/approvals/<env>.yaml` on
+    ROOT but let the measurement fall through to CWD-relative defaults. A deploy runner that
+    shells it out without `cd`ing first would then either fail with a misleading "not in the
+    image" or measure some other tree and print a well-formed id for the wrong release."""
+    from_repo_root = release_identity.release_values("production", version_ref="v0.0.49")
+    monkeypatch.chdir(tmp_path)
+    assert release_identity.release_values("production", version_ref="v0.0.49") == from_repo_root
+
+
 def test_the_release_identity_tool_refuses_to_speak_for_an_unnamed_build(capsys) -> None:
     """A value computed from no release is not one a deployment should write down."""
     with pytest.raises(SystemExit):
