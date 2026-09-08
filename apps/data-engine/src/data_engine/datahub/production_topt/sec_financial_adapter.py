@@ -130,7 +130,8 @@ class FinancialFactsBundle:
     # end (ISO) to its vintage so PEG's series is evidenced per period, not per bundle.
     vintages: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     # #528 decomposition inputs. `financial_assets` = cash and equivalents + the first
-    # complete investment tier (see `financial_components`); `financial_returns` =
+    # investment tier with ANY value at the cash period end, summing only the fields that
+    # tier reports (see `financial_components`); `financial_returns` =
     # investment income (+ dividends, + gains at the same period) or, flagged, the
     # non-operating line. Each carries the basis that resolved it so the row can say
     # which tags composed the number; None with a None basis means the source asserts
@@ -543,14 +544,14 @@ def _sum_at(end: date, datums: Sequence[_Datum]) -> _Datum:
 
 
 def _tier_at(
-    facts: dict[str, Any], ruleset: ConceptMappingRuleset, cutoff: date, end: date, fields: Sequence[str]
+    series: Callable[[str], dict[date, _Datum]], end: date, fields: Sequence[str]
 ) -> tuple[list[_Datum], list[str]]:
     datums: list[_Datum] = []
     named: list[str] = []
     for field_name in fields:
-        series = resolve_field(facts, ruleset, field_name, cutoff)
-        if end in series:
-            datums.append(series[end])
+        resolved = series(field_name)
+        if end in resolved:
+            datums.append(resolved[end])
             named.append(field_name)
     return datums, named
 
@@ -571,7 +572,15 @@ def financial_components(
     returns are not resolved here: the bank-specific mapping is pending review (#528), so
     the component is honestly absent rather than a wrong number.
     """
-    series = lambda field_name: resolve_field(facts, ruleset, field_name, cutoff)  # noqa: E731
+    memo: dict[str, dict[date, _Datum]] = {}
+
+    def series(field_name: str) -> dict[date, _Datum]:
+        # Each field's series is resolved once per call: the tiers below ask for the same
+        # fields more than once and `resolve_field` re-scans company-facts every time.
+        if field_name not in memo:
+            memo[field_name] = resolve_field(facts, ruleset, field_name, cutoff)
+        return memo[field_name]
+
     assets: _Datum | None = None
     assets_basis: str | None = None
     if branch is OperatingBranch.FINANCIAL:
@@ -580,7 +589,7 @@ def financial_components(
             if not ends:
                 continue
             end = max(ends)
-            datums, named = _tier_at(facts, ruleset, cutoff, end, fields)
+            datums, named = _tier_at(series, end, fields)
             assets, assets_basis = _sum_at(end, datums), "+".join(named)
             break
     else:
@@ -589,7 +598,7 @@ def financial_components(
         if cash is not None:
             end = cash.period_end
             for basis, fields in _INVESTMENT_TIERS:
-                datums, named = _tier_at(facts, ruleset, cutoff, end, fields)
+                datums, named = _tier_at(series, end, fields)
                 if datums:
                     assets, assets_basis = _sum_at(end, [cash, *datums]), "cash_and_equivalents+" + "+".join(named)
                     break
@@ -597,7 +606,7 @@ def financial_components(
                 assets, assets_basis = cash, "cash_and_equivalents"
         elif combined is not None:
             end = combined.period_end
-            datums, named = _tier_at(facts, ruleset, cutoff, end, ("long_term_investments",))
+            datums, named = _tier_at(series, end, ("long_term_investments",))
             assets = _sum_at(end, [combined, *datums]) if datums else combined
             assets_basis = "cash_and_short_term_investments" + ("+" + "+".join(named) if named else "")
     returns: _Datum | None = None
