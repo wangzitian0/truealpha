@@ -33,6 +33,7 @@ from data_engine.datahub.production_topt.status_dimensions import (
     StatusDimensions,
     availability_status_for,
     factor_validation_status_for,
+    resolve_raw_pointers,
     source_evidence_status_for,
 )
 
@@ -859,25 +860,32 @@ class PostgresToptCoreRepository:
     def _load_source_evidence(self, snapshot: ToptCoreSnapshot) -> dict[str, InputEvidenceStatus]:
         """§8 `source_evidence_status` per member, from the snapshot's OWN observations
         (#747): the raw-pointer chain of every selected observation plus the evidence the
-        financial-fact payload carries for its side-plane inputs. Read at persist time like
-        `_load_result_periods`, never carried on the snapshot model."""
-        statuses: dict[str, InputEvidenceStatus] = {}
-        for member in snapshot.members:
-            payloads = self._connection.execute(
-                """
-                select p.normalized_payload
-                from staging.capture_normalized_observations o
-                join staging.capture_observation_payloads p using (observation_id)
-                where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
-                """,
-                (list(member.observation_ids),),
-            ).fetchall()
-            statuses[member.listing_id] = source_evidence_status_for(
+        financial-fact payload carries for its side-plane inputs. Two queries for the whole
+        snapshot (pointers, financial payloads), then per-member classification — read at
+        persist time like `_load_result_periods`, never carried on the snapshot model."""
+        all_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
+        resolved = resolve_raw_pointers(self._connection, all_ids)
+        payload_rows = self._connection.execute(
+            """
+            select o.subject_id, p.normalized_payload
+            from staging.capture_normalized_observations o
+            join staging.capture_observation_payloads p using (observation_id)
+            where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
+            """,
+            (all_ids,),
+        ).fetchall()
+        payloads_by_listing: dict[str, list[dict[str, Any]]] = {}
+        for subject_id, payload in payload_rows:
+            payloads_by_listing.setdefault(str(subject_id), []).append(payload)
+        return {
+            member.listing_id: source_evidence_status_for(
                 self._connection,
                 member.observation_ids,
-                financial_payloads=[row[0] for row in payloads],
+                financial_payloads=payloads_by_listing.get(member.listing_id, ()),
+                resolved=resolved,
             )
-        return statuses
+            for member in snapshot.members
+        }
 
     def _load_result_periods(
         self, snapshot: ToptCoreSnapshot

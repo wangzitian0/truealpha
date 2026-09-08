@@ -79,11 +79,32 @@ def decision_availability_status(
     return AvailabilityStatus.AVAILABLE
 
 
+def resolve_raw_pointers(connection: Connection[Any], observation_ids: Iterable[str]) -> dict[str, int | None]:
+    """observation_id → the landed `raw.fetches.id` its source vintage points at (None when the
+    chain breaks). One query for any number of observations, so callers batch a whole
+    snapshot instead of one round-trip per member (Copilot on #776)."""
+    wanted = tuple(dict.fromkeys(observation_ids))
+    if not wanted:
+        return {}
+    rows = connection.execute(
+        """
+        select o.observation_id, f.id
+        from staging.capture_normalized_observations o
+        left join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        left join raw.fetches f on f.id = v.raw_fetch_id
+        where o.observation_id = any(%s)
+        """,
+        (list(wanted),),
+    ).fetchall()
+    return {str(observation_id): fetch_id for observation_id, fetch_id in rows}
+
+
 def source_evidence_status_for(
     connection: Connection[Any],
     observation_ids: Iterable[str],
     *,
     financial_payloads: Iterable[Mapping[str, Any]] = (),
+    resolved: Mapping[str, int | None] | None = None,
 ) -> InputEvidenceStatus:
     """`verified` when every consumed observation dereferences to a landed raw fetch and every
     asserted input names its evidence; `degraded` when an asserted input has no evidence on
@@ -99,17 +120,8 @@ def source_evidence_status_for(
     wanted = tuple(dict.fromkeys(observation_ids))
     if not wanted:
         return InputEvidenceStatus.REJECTED
-    rows = connection.execute(
-        """
-        select o.observation_id, f.id
-        from staging.capture_normalized_observations o
-        left join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-        left join raw.fetches f on f.id = v.raw_fetch_id
-        where o.observation_id = any(%s)
-        """,
-        (list(wanted),),
-    ).fetchall()
-    resolved = {str(observation_id): fetch_id for observation_id, fetch_id in rows}
+    if resolved is None:
+        resolved = resolve_raw_pointers(connection, wanted)
     if any(resolved.get(observation_id) is None for observation_id in wanted):
         return InputEvidenceStatus.REJECTED
     for payload in financial_payloads:

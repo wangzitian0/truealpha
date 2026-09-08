@@ -2,7 +2,7 @@
 
 The registry is code, append-only and content-addressed by the definition it judges: a
 record names the exact `definition_id` (a `gppe-definition:<sha>` / `three-tier-definition:<sha>`
-/ `large-model-value-v0:<sha>` identity), the holdout record that produced the verdict, and
+/ `large_model_value_v0:<sha>` identity — the strategy's `strategy_id` plus its definition sha, underscores as the contract spells it), the holdout record that produced the verdict, and
 the verdict. A definition with no record is `not_evaluated` — the honest default that #747
 makes visible on every row instead of implying acceptance by silence.
 
