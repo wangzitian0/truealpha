@@ -543,7 +543,7 @@ merge enforcement.
 
 ## 11. Current Baseline and Next Gate
 
-**Baseline as of 2026-09-04, measured on the deployed environments rather than on tracker
+**Baseline as of 2026-09-08, measured on the deployed environments rather than on tracker
 state.** The reconnaissance baseline this section used to describe (monorepo, four schemas,
 registry skeleton, samples, first corpus audit) is history; what exists now is a running
 system with named gaps.
@@ -563,16 +563,16 @@ What runs daily on the Dagster schedule in both Staging and Production:
 
 What is verified and what is not, with the owning issue:
 
-| claim | state on 2026-09-04 | owner |
+| claim | state on 2026-09-08 | owner |
 |---|---|---|
-| the chain is non-empty and scheduled | TOPT 17/20 scored daily; PEG 14/20; pointer advances each tick | #434 (root) |
-| the published numbers are possible | JPM GPPE is negative under the uniform charge; no invariant has run against Production | #528, #581, #544 |
-| the denominator is real | every headcount is a manual seed; the extraction primitive is a stub; QQQ is 12/101 available | #70 (root) |
-| the vintage is a measurement | `valid_from` / `freshness_state` are near-constant | #530 |
-| every source is admitted (rule 19) | all attestations `missing` | #60 |
-| one release promotes all three images (§3.1) | data-engine is promoted from `main` by a separate manual dispatch | #712, infra2#622 |
-| every external call is gated (rule 6) | only moomoo goes through `api_call_ledger`; the model provider has no seat | #729 |
-| non-local endpoints are authenticated (rule 21) | MCP answers without a credential | #728 |
+| the chain is non-empty and scheduled | at the 2026-09-07 TOPT cutoff 17/20 issuers are `available`, QQQ 72/101; PEG resolves for 14/20; the pointer advances each tick | #434 (root) |
+| the published numbers are possible | a tick now refuses its own run: plausibility policy v1 judges every published row against the previous accepted run inside the tick's transaction, and the nightly invariant suite runs on both environments. JPM's GPPE is still negative under the uniform capital charge until #528's decomposition merges, and the citation/quality invariants still do not run against Production at deploy time | #528, #581, #544 |
+| the denominator is real | 106 headcount facts covering 89 issuers, 85 of them selected by the seated model from 10-K text rather than hand-seeded; the shared extraction primitive is still a stub that the weekly job does not call, and ~25 cells remain `no_candidate` | #70, #769 |
+| the vintage is a measurement | `knowable_at` is real on every plane (72 distinct filing days for financial facts, bar dates for prices); `valid_from` and the cutoff are still near-constant, so a historical replay would still see the future | #530 |
+| every source is admitted (rule 19) | the model provider has a record (`governance/sources/model-provider-zhipu-glm-coding-plan.v1.json`); every other source's attestation is still `missing` in `governance/gate0/issue-60.source-readiness.candidate-v1.json` | #60 |
+| one release promotes all three images (§3.1) | **yes.** One app-deploy request promotes `truealpha/app` (web + llm-service) and, as its declared companion, `truealpha/data_engine`, whose registry digest is pinned into Vault before the compose reads it; verified on Production 2026-09-08 with v0.0.48 matching across `/api/health`, the Vault pin and the boot-canary run | #712, infra2#622 |
+| every external call is gated (rule 6) | `staging.api_call_ledger` carries 2,186 rows across seven sources — SEC, Twelve Data, yahoo, OpenFIGI, N-PORT, the Nasdaq index and `filing-extraction-model`. moomoo is declared but has never written a row, which is why question 4 has no evidence rather than no capacity | #729 |
+| non-local endpoints are authenticated (rule 21) | MCP answers `tools/call` without a credential | #728 |
 | Production is graduated | no: #54 has not run; restore drill (#650) and sealed holdouts (#65) outstanding | #54 |
 
 **Next gate.** Not "Gate 0": the semantic and contract closure it named is in force in code
@@ -580,7 +580,18 @@ What is verified and what is not, with the owning issue:
 batch/lease machine that would have closed it formally was retired on 2026-07-17. The next
 gate is the one whose claims are false in the table: make the numbers right and provably
 so (#434's standing criteria), fill the prose-only inputs through the gated extraction
-source (#70), admit the sources (#60). Gate epics #56 and #29 close by hand when their rows
+source (#70), admit the sources (#60).
+
+That work is sequenced as three named milestones, and the sequence is a dependency chain,
+not a preference. **M1 (#749)** stays open for its remaining strong-code and tracking
+tracks. **M2 (#773)** makes the wide row honest — real vintage (#530), the §8 status
+dimensions, the question-coverage report, GPPE decomposition, and one deployed slice per
+init.md question. **M3 (#758)** makes the backtest real, and its first track needs exactly
+what M2's first deliverable produces: a `knowable_at`/`valid_from` plane a historical
+cutoff can be replayed against. Within M2 the new data planes expand in the order A3
+decision 3 fixes (owner approved 2026-09-08): #63's ETF holdings before #62's forecasts,
+because an independent share count falsifies the class that produced #529 and #533 while a
+forecast plane has nothing to check it against. Gate epics #56 and #29 close by hand when their rows
 have standing checks; #54 remains the only path to calling Production output authoritative.
 
 Provisional lower-gate work is ordinary issue→PR work; it remains excluded from the
