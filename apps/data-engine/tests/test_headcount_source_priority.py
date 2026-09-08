@@ -23,10 +23,22 @@ class _Capture:
 
 
 def test_the_read_orders_by_source_priority_before_knowable_at() -> None:
-    connection = _Capture((Decimal(33000), datetime(2025, 12, 18, tzinfo=UTC)))
+    connection = _Capture(
+        (
+            Decimal(33000),
+            datetime(2025, 12, 18, tzinfo=UTC),
+            "10k-extraction",
+            "accession=000173016825000121 form=10-K filed=2025-12-19 raw=raw.fetches:1 extractor=rule:single-candidate:v1 span='x'",
+            date(2025, 11, 2),
+            Decimal("0.85"),
+        )
+    )
     fact = PostgresHeadcountExtractor(connection)(1730168, date(2026, 9, 4))
 
     assert fact is not None and fact.value == Decimal(33000)
+    # #747: the reader returns the fact's own evidence so the row can name it.
+    assert fact.source == "10k-extraction" and fact.evidence_ref.startswith("accession=000173016825000121 ")
+    assert fact.period_end == date(2025, 11, 2) and fact.confidence == Decimal("0.85")
     assert "order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc" in connection.sql
     assert "where cik = %s and knowable_at <= %s" in connection.sql  # still point-in-time
     assert connection.params[2] == list(HEADCOUNT_SOURCE_PRIORITY)

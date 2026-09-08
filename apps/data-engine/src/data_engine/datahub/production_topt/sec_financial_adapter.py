@@ -169,6 +169,43 @@ class HeadcountFact:
 
     value: Decimal
     knowable_at: datetime
+    # The fact's own evidence (#747 / #530): which plane asserted it, the pointer string
+    # the loop recorded (`accession=… form=… filed=… raw=raw.fetches:N extractor=… span=…`
+    # for an extraction; a reviewer note for a seed), its period and confidence. Optional so
+    # fixture extractors stay terse; a row without them is `degraded`, never `verified`.
+    source: str | None = None
+    evidence_ref: str | None = None
+    period_end: date | None = None
+    confidence: Decimal | None = None
+
+
+_EVIDENCE_TOKENS = ("accession", "form", "filed", "raw")
+
+
+def headcount_vintage(fact: HeadcountFact) -> dict[str, Any]:
+    """The headcount's evidence as it travels on the row, JSON-ready and key-sorted.
+
+    `raw` is the dereferenceable pointer (`raw.fetches:N`) the loop wrote; `accession`,
+    `form` and `filed` are parsed from the same `key=value` tokens. A seed's free-text
+    evidence_ref yields none of them, which is exactly what makes a seed-backed row
+    `degraded` in `source_evidence_status` (#747).
+    """
+    parsed: dict[str, str | None] = dict.fromkeys(_EVIDENCE_TOKENS)
+    for token in (fact.evidence_ref or "").split():
+        key, separator, value = token.partition("=")
+        if separator and key in parsed and parsed[key] is None:
+            parsed[key] = value or None
+    return {
+        "accession": parsed["accession"],
+        "confidence": None if fact.confidence is None else str(fact.confidence),
+        "evidence_ref": fact.evidence_ref,
+        "filed": parsed["filed"],
+        "form": parsed["form"],
+        "knowable_at": fact.knowable_at.isoformat(),
+        "period_end": None if fact.period_end is None else fact.period_end.isoformat(),
+        "raw": parsed["raw"],
+        "source": fact.source,
+    }
 
 
 # (cik, cutoff) -> the extracted headcount fact, or None when no filing yields one.
@@ -636,6 +673,7 @@ class SecFinancialFactAdapter:
             gross_profit_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
         headcount: Decimal | None = None
+        headcount_evidence: dict[str, Any] | None = None
         # A payload that resolved nothing is knowable exactly at the cutoff: what it
         # asserts is "this source has no such fact yet", not a dated figure.
         knowable_at = bundle.knowable_at or datetime.combine(target.cutoff, datetime.min.time(), tzinfo=UTC)
@@ -643,7 +681,16 @@ class SecFinancialFactAdapter:
             fact = self._headcount_extractor(target.cik, target.cutoff)
             if fact is not None and fact.knowable_at.date() <= target.cutoff:
                 headcount = fact.value
+                headcount_evidence = headcount_vintage(fact)
                 knowable_at = max(knowable_at, fact.knowable_at)
+        vintage = {
+            key: bundle.vintages[key]
+            for key in sorted(bundle.vintages)
+            if not (key == "gross_profit" and gross_profit_value is None)
+        }
+        if headcount_evidence is not None:
+            # #747: the side-plane input names its evidence next to the XBRL inputs.
+            vintage["headcount"] = headcount_evidence
         payload = {
             "issuer_id": target.issuer_id,
             "instrument_id": target.instrument_id,
@@ -668,11 +715,7 @@ class SecFinancialFactAdapter:
             # surfaces it per observation, so a served number names its document. A key is
             # present only for an input the payload actually asserts: when the revenue proxy
             # is refused above, `gross_profit` is null and must not claim a filing.
-            "vintage": {
-                key: bundle.vintages[key]
-                for key in sorted(bundle.vintages)
-                if not (key == "gross_profit" and gross_profit_value is None)
-            },
+            "vintage": {key: vintage[key] for key in sorted(vintage)},
         }
         return FetchSuccess(
             raw=RawResponse(
