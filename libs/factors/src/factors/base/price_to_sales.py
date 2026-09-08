@@ -7,8 +7,8 @@ input `three_tier_valuation` (module 7, the composite) reduces alongside gross p
 employee into the tier valuation gap. It registers `module=7` for that reason -- a base
 factor that exists to feed module 7 rather than answer an independent question (#770;
 previously mis-registered `module=6`, which collides with module 6's own pure-blood
-screening and was recorded as a known error in init.md before this fix,
-`libs/factors/tests/test_module_identity.py` is the standing check now).
+screening and was recorded as a known error in init.md before this fix).
+`libs/factors/tests/test_module_identity.py` is the standing check now.
 
 This is a **simplified preview** of the fuller S5 kernel proven in
 `factors.batches.issuer_price_to_sales_tiny.kernel` (issue #161, closed):
