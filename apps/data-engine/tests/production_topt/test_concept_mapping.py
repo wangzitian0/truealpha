@@ -39,7 +39,7 @@ def connection():
 def _with_extra_revenue_concept() -> ConceptMappingRuleset:
     """The realistic edit: an issuer starts tagging revenue under a variant we did not know."""
     payload = DEFAULT_RULESET.model_dump(mode="json", exclude={"ruleset_id", "content_sha256"})
-    payload["version"] = "production-topt-concepts:v2"
+    payload["version"] = "production-topt-concepts:v3"
     for mapping in payload["mappings"]:
         if mapping["field"] == "revenue":
             mapping["concepts"].append({"taxonomy": "us-gaap", "concept": "SalesRevenueNet"})

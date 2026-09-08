@@ -37,6 +37,7 @@ PARSER_VERSION_HISTORY = (
     "production-topt-live-parser:v6",
     "production-topt-live-parser:v7",
     "production-topt-live-parser:v8",
+    "production-topt-live-parser:v9",
 )
 MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v1",
@@ -47,6 +48,7 @@ MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v6",
     "production-topt-live-map:v7",
     "production-topt-live-map:v8",
+    "production-topt-live-map:v9",
 )
 
 PARSER_VERSION = PARSER_VERSION_HISTORY[-1]
@@ -124,3 +126,15 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # the observations a rate is derived from -- and `knowable_at` now spans EVERY period in
 # the series rather than the window's two endpoints, which is a different claim about when
 # the payload became knowable (and the PIT obligation #284 named).
+
+# v8 -> v9 (#530 item 4, #747, #528): the payload gains `vintage` (per input: accession, form,
+# fy, fp, filed, period_end; `headcount` with its source and raw pointer) and the two
+# decomposition inputs `financial_assets` / `financial_returns` with `financial_basis`
+# (which concept tier resolved each, and whether the returns figure is the non-operating
+# proxy). The ruleset moves to production-topt-concepts:v2 with the fifteen fields those
+# inputs resolve from. No existing FIELD changes value: a v8 and a v9 payload agree on every
+# financial figure they share. `knowable_at` is the one shared stamp that can move: it is the
+# latest filing among the resolved inputs, and the two new inputs join that maximum, so a
+# v9 payload whose financial side was filed after its operating side is knowable later than
+# the v8 payload was — a different, more honest claim, not a changed number. v9 additionally
+# asserts where each number came from and what the issuer's financial side earns and holds.

@@ -129,6 +129,30 @@ class FinancialFactsBundle:
     # means the input resolved to nothing. `net_income_periods` maps each annual period
     # end (ISO) to its vintage so PEG's series is evidenced per period, not per bundle.
     vintages: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    # #528 decomposition inputs. `financial_assets` = cash and equivalents + the first
+    # investment tier with ANY value at the cash period end, summing only the fields that
+    # tier reports (see `financial_components`); `financial_returns` =
+    # investment income (+ dividends, + gains at the same period) or, flagged, the
+    # non-operating line. Each carries the basis that resolved it so the row can say
+    # which tags composed the number; None with a None basis means the source asserts
+    # nothing usable.
+    financial_assets: Decimal | None = None
+    financial_assets_basis: str | None = None
+    financial_returns: Decimal | None = None
+    financial_returns_basis: str | None = None
+    financial_returns_is_proxy: bool = False
+
+
+@dataclass(frozen=True)
+class FinancialComponents:
+    """The decomposition's financial side, resolved from balance-sheet instants and
+    income flows by declared preference — never by which tag happens to be newest."""
+
+    assets: _Datum | None
+    assets_basis: str | None
+    returns: _Datum | None
+    returns_basis: str | None
+    returns_is_proxy: bool
 
 
 @dataclass(frozen=True)
@@ -489,6 +513,122 @@ def pre_provision_profit(
     )
 
 
+_INVESTMENT_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("short_term_investments+long_term_investments", ("short_term_investments", "long_term_investments")),
+    ("marketable_securities", ("marketable_securities_current", "marketable_securities_noncurrent")),
+    ("securities", ("afs_debt_securities", "htm_securities", "equity_securities_fvni")),
+    ("investments_total", ("investments_total",)),
+)
+_BANK_PORTFOLIO_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "securities+fed_funds_sold",
+        ("afs_debt_securities", "htm_securities", "equity_securities_fvni", "fed_funds_sold"),
+    ),
+    ("investments_total", ("investments_total",)),
+)
+
+
+def _sum_at(end: date, datums: Sequence[_Datum]) -> _Datum:
+    """Several instants or flows for the same period end, as one figure attributed to the
+    later filing among them."""
+    later = max(datums, key=lambda datum: datum.filed)
+    return _Datum(
+        value=sum((datum.value for datum in datums), Decimal(0)),
+        filed=later.filed,
+        period_end=end,
+        accession=later.accession,
+        form=later.form,
+        fy=later.fy,
+        fp=later.fp,
+    )
+
+
+def _tier_at(
+    series: Callable[[str], dict[date, _Datum]], end: date, fields: Sequence[str]
+) -> tuple[list[_Datum], list[str]]:
+    datums: list[_Datum] = []
+    named: list[str] = []
+    for field_name in fields:
+        resolved = series(field_name)
+        if end in resolved:
+            datums.append(resolved[end])
+            named.append(field_name)
+    return datums, named
+
+
+def financial_components(
+    facts: dict[str, Any], cutoff: date, branch: OperatingBranch, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
+) -> FinancialComponents:
+    """#528: `financial_assets` and `financial_returns`, composed by declared preference.
+
+    Assets anchor on the latest cash period end (or the combined cash-and-short-term tag when
+    that is all the issuer reports) and add the FIRST investment tier with any value at that
+    end — `ShortTermInvestments + LongTermInvestments`, else the marketable-securities pair,
+    else AFS + HTM + equity securities, else `Investments` — so a filer that tags both the
+    pair and the components is never counted twice. A bank (FINANCIAL branch) holds its
+    securities portfolio as the financial side and never its cash (deposits in mirror).
+    Returns take investment income by preference, add dividends and gains reported for the
+    same period, and fall back to the non-operating line marked as a proxy. A bank's
+    returns are not resolved here: the bank-specific mapping is pending review (#528), so
+    the component is honestly absent rather than a wrong number.
+    """
+    memo: dict[str, dict[date, _Datum]] = {}
+
+    def series(field_name: str) -> dict[date, _Datum]:
+        # Each field's series is resolved once per call: the tiers below ask for the same
+        # fields more than once and `resolve_field` re-scans company-facts every time.
+        if field_name not in memo:
+            memo[field_name] = resolve_field(facts, ruleset, field_name, cutoff)
+        return memo[field_name]
+
+    assets: _Datum | None = None
+    assets_basis: str | None = None
+    if branch is OperatingBranch.FINANCIAL:
+        for basis, fields in _BANK_PORTFOLIO_TIERS:
+            ends = {end for field_name in fields for end in series(field_name)}
+            if not ends:
+                continue
+            end = max(ends)
+            datums, named = _tier_at(series, end, fields)
+            assets, assets_basis = _sum_at(end, datums), "+".join(named)
+            break
+    else:
+        cash = _latest(series("cash_and_equivalents"))
+        combined = _latest(series("cash_and_short_term_investments"))
+        if cash is not None:
+            end = cash.period_end
+            for basis, fields in _INVESTMENT_TIERS:
+                datums, named = _tier_at(series, end, fields)
+                if datums:
+                    assets, assets_basis = _sum_at(end, [cash, *datums]), "cash_and_equivalents+" + "+".join(named)
+                    break
+            else:
+                assets, assets_basis = cash, "cash_and_equivalents"
+        elif combined is not None:
+            end = combined.period_end
+            datums, named = _tier_at(series, end, ("long_term_investments",))
+            assets = _sum_at(end, [combined, *datums]) if datums else combined
+            assets_basis = "cash_and_short_term_investments" + ("+" + "+".join(named) if named else "")
+    returns: _Datum | None = None
+    returns_basis: str | None = None
+    proxy = False
+    if branch is not OperatingBranch.FINANCIAL:
+        income = _latest(series("investment_income"))
+        if income is not None:
+            parts, named = [income], ["investment_income"]
+            for field_name in ("investment_income_dividend", "investment_gains"):
+                extra = series(field_name).get(income.period_end)
+                if extra is not None:
+                    parts.append(extra)
+                    named.append(field_name)
+            returns, returns_basis = _sum_at(income.period_end, parts), "+".join(named)
+        else:
+            nonoperating = _latest(series("nonoperating_income"))
+            if nonoperating is not None:
+                returns, returns_basis, proxy = nonoperating, "nonoperating_income", True
+    return FinancialComponents(assets, assets_basis, returns, returns_basis, proxy)
+
+
 def build_bundle(
     facts: dict[str, Any],
     cutoff: date,
@@ -551,7 +691,12 @@ def build_bundle(
     # downstream rests on all of them, so the payload is knowable only once the latest of
     # them was filed — the PIT obligation #284 named and could not satisfy while only the
     # endpoints travelled.
-    resolved = [datum for datum in (profit, assets, shares, revenue, *earnings_periods.values()) if datum is not None]
+    financial = financial_components(facts, cutoff, branch, ruleset)
+    resolved = [
+        datum
+        for datum in (profit, assets, shares, revenue, financial.assets, financial.returns, *earnings_periods.values())
+        if datum is not None
+    ]
     knowable = max((datum.filed for datum in resolved), default=None)
     vintages: dict[str, Any] = {
         name: _vintage(datum)
@@ -561,6 +706,8 @@ def build_bundle(
             ("shares_outstanding", shares),
             ("revenue", revenue),
             ("net_income", net_income),
+            ("financial_assets", financial.assets),
+            ("financial_returns", financial.returns),
         )
         if datum is not None
     }
@@ -588,6 +735,11 @@ def build_bundle(
         net_income=_v(net_income),
         net_income_by_period={end: datum.value for end, datum in sorted(earnings_periods.items())},
         vintages=vintages,
+        financial_assets=_v(financial.assets),
+        financial_assets_basis=financial.assets_basis,
+        financial_returns=_v(financial.returns),
+        financial_returns_basis=financial.returns_basis,
+        financial_returns_is_proxy=financial.returns_is_proxy,
     )
 
 
@@ -707,6 +859,14 @@ class SecFinancialFactAdapter:
             "revenue_period_end": _d(bundle.revenue_period_end),
             "shares_period_end": _d(bundle.shares_period_end),
             "net_income": _s(bundle.net_income),
+            # #528: the decomposition's financial side, with the basis that composed it.
+            "financial_assets": _s(bundle.financial_assets),
+            "financial_returns": _s(bundle.financial_returns),
+            "financial_basis": {
+                "assets": bundle.financial_assets_basis,
+                "returns": bundle.financial_returns_basis,
+                "returns_is_proxy": bundle.financial_returns_is_proxy,
+            },
             # Sorted so the payload hash depends on the series, not on dict insertion order.
             "net_income_by_period": {
                 end.isoformat(): _s(value) for end, value in sorted(bundle.net_income_by_period.items())

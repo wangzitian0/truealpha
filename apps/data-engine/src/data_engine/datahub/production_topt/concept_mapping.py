@@ -30,7 +30,7 @@ _KIND = "concept-mapping"
 # contract's docstring for why merging the two produces a silently wrong number.
 DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
     {
-        "version": "production-topt-concepts:v1",
+        "version": "production-topt-concepts:v2",
         "mappings": (
             {
                 "field": "revenue",
@@ -147,6 +147,117 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "unit": "USD",
                 "kind": "synonym",
                 "concepts": ({"taxonomy": "us-gaap", "concept": "NoninterestExpense"},),
+            },
+            # --- #528 decomposition inputs (2026-09-08 coverage probe on 111 companyfacts bodies) ---
+            # Balance-sheet instants for `financial_assets`. Cash is its own field; the
+            # investment tiers are composed in `sec_financial_adapter.financial_components`
+            # in a fixed preference order so no concept is counted twice.
+            {
+                "field": "cash_and_equivalents",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": (
+                    {"taxonomy": "us-gaap", "concept": "CashAndCashEquivalentsAtCarryingValue"},
+                    {"taxonomy": "us-gaap", "concept": "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"},
+                ),
+            },
+            {
+                # A combined tag some filers use instead of cash + short-term investments.
+                "field": "cash_and_short_term_investments",
+                "unit": "USD",
+                "kind": "fallback",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "CashCashEquivalentsAndShortTermInvestments"},),
+            },
+            {
+                "field": "short_term_investments",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "ShortTermInvestments"},),
+            },
+            {
+                "field": "long_term_investments",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "LongTermInvestments"},),
+            },
+            {
+                "field": "marketable_securities_current",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "MarketableSecuritiesCurrent"},),
+            },
+            {
+                "field": "marketable_securities_noncurrent",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "MarketableSecuritiesNoncurrent"},),
+            },
+            {
+                "field": "afs_debt_securities",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "AvailableForSaleSecuritiesDebtSecurities"},),
+            },
+            {
+                "field": "htm_securities",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "HeldToMaturitySecurities"},),
+            },
+            {
+                "field": "equity_securities_fvni",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "EquitySecuritiesFvNi"},),
+            },
+            {
+                "field": "investments_total",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "Investments"},),
+            },
+            {
+                "field": "fed_funds_sold",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": (
+                    {"taxonomy": "us-gaap", "concept": "FederalFundsSoldAndSecuritiesPurchasedUnderAgreementsToResell"},
+                ),
+            },
+            # Flows for `financial_returns`: investment income by preference (a FALLBACK list —
+            # the three tags are different quantities, not synonyms), dividends and gains
+            # added when reported for the same period, and the non-operating line as a
+            # flagged proxy of last resort.
+            {
+                "field": "investment_income",
+                "unit": "USD",
+                "kind": "fallback",
+                "concepts": (
+                    {"taxonomy": "us-gaap", "concept": "InvestmentIncomeInterestAndDividend"},
+                    {"taxonomy": "us-gaap", "concept": "InvestmentIncomeNet"},
+                    {"taxonomy": "us-gaap", "concept": "InvestmentIncomeInterest"},
+                ),
+            },
+            {
+                "field": "investment_income_dividend",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "InvestmentIncomeDividend"},),
+            },
+            {
+                "field": "investment_gains",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "GainLossOnInvestments"},),
+            },
+            {
+                "field": "nonoperating_income",
+                "unit": "USD",
+                "kind": "fallback",
+                "concepts": (
+                    {"taxonomy": "us-gaap", "concept": "NonoperatingIncomeExpense"},
+                    {"taxonomy": "us-gaap", "concept": "OtherNonoperatingIncomeExpense"},
+                ),
             },
         ),
     }
