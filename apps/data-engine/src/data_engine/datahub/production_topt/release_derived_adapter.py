@@ -59,6 +59,10 @@ class ReleaseDerivedRecord:
     def __post_init__(self) -> None:
         if self.semantic_type not in _RELEASE_SEMANTICS:
             raise ValueError(f"unsupported release-derived semantic: {self.semantic_type}")
+        if self.knowable_at_basis not in KNOWABLE_AT_BASES:
+            raise ValueError(
+                f"unsupported knowable_at basis: {self.knowable_at_basis!r} (expected one of {KNOWABLE_AT_BASES})"
+            )
 
 
 class ReleaseDerivedAdapter:

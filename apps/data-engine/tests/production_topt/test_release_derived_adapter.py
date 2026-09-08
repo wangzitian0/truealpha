@@ -147,3 +147,19 @@ def test_build_routes_payload_still_satisfies_the_strict_identity_model() -> Non
         context = _context(universe_published_at=published_at)
         adapter = build_route(context, [_cell("wi-1")])
         IdentityPayload.model_validate(adapter.targets["wi-1"].payload)
+
+
+def test_an_unknown_knowable_at_basis_is_refused_before_it_can_land() -> None:
+    import pytest
+
+    from data_engine.datahub.production_topt.release_derived_adapter import KNOWABLE_AT_BASES, ReleaseDerivedRecord
+
+    assert KNOWABLE_AT_BASES == ("universe-head", "report-date")
+    with pytest.raises(ValueError, match="knowable_at basis"):
+        ReleaseDerivedRecord(
+            semantic_type="listing-identity",
+            subject_id="listing:xnas:aapl",
+            payload={},
+            knowable_at=datetime(2026, 3, 31, tzinfo=UTC),
+            knowable_at_basis="universe-heaf",
+        )
