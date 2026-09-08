@@ -132,6 +132,9 @@ def test_the_revenue_proxy_is_refused_for_an_industry_it_was_not_approved_for() 
     assert result.record.payload["gross_profit"] is None, "an oil major must not publish revenue as gross profit"
     # Revenue itself is untouched: the issuer really does report it.
     assert result.record.payload["revenue"] == "332238000000"
+    # And the lineage does not claim a filing for the input it refused (Copilot on #774).
+    assert "gross_profit" not in result.record.payload["vintage"]
+    assert "revenue" in result.record.payload["vintage"]
 
 
 def test_the_revenue_proxy_still_applies_to_an_approved_industry() -> None:

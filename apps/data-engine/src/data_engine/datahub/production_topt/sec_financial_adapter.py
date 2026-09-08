@@ -665,8 +665,14 @@ class SecFinancialFactAdapter:
                 end.isoformat(): _s(value) for end, value in sorted(bundle.net_income_by_period.items())
             },
             # #530 item 4: the filing behind each input, on the row. `mart.topt_core_meta_info`
-            # surfaces it per observation, so a served number names its document.
-            "vintage": {key: bundle.vintages[key] for key in sorted(bundle.vintages)},
+            # surfaces it per observation, so a served number names its document. A key is
+            # present only for an input the payload actually asserts: when the revenue proxy
+            # is refused above, `gross_profit` is null and must not claim a filing.
+            "vintage": {
+                key: bundle.vintages[key]
+                for key in sorted(bundle.vintages)
+                if not (key == "gross_profit" and gross_profit_value is None)
+            },
         }
         return FetchSuccess(
             raw=RawResponse(
