@@ -1181,3 +1181,102 @@ def test_a_derived_figure_is_attributed_to_the_later_filing() -> None:
     assert bundle.gross_profit == 150
     assert bundle.vintages["gross_profit"]["accession"] == "0000000001-26-000002"
     assert bundle.vintages["gross_profit"]["filed"] == "2026-02-20"
+
+
+def _instant(end: str, val: object, filed: str, *, accn: str | None = None) -> dict:
+    entry = {"end": end, "val": val, "filed": filed, "form": "10-K", "fy": int(end[:4]), "fp": "FY"}
+    if accn is not None:
+        entry["accn"] = accn
+    return entry
+
+
+def _facts_with(gaap_extra: dict) -> dict:
+    facts = _facts()
+    for concept, entries in gaap_extra.items():
+        facts["facts"]["us-gaap"][concept] = {"units": {"USD": entries}}
+    return facts
+
+
+def test_financial_assets_take_cash_plus_the_first_investment_tier_only_once() -> None:
+    """#528: a manufacturer tagging cash, ShortTermInvestments AND the marketable-securities
+    pair resolves cash + the STI/LTI tier and never adds the second tier on top."""
+    facts = _facts_with(
+        {
+            "CashAndCashEquivalentsAtCarryingValue": [
+                _instant("2025-12-31", 100, "2026-02-01", accn="0000000001-26-000001")
+            ],
+            "ShortTermInvestments": [_instant("2025-12-31", 40, "2026-02-01")],
+            "LongTermInvestments": [_instant("2025-12-31", 60, "2026-02-01")],
+            "MarketableSecuritiesCurrent": [_instant("2025-12-31", 999, "2026-02-01")],
+            "InvestmentIncomeInterest": [
+                _annual("2025-12-31", "2025-01-01", 7, "2026-02-01", accn="0000000001-26-000001")
+            ],
+            "GainLossOnInvestments": [_annual("2025-12-31", "2025-01-01", 3, "2026-02-01")],
+        }
+    )
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.financial_assets == Decimal("200")
+    assert bundle.financial_assets_basis == "cash_and_equivalents+short_term_investments+long_term_investments"
+    assert bundle.financial_returns == Decimal("10")
+    assert bundle.financial_returns_basis == "investment_income+investment_gains"
+    assert bundle.financial_returns_is_proxy is False
+    assert bundle.vintages["financial_assets"]["period_end"] == "2025-12-31"
+    assert bundle.vintages["financial_returns"]["accession"] == "0000000001-26-000001"
+
+
+def test_financial_returns_fall_back_to_the_non_operating_line_flagged_as_a_proxy() -> None:
+    facts = _facts_with(
+        {
+            "CashCashEquivalentsAndShortTermInvestments": [_instant("2025-12-31", 150, "2026-02-01")],
+            "OtherNonoperatingIncomeExpense": [_annual("2025-12-31", "2025-01-01", -4, "2026-02-01")],
+        }
+    )
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert (
+        bundle.financial_assets == Decimal("150") and bundle.financial_assets_basis == "cash_and_short_term_investments"
+    )
+    assert bundle.financial_returns == Decimal("-4")
+    assert bundle.financial_returns_basis == "nonoperating_income" and bundle.financial_returns_is_proxy is True
+
+
+def test_a_bank_holds_its_securities_portfolio_and_reports_no_financial_return_yet() -> None:
+    """A bank's cash is deposits in mirror, so the financial side is the portfolio only, and
+    its return stays absent until the bank-specific mapping is reviewed (#528)."""
+    facts = _facts_with(
+        {
+            "CashAndCashEquivalentsAtCarryingValue": [_instant("2025-12-31", 500_000, "2026-02-20")],
+            "AvailableForSaleSecuritiesDebtSecurities": [_instant("2025-12-31", 300, "2026-02-20")],
+            "HeldToMaturitySecurities": [_instant("2025-12-31", 200, "2026-02-20")],
+            "FederalFundsSoldAndSecuritiesPurchasedUnderAgreementsToResell": [_instant("2025-12-31", 50, "2026-02-20")],
+            "InvestmentIncomeInterest": [_annual("2025-12-31", "2025-01-01", 99, "2026-02-20")],
+        }
+    )
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.financial_assets == Decimal("550")
+    assert bundle.financial_assets_basis == "afs_debt_securities+htm_securities+fed_funds_sold"
+    assert bundle.financial_returns is None and bundle.financial_returns_basis is None
+
+
+def test_the_payload_carries_the_financial_side_and_its_basis() -> None:
+    item = _work_item("c" * 64)
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda c, cut, b: _bundle(
+            financial_assets=Decimal("200"),
+            financial_assets_basis="cash_and_equivalents+short_term_investments",
+            financial_returns=Decimal("10"),
+            financial_returns_basis="investment_income",
+        ),
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    payload = result.record.payload
+    assert payload["financial_assets"] == "200" and payload["financial_returns"] == "10"
+    assert payload["financial_basis"] == {
+        "assets": "cash_and_equivalents+short_term_investments",
+        "returns": "investment_income",
+        "returns_is_proxy": False,
+    }
+    bare = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda c, cut, b: _bundle()).fetch(item)
+    assert bare.record.payload["financial_assets"] is None
+    assert bare.record.payload["financial_basis"] == {"assets": None, "returns": None, "returns_is_proxy": False}

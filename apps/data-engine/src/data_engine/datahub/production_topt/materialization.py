@@ -88,6 +88,11 @@ class FinancialFactPayload(_FrozenModel):
     # through `mart.topt_core_meta_info` so a number names its document. Absent on
     # observations written before parser v9's adapter.
     vintage: dict[str, Any] | None = None
+    # #528 decomposition inputs (parser v9): the financial side's balance and its return,
+    # plus which concept tier composed each and whether the return is the non-operating proxy.
+    financial_assets: Decimal | None = None
+    financial_returns: Decimal | None = None
+    financial_basis: dict[str, Any] | None = None
     # Superseded by `net_income_by_period` at parser v8 and no longer written. Kept on the
     # contract because observations captured under v5-v7 carry them and must still
     # validate — a point-in-time payload is never rewritten.
