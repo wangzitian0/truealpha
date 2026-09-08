@@ -67,6 +67,15 @@ def migration_ids(path: Path | None = None) -> tuple[str, ...]:
     Ordered by filename because that is the order `db/apply_migrations.sh` applies them in;
     the id is the stem, which is how `db/migrations/README.md` and the migration-chain guard
     name a migration.
+
+    Ids rather than a hash of the files' bytes, because this repository's own frozen release
+    contract already defines the migration set that way: `ReleaseManifest.migration_set_sha256`
+    is `canonical_sha256(migration_ids)`. It also keeps the payload explainable when it is read
+    back out of `staging.contract_objects` -- "which migrations was this release built on" is
+    answerable, not just comparable. The trade is that an in-place edit of an ALREADY-RELEASED
+    migration would not move the id; `db/migrations/README.md` forbids that ("the filename ...
+    is permanent once an environment has run it", "never rename a migration that has reached
+    staging or production") and `libs/runtime/tests/test_migration_chain.py` guards the chain.
     """
     directory = MIGRATIONS_PATH if path is None else Path(path)
     if not directory.is_dir():

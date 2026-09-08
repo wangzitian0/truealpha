@@ -298,11 +298,15 @@ def plan_and_persist(
         (release_manifest_id, release_sha256, psycopg.types.json.Jsonb(identity.payload)),
     )
     # The run records which data-engine build produced it (#712): the compose injects the
-    # image digest and the git sha into every data-engine process. Read through `settings`
-    # (#784) rather than the process environment, so the manifest that declares these names
-    # is the same object that resolves them -- a direct environment read bypassed the
-    # declaration entirely, which is why nothing reconciled these three values and nothing
-    # could require them at boot.
+    # image digest and the git sha into every data-engine process. `mart.data_engine_identity`
+    # projects this for llm-service's /health and the admin page, so "which data engine is
+    # running" is a fact the UI can show and the deploy lane can compare, instead of a parser
+    # vintage that happened to match.
+    #
+    # Read through `settings` (#784) rather than the process environment, so the manifest that
+    # declares these names is the same object that resolves them -- a direct environment read
+    # bypassed the declaration entirely, which is why nothing reconciled these values and
+    # nothing could require them at boot.
     run_plan = {
         "run_id": run.run_id,
         "release_manifest_id": release_manifest_id,
