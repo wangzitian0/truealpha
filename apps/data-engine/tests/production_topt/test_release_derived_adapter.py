@@ -108,7 +108,10 @@ def test_build_route_uses_the_universe_heads_published_at_when_present() -> None
     adapter = build_route(context, [_cell("wi-1")])
     record = adapter.targets["wi-1"]
     assert record.knowable_at == published_at
-    assert record.payload["knowable_at_basis"] == "universe-head"
+    assert record.knowable_at_basis == "universe-head"
+    # The basis is provenance, carried in the raw bytes only -- never inside the
+    # strictly-validated normalized payload (IdentityPayload forbids extra keys).
+    assert "knowable_at_basis" not in record.payload
 
 
 def test_build_route_falls_back_to_the_partition_start_without_a_universe_head() -> None:
@@ -118,7 +121,8 @@ def test_build_route_falls_back_to_the_partition_start_without_a_universe_head()
     adapter = build_route(context, [_cell("wi-1", semantic_type="universe-membership")])
     record = adapter.targets["wi-1"]
     assert record.knowable_at == context.partition_start
-    assert record.payload["knowable_at_basis"] == "report-date"
+    assert record.knowable_at_basis == "report-date"
+    assert "knowable_at_basis" not in record.payload
 
 
 def test_build_route_refuses_a_universe_head_published_after_the_cutoff() -> None:
@@ -130,3 +134,16 @@ def test_build_route_refuses_a_universe_head_published_after_the_cutoff() -> Non
     adapter = build_route(context, [_cell(item.work_item_id)])
     result = adapter.fetch(item)
     assert result.reason_code is ObligationReasonCode.LOOK_AHEAD_VIOLATION
+
+
+def test_build_routes_payload_still_satisfies_the_strict_identity_model() -> None:
+    """Regression for the Copilot finding on #775: `knowable_at_basis` must never land
+    inside `payload` -- `IdentityPayload` (materialization.py) validates that exact dict
+    with `extra="forbid"`, and a stray key there would break snapshot materialization for
+    every listing-identity/universe-membership row, not just this test's fixture."""
+    from data_engine.datahub.production_topt.materialization import IdentityPayload
+
+    for published_at in (datetime(2026, 2, 10, tzinfo=UTC), None):
+        context = _context(universe_published_at=published_at)
+        adapter = build_route(context, [_cell("wi-1")])
+        IdentityPayload.model_validate(adapter.targets["wi-1"].payload)

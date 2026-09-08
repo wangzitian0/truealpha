@@ -47,6 +47,14 @@ class ReleaseDerivedRecord:
     subject_id: str
     payload: dict[str, Any]
     knowable_at: datetime
+    # Which basis produced `knowable_at` (#530 item 2): "universe-head" when a governed
+    # universe's publication time drove it, "report-date" for the hand-curated corpus
+    # (and the default for every pre-existing caller that predates this field). Carried
+    # in the RAW bytes only, NEVER inside `payload`: `IdentityPayload`
+    # (materialization.py) validates that payload with `extra="forbid"` and must stay
+    # exactly {issuer_id, instrument_id, listing_id, ticker} (Copilot review on #775 --
+    # putting it in the payload broke snapshot materialization).
+    knowable_at_basis: str = "report-date"
 
     def __post_init__(self) -> None:
         if self.semantic_type not in _RELEASE_SEMANTICS:
@@ -76,6 +84,9 @@ class ReleaseDerivedAdapter:
                 "semantic_type": record.semantic_type,
                 "subject_id": record.subject_id,
                 "payload": record.payload,
+                # Provenance only, in the immutable raw bytes -- never in `payload`
+                # itself (see `ReleaseDerivedRecord.knowable_at_basis`).
+                "knowable_at_basis": record.knowable_at_basis,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -119,9 +130,9 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> ReleaseDer
                 "instrument_id": cell.instrument_id,
                 "listing_id": cell.listing_id,
                 "ticker": cell.ticker,
-                "knowable_at_basis": knowable_at_basis,
             },
             knowable_at=knowable_at,
+            knowable_at_basis=knowable_at_basis,
         )
         for cell in cells
     }
