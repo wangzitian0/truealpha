@@ -344,6 +344,19 @@ def as_selection(selection: ModelSelection) -> extraction_primitive.Selection | 
     )
 
 
+def _integral_value(value: int | float) -> int:
+    """`Candidate.value` on the shared primitive is `int | float` — headcount is always
+    integral, but a silent `int(...)` truncation would turn a hypothetical 42.7 into 42
+    without complaint (Copilot review on #782). This module's own `Candidate.value` is
+    `int`, so a non-integral value here means the caller handed this selector a candidate
+    it was never meant for; that is a caller bug, not a value to guess at."""
+    if isinstance(value, int):
+        return value
+    if value.is_integer():
+        return int(value)
+    raise ValueError(f"as_selector() received a non-integral candidate value {value!r}; headcount candidates are int")
+
+
 def as_selector(
     connection: Any | None,
     *,
@@ -368,7 +381,7 @@ def as_selector(
     """
 
     def select(candidates: Sequence[extraction_primitive.Candidate]) -> extraction_primitive.Selection | None:
-        local_candidates = [Candidate(value=int(c.value), sentence=c.sentence) for c in candidates]
+        local_candidates = [Candidate(value=_integral_value(c.value), sentence=c.sentence) for c in candidates]
         selection = select_headcount(
             connection,
             cik=cik,

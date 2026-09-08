@@ -110,6 +110,37 @@ def test_a_declined_selection_becomes_none_not_a_guess(seated):
     assert selector(AEP) is None
 
 
+def test_a_non_integral_candidate_value_raises_rather_than_silently_truncating(seated):
+    """Copilot review on #782: `Candidate.value` is `int | float` on the shared primitive,
+    but this module's own `Candidate` is `int`-only (headcount). A bare `int(42.7)` would
+    have thrown away `.7` with no complaint; this must raise instead."""
+    selector = as_selector(
+        _Conn(),
+        cik=1,
+        accession="a",
+        form="10-K",
+        issuer_label="X",
+        caller="t",
+        transport=lambda *_: (200, _answer(17581, 0)),
+    )
+    with pytest.raises(ValueError, match="non-integral"):
+        selector([Candidate(17581.7, "As of December 31, 2025, we had 17,581.7 employees on average.")])
+
+
+def test_a_whole_number_float_candidate_value_is_accepted(seated):
+    selector = as_selector(
+        _Conn(),
+        cik=1,
+        accession="a",
+        form="10-K",
+        issuer_label="X",
+        caller="t",
+        transport=lambda *_: (200, _answer(17581, 0)),
+    )
+    selection = selector([Candidate(17581.0, "whole-number float")])
+    assert selection is not None and selection.value == 17581
+
+
 def test_as_selection_declines_on_a_refusal_without_calling_anything():
     from data_engine.sources.llm import ModelSelection
 
