@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -1024,21 +1025,89 @@ def test_the_run_plan_records_which_data_engine_build_produced_it(connection, mo
     """#712: the compose injects GIT_COMMIT_SHA and TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST into
     every data-engine process; the run plan now carries them and
     `mart.data_engine_identity` projects them for /health and /admin. Read back through the
-    view, which is what the consumers read, not through the payload column."""
-    monkeypatch.setenv("GIT_COMMIT_SHA", "4cf7291deadbeef")
-    monkeypatch.setenv("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST", "sha256:00f7")
+    view, which is what the consumers read, not through the payload column.
+
+    Driven through `settings` since #784 — the deployed reader resolves these names through
+    the model that declares them in `apps/data-engine/required-env.generated.json`, so this
+    test sets what the deployment set, not what happened to be in `os.environ`."""
+    monkeypatch.setattr(settings, "git_commit_sha", "4cf7291deadbeef")
+    monkeypatch.setattr(settings, "data_engine_image_digest", "sha256:00f7")
     stamped = plan_and_persist(connection, cutoff=CUTOFF, version="test-identity-stamped")
     row = connection.execute(
         "select git_sha, image_digest from mart.data_engine_identity where run_id = %s", (stamped.run_id,)
     ).fetchone()
     assert row == ("4cf7291deadbeef", "sha256:00f7")
 
-    # A process without the env (local, a CI job that forgot to pass it) is recorded as
-    # unknown, never as a stale value carried from somewhere else.
-    monkeypatch.delenv("GIT_COMMIT_SHA")
-    monkeypatch.delenv("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST")
+    # A process the deployment told nothing (local, a CI job that forgot to pass it) is
+    # recorded as unknown, never as a stale value carried from somewhere else.
+    monkeypatch.setattr(settings, "git_commit_sha", "")
+    monkeypatch.setattr(settings, "data_engine_image_digest", "")
     bare = plan_and_persist(connection, cutoff=CUTOFF + timedelta(minutes=1), version="test-identity-bare")
     row = connection.execute(
         "select git_sha, image_digest from mart.data_engine_identity where run_id = %s", (bare.run_id,)
     ).fetchone()
     assert row == ("unknown", "unknown")
+
+
+def test_the_run_plan_reads_the_build_through_settings_not_the_process_environment(connection, monkeypatch) -> None:
+    """#784, red against the code this replaced: `plan_and_persist` read
+    `os.environ.get("GIT_COMMIT_SHA")` and `os.environ.get("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST")`
+    at the call site, so the names the environment manifest declares and the values the run
+    actually stamped were two unconnected things — nothing reconciled them and boot
+    validation could not require them. Both are set here, and the settings value must win."""
+    monkeypatch.setattr(settings, "git_commit_sha", "v0.0.49")
+    monkeypatch.setattr(settings, "data_engine_image_digest", "sha256:" + "a" * 64)
+    monkeypatch.setenv("GIT_COMMIT_SHA", "v0.0.00-from-the-environment")
+    monkeypatch.setenv("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST", "sha256:" + "b" * 64)
+    planned = plan_and_persist(connection, cutoff=CUTOFF + timedelta(minutes=2), version="test-identity-settings")
+    row = connection.execute(
+        "select git_sha, image_digest from mart.data_engine_identity where run_id = %s", (planned.run_id,)
+    ).fetchone()
+    assert row == ("v0.0.49", "sha256:" + "a" * 64)
+
+
+def test_the_release_identity_the_run_stamps_is_measured_not_minted_from_a_literal(connection, monkeypatch) -> None:
+    """#784/#712: `release_manifest_id` used to be the hash of `{"kind": ...}` — one value
+    for every run, every tag and both environments. It is now the artifact's measurement, so
+    two releases stamp two ids, and the payload persisted beside it says what was measured.
+
+    Also records what the DEPLOYMENT declared this release to be (`TRUEALPHA_RELEASE_MANIFEST_ID`,
+    still a hand-written Vault value today), so the hand-off to infra2 is observable on the
+    row rather than asserted in a PR body."""
+    monkeypatch.setattr(settings, "release_manifest_id", "release-manifest:" + "c" * 64)
+    monkeypatch.setattr(settings, "capture_approved_by", "zitian")
+
+    monkeypatch.setattr(settings, "git_commit_sha", "v0.0.49")
+    first = plan_and_persist(connection, cutoff=CUTOFF + timedelta(minutes=3), version="test-release-first")
+    monkeypatch.setattr(settings, "git_commit_sha", "v0.0.50")
+    second = plan_and_persist(connection, cutoff=CUTOFF + timedelta(minutes=4), version="test-release-second")
+
+    assert first.release_manifest_id != second.release_manifest_id, "two releases, two identities"
+    assert re.fullmatch(r"release-manifest:[0-9a-f]{64}", first.release_manifest_id)
+
+    payload = connection.execute(
+        "select payload from raw.production_topt_run_plans where run_id = %s", (first.run_id,)
+    ).fetchone()[0]
+    assert payload["release_manifest_id"] == first.release_manifest_id
+    assert payload["declared_release_manifest_id"] == "release-manifest:" + "c" * 64
+    assert payload["capture_approved_by"] == "zitian"
+
+    # The contract object the run wrote is the measurement itself, not a literal.
+    measured = connection.execute(
+        "select content_sha256, payload from staging.contract_objects where contract_id = %s",
+        (first.release_manifest_id,),
+    ).fetchone()
+    assert measured[0] == first.release_manifest_id.removeprefix("release-manifest:")
+    assert measured[1]["git_commit_sha"] == "v0.0.49"
+    assert measured[1]["migration_ids"] and measured[1]["environment_contract_sha256"]
+
+    # This payload is the first content-addressed payload in the lane to carry an ARRAY, and
+    # the database canonicalises payloads with its own function -- the one the run-plan and
+    # snapshot triggers hash with (`raw.canonical_sha256`, migration 0023). Python and
+    # Postgres must agree about what this release is called, or a row that is valid on one
+    # side of the boundary is a drifted identity on the other.
+    in_database = connection.execute(
+        "select raw.canonical_sha256(payload) from staging.contract_objects where contract_id = %s",
+        (first.release_manifest_id,),
+    ).fetchone()[0]
+    assert in_database == measured[0]

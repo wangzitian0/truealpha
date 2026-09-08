@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -10,6 +11,8 @@ from truealpha_contracts.release import (
     ModelRevisionRef,
     ReleaseArtifact,
     ReleaseManifest,
+    live_release_manifest_id,
+    live_release_payload,
     resolve_accepted_release,
 )
 from truealpha_contracts.universe import UniverseRef
@@ -259,3 +262,91 @@ def test_runtime_binding_resolves_signed_manifest_and_rejects_substitution():
             source_readiness_report_sha256=manifest.source_readiness_report_sha256,
             configuration_sha256=manifest.configuration_sha256,
         )
+
+
+# --- the live release identity is a measurement (#784, #712) ---------------------------
+#
+# It was `canonical_sha256({"kind": "production-topt-live-release"})`: one 64-hex value for
+# every tag, every run and both environments. Every assertion below is red against that
+# code -- the first two because a constant cannot tell two releases apart, the rest because
+# there was nothing to validate.
+
+_MIGRATIONS = ("0001_schemas", "20260908T1055_factors_question_coverage_report")
+_CONTRACT = "e" * 64
+
+
+def _live_id(**overrides) -> str:
+    arguments = {
+        "git_commit_sha": "v0.0.49",
+        "migration_ids": _MIGRATIONS,
+        "environment_contract_sha256": _CONTRACT,
+    }
+    arguments.update(overrides)
+    return live_release_manifest_id(**arguments)
+
+
+def test_two_releases_do_not_share_one_identity() -> None:
+    assert _live_id(git_commit_sha="v0.0.49") != _live_id(git_commit_sha="v0.0.50")
+    # ... and neither does a release that ships a different schema, or that changes what
+    # the deployment has to supply.
+    assert _live_id(migration_ids=(*_MIGRATIONS, "20260909T0000_datahub_next")) != _live_id()
+    assert _live_id(environment_contract_sha256="f" * 64) != _live_id()
+
+
+def test_the_identity_is_stable_for_the_same_inputs() -> None:
+    assert _live_id() == _live_id()
+    # Order is part of the measurement: `db/apply_migrations.sh` applies the files in glob
+    # order, so a reordered set is a different schema, not the same one re-sorted.
+    assert _live_id(migration_ids=tuple(reversed(_MIGRATIONS))) != _live_id()
+
+
+def test_the_identity_keeps_the_content_addressed_shape_infra2_asserts() -> None:
+    # `^[a-z][a-z0-9-]*:[0-9a-f]{64}$` in truealpha/truealpha/20.data_engine/deploy.py, and
+    # `_CONTENT_ID` here.
+    assert re.fullmatch(r"^release-manifest:[0-9a-f]{64}$", _live_id())
+
+
+def test_the_payload_says_what_the_identity_measured() -> None:
+    payload = live_release_payload(
+        git_commit_sha="v0.0.49", migration_ids=_MIGRATIONS, environment_contract_sha256=_CONTRACT
+    )
+    assert payload == {
+        "kind": "production-topt-live-release",
+        "git_commit_sha": "v0.0.49",
+        "migration_ids": list(_MIGRATIONS),
+        "environment_contract_sha256": _CONTRACT,
+    }
+    assert live_release_manifest_id(
+        git_commit_sha="v0.0.49", migration_ids=_MIGRATIONS, environment_contract_sha256=_CONTRACT
+    ) == "release-manifest:" + _hash(payload)
+
+
+def test_an_unidentified_build_is_named_unknown_rather_than_refused() -> None:
+    """Local and CI inject no release ref; `unknown` is honest and is its own identity."""
+    assert _live_id(git_commit_sha="unknown") not in {_live_id(), _live_id(git_commit_sha="v0.0.50")}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"git_commit_sha": ""},
+        {"git_commit_sha": "  "},
+        # git reads a leading "-" as an option, and whitespace makes a failure
+        # non-deterministic (truealpha_runtime.deployed_release).
+        {"git_commit_sha": "-v0.0.49"},
+        {"git_commit_sha": "v 0.0.49"},
+        {"migration_ids": ()},
+        {"migration_ids": ("0001_schemas", "0001_schemas")},
+        {"migration_ids": ("0001_schemas", "")},
+        {"environment_contract_sha256": "not-a-hash"},
+        {"environment_contract_sha256": ("E" * 64)},
+    ],
+)
+def test_an_unmeasurable_input_is_refused_rather_than_hashed(overrides) -> None:
+    with pytest.raises(ValueError):
+        _live_id(**overrides)
+
+
+def test_surrounding_whitespace_is_the_same_release_not_a_second_one() -> None:
+    """A rendered template line ending in a newline must not mint a second identity."""
+    assert _live_id(git_commit_sha=" v0.0.49\n") == _live_id(git_commit_sha="v0.0.49")

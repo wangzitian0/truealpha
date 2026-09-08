@@ -20,6 +20,46 @@ class Settings(RuntimeSettings):
         """
         return CaptureEnvironment(self.environment_tier.value)
 
+    # --- release identity injected by infra2's compose (#784, #712) --------------------
+    #
+    # These three values reach every data-engine process through
+    # `truealpha/truealpha/20.data_engine/compose.yaml`, and until #784 no manifest
+    # declared them and no code read them through `settings`: `os.environ.get(...)` at two
+    # call sites was the whole contract, so nothing reconciled them, nothing could require
+    # them at boot, and an environment that silently stopped injecting one read as
+    # "unknown" rather than as a fault.
+    #
+    # The env names are the ones the compose actually sets -- `TRUEALPHA_`-prefixed --
+    # declared as validation aliases rather than renamed on the infra2 side. The manifest
+    # must describe reality; a tidier name that nothing injects would be a manifest that
+    # validates an environment nobody deploys.
+    #
+    # `source: "release"` for the two values a release request determines (infra2's
+    # `pin_release` resolves the tag to a registry digest and writes both), `source:
+    # "decision"` for the reviewed human approval that lives in
+    # `governance/approvals/<env>.yaml`. Both classes are injected by the deployment
+    # rather than held in a secret store, which infra2-sdk's offline gate enforces.
+    release_manifest_id: str = Field(
+        default="",
+        validation_alias="TRUEALPHA_RELEASE_MANIFEST_ID",
+        json_schema_extra={"source": "release", "group": "release"},
+    )
+    data_engine_image_digest: str = Field(
+        default="",
+        validation_alias="TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST",
+        json_schema_extra={"source": "release", "group": "release"},
+    )
+    configuration_sha256: str = Field(
+        default="",
+        validation_alias="TRUEALPHA_CONFIGURATION_SHA256",
+        json_schema_extra={"source": "release", "group": "release"},
+    )
+    capture_approved_by: str = Field(
+        default="",
+        validation_alias="TRUEALPHA_CAPTURE_APPROVED_BY",
+        json_schema_extra={"source": "decision", "group": "release"},
+    )
+
     # The shared runtime contract owns DATABASE_URL; this service composes it for the
     # host-network topology (host loopback port), which is why the override lives here.
     database_url: str = Field(

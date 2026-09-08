@@ -1,4 +1,6 @@
 from fastapi.testclient import TestClient
+from llm_service import main
+from llm_service.config import Settings
 from llm_service.main import ROUTED_PREFIX, app
 
 
@@ -18,8 +20,13 @@ def test_health():
 
 
 def test_health_reports_the_deployed_git_sha(monkeypatch):
-    """#508: tools/health_check.py needs this to confirm the deployed release is live."""
-    monkeypatch.setenv("GIT_COMMIT_SHA", "abc1234")
+    """#508: tools/health_check.py needs this to confirm the deployed release is live.
+
+    Through `settings` since #784: the value this endpoint publishes is the one the manifest
+    it boot-validates against declared, not whatever sits in the process environment beside
+    it. The environment is set to a DIFFERENT value here, and must lose."""
+    monkeypatch.setattr(main, "settings", Settings(_env_file=None, git_commit_sha="abc1234"))
+    monkeypatch.setenv("GIT_COMMIT_SHA", "def5678-from-the-environment")
     resp = TestClient(app).get("/health")
     assert resp.json() == {
         "status": "ok",

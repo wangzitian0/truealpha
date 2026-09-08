@@ -145,7 +145,12 @@ def health() -> dict[str, str]:
     parser, git_sha, image_digest = _data_engine_facts()
     return {
         "status": "ok",
-        "git_sha": os.environ.get("GIT_COMMIT_SHA", "unknown"),
+        # Through `settings`, not the process environment (#784): the manifest this service
+        # boot-validates against declares GIT_COMMIT_SHA, and the value it reports must be
+        # the one that declaration resolved. `env_ignore_empty` also means an unrendered
+        # template line reads as "unknown" here instead of as an empty release identity,
+        # which `truealpha_runtime.deployed_release` would then refuse rather than explain.
+        "git_sha": settings.git_commit_sha,
         "data_engine_parser": parser,
         # #712: the build that produced the newest run, from mart.data_engine_identity —
         # a deploy identity, not a parser vintage, so a stale data engine is visible.

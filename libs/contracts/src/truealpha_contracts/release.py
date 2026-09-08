@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
@@ -252,13 +253,86 @@ def resolve_accepted_release(
     return manifest
 
 
-# --- live release identity (#759, infra2#622) ---------------------------------------------
-# The production TOPT live release is identified by a content hash of a constant payload:
-# anyone holding this repository at a release SHA computes the same value, so it belongs to
-# the ``release`` source class of the environment manifest and is never typed into a store.
+# --- live release identity (#784, #712, #759, infra2#622) ---------------------------------
+# This was the hash of a CONSTANT payload -- ``{"kind": "production-topt-live-release"}`` --
+# so every tag, every run and both environments carried the identical 64-hex id and it
+# distinguished nothing. That is the repository's most repeated defect shape (AGENTS.md:
+# "a constant never stands in for a measurement"), and #712 recorded it as such.
+#
+# The id is now a measurement of the artifact that computes it:
+#
+#   git_commit_sha                  the release ref the image was built from, as the
+#                                   deployment injects it (a vX.Y.Z tag or a commit sha);
+#                                   "unknown" where nothing injects one, which is an
+#                                   honest identity for an unidentified build and is
+#                                   distinct from every real one.
+#   migration_ids                   the ordered ids of the migration set the artifact
+#                                   ships, so a release that changes the schema changes
+#                                   its identity.
+#   environment_contract_sha256     the fingerprint of the environment contract the
+#                                   artifact declares (infra2-sdk
+#                                   ``configuration_fingerprint`` over the app's
+#                                   ``required-env.generated.json``), so a release that
+#                                   changes what the deployment must supply changes its
+#                                   identity.
+#
+# This module only defines what the id IS. Reading those three facts out of a running
+# artifact is ``data_engine.release_identity``, which owns the file paths -- a contract
+# module must not know where an application keeps its files.
 
-LIVE_RELEASE_PAYLOAD: dict[str, str] = {"kind": "production-topt-live-release"}
+LIVE_RELEASE_KIND = "production-topt-live-release"
+
+#: A release ref is a git tag or sha handed to us by a deployment; it reaches ``git`` and
+#: log lines, so a leading "-" (read as an option) and whitespace are refused here rather
+#: than downstream, mirroring ``truealpha_runtime.deployed_release``.
+_RELEASE_REF = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._/-]{0,199}$")
 
 
-def live_release_manifest_id() -> str:
-    return f"release-manifest:{canonical_sha256(LIVE_RELEASE_PAYLOAD)}"
+def live_release_payload(
+    *,
+    git_commit_sha: str,
+    migration_ids: Sequence[str],
+    environment_contract_sha256: str,
+) -> dict[str, object]:
+    """The measured payload whose content hash is the live release identity.
+
+    Persisted verbatim as the ``release_manifest`` contract object, so a run's identity can
+    be read back and explained instead of only compared.
+    """
+    ref = git_commit_sha.strip()
+    if not _RELEASE_REF.fullmatch(ref):
+        raise ValueError(f"git_commit_sha must be a usable release ref, got {git_commit_sha!r}")
+    ids = tuple(str(value).strip() for value in migration_ids)
+    if not ids or any(not value for value in ids):
+        raise ValueError("migration_ids must be a non-empty sequence of non-empty ids")
+    if len(set(ids)) != len(ids):
+        raise ValueError("migration_ids must be unique")
+    if not _SHA256.fullmatch(environment_contract_sha256):
+        raise ValueError("environment_contract_sha256 must be a lowercase sha256 hex digest")
+    return {
+        "kind": LIVE_RELEASE_KIND,
+        "git_commit_sha": ref,
+        # A list, not a set: apply order is part of the schema the release ships.
+        "migration_ids": list(ids),
+        "environment_contract_sha256": environment_contract_sha256,
+    }
+
+
+def live_release_manifest_id(
+    *,
+    git_commit_sha: str,
+    migration_ids: Sequence[str],
+    environment_contract_sha256: str,
+) -> str:
+    """``release-manifest:<sha256>`` over the measured payload.
+
+    The shape is unchanged (``_RELEASE_ID`` here, ``_CONTENT_ID`` for content-addressed
+    references, and infra2's ``^[a-z][a-z0-9-]*:[0-9a-f]{64}$`` deploy assertion all still
+    hold); what changed is that the hash now has something to say.
+    """
+    payload = live_release_payload(
+        git_commit_sha=git_commit_sha,
+        migration_ids=migration_ids,
+        environment_contract_sha256=environment_contract_sha256,
+    )
+    return f"release-manifest:{canonical_sha256(payload)}"

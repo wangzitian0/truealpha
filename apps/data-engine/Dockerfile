@@ -41,6 +41,21 @@ COPY apps/data-engine/dagster.yaml /opt/dagster/dagster.yaml
 # loopback Postgres, and a check that only ever examined the CI fixture proved nothing.
 COPY tools/output_invariants.py tools/output_invariant_exemptions.json /app/tools/
 
+# The environment contract this image ships (#784, #759). Two readers, one file, at the
+# repository path under /app -- the working directory this image already runs in:
+#   * infra2's entrypoint boot-validates the process environment against it
+#     (`truealpha_runtime.boot.assert_environment`), which it could not do before because
+#     the file was simply absent from this image, exactly as `apps/llm-service/Dockerfile`
+#     ships its own;
+#   * `data_engine.release_identity` fingerprints it into the release manifest id, so a
+#     release that changes what the deployment must supply changes its identity.
+COPY apps/data-engine/required-env.generated.json ./apps/data-engine/required-env.generated.json
+# The migration set the release identity measures (#784). DDL is applied by the llm-service
+# image's entrypoint, not here -- this image ships the files only so it can hash the schema
+# it was built against, and so the ordered ids in a run's identity are the ones the artifact
+# actually carries rather than a list written down somewhere.
+COPY db/migrations ./db/migrations
+
 # Default to the webserver role; the compose pins each role's command explicitly.
 EXPOSE 3001
 CMD ["dagster-webserver", "-m", "data_engine.dagster_defs", "--host", "127.0.0.1", "--port", "3001"]
