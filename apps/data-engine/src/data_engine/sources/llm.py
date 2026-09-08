@@ -11,6 +11,11 @@ the instruction/schema digests, request and response digests, token cost, and th
 A second run for the same (subject, accession, instructions, model) REPLAYS the stored
 decision without calling the provider. The call itself goes through the ledger
 (`record_call`, rule 6) with its token cost, under the `filing-extraction-model` seat.
+
+`as_selector()` at the bottom adapts `select_headcount` to the shared extraction
+primitive's `Selector` protocol (`libs/factors/shared/extraction.py`, #769) for a caller
+that only needs "chosen value or None" in the primitive's own vocabulary; every ledger,
+replay, and persistence behaviour above is unchanged and still reached through it.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
 
+from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.common import canonical_sha256
 
 from data_engine.config import settings
@@ -315,3 +321,67 @@ def _parse_decision(content: str, candidates: Sequence[Candidate]) -> dict[str, 
         return {"value": None, "candidate_index": None, "reason": f"model chose {value}, which is not a candidate"}
     chosen = index if isinstance(index, int) and index in matching else matching[0]
     return {"value": value, "candidate_index": chosen, "reason": reason}
+
+
+def as_selection(selection: ModelSelection) -> extraction_primitive.Selection | None:
+    """Adapt this module's `ModelSelection` — its ledger/replay identity, token cost, and
+    the served-model quirk (a requested `model` alias may be served under a different
+    name; see `ModelSelection.extractor`) — to the shared primitive's minimal `Selection`.
+
+    `None` for a decline, exactly like the primitive's own `select_single_candidate`:
+    a caller that only wants "chosen value or nothing to choose" does not need to branch
+    on this module's richer refusal detail (`selection.reason` is still on `ModelSelection`
+    for a caller that does).
+    """
+    if selection.value is None or selection.candidate_index is None:
+        return None
+    return extraction_primitive.Selection(
+        value=selection.value,
+        candidate_index=selection.candidate_index,
+        extractor=selection.extractor,
+        reason=selection.reason,
+        invocation_id=selection.invocation_id,
+    )
+
+
+def as_selector(
+    connection: Any | None,
+    *,
+    cik: int,
+    accession: str,
+    form: str,
+    issuer_label: str,
+    caller: str,
+    standard: str = "employees_total",
+    persist: bool = True,
+    transport: Transport | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> extraction_primitive.Selector:
+    """Bind this call's ledger/replay context and return a `Selector`-conformant callable
+    (`libs/factors/shared/extraction.py`'s protocol) for a caller that only has the shared
+    primitive's `Candidate` sequence — this is the "model-backed selector plugs in without
+    the library importing data_engine" half of #769: the primitive depends only on the
+    protocol shape, and this factory is where a concrete implementation is bound to it.
+
+    `select_headcount`'s own ledger/replay/persistence behaviour (see above) is reached
+    unchanged through the returned closure; nothing about it is reimplemented here.
+    """
+
+    def select(candidates: Sequence[extraction_primitive.Candidate]) -> extraction_primitive.Selection | None:
+        local_candidates = [Candidate(value=int(c.value), sentence=c.sentence) for c in candidates]
+        selection = select_headcount(
+            connection,
+            cik=cik,
+            accession=accession,
+            form=form,
+            issuer_label=issuer_label,
+            candidates=local_candidates,
+            caller=caller,
+            standard=standard,
+            persist=persist,
+            transport=transport,
+            now=now,
+        )
+        return as_selection(selection)
+
+    return select

@@ -1,5 +1,10 @@
 """Filing extraction: one field from the issuer's latest annual filing (#70 slice 1, #735).
 
+This is the SEC-filing ADAPTER for the shared structured-extraction primitive
+(`libs/factors/shared/extraction.py`, #769): recall (this module's regex, sentence
+window, and partial/total classification) is filing-specific and stays here; selecting
+among what recall found is not, and is delegated to the primitive.
+
 Recall is a pattern, precision is a judgement. The pattern enumerates every stated
 headcount in the filing with its sentence and as-of date; it never missed the right
 answer in any multi-candidate case measured (#70). Choosing between candidates is the
@@ -25,6 +30,7 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any, Literal
 
+from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.ports import RawObjectStore
 from truealpha_contracts.standards import MetricStandard, confidence_for
@@ -38,7 +44,10 @@ ANNUAL_FORMS = ("10-K", "20-F")
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 EXTRACTION_SOURCE = "10k-extraction"
-RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"
+# Re-exported, not redefined: the rule's identity is minted exactly once, by the shared
+# primitive (libs/factors/shared/extraction.py, #769) — this module owns only the
+# filing-specific recall and the mapping back onto `FilingCandidate`.
+RULE_SINGLE_CANDIDATE = extraction_primitive.RULE_SINGLE_CANDIDATE
 
 # A figure below this is an officer count or a sentence fragment; above it, nothing any
 # issuer employs (Walmart's 2.1M is the ceiling in the universe).
@@ -172,16 +181,28 @@ def candidates(text: str) -> list[FilingCandidate]:
 
 
 def select_total(found: list[FilingCandidate]) -> tuple[ExtractionStatus, FilingCandidate | None]:
-    """The deterministic half of selection: one company-wide statement, or defer."""
+    """The deterministic half of selection: one company-wide statement, or defer.
+
+    The domain-specific half stays here — filtering to non-partial ("company-wide")
+    candidates, and mapping the primitive's chosen index back onto this module's own
+    `FilingCandidate` (which carries the sentence and partial mark the shared `Candidate`
+    does not). The actual rule — exactly one distinct value needs no judgement — is
+    `select_single_candidate` (libs/factors/shared/extraction.py, #769): this function
+    does not decide that itself, so a filing-shaped duplicate of the rule never has to be
+    invented for a different source (`libs/factors/tests/test_extraction_ownership.py`
+    fails CI if one is).
+    """
     totals = [candidate for candidate in found if not candidate.partial]
-    distinct = {candidate.value for candidate in totals}
     if not totals:
         # Nothing, or only subset counts (a segment, a region, contractors): the filing
         # states no company-wide total, so there is nothing for a model to choose either.
         return "no_candidate", None
-    if len(distinct) == 1:
-        return "resolved", totals[0]
-    return "needs_model_selection", None
+    selection = extraction_primitive.select_single_candidate(
+        [extraction_primitive.Candidate(value=c.value, sentence=c.sentence, as_of=c.as_of) for c in totals]
+    )
+    if selection is None:
+        return "needs_model_selection", None
+    return "resolved", totals[selection.candidate_index]
 
 
 def parse_as_of(text: str | None) -> date | None:
