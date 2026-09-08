@@ -39,6 +39,12 @@ if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
 
 
+#: The only two ways a release-derived row can date itself: the governed universe head's
+#: acceptance time, or the curated corpus's report date (#530 item 2). Persisted into the
+#: immutable raw bytes, so a typo must fail here rather than land in storage.
+KNOWABLE_AT_BASES: tuple[str, ...] = ("universe-head", "report-date")
+
+
 @dataclass(frozen=True)
 class ReleaseDerivedRecord:
     """One frozen listing-identity or universe-membership projection."""

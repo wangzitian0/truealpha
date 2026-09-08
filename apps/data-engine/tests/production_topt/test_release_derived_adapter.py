@@ -151,7 +151,6 @@ def test_build_routes_payload_still_satisfies_the_strict_identity_model() -> Non
 
 def test_an_unknown_knowable_at_basis_is_refused_before_it_can_land() -> None:
     import pytest
-
     from data_engine.datahub.production_topt.release_derived_adapter import KNOWABLE_AT_BASES, ReleaseDerivedRecord
 
     assert KNOWABLE_AT_BASES == ("universe-head", "report-date")
