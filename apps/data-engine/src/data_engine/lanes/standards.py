@@ -62,9 +62,36 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
     return json.dumps(summary, sort_keys=True)
 
 
+@dg.op
+def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
+    """#748: after the week's backfill, count the six questions on the governed head —
+    answered / unavailable-by-reason / missing — and append the report."""
+    from data_engine.datahub.question_coverage import compile_report, persist, summary_line
+
+    executed_at = datetime.fromisoformat(config.executed_at)
+    with psycopg.connect(settings.database_url) as connection:
+        report = compile_report(connection, universe=config.universe, executed_at=executed_at)
+        if report is None:
+            context.log.warning("no governed head for %s; no coverage report", config.universe)
+            return json.dumps({"universe": config.universe, "report": None})
+        report_id = persist(connection, report)
+        connection.commit()
+    context.log.info("question coverage %s: %s", report_id, summary_line(report))
+    context.add_output_metadata(
+        {
+            "report_id": report_id,
+            "universe_id": report["universe_id"],
+            "denominator": report["denominator"],
+            **{f"{q}_answered": entry["answered"] for q, entry in report["questions"].items()},
+            **{f"{q}_missing": entry["missing"] for q, entry in report["questions"].items()},
+        }
+    )
+    return json.dumps({"report_id": report_id, "summary": summary_line(report)})
+
+
 @dg.job(name=STANDARD_BACKFILL_JOB_NAME)
 def standard_backfill_pipeline_job() -> None:
-    run_standard_backfill()
+    run_question_coverage(run_standard_backfill())
 
 
 @dg.schedule(
@@ -79,7 +106,11 @@ def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
         yield dg.RunRequest(
             run_key=f"{executed_at}:{universe}",
             run_config=dg.RunConfig(
-                ops={"run_standard_backfill": StandardBackfillConfig(executed_at=executed_at, universe=universe)}
+                ops={
+                    "run_standard_backfill": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                    # #748: the coverage report follows the backfill for the same universe and tick.
+                    "run_question_coverage": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                }
             ),
         )
 

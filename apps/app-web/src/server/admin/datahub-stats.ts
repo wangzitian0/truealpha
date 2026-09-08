@@ -84,7 +84,86 @@ export interface RecentCallRow {
   landed_fetch_id: number | null;
 }
 
+export interface QuestionCoverageQuestion {
+  question: string;
+  text: string;
+  column: string | null;
+  tracking_issue: string;
+  answered: number;
+  unavailable_total: number;
+  top_reasons: string;
+  missing: number;
+  denominator: number;
+}
+
+export interface QuestionCoverageRow {
+  universe_id: string;
+  cutoff: string;
+  generated_at: string;
+  requirements_sha256: string;
+  questions: QuestionCoverageQuestion[];
+}
+
+interface QuestionCoverageDbRow {
+  universe_id: string;
+  cutoff: string;
+  created_at: string;
+  payload: {
+    generated_at?: string;
+    requirements_sha256?: string;
+    questions?: Record<
+      string,
+      {
+        text?: string;
+        column?: string | null;
+        tracking_issue?: string;
+        answered?: number;
+        unavailable?: Record<string, number>;
+        missing?: number;
+        denominator?: number;
+      }
+    >;
+  };
+}
+
+/** #748: the newest weekly question-coverage report per governed universe. */
+const QUESTION_COVERAGE_SQL = `
+  select distinct on (universe_id) universe_id, cutoff::text, created_at::text, payload
+  from mart.question_coverage_report
+  order by universe_id, created_at desc
+`;
+
+function questionCoverageRows(rows: QuestionCoverageDbRow[]): QuestionCoverageRow[] {
+  return rows.map((row) => ({
+    universe_id: row.universe_id,
+    cutoff: row.cutoff,
+    generated_at: row.payload.generated_at ?? row.created_at,
+    requirements_sha256: row.payload.requirements_sha256 ?? "",
+    questions: Object.entries(row.payload.questions ?? {}).map(([question, entry]) => {
+      const unavailable = entry.unavailable ?? {};
+      const total = Object.values(unavailable).reduce((sum, n) => sum + n, 0);
+      const topReasons = Object.entries(unavailable)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 3)
+        .map(([reason, n]) => `${reason}=${n}`)
+        .join(", ");
+      return {
+        question,
+        text: entry.text ?? "",
+        column: entry.column ?? null,
+        tracking_issue: entry.tracking_issue ?? "",
+        answered: entry.answered ?? 0,
+        unavailable_total: total,
+        top_reasons: topReasons,
+        missing: entry.missing ?? 0,
+        denominator: entry.denominator ?? 0,
+      };
+    }),
+  }));
+}
+
 export interface DatahubStats {
+  questionCoverage: QuestionCoverageRow[];
   heads: HeadStatusRow[];
   sources: SourceStatRow[];
   runs: CaptureRunRow[];
@@ -285,6 +364,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       duration,
       traffic,
       recentCalls,
+      questionCoverage,
     ] = await Promise.all([
       client.query<HeadDbRow>(HEADS_SQL),
       client.query<SourceStatRow>(SOURCES_SQL),
@@ -299,8 +379,10 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       client.query<ValidationRow>(CAPACITY_DURATION_SQL),
       client.query<TrafficSourceRow>(TRAFFIC_SQL),
       client.query<RecentCallRow>(RECENT_CALLS_SQL),
+      client.query<QuestionCoverageDbRow>(QUESTION_COVERAGE_SQL),
     ]);
     return {
+      questionCoverage: questionCoverageRows(questionCoverage.rows),
       heads: heads.rows.map((row: HeadDbRow) => ({
         universe_id: row.universe_id,
         sequence: row.sequence,

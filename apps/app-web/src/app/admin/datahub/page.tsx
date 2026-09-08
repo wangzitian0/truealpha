@@ -31,6 +31,56 @@ export default async function AdminDatahubPage() {
       </p>
 
       <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Question coverage (init.md §0, weekly)</h2>
+        <p className="text-sm text-gray-500">
+          Expected from the question registry, observed from the governed head&apos;s status dimensions.
+          &quot;missing&quot; means no column exists for that universe yet — owned by the issue shown, never
+          counted as unavailable.
+        </p>
+        {stats.questionCoverage.length === 0 && (
+          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No coverage report yet.</p>
+        )}
+        {stats.questionCoverage.map((report) => (
+          <div key={report.universe_id} className="rounded-lg border border-border bg-card p-4">
+            <div className="flex flex-wrap items-baseline gap-3">
+              <span className="font-mono">{report.universe_id}</span>
+              <span className="text-gray-400">cutoff {report.cutoff}</span>
+              <span className="text-gray-400">generated {report.generated_at}</span>
+            </div>
+            <table className="mt-3 w-full text-left text-sm">
+              <thead>
+                <tr className="text-gray-500">
+                  <th className="pr-4 font-normal">question</th>
+                  <th className="pr-4 font-normal">answered</th>
+                  <th className="pr-4 font-normal">unavailable (top reasons)</th>
+                  <th className="pr-4 font-normal">missing</th>
+                  <th className="font-normal">column / owner</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.questions.map((q) => (
+                  <tr key={q.question} className="border-t border-border">
+                    <td className="pr-4">
+                      <span className="font-mono">{q.question}</span> {q.text}
+                    </td>
+                    <td className="pr-4">
+                      {q.answered}/{q.denominator}
+                    </td>
+                    <td className="pr-4 text-gray-400">
+                      {q.unavailable_total}
+                      {q.top_reasons ? ` (${q.top_reasons})` : ""}
+                    </td>
+                    <td className="pr-4">{q.missing}</td>
+                    <td className="font-mono text-gray-400">{q.column ?? q.tracking_issue}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-3">
         <h2 className="text-lg font-semibold">Governed heads</h2>
         {stats.heads.length === 0 && (
           <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No pointer heads yet.</p>
