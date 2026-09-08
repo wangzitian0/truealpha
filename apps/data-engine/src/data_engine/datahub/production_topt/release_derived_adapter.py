@@ -39,6 +39,12 @@ if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
 
 
+#: The only two ways a release-derived row can date itself: the governed universe head's
+#: acceptance time, or the curated corpus's report date (#530 item 2). Persisted into the
+#: immutable raw bytes, so a typo must fail here rather than land in storage.
+KNOWABLE_AT_BASES: tuple[str, ...] = ("universe-head", "report-date")
+
+
 @dataclass(frozen=True)
 class ReleaseDerivedRecord:
     """One frozen listing-identity or universe-membership projection."""
@@ -47,10 +53,22 @@ class ReleaseDerivedRecord:
     subject_id: str
     payload: dict[str, Any]
     knowable_at: datetime
+    # Which basis produced `knowable_at` (#530 item 2): "universe-head" when a governed
+    # universe's publication time drove it, "report-date" for the hand-curated corpus
+    # (and the default for every pre-existing caller that predates this field). Carried
+    # in the RAW bytes only, NEVER inside `payload`: `IdentityPayload`
+    # (materialization.py) validates that payload with `extra="forbid"` and must stay
+    # exactly {issuer_id, instrument_id, listing_id, ticker} (Copilot review on #775 --
+    # putting it in the payload broke snapshot materialization).
+    knowable_at_basis: str = "report-date"
 
     def __post_init__(self) -> None:
         if self.semantic_type not in _RELEASE_SEMANTICS:
             raise ValueError(f"unsupported release-derived semantic: {self.semantic_type}")
+        if self.knowable_at_basis not in KNOWABLE_AT_BASES:
+            raise ValueError(
+                f"unsupported knowable_at basis: {self.knowable_at_basis!r} (expected one of {KNOWABLE_AT_BASES})"
+            )
 
 
 class ReleaseDerivedAdapter:
@@ -76,6 +94,9 @@ class ReleaseDerivedAdapter:
                 "semantic_type": record.semantic_type,
                 "subject_id": record.subject_id,
                 "payload": record.payload,
+                # Provenance only, in the immutable raw bytes -- never in `payload`
+                # itself (see `ReleaseDerivedRecord.knowable_at_basis`).
+                "knowable_at_basis": record.knowable_at_basis,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -100,8 +121,16 @@ class ReleaseDerivedAdapter:
 
 
 def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> ReleaseDerivedAdapter:
-    """Identity and membership are release-frozen configuration: the record IS the
-    coordinate, knowable from the partition start."""
+    """Identity and membership are release-frozen configuration, but the coordinate is
+    not knowable before the universe that scopes it was actually published (#530
+    item 2). A governed universe (QQQ, resolved from `staging.accepted_ruleset_head`)
+    carries its own `recorded_at`, forwarded here as `context.universe_published_at`;
+    that IS the real knowable-at. The hand-curated TOPT corpus has no publication event
+    of its own — only its `report_date`, which is already the partition start — so it
+    keeps that basis. Either way the look-ahead guard still applies: a universe head
+    published after the cutoff is refused exactly like any other future fact."""
+    knowable_at = context.universe_published_at or context.partition_start
+    knowable_at_basis = "universe-head" if context.universe_published_at is not None else "report-date"
     targets = {
         cell.work_item_id: ReleaseDerivedRecord(
             semantic_type=cell.semantic_type,
@@ -112,7 +141,8 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> ReleaseDer
                 "listing_id": cell.listing_id,
                 "ticker": cell.ticker,
             },
-            knowable_at=context.partition_start,
+            knowable_at=knowable_at,
+            knowable_at_basis=knowable_at_basis,
         )
         for cell in cells
     }

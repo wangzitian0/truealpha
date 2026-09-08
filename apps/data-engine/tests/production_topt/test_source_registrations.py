@@ -67,6 +67,7 @@ def test_release_route_builds_without_a_connection_or_a_vendor() -> None:
         cutoff_date=datetime(2026, 9, 4, tzinfo=UTC).date(),
         price_cutoff_date=datetime(2026, 9, 4, tzinfo=UTC).date(),
         partition_start=datetime(2026, 6, 30, tzinfo=UTC),
+        universe_published_at=None,
         coordinates={},
         connection=None,
     )

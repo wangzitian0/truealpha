@@ -61,6 +61,10 @@ class RouteContext:
     cutoff_date: date
     price_cutoff_date: date
     partition_start: datetime
+    # The governed universe head's publication time (#530 item 2): set only when the
+    # run's universe was resolved from a governed head (`resolve_universe_corpus`);
+    # None for the hand-curated TOPT corpus, which has no publication event of its own.
+    universe_published_at: datetime | None
     coordinates: Mapping[str, tuple[str, str, str, str]]
     connection: psycopg.Connection[Any] | None
 

@@ -446,10 +446,17 @@ def resolve_universe_corpus(connection: Connection[Any], head_kind: str) -> dict
 
     Fails loud when no head is published: capturing an unpublished universe would
     be scope from nowhere (#532's silent-fallback lesson, inverted on purpose).
+
+    Carries the head's own `recorded_at` as `published_at` (#530 item 2): identity and
+    membership rows derived from this corpus are knowable when the universe was
+    actually PUBLISHED, not merely when the run's partition starts. A sibling key next
+    to `topt_denominator`, never inside it — `corpus_list_version`'s self-pin hash is
+    computed over the denominator's own `instrument_tuple_fields`/`instruments`, so an
+    added sibling cannot perturb it.
     """
     row = connection.execute(
         """
-        select object.payload
+        select object.payload, object.recorded_at
         from staging.accepted_ruleset_head head
         join staging.contract_objects object on object.contract_id = head.contract_id
         where head.kind = %s
@@ -458,6 +465,7 @@ def resolve_universe_corpus(connection: Connection[Any], head_kind: str) -> dict
     ).fetchone()
     if row is None:
         raise LookupError(f"no published universe head for {head_kind}; publish one from the constituent plane")
-    corpus = {"topt_denominator": row[0]}
+    payload, recorded_at = row
+    corpus = {"topt_denominator": payload, "published_at": recorded_at.isoformat()}
     corpus_list_version(corpus)  # self-pin validation: drift refuses the load
     return corpus
