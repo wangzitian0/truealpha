@@ -448,6 +448,57 @@ def test_headcount_extractor_changes_the_normalized_identity() -> None:
     assert r1.transaction_time == datetime(2026, 3, 1, tzinfo=UTC)
     assert r1.record is not None
     assert r1.record.payload["headcount"] == "1800"
+    # A terse fixture fact carries no evidence: the vintage says so instead of implying it.
+    assert r1.record.payload["vintage"]["headcount"]["raw"] is None
+    assert r1.record.payload["vintage"]["headcount"]["source"] is None
+    assert "headcount" not in r0.record.payload["vintage"]
+
+
+def test_the_headcounts_evidence_travels_on_the_row() -> None:
+    """#747 / #530: an extraction-backed headcount names its filing and raw pointer; a
+    reviewed seed names its source but no pointer, which is what makes it `degraded`."""
+    item = _work_item("a" * 64)
+    extracted = HeadcountFact(
+        value=Decimal("17581"),
+        knowable_at=datetime(2026, 2, 12, tzinfo=UTC),
+        source="10k-extraction",
+        evidence_ref=(
+            "accession=000000490426000013 form=10-K filed=2026-02-12 raw=raw.fetches:18752 "
+            "extractor=model:glm-5.3:4128c20fa0bb model=glm-5.3 span='approximately 17,581 employees'"
+        ),
+        period_end=date(2025, 12, 31),
+        confidence=Decimal("0.90"),
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()}, lambda c, cut, b: _bundle(), headcount_extractor=lambda c, cut: extracted
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    vintage = result.record.payload["vintage"]["headcount"]
+    assert vintage == {
+        "accession": "000000490426000013",
+        "confidence": "0.90",
+        "evidence_ref": extracted.evidence_ref,
+        "filed": "2026-02-12",
+        "form": "10-K",
+        "knowable_at": "2026-02-12T00:00:00+00:00",
+        "period_end": "2025-12-31",
+        "raw": "raw.fetches:18752",
+        "source": "10k-extraction",
+    }
+    seed = HeadcountFact(
+        value=Decimal("164000"),
+        knowable_at=datetime(2026, 1, 1, tzinfo=UTC),
+        source="manual-review",
+        evidence_ref="manual-review: 10-K FY2025 Item 1, reviewed 2026-07-30",
+        confidence=Decimal("0.70"),
+    )
+    seeded = SecFinancialFactAdapter(
+        {item.work_item_id: _target()}, lambda c, cut, b: _bundle(), headcount_extractor=lambda c, cut: seed
+    )
+    seeded_vintage = seeded.fetch(item).record.payload["vintage"]["headcount"]
+    assert seeded_vintage["source"] == "manual-review" and seeded_vintage["raw"] is None
+    assert seeded_vintage["accession"] is None
 
 
 def test_headcount_after_cutoff_is_ignored() -> None:

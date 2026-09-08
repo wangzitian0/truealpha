@@ -56,7 +56,7 @@ class PostgresHeadcountExtractor:
         # knowable_at <= cutoff filter keeps the read point-in-time either way.
         row = self._connection.execute(
             """
-            select headcount, knowable_at
+            select headcount, knowable_at, source, evidence_ref, period_end, confidence
             from staging.issuer_headcount_facts
             where cik = %s and knowable_at <= %s
             order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
@@ -66,7 +66,14 @@ class PostgresHeadcountExtractor:
         ).fetchone()
         if row is None:
             return None
-        return HeadcountFact(value=Decimal(row[0]), knowable_at=row[1])
+        return HeadcountFact(
+            value=Decimal(row[0]),
+            knowable_at=row[1],
+            source=row[2],
+            evidence_ref=row[3],
+            period_end=row[4],
+            confidence=None if row[5] is None else Decimal(row[5]),
+        )
 
 
 def record_headcount(
