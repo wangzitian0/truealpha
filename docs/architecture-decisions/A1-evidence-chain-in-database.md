@@ -1,6 +1,9 @@
 # A1 — Evidence chain lives in the database, behind a storage-neutral port
 
-Status: Draft (needs owner sign-off — amends the `AGENTS.md` consumer-read red line, referenced from `init.md`)
+Status: Accepted (in force; the amended consumer-read red line is `AGENTS.md`'s last
+architecture red line, which names this ADR, and `mart.current_pointer` /
+`current_pointer_head` have carried every consumer read since `0028_evidence_graph.sql`.
+Header corrected 2026-09-08: the decision was ratified when that red line landed.)
 Date: 2026-07-18
 Supersedes the operative parts of: file-based content-hash pinning as an enforcement/consumption mechanism.
 

@@ -1,6 +1,7 @@
 # A2 — Acceptance criteria are standing checks, and they cover the whole scope
 
-Status: Draft (needs owner sign-off — adds `AGENTS.md` rule 7)
+Status: Accepted (in force; `AGENTS.md` rule 7 is this ADR, and every issue closed since
+2026-07-30 is judged against it. Header corrected 2026-09-08.)
 Date: 2026-07-30
 Extends: `AGENTS.md` rule 6 ("Closed means deployed, real, and evidenced")
 

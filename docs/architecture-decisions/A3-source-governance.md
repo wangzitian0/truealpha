@@ -1,7 +1,9 @@
 # A3 — Source governance: corroboration classes, admission, and expansion order
 
-Status: Draft (needs owner sign-off — codifies #579; extends AGENTS.md rule 7's spirit to
-data planes)
+Status: Accepted for Decisions 1-2 (corroboration classes and the admission checklist are
+how sources have been added since 2026-08-17; codifies #579). **Decision 3's expansion
+order is a product-sequencing call reserved to the owner** and stays frozen until #530's
+vintage plane is deployed and proven. Header corrected 2026-09-08.
 Date: 2026-08-17
 
 ## Context
