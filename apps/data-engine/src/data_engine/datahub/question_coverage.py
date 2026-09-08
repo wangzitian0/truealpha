@@ -90,15 +90,27 @@ def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     return tuple(cells)
 
 
-def peg_cells(connection: Connection[Any]) -> tuple[Cell, ...]:
-    """PEG from the newest strategy run's decisions (TOPT only today)."""
+def peg_cells(connection: Connection[Any], *, cutoff: datetime) -> tuple[Cell, ...]:
+    """PEG from the strategy run whose decisions describe the same cutoff as the governed
+    head (the newest run whose decision cutoff is at or before it) — never simply the
+    newest run, which could carry a different vintage (Copilot on #779)."""
     rows = connection.execute(
         """
+        with chosen as (
+            select s.strategy_run_id
+            from mart.strategy_runs s
+            join mart.strategy_decisions d on d.strategy_run_id = s.strategy_run_id
+            where d.cutoff_at <= %s
+            group by s.strategy_run_id, s.executed_at
+            order by max(d.cutoff_at) desc, s.executed_at desc
+            limit 1
+        )
         select d.issuer_id, d.peg, d.availability_status, d.exclusion_reason
         from mart.strategy_decisions d
-        where d.strategy_run_id = (select strategy_run_id from mart.strategy_runs order by executed_at desc limit 1)
+        where d.strategy_run_id = (select strategy_run_id from chosen)
         order by d.issuer_id
-        """
+        """,
+        (cutoff,),
     ).fetchall()
     cells = []
     for issuer_id, peg, availability_status, exclusion_reason in rows:
@@ -118,10 +130,12 @@ def classify_question(
     issuers: Iterable[str],
     cells_by_column: Mapping[str, Iterable[Cell]],
 ) -> dict[str, Any]:
-    """Left-join the expected issuers with the observed cells of the question's column.
+    """Left-join the expected issuers with the observed cells of the question's columns.
 
-    `missing` when no column applies to this universe; `unavailable:no_row` when the column
-    exists but the issuer has no row (the join produced nothing — the red-proof case).
+    `missing` when no column applies to this universe; an issuer is `answered` when ANY
+    applicable column answers it; otherwise the first column with a row supplies the
+    reason; `unavailable:no_row` when no column has a row for the issuer at all (the join
+    produced nothing — the red-proof case).
     """
     expected = tuple(dict.fromkeys(issuers))
     columns = [column for column in requirement.columns if column.applies_to(universe_id)]
@@ -130,6 +144,7 @@ def classify_question(
         "tracking_issue": requirement.tracking_issue,
         "denominator": len(expected),
         "column": None,
+        "columns": [_column_key(column) for column in columns],
         "answered": 0,
         "unavailable": {},
         "missing": 0,
@@ -137,18 +152,17 @@ def classify_question(
     if not columns:
         entry["missing"] = len(expected)
         return entry
-    column = columns[0]
-    entry["column"] = f"{column.table}.{column.column}"
-    observed = {cell.issuer_id: cell for cell in cells_by_column.get(_column_key(column), ())}
+    entry["column"] = entry["columns"][0]
+    observed = [{cell.issuer_id: cell for cell in cells_by_column.get(_column_key(column), ())} for column in columns]
     unavailable: Counter[str] = Counter()
     for issuer_id in expected:
-        cell = observed.get(issuer_id)
-        if cell is None:
+        cells = [lookup[issuer_id] for lookup in observed if issuer_id in lookup]
+        if not cells:
             unavailable[NO_ROW] += 1
-        elif cell.answered:
+        elif any(cell.answered for cell in cells):
             entry["answered"] += 1
         else:
-            unavailable[cell.reason or UNRECORDED_REASON] += 1
+            unavailable[cells[0].reason or UNRECORDED_REASON] += 1
     entry["unavailable"] = dict(sorted(unavailable.items(), key=lambda item: (-item[1], item[0])))
     return entry
 
@@ -173,7 +187,7 @@ def compile_report(
     issuers = [cell.issuer_id for cell in gppe]
     cells_by_column = {
         "mart.topt_gppe_results.gppe": gppe,
-        "mart.strategy_decisions.peg": peg_cells(connection) if prefix == "universe:topt-" else (),
+        "mart.strategy_decisions.peg": peg_cells(connection, cutoff=head.cutoff) if prefix == "universe:topt-" else (),
     }
     questions = {
         requirement.question.value: classify_question(

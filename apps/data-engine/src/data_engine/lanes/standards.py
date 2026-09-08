@@ -68,6 +68,9 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
     answered / unavailable-by-reason / missing — and append the report."""
     from data_engine.datahub.question_coverage import compile_report, persist, summary_line
 
+    # The backfill's summary is this op's only upstream: consuming it is what sequences the
+    # report after the week's facts have landed, and logging it keeps the pair legible.
+    context.log.info("coverage follows backfill: %s", backfill_summary[:400])
     executed_at = datetime.fromisoformat(config.executed_at)
     with psycopg.connect(settings.database_url) as connection:
         report = compile_report(connection, universe=config.universe, executed_at=executed_at)

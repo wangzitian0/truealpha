@@ -102,7 +102,7 @@ def test_peg_cells_name_the_exclusion_or_admit_the_reason_is_unrecorded() -> Non
         ("issuer:b", None, "excluded", "financial_branch"),
         ("issuer:c", None, "available", None),
     ]
-    cells = peg_cells(_Rows(rows))
+    cells = peg_cells(_Rows(rows), cutoff=datetime(2026, 9, 8, tzinfo=UTC))
     assert cells[0].answered and cells[1].reason == "excluded:financial_branch" and cells[2].reason == UNRECORDED_REASON
 
 
@@ -143,3 +143,28 @@ def test_the_report_persists_append_only_and_reads_back() -> None:
     finally:
         connection.rollback()
         connection.close()
+
+
+def test_a_question_bound_to_two_columns_is_answered_by_either() -> None:
+    """Copilot on #779: with more than one answering column an issuer counts once, as
+    answered when any column answers, with the first row's reason otherwise."""
+    from truealpha_contracts.question_requirements import FactorColumn, QuestionRequirement
+
+    two = QuestionRequirement(
+        Question.Q1_MODEL_LEVERAGE,
+        (FactorColumn("mart.a", "x", "gross_profit_per_employee", 2), FactorColumn("mart.b", "y", "peg", 1)),
+        (),
+        "#0",
+    )
+    entry = classify_question(
+        two,
+        universe_id=QQQ,
+        issuers=["issuer:a", "issuer:b", "issuer:c"],
+        cells_by_column={
+            "mart.a.x": (Cell("issuer:a", False, "missing_headcount"), Cell("issuer:b", False, "missing_headcount")),
+            "mart.b.y": (Cell("issuer:a", True),),
+        },
+    )
+    assert entry["columns"] == ["mart.a.x", "mart.b.y"] and entry["column"] == "mart.a.x"
+    assert entry["answered"] == 1
+    assert entry["unavailable"] == {"missing_headcount": 1, NO_ROW: 1}
