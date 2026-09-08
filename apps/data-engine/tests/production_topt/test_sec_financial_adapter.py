@@ -47,8 +47,11 @@ def _target(cik: int = 1, branch: OperatingBranch = OperatingBranch.NON_FINANCIA
     )
 
 
-def _annual(end: str, start: str, val: object, filed: str) -> dict:
-    return {"end": end, "start": start, "val": val, "filed": filed}
+def _annual(end: str, start: str, val: object, filed: str, *, accn: str | None = None, form: str = "10-K") -> dict:
+    entry = {"end": end, "start": start, "val": val, "filed": filed, "form": form, "fy": int(end[:4]), "fp": "FY"}
+    if accn is not None:
+        entry["accn"] = accn
+    return entry
 
 
 def _facts() -> dict:
@@ -129,6 +132,9 @@ def test_the_revenue_proxy_is_refused_for_an_industry_it_was_not_approved_for() 
     assert result.record.payload["gross_profit"] is None, "an oil major must not publish revenue as gross profit"
     # Revenue itself is untouched: the issuer really does report it.
     assert result.record.payload["revenue"] == "332238000000"
+    # And the lineage does not claim a filing for the input it refused (Copilot on #774).
+    assert "gross_profit" not in result.record.payload["vintage"]
+    assert "revenue" in result.record.payload["vintage"]
 
 
 def test_the_revenue_proxy_still_applies_to_an_approved_industry() -> None:
@@ -1065,3 +1071,62 @@ def test_predecessor_fallback_also_fires_when_the_holdco_reports_no_income_fact(
     assert isinstance(outcome, FetchSuccess)
     assert outcome.raw.body == b'{"holdco": true}'
     assert outcome.record.payload["revenue"] is None
+
+
+def test_the_bundle_names_the_filing_behind_each_input() -> None:
+    """#530 item 4: `accn`/`form`/`fy`/`fp` were read from company-facts and discarded;
+    the row could date its numbers but not name the document. Every resolved input now
+    carries its filing identity, and the payload ships it under `vintage`."""
+    facts = _facts()
+    gaap = facts["facts"]["us-gaap"]
+    gaap["GrossProfit"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 120, "2026-02-01", accn="0000320193-26-000010")]}
+    }
+    gaap["Revenues"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01", accn="0000320193-26-000010")]}
+    }
+    gaap["NetIncomeLoss"] = {
+        "units": {
+            "USD": [
+                _annual("2024-12-31", "2024-01-01", 30, "2025-02-01", accn="0000320193-25-000009"),
+                _annual("2025-12-31", "2025-01-01", 40, "2026-02-01", accn="0000320193-26-000010"),
+            ]
+        }
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.vintages["revenue"] == {
+        "accession": "0000320193-26-000010",
+        "filed": "2026-02-01",
+        "form": "10-K",
+        "fp": "FY",
+        "fy": 2025,
+        "period_end": "2025-12-31",
+    }
+    assert bundle.vintages["gross_profit"]["accession"] == "0000320193-26-000010"
+    assert bundle.vintages["net_income"]["period_end"] == "2025-12-31"
+    assert bundle.vintages["net_income_periods"]["2024-12-31"]["accession"] == "0000320193-25-000009"
+    # Inputs that resolved to nothing are absent, never null-filled.
+    assert set(bundle.vintages) <= {
+        "gross_profit",
+        "total_assets",
+        "shares_outstanding",
+        "revenue",
+        "net_income",
+        "net_income_periods",
+    }
+
+
+def test_a_derived_figure_is_attributed_to_the_later_filing() -> None:
+    facts = _facts()
+    gaap = facts["facts"]["us-gaap"]
+    gaap.pop("GrossProfit", None)
+    gaap["Revenues"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01", accn="0000000001-26-000001")]}
+    }
+    gaap["CostOfRevenue"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 250, "2026-02-20", accn="0000000001-26-000002")]}
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.gross_profit == 150
+    assert bundle.vintages["gross_profit"]["accession"] == "0000000001-26-000002"
+    assert bundle.vintages["gross_profit"]["filed"] == "2026-02-20"
