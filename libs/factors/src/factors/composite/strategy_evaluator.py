@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 
-from truealpha_contracts.metrics import METRICS
+from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.strategy import (
     DecimalQuantization,
     ExclusionReason,
@@ -52,7 +52,9 @@ _PEG_KEYS = ("last_close", "shares_outstanding", "net_income")
 # Owner decision 2026-08-17 (#284): three years, recency-weighted. The factor takes it
 # as a required argument so no default can quietly become the convention.
 _PEG_CAGR_YEARS = 3
-_METRIC_FOR_KEY = {"headcount": "employees_total", "last_close": "price"}
+# `truealpha_contracts.metrics.INPUT_KEY_ALIASES` is the one declaration of this mapping
+# (init.md rule 22, #770) -- this module used to keep its own copy under this name.
+_METRIC_FOR_KEY = INPUT_KEY_ALIASES
 
 # Fixed evaluation order for a missing required input -> its exact reason code.
 _REQUIRED_INPUT_REASONS: tuple[tuple[str, ExclusionReason], ...] = (

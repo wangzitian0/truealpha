@@ -1,7 +1,9 @@
 """Module 7: three-tier valuation (traditional / tech / large-model-native P/S tier).
 
 Composes one issuer's already-materialized `gross_profit_per_employee` (module
-2) and `price_to_sales` (module 6) `FactorResult`s into a valuation gap:
+2) and `price_to_sales` (a base factor that itself registers module 7, since it exists
+only to feed this composite -- see `factors.base.price_to_sales`) `FactorResult`s into a
+valuation gap:
 ``target_ps_midpoint / current_price_to_sales - 1`` (#21's `ValuationGapRule`
 ranks candidates by descending valuation gap). Confidence is the minimum of
 the two consumed inputs, per the composite-factor rule (CLAUDE.md: "composite

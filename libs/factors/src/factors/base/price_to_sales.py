@@ -2,6 +2,14 @@
 
 price_to_sales = (price * shares_outstanding) / revenue
 
+P/S is not one of init.md Section 7's seven questions on its own; it is the market-value
+input `three_tier_valuation` (module 7, the composite) reduces alongside gross profit per
+employee into the tier valuation gap. It registers `module=7` for that reason -- a base
+factor that exists to feed module 7 rather than answer an independent question (#770;
+previously mis-registered `module=6`, which collides with module 6's own pure-blood
+screening and was recorded as a known error in init.md before this fix,
+`libs/factors/tests/test_module_identity.py` is the standing check now).
+
 This is a **simplified preview** of the fuller S5 kernel proven in
 `factors.batches.issuer_price_to_sales_tiny.kernel` (issue #161, closed):
 dual-class share-class aggregation, per-listing multi-currency FX conversion,
@@ -88,7 +96,7 @@ def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     return matches[0] if matches else None
 
 
-@factor("price_to_sales", kind="base", module=6)
+@factor("price_to_sales", kind="base", module=7)
 def price_to_sales(
     facts: Sequence[Fact],
     *,

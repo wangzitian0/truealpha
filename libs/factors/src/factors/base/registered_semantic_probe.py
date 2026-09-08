@@ -1,4 +1,11 @@
-"""Isolated Gate 0 probe for additive registered semantic inputs."""
+"""Isolated Gate 0 probe for additive registered semantic inputs.
+
+Registers `module=6`: init.md Section 7 module 6 is "pure-blood company screening,
+LLM-assisted semantic classification" -- the closest of the seven to what a "semantic"
+probe exercises. Previously registered `module=7`, which collides with module 7's
+composite-only identity (`three_tier_valuation`); recorded as a known error in init.md
+before this fix (#770; `libs/factors/tests/test_module_identity.py` is the standing
+check now)."""
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import (
@@ -31,7 +38,7 @@ PROBE_IMPLEMENTATION_SHA256 = canonical_sha256(
 )
 
 
-@factor("registered_semantic_probe", kind="base", module=7)
+@factor("registered_semantic_probe", kind="base", module=6)
 def registered_semantic_probe(
     *,
     subject: SubjectRef,

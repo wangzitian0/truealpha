@@ -157,26 +157,55 @@ def main() -> int:
             failures.append(f"{table}: new column(s) {added} are not in the freeze; add them deliberately")
 
     # --- I4: the module number is an identity; init.md Section 7 is the authority ---
+    # `price_to_sales` is the one documented exception to "module 7 is the composite":
+    # it is a base factor that exists only to feed `three_tier_valuation` (module 7) and
+    # answers none of init.md's seven questions on its own, so it registers `module=7`
+    # too (#770; see the docstrings on both files). This coarse check cannot express that
+    # distinction without re-deriving init.md's table itself, so it carves out the one
+    # name the exact per-factor identity check
+    # (`libs/factors/tests/test_module_identity.py`) already covers, and keeps catching
+    # any OTHER base factor that claims module 7 by mistake -- the `registered_semantic_probe`
+    # bug this rule was written for.
     for name, spec in sorted(actual_factors.items()):
         module, kind = spec.get("module"), spec.get("kind")
         if not isinstance(module, int) or not 1 <= module <= 7:
             failures.append(f"factor {name!r}: module {module!r} is outside init.md Section 7's 1-7")
-        elif module == 7 and kind != "composite":
+        elif module == 7 and kind != "composite" and name != "price_to_sales":
             failures.append(
                 f"factor {name!r}: module 7 is the composite (three-tier valuation); a base factor cannot claim it"
             )
 
     # --- I3: adding a metric is a registry edit, never a migration and never a branch ---
-    inputs_ddl = "\n".join(
-        path.read_text() for path in sorted(MIGRATIONS.glob("*.sql")) if "strategy_backtest_inputs" in path.read_text()
+    # Replayed in file order, like `observed_columns()` above: 0032's CREATE TABLE text
+    # never changes (a deployed migration is never rewritten), so a naive substring
+    # search over the concatenated migrations would report this violation forever, even
+    # after a later migration drops the constraint (#770). `present` tracks the
+    # constraint's live state across that replay instead.
+    present = False
+    # Both forms an enumerated CHECK on this column has taken: 0032's inline column
+    # constraint, and 0039's drop-then-recreate as a named `add constraint ... check (
+    # input_key = any (array[...`.
+    add_check_re = re.compile(
+        r"input_key\s+text\s+not\s+null\s*\n?\s*check\s*\(|add constraint strategy_backtest_inputs_input_key_check",
+        re.I,
     )
-    for match in re.finditer(r"input_key[^;]*?check\s*\(", inputs_ddl, re.I | re.S):
-        del match
+    drop_check_re = re.compile(r"drop constraint (?:if exists )?strategy_backtest_inputs_input_key_check", re.I)
+    for path in sorted(MIGRATIONS.glob("*.sql")):
+        sql = path.read_text()
+        if "strategy_backtest_inputs" not in sql:
+            continue
+        # A migration that both drops and re-adds (0039's idiom) always writes the DROP
+        # first in file order; apply drop before add so a same-file recreate nets to
+        # PRESENT, not to whichever regex this loop happened to check last.
+        if drop_check_re.search(sql):
+            present = False
+        if add_check_re.search(sql):
+            present = True
+    if present:
         failures.append(
             "staging.strategy_backtest_inputs.input_key still carries an enumerated CHECK. "
             "init.md rule 22: adding a metric is a registry edit, not a migration"
         )
-        break
     bridge = REPO / "apps" / "data-engine" / "src" / "data_engine" / "datahub" / "strategy_bridge.py"
     # A LITERAL list of metric names is the violation; deriving the same mapping from the
     # registry is the fix, so match the literal rather than the variable's name.
@@ -184,6 +213,13 @@ def main() -> int:
         failures.append(
             "strategy_bridge._STRATEGY_PERIODIC_KEYS hard-codes which metrics are period-shaped inside "
             "generic transport — init.md rule 22 forbids branching on record type; declare it on the registry"
+        )
+    # Same shape, the other list this bridge derives from the registry (#770): a literal
+    # tuple of metric names is the regression `_STRATEGY_FINANCIAL_KEYS` used to be.
+    if bridge.exists() and re.search(r"^_STRATEGY_FINANCIAL_KEYS\s*=\s*\(\s*\n\s*[\"']", bridge.read_text(), re.M):
+        failures.append(
+            "strategy_bridge._STRATEGY_FINANCIAL_KEYS hard-codes a metric name list inside generic transport "
+            "— init.md rule 22 forbids it; derive it from truealpha_contracts.metrics.METRICS instead"
         )
 
     # --- I1: fusion is exercised at snapshot freeze, by declared priority ---
