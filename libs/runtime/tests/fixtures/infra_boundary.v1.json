@@ -5,13 +5,13 @@
   "claim_ceiling": "Repository-boundary and DeployRequest fixtures only; these bytes authorize no dispatch, activate no infra2 receiver, cause no deployment side effect, and prove no live-environment or Production readiness.",
   "sdk_binding": {
     "distribution": "infra2-sdk",
-    "version": "1.3.2",
+    "version": "1.5.0",
     "contract_version": 1,
     "module": "infra2_sdk.deploy",
     "request_type": "DeployRequest",
-    "release_url": "https://github.com/wangzitian0/infra2-sdk/releases/tag/v1.3.2",
-    "wheel_url": "https://github.com/wangzitian0/infra2-sdk/releases/download/v1.3.2/infra2_sdk-1.3.2-py3-none-any.whl",
-    "wheel_sha256": "bf93d1d0ebed85619f41ae35f3be95854b32da539e1942804458dd9f32585667",
+    "release_url": "https://github.com/wangzitian0/infra2-sdk/releases/tag/v1.5.0",
+    "wheel_url": "https://github.com/wangzitian0/infra2-sdk/releases/download/v1.5.0/infra2_sdk-1.5.0-py3-none-any.whl",
+    "wheel_sha256": "d90c2a4f6ec98c1c5c94552339c3a6aca15499cc113a1e8821b50e3e97b2f6e2",
     "extras": [
       "http"
     ]

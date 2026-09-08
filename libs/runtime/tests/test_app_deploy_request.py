@@ -45,6 +45,10 @@ def test_sdk_release_identity_is_exactly_pinned(corpus: dict) -> None:
     extras = f"[{','.join(binding['extras'])}]" if binding.get("extras") else ""
     dependency = f"{binding['distribution']}{extras} @ {binding['wheel_url']}"
     assert dependency in pyproject["dependency-groups"]["dev"]
+    # libs/runtime pins the wheel too (no extras) and ships in every image; it drifted to a
+    # different release once while the root pin moved on (#759 follow-up, SDK 1.5.0).
+    runtime = tomllib.loads((REPO_ROOT / "libs/runtime/pyproject.toml").read_text(encoding="utf-8"))
+    assert f"{binding['distribution']} @ {binding['wheel_url']}" in runtime["project"]["dependencies"]
 
     lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
     package = next(item for item in lock["package"] if item["name"] == binding["distribution"])

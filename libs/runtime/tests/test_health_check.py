@@ -376,48 +376,41 @@ def test_without_an_expected_digest_the_identity_stays_a_report(capsys: pytest.C
     assert "MISMATCH" not in capsys.readouterr().err
 
 
-def test_the_tag_resolver_reads_the_registry_digest_and_refuses_junk(monkeypatch: pytest.MonkeyPatch) -> None:
-    import io
-    import urllib.request
+def test_the_tag_resolver_reads_the_registry_digest_and_refuses_junk() -> None:
+    """#712: the digest the gate requires is the one the registry names for the tag, read
+    through `infra2_sdk.release.resolve_image_digest` (SDK 1.5.0) -- anonymous pull token,
+    then a HEAD on the manifest with that bearer. Every way the registry fails to name a
+    digest is the one RuntimeError the CLI prints as its red."""
+    from infra2_sdk._transport import HttpResponse
 
     resolve = load_tool("health_check").resolve_data_engine_digest
     digest = "sha256:" + "a" * 64
+    seen: list[tuple[str, str, dict[str, str]]] = []
 
-    class _Response(io.BytesIO):
-        def __init__(self, payload: bytes, headers: dict[str, str]):
-            super().__init__(payload)
-            self.headers = headers
+    def registry(head_digest: str, *, manifest_status: int = 200):
+        def transport(method: str, url: str, headers, body) -> HttpResponse:
+            seen.append((method, url, dict(headers)))
+            if url.startswith("https://ghcr.io/token?"):
+                return HttpResponse(200, {}, b'{"token": "anon"}')
+            return HttpResponse(manifest_status, {"docker-content-digest": head_digest}, b"")
 
-        def __enter__(self):
-            return self
+        return transport
 
-        def __exit__(self, *_: object) -> None:
-            self.close()
+    assert resolve("v0.0.47", transport=registry(digest)) == digest
+    token, manifest = seen
+    assert token[0] == "GET" and token[1].endswith("scope=repository:wangzitian0/truealpha-data-engine:pull")
+    assert manifest[0] == "HEAD" and manifest[1].endswith("/v2/wangzitian0/truealpha-data-engine/manifests/v0.0.47")
+    assert manifest[2]["Authorization"] == "Bearer anon"
 
-    seen: list[str] = []
-
-    def fake_urlopen(request, timeout=0):
-        url = request if isinstance(request, str) else request.full_url
-        seen.append(url)
-        if "ghcr.io/token" in url:
-            return _Response(b'{"token": "anon"}', {})
-        assert request.get_method() == "HEAD"
-        assert request.get_header("Authorization") == "Bearer anon"
-        return _Response(b"", {"Docker-Content-Digest": digest})
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    assert resolve("v0.0.47") == digest
-    assert seen[1].endswith("/v2/wangzitian0/truealpha-data-engine/manifests/v0.0.47")
-
-    def junk_urlopen(request, timeout=0):
-        url = request if isinstance(request, str) else request.full_url
-        if "ghcr.io/token" in url:
-            return _Response(b'{"token": "anon"}', {})
-        return _Response(b"", {"Docker-Content-Digest": "sha256:nope"})
-
-    monkeypatch.setattr(urllib.request, "urlopen", junk_urlopen)
     with pytest.raises(RuntimeError, match="no usable digest"):
-        resolve("v0.0.47")
+        resolve("v0.0.47", transport=registry("sha256:nope"))
+    with pytest.raises(RuntimeError, match="no usable digest"):
+        resolve("v0.0.99", transport=registry("", manifest_status=404))
+    # A reference that is not a tag never reaches the registry and is refused the same way.
+    seen.clear()
+    with pytest.raises(RuntimeError, match="no usable digest"):
+        resolve("not a tag", transport=registry(digest))
+    assert seen == []
 
 
 def test_the_cli_turns_a_tag_into_a_digest_expectation(
