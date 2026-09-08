@@ -37,7 +37,7 @@ _AAPL_GPPE_BAND = (Decimal("300000"), Decimal("4000000"))
 #: the deployed image actually loaded, because a pin only binds the resolver -- an image
 #: built from a stale lock, or one where the wheel failed to install, satisfies the pin on
 #: paper and loads something else.
-PINNED_INFRA2_SDK = "1.2.0"
+PINNED_INFRA2_SDK = "1.5.0"
 
 
 def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:

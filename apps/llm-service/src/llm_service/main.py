@@ -8,16 +8,37 @@ Claude Desktop); the self-built /chat SSE endpoint is Tier 3 (Phase 7).
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
+from truealpha_runtime.boot import assert_environment
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from llm_service.config import settings
 from llm_service.mcp_server import mcp
+
+#: The environment manifest this process boots against (#759). The Dockerfile ships it at
+#: the repository path under /app -- the working directory the entrypoint already relies
+#: on for ./db/apply_migrations.sh -- and `make llm` and pytest run from the repository
+#: root, so one relative path names it wherever the process starts.
+ENV_MANIFEST_PATH = Path("apps/llm-service/required-env.generated.json")
+
+
+def refuse_to_boot_on_a_missing_environment() -> None:
+    """Every name the manifest declares must be present before the service answers (#759).
+
+    Deployed tiers require what the deployment injects (APP_ENV, GIT_COMMIT_SHA,
+    S3_ENDPOINT -- infra2's compose states them); a laptop or CI has no deployer and is not
+    asked for them. Runs before the MCP session manager so a refused boot leaves nothing
+    half-started, and the error names variables only.
+    """
+    assert_environment(ENV_MANIFEST_PATH, require_injected=settings.is_deployed)
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    refuse_to_boot_on_a_missing_environment()
     # FastMCP's own Starlette sub-app lifespan is not invoked by FastAPI's Mount,
     # so the session manager must run from the parent app's lifespan explicitly.
     async with mcp.session_manager.run():

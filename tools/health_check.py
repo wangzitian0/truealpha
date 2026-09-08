@@ -21,16 +21,22 @@ import json
 import sys
 import time
 from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 from infra2_sdk.deploy_health import HttpGet, default_http_get, poll_until_healthy
+from infra2_sdk.release import ReleaseError, resolve_image_digest
 from truealpha_runtime.deployed_release import (
     ReleaseIdentityError,
     identifier_kind,
     identity_from_body,
 )
 
+if TYPE_CHECKING:
+    from infra2_sdk._transport import HttpTransport
+
 DEFAULT_MAX_ATTEMPTS = 24
 INTERVAL_SECONDS = 10.0
+DATA_ENGINE_IMAGE = "wangzitian0/truealpha-data-engine"
 
 # #526: the two sides of this gate must speak the same kind of identifier.
 # `deploy-release.yml` passed `source_sha` (a 40-hex commit sha) while the
@@ -217,37 +223,21 @@ def _await_data_engine(
     ), body
 
 
-def resolve_data_engine_digest(tag: str) -> str:
+def resolve_data_engine_digest(tag: str, *, transport: HttpTransport | None = None) -> str:
     """The registry digest of `ghcr.io/wangzitian0/truealpha-data-engine:<tag>`.
 
-    Read through the anonymous Registry v2 manifest API with the OCI accept set, the
-    same digest `docker pull image@…` and infra2's runner pin from the tag — so the gate
-    and the promotion agree by construction, not by a copied string.
+    `infra2_sdk.release.resolve_image_digest` (SDK 1.5.0) reads it through the anonymous
+    Registry v2 manifest API with the OCI accept set -- the same digest `docker pull
+    image@…` and infra2's runner pin from the tag -- so the gate and the promotion agree by
+    construction, not by a copied string. Every way the registry can fail to name a digest
+    (no such tag, refused, a non-digest header, a reference that is not a tag) is the one
+    RuntimeError `main` prints as its red. `transport` is the SDK's injectable HTTP send,
+    for tests.
     """
-    import urllib.request
-
-    image = "wangzitian0/truealpha-data-engine"
-    accept = ", ".join(
-        [
-            "application/vnd.oci.image.index.v1+json",
-            "application/vnd.oci.image.manifest.v1+json",
-            "application/vnd.docker.distribution.manifest.list.v2+json",
-            "application/vnd.docker.distribution.manifest.v2+json",
-        ]
-    )
-    token_url = f"https://ghcr.io/token?scope=repository:{image}:pull"
-    with urllib.request.urlopen(token_url, timeout=15) as response:  # noqa: S310 - fixed https host
-        token = json.loads(response.read().decode()).get("token", "")
-    request = urllib.request.Request(
-        f"https://ghcr.io/v2/{image}/manifests/{tag}",
-        method="HEAD",
-        headers={"Accept": accept, "Authorization": f"Bearer {token}"},
-    )
-    with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
-        digest = response.headers.get("Docker-Content-Digest", "")
-    if not digest.startswith("sha256:") or len(digest) != 71:
-        raise RuntimeError(f"registry returned no usable digest for {image}:{tag} ({digest!r})")
-    return digest
+    try:
+        return resolve_image_digest(image=DATA_ENGINE_IMAGE, reference=tag, transport=transport)
+    except (ReleaseError, ValueError) as exc:
+        raise RuntimeError(f"registry returned no usable digest for {DATA_ENGINE_IMAGE}:{tag} ({exc})") from exc
 
 
 def _same_commit(expected: str, reported: str) -> bool:

@@ -55,6 +55,17 @@ def test_runtime_dependency_environment_keys_do_not_drift():
     assert declared == settings_keys
 
 
+def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch):
+    """`DATABASE_URL=""` -- an unrendered template line -- falls through to the default
+    (or the next alias). Before `env_ignore_empty` it reached the URL validator as "" and
+    refused the whole service as not-PostgreSQL (#759, SDK 1.5.0 migration)."""
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("S3_BUCKET", "")
+    settings = RuntimeSettings(_env_file=None, app_env="test")
+    assert settings.database_url == RuntimeSettings.model_fields["database_url"].default
+    assert settings.s3_bucket == "truealpha-raw"
+
+
 def test_deployment_environment_is_typed_separately_from_app_config():
     settings = DeploymentSettings(_env_file=None, restart_policy="always", docker_log_max_file=2)
     assert settings.compose_project_name == "truealpha"

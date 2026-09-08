@@ -13,7 +13,10 @@ from truealpha_runtime.tiers import EnvironmentTier, resolve_environment_tier
 class RuntimeSettings(BaseSettings):
     """Runtime/CICD settings shared by every Python application."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+    # env_ignore_empty: an empty environment variable must not shadow a default or the next
+    # alias (`DATABASE_URL=""` from an unrendered template line reached the URL validator as
+    # "" and refused the service as not-PostgreSQL instead of falling through).
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False, env_ignore_empty=True)
 
     app_env: str = Field(default="dev", json_schema_extra={"source": "code", "injected": True, "group": "runtime"})
     git_commit_sha: str = Field(default="unknown", json_schema_extra={"source": "release", "group": "runtime"})
@@ -82,6 +85,16 @@ class RuntimeSettings(BaseSettings):
             EnvironmentTier.LOCAL_DEV,
             EnvironmentTier.LOCAL_TEST,
             EnvironmentTier.GITHUB_CI,
+        }
+
+    @property
+    def is_deployed(self) -> bool:
+        """Preview, staging, production: a platform-provisioned stack, where every value the
+        deployment injects must be present at boot (#759). Local and CI tiers run without them."""
+        return self.environment_tier in {
+            EnvironmentTier.PREVIEW,
+            EnvironmentTier.STAGING,
+            EnvironmentTier.PRODUCTION,
         }
 
 

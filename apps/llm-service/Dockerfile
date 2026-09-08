@@ -33,6 +33,10 @@ RUN apt-get update \
 COPY db/migrations ./db/migrations
 COPY db/roles.sql ./db/roles.sql
 COPY db/apply_migrations.sh ./db/apply_migrations.sh
+# The environment manifest the service validates its process environment against at boot
+# (#759, llm_service.main.ENV_MANIFEST_PATH): the repository path under /app, the working
+# directory the entrypoint already relies on for ./db/apply_migrations.sh.
+COPY apps/llm-service/required-env.generated.json ./apps/llm-service/required-env.generated.json
 EXPOSE 8000
 # NOTE: infra2's compose overrides this CMD with an inline entrypoint, so what
 # runs in staging/production is NOT this line. Proxy-header and root-path
