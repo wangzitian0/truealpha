@@ -26,8 +26,15 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.execution import InputEvidenceStatus
 
 from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TYPES
+from data_engine.datahub.production_topt.status_dimensions import (
+    StatusDimensions,
+    availability_status_for,
+    factor_validation_status_for,
+    source_evidence_status_for,
+)
 
 # Snapshot invariants are SELF-consistent, never universe literals: the frozen
 # TOPT 20 and a 102-listing plane universe freeze through the same checks
@@ -761,8 +768,24 @@ class PostgresToptCoreRepository:
                     or existing_gppe[1] != gppe_invocation_payload
                 ):
                     raise ValueError("TOPT GPPE invocation identity conflict")
+            # #747: the three §8 dimensions, derived from what this materialization consumed.
+            # Not part of any content hash — they surface what the identity already binds.
+            evidence_by_listing = self._load_source_evidence(snapshot)
+            gppe_validation = factor_validation_status_for((gppe_definition.definition_id,))
             for gppe_result in gppe_results:
-                self._put_gppe_result(gppe_result)
+                self._put_gppe_result(
+                    gppe_result,
+                    StatusDimensions(
+                        availability_status=availability_status_for(
+                            availability=gppe_result.availability.value,
+                            freshness=gppe_result.freshness.value,
+                            confidence=gppe_result.confidence,
+                            reason_codes=(item.value for item in gppe_result.reason_codes),
+                        ),
+                        source_evidence_status=evidence_by_listing[gppe_result.listing_id],
+                        factor_validation_status=gppe_validation,
+                    ),
+                )
             materialized_gppe_results = self._load_gppe_results(gppe_invocation_id)
             if len(materialized_gppe_results) != expected_issuers:
                 raise ValueError("GPPE materialization did not persist the complete denominator")
@@ -815,8 +838,46 @@ class PostgresToptCoreRepository:
                     # persisting NULL periods would defeat this column's purpose
                     # (Copilot Medium on #598).
                     raise ValueError(f"no financial-fact observation for {result.listing_id} in its own snapshot")
-                self._put_result(result, periods_by_listing[result.listing_id])
+                self._put_result(
+                    result,
+                    periods_by_listing[result.listing_id],
+                    StatusDimensions(
+                        availability_status=availability_status_for(
+                            availability=result.availability.value,
+                            freshness=result.freshness.value,
+                            confidence=result.confidence,
+                            reason_codes=(item.value for item in result.reason_codes),
+                        ),
+                        source_evidence_status=evidence_by_listing[result.listing_id],
+                        factor_validation_status=factor_validation_status_for(
+                            (gppe_definition.definition_id, tier_definition.definition_id)
+                        ),
+                    ),
+                )
         return results
+
+    def _load_source_evidence(self, snapshot: ToptCoreSnapshot) -> dict[str, InputEvidenceStatus]:
+        """§8 `source_evidence_status` per member, from the snapshot's OWN observations
+        (#747): the raw-pointer chain of every selected observation plus the evidence the
+        financial-fact payload carries for its side-plane inputs. Read at persist time like
+        `_load_result_periods`, never carried on the snapshot model."""
+        statuses: dict[str, InputEvidenceStatus] = {}
+        for member in snapshot.members:
+            payloads = self._connection.execute(
+                """
+                select p.normalized_payload
+                from staging.capture_normalized_observations o
+                join staging.capture_observation_payloads p using (observation_id)
+                where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
+                """,
+                (list(member.observation_ids),),
+            ).fetchall()
+            statuses[member.listing_id] = source_evidence_status_for(
+                self._connection,
+                member.observation_ids,
+                financial_payloads=[row[0] for row in payloads],
+            )
+        return statuses
 
     def _load_result_periods(
         self, snapshot: ToptCoreSnapshot
@@ -877,7 +938,7 @@ class PostgresToptCoreRepository:
             for row in rows
         )
 
-    def _put_gppe_result(self, result: ToptGppeResult) -> None:
+    def _put_gppe_result(self, result: ToptGppeResult, statuses: StatusDimensions) -> None:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
         inserted = self._connection.execute(
             """
@@ -888,10 +949,12 @@ class PostgresToptCoreRepository:
                 operating_metric, availability, operating_efficiency,
                 capital_adjusted_gross_profit, gppe, confidence, freshness,
                 reason_codes, input_observation_ids,
-                gppe_definition_id, gppe_definition_sha256, payload
+                gppe_definition_id, gppe_definition_sha256, payload,
+                availability_status, source_evidence_status, factor_validation_status
             ) values (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s
             ) on conflict (result_id) do nothing returning result_id
             """,
             (
@@ -921,6 +984,7 @@ class PostgresToptCoreRepository:
                 result.gppe_definition_id,
                 result.gppe_definition_sha256,
                 Jsonb(payload),
+                *statuses.as_columns(),
             ),
         ).fetchone()
         if inserted is None:
@@ -931,7 +995,12 @@ class PostgresToptCoreRepository:
             if existing is None or existing[0] != result.content_sha256 or existing[1] != payload:
                 raise ValueError("TOPT GPPE result identity conflict")
 
-    def _put_result(self, result: ToptCoreResult, periods: tuple[date | None, date | None, date | None]) -> None:
+    def _put_result(
+        self,
+        result: ToptCoreResult,
+        periods: tuple[date | None, date | None, date | None],
+        statuses: StatusDimensions,
+    ) -> None:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
         inserted = self._connection.execute(
             """
@@ -946,11 +1015,13 @@ class PostgresToptCoreRepository:
                 confidence, freshness, reason_codes, input_observation_ids,
                 gppe_invocation_id, gppe_result_id,
                 gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, payload
+                tier_definition_id, tier_definition_sha256, payload,
+                availability_status, source_evidence_status, factor_validation_status
             ) values (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s
             ) on conflict (result_id) do nothing returning result_id
             """,
             (
@@ -993,6 +1064,7 @@ class PostgresToptCoreRepository:
                 result.tier_definition_id,
                 result.tier_definition_sha256,
                 Jsonb(payload),
+                *statuses.as_columns(),
             ),
         ).fetchone()
         if inserted is None:
