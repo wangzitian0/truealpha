@@ -36,18 +36,6 @@
   "exemptions": [
     {
       "expires": "2026-10-01",
-      "failure_contains": "input_key still carries an enumerated CHECK",
-      "issue": "#284",
-      "reason": "dropping the CHECK in favour of registry validation is a migration and its own versioned change; the factor axis owns it"
-    },
-    {
-      "expires": "2026-10-01",
-      "failure_contains": "registered_semantic_probe",
-      "issue": "#284",
-      "reason": "correcting a module registration changes a published factor identity, so it is versioned separately"
-    },
-    {
-      "expires": "2026-10-01",
       "failure_contains": "snapshot selection orders by recency alone",
       "issue": "#530",
       "reason": "adding the source-priority rank is value-neutral today (every obligation resolves from one source) but changes the selection contract, so it is the datahub axis's own versioned change"
@@ -72,7 +60,7 @@
     "price_to_sales": {
       "function": "price_to_sales",
       "kind": "base",
-      "module": 6,
+      "module": 7,
       "module_path": "libs/factors/src/factors/base/price_to_sales.py",
       "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime) -> FactorResult"
     },
@@ -86,7 +74,7 @@
     "registered_semantic_probe": {
       "function": "registered_semantic_probe",
       "kind": "base",
-      "module": 7,
+      "module": 6,
       "module_path": "libs/factors/src/factors/base/registered_semantic_probe.py",
       "signature": "(*, subject: SubjectRef, inputs: tuple[FactorInputCapability, ...], output_key: str = 'registered-semantic-probe') -> FactorOutputDraft"
     },

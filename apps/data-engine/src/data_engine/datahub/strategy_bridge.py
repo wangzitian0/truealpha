@@ -24,7 +24,7 @@ from typing import Any
 import psycopg
 from factors.composite.strategy_evaluator import evaluate_cutoff
 from truealpha_contracts.fiscal_period import encode_annual
-from truealpha_contracts.metrics import METRICS
+from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_registered_input_key
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 from data_engine.core_strategy_replay import _load_corpus, _to_decision
@@ -32,18 +32,20 @@ from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION a
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import write_replay
 
-# `net_income` and `earnings_cagr_3y` are module 1's two additions (#284). The CAGR is a
-# rate the adapter reduced from the annual series rather than a raw fact, and it crosses
-# here as an ordinary input because `strategy_backtest_inputs` has no fiscal-period
-# dimension — giving it one means the read path #530 tracks.
-_STRATEGY_FINANCIAL_KEYS = (
-    "gross_profit",
-    "total_assets",
-    "headcount",
-    "revenue",
-    "shares_outstanding",
-    "net_income",
-)
+# Every registered metric except `price` surfaces here as the scalar half of its
+# financial-fact input -- one row with `fiscal_period` NULL, via the registry's own
+# spelling of the metric (init.md rule 22, #770 finding 2) -- adding metric N+1 to
+# `truealpha_contracts.metrics.METRICS` needs no edit here. A PERIODIC metric such as
+# `net_income` still belongs in this tuple too: this is what lands its latest value as a
+# point-in-time scalar (mirroring pre-0043 behavior), while `_STRATEGY_PERIODIC_KEYS`
+# below separately lands its whole annual series. `price` is excluded because it never
+# travels through the financial-fact payload this loop reads: it has its own bucket
+# keyed by `close` below, seeded as `last_close` for the strategy vocabulary. A metric
+# with no field on `FinancialFactPayload` yet (`cost_of_revenue`, `operating_income`,
+# `eps_diluted`) simply reads back `None` from `payload.get(...)` and is skipped, same as
+# any other missing field -- registering it here needs a payload field, not a change to
+# this tuple.
+_STRATEGY_FINANCIAL_KEYS = tuple(sorted(input_key_for_metric(name) for name in METRICS if name != "price"))
 
 # Which metrics are period-shaped comes from the registry, never from a list here:
 # init.md rule 22 forbids generic transport branching on record type.
@@ -134,6 +136,16 @@ def seed_strategy_inputs_from_capture(
             if close is not None:
                 inputs.append(("last_close", close, confidence, observed_at, None))
         for input_key, value, confidence, knowable_at, fiscal_period in inputs:
+            # Registry-backed, not a CHECK: migration 0032's enumerated `input_key`
+            # CHECK was dropped (#770 finding 1, init.md rule 22) because it forced a
+            # migration onto every new metric. This is the replacement guarantee --
+            # unregistered evidence never lands in staging, it just does not require
+            # a schema edit to keep it that way.
+            if not is_registered_input_key(input_key):
+                raise ValueError(
+                    f"{input_key!r} is not a registered metric (truealpha_contracts.metrics.METRICS); "
+                    "register it there before seeding it as a strategy input"
+                )
             connection.execute(
                 """
                 insert into staging.strategy_backtest_inputs

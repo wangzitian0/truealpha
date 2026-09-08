@@ -146,6 +146,37 @@ def _build_registry(specs: tuple[MetricSpec, ...]) -> dict[str, MetricSpec]:
 
 METRICS: dict[str, MetricSpec] = _build_registry(_SPECS)
 
+# The strategy-lane input-key vocabulary (`staging.strategy_backtest_inputs.input_key`,
+# `factors.composite.strategy_evaluator`) reads more naturally than the registry's
+# canonical names in that context -- "headcount", "last_close" -- and predates this
+# registry. This is the one place the two vocabularies are reconciled; a key not listed
+# here IS the registered metric name (init.md rule 22 -- no second enumeration of metric
+# identity, just the narrow spelling difference this alias carries).
+INPUT_KEY_ALIASES: dict[str, str] = {"headcount": "employees_total", "last_close": "price"}
+
+
+def is_registered_input_key(input_key: str) -> bool:
+    """True when `input_key` names a registered metric, directly or through the
+    strategy vocabulary alias above.
+
+    `staging.strategy_backtest_inputs.input_key` used to enforce this with a
+    `CHECK (input_key in (...))` (migration 0032); a metric added to `METRICS` alone
+    now admits its input key here too, so registering metric N+1 needs no migration
+    (init.md rule 22, #770).
+    """
+    return INPUT_KEY_ALIASES.get(input_key, input_key) in METRICS
+
+
+def input_key_for_metric(metric: str) -> str:
+    """The strategy input-key spelling for a registered metric name -- the inverse of
+    `INPUT_KEY_ALIASES`, defaulting to the metric's own name when no alias exists.
+    Lets a transport derive its input keys from `METRICS` instead of re-declaring the
+    same metric list under a second name (init.md rule 22, #770)."""
+    for input_key, name in INPUT_KEY_ALIASES.items():
+        if name == metric:
+            return input_key
+    return metric
+
 
 def source_priority(metric: str) -> tuple[DataSource, ...]:
     """The declared fusion order for a metric. KeyError on unregistered
