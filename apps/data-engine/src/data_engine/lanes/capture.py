@@ -24,6 +24,12 @@ import psycopg
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
 from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
+from data_engine.datahub.production_topt.fund_consolidation import (
+    materialize_fund_consolidation,
+)
+from data_engine.datahub.production_topt.fund_consolidation import (
+    summary_line as fund_consolidation_summary,
+)
 from data_engine.datahub.production_topt.plausibility_gate import judge_run
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
@@ -104,6 +110,13 @@ class UniverseTick:
     #: TOPT additionally seeds the strategy inputs and runs the frozen strategy;
     #: data-only universes serve prices, facts and valuation context, not selections.
     run_strategy: bool
+    #: Whether this tick materializes the module-5 fund consolidation (#727/#36). Only
+    #: the universe whose members ARE the fund's holdings can value them: QQQ's filed
+    #: lines consolidated against TOPT's 20 core rows would resolve a fraction of the
+    #: fund and refuse on coverage — a true answer to a question nobody asked. One flag
+    #: while one fund has a universe; a fund->universe registry is the multi-fund
+    #: tranche's problem (stated the same way in the App's fund-valuation reader).
+    consolidate_funds: bool
     cron: str | None
     default_status: dg.DefaultScheduleStatus = dg.DefaultScheduleStatus.RUNNING
 
@@ -171,6 +184,7 @@ TICKS: tuple[UniverseTick, ...] = (
         label_prefix="production-topt",
         objectives=None,
         run_strategy=True,
+        consolidate_funds=False,
         cron=TOPT_LIVE_CRON,
         # ENABLED by default: #27's appended acceptance (issue comment, 2026-07-20)
         # requires the schedule running in Staging; enabling it is the deliberate,
@@ -187,6 +201,8 @@ TICKS: tuple[UniverseTick, ...] = (
         label_prefix="production-qqq",
         objectives=QQQ_PHASE1_OBJECTIVES,
         run_strategy=False,
+        # QQQ's core rows are the fund's own holdings: the only tick that can value them.
+        consolidate_funds=True,
         cron=QQQ_LIVE_CRON,
         default_status=_production_only(settings.app_env),
     ),
@@ -200,6 +216,7 @@ TICKS: tuple[UniverseTick, ...] = (
         label_prefix="production-canary",
         objectives=CANARY_OBJECTIVES,
         run_strategy=False,
+        consolidate_funds=False,
         cron=CANARY_DAILY_CRON,
         default_status=dg.DefaultScheduleStatus.RUNNING,
     ),
@@ -238,6 +255,18 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
                 "strategy_run_id": strategy_run_id,
                 "decision_count": decision_count,
                 "snapshot_id": snapshot_id,
+            }
+        # #727/#36: the module-5 fund consolidation, in the same transaction as the core
+        # rows it weights. Before the pointer gate on purpose — a run whose plausibility
+        # is refused rolls this back with everything else, so mart.fund_virtual_company
+        # can never describe a run that was never served.
+        fund_consolidation: dict[str, Any] = {}
+        if tick.consolidate_funds:
+            consolidations = materialize_fund_consolidation(connection, run_id=pipeline.run_id, cutoff=cutoff)
+            context.log.info(fund_consolidation_summary(consolidations))
+            fund_consolidation = {
+                "funds_consolidated": len(consolidations),
+                "funds_refused": sum(1 for item in consolidations if item.result.value is None),
             }
         # #544: plausibility policy v1, in the same transaction, before the pointer can
         # advance. A refused run raises here; the `with` unwinds without a commit, so the
@@ -298,6 +327,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         "quality_report_id": pipeline.quality_report_id,
         "independent_reconciliation": pipeline.quality["independent_reconciliation"],
         **strategy,
+        **fund_consolidation,
         "pointer_advanced": registration.accepted,
         "pointer_sequence": registration.sequence,
         "unmet_service_objectives": registration.summary,

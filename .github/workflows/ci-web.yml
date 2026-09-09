@@ -56,6 +56,14 @@ jobs:
       - name: Route-namespace manifest
         working-directory: .
         run: python3 tools/check_route_manifest.py
+      # init.md §1 rule 2 (#727): the App's mart readers reformat rows; a metric computed
+      # ACROSS rows belongs in libs/factors and reaches the App as a materialized column.
+      # §10 recorded that nothing enforced this, and #723's window-function weighted mean
+      # is what that cost — it contradicted its own file header and no gate went red.
+      # Stdlib-only, so it runs before the bun toolchain is set up.
+      - name: App-layer aggregation (init.md rule 2)
+        working-directory: .
+        run: python3 tools/check_app_layer_aggregation.py
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck

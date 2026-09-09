@@ -44,7 +44,14 @@ export default async function HoldingsPage() {
               <span className="text-xs text-gray-400">
                 period {fund.reportPeriod} · filed weight {fund.totalWeightPct}% · resolved {fund.resolvedWeightPct}% ·
                 valued {fund.valuedWeightPct}%
-                {fund.weightedGap !== null ? ` · weighted gap (valued mass) ${fund.weightedGap}` : ""}
+                {fund.weightedGap !== null
+                  ? ` · weighted gap (valued mass) ${fund.weightedGap}`
+                  : fund.reasonCodes.length > 0
+                    ? ` · weighted gap refused (${fund.reasonCodes.join(", ")})`
+                    : " · no weighted gap for this run"}
+                {fund.availabilityStatus !== null
+                  ? ` · ${fund.availabilityStatus}/${fund.sourceEvidenceStatus}/${fund.factorValidationStatus}`
+                  : ""}
                 {fund.runId ? ` · run ${fund.runId.slice(0, 20)}…` : " · no governed valuation run yet"}
               </span>
             </div>

@@ -1,0 +1,84 @@
+{
+  "issue": "#727",
+  "note": "Module 5 (#36 first slice): one fund's filed lines, the consolidation the factor computes from them, and the values the App must render from the materialized row. Both sides read this file; a drift on either goes red.",
+  "definition": {
+    "factor_version": "v0",
+    "content_sha256": "a650889df3dde31d5e1905537787b0c9fb3c3b5793ebfd01576e236a2f018382",
+    "minimum_resolved_weight": "50",
+    "minimum_valued_weight": "20"
+  },
+  "cutoff": "2026-07-01T12:00:00+00:00",
+  "fund_id": "etf:series:S000006219",
+  "lines": [
+    {
+      "holding_name": "NVIDIA Corp.",
+      "weight": "8.90",
+      "listing_id": "listing:xnas:nvda",
+      "valuation_gap": "-0.12",
+      "availability": "available",
+      "confidence": "0.92"
+    },
+    {
+      "holding_name": "Apple Inc.",
+      "weight": "7.40",
+      "listing_id": "listing:xnas:aapl",
+      "valuation_gap": "0.08",
+      "availability": "available",
+      "confidence": "0.88"
+    },
+    {
+      "holding_name": "Microsoft Corp",
+      "weight": "7.10",
+      "listing_id": "listing:xnas:msft",
+      "valuation_gap": "0.15",
+      "availability": "available",
+      "confidence": "0.91"
+    },
+    {
+      "holding_name": "Broadcom Inc.",
+      "weight": "5.20",
+      "listing_id": "listing:xnas:avgo",
+      "valuation_gap": null,
+      "availability": "unavailable",
+      "confidence": null
+    },
+    {
+      "holding_name": "Linde plc",
+      "weight": "1.20",
+      "listing_id": null,
+      "valuation_gap": null,
+      "availability": null,
+      "confidence": null
+    },
+    {
+      "holding_name": "Cash & Other",
+      "weight": "70.10",
+      "listing_id": "listing:xnas:rest",
+      "valuation_gap": "0.02",
+      "availability": "available",
+      "confidence": "0.60"
+    }
+  ],
+  "expected": {
+    "weighted_valuation_gap": "0.02129411764705882352941176471",
+    "total_weight_pct": "99.90",
+    "resolved_weight_pct": "98.70",
+    "valued_weight_pct": "93.50",
+    "unresolved_weight_pct": "1.20",
+    "unvalued_weight_pct": "5.20",
+    "lines": 6,
+    "valued_lines": 4,
+    "confidence": "0.60",
+    "flags": [
+      "partial_valued_mass",
+      "unresolved_holdings"
+    ],
+    "data_availability": "unverified"
+  },
+  "expected_rendered": {
+    "weightedGap": "0.02",
+    "totalWeightPct": "99.90",
+    "resolvedWeightPct": "98.70",
+    "valuedWeightPct": "93.50"
+  }
+}
