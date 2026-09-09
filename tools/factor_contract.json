@@ -46,6 +46,13 @@
   ],
   "exemptions_evaluated_on": "2026-08-20",
   "factors": {
+    "etf_virtual_company": {
+      "function": "consolidate_fund",
+      "kind": "base",
+      "module": 5,
+      "module_path": "libs/factors/src/factors/base/etf_virtual_company.py",
+      "signature": "(lines: Sequence[HoldingLine], *, fund_id: str, as_of: datetime, definition: EtfConsolidationDefinition) -> FundConsolidation"
+    },
     "gross_profit_per_employee": {
       "function": "gross_profit_per_employee",
       "kind": "base",
