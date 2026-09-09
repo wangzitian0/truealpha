@@ -682,3 +682,48 @@ def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypa
     finally:
         probe.rollback()
         probe.close()
+
+
+def test_reuse_requires_parser_vintage_equality(tick_database_url, monkeypatch) -> None:
+    """#788: an anchor parsed by a different primary vintage must not satisfy an
+    obligation.
+
+    The reuse predicate used to check subject, semantic, bytes, freshness and (since
+    #684) identity coordinates — but not the parser vintage. So the first ad-hoc tick
+    after a parser bump reused the previous vintage's observations, issued no vendor
+    call, and graded COMPLETE — while `seed_strategy_inputs_from_capture` selects by the
+    DEPLOYED `PARSER_VERSION` and therefore saw none of them. Every issuer missed every
+    strategy input and the plausibility gate refused the run as `empty-eligible-set`,
+    which reads as a data outage rather than a vintage mismatch. Observed in production
+    2026-09-09 on v0.0.49 (parser v9) against v0.0.48's v8 observations.
+
+    The cost of the rule is one re-capture on the first tick after a bump. The value is
+    that any tick can be re-run on demand right after a release — which is the whole
+    point of having a job you can invoke as well as schedule.
+    """
+    _arm(monkeypatch)
+    cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
+    _run_tick(tick_database_url, version="parser-vintage-source", cutoff=cutoff)
+
+    probe = psycopg.connect(tick_database_url)
+    try:
+        plan = composition.plan_and_persist(probe, cutoff=cutoff, version="parser-vintage-target")
+
+        # Same vintage as the source run: reuse is expected, and is what makes the
+        # negative below mean something.
+        same_vintage = composition._satisfy_from_recent_observations(probe, plan, cutoff=cutoff)
+        assert same_vintage, "an unbumped parser must still reuse (#635 is not disabled)"
+        probe.rollback()
+
+        # A bumped primary parser: the previous vintage's observations no longer qualify,
+        # so the tick captures fresh instead of binding what it cannot consume.
+        plan = composition.plan_and_persist(probe, cutoff=cutoff, version="parser-vintage-bumped")
+        monkeypatch.setattr(composition, "PARSER_VERSION", "production-topt-live-parser:v999")
+        bumped = composition._satisfy_from_recent_observations(probe, plan, cutoff=cutoff)
+        assert bumped == frozenset(), (
+            "a parser bump must force a fresh capture; reusing the old vintage produces a "
+            "COMPLETE run that seeds nothing (#788)"
+        )
+    finally:
+        probe.rollback()
+        probe.close()

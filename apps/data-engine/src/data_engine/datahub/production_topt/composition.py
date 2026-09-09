@@ -79,6 +79,7 @@ from data_engine.datahub.production_topt.capture_orchestration import run_topt_c
 from data_engine.datahub.production_topt.executor import SourceFetchPort
 from data_engine.datahub.production_topt.market_price_adapter import last_settled_session_date
 from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
+from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
 from data_engine.datahub.production_topt.persistence import (
     CaptureTimeline,
     ObligationBinding,
@@ -521,6 +522,17 @@ def _satisfy_from_recent_observations(
     reaches a vendor. Only #628-committed evidence qualifies by construction —
     an uncommitted capture is invisible to this query.
 
+    Reuse additionally requires PARSER-VINTAGE EQUALITY (#788): the anchor must carry
+    the `PARSER_VERSION` this run declares. The bound set is deliberately NOT filtered —
+    a market-price obligation binds both origins, and the second origin has its own
+    parser identity (`twelve-data-parser:v*`) — but an anchor from a different primary
+    vintage cannot qualify, because the run would then hold observations it cannot
+    consume: `seed_strategy_inputs_from_capture` selects by the deployed PARSER_VERSION.
+    Without this, the first ad-hoc tick after a parser bump captured nothing, graded
+    COMPLETE, seeded nothing, and was refused as `empty-eligible-set` — read as a data
+    outage. Re-capturing is the correct cost, and it is what keeps every job runnable on
+    demand rather than only on the schedule that happened to precede the release.
+
     Reuse additionally requires IDENTITY-COORDINATE EQUALITY (#684, both halves):
     every normalized payload embeds the (issuer_id, instrument_id, listing_id) of
     the run that captured it, keyed by that run's corpus. TOPT keys issuers by LEI;
@@ -581,6 +593,18 @@ def _satisfy_from_recent_observations(
              and o.subject_id = m.subject_id
              and o.semantic_type = m.semantic_type
              and o.knowable_at <= %(cutoff)s
+             -- The anchor must have been parsed by the vintage THIS run declares.
+             -- Reuse across a parser bump binds observations the run cannot consume:
+             -- `seed_strategy_inputs_from_capture` selects by the deployed
+             -- PARSER_VERSION, so a v8 anchor in a v9 run seeds nothing, every issuer
+             -- misses every input, and the plausibility gate refuses with
+             -- `empty-eligible-set` — a message about data coverage for what is
+             -- actually a vintage mismatch. Same shape as #684's identity-coordinate
+             -- rule: an anchor that "qualifies" while making the run unusable must not
+             -- qualify. Re-capturing costs vendor calls; that is the correct price for
+             -- the first tick after a parser bump, and it is what makes an ad-hoc
+             -- re-run of ANY tick work right after a release (#788).
+             and o.parser_version = %(parser_version)s
             -- #684: the source run's identity keying rides in every normalized
             -- payload; an anchor with a foreign trio must not qualify.
             join staging.capture_observation_payloads anchor_payload
@@ -614,6 +638,7 @@ def _satisfy_from_recent_observations(
             "max_age": _REUSE_MAX_AGE,
             "release_semantics": sorted(_RELEASE_SEMANTICS),
             "coordinates": coordinates_param,
+            "parser_version": PARSER_VERSION,
         },
     ).fetchall()
 
