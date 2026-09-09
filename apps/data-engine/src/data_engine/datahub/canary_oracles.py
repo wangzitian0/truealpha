@@ -9,7 +9,9 @@ Exit 0 = every oracle holds; exit 1 = the failures, named, one per line.
 
 Packaged INSIDE the image (a docker-cp'd copy died with the first container
 replacement — the deploy lane runs `python -m data_engine.datahub.canary_oracles`
-so the verdict machinery ships with the code it judges).
+so the verdict machinery ships with the code it judges). That is also why the oracles about
+the image itself live here (`image_content_failures`, #784): only a process inside the
+container can see what its image contains.
 
 Usage:
     python -m data_engine.datahub.canary_oracles [--run-id capture-run:...]
@@ -24,6 +26,7 @@ from hashlib import sha256
 
 import psycopg
 
+from data_engine import release_identity
 from data_engine.config import settings
 
 _CANARY_UNIVERSE_LIKE = "universe:canary-us-%"
@@ -43,13 +46,19 @@ PINNED_INFRA2_SDK = "1.5.0"
 def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
     bad: list[str] = []
 
+    # What the image IS, before anything about what it produced. These oracles do not depend
+    # on the run, and judging them first means a wrong image is still named when the run is
+    # missing entirely -- otherwise the early return below drops the cause and reports only
+    # the symptom ("no capture status for ...").
+    bad.extend(image_content_failures())
+
     status = connection.execute(
         "select obligation_count, success_count + unchanged_count, failed_count, complete"
         " from mart.topt_capture_status where run_id = %s",
         (run_id,),
     ).fetchone()
     if status is None:
-        return [f"no capture status for {run_id}"]
+        return [*bad, f"no capture status for {run_id}"]
     obligations, resolved, failed, complete = status
     if not complete or resolved != obligations or failed:
         bad.append(f"capture incomplete: {resolved}/{obligations} resolved, {failed} failed")
@@ -153,14 +162,59 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
     return bad
 
 
+def image_content_failures() -> list[str]:
+    """What the deployed image IS -- judged from inside it, because nothing outside can see it.
+
+    A gate that runs on a GitHub runner inspects the repository, not the artifact; a gate
+    that curls a health endpoint sees an answer, not a filesystem. These three facts are only
+    observable from a process running inside the container, which is why they live in the
+    canary and not in CI:
+
+    * the infra2 SDK the image actually LOADED. A pin only binds the resolver -- an image
+      built from a stale lock, or one where the wheel failed to install, satisfies the pin on
+      paper and loads something else.
+    * the environment contract the image SHIPS. Until #784 the data-engine image shipped no
+      `required-env.generated.json` at all, so infra2's entrypoint could not run
+      `truealpha_runtime.boot.assert_environment` for it -- and the absence read as a clean
+      deploy from every angle outside the container, because the validation simply never ran.
+      A dropped `COPY`, or a path that drifts from the one the entrypoint reads, must be red.
+    * whether the image can state what RELEASE it is (#784). `measure` reads the environment
+      contract and the migration set out of the image, so a missing or unreadable input is
+      named here instead of surfacing mid-tick as a failed run plan.
+    """
+    bad: list[str] = []
+
+    try:
+        from importlib.metadata import version as _installed
+
+        loaded = _installed("infra2-sdk")
+    except Exception as error:  # noqa: BLE001
+        bad.append(f"infra2-sdk is not importable in the deployed image: {type(error).__name__}")
+    else:
+        if loaded != PINNED_INFRA2_SDK:
+            bad.append(f"infra2-sdk {loaded} loaded, repository pins {PINNED_INFRA2_SDK}")
+
+    if not release_identity.ENV_MANIFEST_PATH.is_file():
+        bad.append(
+            f"the deployed image does not ship {release_identity.ENV_MANIFEST_PATH}: infra2's entrypoint "
+            f"cannot boot-validate this environment (#759, #784)"
+        )
+    try:
+        release_identity.measure()
+    except Exception as error:  # noqa: BLE001 - any failure here is the finding
+        bad.append(f"the deployed image cannot measure its release identity: {error}")
+
+    return bad
+
+
 def _infra_failures(connection: psycopg.Connection, run_id: str) -> list[str]:
-    """Infra oracles: dereference real bytes, and pin the SDK the image actually loaded.
+    """Object-storage oracle: dereference the real bytes this run says it wrote.
 
     Every other oracle here reads Postgres, so Postgres proves itself by their passing.
-    Object storage and the infra2 SDK do not: a run can complete, write correctly-shaped
-    `s3://` URIs, and leave nothing behind them. #531 is exactly that -- production injects
-    no `S3_*` variables, the client fell back to a default pointing at its own loopback,
-    and three runs died with what looked like a network fault.
+    Object storage does not: a run can complete, write correctly-shaped `s3://` URIs, and
+    leave nothing behind them. #531 is exactly that -- production injects no `S3_*`
+    variables, the client fell back to a default pointing at its own loopback, and three runs
+    died with what looked like a network fault.
 
     A TCP or HTTP probe cannot catch this class. Only DEREFERENCING an object can: it
     exercises the endpoint, the credentials, the bucket and the write in one assertion, and
@@ -206,18 +260,6 @@ def _infra_failures(connection: psycopg.Connection, run_id: str) -> list[str]:
                 bad.append(f"object bytes do not match the recorded checksum for {object_uri}")
             elif expected_len is not None and len(payload) != int(expected_len):
                 bad.append(f"object byte_length {len(payload)} != recorded {expected_len} for {object_uri}")
-
-    # The SDK is a released contract, not a vendored copy: the image must have loaded the
-    # version this repository pins, or every shared dispatch/health primitive is a guess.
-    try:
-        from importlib.metadata import version as _installed
-
-        loaded = _installed("infra2-sdk")
-    except Exception as error:  # noqa: BLE001
-        bad.append(f"infra2-sdk is not importable in the deployed image: {type(error).__name__}")
-    else:
-        if loaded != PINNED_INFRA2_SDK:
-            bad.append(f"infra2-sdk {loaded} loaded, repository pins {PINNED_INFRA2_SDK}")
 
     return bad
 

@@ -7,7 +7,6 @@ can read the build identity that run stamps). Split from `data_engine.dagster_de
 #731.
 """
 
-import os
 from datetime import UTC, datetime
 
 import dagster as dg
@@ -79,8 +78,13 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
     boot:<digest>`. Dagster dedupes run keys per sensor across ticks and restarts, and
     the cursor remembers the digest, so three containers and any restart produce one
     run per build. Local and CI carry no digest and skip.
+
+    Read through `settings` since #784: `TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST` is now declared
+    in the data-engine environment manifest, and a value the manifest declares is resolved
+    by the settings model that declares it -- not fetched from the process environment
+    beside it, where nothing reconciles it and boot validation cannot require it.
     """
-    digest = (os.environ.get("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST") or "").strip()
+    digest = (settings.data_engine_image_digest or "").strip()
     if not digest.startswith("sha256:"):
         yield dg.SkipReason("no data-engine image digest in the environment (local/CI)")
         return
@@ -94,7 +98,7 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
         run_key=f"boot:{digest}",
         job_name=tick.job_name,
         run_config=dg.RunConfig(ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at)}),
-        tags={"truealpha/boot_canary": digest, "truealpha/build": os.environ.get("GIT_COMMIT_SHA", "unknown")},
+        tags={"truealpha/boot_canary": digest, "truealpha/build": settings.git_commit_sha or "unknown"},
     )
 
 

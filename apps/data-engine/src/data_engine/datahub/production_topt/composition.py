@@ -37,7 +37,6 @@ re-capturing; recovery is the next tick (or an explicit new `executed_at`), not 
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -70,8 +69,8 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
 )
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
-from truealpha_contracts.release import LIVE_RELEASE_PAYLOAD, live_release_manifest_id
 
+from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
@@ -99,6 +98,7 @@ from data_engine.datahub.production_topt.source_registrations import (
 )
 from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
+from data_engine.release_identity import measure as measure_release_identity
 
 # The four semantics, their owners, freshness windows and routes are declared once in
 # source_registrations.py (#72); this module derives, never enumerates.
@@ -284,23 +284,40 @@ def plan_and_persist(
     repository.bind_campaign_list(campaign.campaign_id, list_version.list_version_id)
     repository.put_run(run)
 
-    release_sha256 = canonical_sha256(LIVE_RELEASE_PAYLOAD)
-    release_manifest_id = live_release_manifest_id()
+    # The release identity is MEASURED from the artifact (#784): the release ref the
+    # deployment injected, the migration set this image ships, and the fingerprint of the
+    # environment contract it declares. It used to be the hash of a literal, so every run
+    # in both environments carried one 64-hex value that bound nothing (#712). The payload
+    # is persisted whole, so a run's identity can be explained and not merely compared.
+    identity = measure_release_identity()
+    release_sha256 = identity.content_sha256
+    release_manifest_id = identity.manifest_id
     connection.execute(
         "insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload) "
         "values (%s, 'release_manifest', %s, %s) on conflict (contract_id) do nothing",
-        (release_manifest_id, release_sha256, psycopg.types.json.Jsonb(LIVE_RELEASE_PAYLOAD)),
+        (release_manifest_id, release_sha256, psycopg.types.json.Jsonb(identity.payload)),
     )
     # The run records which data-engine build produced it (#712): the compose injects the
-    # image digest and the git sha into every data-engine process, and until now nothing
-    # read them. `mart.data_engine_identity` projects this for llm-service's /health and
-    # the admin page, so "which data engine is running" is a fact the UI can show and the
-    # deploy lane can compare, instead of a parser vintage that happened to match.
+    # image digest and the git sha into every data-engine process. `mart.data_engine_identity`
+    # projects this for llm-service's /health and the admin page, so "which data engine is
+    # running" is a fact the UI can show and the deploy lane can compare, instead of a parser
+    # vintage that happened to match.
+    #
+    # Read through `settings` (#784) rather than the process environment, so the manifest that
+    # declares these names is the same object that resolves them -- a direct environment read
+    # bypassed the declaration entirely, which is why nothing reconciled these values and
+    # nothing could require them at boot.
     run_plan = {
         "run_id": run.run_id,
         "release_manifest_id": release_manifest_id,
-        "data_engine_git_sha": os.environ.get("GIT_COMMIT_SHA") or "unknown",
-        "data_engine_image_digest": os.environ.get("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST") or "unknown",
+        "data_engine_git_sha": settings.git_commit_sha or "unknown",
+        "data_engine_image_digest": settings.data_engine_image_digest or "unknown",
+        # What the DEPLOYMENT says this release is, beside what the artifact measures.
+        # infra2 still injects a hand-written Vault value here, so the two differ today;
+        # recording both makes the hand-off observable (they become equal once infra2
+        # sources it from `tools/release_identity.py`) instead of a claim in a PR body.
+        "declared_release_manifest_id": settings.release_manifest_id or "unknown",
+        "capture_approved_by": settings.capture_approved_by or "unknown",
     }
     connection.execute(
         "insert into raw.production_topt_run_plans (run_id, release_manifest_id, content_sha256, payload) "

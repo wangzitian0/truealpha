@@ -20,6 +20,57 @@ class Settings(RuntimeSettings):
         """
         return CaptureEnvironment(self.environment_tier.value)
 
+    # --- release identity injected by infra2's compose (#784, #712) --------------------
+    #
+    # Every data-engine process receives these four through
+    # `truealpha/truealpha/20.data_engine/compose.yaml`, and until #784 no manifest declared
+    # any of them and no code read them through `settings`: `os.environ.get(...)` at two
+    # call sites was the whole contract, so nothing reconciled them, nothing could require
+    # them at boot, and an environment that silently stopped injecting one read as "unknown"
+    # rather than as a fault.
+    #
+    # The env names are the ones the compose actually sets -- `TRUEALPHA_`-prefixed --
+    # declared as validation aliases rather than renamed on the infra2 side. The manifest
+    # must describe reality; a tidier name that nothing injects would be a manifest that
+    # validates an environment nobody deploys.
+    #
+    # Where each comes from on the infra2 side, and hence its source class:
+    #
+    #   TRUEALPHA_RELEASE_MANIFEST_ID       Vault RELEASE_MANIFEST_ID. Determined by the
+    #                                       release (`tools/release_identity.py`); still a
+    #                                       hand-written key until the infra2 follow-up.
+    #   TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST  Vault DATA_ENGINE_IMAGE_DIGEST, which
+    #                                       `DataEngineDeployer.pin_release` resolves from the
+    #                                       registry for the release tag.
+    #   TRUEALPHA_CONFIGURATION_SHA256      `DataEngineDeployer._configuration_sha256` over the
+    #                                       compose artifacts and public env of that deploy.
+    #   TRUEALPHA_CAPTURE_APPROVED_BY       Vault CAPTURE_APPROVED_BY, the reviewed human
+    #                                       decision in `governance/approvals/<env>.yaml` --
+    #                                       hence `decision`, not `release`.
+    #
+    # Both classes are injected by the deployment rather than held as an application secret,
+    # which infra2-sdk's offline gate enforces (`COMPOSE_SOURCES`).
+    release_manifest_id: str = Field(
+        default="",
+        validation_alias="TRUEALPHA_RELEASE_MANIFEST_ID",
+        json_schema_extra={"source": "release", "group": "release"},
+    )
+    data_engine_image_digest: str = Field(
+        default="",
+        validation_alias="TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST",
+        json_schema_extra={"source": "release", "group": "release"},
+    )
+    configuration_sha256: str = Field(
+        default="",
+        validation_alias="TRUEALPHA_CONFIGURATION_SHA256",
+        json_schema_extra={"source": "release", "group": "release"},
+    )
+    capture_approved_by: str = Field(
+        default="",
+        validation_alias="TRUEALPHA_CAPTURE_APPROVED_BY",
+        json_schema_extra={"source": "decision", "group": "release"},
+    )
+
     # The shared runtime contract owns DATABASE_URL; this service composes it for the
     # host-network topology (host loopback port), which is why the override lives here.
     database_url: str = Field(
