@@ -75,7 +75,19 @@ class HoldingLine:
 
     @property
     def valued(self) -> bool:
-        return self.resolved and self.availability == "available" and self.valuation_gap is not None
+        """A line is valued only if it can actually enter the aggregate.
+
+        `weight is not None` is part of that: a filed line whose `pctVal` did not parse
+        contributes to neither numerator nor denominator, so counting it as valued would
+        overstate `valued_lines` and let its confidence pull `min()` down for a line the
+        number does not depend on (review on #727).
+        """
+        return (
+            self.weight is not None
+            and self.resolved
+            and self.availability == "available"
+            and self.valuation_gap is not None
+        )
 
 
 @dataclass(frozen=True)
@@ -171,7 +183,11 @@ def consolidate_fund(
     # by coverage can, and a number that silently mixes the two explains neither.
     confidences = [line.confidence for line in valued_lines if line.confidence is not None]
     confidence = min(confidences) if confidences else _ZERO
-    availability: DataAvailability = "verified" if valued >= resolved else "unverified"
+    # Measured against the WHOLE filed mass, not against the resolved subset: a fund with
+    # unresolved holdings is described only in part, whatever share of the resolved half
+    # was valued. `_status_dimensions` grades source evidence by the same comparison, and
+    # the two must not disagree about one fact (review on #727).
+    availability: DataAvailability = "verified" if valued >= total else "unverified"
     flags: list[str] = []
     if valued < resolved:
         flags.append("partial_valued_mass")

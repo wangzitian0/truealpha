@@ -127,11 +127,33 @@ def test_definition_is_content_addressed() -> None:
 
 
 def test_a_line_with_no_weight_is_not_counted_as_zero() -> None:
-    """A filing line whose pctVal did not parse must not silently enter the denominator."""
-    with_null = [*FUND, HoldingLine("No pctVal", None, "listing:xnas:d", Decimal("9.0"), "available", Decimal("0.9"))]
+    """A filing line whose pctVal did not parse must not silently enter the denominator —
+    and must not be counted as valued either (review on #727): it contributes to neither
+    the numerator nor the denominator, so counting it would overstate `valued_lines` and
+    let its confidence pull min() down for a line the number does not depend on. Its
+    confidence is deliberately the LOWEST here, so a regression shows up in the number."""
+    with_null = [*FUND, HoldingLine("No pctVal", None, "listing:xnas:d", Decimal("9.0"), "available", Decimal("0.1"))]
     result = consolidate_fund(with_null, fund_id="f", as_of=CUTOFF, definition=ETF_CONSOLIDATION_V0)
     assert result.total_weight == Decimal("100"), "an unparsed weight adds nothing to any mass"
     assert result.weighted_valuation_gap == Decimal("0.10"), "and cannot move the aggregate"
+    assert result.valued_lines == 2, "a weightless line is not a valued line"
+    assert result.result.confidence == Decimal("0.70"), "and cannot pull min() below the lines that count"
+
+
+def test_unresolved_holdings_keep_the_aggregate_unverified() -> None:
+    """`verified` is measured against the WHOLE filed mass (review on #727). A fund whose
+    resolved half is fully valued is still only partly described while any filed weight
+    went unresolved, and `_status_dimensions` grades source evidence by the same
+    comparison — the two must not disagree about one fact."""
+    partly_resolved = [
+        line("Resolved and valued", "95", listing="listing:xnas:a", gap="0.30", availability="available", conf="0.9"),
+        line("Unresolved ISIN", "5", listing=None, gap=None, availability=None, conf=None),
+    ]
+    result = consolidate_fund(partly_resolved, fund_id="f", as_of=CUTOFF, definition=ETF_CONSOLIDATION_V0)
+    assert result.valued_weight == result.resolved_weight == Decimal("95")
+    assert result.total_weight == Decimal("100")
+    assert result.result.data_availability == "unverified", "5% of the fund is not described at all"
+    assert "unresolved_holdings" in result.result.flags
 
 
 @pytest.mark.parametrize(
