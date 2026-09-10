@@ -147,7 +147,7 @@ def test_a_scale_stated_nowhere_in_the_filing_is_counted_rather_than_forgotten(a
     the FILING declares no scale anywhere, not when one table happens to omit it. ADM declares
     millions 51 times, so its count is zero even though two of its windows say nothing.
     """
-    assert unitless_windows(adm_text) == 0, "the filing states its scale, so no window is uncomparable"
+    assert unitless_windows(adm_text) == 0, "the filing states its scale, so no window is incomparable"
     assert any(not _UNITS.search(w) for _, w in _windows(adm_text)), "though some windows still omit it"
 
     shop = Path(__file__).resolve().parents[1] / "samples" / "filings" / "SHOP_10K_000159480526000007.html"
@@ -256,7 +256,7 @@ def test_a_single_segment_issuer_is_a_determinate_answer_not_a_miss() -> None:
             assert statement is None, f"{ticker} reports segments; a false positive would replace its table"
 
 
-def test_a_table_that_states_no_scale_inherits_the_filing_s(adm_recalled, adm_text) -> None:
+def test_a_table_that_states_no_scale_inherits_the_filing_scale(adm_recalled, adm_text) -> None:
     """A filing declares its units once at the top of the financial statements and every table
     below inherits them. ADM says millions 51 times and thousands twice; two of its segment
     windows state nothing of their own and are not scaleless — they are using the filing's.
@@ -288,11 +288,17 @@ def test_the_dominant_declaration_wins_over_a_stray_one(adm_text) -> None:
 
 def test_a_filing_that_declares_no_scale_anywhere_still_refuses() -> None:
     """The fallback is the FILING's own statement, not a default. SHOP declares no units in
-    its whole document, so its windows stay uncomparable rather than being handed a guess."""
+    its whole document, so its windows stay incomparable rather than being handed a guess."""
     shop = Path(__file__).resolve().parents[1] / "samples" / "filings" / "SHOP_10K_000159480526000007.html"
     text = filing_plain_text(shop.read_bytes())
     assert filing_scale(text) is None
     assert all(c.scale_source == "table" for c in segment_candidates(text))
+    # SHOP matches no heading either, so the count is zero for the OTHER reason — and the
+    # two are distinguishable, which is the point of reporting the count at all. The
+    # adapter says "no segment table matched" here and "N table(s) state no scale" only
+    # when a filing that declares nothing anywhere does have tables.
+    assert unitless_windows(text) == len([w for _, w in _windows(text) if not _UNITS.search(w)])
+    assert _windows(text) == [], "no heading matched, so the zero above is 'nothing found', not 'nothing comparable'"
 
 
 def test_inheriting_a_wrong_scale_refuses_rather_than_publishes(recalled) -> None:
