@@ -30,9 +30,12 @@ candidates with the evidence each was read from.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
 
@@ -42,7 +45,7 @@ from factors.shared.extraction import (
     PartitionRefusal,
     select_exhaustive_partition,
 )
-from truealpha_contracts.standards import MetricStandard
+from truealpha_contracts.standards import MetricStandard, confidence_for
 
 from data_engine.datahub.standards.filing_extraction import (
     ExtractionOutcome,
@@ -244,7 +247,8 @@ SEGMENT_TOLERANCE = Decimal("5")
 #: The id is zero-padded to ten digits because that is how the capture layer writes it
 #: (`companyfacts:CIK0001730168`); an unpadded id matches nothing (review on #805).
 _CONSOLIDATED_REVENUE_SQL = """
-select p.normalized_payload->>'revenue'
+select p.normalized_payload->>'revenue',
+       p.normalized_payload->>'revenue_period_end'
 from staging.capture_normalized_observations o
 join staging.capture_observation_payloads p on p.observation_id = o.observation_id
 join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
@@ -252,12 +256,28 @@ where o.semantic_type = 'financial-fact'
   and v.source_record_id = %s
   and o.knowable_at <= %s
   and p.normalized_payload->>'revenue' is not null
+  and p.normalized_payload->>'revenue_period_end' is not null
 order by o.knowable_at desc
 limit 1
 """
 
 
-def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> Decimal | None:
+@dataclass(frozen=True)
+class ConsolidatedRevenue:
+    """The oracle, with the period it describes.
+
+    The period is not decoration and it is not read from the filing's table header. The
+    identity's whole premise is that these parts and this total describe the SAME period, and
+    the only way to hold that without asserting it is to take the period from the number the
+    parts are checked against. A total whose period the source never stated cannot certify any
+    period's partition, so the query above requires it and this is never None.
+    """
+
+    value: Decimal
+    period_end: date
+
+
+def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> ConsolidatedRevenue | None:
     """The issuer's own consolidated revenue at this cutoff — the partition's oracle.
 
     Read from the SAME plane the wide row is built from, so the number the parts are checked
@@ -268,11 +288,103 @@ def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> Deci
     (`segment_candidates`) from the units each table declares, so the identity compares two
     numbers on the same scale rather than one that is right and one that is off by 10^6.
 
-    Returns None when the issuer has no revenue observation, which the caller turns into a
-    `no_total` refusal rather than a partition it cannot check.
+    Returns None when the issuer has no revenue observation — or has one whose period the
+    source never stated — which the caller turns into a `no_total` refusal rather than a
+    partition it cannot check or cannot file under a period.
     """
     row = connection.execute(_CONSOLIDATED_REVENUE_SQL, (f"companyfacts:CIK{cik:010d}", cutoff)).fetchone()
-    return None if row is None or row[0] is None else Decimal(str(row[0]))
+    if row is None or row[0] is None or row[1] is None:
+        return None
+    return ConsolidatedRevenue(value=Decimal(str(row[0])), period_end=date.fromisoformat(str(row[1])))
+
+
+#: What the plane records as the origin of these rows. Matches the standard's
+#: `evidence_bearing_sources` and its plane's `source_priority`, which is what makes a later
+#: source able to supersede this one without a code change.
+SEGMENT_SOURCE = "10k-segment-extraction"
+
+
+def partition_id_for(cik: int, period_end: date, parts: Sequence[tuple[str, Decimal]]) -> str:
+    """The identity of one accepted set, addressed by its content.
+
+    Same filing extracted twice lands the same id, so a re-run collapses onto the rows it
+    already wrote instead of duplicating a segment set — and a RESTATEMENT, which changes a
+    part, is a different set with a different id rather than an update to history.
+
+    `(cik, period_end, parts)` and nothing else: not the accession, because the same segments
+    restated in a later filing are the same claim about the same period; not the residual,
+    because a set is what its parts are.
+    """
+    canonical = json.dumps(
+        {
+            "cik": cik,
+            "period_end": period_end.isoformat(),
+            "parts": sorted((name, str(value)) for name, value in parts),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "segment-partition:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def partition_already_recorded(connection: Any, partition_id: str) -> bool:
+    row = connection.execute(
+        "select 1 from staging.issuer_segment_revenue_facts where partition_id = %s limit 1",
+        (partition_id,),
+    ).fetchone()
+    return row is not None
+
+
+def record_segment_partition(
+    connection: Any,
+    *,
+    cik: int,
+    partition_id: str,
+    period_end: date,
+    parts: Sequence[tuple[str, Decimal]],
+    partition_total: Decimal,
+    partition_residual: Decimal,
+    knowable_at: datetime,
+    evidence_ref: str,
+    extractor: str,
+    confidence: Decimal,
+) -> int:
+    """Land one accepted partition: one row per segment, all carrying the set's identity.
+
+    Deliberately not an upsert, like every other PIT plane here: a corrected breakdown is a
+    NEW partition with a later `knowable_at`, so history stays readable and a replay of an
+    older cutoff is unaffected.
+
+    The whole set is written or none of it is — the caller runs inside the backfill's
+    transaction, and a half-written partition is exactly the "missed segment" this design
+    refuses to produce from a filing. A partition landed with one row missing would pass
+    every check the plane makes and raise every remaining segment's share.
+    """
+    for segment_name, revenue in parts:
+        connection.execute(
+            """
+            insert into staging.issuer_segment_revenue_facts
+                (cik, segment_name, segment_revenue, partition_id, partition_total,
+                 partition_residual, knowable_at, period_end, source, evidence_ref,
+                 extractor, confidence)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                cik,
+                segment_name,
+                revenue,
+                partition_id,
+                partition_total,
+                partition_residual,
+                knowable_at,
+                period_end,
+                SEGMENT_SOURCE,
+                evidence_ref,
+                extractor,
+                confidence,
+            ),
+        )
+    return len(parts)
 
 
 def extract_segment_revenue(
@@ -299,11 +411,17 @@ def extract_segment_revenue(
     the packaged filing assert exactly one balances, and if a filing ever produces two the
     honest outcome is the refusal below rather than a silent pick.
 
-    Write mode is not implemented in this slice — the fact writer lands with the standard's
-    registration. `write=True` therefore reports what it WOULD land rather than pretending
-    to have landed it.
+    In write mode the accepted set is landed as one row per segment, all sharing a
+    content-addressed `partition_id`, inside the caller's transaction — the rows are
+    admissible only together, so they commit together or not at all.
     """
-    del record_cik, issuer_label  # accepted for signature parity; not used by this adapter
+    del issuer_label  # accepted for signature parity; not used by this adapter
+    # #496, the same split `extract_headcount` makes: `cik` is where the FILING is fetched
+    # from, `record_cik` (default: the same) is the issuer the fact is RECORDED under. They
+    # differ for a post-reorganization holding company whose filings still sit under the
+    # predecessor CIK — and the backfill's fallback passes it, so discarding it would file
+    # XOM's segments under the CIK it no longer trades as.
+    record_cik = cik if record_cik is None else record_cik
     # Same contract as `extract_headcount`: a backfill reports the failure per CELL and
     # keeps going. Letting `CapacityExceeded` escape here would abandon every issuer after
     # the first throttled one, which is the opposite of what a capacity signal means
@@ -317,7 +435,11 @@ def extract_segment_revenue(
     if document is None:
         return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F at or before the cutoff")
 
-    total = consolidated_revenue(connection, cik, cutoff=cutoff)
+    # By `record_cik`, not `cik`: the total must be the ISSUER's, even when the filing the
+    # parts were read from sits under a predecessor. Checking a holdco's segments against the
+    # predecessor's revenue would balance two different entities against each other.
+    oracle = consolidated_revenue(connection, record_cik, cutoff=cutoff)
+    total = None if oracle is None else oracle.value
     text = filing_plain_text(document.body)
     recalled = segment_candidates(text)
     if not recalled:
@@ -344,25 +466,63 @@ def extract_segment_revenue(
         tolerance = SEGMENT_TOLERANCE * recalled[indices[0]].multiplier
         verdict = select_exhaustive_partition(candidates, total=total, tolerance=tolerance, indices=indices)
         if isinstance(verdict, Partition):
+            assert oracle is not None  # a Partition cannot be returned without a total
+            parts = [(recalled[i].segment_name, recalled[i].value) for i in verdict.candidate_indices]
             named = ", ".join(
                 f"{recalled[i].segment_name}={recalled[i].stated_value}" for i in verdict.candidate_indices
             )
+            partition_id = partition_id_for(record_cik, oracle.period_end, parts)
+            summary = (
+                f"{len(parts)} segments accounting for {verdict.total} "
+                f"(residual {verdict.residual}) for {oracle.period_end}: {named}"
+            )
+            if not write:
+                return ExtractionOutcome(
+                    record_cik,
+                    "resolved",
+                    extractor=verdict.extractor,
+                    accession=document.accession,
+                    form=document.form,
+                    filing_date=document.filing_date,
+                    detail=f"would land {summary}",
+                )
+            if partition_already_recorded(connection, partition_id):
+                # The same filing re-extracted addresses the same set. Saying so is the
+                # point: a second identical run must be visible as a no-op rather than as a
+                # fresh landing, or an operator cannot tell a backfill that worked from one
+                # that ran twice.
+                return ExtractionOutcome(
+                    record_cik,
+                    "already_recorded",
+                    extractor=verdict.extractor,
+                    accession=document.accession,
+                    form=document.form,
+                    filing_date=document.filing_date,
+                    detail=f"{partition_id} already holds {summary}",
+                )
+            record_segment_partition(
+                connection,
+                cik=record_cik,
+                partition_id=partition_id,
+                period_end=oracle.period_end,
+                parts=parts,
+                partition_total=oracle.value,
+                partition_residual=Decimal(str(verdict.residual)),
+                # WHEN the breakdown became knowable: the filing's own date, never now().
+                # An insertion clock here is look-ahead for every historical cutoff.
+                knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
+                evidence_ref=f"accession={document.accession} form={document.form}",
+                extractor=verdict.extractor,
+                confidence=confidence_for(standard.confidence_policy_id, verdict.extractor),
+            )
             return ExtractionOutcome(
-                cik,
+                record_cik,
                 "resolved",
                 extractor=verdict.extractor,
                 accession=document.accession,
                 form=document.form,
                 filing_date=document.filing_date,
-                # `write` changes only what this SAYS, because the writer does not exist yet.
-                # It used to change nothing at all (`"resolved" if not write else "resolved"`)
-                # while the docstring claimed write mode reported what it would land — so an
-                # operator running the standard in write mode read the same sentence a probe
-                # produces and had no way to tell no fact was written.
-                detail=(
-                    f"{'would land ' if write else ''}{len(verdict.candidate_indices)} segments "
-                    f"accounting for {verdict.total} (residual {verdict.residual}): {named}"
-                ),
+                detail=f"{partition_id} landed {summary}",
             )
         refusals.append(verdict)
 
