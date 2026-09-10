@@ -10,7 +10,6 @@ from typing import Any
 
 from truealpha_contracts.capture_control import (
     CaptureListObligation,
-    CaptureListVersion,
     CaptureObligationWorkBinding,
 )
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
@@ -36,7 +35,7 @@ from truealpha_contracts.datahub import (
     SourceRequest,
     SourceVintage,
 )
-from truealpha_contracts.universe import SubjectKind, SubjectRef
+from truealpha_contracts.universe import SubjectRef
 
 from data_engine.datahub.control_plane import (
     AttemptLedger,
@@ -44,6 +43,7 @@ from data_engine.datahub.control_plane import (
     frozen_topt_universe,
     replay_retry_policy,
 )
+from data_engine.datahub.production_topt.universe_corpus import frozen_topt_list_version
 
 _CUTOFFS = (
     datetime(2026, 4, 1, tzinfo=UTC),
@@ -149,41 +149,6 @@ class ToptMediumReplayReport:
         if include_hash:
             result["report_sha256"] = self.report_sha256
         return result
-
-
-def frozen_topt_list_version(corpus: Mapping[str, Any]) -> CaptureListVersion:
-    denominator = corpus["topt_denominator"]
-    instruments = denominator["instruments"]
-    if (
-        int(denominator["instrument_count"]) != _EXPECTED_INSTRUMENT_COUNT
-        or len(instruments) != _EXPECTED_INSTRUMENT_COUNT
-    ):
-        raise ValueError("TOPT instrument denominator shrink")
-    issuer_ids = {str(row[0]) for row in instruments}
-    if int(denominator["issuer_count"]) != _EXPECTED_ISSUER_COUNT or len(issuer_ids) != _EXPECTED_ISSUER_COUNT:
-        raise ValueError("TOPT issuer denominator drift")
-    instrument_ids = tuple(str(row[1]) for row in instruments)
-    if len(instrument_ids) != len(set(instrument_ids)):
-        raise ValueError("TOPT security denominator contains duplicates")
-    listings = tuple(str(row[2]) for row in instruments)
-    if len(listings) != len(set(listings)):
-        raise ValueError("TOPT listing denominator contains duplicates")
-    mapping_sha256 = canonical_sha256(
-        {
-            "fields": denominator["instrument_tuple_fields"],
-            "instruments": instruments,
-        }
-    )
-    if mapping_sha256 != _EXPECTED_INSTRUMENT_MAPPING_SHA256:
-        raise ValueError("frozen TOPT instrument mapping drift")
-    version = CaptureListVersion(
-        universe=frozen_topt_universe(corpus),
-        members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=listing) for listing in listings),
-        effective_at=_CUTOFFS[0],
-    )
-    if version.list_version_id != denominator["list_version_id"]:
-        raise ValueError("frozen TOPT list identity drift")
-    return version
 
 
 def _schedule_policy() -> CaptureSchedulePolicy:

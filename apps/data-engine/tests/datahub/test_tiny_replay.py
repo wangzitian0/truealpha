@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from data_engine.datahub import (
+from data_engine.datahub.tiny_replay import (
     build_recapture_plan,
     execute_recapture,
     materialize_shared_provider_work,

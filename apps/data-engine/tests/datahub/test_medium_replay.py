@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from data_engine.datahub import run_topt_medium_replay
+from data_engine.datahub.medium_replay import run_topt_medium_replay
 
 ROOT = Path(__file__).parents[1]
 REPOSITORY_ROOT = Path(__file__).parents[4]
