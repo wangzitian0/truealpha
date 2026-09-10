@@ -51,10 +51,9 @@ from truealpha_contracts.standards import MetricStandard, confidence_for
 
 from data_engine.datahub.standards.filing_extraction import (
     ExtractionOutcome,
+    fetch_annual_filing,
     filing_plain_text,
-    latest_annual_filing,
 )
-from data_engine.sources.gateway import CapacityExceeded
 
 #: The sentence that introduces a segment revenue table. Every phrasing seen in the packaged
 #: filings AND in the ones the deployed run refused; a heading this misses costs a
@@ -707,16 +706,12 @@ def extract_segment_revenue(
     # predecessor CIK — and the backfill's fallback passes it, so discarding it would file
     # XOM's segments under the CIK it no longer trades as.
     record_cik = cik if record_cik is None else record_cik
-    # Same contract as `extract_headcount`: a backfill reports the failure per CELL and
-    # keeps going. Letting `CapacityExceeded` escape here would abandon every issuer after
-    # the first throttled one, which is the opposite of what a capacity signal means
-    # (review on #805).
-    try:
-        document = latest_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
-    except CapacityExceeded as error:
-        return ExtractionOutcome(cik, "deferred_capacity", detail=str(error))
-    except Exception as error:  # noqa: BLE001 - a backfill reports the failure per cell and continues
-        return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
+    # One fetch contract for every adapter (`fetch_annual_filing`): a backfill reports the
+    # failure per CELL and keeps going. This module shipped its own copy and #805's review
+    # caught what it had drifted from; there is one now.
+    document = fetch_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
+    if isinstance(document, ExtractionOutcome):
+        return document
     if document is None:
         return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F at or before the cutoff")
 

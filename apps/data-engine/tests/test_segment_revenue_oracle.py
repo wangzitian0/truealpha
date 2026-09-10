@@ -180,7 +180,7 @@ def test_the_whole_adapter_resolves_the_real_filing_against_the_real_total(monke
         url="https://www.sec.gov/Archives/edgar/data/1730168/avgo-20251102.htm",
         body=FILING.read_bytes(),
     )
-    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: filing)
+    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: filing)
 
     outcome = adapter.extract_segment_revenue(
         CIK,
@@ -202,13 +202,17 @@ def test_a_capacity_signal_defers_the_cell_instead_of_crashing_the_backfill(monk
     """A throttled vendor means "come back later for THIS issuer", not "abandon the other
     hundred". `extract_headcount` has always returned `deferred_capacity`; this adapter let
     the exception escape and took the whole run with it (review on #805)."""
+    from data_engine.datahub.standards import filing_extraction
     from data_engine.datahub.standards import segment_extraction as adapter
     from data_engine.sources.gateway import CapacityExceeded
 
     def raise_capacity(*_a, **_k):
         raise CapacityExceeded("sec", "0 calls left in window")
 
-    monkeypatch.setattr(adapter, "latest_annual_filing", raise_capacity)
+    # Patched at the VENDOR call, not at the catcher, so the real `fetch_annual_filing` is the
+    # thing being tested. Patching the catcher would assert that a stub returns what the stub
+    # was told to return.
+    monkeypatch.setattr(filing_extraction, "latest_annual_filing", raise_capacity)
     outcome = adapter.extract_segment_revenue(
         CIK,
         connection=_RecordingConnection(),
@@ -223,12 +227,13 @@ def test_a_capacity_signal_defers_the_cell_instead_of_crashing_the_backfill(monk
 
 
 def test_an_unexpected_failure_is_reported_per_cell(monkeypatch) -> None:
+    from data_engine.datahub.standards import filing_extraction
     from data_engine.datahub.standards import segment_extraction as adapter
 
     def boom(*_a, **_k):
         raise TimeoutError("read timed out")
 
-    monkeypatch.setattr(adapter, "latest_annual_filing", boom)
+    monkeypatch.setattr(filing_extraction, "latest_annual_filing", boom)
     outcome = adapter.extract_segment_revenue(
         CIK,
         connection=_RecordingConnection(),
@@ -259,7 +264,7 @@ def _avgo_filing():
 def _run(monkeypatch, connection, *, write: bool):
     from data_engine.datahub.standards import segment_extraction as adapter
 
-    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: _avgo_filing())
+    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: _avgo_filing())
     return adapter.extract_segment_revenue(
         CIK,
         connection=connection,
@@ -373,7 +378,7 @@ def test_a_holding_company_files_under_the_issuer_it_is_now(monkeypatch) -> None
     from data_engine.datahub.standards import segment_extraction as adapter
 
     predecessor, issuer = 34_088, CIK  # the filing's CIK vs. the issuer's
-    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: _avgo_filing())
+    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: _avgo_filing())
     connection = _RecordingConnection()
     outcome = adapter.extract_segment_revenue(
         predecessor,
@@ -434,7 +439,7 @@ def test_a_single_segment_issuer_lands_the_whole_company_as_one_part(monkeypatch
 
     duol_cik = 1562088
     monkeypatch.setattr(
-        adapter, "latest_annual_filing", lambda *a, **k: _filing("DUOL_10K_000162828026012494.html", duol_cik)
+        adapter, "fetch_annual_filing", lambda *a, **k: _filing("DUOL_10K_000162828026012494.html", duol_cik)
     )
     connection = _RecordingConnection(("748000000", "2025-12-31"))
     outcome = adapter.extract_segment_revenue(
@@ -465,7 +470,7 @@ def test_an_issuer_that_reports_segments_never_takes_the_single_segment_path(mon
     from data_engine.datahub.standards import segment_extraction as adapter
     from factors.shared.extraction import RULE_EXHAUSTIVE_PARTITION
 
-    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: _avgo_filing())
+    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: _avgo_filing())
     outcome = adapter.extract_segment_revenue(
         CIK,
         connection=_RecordingConnection(),
@@ -490,7 +495,7 @@ def test_the_landed_row_says_where_its_scale_came_from(monkeypatch) -> None:
     """
     from data_engine.datahub.standards import segment_extraction as adapter
 
-    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: _avgo_filing())
+    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: _avgo_filing())
     connection = _RecordingConnection()
     adapter.extract_segment_revenue(
         CIK,
