@@ -1,10 +1,14 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-# Importing the stub modules registers them.
+# Importing the factor modules registers them. Both kinds are covered by REAL factors
+# now — module 6 was a Gate 0 probe standing in for a factor that did not exist until
+# `theme_purity` (#772). The composite probe stays: it is the subject of
+# `test_issue58_additive_probe.py`'s conformance contract, which needs a signature that
+# does not move.
 import factors.base.gross_profit_per_employee  # noqa: F401
 import factors.base.peg  # noqa: F401
-import factors.base.registered_semantic_probe  # noqa: F401
+import factors.base.theme_purity  # noqa: F401
 import factors.composite.registered_composite_probe  # noqa: F401
 import factors.composite.three_tier_valuation  # noqa: F401
 import pytest
@@ -12,11 +16,11 @@ from factors import FACTOR_REGISTRY, Fact, FactorResult, UnitFamily
 from pydantic import ValidationError
 
 
-def test_stub_factors_are_registered():
+def test_every_registered_factor_is_registered_under_its_declared_kind():
     assert FACTOR_REGISTRY["peg"].kind == "base"
     assert FACTOR_REGISTRY["gross_profit_per_employee"].kind == "base"
     assert FACTOR_REGISTRY["three_tier_valuation"].kind == "composite"
-    assert FACTOR_REGISTRY["registered_semantic_probe"].kind == "base"
+    assert FACTOR_REGISTRY["theme_purity"].kind == "base"
     assert FACTOR_REGISTRY["registered_composite_probe"].kind == "composite"
 
 
