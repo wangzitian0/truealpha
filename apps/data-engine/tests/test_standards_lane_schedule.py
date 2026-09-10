@@ -1,6 +1,10 @@
-"""The weekly standards lane runs the backfill and then the question-coverage report (#748)
-with one configuration per universe; a run request that configured only one op would fail
-at launch, so the schedule is asserted here rather than discovered on Sunday."""
+"""The weekly standards lane runs the backfill, then module 6's theme purity (#772), then
+the question-coverage report (#748) — with one configuration per universe. A run request
+that configured only some of the ops would fail at launch, so the schedule is asserted here
+rather than discovered on Sunday.
+
+The order is the data dependency, not a preference: purity consumes the segment partitions
+the backfill lands, and coverage counts the purity column."""
 
 from __future__ import annotations
 
@@ -14,14 +18,18 @@ from data_engine.lanes.standards import (
 )
 
 
-def test_the_job_chains_backfill_then_coverage() -> None:
+def test_the_job_chains_backfill_then_purity_then_coverage() -> None:
+    """Each op consumes the one before it, so the chain is enforced by the dependency rather
+    than by ordering luck: purity would classify an empty plane if it ran first, and coverage
+    would count a column that had not been written yet."""
     assert [node.name for node in standard_backfill_pipeline_job.graph.node_defs] == [
         "run_standard_backfill",
+        "run_theme_purity",
         "run_question_coverage",
     ]
 
 
-def test_every_run_request_configures_both_ops_for_its_universe() -> None:
+def test_every_run_request_configures_every_op_for_its_universe() -> None:
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 13, 9, 7, tzinfo=UTC))
     requests = list(standard_backfill_schedule.evaluate_tick(context).run_requests)
     assert [request.run_key for request in requests] == [
@@ -29,7 +37,7 @@ def test_every_run_request_configures_both_ops_for_its_universe() -> None:
     ]
     for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
         ops = request.run_config["ops"]
-        assert set(ops) == {"run_standard_backfill", "run_question_coverage"}
+        assert set(ops) == {"run_standard_backfill", "run_theme_purity", "run_question_coverage"}
         for op in ops.values():
             assert op["config"]["universe"] == universe
             assert op["config"]["executed_at"] == "2026-09-13T09:07:00+00:00"

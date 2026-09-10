@@ -123,7 +123,19 @@ QUESTION_REQUIREMENTS: tuple[QuestionRequirement, ...] = (
         scope=QuestionScope.FUND,
         tracking_issue="#36",
     ),
-    QuestionRequirement(Question.Q6_THEME_PURITY, (), (), "#772"),
+    QuestionRequirement(
+        question=Question.Q6_THEME_PURITY,
+        # Module 6 writes one row per (run, issuer, THEME), so an issuer is answered when
+        # any governed theme produced a share for it. The column is the share itself;
+        # `unclassified_revenue` beside it is what stops a reader mistaking coverage for
+        # purity, but the cell's presence is what q6 is counted on.
+        columns=(FactorColumn("mart.issuer_theme_purity", "theme_share", "theme_purity", 6),),
+        # The share is computed over an accepted segment partition; without that standard's
+        # facts there is nothing to classify, so the dependency is declared rather than
+        # discovered from an empty table.
+        standards=("segment_revenue",),
+        tracking_issue="#772",
+    ),
 )
 
 

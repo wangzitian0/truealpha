@@ -154,6 +154,38 @@ def fund_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     return tuple(cells)
 
 
+def theme_purity_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
+    """Module 6's purity rows for this run, collapsed to one cell per ISSUER (#772).
+
+    An issuer has one row per governed theme, and q6 asks whether the issuer's purity is
+    answerable at all — so it is answered when ANY theme produced a share for it. The
+    alternative, counting an issuer unavailable because one of three themes refused, would
+    make adding a theme look like a regression in coverage.
+
+    A refused share reports the refusing reason, the same shape every other cell uses;
+    `below_minimum_classified_share` is the common one and it is the honest answer: the
+    classifier could not judge enough of the issuer's revenue to rank it.
+    """
+    rows = connection.execute(
+        """
+        select issuer_id, availability_status, reason_codes
+        from mart.issuer_theme_purity where run_id = %s order by issuer_id, theme_id
+        """,
+        (run_id,),
+    ).fetchall()
+    answered: dict[str, Cell] = {}
+    for issuer_id, availability_status, reason_codes in rows:
+        subject = str(issuer_id)
+        if answered.get(subject) and answered[subject].answered:
+            continue
+        if availability_status == "available":
+            answered[subject] = Cell(subject, True)
+        else:
+            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
+            answered.setdefault(subject, Cell(subject, False, str(reason)))
+    return tuple(answered[key] for key in sorted(answered))
+
+
 def classify_question(
     requirement: QuestionRequirement,
     *,
@@ -239,6 +271,7 @@ def compile_report(
         "mart.topt_gppe_results.gppe": gppe,
         "mart.strategy_decisions.peg": peg_cells(connection, cutoff=head.cutoff) if prefix == "universe:topt-" else (),
         "mart.fund_virtual_company.weighted_valuation_gap": funds_observed,
+        "mart.issuer_theme_purity.theme_share": theme_purity_cells(connection, head.run_id),
     }
     questions = {
         requirement.question.value: classify_question(
