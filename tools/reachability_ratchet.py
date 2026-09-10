@@ -1,14 +1,31 @@
 #!/usr/bin/env python3
-"""Unreachable-code ratchet for the data engine (#429 / truealpha#539 P6).
+"""Unreachable-code ratchet for the data engine and the factor library
+(#429 / truealpha#539 P6; extended to ``libs/factors`` by #791).
 
-Computes the import closure of ``data_engine`` from its DEPLOYED roots — the
-Dagster composition root plus every module an operator script imports — and
-compares the unreachable line count against the committed baseline. The count
-may only go DOWN: 21k+ lines of parallel implementations accreted precisely
-because nothing objected when a new one landed (three headcount
-implementations, a four-way governed-read copy, a batches graveyard).
+Computes the import closure from the DEPLOYED roots — the Dagster composition
+root plus every module an operator script imports — and compares the unreachable
+line count against the committed baseline. The count may only go DOWN: 21k+ lines
+of parallel implementations accreted precisely because nothing objected when a new
+one landed (three headcount implementations, a four-way governed-read copy, a
+batches graveyard).
 
-Fails when the count grows. When it shrinks, prints the new number so the
+Both source trees are walked, because the closure crosses the package boundary:
+``data_engine`` imports ``factors``, and a factor is reachable exactly when the
+deployed composition can get to it. Guarding only the data engine left the half
+that holds the factors unmeasured, and answering "can production reach this
+factor?" by hand takes eight steps — grep the importers, tell a comment
+reference from an import, follow the batch chain, then check two workflows.
+
+The baseline is recorded PER TREE. A single total lets one tree's deletion pay
+for another tree's accretion, which is the ratchet failing silently at the one
+thing it exists to catch.
+
+Note the roots include operator scripts, so an unreferenced script keeps whatever
+it imports on the reachable side. That is deliberate (a script IS a deployment
+path) and it is also how one unused file anchored 2,415 lines of the retired
+batch machine — the census below names modules, so the anchor is visible.
+
+Fails when a count grows. When one shrinks, prints the new numbers so the
 baseline can be tightened in the same PR (`--write-baseline`).
 
 Run: python3 tools/reachability_ratchet.py [--check|--write-baseline]
@@ -22,26 +39,37 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "apps" / "data-engine" / "src"
+#: tree name -> source root. The tree name is also the top-level package it holds,
+#: which is what lets a module be attributed back to its tree for the per-tree count.
+TREES: dict[str, Path] = {
+    "data_engine": ROOT / "apps" / "data-engine" / "src",
+    "factors": ROOT / "libs" / "factors" / "src",
+}
+PACKAGE_PREFIXES = tuple(TREES)
 SCRIPTS = ROOT / "apps" / "data-engine" / "scripts"
 BASELINE = Path(__file__).with_name("reachability_baseline.json")
 DEPLOYED_ROOT = "data_engine.dagster_defs"
 
 
+def _tree_of(module: str) -> str:
+    return module.split(".", 1)[0]
+
+
 def _modules() -> dict[str, Path]:
     modules: dict[str, Path] = {}
-    for path in SRC.rglob("*.py"):
-        parts = list(path.relative_to(SRC).with_suffix("").parts)
-        if parts[-1] == "__init__":
-            parts = parts[:-1]
-        modules[".".join(parts)] = path
+    for src in TREES.values():
+        for path in src.rglob("*.py"):
+            parts = list(path.relative_to(src).with_suffix("").parts)
+            if parts[-1] == "__init__":
+                parts = parts[:-1]
+            modules[".".join(parts)] = path
     return modules
 
 
 def _imports(tree: ast.AST, modules: dict[str, Path]) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("data_engine"):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(PACKAGE_PREFIXES):
             found.add(node.module)
             for alias in node.names:
                 # `from package import submodule` — resolving module+name against
@@ -52,7 +80,7 @@ def _imports(tree: ast.AST, modules: dict[str, Path]) -> set[str]:
                     found.add(candidate)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.startswith("data_engine"):
+                if alias.name.startswith(PACKAGE_PREFIXES):
                     found.add(alias.name)
     # Registry entry points (#72): a source registration names its route builder as
     # "data_engine.<module>:<function>", resolved at plan time. That string IS a wiring
@@ -99,31 +127,51 @@ def unreachable() -> tuple[int, list[str]]:
                     stack.append(candidate)
 
     dead = sorted(name for name in modules if name not in seen)
-    lines = sum(len(modules[name].read_text().splitlines()) for name in dead)
+    lines = {tree: 0 for tree in TREES}
+    for name in dead:
+        lines[_tree_of(name)] += len(modules[name].read_text().splitlines())
     return lines, dead
+
+
+def _read_baseline() -> dict[str, int]:
+    """Per-tree baseline. The pre-#791 file held a single `unreachable_lines` total for
+    the data engine alone; it is read as that tree's number so the ratchet keeps working
+    across the change instead of failing on a key it has not seen."""
+    stored = json.loads(BASELINE.read_text())
+    if "unreachable_lines" in stored:
+        return {"data_engine": int(stored["unreachable_lines"]), "factors": 0}
+    return {tree: int(stored.get(tree, 0)) for tree in TREES}
 
 
 def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "--check"
     lines, dead = unreachable()
     if mode == "--write-baseline":
-        BASELINE.write_text(json.dumps({"unreachable_lines": lines}, indent=2) + "\n")
-        print(f"baseline written: {lines} unreachable lines across {len(dead)} modules")
+        BASELINE.write_text(json.dumps(lines, indent=2, sort_keys=True) + "\n")
+        counts = ", ".join(f"{tree} {count}" for tree, count in sorted(lines.items()))
+        print(f"baseline written: {counts} unreachable lines across {len(dead)} modules")
         return 0
-    baseline = json.loads(BASELINE.read_text())["unreachable_lines"]
-    if lines > baseline:
-        grew = lines - baseline
-        print(f"reachability ratchet FAILED: {lines} unreachable lines (baseline {baseline}, +{grew}).")
+    baseline = _read_baseline()
+    # Judged per tree on purpose: a single total lets a deletion in one tree pay for an
+    # accretion in the other, which is the ratchet silently failing at its one job.
+    grown = {tree: (lines[tree], baseline[tree]) for tree in TREES if lines[tree] > baseline[tree]}
+    if grown:
+        print("reachability ratchet FAILED:")
+        for tree, (now, was) in sorted(grown.items()):
+            print(f"  {tree}: {now} unreachable lines (baseline {was}, +{now - was})")
         print("A new module landed without a deployed consumer. Wire it into the")
         print("composition root or an operator script, or remove it — the census is:")
         for name in dead:
-            print(f"  {name}")
+            print(f"  {_tree_of(name):12} {name}")
         return 1
-    if lines < baseline:
-        print(f"reachability improved: {lines} unreachable lines (baseline {baseline}).")
+    if any(lines[tree] < baseline[tree] for tree in TREES):
+        for tree in sorted(TREES):
+            if lines[tree] < baseline[tree]:
+                print(f"reachability improved: {tree} {lines[tree]} unreachable lines (baseline {baseline[tree]}).")
         print("Tighten the baseline in this PR: python3 tools/reachability_ratchet.py --write-baseline")
     else:
-        print(f"reachability ratchet OK: {lines} unreachable lines (== baseline)")
+        counts = ", ".join(f"{tree} {lines[tree]}" for tree in sorted(TREES))
+        print(f"reachability ratchet OK: {counts} unreachable lines (== baseline)")
     return 0
 
 
