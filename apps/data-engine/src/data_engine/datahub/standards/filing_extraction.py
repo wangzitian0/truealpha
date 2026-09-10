@@ -247,6 +247,33 @@ def _get_bytes(http: Any, url: str) -> bytes:
     return bytes(response.content)
 
 
+def fetch_annual_filing(
+    cik: int, *, http: Any, gateway: SourceGateway, cutoff: datetime
+) -> FilingDocument | None | ExtractionOutcome:
+    """Fetch the filing, or the OUTCOME that says why the cell could not be TRIED.
+
+    `None` stays a third answer rather than being folded into the outcome: "this issuer has
+    no annual filing at the cutoff" is a fact about the issuer, while a capacity refusal or a
+    vendor error is a fact about the attempt, and each adapter words the first for itself.
+
+    Every adapter the standards backfill drives needs the same three-way answer, and the
+    reason it is one function rather than a convention is what happens when the convention is
+    forgotten: a `CapacityExceeded` escaping one adapter abandons every issuer after the first
+    throttled one, which is the opposite of what a capacity signal means. `segment_extraction`
+    shipped without it and #805's review caught it; a third adapter should not get the chance
+    to be the third.
+
+    Returns the document, or an `ExtractionOutcome` the caller returns unchanged — so the
+    call site reads `if isinstance(result, ExtractionOutcome): return result`.
+    """
+    try:
+        return latest_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
+    except CapacityExceeded as error:
+        return ExtractionOutcome(cik, "deferred_capacity", detail=str(error))
+    except Exception as error:  # noqa: BLE001 - a backfill reports the failure per cell and continues
+        return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
+
+
 def extract_headcount(
     cik: int,
     *,
@@ -270,12 +297,9 @@ def extract_headcount(
     company whose filings still sit under the predecessor CIK (#496).
     """
     record_cik = cik if record_cik is None else record_cik
-    try:
-        document = latest_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
-    except CapacityExceeded as error:
-        return ExtractionOutcome(cik, "deferred_capacity", detail=str(error))
-    except Exception as error:  # noqa: BLE001 - a backfill reports the failure per cell and continues
-        return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
+    document = fetch_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
+    if isinstance(document, ExtractionOutcome):
+        return document
     if document is None:
         return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F on file at the cutoff")
 
