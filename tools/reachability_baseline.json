@@ -1,4 +1,5 @@
 {
+  "_comment": "Unreachable-line budget per source tree (tools/reachability_ratchet.py). It may only go DOWN. data_engine is 0 and must stay there. factors is 73, and those 73 are one file — libs/factors/src/factors/base/registered_semantic_probe.py, a Gate 0 probe for the governance machine frozen 2026-07-17. It is NOT accretion and deleting it is not an improvement: apps/data-engine/tests/test_issue58_additive_probe.py uses it as the subject of the additive-registered-semantic-input conformance contract, and a real factor would couple that contract to a signature that evolves. The ratchet measures the DEPLOYED closure, so a deliberate test fixture reads as unreachable — which is correct for what the ratchet guards and is why this number is documented rather than chased to zero (#772; measured 2026-09-10 by deleting it and finding the third consumer that two greps had missed and mypy had not).",
   "data_engine": 0,
   "factors": 73
 }

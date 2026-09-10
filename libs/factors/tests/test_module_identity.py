@@ -1,7 +1,7 @@
 """#770: init.md Section 7's module table is the authority for `@factor(..., module=N)`.
 
 The two known mismatches (`price_to_sales` at `module=6`, `registered_semantic_probe` at
-`module=7`) were corrected by hand in this same change, and `check_factor_contract.py`'s
+`module=7`) were corrected by hand in that change, and `check_factor_contract.py`'s
 I4 rule only ever asserted the coarse shape ("1-7", "module 7 is composite-only except
 `price_to_sales`"). Nothing previously asserted the EXACT per-factor number against
 init.md's own text, which is why the two mismatches shipped unnoticed in the first place
@@ -18,7 +18,7 @@ from pathlib import Path
 import factors.base.gross_profit_per_employee  # noqa: F401
 import factors.base.peg  # noqa: F401
 import factors.base.price_to_sales  # noqa: F401
-import factors.base.registered_semantic_probe  # noqa: F401
+import factors.base.theme_purity  # noqa: F401
 import factors.composite.registered_composite_probe  # noqa: F401
 import factors.composite.three_tier_valuation  # noqa: F401
 from factors import FACTOR_REGISTRY
@@ -28,12 +28,18 @@ INIT_MD = REPO_ROOT / "init.md"
 
 #: Registered factor name -> a substring of the init.md list-item title that identifies
 #: which of the seven questions it answers. Only factors that answer one of the seven
-#: questions ON THEIR OWN belong here; `price_to_sales` and the two Gate-0 probes are
-#: handled separately below.
+#: questions ON THEIR OWN belong here; `price_to_sales` is handled separately below.
+#:
+#: Module 6 was represented here by `registered_semantic_probe`, a Gate 0 probe standing in
+#: for a factor that did not exist. `theme_purity` (#772) is the real one, so this checks the
+#: factor that ANSWERS the question rather than a placeholder that happened to claim its
+#: number. The probe still exists and still registers `module=6` — it is the subject of
+#: `test_issue58_additive_probe.py`'s conformance contract — but it is no longer what module
+#: 6 is checked through.
 _FACTOR_KEYWORDS = {
     "peg": "PEG",
     "gross_profit_per_employee": "Gross profit per employee",
-    "registered_semantic_probe": "Pure-blood",
+    "theme_purity": "Pure-blood",
     "three_tier_valuation": "Three-tier valuation",
 }
 

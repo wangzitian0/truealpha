@@ -157,7 +157,14 @@ def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "--check"
     lines, dead = unreachable()
     if mode == "--write-baseline":
-        BASELINE.write_text(json.dumps(lines, indent=2, sort_keys=True) + "\n")
+        # `_comment` carries WHY a tree's number is not zero. Rewriting the file from the
+        # counts alone would delete that explanation on the next tightening, and the number
+        # would go back to being a mystery someone re-derives by deleting a file to see what
+        # breaks.
+        stored = json.loads(BASELINE.read_text())
+        written = {k: v for k, v in stored.items() if k.startswith("_")}
+        written.update(dict(sorted(lines.items())))
+        BASELINE.write_text(json.dumps(written, indent=2, ensure_ascii=False) + "\n")
         counts = ", ".join(f"{tree} {count}" for tree, count in sorted(lines.items()))
         print(f"baseline written: {counts} unreachable lines across {len(dead)} modules")
         return 0

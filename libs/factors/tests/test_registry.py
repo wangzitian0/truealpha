@@ -1,10 +1,11 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-# Importing the stub modules registers them.
+# Importing the factor modules registers them. Both kinds are covered by real
+# factors — the Gate 0 probes that used to stand in for them are retired (#772).
 import factors.base.gross_profit_per_employee  # noqa: F401
 import factors.base.peg  # noqa: F401
-import factors.base.registered_semantic_probe  # noqa: F401
+import factors.base.theme_purity  # noqa: F401
 import factors.composite.registered_composite_probe  # noqa: F401
 import factors.composite.three_tier_valuation  # noqa: F401
 import pytest
@@ -16,7 +17,7 @@ def test_stub_factors_are_registered():
     assert FACTOR_REGISTRY["peg"].kind == "base"
     assert FACTOR_REGISTRY["gross_profit_per_employee"].kind == "base"
     assert FACTOR_REGISTRY["three_tier_valuation"].kind == "composite"
-    assert FACTOR_REGISTRY["registered_semantic_probe"].kind == "base"
+    assert FACTOR_REGISTRY["theme_purity"].kind == "base"
     assert FACTOR_REGISTRY["registered_composite_probe"].kind == "composite"
 
 
