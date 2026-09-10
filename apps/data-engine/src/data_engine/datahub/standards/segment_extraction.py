@@ -26,9 +26,23 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
-from factors.shared.extraction import Candidate
+from factors.shared.extraction import (
+    Candidate,
+    Partition,
+    PartitionRefusal,
+    select_exhaustive_partition,
+)
+from truealpha_contracts.standards import MetricStandard
+
+from data_engine.datahub.standards.filing_extraction import (
+    ExtractionOutcome,
+    filing_plain_text,
+    latest_annual_filing,
+)
 
 #: The sentence that introduces a segment revenue table. Every phrasing seen in the packaged
 #: filings; a heading this misses costs a `no_candidates` refusal, never a wrong number.
@@ -136,3 +150,114 @@ def windows_of(segments: list[SegmentCandidate]) -> dict[int, list[int]]:
     for index, item in enumerate(segments):
         grouped.setdefault(item.window_start, []).append(index)
     return grouped
+
+
+#: Absolute, in the filing's own reporting units (millions for most large issuers). A
+#: segment table that rounds each part to the nearest million can miss its own total by a
+#: few; more than that is a missing or double-counted part, not rounding. Declared here
+#: rather than taken from the standard because it is a property of how filings round, and it
+#: moves with evidence rather than with a metric definition.
+SEGMENT_TOLERANCE = Decimal("5")
+
+
+def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> Decimal | None:
+    """The issuer's own consolidated revenue at this cutoff — the partition's oracle.
+
+    Read from the SAME plane the wide row is built from, so the number the parts are checked
+    against is the number a reader sees beside them. Point-in-time by construction: only
+    facts knowable at or before the cutoff are eligible.
+
+    Returns None when the issuer has no revenue fact, which the caller turns into a
+    `no_total` refusal rather than a partition it cannot check.
+    """
+    row = connection.execute(
+        """
+        select value
+        from staging.financial_facts
+        where unified_id = %s and metric = 'revenue' and transaction_time <= %s
+        order by transaction_time desc, id desc
+        limit 1
+        """,
+        (f"issuer:cik:{cik}", cutoff),
+    ).fetchone()
+    return None if row is None or row[0] is None else Decimal(str(row[0]))
+
+
+def extract_segment_revenue(
+    cik: int,
+    *,
+    connection: Any,
+    http: Any,
+    gateway: Any,
+    standard: MetricStandard,
+    cutoff: datetime,
+    write: bool,
+    store: Any = None,
+    record_cik: int | None = None,
+    issuer_label: str | None = None,
+    **_unused: Any,
+) -> ExtractionOutcome:
+    """The standard's adapter: fetch, recall, and accept the ONE table that balances.
+
+    Same signature as `extract_headcount` because `backfill._resolve` calls whichever adapter
+    the standard declares (#800) — the loop no longer knows which is which.
+
+    Every window recall found is offered to the identity separately, and the FIRST that
+    balances wins. Two balancing windows would be two answers to one question; the tests on
+    the packaged filing assert exactly one balances, and if a filing ever produces two the
+    honest outcome is the refusal below rather than a silent pick.
+
+    Write mode is not implemented in this slice — the fact writer lands with the standard's
+    registration. `write=True` therefore reports what it WOULD land rather than pretending
+    to have landed it.
+    """
+    del record_cik, issuer_label  # accepted for signature parity; not used by this adapter
+    document = latest_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
+    if document is None:
+        return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F at or before the cutoff")
+
+    total = consolidated_revenue(connection, cik, cutoff=cutoff)
+    recalled = segment_candidates(filing_plain_text(document.body))
+    if not recalled:
+        return ExtractionOutcome(
+            cik,
+            "no_candidate",
+            accession=document.accession,
+            form=document.form,
+            filing_date=document.filing_date,
+            detail="no segment table matched in the filing text",
+        )
+
+    candidates = as_candidates(recalled)
+    refusals: list[PartitionRefusal] = []
+    for indices in windows_of(recalled).values():
+        verdict = select_exhaustive_partition(candidates, total=total, tolerance=SEGMENT_TOLERANCE, indices=indices)
+        if isinstance(verdict, Partition):
+            named = ", ".join(f"{recalled[i].segment_name}={recalled[i].value}" for i in verdict.candidate_indices)
+            return ExtractionOutcome(
+                cik,
+                "resolved" if not write else "resolved",
+                extractor=verdict.extractor,
+                accession=document.accession,
+                form=document.form,
+                filing_date=document.filing_date,
+                detail=(
+                    f"{len(verdict.candidate_indices)} segments accounting for {verdict.total} "
+                    f"(residual {verdict.residual}): {named}"
+                ),
+            )
+        refusals.append(verdict)
+
+    # No window balanced. The refusals say WHY, and they differ: `no_total` is a missing
+    # consolidated revenue (this issuer has no wide-row number to check against), while
+    # short/over means recall missed or over-collected. Reporting the set rather than the
+    # first keeps that distinction visible.
+    reasons = ", ".join(sorted({refusal.value for refusal in refusals}))
+    return ExtractionOutcome(
+        cik,
+        "no_candidate",
+        accession=document.accession,
+        form=document.form,
+        filing_date=document.filing_date,
+        detail=f"no segment table accounts for the consolidated revenue ({reasons})",
+    )

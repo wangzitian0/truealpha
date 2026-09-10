@@ -83,6 +83,29 @@ def test_the_committed_baseline_matches_the_tree(ratchet) -> None:
         )
 
 
+def test_a_standards_adapter_string_is_a_wiring(ratchet) -> None:
+    """`STANDARDS` declares each standard's adapter as "module:function" and
+    `backfill._adapter` resolves it at run time (#800). That string IS how the deployed loop
+    reaches the module, so the walk must follow it — otherwise landing a second standard's
+    adapter turns the ratchet red for a module production genuinely calls, and the only way
+    to green is to raise the baseline, which is the ratchet failing at its job.
+
+    Asserted through the real registry rather than a fixture: if a standard stops declaring
+    an adapter, or the walk stops reading it, this goes red.
+    """
+    from truealpha_contracts.standards import STANDARDS
+
+    _lines, dead = ratchet.unreachable()
+    declared = {standard.adapter.partition(":")[0] for standard in STANDARDS.values()}
+    assert declared, "no standard declares an adapter; this test's premise is gone"
+    for module in declared:
+        assert module in ratchet._modules(), f"{module} is declared as an adapter but does not exist"
+        assert module not in dead, (
+            f"{module} is the adapter a standard declares, so the deployed loop reaches it — "
+            "the walk must follow the registry string"
+        )
+
+
 def test_an_unimported_factor_module_is_caught(ratchet) -> None:
     """Red-proof: a new factor module nobody imports must raise the factor tree's count.
 

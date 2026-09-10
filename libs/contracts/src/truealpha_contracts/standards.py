@@ -104,6 +104,19 @@ class MetricStandard(BaseModel):
 #: (init.md §9: self-reported confidence is a signal, not ground truth).
 CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = MappingProxyType(
     {
+        # A partition's confidence is about the SET, not about any one part: the parts were
+        # accepted together because they balanced, and no part is more or less believed than
+        # its siblings. The deterministic rule scores higher than the headcount rule's
+        # single-candidate case because it is checked against an independently computed
+        # total rather than merely being unambiguous.
+        "segment-revenue-confidence:v1": MappingProxyType(
+            {
+                "rule:exhaustive-partition:v1": Decimal("0.90"),
+                # Reserved for a model-proposed partition (#772). The proposal still has to
+                # balance, so the floor is the rule's minus a margin for the proposing step.
+                "model-selection": Decimal("0.85"),
+            }
+        ),
         "headcount-confidence:v1": MappingProxyType(
             {
                 # Exactly one company-wide statement in the filing: nothing to choose.
@@ -113,7 +126,7 @@ CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = Map
                 # The reviewed seed, as it was recorded (#521).
                 "manual-review": Decimal("0.70"),
             }
-        )
+        ),
     }
 )
 
@@ -145,7 +158,33 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
                 source_priority=("10k-extraction", "manual-review"),
             ),
             adapter="data_engine.datahub.standards.filing_extraction:extract_headcount",
-        )
+        ),
+        "segment_revenue": MetricStandard(
+            metric="segment_revenue",
+            definition=(
+                "Revenue attributed to one reportable segment, as the issuer's latest annual "
+                "filing states it in its own segment table."
+            ),
+            acceptance_rule=(
+                "The parts, not a part. A segment set is the value only when it accounts for "
+                "the issuer's consolidated revenue: a missed segment silently raises every "
+                "remaining segment's share, so a set that does not balance is refused rather "
+                "than ranked. Intersegment revenue is excluded, not summed."
+            ),
+            kind=StandardKind.HARD,
+            evidence=EvidenceRequirement.FILING_SPAN,
+            confidence_policy_id="segment-revenue-confidence:v1",
+            # A segment table is restated once a year like the headcount it sits beside; 400
+            # tolerates a late filer without treating a two-year-old breakdown as current.
+            max_age_days=400,
+            evidence_bearing_sources=("10k-segment-extraction",),
+            plane=FactPlane(
+                table="staging.issuer_segment_revenue_facts",
+                issuer_column="cik",
+                source_priority=("10k-segment-extraction",),
+            ),
+            adapter="data_engine.datahub.standards.segment_extraction:extract_segment_revenue",
+        ),
     }
 )
 
