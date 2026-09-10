@@ -478,3 +478,30 @@ def test_an_issuer_that_reports_segments_never_takes_the_single_segment_path(mon
     assert outcome.status == "resolved"
     assert outcome.extractor == RULE_EXHAUSTIVE_PARTITION, "AVGO's two segments, checked against its total"
     assert "Semiconductor solutions=36858" in outcome.detail
+
+
+def test_the_landed_row_says_where_its_scale_came_from(monkeypatch) -> None:
+    """A scale printed beside the numbers and one inherited from the filing are different
+    evidence. The candidate carried `scale_source` and the ROW did not, so the distinction
+    existed in memory and never reached anyone who could act on it.
+
+    AVGO's table declares its own, so this lands `scale=table`; the assertion is that the
+    field is there and true, not that it is always the same value.
+    """
+    from data_engine.datahub.standards import segment_extraction as adapter
+
+    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: _avgo_filing())
+    connection = _RecordingConnection()
+    adapter.extract_segment_revenue(
+        CIK,
+        connection=connection,
+        http=None,
+        gateway=None,
+        standard=STANDARDS["segment_revenue"],
+        cutoff=CUTOFF,
+        write=True,
+    )
+    rows = [_row(p) for p in connection.inserts()]
+    assert rows, "the partition landed"
+    assert all("scale=table" in r["evidence_ref"] for r in rows), "AVGO states its own scale"
+    assert all("accession=0001730168-25-000121" in r["evidence_ref"] for r in rows)

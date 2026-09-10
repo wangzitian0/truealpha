@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
@@ -163,9 +164,15 @@ class SegmentCandidate:
     #: The number as the row printed it (36,858), kept beside the scaled one so the evidence
     #: span and the value a reader sees in the filing still agree.
     stated_value: Decimal
-    #: The scale this window declared. Per window, not per filing: an issuer may state its
-    #: segment table in millions and a supplementary table in thousands.
+    #: The scale applied to this row. Per window where the table states one — an issuer may
+    #: print its segment table in millions and a supplementary table in thousands — and the
+    #: filing's own dominant declaration where it does not.
     multiplier: Decimal
+    #: `"table"` when the window declared the scale, `"filing"` when it was inherited. Kept
+    #: because the two are different evidence: the first is stated beside the numbers, the
+    #: second is stated elsewhere and only survives because the identity would have refused
+    #: the set had it been wrong.
+    scale_source: str
     sentence: str
     window_start: int
 
@@ -182,14 +189,18 @@ def segment_candidates(text: str) -> list[SegmentCandidate]:
     """
     seen: set[tuple[str, Decimal]] = set()
     found: list[SegmentCandidate] = []
+    inherited = filing_scale(text)
     for start, window in _windows(text):
         units = _UNITS.search(window)
-        if units is None:
+        if units is not None:
+            multiplier, scale_source = _MULTIPLIERS[units.group(1).lower()], "table"
+        elif inherited is not None:
+            multiplier, scale_source = inherited, "filing"
+        else:
             # Not a judgement about whether this table is the right one — that is the
-            # identity's job. A number whose scale the document never states cannot be
+            # identity's job. A number whose scale the document states NOWHERE cannot be
             # compared to an absolute oracle at all.
             continue
-        multiplier = _MULTIPLIERS[units.group(1).lower()]
         for row in _ROW.finditer(window):
             name = row.group(1).strip()
             if _NOT_A_SEGMENT.search(name) or len(name.split()) > 6:
@@ -205,6 +216,7 @@ def segment_candidates(text: str) -> list[SegmentCandidate]:
                     value=stated * multiplier,
                     stated_value=stated,
                     multiplier=multiplier,
+                    scale_source=scale_source,
                     sentence=row.group(0).strip(),
                     window_start=start,
                 )
@@ -215,6 +227,28 @@ def segment_candidates(text: str) -> list[SegmentCandidate]:
 #: How far back to look for a units caption when the forward window has none. Measured, not
 #: guessed: ADM's caption sits ~700 characters before the phrase this module matches on.
 _LOOKBACK = 900
+
+
+def filing_scale(text: str) -> Decimal | None:
+    """The scale this filing declares most often, or None if it declares none.
+
+    Measured on the packaged corpus, where the dominant declaration is never close: ADM says
+    millions 51 times and thousands twice, DDOG says thousands 39 times and millions once,
+    JPM says millions 253 times. A filing declares its units once at the top of the financial
+    statements and every table below inherits them, so a table that states no scale of its own
+    is not scaleless — it is using the filing's.
+
+    Safe to fall back to precisely because it CANNOT hide an error. A scale wrong by 1000x
+    makes the parts miss the consolidated total by 1000x, and
+    `select_exhaustive_partition` refuses the set. Unlike a classification, a wrong guess here
+    produces a refusal rather than a plausible number — which is what earns this a fallback
+    instead of a refusal (measured on ADP: its segment table states no scale within 900
+    characters in either direction, and the backward window recovered nothing).
+    """
+    counts = Counter(match.group(1).lower() for match in _UNITS.finditer(text))
+    if not counts:
+        return None
+    return _MULTIPLIERS[counts.most_common(1)[0][0]]
 
 
 def _windows(text: str) -> list[tuple[int, str]]:
@@ -261,12 +295,15 @@ def _windows(text: str) -> list[tuple[int, str]]:
 
 
 def unitless_windows(text: str) -> int:
-    """How many segment tables were found but state no scale.
+    """How many segment tables were found in a filing that declares no scale ANYWHERE.
 
-    Reported so a filing whose tables were all skipped for missing units refuses with that
-    reason instead of "no segment table matched" — two different problems with two different
-    fixes (a heading this module cannot read vs. a caption shape it cannot read).
+    Zero once the filing declares one, because every window then inherits it. Reported so a
+    filing whose tables were all skipped refuses with that reason instead of "no segment table
+    matched" — two different problems with two different fixes (a heading this module cannot
+    read vs. a document that never states its units).
     """
+    if filing_scale(text) is not None:
+        return 0
     return sum(1 for _, window in _windows(text) if _UNITS.search(window) is None)
 
 
@@ -676,7 +713,15 @@ def extract_segment_revenue(
                 # WHEN the breakdown became knowable: the filing's own date, never now().
                 # An insertion clock here is look-ahead for every historical cutoff.
                 knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
-                evidence_ref=f"accession={document.accession} form={document.form}",
+                # `scale=` is not decoration: a scale printed beside the numbers and one
+                # inherited from the filing are different evidence, and a row that does not
+                # say which leaves a reader unable to tell them apart. It is the honest cost
+                # of letting a table inherit — the identity proves the scale was RIGHT, and
+                # this says where it came from.
+                evidence_ref=(
+                    f"accession={document.accession} form={document.form} "
+                    f"scale={recalled[verdict.candidate_indices[0]].scale_source}"
+                ),
                 extractor=verdict.extractor,
                 confidence=confidence_for(standard.confidence_policy_id, verdict.extractor),
             )
