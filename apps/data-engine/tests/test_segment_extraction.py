@@ -442,3 +442,32 @@ def test_rejecting_the_window_instead_of_the_row_would_lose_the_table() -> None:
     stated = {c.stated_value for c in recalled}
     assert Decimal("10353") in stated and Decimal("10855") in stated, "the leaves survive"
     assert Decimal("79820") not in stated, "and the grand total does not"
+
+
+def test_a_single_segment_issuer_with_no_oracle_says_which_half_is_missing() -> None:
+    """The state that hid the largest gap in this module's coverage.
+
+    Measured 2026-09-10: of thirteen refusing QQQ issuers, **nine** state that they operate
+    as a single segment — ABNB, ADI, ADSK, ALAB, APP, ARM, ASML, BKNG, CDNS. The
+    single-segment path is deployed and answers for exactly that shape. It never fired,
+    because it needs a consolidated revenue to file the partition against and staging holds
+    one for 12 of 101 issuers.
+
+    They fell through to the table path and reported "no segment table matched" — true, and
+    pointing at the heading pattern, the one thing that was never their problem. Two halves
+    are needed and the message now says WHICH one is missing.
+    """
+    from data_engine.datahub.standards.segment_extraction import _no_candidate_detail
+
+    single = "The Company operates as a single operating segment and derives revenues from subscriptions."
+    detail = _no_candidate_detail(single, has_oracle=False)
+    assert "single operating segment" in detail
+    assert "no consolidated revenue" in detail
+    assert "no segment table matched" not in detail, "the heading pattern is not the problem here"
+
+    # With the oracle present the same filing takes the single-segment path instead, so this
+    # message is never the answer for it.
+    assert _no_candidate_detail(single, has_oracle=True) == "no segment table matched in the filing text"
+    assert _no_candidate_detail("a filing with no segment language", has_oracle=False) == (
+        "no segment table matched in the filing text"
+    ), "and an issuer that states nothing is still the plain miss"

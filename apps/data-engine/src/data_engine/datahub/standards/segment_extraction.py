@@ -650,8 +650,17 @@ def _single_segment_outcome(
     )
 
 
-def _no_candidate_detail(text: str) -> str:
-    """Which of THREE things happened, because they have three different owners.
+def _no_candidate_detail(text: str, *, has_oracle: bool = True) -> str:
+    """Which of FOUR things happened, because they have four different owners.
+
+    The fourth is the one that hid the largest gap in this module's coverage. Nine of the
+    thirteen refusing QQQ issuers measured on 2026-09-10 — ABNB, ADI, ADSK, ALAB, APP, ARM,
+    ASML, BKNG, CDNS — STATE that they operate as a single segment, and the single-segment
+    path is deployed and would answer for them. It never fired because it needs a
+    consolidated revenue to file the partition against, and staging holds one for 12 of 101
+    issuers. So they fell through to the table path and reported "no segment table matched",
+    which is true and points at the heading pattern — the one thing that was never their
+    problem.
 
     A fourth state appeared the moment a table could inherit the filing's scale, and it was
     reported as the first: ADP matches six headings and parses no rows from them, and the
@@ -659,9 +668,15 @@ def _no_candidate_detail(text: str) -> str:
     when the fault was in the row pattern — its numbers carry a decimal ("14,831.4") and the
     row regex could not read one.
 
-    Collapsing two problems into one refusal string is the thing this module keeps being
-    caught by. Three states, three sentences.
+    Collapsing problems with different owners into one refusal string is the thing this
+    module keeps being caught by — twice in one day, and the second time in the comment
+    describing the first. Four states, four sentences.
     """
+    if not has_oracle and single_segment_statement(text) is not None:
+        return (
+            "states a single operating segment, but this environment holds no consolidated "
+            "revenue to file the partition against"
+        )
     found = len(_windows(text))
     if not found:
         return "no segment table matched in the filing text"
@@ -755,7 +770,7 @@ def extract_segment_revenue(
             accession=document.accession,
             form=document.form,
             filing_date=document.filing_date,
-            detail=_no_candidate_detail(text),
+            detail=_no_candidate_detail(text, has_oracle=oracle is not None),
         )
 
     candidates = as_candidates(recalled)
