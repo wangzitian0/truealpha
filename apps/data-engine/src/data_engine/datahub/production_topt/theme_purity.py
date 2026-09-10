@@ -69,6 +69,17 @@ class IssuerPartition:
     partition_residual: Decimal
     #: (segment name, revenue), in the order the model will be asked about them.
     parts: tuple[tuple[str, Decimal], ...]
+    #: What the classifier is actually shown, one per part. Usually the segment name, which
+    #: is what the filing calls it and is judgeable on its own ("Semiconductor solutions").
+    #:
+    #: A SINGLE-SEGMENT issuer is the exception and the reason this field exists: its one
+    #: part is labelled `Single operating segment`, which no classifier can judge against any
+    #: theme — every pure-play would decline, fall below the coverage floor, and be refused,
+    #: which is the outcome the single-segment path was built to stop. The filing's own
+    #: sentence travels in `evidence_ref` precisely because it says what the company does
+    #: ("providing an observability and security platform for cloud applications"), so that
+    #: is what the model gets.
+    descriptions: tuple[str, ...]
     accession: str
     #: Confidence of the extraction that produced the set — the ceiling on any share
     #: computed from it (init.md rule 3: composite confidence cannot exceed the minimum
@@ -100,11 +111,32 @@ def load_partitions(connection: Connection[Any], *, cutoff: datetime) -> tuple[I
                 consolidated_revenue=Decimal(str(total)),
                 partition_residual=Decimal(str(residual)),
                 parts=tuple(parts),
+                descriptions=_descriptions_for(parts, evidence),
                 accession=_accession_of(evidence),
                 extraction_confidence=Decimal(str(confidence)),
             )
         )
     return tuple(partitions)
+
+
+#: How the single-segment adapter writes the filing's own sentence onto the row.
+_SINGLE_SEGMENT_MARKER = "single_segment_statement="
+
+
+def _descriptions_for(parts: list[tuple[str, Decimal]], evidence_ref: str) -> tuple[str, ...]:
+    """What to show the classifier for each part.
+
+    The segment's own name for a real segment table. For the one-part partition of an issuer
+    that states it has a single segment, the filing's sentence instead — the label on that
+    row is `Single operating segment`, which is unjudgeable, and handing it to a model
+    guarantees a decline for every pure-play.
+    """
+    marker = evidence_ref.find(_SINGLE_SEGMENT_MARKER)
+    if len(parts) == 1 and marker != -1:
+        statement = evidence_ref[marker + len(_SINGLE_SEGMENT_MARKER) :].strip()
+        if statement:
+            return (statement,)
+    return tuple(name for name, _ in parts)
 
 
 def _accession_of(evidence_ref: str) -> str:
@@ -169,10 +201,13 @@ def compute_for_theme(
         issuer_label=partition.issuer_id,
         theme=definition.theme,
         inclusion=definition.inclusion,
-        segments=[name for name, _ in partition.parts],
+        segments=list(partition.descriptions),
         caller="theme-purity",
         persist=persist_invocations,
     )
+    # The factor sees the segment's own NAME; only the classifier sees the description. A
+    # row that recorded the sentence as its segment name would make the plane and the mart
+    # disagree about what the segment is called.
     segments = [
         ThemeSegment(segment_name=name, revenue=revenue, in_theme=verdict)
         for (name, revenue), verdict in zip(partition.parts, classification.verdicts, strict=True)

@@ -48,6 +48,17 @@ RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"
 #: it lands in `evidence_ref` and is compared verbatim.
 RULE_EXHAUSTIVE_PARTITION = "rule:exhaustive-partition:v1"
 
+#: The degenerate partition (#772): the issuer STATES it operates as one segment, so the one
+#: part is the whole company and the identity holds by construction. Minted here, beside the
+#: rule it is a special case of, because this module owns rule identities — but named apart
+#: on purpose: a set checked against an independently measured total and a set that cannot
+#: fail its own check are different evidence, and a consumer pricing them the same would be
+#: paying for an arithmetic tautology. The confidence policy keys on this id to say so.
+#:
+#: Same persistence contract as the ids above — it lands in `evidence_ref` and is compared
+#: verbatim.
+RULE_SINGLE_SEGMENT = "rule:single-segment:v1"
+
 
 @dataclass(frozen=True)
 class Candidate:

@@ -40,6 +40,7 @@ from decimal import Decimal
 from typing import Any
 
 from factors.shared.extraction import (
+    RULE_SINGLE_SEGMENT,
     Candidate,
     Partition,
     PartitionRefusal,
@@ -112,6 +113,40 @@ _NOT_A_SEGMENT = re.compile(
 )
 
 
+#: An issuer stating, in its own words, that it has ONE segment. Measured against the
+#: packaged corpus, not invented: it catches DDOG ("a single operating and reportable
+#: segment"), SHOP ("one single operating and reportable segment"), DUOL and PLUG ("a single
+#: operating segment"), and fires on none of ADM, AVGO, JPM or NICE.
+#:
+#: This is not a recall fallback. A single-segment issuer is a DETERMINATE answer, and for
+#: init.md question 6 it is the most interesting one — a pure-play is the purest name under
+#: its theme. Refusing them, which this module did until now, would make the ranking
+#: systematically exclude exactly the companies it exists to find.
+_SINGLE_SEGMENT = re.compile(
+    r"\b(?:one|a\s+single|single)\s+(?:operating|reportable)"
+    r"(?:\s+and\s+(?:operating|reportable))?\s+segment\b",
+    re.IGNORECASE,
+)
+#: Enough of the sentence around the statement to be worth reading back. The filing usually
+#: says what the one segment DOES right there ("providing an observability and security
+#: platform for cloud applications"), which is the only description a classifier will get.
+_SINGLE_SEGMENT_SPAN = 240
+
+
+def single_segment_statement(text: str) -> str | None:
+    """The filing's own sentence saying it operates as one segment, or None.
+
+    Returned verbatim because it is the evidence AND the description: a single-segment
+    issuer has no segment table, so this sentence is the whole of what the filing says about
+    the thing being classified.
+    """
+    match = _SINGLE_SEGMENT.search(text)
+    if match is None:
+        return None
+    start = max(0, match.start() - 90)
+    return " ".join(text[start : match.end() + _SINGLE_SEGMENT_SPAN].split())
+
+
 @dataclass(frozen=True)
 class SegmentCandidate:
     """One stated segment revenue, with what it was read from.
@@ -177,17 +212,51 @@ def segment_candidates(text: str) -> list[SegmentCandidate]:
     return found
 
 
+#: How far back to look for a units caption when the forward window has none. Measured, not
+#: guessed: ADM's caption sits ~700 characters before the phrase this module matches on.
+_LOOKBACK = 900
+
+
 def _windows(text: str) -> list[tuple[int, str]]:
-    """Each segment-table heading and the text from it to that table's own total row."""
+    """Each segment table, as a span that contains both its rows and its declared scale.
+
+    A segment table is bounded by a units caption on one side and a total row on the other,
+    and the phrase this module matches on can be at EITHER end — which is the thing the first
+    version got wrong by assuming one shape:
+
+    - AVGO prints `Net Revenue by Segment ... (In millions, except percentages) ... Total net
+      revenue $ 63,887`. The match is the caption's heading; the window runs forward to the
+      total.
+    - ADM's total row is itself called `Segment Revenues 79,820 85,099`, so the match lands on
+      the table's LAST line. Everything this module wants — the caption and every segment row
+      — is BEHIND the match, and a forward-only window captured none of it. Six tables on that
+      one filing, found and thrown away.
+
+    So: try forward first, and when the forward span states no scale, fall back to the span
+    from the nearest preceding caption up to the match. A window is still offered to the
+    identity as a whole; this only changes where its edges are.
+    """
     windows = []
     for heading in _TABLE_HEADING.finditer(text):
-        window = text[heading.start() : heading.start() + _WINDOW]
+        forward = text[heading.start() : heading.start() + _WINDOW]
         # Stop at the table's own total row, so a second table under the same heading (the
         # percentage restatement) is a SEPARATE window rather than extra parts in this one.
-        end = _TABLE_END.search(window)
+        end = _TABLE_END.search(forward)
         if end:
-            window = window[: end.start()]
-        windows.append((heading.start(), window))
+            forward = forward[: end.start()]
+        if _UNITS.search(forward):
+            windows.append((heading.start(), forward))
+            continue
+        # Nothing forward states a scale. The caption may be behind the match — take the
+        # NEAREST preceding one, never an earlier table's.
+        back_start = max(0, heading.start() - _LOOKBACK)
+        behind = text[back_start : heading.start()]
+        captions = list(_UNITS.finditer(behind))
+        if captions:
+            caption = captions[-1]
+            windows.append((back_start + caption.start(), behind[caption.start() :]))
+        else:
+            windows.append((heading.start(), forward))
     return windows
 
 
@@ -387,6 +456,76 @@ def record_segment_partition(
     return len(parts)
 
 
+#: What a one-part partition is named. Not the issuer's ticker and not a guess at its
+#: business: the classifier is handed `evidence_ref`'s statement as the description, and this
+#: is the row's label for a reader scanning the plane.
+SINGLE_SEGMENT_NAME = "Single operating segment"
+
+
+def _single_segment_outcome(
+    connection: Any,
+    *,
+    cik: int,
+    record_cik: int,
+    document: Any,
+    oracle: ConsolidatedRevenue,
+    statement: str,
+    standard: MetricStandard,
+    write: bool,
+) -> ExtractionOutcome:
+    """Land (or report) the determinate partition of an issuer that states one segment."""
+    parts = [(SINGLE_SEGMENT_NAME, oracle.value)]
+    partition_id = partition_id_for(record_cik, oracle.period_end, parts)
+    summary = f"1 segment (the whole issuer) accounting for {oracle.value} for {oracle.period_end}"
+    if not write:
+        return ExtractionOutcome(
+            record_cik,
+            "resolved",
+            extractor=RULE_SINGLE_SEGMENT,
+            accession=document.accession,
+            form=document.form,
+            filing_date=document.filing_date,
+            detail=f"would land {summary}: {statement[:160]}",
+        )
+    if partition_already_recorded(connection, partition_id):
+        return ExtractionOutcome(
+            record_cik,
+            "already_recorded",
+            extractor=RULE_SINGLE_SEGMENT,
+            accession=document.accession,
+            form=document.form,
+            filing_date=document.filing_date,
+            detail=f"{partition_id} already holds {summary}",
+        )
+    record_segment_partition(
+        connection,
+        cik=record_cik,
+        partition_id=partition_id,
+        period_end=oracle.period_end,
+        parts=parts,
+        partition_total=oracle.value,
+        partition_residual=Decimal(0),
+        knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
+        # The statement travels ON the row. Everything else here balances by construction, so
+        # this sentence is the only thing a reader can check the claim against.
+        evidence_ref=(
+            f"accession={document.accession} form={document.form} single_segment_statement={statement[:400]}"
+        ),
+        extractor=RULE_SINGLE_SEGMENT,
+        confidence=confidence_for(standard.confidence_policy_id, RULE_SINGLE_SEGMENT),
+    )
+    del cik  # the filing's CIK; the fact is recorded under record_cik
+    return ExtractionOutcome(
+        record_cik,
+        "resolved",
+        extractor=RULE_SINGLE_SEGMENT,
+        accession=document.accession,
+        form=document.form,
+        filing_date=document.filing_date,
+        detail=f"{partition_id} landed {summary}: {statement[:160]}",
+    )
+
+
 def extract_segment_revenue(
     cik: int,
     *,
@@ -441,6 +580,32 @@ def extract_segment_revenue(
     oracle = consolidated_revenue(connection, record_cik, cutoff=cutoff)
     total = None if oracle is None else oracle.value
     text = filing_plain_text(document.body)
+
+    # A single-segment issuer has no segment TABLE, and that is an answer rather than a
+    # miss: the one segment IS the company, so the partition is the consolidated revenue in
+    # one part. It satisfies the accounting identity by construction — which is exactly why
+    # it has to say so on the row: the identity gives these no independent check, and the
+    # filing's own sentence is the whole of the evidence.
+    #
+    # Checked BEFORE the tables, not as a fallback after them: an issuer that states one
+    # segment and also prints a geography or product breakdown must not have that breakdown
+    # accepted as its reportable segments.
+    statement = single_segment_statement(text)
+    if statement is not None and oracle is not None:
+        return _single_segment_outcome(
+            connection,
+            cik=cik,
+            record_cik=record_cik,
+            document=document,
+            oracle=oracle,
+            statement=statement,
+            standard=standard,
+            write=write,
+        )
+
+    # Recall runs only now, so "before the tables" is the code's order and not just a claim
+    # about it — a filing that states one segment never pays for a sweep whose result is
+    # already known to be unused (review on #808).
     recalled = segment_candidates(text)
     if not recalled:
         skipped = unitless_windows(text)

@@ -112,6 +112,14 @@ CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = Map
         "segment-revenue-confidence:v1": MappingProxyType(
             {
                 "rule:exhaustive-partition:v1": Decimal("0.90"),
+                # The issuer states it has one segment, so the "partition" is the whole
+                # company in one part. Lower than the rule above and deliberately so: that
+                # one is accepted because independently measured parts ADD UP to an
+                # independently measured total, and this one cannot fail its own check. What
+                # it rests on is a sentence in the filing, which is weaker evidence than an
+                # arithmetic agreement between two sources — and a policy that priced them
+                # the same would be paying for a tautology (#772).
+                "rule:single-segment:v1": Decimal("0.75"),
                 # Reserved for a model-proposed partition (#772). The proposal still has to
                 # balance, so the floor is the rule's minus a margin for the proposing step.
                 "model-selection": Decimal("0.85"),

@@ -335,3 +335,55 @@ def test_a_rerun_refreshes_provenance_not_just_the_numbers(connection, seated, m
     ).fetchone()
     assert partition_id == later, "the row names the partition its numbers came from"
     assert in_theme == Decimal("40000000000"), "and the numbers are that partition's"
+
+
+def test_a_single_segment_issuer_is_described_to_the_classifier_by_its_filing(connection, seated, monkeypatch) -> None:
+    """Without this, the single-segment path lands rows and answers nothing.
+
+    Its one part is labelled `Single operating segment`. No classifier can judge that against
+    any theme, so every pure-play would decline, fall below the coverage floor, and be
+    refused — the exact outcome the single-segment path exists to prevent. The filing's own
+    sentence is on the row because it says what the company DOES, and that is what the model
+    is shown.
+    """
+    statement = (
+        "Segment Information The Company has a single operating and reportable segment, "
+        "providing an observability and security platform for cloud applications"
+    )
+    connection.execute(
+        """
+        insert into staging.issuer_segment_revenue_facts
+            (cik, segment_name, segment_revenue, partition_id, partition_total,
+             partition_residual, knowable_at, period_end, source, evidence_ref,
+             extractor, confidence)
+        values (%s, 'Single operating segment', %s, %s, %s, 0, %s, '2025-12-31',
+                '10k-segment-extraction', %s, 'rule:single-segment:v1', 0.75)
+        """,
+        (
+            CIK,
+            TOTAL,
+            "segment-partition:" + "a" * 64,
+            TOTAL,
+            KNOWABLE,
+            f"accession=0001628280-26-008819 form=10-K single_segment_statement={statement}",
+        ),
+    )
+    transport = _answers([{"index": 0, "in_theme": True, "reason": "observability for cloud"}])
+    monkeypatch.setattr(llm, "_gateway_transport", transport)
+    materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+
+    asked = json.dumps(transport.sent)
+    assert "observability and security platform" in asked, "the model is told what the company does"
+    assert '"[0] Single operating segment"' not in asked, "not the unjudgeable label"
+
+    theme_share, segment_name = connection.execute(
+        """
+        select p.theme_share, f.segment_name
+        from mart.issuer_theme_purity p
+        join staging.issuer_segment_revenue_facts f on f.partition_id = p.partition_id
+        where p.run_id = %s and p.cik = %s limit 1
+        """,
+        (RUN_ID, CIK),
+    ).fetchone()
+    assert theme_share == Decimal(1), "a pure-play judged in the theme is 100% of it"
+    assert segment_name == "Single operating segment", "the plane keeps the row's own label"

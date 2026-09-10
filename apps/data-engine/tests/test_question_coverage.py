@@ -17,6 +17,7 @@ from data_engine.datahub.question_coverage import (
     peg_cells,
     persist,
     summary_line,
+    theme_purity_cells,
 )
 from truealpha_contracts.question_requirements import (
     QUESTION_REQUIREMENTS,
@@ -242,3 +243,49 @@ def test_issuer_scoped_questions_ignore_the_fund_subjects() -> None:
     )
     assert entry["scope"] == "issuer"
     assert entry["denominator"] == 3 and entry["answered"] == 1
+
+
+def test_theme_purity_cells_answer_an_issuer_when_any_theme_produced_a_share() -> None:
+    """Module 6 writes one row per (issuer, THEME), and q6 asks whether an issuer's purity is
+    answerable at all. Counting an issuer unavailable because one of three themes refused
+    would make ADDING a theme look like a regression in coverage."""
+    rows = [
+        ("issuer:a", "available", []),
+        ("issuer:a", "unavailable", ["below_minimum_classified_share"]),
+        ("issuer:b", "unavailable", ["below_minimum_classified_share"]),
+        ("issuer:b", "unavailable", ["no_segments"]),
+    ]
+    cells = theme_purity_cells(_Rows(rows), "run")
+    by_subject = {c.subject_id: c for c in cells}
+    assert by_subject["issuer:a"].answered is True, "one theme produced a share"
+    assert by_subject["issuer:b"].answered is False
+    assert by_subject["issuer:b"].reason == "below_minimum_classified_share", "the first reason, not the last"
+
+
+def test_a_theme_purity_refusal_names_the_floor_that_refused_it() -> None:
+    """The same shape every other cell uses: unavailable-with-a-reason, never answered and
+    never missing. `below_minimum_classified_share` is the honest one — the classifier could
+    not judge enough of the issuer's revenue to rank it."""
+    entry = classify_question(
+        REQ[Question.Q6_THEME_PURITY],
+        universe_id=QQQ,
+        issuers=["issuer:thin"],
+        funds=[],
+        cells_by_column={
+            "mart.issuer_theme_purity.theme_share": (Cell("issuer:thin", False, "below_minimum_classified_share"),)
+        },
+    )
+    assert entry["answered"] == 0 and entry["missing"] == 0
+    assert entry["unavailable"] == {"below_minimum_classified_share": 1}
+
+
+def test_q6_is_bound_to_the_materialized_column_rather_than_left_missing() -> None:
+    """The gap this closes: q6 carried no column, so every issuer counted as `missing` — a
+    claim about the REGISTRY ("no column exists yet"), which stopped being true when
+    `mart.issuer_theme_purity` landed. A question whose column exists and is not declared
+    reports a gap that is nobody's to fix."""
+    requirement = REQ[Question.Q6_THEME_PURITY]
+    assert requirement.has_column
+    assert [c.table for c in requirement.columns] == ["mart.issuer_theme_purity"]
+    assert [c.column for c in requirement.columns] == ["theme_share"]
+    assert requirement.standards == ("segment_revenue",), "and it names the standard it consumes"
