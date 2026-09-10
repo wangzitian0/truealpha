@@ -7,7 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from data_engine.datahub import run_topt_hardening_replay
+from data_engine.datahub.hardening_replay import run_topt_hardening_replay
 
 ROOT = Path(__file__).parents[1]
 REPOSITORY_ROOT = Path(__file__).parents[4]

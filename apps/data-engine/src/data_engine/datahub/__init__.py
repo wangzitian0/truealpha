@@ -1,15 +1,15 @@
-"""Isolated DataHub control-plane implementation."""
+"""Isolated DataHub control-plane implementation.
+
+Deliberately does NOT re-export the replay harnesses (`tiny_replay`,
+`medium_replay`, `hardening_replay`). It did until #795, which meant every
+importer of this package — the deployed tick included — executed 1,615 lines of
+replay machinery it never calls, purely to reach one corpus function that has
+since moved to `production_topt.universe_corpus`. A caller that genuinely wants a
+replay imports its module by name; `test_deployed_closure_excludes_replay` is the
+standing check that the composition root does not."""
 
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from data_engine.datahub.hardening_replay import (
-    HardeningResourceCeilings,
-    HardeningResourceObservation,
-    HardeningScopeMetric,
-    ToptHardeningReplayReport,
-    run_topt_hardening_replay,
-)
-from data_engine.datahub.medium_replay import ToptMediumReplayReport, ToptRunSummary, run_topt_medium_replay
 from data_engine.datahub.production_topt.materialization import (
     PostgresToptCoreRepository,
     ToptCoreIdentity,
@@ -23,17 +23,6 @@ from data_engine.datahub.repository import (
     ToptCaptureMetaInfo,
     ToptCaptureStatus,
 )
-from data_engine.datahub.tiny_replay import (
-    FrozenRecapturePlan,
-    TinyReplayReport,
-    build_recapture_plan,
-    execute_recapture,
-    materialize_shared_provider_work,
-    reject_out_of_order_attempt,
-    replay_resume_scenarios,
-    run_tiny_replay,
-    select_recapture,
-)
 from data_engine.datahub.topt_read import PostgresToptReadRepository
 
 __all__ = [
@@ -41,30 +30,15 @@ __all__ = [
     "CaptureRepositoryConflictError",
     "PostgresEvidenceGraphRepository",
     "PostgresToptReadRepository",
-    "FrozenRecapturePlan",
-    "HardeningResourceCeilings",
-    "HardeningResourceObservation",
-    "HardeningScopeMetric",
     "PostgresCaptureControlRepository",
     "PostgresToptCoreRepository",
-    "TinyReplayReport",
-    "ToptHardeningReplayReport",
     "ToptCaptureMetaInfo",
     "ToptCaptureStatus",
     "ToptCoreIdentity",
     "ToptCoreMetaInfo",
     "ToptCoreReadResult",
     "ToptCoreSnapshot",
-    "ToptMediumReplayReport",
-    "ToptRunSummary",
-    "build_recapture_plan",
-    "execute_recapture",
     "expand_obligations",
-    "materialize_shared_provider_work",
-    "reject_out_of_order_attempt",
     "replay_resume_scenarios",
-    "run_tiny_replay",
-    "run_topt_hardening_replay",
-    "run_topt_medium_replay",
     "select_recapture",
 ]

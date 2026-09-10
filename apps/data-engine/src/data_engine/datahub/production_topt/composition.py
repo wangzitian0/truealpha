@@ -74,7 +74,6 @@ from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from data_engine.datahub.medium_replay import frozen_topt_list_version
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.executor import SourceFetchPort
 from data_engine.datahub.production_topt.market_price_adapter import last_settled_session_date
@@ -97,7 +96,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     registered_semantic_types,
     registration_for,
 )
-from data_engine.datahub.production_topt.universe_corpus import corpus_list_version
+from data_engine.datahub.production_topt.universe_corpus import corpus_list_version, frozen_topt_list_version
 from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
 from data_engine.release_identity import measure as measure_release_identity
 
