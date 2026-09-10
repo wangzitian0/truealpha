@@ -713,7 +713,15 @@ def extract_segment_revenue(
                 # WHEN the breakdown became knowable: the filing's own date, never now().
                 # An insertion clock here is look-ahead for every historical cutoff.
                 knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
-                evidence_ref=f"accession={document.accession} form={document.form}",
+                # `scale=` is not decoration: a scale printed beside the numbers and one
+                # inherited from the filing are different evidence, and a row that does not
+                # say which leaves a reader unable to tell them apart. It is the honest cost
+                # of letting a table inherit — the identity proves the scale was RIGHT, and
+                # this says where it came from.
+                evidence_ref=(
+                    f"accession={document.accession} form={document.form} "
+                    f"scale={recalled[verdict.candidate_indices[0]].scale_source}"
+                ),
                 extractor=verdict.extractor,
                 confidence=confidence_for(standard.confidence_policy_id, verdict.extractor),
             )
