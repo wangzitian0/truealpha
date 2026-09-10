@@ -168,3 +168,73 @@ def test_a_question_bound_to_two_columns_is_answered_by_either() -> None:
     assert entry["columns"] == ["mart.a.x", "mart.b.y"] and entry["column"] == "mart.a.x"
     assert entry["answered"] == 1
     assert entry["unavailable"] == {"missing_headcount": 1, NO_ROW: 1}
+
+
+def test_a_fund_scoped_question_counts_funds_not_issuers() -> None:
+    """q5 asks whether an ETF looks like a healthy company; its subject is the FUND (#36).
+
+    The registry could not hold it at all before the scope existed: one fund row looked up
+    under twenty issuer ids would grade twenty `unavailable:no_row` — a red describing the
+    registry rather than the data — and broadcasting the row to twenty `answered` is the
+    inflated numerator rule 24 exists to prevent. Both wrong answers are asserted against
+    here by the denominator.
+    """
+    entry = classify_question(
+        REQ[Question.Q5_ETF_VIRTUAL_COMPANY],
+        universe_id=QQQ,
+        issuers=[f"issuer:cik:{n}" for n in range(20)],
+        funds=["etf:series:S000101292"],
+        cells_by_column={"mart.fund_virtual_company.weighted_valuation_gap": (Cell("etf:series:S000101292", True),)},
+    )
+    assert entry["scope"] == "fund"
+    assert entry["denominator"] == 1, "twenty issuers must not become q5's denominator"
+    assert entry["answered"] == 1 and entry["missing"] == 0 and entry["unavailable"] == {}
+
+
+def test_a_refused_consolidation_is_unavailable_with_the_refusing_floor() -> None:
+    """A fund whose coverage fell below the definition's floors has no aggregate. It must
+    read as unavailable-with-a-reason, never as answered and never as missing — missing is
+    reserved for "no column exists yet", which is a different problem with a different owner."""
+    entry = classify_question(
+        REQ[Question.Q5_ETF_VIRTUAL_COMPANY],
+        universe_id=QQQ,
+        issuers=[],
+        funds=["etf:series:thin"],
+        cells_by_column={
+            "mart.fund_virtual_company.weighted_valuation_gap": (
+                Cell("etf:series:thin", False, "valued_weight_below_minimum"),
+            )
+        },
+    )
+    assert entry["answered"] == 0 and entry["missing"] == 0
+    assert entry["unavailable"] == {"valued_weight_below_minimum": 1}
+
+
+def test_a_universe_whose_tick_does_not_consolidate_has_no_fund_subjects() -> None:
+    """Only the universe that IS a fund's holdings consolidates it (`consolidate_funds` on
+    the QQQ tick alone). On TOPT the column does not apply, so q5 is `missing` there — and
+    must NOT borrow QQQ's fund to look answered."""
+    entry = classify_question(
+        REQ[Question.Q5_ETF_VIRTUAL_COMPANY],
+        universe_id=TOPT,
+        issuers=[f"issuer:lei:{n}" for n in range(20)],
+        funds=[],
+        cells_by_column={},
+    )
+    assert entry["columns"] == [], "the q5 column is scoped to universe:qqq-"
+    assert entry["denominator"] == 0 and entry["answered"] == 0
+    assert entry["missing"] == 0, "no fund subjects means nothing to be missing about"
+
+
+def test_issuer_scoped_questions_ignore_the_fund_subjects() -> None:
+    """Red-proof for the scope switch itself: handing funds to an issuer-scoped question
+    must not change its denominator. If the switch inverted, q1 would count 1 instead of 3."""
+    entry = classify_question(
+        REQ[Question.Q1_MODEL_LEVERAGE],
+        universe_id=QQQ,
+        issuers=["issuer:a", "issuer:b", "issuer:c"],
+        funds=["etf:series:S000101292"],
+        cells_by_column={"mart.topt_gppe_results.gppe": (Cell("issuer:a", True),)},
+    )
+    assert entry["scope"] == "issuer"
+    assert entry["denominator"] == 3 and entry["answered"] == 1

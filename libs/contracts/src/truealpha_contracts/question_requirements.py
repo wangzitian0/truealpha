@@ -20,6 +20,24 @@ from types import MappingProxyType
 from truealpha_contracts.common import canonical_sha256
 
 
+class QuestionScope(StrEnum):
+    """Whose question it is — which decides the report's denominator.
+
+    Every question was implicitly `ISSUER` until #748's classifier met one that is not.
+    q5 asks whether an ETF looks like a healthy company; its subject is the FUND. Counting
+    it per issuer would either grade every issuer `unavailable:no_row` (a red describing the
+    registry, not the data) or broadcast one fund row to twenty `answered` — the inflated
+    numerator rule 24 exists to prevent.
+
+    `ISSUER` stays the default, so every existing entry and every existing count is
+    unchanged by this type existing. The same choice is coming for q4 (per analyst) and
+    q3 (per supply-chain edge).
+    """
+
+    ISSUER = "issuer"
+    FUND = "fund"
+
+
 class Question(StrEnum):
     Q1_MODEL_LEVERAGE = "q1"
     Q2_VALUATION_VS_GROWTH = "q2"
@@ -62,6 +80,9 @@ class QuestionRequirement:
     columns: tuple[FactorColumn, ...]
     standards: tuple[str, ...]
     tracking_issue: str
+    #: The subject the report counts. Defaults to ISSUER, which is what every question
+    #: assumed before #748 met one whose subject is a fund.
+    scope: QuestionScope = QuestionScope.ISSUER
 
     @property
     def has_column(self) -> bool:
@@ -84,7 +105,24 @@ QUESTION_REQUIREMENTS: tuple[QuestionRequirement, ...] = (
     ),
     QuestionRequirement(Question.Q3_SUPPLY_CHAIN_EXPOSURE, (), (), "#772"),
     QuestionRequirement(Question.Q4_ANALYST_TRACK_RECORD, (), (), "#771"),
-    QuestionRequirement(Question.Q5_ETF_VIRTUAL_COMPANY, (), (), "#773"),
+    QuestionRequirement(
+        question=Question.Q5_ETF_VIRTUAL_COMPANY,
+        # Module 5 writes one row per (run, fund); the QQQ tick is the only one that
+        # consolidates, because a fund can only be valued by the universe that IS its
+        # holdings (`UniverseTick.consolidate_funds`).
+        columns=(
+            FactorColumn(
+                "mart.fund_virtual_company",
+                "weighted_valuation_gap",
+                "etf_virtual_company",
+                5,
+                ("universe:qqq-",),
+            ),
+        ),
+        standards=(),
+        scope=QuestionScope.FUND,
+        tracking_issue="#36",
+    ),
     QuestionRequirement(Question.Q6_THEME_PURITY, (), (), "#772"),
 )
 
@@ -95,6 +133,7 @@ def requirements_payload(requirements: tuple[QuestionRequirement, ...] = QUESTIO
             "question": item.question.value,
             "columns": [asdict(column) for column in item.columns],
             "standards": list(item.standards),
+            "scope": item.scope.value,
             "tracking_issue": item.tracking_issue,
         }
         for item in requirements
