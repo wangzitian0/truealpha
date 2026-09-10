@@ -21,11 +21,12 @@ the number comes from and WHAT SHAPE the key has, not about the arithmetic on to
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
 from data_engine.datahub.standards.segment_extraction import consolidated_revenue
+from truealpha_contracts.standards import STANDARDS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_TREES = (
@@ -44,28 +45,49 @@ RETIRED_TABLE_SQL = re.compile(
 )
 
 FILING = REPO_ROOT / "apps" / "data-engine" / "samples" / "filings" / "AVGO_10K_000173016825000121.html"
+_UNSET = object()
+#: What the prod plane returns for AVGO (vps-01, 2026-09-10): the absolute revenue and the
+#: period it describes. The period comes from the ORACLE, not the filing's table header, so
+#: the parts and the total provably describe the same year.
+_ORACLE_ROW = ("63887000000", "2025-11-02")
 CIK = 1_730_168  # AVGO
 CUTOFF = datetime(2026, 9, 1, tzinfo=UTC)
 
 
 class _RecordingConnection:
-    """Captures the query and its parameters instead of running them.
+    """Captures every query and its parameters instead of running them.
 
-    The point is the ADDRESS, which is decidable without a database: a padded key or an
-    unpadded one, the capture plane or the retired table.
+    The oracle's ADDRESS is decidable without a database — a padded key or an unpadded one,
+    the capture plane or the retired table — and so is the SHAPE of what the writer lands.
+    A partition is many rows sharing an id, and "did all of them go in with the same id" is
+    a property of the calls, not of the storage.
     """
 
-    def __init__(self, row=None) -> None:
-        self.sql: str | None = None
-        self.params: tuple | None = None
-        self._row = row
+    def __init__(self, row=_UNSET, *, recorded: bool = False) -> None:
+        self.calls: list[tuple[str, tuple]] = []
+        self._row = _ORACLE_ROW if row is _UNSET else row
+        self._recorded = recorded
 
     def execute(self, sql, params):
-        self.sql, self.params = sql, params
+        self.calls.append((sql, params))
+        self._last = sql
         return self
 
     def fetchone(self):
+        if "issuer_segment_revenue_facts" in self._last and "select" in self._last.lower():
+            return (1,) if self._recorded else None
         return self._row
+
+    @property
+    def sql(self) -> str | None:
+        return self.calls[0][0] if self.calls else None
+
+    @property
+    def params(self) -> tuple | None:
+        return self.calls[0][1] if self.calls else None
+
+    def inserts(self) -> list[tuple]:
+        return [params for sql, params in self.calls if sql.lstrip().lower().startswith("insert")]
 
 
 def test_no_deployed_module_reads_the_retired_financial_facts_table() -> None:
@@ -115,15 +137,24 @@ def test_a_missing_observation_is_none_rather_than_zero() -> None:
     """Zero revenue would make every partition OVER; None makes the caller refuse `no_total`,
     which is the truth — the issuer has nothing to check against."""
     assert consolidated_revenue(_RecordingConnection(None), CIK, cutoff=CUTOFF) is None
-    assert consolidated_revenue(_RecordingConnection((None,)), CIK, cutoff=CUTOFF) is None
+    assert consolidated_revenue(_RecordingConnection((None, None)), CIK, cutoff=CUTOFF) is None
+
+
+def test_a_total_with_no_stated_period_is_not_an_oracle() -> None:
+    """The identity's premise is that the parts and the total describe the same period. A
+    total whose period the source never stated cannot certify any period's partition — and
+    the plane's `period_end` is NOT NULL precisely because `partition_id` is addressed over
+    it, so a null would let two fiscal years of the same segments hash to one set."""
+    assert consolidated_revenue(_RecordingConnection(("63887000000", None)), CIK, cutoff=CUTOFF) is None
 
 
 def test_the_value_arrives_as_decimal_not_float() -> None:
     """The plane stores the number as JSON text (63887000000). Reading it through float would
     put binary error into a monetary comparison the whole design turns on."""
-    value = consolidated_revenue(_RecordingConnection(("63887000000",)), CIK, cutoff=CUTOFF)
-    assert value == Decimal("63887000000")
-    assert isinstance(value, Decimal)
+    oracle = consolidated_revenue(_RecordingConnection(), CIK, cutoff=CUTOFF)
+    assert oracle.value == Decimal("63887000000")
+    assert isinstance(oracle.value, Decimal)
+    assert oracle.period_end == date(2025, 11, 2), "AVGO's fiscal year end, as the source states it"
 
 
 def test_the_whole_adapter_resolves_the_real_filing_against_the_real_total(monkeypatch) -> None:
@@ -153,7 +184,7 @@ def test_the_whole_adapter_resolves_the_real_filing_against_the_real_total(monke
 
     outcome = adapter.extract_segment_revenue(
         CIK,
-        connection=_RecordingConnection(("63887000000",)),
+        connection=_RecordingConnection(),
         http=None,
         gateway=None,
         standard=None,
@@ -211,16 +242,10 @@ def test_an_unexpected_failure_is_reported_per_cell(monkeypatch) -> None:
     assert "TimeoutError: read timed out" == outcome.detail
 
 
-def test_write_mode_says_it_wrote_nothing(monkeypatch) -> None:
-    """The writer does not exist yet (#772 lands it with the standard's registration). Until
-    it does, `write=True` must not produce the same sentence a probe produces — an operator
-    reading "2 segments accounting for ..." would reasonably believe a fact landed."""
-    from datetime import date
-
-    from data_engine.datahub.standards import segment_extraction as adapter
+def _avgo_filing():
     from data_engine.datahub.standards.filing_extraction import FilingDocument
 
-    filing = FilingDocument(
+    return FilingDocument(
         cik=CIK,
         accession="0001730168-25-000121",
         form="10-K",
@@ -229,17 +254,151 @@ def test_write_mode_says_it_wrote_nothing(monkeypatch) -> None:
         url="https://www.sec.gov/Archives/edgar/data/1730168/avgo-20251102.htm",
         body=FILING.read_bytes(),
     )
-    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: filing)
-    common = dict(
-        connection=_RecordingConnection(("63887000000",)),
+
+
+def _run(monkeypatch, connection, *, write: bool):
+    from data_engine.datahub.standards import segment_extraction as adapter
+
+    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: _avgo_filing())
+    return adapter.extract_segment_revenue(
+        CIK,
+        connection=connection,
         http=None,
         gateway=None,
-        standard=None,
+        standard=STANDARDS["segment_revenue"],
         cutoff=CUTOFF,
+        write=write,
     )
-    probed = adapter.extract_segment_revenue(CIK, write=False, **common)
-    written = adapter.extract_segment_revenue(CIK, write=True, **common)
 
-    assert probed.status == written.status == "resolved"
-    assert written.detail.startswith("would land "), written.detail
-    assert probed.detail != written.detail, "write mode must not read like a landed fact"
+
+#: Column order of the writer's insert, so an assertion names a field instead of an index.
+_COLS = (
+    "cik segment_name segment_revenue partition_id partition_total partition_residual "
+    "knowable_at period_end source evidence_ref extractor confidence"
+).split()
+
+
+def _row(params) -> dict:
+    return dict(zip(_COLS, params, strict=True))
+
+
+def test_a_probe_writes_nothing(monkeypatch) -> None:
+    """`write=False` is how an operator measures what a backfill would do. A probe that
+    inserted would make the measurement the change."""
+    connection = _RecordingConnection()
+    outcome = _run(monkeypatch, connection, write=False)
+    assert outcome.status == "resolved"
+    assert outcome.detail.startswith("would land ")
+    assert connection.inserts() == []
+
+
+def test_write_lands_one_row_per_segment_under_one_partition_id(monkeypatch) -> None:
+    """The rows are admissible only as the set they were accepted in, so they carry the set's
+    identity. Two rows with different partition ids would be two claims, and a consumer
+    computing a share over them would be mixing extractions."""
+    connection = _RecordingConnection()
+    outcome = _run(monkeypatch, connection, write=True)
+    rows = [_row(p) for p in connection.inserts()]
+
+    assert outcome.status == "resolved"
+    assert len(rows) == 2
+    assert {r["segment_name"] for r in rows} == {"Semiconductor solutions", "Infrastructure software"}
+    assert {r["segment_revenue"] for r in rows} == {Decimal("36858000000"), Decimal("27029000000")}
+    assert len({r["partition_id"] for r in rows}) == 1
+    assert rows[0]["partition_id"].startswith("segment-partition:")
+    assert outcome.detail.startswith(rows[0]["partition_id"] + " landed ")
+
+
+def test_every_landed_row_carries_the_identity_it_was_accepted_under(monkeypatch) -> None:
+    """`partition_total` and `partition_residual` on every row is what lets a reader RE-CHECK
+    a set instead of trusting it — the difference between a share it can defend and one it
+    inherited."""
+    connection = _RecordingConnection()
+    _run(monkeypatch, connection, write=True)
+    rows = [_row(p) for p in connection.inserts()]
+
+    assert {r["partition_total"] for r in rows} == {Decimal("63887000000")}
+    assert {r["partition_residual"] for r in rows} == {Decimal("0")}
+    assert sum(r["segment_revenue"] for r in rows) + rows[0]["partition_residual"] == rows[0]["partition_total"]
+    assert {r["period_end"] for r in rows} == {date(2025, 11, 2)}, "the ORACLE's period, not the table header's"
+    assert {r["source"] for r in rows} == {"10k-segment-extraction"}
+    assert all("accession=0001730168-25-000121" in r["evidence_ref"] for r in rows)
+    assert all(r["confidence"] > 0 for r in rows)
+
+
+def test_knowable_at_is_the_filing_date_and_never_an_insertion_clock(monkeypatch) -> None:
+    """AGENTS.md's most-repeated defect shape: a fact stamped at insert time is look-ahead for
+    every historical cutoff, and it passes every test built on the founding assumption."""
+    connection = _RecordingConnection()
+    _run(monkeypatch, connection, write=True)
+    rows = [_row(p) for p in connection.inserts()]
+    assert {r["knowable_at"] for r in rows} == {datetime(2025, 12, 12, tzinfo=UTC)}
+    assert all(r["knowable_at"] < datetime.now(UTC) for r in rows)
+
+
+def test_re_extracting_the_same_filing_collapses_instead_of_duplicating(monkeypatch) -> None:
+    """`partition_id` is content-addressed, so the second run addresses the set the first one
+    wrote. Landing it again would double every segment and halve every share."""
+    connection = _RecordingConnection(recorded=True)
+    outcome = _run(monkeypatch, connection, write=True)
+    assert outcome.status == "already_recorded"
+    assert connection.inserts() == []
+    assert "already holds" in outcome.detail
+
+
+def test_the_partition_id_is_addressed_by_what_the_set_is() -> None:
+    """Stable across runs, distinct across periods. If the period were not part of the
+    address, two fiscal years of the same segment names would collide and a restatement would
+    look like a re-run."""
+    from data_engine.datahub.standards.segment_extraction import partition_id_for
+
+    parts = [("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27029000000"))]
+    first = partition_id_for(CIK, date(2025, 11, 2), parts)
+    assert first == partition_id_for(CIK, date(2025, 11, 2), list(reversed(parts))), "a set is not an order"
+    assert first != partition_id_for(CIK, date(2024, 11, 3), parts), "a different period is a different set"
+    assert first != partition_id_for(CIK + 1, date(2025, 11, 2), parts)
+    changed = [parts[0], ("Infrastructure software", Decimal("27029000001"))]
+    assert first != partition_id_for(CIK, date(2025, 11, 2), changed), "a restatement is a new set"
+
+
+def test_a_holding_company_files_under_the_issuer_it_is_now(monkeypatch) -> None:
+    """#496: `cik` is where the FILING comes from, `record_cik` is who the fact is ABOUT.
+    The backfill's predecessor fallback passes both, and the first version of this adapter
+    discarded `record_cik` — so a post-reorganization issuer's segments would have landed
+    under the CIK it no longer trades as, invisible to every reader looking it up.
+
+    The oracle follows the issuer too: checking a holdco's parts against the predecessor's
+    consolidated revenue balances two different entities against each other.
+    """
+    from data_engine.datahub.standards import segment_extraction as adapter
+
+    predecessor, issuer = 34_088, CIK  # the filing's CIK vs. the issuer's
+    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: _avgo_filing())
+    connection = _RecordingConnection()
+    outcome = adapter.extract_segment_revenue(
+        predecessor,
+        connection=connection,
+        http=None,
+        gateway=None,
+        standard=STANDARDS["segment_revenue"],
+        cutoff=CUTOFF,
+        write=True,
+        record_cik=issuer,
+    )
+    rows = [_row(p) for p in connection.inserts()]
+    assert outcome.cik == issuer
+    assert {r["cik"] for r in rows} == {issuer}, "the fact is filed under the issuer, not the filing's CIK"
+    assert connection.calls[0][1][0] == f"companyfacts:CIK{issuer:010d}", "and so is the total it was checked against"
+
+
+def test_the_oracle_s_annotation_matches_what_it_returns() -> None:
+    """A signature that lies is worse than no signature: `-> Decimal | None` on a function
+    returning `ConsolidatedRevenue` type-checks a caller into `oracle * 2` (review on #806).
+    Asserted from the runtime annotation so it cannot drift back without this going red."""
+    import typing
+
+    from data_engine.datahub.standards.segment_extraction import ConsolidatedRevenue
+
+    hints = typing.get_type_hints(consolidated_revenue)
+    assert hints["return"] == ConsolidatedRevenue | None
+    assert isinstance(consolidated_revenue(_RecordingConnection(), CIK, cutoff=CUTOFF), ConsolidatedRevenue)

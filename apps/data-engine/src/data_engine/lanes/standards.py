@@ -7,6 +7,7 @@ from datetime import datetime
 
 import dagster as dg
 import psycopg
+from truealpha_contracts.standards import STANDARDS
 
 from data_engine.config import settings
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
@@ -27,9 +28,31 @@ class StandardBackfillConfig(dg.Config):
 
     executed_at: str
     universe: str = "universe-list:qqq"
-    standard: str = "employees_total"
+    #: Empty runs EVERY registered standard, which is what the schedule does. A name here
+    #: bounds a manual run to one metric.
+    #:
+    #: This used to default to `"employees_total"`, so the weekly schedule — which passes no
+    #: standard — ran exactly one metric. `segment_revenue` was registered with a plane and an
+    #: adapter (#804/#805) and was never invoked by anything deployed: the loop was
+    #: generalized (#799/#800) while the last enumerated metric list in the repository sat
+    #: here, one name long. init.md rule 22 is that the registry is the list; a default that
+    #: names a metric is that list wearing a different hat.
+    standard: str = ""
     mode: str = "backfill"
     max_issuers: int = 0
+
+
+def standards_to_run(selected: str) -> tuple[str, ...]:
+    """Which standards one run covers: the named one, or every registered one.
+
+    Sorted so a run's order is a property of the registry rather than of dict insertion —
+    two runs of the same week do the same thing in the same order.
+    """
+    if selected:
+        if selected not in STANDARDS:
+            raise ValueError(f"unknown standard {selected!r}; registered: {sorted(STANDARDS)}")
+        return (selected,)
+    return tuple(sorted(STANDARDS))
 
 
 @dg.op
@@ -37,35 +60,36 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
     cutoff = datetime.fromisoformat(config.executed_at)
     if config.mode not in ("backfill", "probe"):
         raise ValueError(f"mode must be backfill or probe, got {config.mode!r}")
+    names = standards_to_run(config.standard)
+    summaries = []
     with psycopg.connect(settings.database_url) as connection:
-        report = _run_standard_backfill(
-            connection,
-            universe=config.universe,
-            standard_name=config.standard,
-            cutoff=cutoff,
-            mode=config.mode,  # type: ignore[arg-type]
-            max_issuers=config.max_issuers,
-            log=context.log.info,
-        )
-    summary = report.summary()
-    context.add_output_metadata(
-        {
-            "universe": config.universe,
-            "standard": config.standard,
-            "mode": config.mode,
-            "issuers": report.issuers,
-            "open_cells": report.open,
-            "open_by_reason": str(dict(report.open_by_reason)),
-            "outcomes": str(dict(report.outcomes)),
-        }
-    )
-    return json.dumps(summary, sort_keys=True)
+        for name in names:
+            report = _run_standard_backfill(
+                connection,
+                universe=config.universe,
+                standard_name=name,
+                cutoff=cutoff,
+                mode=config.mode,  # type: ignore[arg-type]
+                max_issuers=config.max_issuers,
+                log=context.log.info,
+            )
+            summaries.append(report.summary())
+            context.add_output_metadata(
+                {
+                    f"{name}_issuers": report.issuers,
+                    f"{name}_open_cells": report.open,
+                    f"{name}_open_by_reason": str(dict(report.open_by_reason)),
+                    f"{name}_outcomes": str(dict(report.outcomes)),
+                }
+            )
+    context.add_output_metadata({"universe": config.universe, "standards": ", ".join(names), "mode": config.mode})
+    return json.dumps(summaries, sort_keys=True)
 
 
 @dg.op
 def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
-    """#748: after the week's backfill, count the six questions on the governed head —
-    answered / unavailable-by-reason / missing — and append the report."""
+    """#748: after the week's backfill of EVERY standard, count the six questions on the
+    governed head — answered / unavailable-by-reason / missing — and append the report."""
     from data_engine.datahub.question_coverage import compile_report, persist, summary_line
 
     # The backfill's summary is this op's only upstream: consuming it is what sequences the

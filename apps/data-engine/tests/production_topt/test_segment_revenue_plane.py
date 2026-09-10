@@ -122,3 +122,59 @@ def test_a_malformed_partition_id_is_refused(connection) -> None:
     different extractions claim to be the same set."""
     with pytest.raises(psycopg.errors.CheckViolation):
         _insert(connection, segment="Americas", value="100", partition="whatever")
+
+
+def test_the_writer_and_the_plane_agree(connection) -> None:
+    """The join the two halves above never test: `record_segment_partition` builds the rows,
+    the plane accepts them. Column names, types, the content-addressed id format and the
+    `source` the standard declares are all things that can drift apart while each side's own
+    tests stay green — this is where a drift shows up as a database error instead of as an
+    empty table nobody notices.
+    """
+    from datetime import UTC, date, datetime
+
+    from data_engine.datahub.standards.segment_extraction import (
+        SEGMENT_SOURCE,
+        partition_already_recorded,
+        partition_id_for,
+        record_segment_partition,
+    )
+    from truealpha_contracts.standards import STANDARDS
+
+    period_end = date(2025, 11, 2)
+    parts = [("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27029000000"))]
+    partition_id = partition_id_for(CIK, period_end, parts)
+
+    assert not partition_already_recorded(connection, partition_id), "nothing written yet"
+    landed = record_segment_partition(
+        connection,
+        cik=CIK,
+        partition_id=partition_id,
+        period_end=period_end,
+        parts=parts,
+        partition_total=Decimal("63887000000"),
+        partition_residual=Decimal("0"),
+        knowable_at=datetime(2025, 12, 12, tzinfo=UTC),
+        evidence_ref="accession=0001730168-25-000121 form=10-K",
+        extractor="rule:exhaustive-partition:v1",
+        confidence=Decimal("0.85"),
+    )
+    assert landed == 2
+
+    rows = connection.execute(
+        f"""
+        select segment_name, segment_revenue, partition_total, partition_residual,
+               period_end, source, knowable_at
+        from {TABLE} where partition_id = %s order by segment_name
+        """,  # noqa: S608
+        (partition_id,),
+    ).fetchall()
+    assert len(rows) == 2
+    assert sum(r[1] for r in rows) + rows[0][3] == rows[0][2], "the parts and the stored identity agree"
+    assert {r[4] for r in rows} == {period_end}
+    assert {r[5] for r in rows} == {SEGMENT_SOURCE}
+    assert SEGMENT_SOURCE in STANDARDS["segment_revenue"].plane.source_priority, (
+        "a source the standard's fusion priority does not list can never be selected"
+    )
+    assert {r[6] for r in rows} == {datetime(2025, 12, 12, tzinfo=UTC)}
+    assert partition_already_recorded(connection, partition_id), "a re-run must see what it wrote"
