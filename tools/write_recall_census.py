@@ -38,7 +38,17 @@ CENSUS = ROOT / "apps" / "data-engine" / "tests" / "recall_census.json"
 #: Consolidated revenue as the CAPTURE PLANE holds it, for the filings whose oracle is known
 #: — absolute, read from Production, the same number a run checks the identity against. Only
 #: these can have an accepted partition recorded; the rest record recall alone.
-TOTALS = {"AVGO_10K_000173016825000121.html": "63887000000"}
+#:
+#: Two entries rather than one because the corpus gained the filings the DEPLOYED run refuses.
+#: The packaged set held none of them: ADM, JPM, NICE, PLUG and SHOP are not in the universe
+#: the standards lane walks, so the census could catch a regression and could not measure
+#: progress. AAPL and ADP are in it, their behaviour was measured through the deployed
+#: gateway, and AAPL's five geographies balance to the cent — so an acceptance, not just a
+#: recall count, is now pinned for a filing production actually meets.
+TOTALS = {
+    "AVGO_10K_000173016825000121.html": "63887000000",
+    "AAPL_10K_000032019325000079.html": "416161000000",
+}
 
 COMMENT = (
     "Per-filing recall census over apps/data-engine/samples/filings. Committed so a change to "

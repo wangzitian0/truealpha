@@ -292,9 +292,16 @@ def _rows_in(window: str) -> int:
     rather than by where a units caption sits, because a caption is optional and the rows are
     the thing being looked for.
 
-    Window-local on purpose, and so slightly looser than the filter in `segment_candidates`:
-    this only compares two spans of the SAME document to pick a direction, and a row that will
-    later be rejected as a total's tail counts the same on both sides of that comparison.
+    Applies the same three filters `segment_candidates` does — not a segment label, at most six
+    words, not the tail of a total — so the two cannot disagree about what a row is.
+
+    It differs in ONE way, and only because it can: the total-tail check here reads the
+    WINDOW, while `segment_candidates` reads the full text. A tail whose "Total" sits before
+    the window's own start is therefore counted here and rejected there. That is harmless for
+    what this is used for — comparing two spans of the same document to pick a direction —
+    and it is stated rather than left for someone to find, because the two filters looking
+    identical while behaving differently is exactly the kind of drift this module keeps
+    paying for.
     """
     return sum(
         1
