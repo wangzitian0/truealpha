@@ -47,6 +47,13 @@ TREES: dict[str, Path] = {
 }
 PACKAGE_PREFIXES = tuple(TREES)
 SCRIPTS = ROOT / "apps" / "data-engine" / "scripts"
+#: Scanned for EDGES but never counted in the census: a lower layer whose registries name
+#: modules in the trees above. `truealpha_contracts.standards.STANDARDS` declares each
+#: standard's adapter as "module:function" and `backfill._adapter` resolves it at run time
+#: (#800), so that string is a wiring exactly like an operator script's import — and a
+#: registry the deployed loop reads is a deployment path whatever layer it lives in.
+#: Contracts' own modules are not censused here; this file guards the trees that consume it.
+REGISTRY_SOURCES = (ROOT / "libs" / "contracts" / "src" / "truealpha_contracts",)
 BASELINE = Path(__file__).with_name("reachability_baseline.json")
 DEPLOYED_ROOT = "data_engine.dagster_defs"
 
@@ -105,6 +112,9 @@ def unreachable() -> tuple[int, list[str]]:
     for script in SCRIPTS.glob("*.py"):
         # Operator scripts are deployment-adjacent: what they import is alive.
         roots |= _imports(ast.parse(script.read_text()), modules)
+    for source in REGISTRY_SOURCES:
+        for path in source.rglob("*.py"):
+            roots |= _imports(ast.parse(path.read_text()), modules)
 
     def with_ancestors(name: str) -> list[str]:
         # Importing a.b.c executes a/__init__ and a.b/__init__, whose own imports
