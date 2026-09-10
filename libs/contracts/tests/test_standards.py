@@ -6,9 +6,9 @@ import pytest
 from pydantic import ValidationError
 from truealpha_contracts.metrics import METRICS
 from truealpha_contracts.standards import (
-    FactPlane,
     STANDARDS,
     EvidenceRequirement,
+    FactPlane,
     MetricStandard,
     StandardKind,
     confidence_for,
