@@ -25,15 +25,17 @@ from pathlib import Path
 import pytest
 from data_engine.datahub.standards.filing_extraction import filing_plain_text
 from data_engine.datahub.standards.segment_extraction import (
+    _UNITS,
     SEGMENT_TOLERANCE,
     _windows,
     as_candidates,
+    filing_scale,
     segment_candidates,
     single_segment_statement,
     unitless_windows,
     windows_of,
 )
-from factors.shared.extraction import Partition, PartitionRefusal, select_exhaustive_partition
+from factors.shared.extraction import Candidate, Partition, PartitionRefusal, select_exhaustive_partition
 
 FILING = Path(__file__).resolve().parents[1] / "samples" / "filings" / "AVGO_10K_000173016825000121.html"
 #: Broadcom's FY2025 consolidated net revenue as the CAPTURE PLANE holds it — absolute, the
@@ -136,16 +138,21 @@ def test_a_percentage_restatement_is_never_recalled_as_revenue(recalled) -> None
     assert Decimal("36858") in values, "while the amounts under the same heading are read"
 
 
-def test_a_table_whose_scale_is_stated_nowhere_is_counted_rather_than_forgotten(adm_text) -> None:
-    """ "No segment table matched" and "the table states no scale" have different fixes — a
-    heading pattern vs. a caption pattern — so the adapter reports which one happened rather
-    than collapsing both into "found nothing".
+def test_a_scale_stated_nowhere_in_the_filing_is_counted_rather_than_forgotten(adm_text) -> None:
+    """ "No segment table matched" and "this document never states its units" have different
+    fixes — a heading pattern vs. a filing this module cannot read at all — so the adapter
+    reports which one happened rather than collapsing both into "found nothing".
 
-    Driven by ADM, where both paths are live on one filing: six headings, four of which
-    resolve to a scale in one direction or the other, and two that state one nowhere.
+    The bar moved with the fallback, and that is the point: a window is only uncounted when
+    the FILING declares no scale anywhere, not when one table happens to omit it. ADM declares
+    millions 51 times, so its count is zero even though two of its windows say nothing.
     """
-    assert unitless_windows(adm_text) >= 1, "some window states its scale nowhere"
-    assert unitless_windows(adm_text) < len(_windows(adm_text)), "and some window does state it"
+    assert unitless_windows(adm_text) == 0, "the filing states its scale, so no window is uncomparable"
+    assert any(not _UNITS.search(w) for _, w in _windows(adm_text)), "though some windows still omit it"
+
+    shop = Path(__file__).resolve().parents[1] / "samples" / "filings" / "SHOP_10K_000159480526000007.html"
+    shop_text = filing_plain_text(shop.read_bytes())
+    assert filing_scale(shop_text) is None, "SHOP is the filing that states units nowhere"
 
 
 def test_every_other_window_is_refused_rather_than_filtered(recalled) -> None:
@@ -247,3 +254,84 @@ def test_a_single_segment_issuer_is_a_determinate_answer_not_a_miss() -> None:
             assert "segment" in statement.lower()
         else:
             assert statement is None, f"{ticker} reports segments; a false positive would replace its table"
+
+
+def test_a_table_that_states_no_scale_inherits_the_filing_s(adm_recalled, adm_text) -> None:
+    """A filing declares its units once at the top of the financial statements and every table
+    below inherits them. ADM says millions 51 times and thousands twice; two of its segment
+    windows state nothing of their own and are not scaleless — they are using the filing's.
+
+    Measured because the alternative failed in production: ADP's segment table states no scale
+    within 900 characters in EITHER direction, so the backward window recovered nothing and
+    six tables stayed discarded.
+    """
+    assert filing_scale(adm_text) == MILLIONS
+    inherited = [c for c in adm_recalled if c.scale_source == "filing"]
+    assert inherited, "some window took the filing's scale"
+    assert all(c.multiplier == MILLIONS for c in inherited)
+    stated = [c for c in adm_recalled if c.scale_source == "table"]
+    assert stated, "and some still state their own — the two are distinguishable on the row"
+
+
+def test_the_dominant_declaration_wins_over_a_stray_one(adm_text) -> None:
+    """ADM declares thousands twice, in tables that are not its segment tables. A rule that
+    took the FIRST declaration, or any declaration, would scale a segment table by 1,000 and
+    it would refuse."""
+    from collections import Counter
+
+    from data_engine.datahub.standards.segment_extraction import _UNITS
+
+    counts = Counter(m.group(1).lower() for m in _UNITS.finditer(adm_text))
+    assert counts["thousands"] > 0 and counts["millions"] > counts["thousands"]
+    assert filing_scale(adm_text) == MILLIONS
+
+
+def test_a_filing_that_declares_no_scale_anywhere_still_refuses() -> None:
+    """The fallback is the FILING's own statement, not a default. SHOP declares no units in
+    its whole document, so its windows stay uncomparable rather than being handed a guess."""
+    shop = Path(__file__).resolve().parents[1] / "samples" / "filings" / "SHOP_10K_000159480526000007.html"
+    text = filing_plain_text(shop.read_bytes())
+    assert filing_scale(text) is None
+    assert all(c.scale_source == "table" for c in segment_candidates(text))
+
+
+def test_inheriting_a_wrong_scale_refuses_rather_than_publishes(recalled) -> None:
+    """The whole argument for a fallback instead of a refusal.
+
+    A classification the model gets wrong produces a plausible number that nothing catches. A
+    SCALE that is wrong by 1,000 makes the parts miss the consolidated total by 1,000, and the
+    identity refuses the set. That asymmetry is why this may be guessed at all, so it is
+    asserted rather than argued.
+    """
+    candidates = as_candidates(recalled)
+    accepted = [
+        (window, indices)
+        for window, indices in windows_of(recalled).items()
+        if isinstance(
+            select_exhaustive_partition(
+                candidates,
+                total=CONSOLIDATED,
+                tolerance=SEGMENT_TOLERANCE * recalled[indices[0]].multiplier,
+                indices=indices,
+            ),
+            Partition,
+        )
+    ]
+    assert len(accepted) == 1, "AVGO's real table balances"
+    _window, indices = accepted[0]
+
+    over = [Candidate(float(recalled[i].value) * 1000, recalled[i].sentence) for i in indices]
+    under = [Candidate(float(recalled[i].value) / 1000, recalled[i].sentence) for i in indices]
+    for wrong, expected in ((over, PartitionRefusal.OVER), (under, PartitionRefusal.SHORT)):
+        verdict = select_exhaustive_partition(
+            wrong, total=CONSOLIDATED, tolerance=SEGMENT_TOLERANCE * MILLIONS, indices=list(range(len(wrong)))
+        )
+        assert not isinstance(verdict, Partition), "a scale off by 1,000 cannot be accepted"
+        assert verdict is expected, "and the refusal even says which way it was wrong"
+
+
+def test_avgo_is_unchanged_by_the_fallback(recalled) -> None:
+    """The fallback must not reach a filing that states its own scale. AVGO declares millions
+    in the caption of the table this module accepts, so nothing about it inherits."""
+    assert all(c.scale_source == "table" for c in recalled)
+    assert Decimal("58") not in {c.stated_value for c in recalled}
