@@ -1,8 +1,7 @@
 {
+  "files": 59,
   "harvested_from_run": "34221594703",
   "root": "apps/data-engine/tests",
-  "files": 59,
-  "total_seconds": 94.33,
   "seconds_by_file": {
     "apps/data-engine/tests/datahub/test_a1_evidence.py": 0.14,
     "apps/data-engine/tests/datahub/test_control_plane.py": 0.01,
@@ -38,7 +37,6 @@
     "apps/data-engine/tests/test_continuous_confidence.py": 0.06,
     "apps/data-engine/tests/test_core_strategy_replay_mart_migration.py": 0.07,
     "apps/data-engine/tests/test_dagster_defs.py": 1.4,
-    "apps/data-engine/tests/test_direct_pe_qlib_smoke.py": 0.72,
     "apps/data-engine/tests/test_entity_display_resolution_view.py": 3.35,
     "apps/data-engine/tests/test_factor_matrix_sample_capture.py": 0.08,
     "apps/data-engine/tests/test_headcount_source_priority.py": 0.0,
@@ -63,5 +61,6 @@
     "apps/data-engine/tests/test_strategy_smoke.py": 0.0,
     "apps/data-engine/tests/test_universe.py": 0.0,
     "apps/data-engine/tests/test_yahoo_precision.py": 0.0
-  }
+  },
+  "total_seconds": 93.61
 }

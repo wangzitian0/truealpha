@@ -10,11 +10,12 @@ previously mis-registered `module=6`, which collides with module 6's own pure-bl
 screening and was recorded as a known error in init.md before this fix).
 `libs/factors/tests/test_module_identity.py` is the standing check now.
 
-This is a **simplified preview** of the fuller S5 kernel proven in
-`factors.batches.issuer_price_to_sales_tiny.kernel` (issue #161, closed):
-dual-class share-class aggregation, per-listing multi-currency FX conversion,
-and quarterly/fiscal-year revenue-window completeness checks are proven there
-but deliberately not ported here yet — the flat `Fact` interface (one scalar
+This is a **simplified preview** of a fuller computation. Dual-class
+share-class aggregation, per-listing multi-currency FX conversion, and
+quarterly/fiscal-year revenue-window completeness checks were proven by the S5
+tiny kernel of the retired batch machine (#161, closed; the kernel was removed
+with that machine in #791 and git history holds it) and are deliberately not
+ported here yet — the flat `Fact` interface (one scalar
 value per metric) has no place to carry multiple listings/securities per
 issuer. Single-listing, reporting-currency-only issuers get a correct number
 from this module; dual-class issuers need the richer S5-style aggregation,

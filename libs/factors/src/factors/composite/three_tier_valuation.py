@@ -14,8 +14,9 @@ caller supplies an explicit, versioned
 `truealpha_contracts.strategy.ThreeTierValuationDefinition` (the locked v0
 bands from #21/#335's golden fixture, or any later versioned revision),
 matching #21's "no implicit defaults" rule. Band lookup and target-midpoint
-arithmetic port the logic proven by the S6 tiny kernel
-(`factors.batches.issuer_tier_valuation_tiny.kernel`, #169, closed).
+arithmetic port the logic proven by the S6 tiny kernel of the retired batch
+machine (#169, closed; the kernel itself was removed with that machine in #791,
+and git history holds it).
 
 `FactorResult` carries one scalar `value`; it cannot also carry the tier
 label, target P/S bounds, or current P/S. Callers that need those for
