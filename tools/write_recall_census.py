@@ -80,8 +80,11 @@ def census() -> dict[str, dict]:
 
 
 def main() -> int:
-    CENSUS.write_text(json.dumps({"_comment": COMMENT, "filings": census()}, indent=2) + "\n")
-    print(f"recall census written: {len(census())} filings")
+    # Once, and the number printed is the number written. Computing it twice doubles a full
+    # parse of every packaged filing and lets the log disagree with the file (review on #813).
+    filings = census()
+    CENSUS.write_text(json.dumps({"_comment": COMMENT, "filings": filings}, indent=2) + "\n")
+    print(f"recall census written: {len(filings)} filings")
     return 0
 
 
