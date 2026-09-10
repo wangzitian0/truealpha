@@ -19,6 +19,7 @@ where a check was supposed to be.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -138,23 +139,6 @@ def test_a_percentage_restatement_is_never_recalled_as_revenue(recalled) -> None
     assert Decimal("36858") in values, "while the amounts under the same heading are read"
 
 
-def test_a_scale_stated_nowhere_in_the_filing_is_counted_rather_than_forgotten(adm_text) -> None:
-    """ "No segment table matched" and "this document never states its units" have different
-    fixes — a heading pattern vs. a filing this module cannot read at all — so the adapter
-    reports which one happened rather than collapsing both into "found nothing".
-
-    The bar moved with the fallback, and that is the point: a window is only uncounted when
-    the FILING declares no scale anywhere, not when one table happens to omit it. ADM declares
-    millions 51 times, so its count is zero even though two of its windows say nothing.
-    """
-    assert unitless_windows(adm_text) == 0, "the filing states its scale, so no window is incomparable"
-    assert any(not _UNITS.search(w) for _, w in _windows(adm_text)), "though some windows still omit it"
-
-    shop = Path(__file__).resolve().parents[1] / "samples" / "filings" / "SHOP_10K_000159480526000007.html"
-    shop_text = filing_plain_text(shop.read_bytes())
-    assert filing_scale(shop_text) is None, "SHOP is the filing that states units nowhere"
-
-
 def test_every_other_window_is_refused_rather_than_filtered(recalled) -> None:
     """Recall still returns the per-segment income statement — it is not clever, on purpose.
     Its cost, R&D and operating-income rows sum to far more than the issuer earned, and it is
@@ -199,6 +183,54 @@ def test_a_segment_is_never_recalled_twice_with_the_same_value(recalled) -> None
     swept more than once. One segment stated twice double-counts into every share."""
     pairs = [(c.segment_name, c.stated_value) for c in recalled]
     assert len(pairs) == len(set(pairs))
+
+
+def test_a_scale_stated_nowhere_in_the_filing_is_counted_rather_than_forgotten(adm_text) -> None:
+    """ "No segment table matched" and "this document never states its units" have different
+    fixes — a heading pattern vs. a filing this module cannot read at all — so the adapter
+    reports which one happened rather than collapsing both into "found nothing".
+
+    The bar moved with the filing-wide fallback, and that is the point: a window is only
+    uncounted when the FILING declares no scale anywhere, not when one table omits it. ADM
+    declares millions 51 times, so its count is zero even though windows of it say nothing.
+    """
+    assert unitless_windows(adm_text) == 0, "the filing states its scale, so no window is incomparable"
+    assert any(not _UNITS.search(w) for _, w in _windows(adm_text)), "though some windows still omit it"
+
+
+#: A document with a segment table and no unit statement anywhere. Constructed, and the
+#: reason it has to be is the finding: NO packaged filing declares its units nowhere. SHOP
+#: looked like one and was not — it writes `(in US $ millions)`, which the first version of
+#: `_UNITS` could not read because it required `(` to be followed immediately by `in`. A test
+#: of mine asserted that as a property of the DOCUMENT when it was a property of the regex,
+#: which is the whole failure shape this module keeps being caught by.
+_NO_UNITS_ANYWHERE = (
+    "Net revenue by segment for the periods presented: "
+    "Semiconductor solutions 36,858 Infrastructure software 27,029 Total net revenue 63,887"
+)
+
+
+def test_a_filing_that_declares_no_scale_anywhere_still_refuses() -> None:
+    """The fallback is the FILING's own statement, never a default. A document that states
+    units nowhere leaves its tables incomparable rather than handing them a guess — and says
+    so through the count, which is what separates it from a document with no table at all."""
+    assert filing_scale(_NO_UNITS_ANYWHERE) is None
+    assert segment_candidates(_NO_UNITS_ANYWHERE) == []
+    assert _windows(_NO_UNITS_ANYWHERE), "the heading matched — this is not 'nothing found'"
+    assert unitless_windows(_NO_UNITS_ANYWHERE) >= 1, "and the count says the scale is what is missing"
+
+
+def test_shop_declares_its_scale_and_the_first_pattern_could_not_read_it() -> None:
+    """The correction, pinned so it cannot come back. SHOP writes `(in US $ millions)`; the
+    pattern that required `(` then `in` scored zero on the whole document and made it look
+    like a filing with no units at all."""
+    shop = Path(__file__).resolve().parents[1] / "samples" / "filings" / "SHOP_10K_000159480526000007.html"
+    text = filing_plain_text(shop.read_bytes())
+    assert "in US $ millions" in text, "the phrasing this module used to miss"
+    assert filing_scale(text) == MILLIONS
+    assert re.search(r"\(\s*in\s+millions\b", text, re.IGNORECASE) is None, (
+        "and it is NOT written the way the narrow pattern demanded"
+    )
 
 
 def test_the_window_reaches_backwards_when_the_match_is_the_total_row(adm_recalled) -> None:
@@ -284,21 +316,6 @@ def test_the_dominant_declaration_wins_over_a_stray_one(adm_text) -> None:
     counts = Counter(m.group(1).lower() for m in _UNITS.finditer(adm_text))
     assert counts["thousands"] > 0 and counts["millions"] > counts["thousands"]
     assert filing_scale(adm_text) == MILLIONS
-
-
-def test_a_filing_that_declares_no_scale_anywhere_still_refuses() -> None:
-    """The fallback is the FILING's own statement, not a default. SHOP declares no units in
-    its whole document, so its windows stay incomparable rather than being handed a guess."""
-    shop = Path(__file__).resolve().parents[1] / "samples" / "filings" / "SHOP_10K_000159480526000007.html"
-    text = filing_plain_text(shop.read_bytes())
-    assert filing_scale(text) is None
-    assert all(c.scale_source == "table" for c in segment_candidates(text))
-    # SHOP matches no heading either, so the count is zero for the OTHER reason — and the
-    # two are distinguishable, which is the point of reporting the count at all. The
-    # adapter says "no segment table matched" here and "N table(s) state no scale" only
-    # when a filing that declares nothing anywhere does have tables.
-    assert unitless_windows(text) == len([w for _, w in _windows(text) if not _UNITS.search(w)])
-    assert _windows(text) == [], "no heading matched, so the zero above is 'nothing found', not 'nothing comparable'"
 
 
 def test_inheriting_a_wrong_scale_refuses_rather_than_publishes(recalled) -> None:

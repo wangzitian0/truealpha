@@ -57,11 +57,18 @@ from data_engine.datahub.standards.filing_extraction import (
 from data_engine.sources.gateway import CapacityExceeded
 
 #: The sentence that introduces a segment revenue table. Every phrasing seen in the packaged
-#: filings; a heading this misses costs a `no_candidates` refusal, never a wrong number.
+#: filings AND in the ones the deployed run refused; a heading this misses costs a
+#: `no_candidates` refusal, never a wrong number.
+#:
+#: `sales` is here because the word is not always "revenue": Apple writes "net sales by
+#: reportable segment for 2025, 2024 and 2023 (dollars in millions)" and Costco reports
+#: segment "revenue" under a sentence this still does not match. Measured on the filings the
+#: staging run refused, not invented — 15 of 25 issuers refused with "no segment table
+#: matched", which is a statement about this pattern and not about the filings.
 _TABLE_HEADING = re.compile(
-    r"(?:net\s+)?revenue\s+by\s+(?:reportable\s+)?segment"
-    r"|segment\s+(?:net\s+)?revenue"
-    r"|revenues?\s+from\s+external\s+customers\s+by\s+(?:reportable\s+)?segment",
+    r"(?:net\s+)?(?:revenue|sales)\s+by\s+(?:reportable\s+|operating\s+)?segment"
+    r"|segment\s+(?:net\s+)?(?:revenue|sales)"
+    r"|(?:revenues?|net\s+sales)\s+from\s+external\s+customers\s+by\s+(?:reportable\s+)?segment",
     re.IGNORECASE,
 )
 
@@ -96,7 +103,17 @@ _TABLE_END = re.compile(r"\btotal\b[^\n]{0,40}?[\d,]{2,15}", re.IGNORECASE)
 #: it balances, which it cannot. A window that does not state its units is skipped, and
 #: `unitless_windows` counts it so the refusal says so instead of claiming recall found
 #: nothing.
-_UNITS = re.compile(r"\(\s*in\s+(thousands|millions|billions)\b", re.IGNORECASE)
+#: Every shape the packaged corpus actually uses, measured rather than guessed:
+#: `(In millions, except percentages)`, `(dollars in millions)`, `(in US $ millions, except
+#: share and per share amounts)`, `(in thousands)`. The first version required `(` to be
+#: followed immediately by `in`, and SHOP writes `(in US $ millions)` — so the filing read as
+#: declaring no scale ANYWHERE, and a test of mine asserted that as a property of the
+#: DOCUMENT when it was a property of this regex. Widening it takes SHOP from nothing to
+#: millions x70 and changes no other filing's dominant answer.
+_UNITS = re.compile(
+    r"\(\s*(?:[^()]{0,40}?\b)?in\s+(?:U\.?S\.?\s*\$\s*|\$\s*)?(thousands|millions|billions)\b",
+    re.IGNORECASE,
+)
 _MULTIPLIERS = {
     "thousands": Decimal("1000"),
     "millions": Decimal("1000000"),
