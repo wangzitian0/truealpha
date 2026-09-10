@@ -12,6 +12,8 @@ future reader does not "fix" this back), and the view really does read the paylo
 
 from __future__ import annotations
 
+import os
+
 import psycopg
 import pytest
 from data_engine.config import settings
@@ -31,7 +33,13 @@ def connection():
     try:
         active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=True)
     except psycopg.OperationalError as error:
-        pytest.skip(f"no local database: {error}")
+        # The repository's convention, which this file did not follow when it landed
+        # (review on #798): an UNCONDITIONAL skip silently drops this coverage in CI, where
+        # a Postgres service exists and a connection failure is a real failure. A guard that
+        # cannot go red where production runs is the shape AGENTS.md rule 7 forbids.
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs the required integration coverage")
     try:
         yield active
     finally:
@@ -39,8 +47,12 @@ def connection():
 
 
 def _viewdef(connection) -> str:
-    row = connection.execute("select pg_get_viewdef('mart.topt_core_meta_info'::regclass, true)").fetchone()
-    assert row is not None, "mart.topt_core_meta_info does not exist"
+    # `to_regclass` returns NULL for a missing relation; `'…'::regclass` RAISES, which made
+    # the assertion below dead code and the failure message misleading (review on #798).
+    row = connection.execute("select pg_get_viewdef(to_regclass('mart.topt_core_meta_info'), true)").fetchone()
+    assert row is not None and row[0] is not None, (
+        "mart.topt_core_meta_info does not exist — apply db/migrations before running this"
+    )
     return " ".join(row[0].split())
 
 
