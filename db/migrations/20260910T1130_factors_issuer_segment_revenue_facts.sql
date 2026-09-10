@@ -40,8 +40,12 @@ create table if not exists staging.issuer_segment_revenue_facts (
     -- When the figure became knowable: the filing date. Never an insertion clock — a fact
     -- stamped at insert time is look-ahead for any historical cutoff.
     knowable_at        timestamptz not null,
-    -- The fiscal period the segment revenue describes.
-    period_end         date,
+    -- The fiscal period the segment revenue describes. NOT NULL, unlike the headcount
+    -- plane's: `partition_id` is content-addressed over (cik, period_end, parts), so a
+    -- null period makes the identity ambiguous — two fiscal years of the same segments
+    -- would hash to the same set (review on #804). A segment table always states its
+    -- period; a headcount cover-page figure may not, which is why the two planes differ.
+    period_end         date not null,
     source             text not null check (source <> ''),
     -- What justifies the number: accession + the span the value was read from. Required,
     -- because a segment revenue with no stated justification is indistinguishable from a
@@ -96,10 +100,7 @@ create trigger reject_mutation
 before update or delete on staging.issuer_segment_revenue_facts
 for each row execute function raw.reject_mutation();
 
-do $$
-begin
-    if exists (select from pg_roles where rolname = 'mart_readonly') then
-        grant select on staging.issuer_segment_revenue_facts to mart_readonly;
-    end if;
-end;
-$$;
+-- No grant to mart_readonly. db/roles.sql is explicit: that role "has no raw/staging
+-- access", and it holds no USAGE on schema staging, so the grant I first wrote here was
+-- both ineffective and a boundary violation (review on #804). When a consumer needs these
+-- rows they arrive through a mart view, like every other staging plane.

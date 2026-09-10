@@ -26,7 +26,7 @@ from truealpha_contracts.models import DataSource
 # Bump on ANY semantic registry change (priority reorder, metric add/remove,
 # unit redefinition). Mart rows carry this so a number stays explainable after
 # the rules move on: mart lineage is (staging_ref, fusion_version).
-FUSION_RULESET_VERSION = 1
+FUSION_RULESET_VERSION = 2
 
 
 class UnitFamily(StrEnum):
