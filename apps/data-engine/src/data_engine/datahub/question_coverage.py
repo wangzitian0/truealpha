@@ -228,8 +228,11 @@ def compile_report(
     gppe = gppe_cells(connection, head.run_id)
     issuers = [cell.subject_id for cell in gppe]
     # The fund subjects are whatever module 5 consolidated for THIS run — an empty tuple on
-    # a universe whose tick does not consolidate, which grades q5 `missing` there rather
-    # than borrowing another universe's funds.
+    # a universe whose tick does not consolidate. q5 is then NOT APPLICABLE there, not
+    # missing: `denominator == 0` with nothing answered, unavailable or missing. `missing`
+    # means "a subject exists and no column covers it", which is a different claim with a
+    # different owner (review on #797). What matters either way is that it does not borrow
+    # another universe's funds to look answered.
     funds_observed = fund_cells(connection, head.run_id)
     funds = [cell.subject_id for cell in funds_observed]
     cells_by_column = {

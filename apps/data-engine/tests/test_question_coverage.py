@@ -212,8 +212,11 @@ def test_a_refused_consolidation_is_unavailable_with_the_refusing_floor() -> Non
 
 def test_a_universe_whose_tick_does_not_consolidate_has_no_fund_subjects() -> None:
     """Only the universe that IS a fund's holdings consolidates it (`consolidate_funds` on
-    the QQQ tick alone). On TOPT the column does not apply, so q5 is `missing` there — and
-    must NOT borrow QQQ's fund to look answered."""
+    the QQQ tick alone). On TOPT q5 is NOT APPLICABLE — no fund subject exists, so the
+    denominator is 0 and nothing is answered, unavailable OR missing. `missing` would claim
+    "a subject exists and no column covers it", which is a different problem with a different
+    owner (review on #797). The assertions below say exactly that, and that TOPT must not
+    borrow QQQ's fund to look answered."""
     entry = classify_question(
         REQ[Question.Q5_ETF_VIRTUAL_COMPANY],
         universe_id=TOPT,
@@ -223,7 +226,8 @@ def test_a_universe_whose_tick_does_not_consolidate_has_no_fund_subjects() -> No
     )
     assert entry["columns"] == [], "the q5 column is scoped to universe:qqq-"
     assert entry["denominator"] == 0 and entry["answered"] == 0
-    assert entry["missing"] == 0, "no fund subjects means nothing to be missing about"
+    assert entry["missing"] == 0, "not applicable is not missing: there is no subject to be missing a column"
+    assert entry["unavailable"] == {}, "and nothing is unavailable either — there is nothing to grade"
 
 
 def test_issuer_scoped_questions_ignore_the_fund_subjects() -> None:
