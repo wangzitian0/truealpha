@@ -33,6 +33,28 @@ class StandardKind(StrEnum):
     EVALUATIVE = "evaluative"
 
 
+class FactPlane(BaseModel):
+    """WHERE a standard's facts live, and which source wins among them.
+
+    The metric registry answers "which source wins"; this answers "wins among what". Both
+    were the planner's source code until #799: `open_cells` took a `MetricStandard` and
+    queried `staging.issuer_headcount_facts` with `HEADCOUNT_SOURCE_PRIORITY` regardless,
+    so a second standard would have planned against headcount facts under its own name.
+
+    `table` and `columns` are identifiers the planner interpolates, never user input — a
+    standard is code, declared in `STANDARDS` below and reviewed as code.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    table: str = Field(pattern=r"^[a-z_]+\.[a-z_]+$")
+    #: The column holding the issuer key the planner joins on (a CIK today).
+    issuer_column: str = Field(pattern=r"^[a-z_]+$")
+    #: Source labels in winning order — init.md rule 12's declared priority, source first
+    #: and recency second. A source absent from this tuple sorts last.
+    source_priority: tuple[str, ...] = Field(min_length=1)
+
+
 class EvidenceRequirement(StrEnum):
     """What a landed value must point at before it is a value rather than a guess."""
 
@@ -59,6 +81,11 @@ class MetricStandard(BaseModel):
     # cell whose best fact comes from any other source is open: the loop may supersede a
     # reviewed seed with a cited extraction, never the reverse.
     evidence_bearing_sources: tuple[str, ...] = Field(min_length=1)
+    #: The plane the planner reads to decide whether a cell is already closed (#799).
+    plane: FactPlane
+    #: The adapter that resolves an open cell, as `module:function`. `backfill` dispatched on
+    #: `evidence` alone until #799, which made every FILING_SPAN standard extract headcount.
+    adapter: str = Field(pattern=r"^[a-z0-9_.]+:[a-z0-9_]+$")
 
     @model_validator(mode="after")
     def _registered_metric(self) -> MetricStandard:
@@ -109,6 +136,15 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
             confidence_policy_id="headcount-confidence:v1",
             max_age_days=400,
             evidence_bearing_sources=("10k-extraction",),
+            plane=FactPlane(
+                table="staging.issuer_headcount_facts",
+                issuer_column="cik",
+                # Was `production_topt.headcount.HEADCOUNT_SOURCE_PRIORITY`, imported by the
+                # planner. Declared here so the standard carries its own answer and the
+                # planner carries none.
+                source_priority=("10k-extraction", "manual-review"),
+            ),
+            adapter="data_engine.datahub.standards.filing_extraction:extract_headcount",
         )
     }
 )
