@@ -148,14 +148,6 @@ def _status_dimensions(
     return (availability, evidence, FactorValidationStatus.NOT_EVALUATED)
 
 
-def classified_share(purity: ThemePurity) -> Decimal:
-    """How much of the denominator carries a judgement either way."""
-    if purity.consolidated_revenue <= 0:
-        return Decimal(0)
-    judged = purity.in_theme_revenue + purity.out_of_theme_revenue
-    return judged / purity.consolidated_revenue
-
-
 def compute_for_theme(
     connection: Connection[Any],
     partition: IssuerPartition,
@@ -216,6 +208,18 @@ insert into mart.issuer_theme_purity
      reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status)
 values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 on conflict (run_id, issuer_id, theme_id) do update set
+    -- Provenance travels with the numbers. A re-run that sees a newer partition at the same
+    -- cutoff, or a reworded theme, would otherwise leave a share from one extraction beside
+    -- the partition_id and definition sha of another — a row that reads as re-checkable and
+    -- is not (review on #807). `fund_consolidation` refreshes its whole row for the same
+    -- reason.
+    cik = excluded.cik,
+    theme = excluded.theme,
+    definition_version = excluded.definition_version,
+    definition_sha256 = excluded.definition_sha256,
+    cutoff = excluded.cutoff,
+    period_end = excluded.period_end,
+    partition_id = excluded.partition_id,
     theme_share = excluded.theme_share,
     consolidated_revenue = excluded.consolidated_revenue,
     in_theme_revenue = excluded.in_theme_revenue,

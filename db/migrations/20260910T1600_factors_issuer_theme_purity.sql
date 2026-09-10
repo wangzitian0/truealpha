@@ -62,10 +62,20 @@ create table if not exists mart.issuer_theme_purity (
         check (factor_validation_status in ('accepted', 'rejected', 'not_evaluated')),
     created_at                timestamptz not null default clock_timestamp(),
     primary key (run_id, issuer_id, theme_id),
-    -- The masses account for the whole, by construction. A violation means the producer's
-    -- arithmetic, not a policy choice, so the database refuses the row rather than
-    -- publishing a share whose parts do not add up.
-    check (in_theme_revenue + out_of_theme_revenue + unclassified_revenue = consolidated_revenue)
+    -- The masses account for the whole, by construction — INCLUDING the residual. The three
+    -- masses are computed over the partition's PARTS, and the parts sum to
+    -- `consolidated_revenue - partition_residual`, not to the total. Requiring the three to
+    -- equal the total on their own would reject every issuer whose filing rounds, which is
+    -- most of them: a real row with a residual of 3,000,000 would be refused by the database
+    -- while being exactly right (review on #807).
+    --
+    -- A violation of the identity below means the producer's arithmetic, not a policy
+    -- choice, so the database refuses the row rather than publishing a share whose parts do
+    -- not add up.
+    check (
+        in_theme_revenue + out_of_theme_revenue + unclassified_revenue + partition_residual
+            = consolidated_revenue
+    )
 );
 
 create index if not exists ix_issuer_theme_purity_ranking

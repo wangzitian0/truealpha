@@ -258,3 +258,80 @@ def test_the_summary_names_what_was_published(connection, seated, monkeypatch) -
     line = summary_line(written)
     assert "published" in line and "0.57" in line
     assert summary_line(()) == "theme purity: no issuer has a segment partition at this cutoff"
+
+
+def test_a_partition_that_rounds_still_lands(connection, seated, monkeypatch) -> None:
+    """The defect this pins: the plane's accounting check required the three masses to equal
+    the consolidated total on their own. They are computed over the partition's PARTS, and
+    the parts sum to `total - partition_residual` — so a filing that rounds (most of them)
+    would have had a correct row REFUSED by the database, with the failure surfacing as a
+    constraint violation in a weekly job rather than as anything a reader could act on
+    (review on #807).
+
+    3,000,000 short on 63,887,000,000: well inside the extraction's tolerance, and the share
+    is unchanged because the denominator was never the parts.
+    """
+    residual = Decimal("3000000")
+    short = (("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27026000000")))
+    _seed(connection, segments=short, residual=str(residual), partition="segment-partition:" + "e" * 64)
+    monkeypatch.setattr(
+        llm,
+        "_gateway_transport",
+        _answers(
+            [
+                {"index": 0, "in_theme": True, "reason": "accelerators"},
+                {"index": 1, "in_theme": False, "reason": "enterprise software"},
+            ]
+        ),
+    )
+    materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+    rows = connection.execute(
+        """
+        select theme_share, consolidated_revenue, in_theme_revenue, out_of_theme_revenue,
+               unclassified_revenue, partition_residual
+        from mart.issuer_theme_purity where run_id = %s and cik = %s
+        """,
+        (RUN_ID, CIK),
+    ).fetchall()
+    assert len(rows) == 1, "the row landed rather than being refused by the check"
+    share, total, in_theme, out_of_theme, unclassified, stored_residual = rows[0]
+    assert in_theme + out_of_theme + unclassified + stored_residual == total, "the identity the check enforces"
+    assert in_theme + out_of_theme + unclassified != total, "and it is NOT the identity without the residual"
+    assert share == Decimal("36858000000") / TOTAL, "the share is over the total, so rounding does not move it"
+
+
+def test_a_rerun_refreshes_provenance_not_just_the_numbers(connection, seated, monkeypatch) -> None:
+    """A re-run that sees a newer partition at the same cutoff must not leave a share from
+    one extraction beside the partition_id of another — a row that reads as re-checkable and
+    is not."""
+    _seed(connection)
+    monkeypatch.setattr(
+        llm,
+        "_gateway_transport",
+        _answers(
+            [
+                {"index": 0, "in_theme": True, "reason": "a"},
+                {"index": 1, "in_theme": False, "reason": "b"},
+            ]
+        ),
+    )
+    materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+
+    later = "segment-partition:" + "f" * 64
+    _seed(
+        connection,
+        segments=(
+            ("Semiconductor solutions", Decimal("40000000000")),
+            ("Infrastructure software", Decimal("23887000000")),
+        ),
+        partition=later,
+        knowable=datetime(2026, 1, 15, tzinfo=UTC),
+    )
+    materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+
+    partition_id, in_theme = connection.execute(
+        "select partition_id, in_theme_revenue from mart.issuer_theme_purity where run_id = %s and cik = %s",
+        (RUN_ID, CIK),
+    ).fetchone()
+    assert partition_id == later, "the row names the partition its numbers came from"
+    assert in_theme == Decimal("40000000000"), "and the numbers are that partition's"
