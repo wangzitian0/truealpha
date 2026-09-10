@@ -668,8 +668,9 @@ def _no_candidate_detail(text: str, *, has_oracle: bool = True) -> str:
     when the fault was in the row pattern — its numbers carry a decimal ("14,831.4") and the
     row regex could not read one.
 
-    Collapsing two problems into one refusal string is the thing this module keeps being
-    caught by. Three states, three sentences.
+    Collapsing problems with different owners into one refusal string is the thing this
+    module keeps being caught by — twice in one day, and the second time in the comment
+    describing the first. Four states, four sentences.
     """
     if not has_oracle and single_segment_statement(text) is not None:
         return (
