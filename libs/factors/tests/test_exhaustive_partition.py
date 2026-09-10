@@ -107,6 +107,26 @@ def test_a_proposed_subset_is_still_judged_by_the_identity() -> None:
     )
 
 
+def test_a_proposal_naming_a_part_recall_never_found_is_refused_not_raised() -> None:
+    """A `Partitioner` is implemented outside this library, so a bad proposal is INPUT to be
+    judged — not a programmer error to crash on. An `IndexError` here would break the
+    contract the other refusals establish: callers branch on the return type alone
+    (review on #803).
+
+    Negative indices matter too: Python would silently accept `-1` as "the last candidate",
+    turning a malformed proposal into a plausible-looking partition.
+    """
+    candidates = parts("60", "40")
+    assert (
+        select_exhaustive_partition(candidates, total=Decimal("100"), tolerance=TOL, indices=[0, 5])
+        is PartitionRefusal.INDEX_OUT_OF_RANGE
+    )
+    assert (
+        select_exhaustive_partition(candidates, total=Decimal("100"), tolerance=TOL, indices=[-1])
+        is PartitionRefusal.INDEX_OUT_OF_RANGE
+    )
+
+
 def test_a_subset_that_happens_to_balance_is_accepted_with_its_own_indices() -> None:
     """The identity is about the parts CHOSEN, not about every candidate recall produced —
     an intersegment-elimination line correctly excluded must not make the set look short."""
@@ -136,7 +156,16 @@ def test_the_partitioner_protocol_is_structural() -> None:
     assert isinstance(_Proposer(), Partitioner)
 
 
-@pytest.mark.parametrize("bad", [PartitionRefusal.SHORT, PartitionRefusal.OVER, PartitionRefusal.NO_CANDIDATES])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        PartitionRefusal.SHORT,
+        PartitionRefusal.OVER,
+        PartitionRefusal.NO_CANDIDATES,
+        PartitionRefusal.NO_TOTAL,
+        PartitionRefusal.INDEX_OUT_OF_RANGE,
+    ],
+)
 def test_a_refusal_is_never_mistaken_for_a_partition(bad) -> None:
     """Callers branch on the type. A refusal that duck-typed as a `Partition` would be
     consumed as an answer."""

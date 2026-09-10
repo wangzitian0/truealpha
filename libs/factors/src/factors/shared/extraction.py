@@ -5,12 +5,7 @@ reimplement extraction per factor." Before #769 this file was a stub (`extract_m
 raised `NotImplementedError`) while the real, production rule — one company-wide filing
 statement is unambiguous, more than one needs a judgement — was built and lived entirely
 inside `apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py`
-(`select_total`, `RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"
-
-#: The set-valued rule (#772): recall found parts that ADD UP to a total measured
-#: elsewhere, so the set is the answer. Same persistence contract as the id above —
-#: it lands in `evidence_ref` and is compared verbatim.
-RULE_EXHAUSTIVE_PARTITION = "rule:exhaustive-partition:v1"`). #70's headcount
+(`select_total`, `RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"`). #70's headcount
 slice became the primitive's first REAL use beside the primitive, not as it — exactly the
 drift AGENTS.md warns about. This module is now that primitive; `filing_extraction.py`
 is its SEC-filing adapter (recall regex -> `Candidate` -> `select_single_candidate`), and
@@ -155,6 +150,11 @@ class PartitionRefusal(StrEnum):
 
     NO_CANDIDATES = "no_candidates"
     NO_TOTAL = "no_total"
+    #: A proposer named a part that recall never found. Typed rather than raised so a
+    #: caller keeps branching on the return type alone — and separate from NO_CANDIDATES
+    #: because the fix is different: recall found things, the proposal points outside them
+    #: (review on #803).
+    INDEX_OUT_OF_RANGE = "index_out_of_range"
     SHORT = "sums_short_of_total"
     OVER = "sums_over_total"
 
@@ -212,10 +212,13 @@ def select_exhaustive_partition(
 
     `indices` selects a subset (what a `Partitioner` proposed); omitted, every candidate is
     a part. Refusals are typed rather than `None`: "recall found nothing", "there is no
-    total to check against", "the parts miss some of the whole" and "the parts exceed it"
-    are four different problems, and a caller that collapses them into one cannot say which
-    happened. Never raises and never guesses — a refused set is a refused set, not a share
-    computed over whatever was found.
+    total to check against", "the parts miss some of the whole", "the parts exceed it" and
+    "the proposal names a part recall never found" are five different problems, and a caller
+    that collapses them into one cannot say which happened. Never raises and never guesses —
+    a refused set is a refused set, not a share computed over whatever was found. An
+    out-of-range index is a refusal rather than an `IndexError` for the same reason the
+    others are: a `Partitioner` is implemented outside this library, so a bad proposal is
+    input to be judged, not a programmer error to crash on.
 
     `tolerance` is absolute and in the total's units; the caller owns it, because what
     counts as a rounding difference is a property of the source's own reporting precision,
@@ -229,6 +232,8 @@ def select_exhaustive_partition(
     chosen = tuple(indices) if indices is not None else tuple(range(len(candidates)))
     if not chosen:
         return PartitionRefusal.NO_CANDIDATES
+    if any(index < 0 or index >= len(candidates) for index in chosen):
+        return PartitionRefusal.INDEX_OUT_OF_RANGE
     # `Candidate.value` is int|float by contract (see its docstring); the sum is taken in
     # Decimal because the ACCEPTANCE is monetary, and str() is what keeps a float's binary
     # representation error out of it.
