@@ -411,3 +411,34 @@ def test_a_refusal_names_which_of_three_things_happened() -> None:
     assert "no row parsed as a segment" in _no_candidate_detail(
         "(in millions) Net revenue by segment: 14,831.4 7,128.1 Total revenue 21,959.5"
     )
+
+
+def test_a_total_never_enters_the_set_as_a_part_named_after_what_it_totals() -> None:
+    """`_NOT_A_SEGMENT` rejects the label `Total Segment Revenues` — and then the row regex
+    matches again from `Segment Revenues`, so the aggregate walks straight back in under the
+    name of the group it totals. ADM's grand total is literally that string.
+
+    A partition holding both the parts and their total sums to twice the truth, which the
+    identity refuses — but the DANGEROUS shape is the one here: a window that begins at the
+    aggregate, whose two 'segments' are `Segment Revenues` and `Other`, and which balances
+    against the issuer's consolidated revenue exactly.
+    """
+    probe = "(in millions) Net revenue by segment: Alpha 100 Beta 200 Total Segment Revenues 300 Other 50"
+    names = [c.segment_name for c in segment_candidates(probe)]
+    assert names == ["Alpha", "Beta", "Other"]
+    assert "Segment Revenues" not in names, "the aggregate is not a part"
+
+
+def test_rejecting_the_window_instead_of_the_row_would_lose_the_table() -> None:
+    """Measured, and it is why the check is on the ROW.
+
+    The same phrase-inside-a-total match is the ANCHOR the backward window uses to find ADM's
+    table at all. Skipping those windows takes ADM from 32 candidates to 6 and loses every
+    real leaf — Crushing 10,353, Refined Products and Other 10,855, Starches and Sweeteners
+    7,982. The table is found BY the total; only the total's own row is not a part.
+    """
+    adm = Path(__file__).resolve().parents[1] / "samples" / "filings" / "ADM_10K_000000708426000011.html"
+    recalled = segment_candidates(filing_plain_text(adm.read_bytes()))
+    stated = {c.stated_value for c in recalled}
+    assert Decimal("10353") in stated and Decimal("10855") in stated, "the leaves survive"
+    assert Decimal("79820") not in stated, "and the grand total does not"
