@@ -47,8 +47,7 @@ def _viewdef(connection) -> str:
 def test_the_view_reads_the_payload_table_for_vintage(connection) -> None:
     definition = _viewdef(connection)
     assert "capture_observation_payloads" in definition, (
-        "the view does not join the payload table, so `vintage` cannot resolve to anything "
-        "but NULL (#530 item 4)"
+        "the view does not join the payload table, so `vintage` cannot resolve to anything but NULL (#530 item 4)"
     )
     assert "normalized_payload -> 'vintage'" in definition, (
         "the vintage must come from the business payload, not the observation envelope"
@@ -71,8 +70,7 @@ def test_the_envelope_carries_no_business_fields(connection) -> None:
     the envelope ever gains business fields this test goes red and the reasoning above needs
     revisiting — which is the point."""
     row = connection.execute(
-        "select payload from staging.capture_normalized_observations "
-        "where semantic_type = 'financial-fact' limit 1"
+        "select payload from staging.capture_normalized_observations where semantic_type = 'financial-fact' limit 1"
     ).fetchone()
     if row is None:
         pytest.skip("no financial-fact observation in this database")
