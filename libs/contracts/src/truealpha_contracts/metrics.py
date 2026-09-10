@@ -26,7 +26,7 @@ from truealpha_contracts.models import DataSource
 # Bump on ANY semantic registry change (priority reorder, metric add/remove,
 # unit redefinition). Mart rows carry this so a number stays explainable after
 # the rules move on: mart lineage is (staging_ref, fusion_version).
-FUSION_RULESET_VERSION = 1
+FUSION_RULESET_VERSION = 2
 
 
 class UnitFamily(StrEnum):
@@ -75,6 +75,26 @@ _SPECS = (
         unit_family=UnitFamily.CURRENCY,
         source_priority=(DataSource.SEC, DataSource.MOOMOO, DataSource.TWELVE_DATA, DataSource.YAHOO),
         description="Total revenue for the fiscal period.",
+    ),
+    MetricSpec(
+        name="segment_revenue",
+        unit_family=UnitFamily.CURRENCY,
+        # SEC only, and deliberately not the same list as `revenue`. companyfacts publishes
+        # no segment axis — measured 2026-09-09 on the packaged ADM sample: every fact entry's
+        # keys are exactly accn/end/filed/form/fp/frame/fy/start/val, and
+        # SegmentReportingInformationRevenueFromExternalCustomers appears as ONE undimensioned
+        # row per period whose value equals consolidated Revenues. So this metric's rows come
+        # from the filing's segment note through the shared extraction primitive, and a vendor
+        # that cannot express a segment must not be listed as if it could (#772).
+        source_priority=(DataSource.SEC,),
+        description=(
+            "Revenue attributed to one reportable segment for the fiscal period. One issuer "
+            "yields MANY rows — the segment name is part of the row's identity, not of the "
+            "metric name — and the rows are admissible only as a set that accounts for the "
+            "issuer's consolidated revenue — the set-valued rule in "
+            "factors.shared.extraction owns that identifier and this description does not "
+            "restate it (#772, #782's ownership guard)."
+        ),
     ),
     MetricSpec(
         name="gross_profit",
