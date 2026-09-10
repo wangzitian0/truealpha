@@ -389,3 +389,25 @@ def test_a_percentage_table_cannot_be_accepted_by_an_issuer_whose_revenue_happen
     )
     assert isinstance(would_have, Partition), "and it WOULD have balanced — which is why the guard is not optional"
     assert would_have.residual == 0
+
+
+def test_a_refusal_names_which_of_three_things_happened() -> None:
+    """The message is the only thing the next reader gets, and it has to point at the right
+    half of the problem.
+
+    A fourth state appeared the moment a table could inherit the filing's scale, and it was
+    reported as the first: ADP matches six headings and parses no rows from them, and the
+    deployed run said "no segment table matched". That sends someone to the heading pattern
+    when the fault is in the ROW pattern — ADP's numbers carry a decimal ("14,831.4"), which
+    the row regex could not read.
+
+    Collapsing two problems into one refusal string is the failure this module keeps being
+    caught by. Three states, three sentences.
+    """
+    from data_engine.datahub.standards.segment_extraction import _no_candidate_detail
+
+    assert _no_candidate_detail("a filing with nothing of interest") == ("no segment table matched in the filing text")
+    assert "state no scale" in _no_candidate_detail("Net revenue by segment: Alpha 10 Beta 20 Total 30")
+    assert "no row parsed as a segment" in _no_candidate_detail(
+        "(in millions) Net revenue by segment: 14,831.4 7,128.1 Total revenue 21,959.5"
+    )

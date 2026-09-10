@@ -618,6 +618,27 @@ def _single_segment_outcome(
     )
 
 
+def _no_candidate_detail(text: str) -> str:
+    """Which of THREE things happened, because they have three different owners.
+
+    A fourth state appeared the moment a table could inherit the filing's scale, and it was
+    reported as the first: ADP matches six headings and parses no rows from them, and the
+    message said "no segment table matched". That sent the next reader to the heading pattern
+    when the fault was in the row pattern — its numbers carry a decimal ("14,831.4") and the
+    row regex could not read one.
+
+    Collapsing two problems into one refusal string is the thing this module keeps being
+    caught by. Three states, three sentences.
+    """
+    found = len(_windows(text))
+    if not found:
+        return "no segment table matched in the filing text"
+    unitless = unitless_windows(text)
+    if unitless:
+        return f"{unitless} segment table(s) state no scale, so no part could be compared"
+    return f"{found} segment table(s) matched but no row parsed as a segment"
+
+
 def extract_segment_revenue(
     cik: int,
     *,
@@ -700,18 +721,13 @@ def extract_segment_revenue(
     # already known to be unused (review on #808).
     recalled = segment_candidates(text)
     if not recalled:
-        skipped = unitless_windows(text)
         return ExtractionOutcome(
             cik,
             "no_candidate",
             accession=document.accession,
             form=document.form,
             filing_date=document.filing_date,
-            detail=(
-                f"{skipped} segment table(s) state no scale, so no part could be compared"
-                if skipped
-                else "no segment table matched in the filing text"
-            ),
+            detail=_no_candidate_detail(text),
         )
 
     candidates = as_candidates(recalled)
