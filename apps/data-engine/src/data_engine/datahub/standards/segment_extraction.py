@@ -57,19 +57,28 @@ from data_engine.datahub.standards.filing_extraction import (
 from data_engine.sources.gateway import CapacityExceeded
 
 #: The sentence that introduces a segment revenue table. Every phrasing seen in the packaged
-#: filings; a heading this misses costs a `no_candidates` refusal, never a wrong number.
+#: filings AND in the ones the deployed run refused; a heading this misses costs a
+#: `no_candidates` refusal, never a wrong number.
+#:
+#: `sales` is here because the word is not always "revenue": Apple writes "net sales by
+#: reportable segment for 2025, 2024 and 2023 (dollars in millions)" and Costco reports
+#: segment "revenue" under a sentence this still does not match. Measured on the filings the
+#: staging run refused, not invented — 15 of 25 issuers refused with "no segment table
+#: matched", which is a statement about this pattern and not about the filings.
 _TABLE_HEADING = re.compile(
-    r"(?:net\s+)?revenue\s+by\s+(?:reportable\s+)?segment"
-    r"|segment\s+(?:net\s+)?revenue"
-    r"|revenues?\s+from\s+external\s+customers\s+by\s+(?:reportable\s+)?segment",
+    r"(?:net\s+)?(?:revenue|sales)\s+by\s+(?:reportable\s+|operating\s+)?segment"
+    r"|segment\s+(?:net\s+)?(?:revenue|sales)"
+    r"|(?:revenues?|net\s+sales)\s+from\s+external\s+customers\s+by\s+(?:reportable\s+)?segment",
     re.IGNORECASE,
 )
 
-#: One table row: a label followed by its first numeric column. The SECOND column is
-#: deliberately not read — it is the prior fiscal year, and mixing the years is the trap that
+#: One table row: a label followed by its first numeric column, DECIMALS INCLUDED. Without
+#: the decimal, ADP is invisible: it reports millions to one place ("segment revenues 14,831.4
+#: 7,128.1 21,959.5"), so every row of its segment table failed to match and six located
+#: tables produced nothing. The SECOND column is deliberately not read — it is the prior fiscal year, and mixing the years is the trap that
 #: makes a partition sum to neither. Which column belongs to which year is stated in the
 #: header the window starts with, so the first is this year's by position within the window.
-_ROW = re.compile(r"([A-Z][A-Za-z&/,\.\-' ]{3,60}?)\s+\$?\s*([\d,]{2,15})(?:\s|$)")
+_ROW = re.compile(r"([A-Z][A-Za-z&/,\.\-' ]{3,60}?)\s+\$?\s*([\d,]{2,15}(?:\.\d+)?)(?:\s|$)")
 
 #: A window wide enough for a two-to-six segment table plus its header. An upper bound only
 #: — the window really ends at the table's total row, below.
@@ -96,7 +105,29 @@ _TABLE_END = re.compile(r"\btotal\b[^\n]{0,40}?[\d,]{2,15}", re.IGNORECASE)
 #: it balances, which it cannot. A window that does not state its units is skipped, and
 #: `unitless_windows` counts it so the refusal says so instead of claiming recall found
 #: nothing.
-_UNITS = re.compile(r"\(\s*in\s+(thousands|millions|billions)\b", re.IGNORECASE)
+#: Every shape the packaged corpus actually uses, measured rather than guessed:
+#: `(In millions, except percentages)`, `(dollars in millions)`, `(in US $ millions, except
+#: share and per share amounts)`, `(in thousands)`. The first version required `(` to be
+#: followed immediately by `in`, and SHOP writes `(in US $ millions)` — so the filing read as
+#: declaring no scale ANYWHERE, and a test of mine asserted that as a property of the
+#: DOCUMENT when it was a property of this regex. Widening it takes SHOP from nothing to
+#: millions x70 and changes no other filing's dominant answer.
+_UNITS = re.compile(
+    r"\(\s*(?:[^()]{0,40}?\b)?in\s+(?:U\.?S\.?\s*\$\s*|\$\s*)?(thousands|millions|billions)\b",
+    re.IGNORECASE,
+)
+#: A table that says it is stated in percentages. Not cleverness about which table is right
+#: — the same document-stated fact the units are, read for the same reason.
+#:
+#: This became load-bearing when a table could inherit the FILING's scale: AVGO restates its
+#: segments as `58 / 42` under `(As a percentage of net revenue)`, and 58 + 42 inherited as
+#: millions is 100,000,000. Against the issuer this is harmless — 100M is nowhere near
+#: 63,887M — but an issuer whose consolidated revenue happens to be about $100 million would
+#: have had its PERCENTAGE table accepted as its segment revenues, balanced to the cent. A
+#: plausible-looking wrong answer is the one failure this module is built to make impossible,
+#: so the percentage table is excluded by what it says about itself.
+_PERCENTAGE_TABLE = re.compile(r"\(\s*(?:as\s+a\s+)?percentages?\b|\bas\s+a\s+percentage\s+of\b", re.IGNORECASE)
+
 _MULTIPLIERS = {
     "thousands": Decimal("1000"),
     "millions": Decimal("1000000"),
@@ -108,6 +139,11 @@ _MULTIPLIERS = {
 #: table; a month name is a header date fragment the row pattern picks up.
 _NOT_A_SEGMENT = re.compile(
     r"^total\b"
+    # Column headers, whose "value" is a year. Measured on Apple: its table is headed
+    # `... 2025 Change 2024 Change 2023`, and reading `Change 2024` as a 2,024-unit segment
+    # put two junk parts in the set — the five real geographies sum to the consolidated
+    # revenue exactly, and did not balance until these were out.
+    r"|^(?:change|fiscal|year|period|quarter)\b"
     r"|^(?:january|february|march|april|may|june|july|august|september|october|november|december)\b"
     r"|\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b",
     re.IGNORECASE,
@@ -191,6 +227,9 @@ def segment_candidates(text: str) -> list[SegmentCandidate]:
     found: list[SegmentCandidate] = []
     inherited = filing_scale(text)
     for start, window in _windows(text):
+        if _PERCENTAGE_TABLE.search(window):
+            # The table states it holds percentages. Nothing here is a revenue.
+            continue
         units = _UNITS.search(window)
         if units is not None:
             multiplier, scale_source = _MULTIPLIERS[units.group(1).lower()], "table"
@@ -227,6 +266,17 @@ def segment_candidates(text: str) -> list[SegmentCandidate]:
 #: How far back to look for a units caption when the forward window has none. Measured, not
 #: guessed: ADM's caption sits ~700 characters before the phrase this module matches on.
 _LOOKBACK = 900
+
+
+def _rows_in(window: str) -> int:
+    """How many segment-looking rows a span holds. The window's direction is chosen by this
+    rather than by where a units caption sits, because a caption is optional and the rows
+    are the thing being looked for."""
+    return sum(
+        1
+        for row in _ROW.finditer(window)
+        if not _NOT_A_SEGMENT.search(row.group(1).strip()) and len(row.group(1).split()) <= 6
+    )
 
 
 def filing_scale(text: str) -> Decimal | None:
@@ -278,17 +328,22 @@ def _windows(text: str) -> list[tuple[int, str]]:
         end = _TABLE_END.search(forward)
         if end:
             forward = forward[: end.start()]
-        if _UNITS.search(forward):
-            windows.append((heading.start(), forward))
-            continue
-        # Nothing forward states a scale. The caption may be behind the match — take the
-        # NEAREST preceding one, never an earlier table's.
+        # The caption may be behind the match — take the NEAREST preceding one, never an
+        # earlier table's; without one, the whole look-back span is the candidate.
         back_start = max(0, heading.start() - _LOOKBACK)
         behind = text[back_start : heading.start()]
         captions = list(_UNITS.finditer(behind))
-        if captions:
-            caption = captions[-1]
-            windows.append((back_start + caption.start(), behind[caption.start() :]))
+        backward = behind[captions[-1].start() :] if captions else behind
+        backward_start = back_start + (captions[-1].start() if captions else 0)
+
+        if _UNITS.search(forward) and _rows_in(forward):
+            windows.append((heading.start(), forward))
+        elif _rows_in(backward) > _rows_in(forward):
+            # The direction follows the ROWS, not the caption. ADP states no scale in either
+            # direction, so a caption-driven choice sent it forward — into the half of the
+            # table with nothing in it. A match that lands on a table's TOTAL row has
+            # everything worth reading behind it, whether or not a caption is there too.
+            windows.append((backward_start, backward))
         else:
             windows.append((heading.start(), forward))
     return windows
