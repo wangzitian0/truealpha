@@ -82,3 +82,41 @@ def test_an_unknown_standard_fails_at_the_run_rather_than_silently_doing_nothing
 
     with pytest.raises(ValueError, match="unknown standard"):
         standards_to_run("employees")
+
+
+def test_each_op_body_actually_runs(monkeypatch) -> None:
+    """The gap this closes: `run_theme_purity` imported a module that does not exist
+    (`production_topt.governed_read`; `governed_head` lives in `question_coverage`). Every
+    test above asserted the lane's SHAPE — the ops, their order, their config — and none of
+    them executed a body, so a `ModuleNotFoundError` would have waited until Sunday 09:07 UTC
+    to appear. mypy caught it; this is the check that catches the next one.
+
+    The no-governed-head branch is the one to drive: it reaches every import and every
+    settings read in the body, touches the database only to ask for a head, and returns
+    without writing — so it needs no fixture beyond a connection that answers nothing.
+    """
+    import json as _json
+
+    import psycopg
+    from data_engine.lanes.standards import run_theme_purity
+
+    class _NoHead:
+        def execute(self, *_a, **_k):
+            return self
+
+        def fetchone(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    from data_engine.lanes.standards import StandardBackfillConfig
+
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _NoHead())
+    context = dg.build_op_context()
+    config = StandardBackfillConfig(executed_at="2026-09-13T09:07:00+00:00", universe="topt")
+    out = _json.loads(run_theme_purity(context, config, "{}"))
+    assert out == {"universe": "topt", "rows": 0, "reason": "no_governed_head"}

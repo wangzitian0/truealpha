@@ -101,8 +101,8 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     filings replays (§9). A restated segment set is a new filing and is asked afresh, which
     is the behaviour you want.
     """
-    from data_engine.datahub.production_topt.governed_read import governed_head
     from data_engine.datahub.production_topt.theme_purity import materialize_theme_purity, summary_line
+    from data_engine.datahub.question_coverage import governed_head
 
     context.log.info("theme purity follows backfill: %s", backfill_summary[:200])
     # The cutoff is the governed HEAD's, not `config.executed_at`: these rows describe the
