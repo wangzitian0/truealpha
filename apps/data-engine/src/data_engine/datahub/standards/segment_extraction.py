@@ -80,6 +80,19 @@ _TABLE_HEADING = re.compile(
 #: header the window starts with, so the first is this year's by position within the window.
 _ROW = re.compile(r"([A-Z][A-Za-z&/,\.\-' ]{3,60}?)\s+\$?\s*([\d,]{2,15}(?:\.\d+)?)(?:\s|$)")
 
+#: A row label that is really the TAIL of a total. `_NOT_A_SEGMENT` rejects `Total Segment
+#: Revenues`, and then the row regex matches again from `Segment Revenues` — so the aggregate
+#: enters the set as a part named after the group it totals. Measured on ADM, whose grand
+#: total is literally "Total Segment Revenues 79,820".
+#:
+#: Checked against the text BEFORE the label rather than the label itself, which is the only
+#: place the word survives. Rejecting the whole WINDOW instead was tried and measured: it
+#: takes ADM from 32 candidates to 6 and loses every real leaf (Crushing 10,353, Refined
+#: Products and Other 10,855, Starches and Sweeteners 7,982 ...), because that same match is
+#: the anchor the backward window uses to find the table at all. The row is the thing to
+#: reject; the window is not.
+_TAIL_OF_A_TOTAL = re.compile(r"\btotal\s+(?:\w+\s+){0,2}$", re.IGNORECASE)
+
 #: A window wide enough for a two-to-six segment table plus its header. An upper bound only
 #: — the window really ends at the table's total row, below.
 _WINDOW = 700
@@ -244,6 +257,12 @@ def segment_candidates(text: str) -> list[SegmentCandidate]:
             name = row.group(1).strip()
             if _NOT_A_SEGMENT.search(name) or len(name.split()) > 6:
                 continue
+            # Against the FULL text, not the window: when the phrase matched inside the total
+            # itself the window BEGINS at the aggregate's name, so the word "Total" is behind
+            # the window's own start and a window-local look-back sees nothing.
+            at = start + row.start(1)
+            if _TAIL_OF_A_TOTAL.search(text[max(0, at - 12) : at]):
+                continue
             stated = Decimal(row.group(2).replace(",", ""))
             key = (name, stated)
             if key in seen:
@@ -270,12 +289,26 @@ _LOOKBACK = 900
 
 def _rows_in(window: str) -> int:
     """How many segment-looking rows a span holds. The window's direction is chosen by this
-    rather than by where a units caption sits, because a caption is optional and the rows
-    are the thing being looked for."""
+    rather than by where a units caption sits, because a caption is optional and the rows are
+    the thing being looked for.
+
+    Applies the same three filters `segment_candidates` does — not a segment label, at most six
+    words, not the tail of a total — so the two cannot disagree about what a row is.
+
+    It differs in ONE way, and only because it can: the total-tail check here reads the
+    WINDOW, while `segment_candidates` reads the full text. A tail whose "Total" sits before
+    the window's own start is therefore counted here and rejected there. That is harmless for
+    what this is used for — comparing two spans of the same document to pick a direction —
+    and it is stated rather than left for someone to find, because the two filters looking
+    identical while behaving differently is exactly the kind of drift this module keeps
+    paying for.
+    """
     return sum(
         1
         for row in _ROW.finditer(window)
-        if not _NOT_A_SEGMENT.search(row.group(1).strip()) and len(row.group(1).split()) <= 6
+        if not _NOT_A_SEGMENT.search(row.group(1).strip())
+        and len(row.group(1).split()) <= 6
+        and not _TAIL_OF_A_TOTAL.search(window[max(0, row.start(1) - 12) : row.start(1)])
     )
 
 

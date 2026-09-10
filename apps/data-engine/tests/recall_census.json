@@ -1,9 +1,28 @@
 {
   "_comment": "Per-filing recall census over apps/data-engine/samples/filings. Committed so a change to the extraction patterns shows WHICH filings it moved, in the diff, rather than being described as general because it scored on the one it was developed against. A drop counts as much as a gain. Regenerate with: uv run python tools/write_recall_census.py",
   "filings": {
+    "AAPL_10K_000032019325000079.html": {
+      "windows": 2,
+      "candidates": 6,
+      "filing_scale": "1000000",
+      "accepted_partitions": [
+        [
+          "Americas",
+          "Europe",
+          "Greater China",
+          "Japan",
+          "Rest of Asia Pacific"
+        ]
+      ]
+    },
     "ADM_10K_000000708426000011.html": {
       "windows": 18,
       "candidates": 32,
+      "filing_scale": "1000000"
+    },
+    "ADP_10K_000000867026000030.html": {
+      "windows": 6,
+      "candidates": 18,
       "filing_scale": "1000000"
     },
     "AVGO_10K_000173016825000121.html": {

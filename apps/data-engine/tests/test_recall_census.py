@@ -49,7 +49,10 @@ FILINGS = REPO_ROOT / "apps" / "data-engine" / "samples" / "filings"
 CENSUS = Path(__file__).with_name("recall_census.json")
 #: Mirrors tools/write_recall_census.py. Kept here rather than imported so the test does not
 #: depend on the generator it is checking.
-TOTALS = {"AVGO_10K_000173016825000121.html": "63887000000"}
+TOTALS = {
+    "AVGO_10K_000173016825000121.html": "63887000000",
+    "AAPL_10K_000032019325000079.html": "416161000000",
+}
 
 
 def _measure(path: Path) -> dict:
@@ -110,12 +113,37 @@ def test_recall_on_every_filing_matches_the_committed_census(committed) -> None:
     )
 
 
-def test_the_one_filing_with_a_known_oracle_still_balances(committed) -> None:
-    """Coverage can move for many reasons; this cannot move quietly. AVGO's two segments are
-    the only accepted partition in the corpus, and they are checked against the consolidated
-    revenue the capture plane actually holds."""
+def test_the_filings_with_a_known_oracle_still_balance(committed) -> None:
+    """Coverage can move for many reasons; an acceptance cannot move quietly.
+
+    Both are checked against the consolidated revenue the capture plane actually holds, and
+    AAPL is the one that matters most: it is a filing the DEPLOYED run meets, its five
+    geographies balance to the cent, and it refused for a day while three separate causes
+    were mistaken for one.
+    """
     avgo = committed["AVGO_10K_000173016825000121.html"]
     assert avgo["accepted_partitions"] == [["Semiconductor solutions", "Infrastructure software"]]
+
+    aapl = committed["AAPL_10K_000032019325000079.html"]
+    assert aapl["accepted_partitions"] == [["Americas", "Europe", "Greater China", "Japan", "Rest of Asia Pacific"]]
+
+
+def test_the_corpus_holds_filings_the_deployed_run_actually_meets(committed) -> None:
+    """The census's own blind spot, closed and pinned.
+
+    For a day it held ADM, JPM, NICE, PLUG and SHOP — **none of them in the universe the
+    standards lane walks**. So it could catch a regression and could not measure progress: a
+    change could move every packaged filing and nothing the deployed run refuses. AAPL and ADP
+    are in that universe, and their behaviour was measured through the deployed gateway
+    before either was packaged.
+    """
+    assert "AAPL_10K_000032019325000079.html" in committed
+    assert "ADP_10K_000000867026000030.html" in committed
+    adp = committed["ADP_10K_000000867026000030.html"]
+    assert adp["candidates"] > 0, (
+        "ADP produced zero candidates from six located tables until its rows were read with a "
+        "decimal; a regression there is invisible without it in the corpus"
+    )
 
 
 def test_a_filing_with_no_table_is_recorded_as_zero_rather_than_omitted(committed) -> None:
