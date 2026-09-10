@@ -16,7 +16,6 @@ from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
-from data_engine.datahub.production_topt.headcount import HEADCOUNT_SOURCE_PRIORITY
 from data_engine.datahub.production_topt.universe_corpus import load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 
@@ -94,6 +93,7 @@ def open_cells(
     if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ValueError("cutoff must be timezone-aware")
     stale_before = cutoff - timedelta(days=standard.max_age_days)
+    plane = standard.plane
     cells: list[OpenCell] = []
     for issuer in issuers:
         if issuer.cik is None:
@@ -103,15 +103,23 @@ def open_cells(
         # priority first, recency second): a cited extraction with an older filing date
         # outranks a later-stamped seed, so the cell is closed, not refetched (review on
         # #740).
+        #
+        # The plane and its priority come from the STANDARD (#799). They were
+        # `staging.issuer_headcount_facts` and `HEADCOUNT_SOURCE_PRIORITY` in this file,
+        # which meant a second standard planned against headcount facts under its own name
+        # — this function took a `MetricStandard` and used it for two fields while reading
+        # one hardcoded table. The identifiers are interpolated because they are code (a
+        # `FactPlane` is declared in `STANDARDS`, not supplied by a caller); the values
+        # stay parameterised.
         row = connection.execute(
-            """
+            f"""
             select source, knowable_at
-            from staging.issuer_headcount_facts
-            where cik = %s and knowable_at <= %s
+            from {plane.table}
+            where {plane.issuer_column} = %s and knowable_at <= %s
             order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
             limit 1
-            """,
-            (issuer.cik, cutoff, list(HEADCOUNT_SOURCE_PRIORITY)),
+            """,  # noqa: S608 - identifiers come from the standard's declared plane, not input
+            (issuer.cik, cutoff, list(plane.source_priority)),
         ).fetchone()
         if row is None:
             cells.append(OpenCell(issuer, "no_fact", None, None))

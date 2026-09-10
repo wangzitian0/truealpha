@@ -17,12 +17,13 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from importlib import import_module
 from typing import Any, Literal
 
 from truealpha_contracts.ports import RawObjectStore
 from truealpha_contracts.standards import STANDARDS, EvidenceRequirement, MetricStandard
 
-from data_engine.datahub.standards.filing_extraction import ExtractionOutcome, extract_headcount
+from data_engine.datahub.standards.filing_extraction import ExtractionOutcome
 from data_engine.datahub.standards.planner import (
     OpenCell,
     open_cells,
@@ -123,9 +124,23 @@ def _resolve(
 ) -> ExtractionOutcome:
     if cell.issuer.cik is None:
         return ExtractionOutcome(0, "error", detail="issuer has no CIK in the universe plane or the SEC crosswalk")
+    # The adapter comes from the STANDARD (#799). This dispatched on `evidence` alone and
+    # then called `extract_headcount`, so EVERY `FILING_SPAN` standard extracted headcount
+    # whatever it declared — the loop was generic in signature and headcount-only in fact.
+    #
+    # Evidence is still gated because this backfill only knows how to drive a filing-span
+    # adapter (it opens an SEC client and passes a cutoff). The standard HAS an adapter; what
+    # is missing is this runner's support for the evidence class — the message says so rather
+    # than blaming the standard for a field it declared (review on #800).
     if standard.evidence is not EvidenceRequirement.FILING_SPAN:
-        return ExtractionOutcome(cell.issuer.cik, "error", detail=f"no adapter for evidence {standard.evidence}")
-    outcome = extract_headcount(
+        return ExtractionOutcome(
+            cell.issuer.cik,
+            "error",
+            detail=f"standard backfill drives {EvidenceRequirement.FILING_SPAN.value} adapters only, "
+            f"not {standard.evidence.value}",
+        )
+    extract = _adapter(standard)
+    outcome = extract(
         cell.issuer.cik,
         connection=connection,
         http=http,
@@ -139,7 +154,7 @@ def _resolve(
     if outcome.status == "no_annual_filing" and cell.issuer.predecessor_cik is not None:
         # #496: the same fallback the daily tick applies — the holdco's filings still
         # live under the predecessor; the fact is recorded under the issuer's current CIK.
-        outcome = extract_headcount(
+        outcome = extract(
             cell.issuer.predecessor_cik,
             connection=connection,
             http=http,
@@ -152,6 +167,31 @@ def _resolve(
             issuer_label=f"{cell.issuer.ticker} ({cell.issuer.issuer_id})",
         )
     return outcome
+
+
+def _adapter(standard: MetricStandard) -> Callable[..., ExtractionOutcome]:
+    """Resolve the standard's declared `module:function` adapter.
+
+    Resolved per call rather than cached: a standard is code, the module set is small, and
+    an import error must name the standard that asked for it rather than surfacing at
+    process start for a standard nobody ran.
+    """
+    module_name, _, attribute = standard.adapter.partition(":")
+    try:
+        resolved = getattr(import_module(module_name), attribute)
+    except (ImportError, AttributeError) as error:
+        raise LookupError(
+            f"standard {standard.metric!r} declares adapter {standard.adapter!r}, which does not resolve"
+        ) from error
+    # A name that resolves to a constant or a class would otherwise crash at CALL time with
+    # a bare TypeError, losing the one piece of context worth having — which standard asked
+    # for it (review on #800).
+    if not callable(resolved):
+        raise LookupError(
+            f"standard {standard.metric!r} declares adapter {standard.adapter!r}, "
+            f"which resolves to {type(resolved).__name__}, not a callable"
+        )
+    return resolved
 
 
 def _cell_record(cell: OpenCell, outcome: ExtractionOutcome) -> dict[str, Any]:
