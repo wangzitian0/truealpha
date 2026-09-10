@@ -26,8 +26,10 @@ import pytest
 from data_engine.datahub.standards.filing_extraction import filing_plain_text
 from data_engine.datahub.standards.segment_extraction import (
     SEGMENT_TOLERANCE,
+    _windows,
     as_candidates,
     segment_candidates,
+    single_segment_statement,
     unitless_windows,
     windows_of,
 )
@@ -54,6 +56,24 @@ def text() -> str:
 @pytest.fixture(scope="module")
 def recalled(text):
     return segment_candidates(text)
+
+
+#: The BACKWARD-window case, and it is a different filing on purpose. ADM's total row is
+#: itself called "Segment Revenues 79,820 85,099", so the phrase this module matches on lands
+#: on the table's LAST line and everything it wants is behind the match. A forward-only window
+#: found six headings on this filing and produced zero candidates.
+ADM = Path(__file__).resolve().parents[1] / "samples" / "filings" / "ADM_10K_000000708426000011.html"
+
+
+@pytest.fixture(scope="module")
+def adm_text() -> str:
+    assert ADM.exists(), f"packaged filing missing: {ADM}"
+    return filing_plain_text(ADM.read_bytes())
+
+
+@pytest.fixture(scope="module")
+def adm_recalled(adm_text):
+    return segment_candidates(adm_text)
 
 
 def _verdicts(recalled):
@@ -101,29 +121,31 @@ def test_the_parts_are_scaled_into_the_oracle_s_units(recalled) -> None:
     assert semis.value / CONSOLIDATED < 1
 
 
-def test_a_table_that_states_no_scale_is_not_recalled_as_revenue(recalled, text) -> None:
+def test_a_percentage_restatement_is_never_recalled_as_revenue(recalled) -> None:
     """AVGO restates the same two segments as percentages (58 / 42) under a heading this
     module matches. 58 is not a small revenue — it is a number in a unit the identity has no
     way to compare, and reading it as dollars is how a percentage becomes a part.
 
-    This is the ONE thing excluded before the identity sees it, and it is not a judgement
-    about which table is right: the exclusion is that the document never stated a scale.
+    The MECHANISM changed when the window learned to look backwards for a scale: that window
+    now resolves to the amounts table's own caption span rather than being set aside as
+    unitless. The property is what matters and it is unchanged — those two numbers never
+    become parts — so it is asserted on the numbers rather than on the reason.
     """
-    assert unitless_windows(text) >= 1, "the percentage restatement is found and set aside"
-    assert Decimal("58") not in {c.stated_value for c in recalled}
-    assert Decimal("42") not in {c.stated_value for c in recalled}
+    values = {c.stated_value for c in recalled}
+    assert Decimal("58") not in values and Decimal("42") not in values
+    assert Decimal("36858") in values, "while the amounts under the same heading are read"
 
 
-def test_a_skipped_window_is_counted_rather_than_forgotten(text, recalled) -> None:
+def test_a_table_whose_scale_is_stated_nowhere_is_counted_rather_than_forgotten(adm_text) -> None:
     """ "No segment table matched" and "the table states no scale" have different fixes — a
     heading pattern vs. a caption pattern — so the adapter reports which one happened rather
     than collapsing both into "found nothing".
 
-    Both paths must be live on this filing, or the distinction is untested: at least one
-    window was set aside for stating no scale, AND at least one was read.
+    Driven by ADM, where both paths are live on one filing: six headings, four of which
+    resolve to a scale in one direction or the other, and two that state one nowhere.
     """
-    assert unitless_windows(text) >= 1
-    assert recalled, "the scaled windows still produced candidates"
+    assert unitless_windows(adm_text) >= 1, "some window states its scale nowhere"
+    assert unitless_windows(adm_text) < len(_windows(adm_text)), "and some window does state it"
 
 
 def test_every_other_window_is_refused_rather_than_filtered(recalled) -> None:
@@ -170,3 +192,58 @@ def test_a_segment_is_never_recalled_twice_with_the_same_value(recalled) -> None
     swept more than once. One segment stated twice double-counts into every share."""
     pairs = [(c.segment_name, c.stated_value) for c in recalled]
     assert len(pairs) == len(set(pairs))
+
+
+def test_the_window_reaches_backwards_when_the_match_is_the_total_row(adm_recalled) -> None:
+    """ADM's segment table is found only by looking behind the match. Before that, this
+    filing produced six heading matches and zero candidates — six tables located and thrown
+    away, because the `(in millions)` caption sits before the phrase, not after it."""
+    names = {c.segment_name for c in adm_recalled}
+    assert adm_recalled, "the backward window recovers the rows"
+    assert "Crushing" in names and "Vantage Corn Processors" in names
+    assert all(c.multiplier == MILLIONS for c in adm_recalled), "scaled by the caption behind them"
+
+
+def test_adm_still_refuses_because_its_table_is_nested(adm_recalled) -> None:
+    """Recovering the rows is not the same as answering. ADM reports sub-segments under
+    sub-totals ("Total Ag Services and Oilseeds"), and this module's flat model cuts the
+    window at the FIRST total — so the parts it recovers are a subset and no window balances.
+
+    A refusal is the right outcome for a table this module cannot represent, and it is the
+    identity that produces it rather than a guess. Pinned so that a future nested-table
+    change has to state what it did to this case.
+    """
+    consolidated = Decimal("85099") * MILLIONS
+    candidates = as_candidates(adm_recalled)
+    accepted = [
+        select_exhaustive_partition(
+            candidates,
+            total=consolidated,
+            tolerance=SEGMENT_TOLERANCE * adm_recalled[indices[0]].multiplier,
+            indices=indices,
+        )
+        for indices in windows_of(adm_recalled).values()
+    ]
+    assert not any(isinstance(v, Partition) for v in accepted), "no window balances, so none is landed"
+
+
+def test_a_single_segment_issuer_is_a_determinate_answer_not_a_miss() -> None:
+    """The failure this fixes is the one that would have hurt q6 most: a pure-play IS the
+    purest name under its theme, and every single-segment issuer was being refused. The
+    ranking would have systematically excluded exactly the companies it exists to find.
+
+    Measured against the packaged corpus — the statement is detected on the four issuers that
+    make it, and on none of the ones that report segments.
+    """
+    root = Path(__file__).resolve().parents[1] / "samples" / "filings"
+    single = {"DDOG", "DUOL", "PLUG", "SHOP"}
+    for path in sorted(root.glob("*.html")):
+        if "8K" in path.name:
+            continue
+        ticker = path.name.split("_")[0]
+        statement = single_segment_statement(filing_plain_text(path.read_bytes()))
+        if ticker in single:
+            assert statement is not None, f"{ticker} states one segment and must be detected"
+            assert "segment" in statement.lower()
+        else:
+            assert statement is None, f"{ticker} reports segments; a false positive would replace its table"

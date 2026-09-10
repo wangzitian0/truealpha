@@ -402,3 +402,79 @@ def test_the_oracle_s_annotation_matches_what_it_returns() -> None:
     hints = typing.get_type_hints(consolidated_revenue)
     assert hints["return"] == ConsolidatedRevenue | None
     assert isinstance(consolidated_revenue(_RecordingConnection(), CIK, cutoff=CUTOFF), ConsolidatedRevenue)
+
+
+def _filing(name: str, cik: int):
+    from datetime import date
+
+    from data_engine.datahub.standards.filing_extraction import FilingDocument
+
+    path = REPO_ROOT / "apps" / "data-engine" / "samples" / "filings" / name
+    return FilingDocument(
+        cik=cik,
+        accession="0001628280-26-012494",
+        form="10-K",
+        filing_date=date(2026, 2, 27),
+        primary_document=name,
+        url=f"https://www.sec.gov/Archives/edgar/data/{cik}/{name}",
+        body=path.read_bytes(),
+    )
+
+
+def test_a_single_segment_issuer_lands_the_whole_company_as_one_part(monkeypatch) -> None:
+    """A pure-play is the purest name under its theme, and every one of them was refused.
+
+    The partition is the consolidated revenue in ONE part, which satisfies the accounting
+    identity by construction — so the row has to say that out loud: a distinct extractor id
+    the confidence policy prices lower, and the filing's own sentence in `evidence_ref`,
+    because the identity gives these rows no independent check.
+    """
+    from data_engine.datahub.standards import segment_extraction as adapter
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
+    duol_cik = 1562088
+    monkeypatch.setattr(
+        adapter, "latest_annual_filing", lambda *a, **k: _filing("DUOL_10K_000162828026012494.html", duol_cik)
+    )
+    connection = _RecordingConnection(("748000000", "2025-12-31"))
+    outcome = adapter.extract_segment_revenue(
+        duol_cik,
+        connection=connection,
+        http=None,
+        gateway=None,
+        standard=STANDARDS["segment_revenue"],
+        cutoff=CUTOFF,
+        write=True,
+    )
+    rows = [_row(p) for p in connection.inserts()]
+
+    assert outcome.status == "resolved", outcome.detail
+    assert outcome.extractor == RULE_SINGLE_SEGMENT, "named apart from the checked-partition rule"
+    assert len(rows) == 1
+    assert rows[0]["segment_revenue"] == Decimal("748000000"), "the one part IS the consolidated revenue"
+    assert rows[0]["partition_residual"] == Decimal(0), "exhaustive by construction"
+    assert "single_segment_statement=" in rows[0]["evidence_ref"], "the sentence the claim rests on"
+    assert "single operating segment" in rows[0]["evidence_ref"]
+    assert rows[0]["confidence"] < Decimal("0.90"), "priced below a set checked against an independent total"
+
+
+def test_an_issuer_that_reports_segments_never_takes_the_single_segment_path(monkeypatch) -> None:
+    """A false positive here would REPLACE a real segment table with one undifferentiated
+    part, and the resulting purity would be 0 or 1 for every theme — confidently wrong rather
+    than refused."""
+    from data_engine.datahub.standards import segment_extraction as adapter
+    from factors.shared.extraction import RULE_EXHAUSTIVE_PARTITION
+
+    monkeypatch.setattr(adapter, "latest_annual_filing", lambda *a, **k: _avgo_filing())
+    outcome = adapter.extract_segment_revenue(
+        CIK,
+        connection=_RecordingConnection(),
+        http=None,
+        gateway=None,
+        standard=STANDARDS["segment_revenue"],
+        cutoff=CUTOFF,
+        write=False,
+    )
+    assert outcome.status == "resolved"
+    assert outcome.extractor == RULE_EXHAUSTIVE_PARTITION, "AVGO's two segments, checked against its total"
+    assert "Semiconductor solutions=36858" in outcome.detail
