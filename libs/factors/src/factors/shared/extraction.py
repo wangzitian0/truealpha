@@ -34,12 +34,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 #: The deterministic rule this module owns: recall found exactly one distinct value, so
 #: there is nothing to choose. Persisted in `evidence_ref` and compared in tests verbatim
 #: — never rename or reformat without a migration for every row that already carries it.
 RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"
+
+#: The set-valued rule (#772): recall found parts that ADD UP to a total measured
+#: elsewhere, so the set is the answer. Same persistence contract as the id above —
+#: it lands in `evidence_ref` and is compared verbatim.
+RULE_EXHAUSTIVE_PARTITION = "rule:exhaustive-partition:v1"
 
 
 @dataclass(frozen=True)
@@ -128,4 +135,119 @@ def select_single_candidate(candidates: Sequence[Candidate]) -> Selection | None
         candidate_index=0,
         extractor=RULE_SINGLE_CANDIDATE,
         reason="every candidate states the same value; nothing to choose",
+    )
+
+
+class PartitionRefusal(StrEnum):
+    """Why a candidate set is NOT the answer. Every value is a different problem with a
+    different fix, which is the reason this is an enum rather than a bool.
+
+    `SHORT` and `OVER` matter most for a revenue-share ranking: a missed part silently
+    RAISES every remaining part's share, and a double-counted one lowers them. Either way
+    the ranking inverts while every number still looks like a number — so neither may be
+    reported as a share computed over whatever was found.
+    """
+
+    NO_CANDIDATES = "no_candidates"
+    NO_TOTAL = "no_total"
+    #: A proposer named a part that recall never found. Typed rather than raised so a
+    #: caller keeps branching on the return type alone — and separate from NO_CANDIDATES
+    #: because the fix is different: recall found things, the proposal points outside them
+    #: (review on #803).
+    INDEX_OUT_OF_RANGE = "index_out_of_range"
+    SHORT = "sums_short_of_total"
+    OVER = "sums_over_total"
+
+
+@dataclass(frozen=True)
+class Partition:
+    """A set-valued selection: N candidates that TOGETHER are the value (#772).
+
+    `Selection` answers "which ONE of these is the value" and is right for a metric stated
+    once in several places (a headcount). A metric that is DECOMPOSED — segment revenue,
+    where each part is its own row and the parts are the answer — needs the other shape:
+    the same candidate sequence, several indices, and an accounting identity that says the
+    set is complete.
+
+    `residual` is kept rather than discarded because it is the honest size of the doubt: a
+    partition accepted within tolerance still missed or over-counted `residual`, and a
+    consumer computing shares should be able to see it.
+    """
+
+    candidate_indices: tuple[int, ...]
+    total: Decimal
+    parts_sum: Decimal
+    residual: Decimal
+    extractor: str
+    reason: str
+    invocation_id: str | None = None
+
+
+@runtime_checkable
+class Partitioner(Protocol):
+    """A judgement-based proposer of a partition, for the cases the rule cannot settle.
+
+    Same contract as `Selector`: implemented outside this library, may decline, and may
+    never invent a part that is not among `candidates`. It proposes; the accounting
+    identity still decides — a proposal whose parts do not sum to the total is refused
+    exactly as a rule-built one would be.
+    """
+
+    def __call__(self, candidates: Sequence[Candidate], *, total: Decimal) -> tuple[int, ...] | None: ...
+
+
+def select_exhaustive_partition(
+    candidates: Sequence[Candidate],
+    *,
+    total: Decimal | None,
+    tolerance: Decimal,
+    indices: Sequence[int] | None = None,
+) -> Partition | PartitionRefusal:
+    """Accept a candidate set only when its parts sum to a total measured ELSEWHERE.
+
+    The check that makes a decomposition safe is not "did recall find plausible parts" but
+    "do the parts account for the whole". For segment revenue the whole is already on the
+    wide row — the issuer's consolidated `revenue`, SEC-sourced, computed by a different
+    path — so the partition has an independent oracle without a new source.
+
+    `indices` selects a subset (what a `Partitioner` proposed); omitted, every candidate is
+    a part. Refusals are typed rather than `None`: "recall found nothing", "there is no
+    total to check against", "the parts miss some of the whole", "the parts exceed it" and
+    "the proposal names a part recall never found" are five different problems, and a caller
+    that collapses them into one cannot say which happened. Never raises and never guesses —
+    a refused set is a refused set, not a share computed over whatever was found. An
+    out-of-range index is a refusal rather than an `IndexError` for the same reason the
+    others are: a `Partitioner` is implemented outside this library, so a bad proposal is
+    input to be judged, not a programmer error to crash on.
+
+    `tolerance` is absolute and in the total's units; the caller owns it, because what
+    counts as a rounding difference is a property of the source's own reporting precision,
+    not of this rule.
+    """
+    if not candidates:
+        return PartitionRefusal.NO_CANDIDATES
+    if total is None:
+        return PartitionRefusal.NO_TOTAL
+
+    chosen = tuple(indices) if indices is not None else tuple(range(len(candidates)))
+    if not chosen:
+        return PartitionRefusal.NO_CANDIDATES
+    if any(index < 0 or index >= len(candidates) for index in chosen):
+        return PartitionRefusal.INDEX_OUT_OF_RANGE
+    # `Candidate.value` is int|float by contract (see its docstring); the sum is taken in
+    # Decimal because the ACCEPTANCE is monetary, and str() is what keeps a float's binary
+    # representation error out of it.
+    parts_sum = sum((Decimal(str(candidates[index].value)) for index in chosen), Decimal(0))
+    residual = total - parts_sum
+    if residual > tolerance:
+        return PartitionRefusal.SHORT
+    if -residual > tolerance:
+        return PartitionRefusal.OVER
+    return Partition(
+        candidate_indices=chosen,
+        total=total,
+        parts_sum=parts_sum,
+        residual=residual,
+        extractor=RULE_EXHAUSTIVE_PARTITION,
+        reason=f"{len(chosen)} parts sum to {parts_sum} against a measured {total} (residual {residual})",
     )
