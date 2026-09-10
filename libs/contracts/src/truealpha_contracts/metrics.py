@@ -91,7 +91,9 @@ _SPECS = (
             "Revenue attributed to one reportable segment for the fiscal period. One issuer "
             "yields MANY rows — the segment name is part of the row's identity, not of the "
             "metric name — and the rows are admissible only as a set that accounts for the "
-            "issuer's consolidated revenue (rule:exhaustive-partition:v1, #772)."
+            "issuer's consolidated revenue — the set-valued rule in "
+            "factors.shared.extraction owns that identifier and this description does not "
+            "restate it (#772, #782's ownership guard)."
         ),
     ),
     MetricSpec(
