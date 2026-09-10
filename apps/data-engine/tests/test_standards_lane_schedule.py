@@ -1,6 +1,10 @@
-"""The weekly standards lane runs the backfill and then the question-coverage report (#748)
-with one configuration per universe; a run request that configured only one op would fail
-at launch, so the schedule is asserted here rather than discovered on Sunday."""
+"""The weekly standards lane runs the backfill, then module 6's theme purity (#772), then
+the question-coverage report (#748) — with one configuration per universe. A run request
+that configured only some of the ops would fail at launch, so the schedule is asserted here
+rather than discovered on Sunday.
+
+The order is the data dependency, not a preference: purity consumes the segment partitions
+the backfill lands, and coverage counts the purity column."""
 
 from __future__ import annotations
 
@@ -14,14 +18,18 @@ from data_engine.lanes.standards import (
 )
 
 
-def test_the_job_chains_backfill_then_coverage() -> None:
+def test_the_job_chains_backfill_then_purity_then_coverage() -> None:
+    """Each op consumes the one before it, so the chain is enforced by the dependency rather
+    than by ordering luck: purity would classify an empty plane if it ran first, and coverage
+    would count a column that had not been written yet."""
     assert [node.name for node in standard_backfill_pipeline_job.graph.node_defs] == [
         "run_standard_backfill",
+        "run_theme_purity",
         "run_question_coverage",
     ]
 
 
-def test_every_run_request_configures_both_ops_for_its_universe() -> None:
+def test_every_run_request_configures_every_op_for_its_universe() -> None:
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 13, 9, 7, tzinfo=UTC))
     requests = list(standard_backfill_schedule.evaluate_tick(context).run_requests)
     assert [request.run_key for request in requests] == [
@@ -29,7 +37,7 @@ def test_every_run_request_configures_both_ops_for_its_universe() -> None:
     ]
     for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
         ops = request.run_config["ops"]
-        assert set(ops) == {"run_standard_backfill", "run_question_coverage"}
+        assert set(ops) == {"run_standard_backfill", "run_theme_purity", "run_question_coverage"}
         for op in ops.values():
             assert op["config"]["universe"] == universe
             assert op["config"]["executed_at"] == "2026-09-13T09:07:00+00:00"
@@ -74,3 +82,41 @@ def test_an_unknown_standard_fails_at_the_run_rather_than_silently_doing_nothing
 
     with pytest.raises(ValueError, match="unknown standard"):
         standards_to_run("employees")
+
+
+def test_each_op_body_actually_runs(monkeypatch) -> None:
+    """The gap this closes: `run_theme_purity` imported a module that does not exist
+    (`production_topt.governed_read`; `governed_head` lives in `question_coverage`). Every
+    test above asserted the lane's SHAPE — the ops, their order, their config — and none of
+    them executed a body, so a `ModuleNotFoundError` would have waited until Sunday 09:07 UTC
+    to appear. mypy caught it; this is the check that catches the next one.
+
+    The no-governed-head branch is the one to drive: it reaches every import and every
+    settings read in the body, touches the database only to ask for a head, and returns
+    without writing — so it needs no fixture beyond a connection that answers nothing.
+    """
+    import json as _json
+
+    import psycopg
+    from data_engine.lanes.standards import run_theme_purity
+
+    class _NoHead:
+        def execute(self, *_a, **_k):
+            return self
+
+        def fetchone(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    from data_engine.lanes.standards import StandardBackfillConfig
+
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _NoHead())
+    context = dg.build_op_context()
+    config = StandardBackfillConfig(executed_at="2026-09-13T09:07:00+00:00", universe="topt")
+    out = _json.loads(run_theme_purity(context, config, "{}"))
+    assert out == {"universe": "topt", "rows": 0, "reason": "no_governed_head"}

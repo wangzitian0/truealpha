@@ -64,6 +64,65 @@ RESPONSE_SCHEMA: dict[str, Any] = {
 PROMPT_SHA256 = hashlib.sha256((PROMPT_VERSION + "\n" + INSTRUCTIONS).encode()).hexdigest()
 SCHEMA_SHA256 = canonical_sha256(RESPONSE_SCHEMA)
 
+
+@dataclass(frozen=True)
+class ModelTask:
+    """One bound decision: what is asked, in what shape, under whose identity.
+
+    The invocation table has always had `prompt_version`, `prompt_sha256` and
+    `schema_sha256` columns — the plane was generic while the module that wrote to it held
+    exactly one prompt at module scope. A second decision (segment-theme classification,
+    #772) is what turns that from tidy into wrong, so the prompt becomes a value.
+
+    Bound as a whole because §9's replay contract is over the whole ask: the instructions,
+    the schema, the decoding settings and the model together are the identity, and a task
+    that changed one of them silently would replay an answer to a different question.
+    """
+
+    prompt_version: str
+    instructions: str
+    response_schema: dict[str, Any]
+    #: Enough for a short JSON answer. A classification over a handful of segments needs
+    #: more room than a single chosen integer, so it is per task rather than global.
+    max_tokens: int = 300
+
+    @property
+    def prompt_sha256(self) -> str:
+        return hashlib.sha256((self.prompt_version + "\n" + self.instructions).encode()).hexdigest()
+
+    @property
+    def schema_sha256(self) -> str:
+        return canonical_sha256(self.response_schema)
+
+
+HEADCOUNT_TASK = ModelTask(prompt_version=PROMPT_VERSION, instructions=INSTRUCTIONS, response_schema=RESPONSE_SCHEMA)
+
+
+@dataclass(frozen=True)
+class ModelInvocation:
+    """What one ask produced, before any task-specific reading of it.
+
+    `decision` is the parsed answer in the task's own vocabulary; everything else is the
+    §9 identity that is the same for every task.
+    """
+
+    decision: dict[str, Any]
+    model: str
+    provider: str
+    prompt_sha256: str
+    request_sha256: str
+    response_sha256: str | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    invocation_id: str
+    replayed: bool
+    served_model: str | None = None
+
+    @property
+    def extractor(self) -> str:
+        return f"model:{self.served_model or self.model}:{self.prompt_sha256[:12]}"
+
+
 Transport = Callable[[str, dict[str, str], bytes], tuple[int, bytes]]
 
 
@@ -106,19 +165,26 @@ def is_configured() -> bool:
     return bool(settings.llm_api_key)
 
 
-def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate], *, model: str) -> dict[str, Any]:
-    lines = [f"[{i}] {c.value:,}: {c.sentence}" for i, c in enumerate(candidates)]
-    user = f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
+def build_chat_request(task: ModelTask, user_content: str, *, model: str) -> dict[str, Any]:
+    """The provider request for any task. Its digest IS the replay key, so everything that
+    could change the answer has to be in here."""
     return {
         "model": model,
-        "messages": [{"role": "system", "content": INSTRUCTIONS}, {"role": "user", "content": user}],
-        "max_tokens": 300,
+        "messages": [{"role": "system", "content": task.instructions}, {"role": "user", "content": user_content}],
+        "max_tokens": task.max_tokens,
         "temperature": 0,
         # Deterministic decoding settings are part of the invocation identity (§9); the
         # provider's reasoning mode is disabled so the answer is the JSON, not a trace.
         "thinking": {"type": "disabled"},
         "response_format": {"type": "json_object"},
     }
+
+
+def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate], *, model: str) -> dict[str, Any]:
+    """The headcount task's user content, wrapped by the generic builder above."""
+    lines = [f"[{i}] {c.value:,}: {c.sentence}" for i, c in enumerate(candidates)]
+    user = f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
+    return build_chat_request(HEADCOUNT_TASK, user, model=model)
 
 
 def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
@@ -130,7 +196,9 @@ def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[
     return int(status or 0), response
 
 
-def _replay(connection: Any, *, cik: int, accession: str, model: str, request_sha256: str) -> ModelSelection | None:
+def _replay(
+    connection: Any, *, task: ModelTask, cik: int, accession: str, model: str, request_sha256: str
+) -> ModelInvocation | None:
     """An identical prior ask — same subject, filing, instructions, candidates, decoding
     settings and model, i.e. the same request digest — that the provider answered (status
     < 400). A changed candidate set or schema is a different request and is asked afresh;
@@ -149,13 +217,11 @@ def _replay(connection: Any, *, cik: int, accession: str, model: str, request_sh
     if row is None:
         return None
     decision = row[1] if isinstance(row[1], dict) else json.loads(row[1])
-    return ModelSelection(
-        value=decision.get("value"),
-        candidate_index=decision.get("candidate_index"),
-        reason=str(decision.get("reason", "")),
+    return ModelInvocation(
+        decision=decision,
         model=model,
         provider=row[6],
-        prompt_sha256=PROMPT_SHA256,
+        prompt_sha256=task.prompt_sha256,
         request_sha256=row[5],
         response_sha256=row[2],
         prompt_tokens=row[3],
@@ -166,35 +232,42 @@ def _replay(connection: Any, *, cik: int, accession: str, model: str, request_sh
     )
 
 
-def select_headcount(
+def invoke(
     connection: Any | None,
     *,
+    task: ModelTask,
     cik: int,
     accession: str,
-    form: str,
-    issuer_label: str,
-    candidates: Sequence[Candidate],
+    user_content: str,
     caller: str,
-    standard: str = "employees_total",
+    standard: str,
+    parse: Callable[[str], dict[str, Any]],
+    refusal: Callable[[str], dict[str, Any]],
     persist: bool = True,
     transport: Transport | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
-) -> ModelSelection:
-    """Ask the seated model to choose among enumerated candidates; record the invocation.
+) -> ModelInvocation:
+    """Ask the seated model one task's question; record the invocation. Task-agnostic.
 
     `persist=False` (probe mode) neither replays nor records an invocation — it only asks,
     and the call still lands in the ledger. With a connection and `persist=True`, every ask
     is recorded (answers and vendor errors alike) and an identical prior ANSWERED ask is
     replayed instead of re-asked (§9: replay never silently calls the model again).
+
+    `parse` reads the provider's content into the task's own decision shape; `refusal`
+    builds that same shape for a vendor error, so a failed ask is still a well-formed
+    recorded decision rather than a hole the caller has to special-case.
     """
     if not is_configured():
         raise ModelNotConfigured("LLM_API_KEY is not set; no provider seated (#70 scope 1)")
     model = settings.llm_model
-    request_body = build_request(issuer_label, form, candidates, model=model)
+    request_body = build_chat_request(task, user_content, model=model)
     request_bytes = json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
     request_sha256 = hashlib.sha256(request_bytes).hexdigest()
     if persist and connection is not None:
-        replayed = _replay(connection, cik=cik, accession=accession, model=model, request_sha256=request_sha256)
+        replayed = _replay(
+            connection, task=task, cik=cik, accession=accession, model=model, request_sha256=request_sha256
+        )
         if replayed is not None:
             return replayed
 
@@ -216,32 +289,29 @@ def select_headcount(
     prompt_tokens = usage.get("prompt_tokens")
     completion_tokens = usage.get("completion_tokens")
     served_model = str(payload["model"]) if payload.get("model") else None
-    decision: dict[str, Any]
     if status >= 400:
         # A vendor error is still an invocation that happened: recorded with its status and
         # body as a refusal, excluded from replay so the next run asks again.
-        decision = {"value": None, "candidate_index": None, "reason": f"HTTP {status}: {body[:200]!r}"}
+        decision = refusal(f"HTTP {status}: {body[:200]!r}")
     else:
         content = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        decision = _parse_decision(content, candidates)
+        decision = parse(content)
     response_sha256 = hashlib.sha256(body).hexdigest()
     invocation_id = "model-invocation:" + canonical_sha256(
         {
             "provider": settings.llm_provider,
             "model": model,
-            "prompt_sha256": PROMPT_SHA256,
+            "prompt_sha256": task.prompt_sha256,
             "request_sha256": request_sha256,
             "response_sha256": response_sha256,
             "started_at": started_at.isoformat(),
         }
     )
-    selection = ModelSelection(
-        value=decision["value"],
-        candidate_index=decision["candidate_index"],
-        reason=decision["reason"],
+    invocation = ModelInvocation(
+        decision=decision,
         model=model,
         provider=settings.llm_provider,
-        prompt_sha256=PROMPT_SHA256,
+        prompt_sha256=task.prompt_sha256,
         request_sha256=request_sha256,
         response_sha256=response_sha256,
         prompt_tokens=prompt_tokens,
@@ -270,9 +340,9 @@ def select_headcount(
                 standard,
                 cik,
                 accession,
-                PROMPT_VERSION,
-                PROMPT_SHA256,
-                SCHEMA_SHA256,
+                task.prompt_version,
+                task.prompt_sha256,
+                task.schema_sha256,
                 request_sha256,
                 response_sha256,
                 status,
@@ -289,7 +359,204 @@ def select_headcount(
         )
     if status >= 400:
         raise RuntimeError(f"{SOURCE}: HTTP {status}: {body[:200]!r}")
-    return selection
+    return invocation
+
+
+def select_headcount(
+    connection: Any | None,
+    *,
+    cik: int,
+    accession: str,
+    form: str,
+    issuer_label: str,
+    candidates: Sequence[Candidate],
+    caller: str,
+    standard: str = "employees_total",
+    persist: bool = True,
+    transport: Transport | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> ModelSelection:
+    """Ask the seated model to choose among enumerated candidates; record the invocation.
+
+    The ledger, replay and persistence behaviour is `invoke`'s (above), shared with every
+    other task. What is headcount's own is the two things a task owns: how the candidates
+    are written into the question, and how the answer is read back — here, the rule that
+    the model may CHOOSE but never invent.
+    """
+    lines = [f"[{i}] {c.value:,}: {c.sentence}" for i, c in enumerate(candidates)]
+    user = f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
+    invocation = invoke(
+        connection,
+        task=HEADCOUNT_TASK,
+        cik=cik,
+        accession=accession,
+        user_content=user,
+        caller=caller,
+        standard=standard,
+        parse=lambda content: _parse_decision(content, candidates),
+        refusal=lambda detail: {"value": None, "candidate_index": None, "reason": detail},
+        persist=persist,
+        transport=transport,
+        now=now,
+    )
+    decision = invocation.decision
+    return ModelSelection(
+        value=decision.get("value"),
+        candidate_index=decision.get("candidate_index"),
+        reason=str(decision.get("reason", "")),
+        model=invocation.model,
+        provider=invocation.provider,
+        prompt_sha256=invocation.prompt_sha256,
+        request_sha256=invocation.request_sha256,
+        response_sha256=invocation.response_sha256,
+        prompt_tokens=invocation.prompt_tokens,
+        completion_tokens=invocation.completion_tokens,
+        invocation_id=invocation.invocation_id,
+        replayed=invocation.replayed,
+        served_model=invocation.served_model,
+    )
+
+
+#: #772 / init.md §7 module 6: "LLM-assisted semantic classification of segment revenue".
+#: The theme is NOT in these instructions — it travels in the user content, so one task
+#: identity covers "how to judge a segment against a stated theme" while the theme itself
+#: still enters `request_sha256` and therefore the replay key. A per-theme prompt would
+#: make every theme a new prompt version and every wording tweak a migration.
+SEGMENT_THEME_PROMPT_VERSION = "segment-theme:v1"
+SEGMENT_THEME_INSTRUCTIONS = (
+    "You judge whether each of an issuer's reportable segments belongs to a stated investment "
+    "theme. You are given the theme, the definition of what counts as in-theme, and the "
+    "segments as the issuer's own filing names them. Judge each segment on the theme "
+    "definition alone. Answer true when the segment's revenue is predominantly in the theme, "
+    "false when it predominantly is not, and null when the segment name does not carry enough "
+    "information to decide — null is a correct answer and is preferred over a guess. Return "
+    "one verdict per segment, using the [index] given. Respond ONLY with a JSON object of "
+    'exactly this shape: {"verdicts": [{"index": <int>, "in_theme": <true|false|null>, '
+    '"reason": <one short sentence>}]}'
+)
+SEGMENT_THEME_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "verdicts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "in_theme": {"type": ["boolean", "null"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["index", "in_theme", "reason"],
+            },
+        }
+    },
+    "required": ["verdicts"],
+}
+SEGMENT_THEME_TASK = ModelTask(
+    prompt_version=SEGMENT_THEME_PROMPT_VERSION,
+    instructions=SEGMENT_THEME_INSTRUCTIONS,
+    response_schema=SEGMENT_THEME_SCHEMA,
+    # One verdict per segment plus a sentence each; issuers report two to six segments.
+    max_tokens=900,
+)
+
+
+@dataclass(frozen=True)
+class ThemeClassification:
+    """One verdict per segment, in the order the segments were given.
+
+    `verdicts[i] is None` means the classifier declined or never answered for that segment.
+    That is deliberately NOT `False`: a declined segment is unclassified revenue that lowers
+    confidence in the share, while `False` is a judgement that lowers the share itself, and
+    `factors.base.theme_purity` counts them into different masses. Collapsing them would let
+    a silent model look like a confident "not in the theme" — and would make an issuer whose
+    segments the model could not read look purer or dirtier than the evidence supports.
+    """
+
+    verdicts: tuple[bool | None, ...]
+    reasons: tuple[str, ...]
+    invocation: ModelInvocation
+
+    @property
+    def extractor(self) -> str:
+        return self.invocation.extractor
+
+
+def _parse_theme_verdicts(content: str, segments: Sequence[str]) -> dict[str, Any]:
+    """Read the model's verdicts, defaulting every unanswered segment to unclassified.
+
+    The model may judge, never invent: an index outside the segment list is dropped rather
+    than shifted onto a neighbour, and a segment the answer skips stays `None`. A parser
+    that packed verdicts positionally would silently attribute one segment's judgement to
+    another whenever the model returned a short list.
+    """
+    verdicts: list[bool | None] = [None] * len(segments)
+    reasons: list[str] = [""] * len(segments)
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return {
+            "verdicts": verdicts,
+            "reasons": [f"unparseable model answer: {content[:120]!r}"] * len(segments),
+        }
+    for item in parsed.get("verdicts") or []:
+        if not isinstance(item, dict):
+            continue
+        index = item.get("index")
+        if not isinstance(index, int) or not 0 <= index < len(segments):
+            continue
+        value = item.get("in_theme")
+        verdicts[index] = value if isinstance(value, bool) else None
+        reasons[index] = str(item.get("reason", ""))[:400]
+    return {"verdicts": verdicts, "reasons": reasons}
+
+
+def classify_segments(
+    connection: Any | None,
+    *,
+    cik: int,
+    accession: str,
+    issuer_label: str,
+    theme: str,
+    inclusion: str,
+    segments: Sequence[str],
+    caller: str,
+    standard: str = "segment_revenue",
+    persist: bool = True,
+    transport: Transport | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> ThemeClassification:
+    """Ask the seated model which of an issuer's segments belong to a theme.
+
+    The model sees the segment NAMES and the theme definition — never the revenue. That is
+    not an economy: a classifier that can see which segment is the big one can be graded by
+    how flattering its answer is, and the whole point of q6 is that the share is computed
+    from a judgement made without knowing what it would produce.
+
+    Ledger, replay and the invocation record are `invoke`'s, shared with the headcount task.
+    """
+    lines = [f"[{i}] {name}" for i, name in enumerate(segments)]
+    user = f"Issuer: {issuer_label}.\nTheme: {theme}.\nIn-theme means: {inclusion}\nSegments:\n" + "\n".join(lines)
+    invocation = invoke(
+        connection,
+        task=SEGMENT_THEME_TASK,
+        cik=cik,
+        accession=accession,
+        user_content=user,
+        caller=caller,
+        standard=standard,
+        parse=lambda content: _parse_theme_verdicts(content, segments),
+        refusal=lambda detail: {"verdicts": [None] * len(segments), "reasons": [detail] * len(segments)},
+        persist=persist,
+        transport=transport,
+        now=now,
+    )
+    decision = invocation.decision
+    raw = decision.get("verdicts") or []
+    verdicts = tuple((raw[i] if i < len(raw) and isinstance(raw[i], bool) else None) for i in range(len(segments)))
+    raw_reasons = decision.get("reasons") or []
+    reasons = tuple(str(raw_reasons[i]) if i < len(raw_reasons) else "" for i in range(len(segments)))
+    return ThemeClassification(verdicts=verdicts, reasons=reasons, invocation=invocation)
 
 
 def _jsonb_or_null(body: bytes) -> str | None:

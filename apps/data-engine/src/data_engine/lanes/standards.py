@@ -10,6 +10,7 @@ import psycopg
 from truealpha_contracts.standards import STANDARDS
 
 from data_engine.config import settings
+from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
@@ -87,14 +88,53 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
 
 
 @dg.op
-def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
-    """#748: after the week's backfill of EVERY standard, count the six questions on the
-    governed head — answered / unavailable-by-reason / missing — and append the report."""
+def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
+    """#772 (init.md §7 module 6): the theme-purity rows for this week's governed head.
+
+    Sequenced after the backfill because it consumes what the backfill landed — the accepted
+    segment partitions — and before the coverage report, which counts the column this writes.
+    A run with no governed head writes nothing and says so; that is the honest state for a
+    universe whose pointer has not advanced yet, not an error.
+
+    Model spend is bounded by replay, not by a limit: the classification is keyed on
+    (issuer, filing, theme), so the first week asks and every later week that sees the same
+    filings replays (§9). A restated segment set is a new filing and is asked afresh, which
+    is the behaviour you want.
+    """
+    from data_engine.datahub.production_topt.theme_purity import materialize_theme_purity, summary_line
+    from data_engine.datahub.question_coverage import governed_head
+
+    context.log.info("theme purity follows backfill: %s", backfill_summary[:200])
+    # The cutoff is the governed HEAD's, not `config.executed_at`: these rows describe the
+    # run the App serves, so the partitions they consume must be the ones knowable at that
+    # run's cutoff. Selecting at the schedule time instead would let a filing that landed
+    # after the head was published change a row attributed to it.
+    prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
+    with psycopg.connect(settings.database_url) as connection:
+        head = governed_head(connection, universe_prefix=prefix, environment=settings.app_env)
+        if head is None:
+            context.log.warning("no governed head for %s; no theme purity rows", config.universe)
+            return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
+        rows = materialize_theme_purity(connection, run_id=head.run_id, cutoff=head.cutoff)
+        connection.commit()
+    context.log.info(summary_line(rows))
+    published = sum(1 for row in rows if row.result.value is not None)
+    context.add_output_metadata(
+        {"universe": config.universe, "run_id": head.run_id, "rows": len(rows), "published": published}
+    )
+    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": len(rows), "published": published})
+
+
+@dg.op
+def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str) -> str:
+    """#748: after the week's backfill of EVERY standard and module 6's purity rows, count
+    the six questions on the governed head — answered / unavailable-by-reason / missing — and
+    append the report."""
     from data_engine.datahub.question_coverage import compile_report, persist, summary_line
 
     # The backfill's summary is this op's only upstream: consuming it is what sequences the
     # report after the week's facts have landed, and logging it keeps the pair legible.
-    context.log.info("coverage follows backfill: %s", backfill_summary[:400])
+    context.log.info("coverage follows theme purity: %s", purity_summary[:400])
     executed_at = datetime.fromisoformat(config.executed_at)
     with psycopg.connect(settings.database_url) as connection:
         report = compile_report(connection, universe=config.universe, executed_at=executed_at)
@@ -118,7 +158,7 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
 
 @dg.job(name=STANDARD_BACKFILL_JOB_NAME)
 def standard_backfill_pipeline_job() -> None:
-    run_question_coverage(run_standard_backfill())
+    run_question_coverage(run_theme_purity(run_standard_backfill()))
 
 
 @dg.schedule(
@@ -135,7 +175,9 @@ def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
             run_config=dg.RunConfig(
                 ops={
                     "run_standard_backfill": StandardBackfillConfig(executed_at=executed_at, universe=universe),
-                    # #748: the coverage report follows the backfill for the same universe and tick.
+                    # #772: module 6 consumes the partitions the backfill just landed.
+                    "run_theme_purity": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                    # #748: the coverage report follows, for the same universe and tick.
                     "run_question_coverage": StandardBackfillConfig(executed_at=executed_at, universe=universe),
                 }
             ),

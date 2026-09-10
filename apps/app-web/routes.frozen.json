@@ -1,5 +1,5 @@
 {
-  "_comment": "#493: the frozen app-web URL tree \u2014 the inner-tree counterpart of tools/route_manifest.json (which only assigns service PREFIXES). tests/route-tree-freeze.test.ts fails when a filesystem route exists that is not listed here, when a live route is missing, or when a planned route gets built without flipping it to live in the same PR. Planned entries are the approved-but-unbuilt pages from the 4-step overhaul (#494/#495); adding any route outside this contract requires amending this file, visibly, in the same PR.",
+  "_comment": "#493: the frozen app-web URL tree — the inner-tree counterpart of tools/route_manifest.json (which only assigns service PREFIXES). tests/route-tree-freeze.test.ts fails when a filesystem route exists that is not listed here, when a live route is missing, or when a planned route gets built without flipping it to live in the same PR. Planned entries are the approved-but-unbuilt pages from the 4-step overhaul (#494/#495); adding any route outside this contract requires amending this file, visibly, in the same PR.",
   "routes": [
     {
       "path": "/",
@@ -23,6 +23,10 @@
     },
     {
       "path": "/research/rankings",
+      "live": true
+    },
+    {
+      "path": "/research/themes",
       "live": true
     },
     {

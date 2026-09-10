@@ -46,12 +46,12 @@
   ],
   "exemptions_evaluated_on": "2026-08-20",
   "factors": {
-    "etf_virtual_company": {
-      "function": "consolidate_fund",
+    "peg": {
+      "function": "peg",
       "kind": "base",
-      "module": 5,
-      "module_path": "libs/factors/src/factors/base/etf_virtual_company.py",
-      "signature": "(lines: Sequence[HoldingLine], *, fund_id: str, as_of: datetime, definition: EtfConsolidationDefinition) -> FundConsolidation"
+      "module": 1,
+      "module_path": "libs/factors/src/factors/base/peg.py",
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, growth_convention: GrowthConvention, as_of: datetime, cagr_years: int) -> FactorResult"
     },
     "gross_profit_per_employee": {
       "function": "gross_profit_per_employee",
@@ -60,12 +60,26 @@
       "module_path": "libs/factors/src/factors/base/gross_profit_per_employee.py",
       "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal) -> FactorResult"
     },
-    "peg": {
-      "function": "peg",
+    "etf_virtual_company": {
+      "function": "consolidate_fund",
       "kind": "base",
-      "module": 1,
-      "module_path": "libs/factors/src/factors/base/peg.py",
-      "signature": "(facts: Sequence[Fact], *, entity_id: str, growth_convention: GrowthConvention, as_of: datetime, cagr_years: int) -> FactorResult"
+      "module": 5,
+      "module_path": "libs/factors/src/factors/base/etf_virtual_company.py",
+      "signature": "(lines: Sequence[HoldingLine], *, fund_id: str, as_of: datetime, definition: EtfConsolidationDefinition) -> FundConsolidation"
+    },
+    "registered_semantic_probe": {
+      "function": "registered_semantic_probe",
+      "kind": "base",
+      "module": 6,
+      "module_path": "libs/factors/src/factors/base/registered_semantic_probe.py",
+      "signature": "(*, subject: SubjectRef, inputs: tuple[FactorInputCapability, ...], output_key: str = 'registered-semantic-probe') -> FactorOutputDraft"
+    },
+    "theme_purity": {
+      "function": "theme_purity",
+      "kind": "base",
+      "module": 6,
+      "module_path": "libs/factors/src/factors/base/theme_purity.py",
+      "signature": "(segments: Sequence[ThemeSegment], *, entity_id: str, theme: str, as_of: datetime, consolidated_revenue: Decimal | None, partition_residual: Decimal = _ZERO, confidence: Decimal = _ZERO, minimum_classified_share: Decimal = _ZERO) -> ThemePurity"
     },
     "price_to_sales": {
       "function": "price_to_sales",
@@ -80,13 +94,6 @@
       "module": 7,
       "module_path": "libs/factors/src/factors/composite/registered_composite_probe.py",
       "signature": "(*, subject: SubjectRef, inputs: tuple[FactorInputCapability, ...], output_key: str = 'registered-composite-probe') -> FactorOutputDraft"
-    },
-    "registered_semantic_probe": {
-      "function": "registered_semantic_probe",
-      "kind": "base",
-      "module": 6,
-      "module_path": "libs/factors/src/factors/base/registered_semantic_probe.py",
-      "signature": "(*, subject: SubjectRef, inputs: tuple[FactorInputCapability, ...], output_key: str = 'registered-semantic-probe') -> FactorOutputDraft"
     },
     "three_tier_valuation": {
       "function": "three_tier_valuation",
