@@ -580,7 +580,6 @@ def extract_segment_revenue(
     oracle = consolidated_revenue(connection, record_cik, cutoff=cutoff)
     total = None if oracle is None else oracle.value
     text = filing_plain_text(document.body)
-    recalled = segment_candidates(text)
 
     # A single-segment issuer has no segment TABLE, and that is an answer rather than a
     # miss: the one segment IS the company, so the partition is the consolidated revenue in
@@ -604,6 +603,10 @@ def extract_segment_revenue(
             write=write,
         )
 
+    # Recall runs only now, so "before the tables" is the code's order and not just a claim
+    # about it — a filing that states one segment never pays for a sweep whose result is
+    # already known to be unused (review on #808).
+    recalled = segment_candidates(text)
     if not recalled:
         skipped = unitless_windows(text)
         return ExtractionOutcome(
