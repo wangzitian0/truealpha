@@ -358,3 +358,34 @@ def test_avgo_is_unchanged_by_the_fallback(recalled) -> None:
     in the caption of the table this module accepts, so nothing about it inherits."""
     assert all(c.scale_source == "table" for c in recalled)
     assert Decimal("58") not in {c.stated_value for c in recalled}
+
+
+def test_a_percentage_table_cannot_be_accepted_by_an_issuer_whose_revenue_happens_to_fit() -> None:
+    """The hazard the filing-wide scale introduced, pinned with the issuer that would have
+    been hurt by it.
+
+    AVGO's percentages (58 / 42) inherited as millions are 100,000,000 — harmless against
+    63,887M, and *exactly* right for an issuer with about $100 million of revenue. That
+    issuer would have had its PERCENTAGE table accepted as its segment revenues, balanced to
+    the cent: a plausible-looking wrong answer, which is the one failure this module exists to
+    make impossible.
+
+    So the table is excluded by what it says about ITSELF — the same document-stated fact the
+    units are — and this asserts it against the balance that would otherwise have passed.
+    """
+    percentages = (
+        "Net Revenue by Segment November 2, 2025 (As a percentage of net revenue) "
+        "Semiconductor solutions 58 % Infrastructure software 42 Total net revenue 100 %"
+    )
+    assert segment_candidates(percentages) == [], "a table that says it holds percentages holds no revenue"
+
+    hundred_million = Decimal("100000000")
+    without_the_guard = [
+        Candidate(58 * 1_000_000, "Semiconductor solutions 58"),
+        Candidate(42 * 1_000_000, "Infrastructure software 42"),
+    ]
+    would_have = select_exhaustive_partition(
+        without_the_guard, total=hundred_million, tolerance=SEGMENT_TOLERANCE * MILLIONS, indices=[0, 1]
+    )
+    assert isinstance(would_have, Partition), "and it WOULD have balanced — which is why the guard is not optional"
+    assert would_have.residual == 0
