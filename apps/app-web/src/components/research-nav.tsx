@@ -19,7 +19,10 @@ import { usePathname } from "next/navigation";
 
 const LINKS: readonly { href: string; label: string }[] = [
   { href: "/research", label: "Overview" },
-  { href: "/research/rankings", label: "Rankings / themes" },
+  // "Rankings / themes" until #772: that page ranks the strategy's VALUATION gap, and
+  // labelling it themes made the nav claim an answer to init.md q6 that lived nowhere.
+  { href: "/research/rankings", label: "Rankings" },
+  { href: "/research/themes", label: "Theme purity" },
   { href: "/research/compare", label: "Comparison" },
   { href: "/research/holdings", label: "Holdings" },
   { href: "/research/strategy", label: "Strategy" },

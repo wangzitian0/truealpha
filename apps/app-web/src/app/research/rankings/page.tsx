@@ -29,11 +29,20 @@ export default async function RankingsPage({
     <section aria-labelledby="rankings-heading" className="space-y-6">
       <div>
         <h1 id="rankings-heading" className="text-2xl font-bold tracking-tight">
-          Theme rankings
+          Valuation rankings
         </h1>
         <p className="mt-2 text-sm text-gray-400">
-          Purest large-model-value names, ranked from the materialized strategy run through the mart read adapter
-          (#370), not recomputed here.
+          The strategy&apos;s large-model-value universe ranked by valuation gap, read from the materialized strategy
+          run through the mart read adapter (#370), not recomputed here.
+        </p>
+        <p className="mt-2 text-sm text-gray-400">
+          Titled &ldquo;Theme rankings&mdash;purest large-model-value names&rdquo; until #772. It ranks a valuation
+          gap, and &ldquo;purest&rdquo; is init.md question 6&apos;s word for a revenue share, which now has its own
+          page:{" "}
+          <Link href="/research/themes" className="text-accent hover:underline">
+            Theme purity
+          </Link>
+          . Same word, two measurements &mdash; and the one this page shows is the valuation.
         </p>
       </div>
 
