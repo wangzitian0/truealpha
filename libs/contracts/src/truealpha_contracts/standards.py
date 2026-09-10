@@ -41,8 +41,8 @@ class FactPlane(BaseModel):
     queried `staging.issuer_headcount_facts` with `HEADCOUNT_SOURCE_PRIORITY` regardless,
     so a second standard would have planned against headcount facts under its own name.
 
-    `table` and `columns` are identifiers the planner interpolates, never user input — a
-    standard is code, declared in `STANDARDS` below and reviewed as code.
+    `table` and `issuer_column` are identifiers the planner interpolates, never user input —
+    a standard is code, declared in `STANDARDS` below and reviewed as code.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

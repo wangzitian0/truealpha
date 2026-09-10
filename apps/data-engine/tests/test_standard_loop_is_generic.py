@@ -125,6 +125,30 @@ def test_an_unresolvable_adapter_names_the_standard_that_declared_it() -> None:
     assert "revenue" in message and "tests_fixture_module:extract_fixture" in message
 
 
+def test_an_adapter_that_is_not_callable_is_refused_by_name() -> None:
+    """A name that resolves to a constant or a class would crash at CALL time with a bare
+    TypeError, losing the one piece of context worth having — which standard asked for it
+    (review on #800). `EvidenceRequirement` is a real importable name that is not a function."""
+    not_callable = OTHER.model_copy(update={"adapter": "truealpha_contracts.standards:CONFIDENCE_POLICIES"})
+    with pytest.raises(LookupError) as error:
+        _adapter(not_callable)
+    message = str(error.value)
+    assert "revenue" in message, "the failure must name the standard that declared it"
+    assert "not a callable" in message
+
+
+def test_an_unsupported_evidence_class_blames_the_runner_not_the_standard() -> None:
+    """Every standard declares an adapter now, so "no adapter for evidence X" was a lie: what
+    is missing is THIS runner's support for the evidence class (review on #800)."""
+    xbrl = OTHER.model_copy(update={"evidence": EvidenceRequirement.XBRL_FACT})
+    cell = OpenCell(ISSUER, "no_fact", None, None)
+    outcome = _resolve(cell, xbrl, _RecordingConnection(), None, None, CUTOFF, "probe", None)
+    assert outcome.status == "error"
+    assert "drives filing_span adapters only" in outcome.detail
+    assert "xbrl_fact" in outcome.detail
+    assert "no adapter" not in outcome.detail, "the standard HAS an adapter; do not blame it"
+
+
 def test_the_registered_standard_still_resolves_its_real_adapter() -> None:
     resolved = _adapter(STANDARDS["employees_total"])
     assert f"{resolved.__module__}:{resolved.__name__}" == STANDARDS["employees_total"].adapter

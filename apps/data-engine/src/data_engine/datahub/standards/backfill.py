@@ -127,8 +127,18 @@ def _resolve(
     # The adapter comes from the STANDARD (#799). This dispatched on `evidence` alone and
     # then called `extract_headcount`, so EVERY `FILING_SPAN` standard extracted headcount
     # whatever it declared — the loop was generic in signature and headcount-only in fact.
+    #
+    # Evidence is still gated because this backfill only knows how to drive a filing-span
+    # adapter (it opens an SEC client and passes a cutoff). The standard HAS an adapter; what
+    # is missing is this runner's support for the evidence class — the message says so rather
+    # than blaming the standard for a field it declared (review on #800).
     if standard.evidence is not EvidenceRequirement.FILING_SPAN:
-        return ExtractionOutcome(cell.issuer.cik, "error", detail=f"no adapter for evidence {standard.evidence}")
+        return ExtractionOutcome(
+            cell.issuer.cik,
+            "error",
+            detail=f"standard backfill drives {EvidenceRequirement.FILING_SPAN.value} adapters only, "
+            f"not {standard.evidence.value}",
+        )
     extract = _adapter(standard)
     outcome = extract(
         cell.issuer.cik,
@@ -173,6 +183,14 @@ def _adapter(standard: MetricStandard) -> Callable[..., ExtractionOutcome]:
         raise LookupError(
             f"standard {standard.metric!r} declares adapter {standard.adapter!r}, which does not resolve"
         ) from error
+    # A name that resolves to a constant or a class would otherwise crash at CALL time with
+    # a bare TypeError, losing the one piece of context worth having — which standard asked
+    # for it (review on #800).
+    if not callable(resolved):
+        raise LookupError(
+            f"standard {standard.metric!r} declares adapter {standard.adapter!r}, "
+            f"which resolves to {type(resolved).__name__}, not a callable"
+        )
     return resolved
 
 
