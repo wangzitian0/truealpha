@@ -97,9 +97,7 @@ jobs:
               - '.github/workflows/ci-required.yml'
             qlib:
               - 'libs/factors/qlib-runtime/**'
-              - 'libs/factors/src/factors/batches/issuer_strategy_selection_tiny/**'
               - 'libs/factors/src/factors/batches/qlib_expression_contract_tiny/**'
-              - 'libs/factors/tests/batches/issuer_strategy_selection_tiny/**'
               - 'libs/factors/tests/batches/qlib_expression_contract_tiny/**'
               - '.github/workflows/ci-qlib.yml'
               - '.github/workflows/ci-required.yml'
