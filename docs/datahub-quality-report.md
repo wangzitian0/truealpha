@@ -66,6 +66,21 @@ carries every field's grade under `fields[<field>]` with its `policy_id`;
 the graded market-price cells. The headline `independent_reconciliation` ratio stays
 the close's, over the full requested denominator.
 
+### Policies in force
+
+- `market-price-fusion:v3` (`quality_report.RECONCILIATION_POLICY`): priority
+  `yahoo-chart:v1`, `twelve-data:v1`, `moomoo-kline:v1`; relative tolerance 0.3%;
+  assertions narrowed to the served bar's trading day first (#622).
+- `financial-fact-fusion:v1` (`quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY`):
+  priority `sec-company-facts:v1`, `moomoo-financials:v1`; relative tolerance 1%;
+  reconciled per field (`revenue`, `gross_profit`, `net_income`, `total_assets`) at the
+  PRIMARY's fiscal period end. The report carries `financial_fact_reconciliation_cells`
+  per subject with the per-field outcomes; a subject counts as independently reconciled
+  only when every compared field agreed, and any conflicting field abstains it. A second
+  origin that has not published the primary's period is absent for that field
+  (`insufficient_independent_origins`), never a conflict. See
+  `docs/price-source-calibration.md` for the measured tolerance.
+
 ## Fixed Denominator
 
 `VersionedDataHubQualityReport.cells` contains exactly one row per requested cell,

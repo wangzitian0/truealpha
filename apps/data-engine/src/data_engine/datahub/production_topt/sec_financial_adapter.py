@@ -20,6 +20,12 @@ and the evaluator silently excludes it as `missing_gross_profit` instead of scor
 
 `headcount` is not a reliable XBRL concept; it arrives through the `HeadcountExtractor`
 port (#70), never as a branch in generic capture code.
+
+A financial-fact cell reaches a second independent origin here, exactly as a price cell
+does in `market_price_adapter` (init.md rules 15 and 22): the adapter also queries each
+configured `FinancialFactCorroboratingOrigin` and attaches its assertion to the success.
+The second origin is best-effort — if it does not answer, the cell is honestly
+single-origin and the fusion engine reports `insufficient_independent_origins`.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.executor import (
+    Corroboration,
     FetchFailure,
     FetchOutcome,
     FetchSuccess,
@@ -177,9 +184,62 @@ class SecTarget:
     # Defaults False so a target assembled without the registry cannot inherit a
     # substitution that only holds for ~zero-COGS industries.
     revenue_proxy_allowed: bool = False
+    # The listing's canonical ticker, for a corroborating origin that is keyed by symbol
+    # rather than by CIK (moomoo). Empty means no such origin can be asked; the primary
+    # capture never needs it.
+    ticker: str = ""
 
 
 FinancialFactsFetcher = Callable[[int, date, OperatingBranch], FinancialFactsBundle | None]
+
+# The financial fields a second origin may corroborate, in payload-key order. A key here
+# is what `quality_report._FINANCIAL_FACT_FUSION_FIELDS` reconciles by name; an origin
+# that does not carry one leaves it None, and the cell is honestly single-origin for it.
+CORROBORATED_FINANCIAL_FIELDS: tuple[str, ...] = (
+    "revenue",
+    "net_income",
+    "gross_profit",
+    "total_assets",
+    "eps_basic",
+    "eps_diluted",
+)
+
+
+@dataclass(frozen=True)
+class FinancialFactAssertion:
+    """What a second origin asserts about one issuer's annual figures at a cutoff.
+
+    `by_period_end` carries EVERY period the origin publishes with a period end at/before
+    the cutoff — annual flows, balance-sheet instants at any reported date — so the
+    fusion engine can align on the PRIMARY's period for each field rather than on
+    whichever period the vendor happens to show first; the top-level fields are the
+    newest fiscal year (`period_end`). Values are Decimal; a field the origin does not
+    publish is None.
+    """
+
+    raw_bytes: bytes
+    period_end: date
+    values: Mapping[str, Decimal | None]
+    by_period_end: Mapping[date, Mapping[str, Decimal | None]]
+    knowable_at: datetime
+    currency: str = "USD"
+    accounting_standards: str | None = None
+
+
+# (ticker, cutoff) -> the origin's assertion, or None when it has nothing for the issuer.
+FinancialFactCorroborator = Callable[[str, date], FinancialFactAssertion | None]
+
+
+@dataclass(frozen=True)
+class FinancialFactCorroboratingOrigin:
+    """An independent second financial-fact origin, with the parser identity it asserts under."""
+
+    origin: str
+    parser_version: str
+    mapping_version: str
+    confidence: Decimal
+    fetch: FinancialFactCorroborator
+    raw_source: DataSource = DataSource.MOOMOO
 
 
 @dataclass(frozen=True)
@@ -777,6 +837,7 @@ class SecFinancialFactAdapter:
         *,
         headcount_extractor: HeadcountExtractor | None = None,
         mapping_version: str = MAPPING_VERSION,
+        corroborating_origins: Sequence[FinancialFactCorroboratingOrigin] = (),
     ) -> None:
         self._targets = targets
         self._fetcher = fetcher
@@ -785,6 +846,56 @@ class SecFinancialFactAdapter:
         # rules behind it. Without that, advancing the pointer silently changes what
         # numbers mean while every row still claims the same mapping identity.
         self._mapping_version = mapping_version
+        self._corroborating_origins = tuple(corroborating_origins)
+
+    def _corroborate(self, target: SecTarget) -> tuple[Corroboration, ...]:
+        """Ask every configured second origin about this issuer; an origin that errors,
+        has nothing, or answers with a period knowable only after the cutoff is absent."""
+        if not target.ticker:
+            return ()
+        found: list[Corroboration] = []
+        for origin in self._corroborating_origins:
+            try:
+                assertion = origin.fetch(target.ticker, target.cutoff)
+            except Exception:  # noqa: BLE001 - a second origin never fails the primary capture
+                continue
+            if assertion is None or assertion.knowable_at.date() > target.cutoff:
+                continue
+            payload: dict[str, Any] = {
+                "issuer_id": target.issuer_id,
+                "instrument_id": target.instrument_id,
+                "listing_id": target.listing_id,
+                "currency": assertion.currency,
+                "origin": origin.origin,
+                "period_end": assertion.period_end.isoformat(),
+                "accounting_standards": assertion.accounting_standards,
+                # Sorted so the payload hash depends on the series, not on dict order.
+                "by_period_end": {
+                    end.isoformat(): {name: _s(values.get(name)) for name in CORROBORATED_FINANCIAL_FIELDS}
+                    for end, values in sorted(assertion.by_period_end.items())
+                },
+            }
+            for name in CORROBORATED_FINANCIAL_FIELDS:
+                payload[name] = _s(assertion.values.get(name))
+            found.append(
+                Corroboration(
+                    origin=origin.origin,
+                    transaction_time=assertion.knowable_at,
+                    record=NormalizedRecord(
+                        payload=payload,
+                        parser_version=origin.parser_version,
+                        mapping_version=origin.mapping_version,
+                    ),
+                    confidence=origin.confidence,
+                    raw=RawResponse(
+                        body=assertion.raw_bytes,
+                        source=origin.raw_source,
+                        record_id=f"{origin.origin}:{target.ticker}:{assertion.period_end.isoformat()}",
+                    ),
+                    normalized_sha256=canonical_sha256(payload),
+                )
+            )
+        return tuple(found)
 
     def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome:
         target = self._targets.get(work_item.work_item_id)
@@ -890,6 +1001,7 @@ class SecFinancialFactAdapter:
             record=NormalizedRecord(
                 payload=payload, parser_version=PARSER_VERSION, mapping_version=self._mapping_version
             ),
+            corroborations=self._corroborate(target),
         )
 
 
@@ -1012,6 +1124,7 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
     from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
     from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
     from data_engine.datahub.production_topt.issuer_registry import resolve_issuer_classifications
+    from data_engine.datahub.production_topt.moomoo_origin import moomoo_financials_origin
     from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION
     from data_engine.sources import sec
 
@@ -1055,10 +1168,12 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
             predecessor_cik=(
                 predecessors.get(cell.listing_id) if predecessors.get(cell.listing_id) not in (None, cik) else None
             ),
+            ticker=cell.ticker,
         )
     # Resolved once per run through the governed pointer, so every cell in the run is
     # parsed by ONE ruleset and the observations can name it.
     ruleset = resolve_ruleset(connection)
+    second_origin = moomoo_financials_origin()
     return SecFinancialFactAdapter(
         targets,
         partial(sec_financial_fetcher, ruleset=ruleset),
@@ -1068,4 +1183,5 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
         # table exists to end (#70).
         headcount_extractor=None if connection is None else PostgresHeadcountExtractor(connection),
         mapping_version=f"{MAPPING_VERSION}+{ruleset.content_sha256[:12]}",
+        corroborating_origins=() if second_origin is None else (second_origin,),
     )

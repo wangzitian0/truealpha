@@ -117,6 +117,16 @@ class Settings(RuntimeSettings):
     # ge=1: 0 would make throttle() index an empty deque instead of meaning
     # "no throttle" — misconfiguration must fail at startup, not mid-sweep.
     moomoo_calls_per_30s: int = Field(default=8, ge=1, json_schema_extra={"source": "code", "group": "moomoo"})
+    # The two governed moomoo origins (`datahub.production_topt.moomoo_origin`): a third
+    # market-price origin from the daily K-line and a second financial-fact origin from
+    # the annual statements. Off by default so an environment opts in deliberately —
+    # staging first, production after a scheduled tick has shown the ledger rows and the
+    # reconciliation cells. Enabling either with no OpenD coordinates fails at route
+    # build rather than dialling a guess.
+    moomoo_kline_origin_enabled: bool = Field(default=False, json_schema_extra={"source": "code", "group": "moomoo"})
+    moomoo_financials_origin_enabled: bool = Field(
+        default=False, json_schema_extra={"source": "code", "group": "moomoo"}
+    )
     # Optional; raises OpenFIGI mapping limits from 25 req/min x 10 jobs to
     # 25 req/6s x 100 jobs. Free key: https://www.openfigi.com/api
     openfigi_api_key: str = Field(

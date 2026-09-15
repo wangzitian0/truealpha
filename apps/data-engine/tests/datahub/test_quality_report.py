@@ -695,3 +695,158 @@ def test_the_volume_tolerance_absorbs_late_prints_and_still_catches_a_different_
         ]
     )
     assert primary_listing_only["fields"]["volume"]["outcome"] == "conflict_abstained"
+
+
+# --- financial-fact fusion: alignment on the primary's period, per field ----------------
+
+
+def _financial_entry(source: str, payload: dict, *, knowable: str = "2026-02-18"):
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
+    from data_engine.datahub.quality_report import classify_financial_fact_entry
+
+    parser = PARSER_VERSION if source == "sec" else "moomoo-financials-parser:v1"
+    digest = hashlib.sha256(f"{source}:{sorted(payload.items())!r}".encode()).hexdigest()
+    entry = classify_financial_fact_entry(
+        parser,
+        datetime.fromisoformat(knowable).replace(tzinfo=UTC),
+        Decimal("0.9"),
+        digest,
+        "normalized-observation:" + hashlib.sha256(source.encode()).hexdigest(),
+        "source-vintage:" + "a" * 64,
+        "raw-object:" + "b" * 64,
+        payload,
+    )
+    assert entry is not None
+    return entry
+
+
+_PRIMARY_FACT = {
+    "revenue": "100000000",
+    "revenue_period_end": "2025-12-31",
+    "gross_profit": "40000000",
+    "operating_period_end": "2025-12-31",
+    "net_income": "9000000",
+    "total_assets": "500000000",
+    "vintage": {"net_income": {"period_end": "2025-12-31"}, "total_assets": {"period_end": "2025-12-31"}},
+}
+_MOOMOO_FACT = {
+    "origin": "moomoo-financials",
+    "by_period_end": {
+        "2024-12-31": {"revenue": "80000000", "gross_profit": "30000000", "net_income": "5000000"},
+        "2025-12-31": {
+            "revenue": "100000000",
+            "gross_profit": "40000000",
+            "net_income": "9060000",  # +0.67%: the ProfitLoss-vs-NetIncomeLoss gap, inside 1%
+            "total_assets": "500000000",
+        },
+    },
+}
+
+
+def test_every_dated_primary_field_reconciles_at_its_own_period() -> None:
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.quality_report import reconcile_financial_fact_entries
+
+    cell = reconcile_financial_fact_entries(
+        "listing:xnas:t",
+        [_financial_entry("sec", _PRIMARY_FACT), _financial_entry("moomoo", _MOOMOO_FACT)],
+        cutoff=datetime(2026, 3, 31, tzinfo=UTC),
+    )
+    assert cell["outcome"] == "agreed" and cell["origin_groups"] == 2
+    assert set(cell["fields"]) == {"revenue", "gross_profit", "net_income", "total_assets"}
+    assert cell["fields"]["net_income"]["outcome"] == "agreed", "0.67% is inside the declared 1%"
+    assert cell["fields"]["net_income"]["selected_value"] == "9000000", "the primary's number is served"
+    assert cell["fields"]["revenue"]["selected_source"] == "sec-company-facts:v1"
+
+
+def test_an_undated_primary_field_is_not_compared() -> None:
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.quality_report import reconcile_financial_fact_entries
+
+    undated = {k: v for k, v in _PRIMARY_FACT.items() if k != "vintage"}
+    cell = reconcile_financial_fact_entries(
+        "listing:xnas:t",
+        [_financial_entry("sec", undated), _financial_entry("moomoo", _MOOMOO_FACT)],
+        cutoff=datetime(2026, 3, 31, tzinfo=UTC),
+    )
+    assert set(cell["fields"]) == {"revenue", "gross_profit"}, "no period, no alignment, no comparison"
+    assert cell["outcome"] == "agreed"
+
+
+def test_a_second_origin_at_another_period_is_insufficient_never_a_conflict() -> None:
+    """The financial analogue of #622: a vendor that has not published the primary's
+    period has not disagreed with it."""
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.quality_report import reconcile_financial_fact_entries
+
+    stale = {**_MOOMOO_FACT, "by_period_end": {"2024-12-31": _MOOMOO_FACT["by_period_end"]["2024-12-31"]}}
+    cell = reconcile_financial_fact_entries(
+        "listing:xnas:t",
+        [_financial_entry("sec", _PRIMARY_FACT), _financial_entry("moomoo", stale)],
+        cutoff=datetime(2026, 3, 31, tzinfo=UTC),
+    )
+    assert cell["outcome"] == "insufficient_independent_origins"
+    assert all(g["outcome"] == "insufficient_independent_origins" for g in cell["fields"].values())
+
+
+def test_one_conflicting_field_abstains_the_subject() -> None:
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.quality_report import reconcile_financial_fact_entries
+
+    conflicting = {
+        **_MOOMOO_FACT,
+        "by_period_end": {"2025-12-31": {**_MOOMOO_FACT["by_period_end"]["2025-12-31"], "revenue": "103000000"}},
+    }
+    cell = reconcile_financial_fact_entries(
+        "listing:xnas:t",
+        [_financial_entry("sec", _PRIMARY_FACT), _financial_entry("moomoo", conflicting)],
+        cutoff=datetime(2026, 3, 31, tzinfo=UTC),
+    )
+    assert cell["fields"]["revenue"]["outcome"] == "conflict_abstained"
+    assert cell["fields"]["gross_profit"]["outcome"] == "agreed"
+    assert cell["outcome"] == "conflict_abstained", "a subject with any disagreeing field is not corroborated"
+
+
+def test_a_subject_without_a_primary_is_unavailable_and_an_unknown_vintage_is_ignored() -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from data_engine.datahub.quality_report import classify_financial_fact_entry, reconcile_financial_fact_entries
+
+    only_second = reconcile_financial_fact_entries(
+        "listing:xnas:t", [_financial_entry("moomoo", _MOOMOO_FACT)], cutoff=datetime(2026, 3, 31, tzinfo=UTC)
+    )
+    assert only_second["outcome"] == "unavailable" and only_second["fields"] == {}
+    assert (
+        classify_financial_fact_entry(
+            "probe-parser:v1",
+            datetime(2026, 1, 1, tzinfo=UTC),
+            Decimal("0.5"),
+            "a" * 64,
+            "normalized-observation:" + "b" * 64,
+            "source-vintage:" + "c" * 64,
+            "raw-object:" + "d" * 64,
+            {},
+        )
+        is None
+    )
+
+
+def test_the_financial_policy_is_the_measured_one_and_the_price_policy_names_the_third_origin() -> None:
+    from decimal import Decimal
+
+    from data_engine.datahub.quality_report import FINANCIAL_FACT_RECONCILIATION_POLICY, RECONCILIATION_POLICY
+
+    assert FINANCIAL_FACT_RECONCILIATION_POLICY.source_priority == ("sec-company-facts:v1", "moomoo-financials:v1")
+    assert FINANCIAL_FACT_RECONCILIATION_POLICY.relative_tolerance == Decimal("0.01")
+    assert FINANCIAL_FACT_RECONCILIATION_POLICY.absolute_tolerance == Decimal("0")
+    assert RECONCILIATION_POLICY.source_priority == ("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1")
+    assert RECONCILIATION_POLICY.policy_version == "market-price-fusion:v3"
+    assert RECONCILIATION_POLICY.relative_tolerance == Decimal("0.003"), "the third origin does not move the tolerance"

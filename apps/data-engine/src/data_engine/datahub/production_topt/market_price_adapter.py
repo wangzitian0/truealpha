@@ -314,8 +314,10 @@ def quote_from_chart(body: bytes, bars: Sequence[PriceBar], *, cutoff: date) -> 
 
 def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> MarketPriceAdapter:
     """The market-price source's own routing: one target per planned cell, the Yahoo
-    primary and the Twelve Data second origin. Named by the `yahoo-chart` registration
-    in `source_registrations.py`; the composition root never sees these types."""
+    primary, the Twelve Data second origin and the moomoo K-line third origin. Named by
+    the `yahoo-chart` registration in `source_registrations.py`; the composition root
+    never sees these types."""
+    from data_engine.datahub.production_topt.moomoo_origin import moomoo_kline_origin
     from data_engine.datahub.production_topt.twelve_data_origin import twelve_data_origin
 
     targets = {
@@ -330,9 +332,7 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> MarketPric
         )
         for cell in cells
     }
-    second_origin = twelve_data_origin()
-    return MarketPriceAdapter(
-        targets,
-        yahoo_quote_fetcher,
-        corroborating_origins=() if second_origin is None else (second_origin,),
-    )
+    # Priority order is the fusion policy's (`quality_report.RECONCILIATION_POLICY`); an
+    # origin that is not configured for this environment is simply not asked.
+    origins = [origin for origin in (twelve_data_origin(), moomoo_kline_origin()) if origin is not None]
+    return MarketPriceAdapter(targets, yahoo_quote_fetcher, corroborating_origins=tuple(origins))

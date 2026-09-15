@@ -125,6 +125,16 @@ Verified working end-to-end for all 4 tickers.
   own financials have the same "opaque tag" problem SEC XBRL does (see above), just
   with integer IDs instead of XBRL tag strings. A field_id → meaning mapping needs to be
   sourced separately before this is usable; don't assume the field names are self-evident.
+- **Field ids calibrated against SEC (2026-09-15)**: comparing the annual
+  (`financial_type == 7`) rows with the XBRL facts in `sec/` at the same period end gives
+  income statement 8001 = total revenue, 8004 = gross profit, 8037 = net income
+  (`ProfitLoss`, i.e. before minority interest — NICE FY2024 is 0.70% above
+  `NetIncomeLoss`), 8047 / 8048 = basic / diluted EPS, and balance sheet 8001 = total
+  assets — byte-equal for DDOG, DUOL, NICE and SHOP across FY2023–FY2025 except the
+  net-income definition gap. `date_time` is midnight Asia/Shanghai on the period-end date,
+  so `date_time_str` (its UTC rendering) is the day BEFORE the SEC `period_end`. Both facts
+  are standing checks in `tests/production_topt/test_moomoo_origin.py`, which byte-pins
+  these sample files, and they drive the `moomoo-financials:v1` origin.
 - **Morningstar coverage exists for all 4 tickers** (star ratings 2–5), but
   `economic_moat_label` came back empty for all 4 despite the star rating being
   populated — coverage is per-field, not all-or-nothing even within one endpoint response.
