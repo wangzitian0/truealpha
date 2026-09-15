@@ -31,6 +31,7 @@ candidates with the evidence each was read from.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 from collections import Counter
@@ -162,37 +163,179 @@ _NOT_A_SEGMENT = re.compile(
 )
 
 
-#: An issuer stating, in its own words, that it has ONE segment. Measured against the
-#: packaged corpus, not invented: it catches DDOG ("a single operating and reportable
-#: segment"), SHOP ("one single operating and reportable segment"), DUOL and PLUG ("a single
-#: operating segment"), and fires on none of ADM, AVGO, JPM or NICE.
+#: How many segments the issuer says it has, in the form it files for machines: the inline
+#: XBRL tag on the count in its own segment note. This — never a sentence — is what decides
+#: that an issuer has ONE segment.
 #:
-#: This is not a recall fallback. A single-segment issuer is a DETERMINATE answer, and for
-#: init.md question 6 it is the most interesting one — a pure-play is the purest name under
-#: its theme. Refusing them, which this module did until now, would make the ranking
-#: systematically exclude exactly the companies it exists to find.
+#: A single-segment issuer is a DETERMINATE answer, and for init.md question 6 the most
+#: interesting one: a pure-play is the purest name under its theme. But its one-part partition
+#: balances by construction, so nothing downstream can catch a wrong one, and the evidence it
+#: rests on has to be the strongest the filing offers. Prose decided until #822, and measured
+#: over the latest annual filing of every issuer the standards lane walks (106 filings,
+#: 2026-09-15), a pattern for "one/single operating/reportable segment" fired on 48 — at least
+#: five of them issuers with SEVERAL segments. Berkshire Hathaway was landed as one segment on
+#: "expenses considered significant for one operating segment may not be significant in
+#: others"; AMD on "we combined the Client and Gaming segments into one reportable segment";
+#: AEP and Exelon on sentences about a subsidiary registrant. 97 of the 106 filings tag the
+#: count, and each of those five tags two or more, or one only under a subsidiary's dimension.
+_SEGMENT_COUNT_CONCEPTS = ("us-gaap:NumberOfReportableSegments", "us-gaap:NumberOfOperatingSegments")
+_NON_FRACTION = re.compile(r"<ix:nonFraction\b[^>]*>", re.IGNORECASE)
+_NON_FRACTION_END = re.compile(r"</ix:nonFraction\s*>", re.IGNORECASE)
+_ATTRIBUTE = re.compile(r"([\w:.-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
+_CONTEXT = re.compile(
+    r"<xbrli:context\b[^>]*\bid\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</xbrli:context\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_PERIOD_END = re.compile(r"<xbrli:(?:endDate|instant)>\s*(\d{4}-\d{2}-\d{2})\s*<", re.IGNORECASE)
+#: A context qualified by a dimension describes PART of the filer: a subsidiary registrant in
+#: a combined filing (AEP, Exelon) or one of several segments (CSX's railroad).
+_DIMENSIONAL = re.compile(r"<xbrli:(?:segment|scenario)\b", re.IGNORECASE)
+#: The hidden header, where a filer may tag a count it never prints.
+_HIDDEN_HEADER = re.compile(r"<ix:header\b.*?</ix:header\s*>", re.IGNORECASE | re.DOTALL)
+_TAG_MARKUP = re.compile(r"<[^>]+>")
+#: `ixt-sec:numwordsen` is how a filer tags the word ("one reportable segment"); the others tag
+#: digits. Every form met in the 106 filings is one of the two.
+_NUMBER_WORDS = {
+    "no": 0,
+    "none": 0,
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+#: Enough of the sentence around the statement to be worth reading back. The filing usually
+#: says what the one segment DOES right there ("one reportable segment, Payment Services"),
+#: which is the only description a classifier will get.
+_SINGLE_SEGMENT_SPAN = 240
+_STATEMENT_LEAD = 90
+_MARK = "⦃segment-count⦄"
+
+
+@dataclass(frozen=True)
+class DeclaredSegmentCount:
+    """The filer's own count of its segments, for the latest period it tags one."""
+
+    concept: str
+    #: None when the tags at that period disagree or cannot be read — which refuses the
+    #: single-segment path exactly as firmly as a count of several does.
+    value: int | None
+    period_end: date
+    #: The printed sentence the count is tagged in, when it is printed at all.
+    statement: str | None
+
+    @property
+    def evidence(self) -> str:
+        return f"{self.concept}={self.value}@{self.period_end.isoformat()}"
+
+
+def declared_segment_count(body: bytes) -> DeclaredSegmentCount | None:
+    """The segment count the filing's inline XBRL states, or None when it tags none.
+
+    Three rules, each taken from a filing that breaks the simpler one:
+
+    - Only a fact about the whole filer counts. A dimensional context is about a part of it.
+    - The latest period decides. Western Digital tags `two` for the day before its Flash
+      separation and `one` for the fiscal year.
+    - The reportable count outranks the operating count. Ross and Booking aggregate several
+      operating segments into ONE reportable segment, and a reportable segment is what the
+      standard measures; the operating count answers only when no reportable count is tagged.
+    """
+    raw = body.decode("utf-8", "ignore")
+    periods: dict[str, date] = {}
+    for context_id, inner in _CONTEXT.findall(raw):
+        ends = _PERIOD_END.findall(inner)
+        if ends and not _DIMENSIONAL.search(inner):
+            periods[context_id] = date.fromisoformat(ends[-1])
+    hidden = [header.span() for header in _HIDDEN_HEADER.finditer(raw)]
+
+    stated: dict[str, list[tuple[date, int | None, int]]] = {}
+    for tag in _NON_FRACTION.finditer(raw):
+        attributes = {name: double or single for name, double, single in _ATTRIBUTE.findall(tag.group(0))}
+        concept = attributes.get("name", "")
+        period_end = periods.get(attributes.get("contextRef", ""))
+        if concept not in _SEGMENT_COUNT_CONCEPTS or period_end is None:
+            continue
+        # To the NEXT close, with markup stripped: a filer tagging one printed word with both
+        # concepts nests one tag inside the other (DUOL, SHOP), and both read the same word.
+        end = _NON_FRACTION_END.search(raw, tag.end())
+        shown = _TAG_MARKUP.sub(" ", raw[tag.end() : end.start() if end else tag.end()])
+        stated.setdefault(concept, []).append((period_end, _count(html.unescape(shown)), tag.start()))
+
+    for concept in _SEGMENT_COUNT_CONCEPTS:
+        facts = stated.get(concept)
+        if not facts:
+            continue
+        latest = max(period_end for period_end, _, _ in facts)
+        values = {value for period_end, value, _ in facts if period_end == latest}
+        value = values.pop() if len(values) == 1 else None
+        printed = [
+            offset
+            for period_end, _, offset in facts
+            if period_end == latest and not any(start <= offset < stop for start, stop in hidden)
+        ]
+        statement = _statement_at(raw, printed[0], hidden) if value is not None and printed else None
+        return DeclaredSegmentCount(concept, value, latest, statement)
+    return None
+
+
+def _count(shown: str) -> int | None:
+    word = " ".join(shown.split()).lower()
+    if word in _NUMBER_WORDS:
+        return _NUMBER_WORDS[word]
+    try:
+        number = Decimal(word.replace(",", ""))
+    except ArithmeticError:
+        return None
+    return int(number) if number.is_finite() and number == number.to_integral_value() else None
+
+
+def _statement_at(raw: str, offset: int, hidden: list[tuple[int, int]]) -> str | None:
+    """The printed sentence around the tag at `offset`, read back as plain text.
+
+    The tag's own position is marked before the markup is stripped, because the printed word
+    ("one") occurs thousands of times in a filing and only the mark says which is the tagged
+    one. The fragment starts and ends on a tag boundary so no half-tag reads as text, and never
+    reaches back into a hidden header.
+    """
+    start = max([offset - 6000] + [stop for _, stop in hidden if stop <= offset])
+    start = raw.find("<", max(0, start))
+    stop = raw.rfind(">", offset, offset + 3000) + 1
+    fragment = f"{raw[start:offset]} {_MARK} {raw[offset:stop]}"
+    text = filing_plain_text(fragment.encode("utf-8"))
+    at = text.find(_MARK)
+    if at < 0:
+        return None
+    lead = text[max(0, at - _STATEMENT_LEAD) : at]
+    return " ".join((lead + text[at + len(_MARK) : at + len(_MARK) + _SINGLE_SEGMENT_SPAN]).split())
+
+
+#: The prose that USED to decide (see `_SEGMENT_COUNT_CONCEPTS` for why it no longer does).
+#: It survives for one job: when a filer tags its count only in the hidden header (DDOG, LLY,
+#: TMUS), there is no tagged sentence to read back, and this finds the sentence a classifier is
+#: shown instead. Choosing a poor description costs a declined classification, never a
+#: partition.
 _SINGLE_SEGMENT = re.compile(
     r"\b(?:one|a\s+single|single)\s+(?:operating|reportable)"
     r"(?:\s+and\s+(?:operating|reportable))?\s+segment\b",
     re.IGNORECASE,
 )
-#: Enough of the sentence around the statement to be worth reading back. The filing usually
-#: says what the one segment DOES right there ("providing an observability and security
-#: platform for cloud applications"), which is the only description a classifier will get.
-_SINGLE_SEGMENT_SPAN = 240
 
 
 def single_segment_statement(text: str) -> str | None:
-    """The filing's own sentence saying it operates as one segment, or None.
-
-    Returned verbatim because it is the evidence AND the description: a single-segment
-    issuer has no segment table, so this sentence is the whole of what the filing says about
-    the thing being classified.
-    """
+    """A sentence in the filing text that talks about one segment, or None. Description only."""
     match = _SINGLE_SEGMENT.search(text)
     if match is None:
         return None
-    start = max(0, match.start() - 90)
+    start = max(0, match.start() - _STATEMENT_LEAD)
     return " ".join(text[start : match.end() + _SINGLE_SEGMENT_SPAN].split())
 
 
@@ -497,22 +640,28 @@ def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> Cons
 SEGMENT_SOURCE = "10k-segment-extraction"
 
 
-def partition_id_for(cik: int, period_end: date, parts: Sequence[tuple[str, Decimal]]) -> str:
+def partition_id_for(cik: int, period_end: date, parts: Sequence[tuple[str, Decimal]], *, extractor: str) -> str:
     """The identity of one accepted set, addressed by its content.
 
     Same filing extracted twice lands the same id, so a re-run collapses onto the rows it
     already wrote instead of duplicating a segment set — and a RESTATEMENT, which changes a
     part, is a different set with a different id rather than an update to history.
 
-    `(cik, period_end, parts)` and nothing else: not the accession, because the same segments
-    restated in a later filing are the same claim about the same period; not the residual,
-    because a set is what its parts are.
+    `(cik, period_end, parts, extractor)` and nothing else: not the accession, because the same
+    segments restated in a later filing are the same claim about the same period; not the
+    residual, because a set is what its parts are.
+
+    The extractor IS part of it, because the rule that accepted a set is part of what the set
+    claims. Without it a withdrawn rule's rows would block their own replacement: the plane
+    stops admitting them, the cell reopens, the new rule accepts the same parts — and lands
+    nothing, because the id already exists (#822).
     """
     canonical = json.dumps(
         {
             "cik": cik,
             "period_end": period_end.isoformat(),
             "parts": sorted((name, str(value)) for name, value in parts),
+            "extractor": extractor,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -582,8 +731,10 @@ def record_segment_partition(
 
 #: What a one-part partition is named. Not the issuer's ticker and not a guess at its
 #: business: the classifier is handed `evidence_ref`'s statement as the description, and this
-#: is the row's label for a reader scanning the plane.
-SINGLE_SEGMENT_NAME = "Single operating segment"
+#: is the row's label for a reader scanning the plane. REPORTABLE, not operating: Booking tags
+#: five operating segments aggregated into one reportable segment, and the reportable segment
+#: is what the standard measures.
+SINGLE_SEGMENT_NAME = "Single reportable segment"
 
 
 def _single_segment_outcome(
@@ -593,14 +744,18 @@ def _single_segment_outcome(
     record_cik: int,
     document: Any,
     oracle: ConsolidatedRevenue,
-    statement: str,
+    declared: DeclaredSegmentCount,
+    statement: str | None,
     standard: MetricStandard,
     write: bool,
 ) -> ExtractionOutcome:
-    """Land (or report) the determinate partition of an issuer that states one segment."""
+    """Land (or report) the determinate partition of an issuer that declares one segment."""
     parts = [(SINGLE_SEGMENT_NAME, oracle.value)]
-    partition_id = partition_id_for(record_cik, oracle.period_end, parts)
-    summary = f"1 segment (the whole issuer) accounting for {oracle.value} for {oracle.period_end}"
+    partition_id = partition_id_for(record_cik, oracle.period_end, parts, extractor=RULE_SINGLE_SEGMENT)
+    summary = (
+        f"1 segment (the whole issuer) accounting for {oracle.value} for {oracle.period_end}, "
+        f"declared as {declared.evidence}"
+    )
     if not write:
         return ExtractionOutcome(
             record_cik,
@@ -609,7 +764,7 @@ def _single_segment_outcome(
             accession=document.accession,
             form=document.form,
             filing_date=document.filing_date,
-            detail=f"would land {summary}: {statement[:160]}",
+            detail=f"would land {summary}: {(statement or '')[:160]}",
         )
     if partition_already_recorded(connection, partition_id):
         return ExtractionOutcome(
@@ -630,10 +785,13 @@ def _single_segment_outcome(
         partition_total=oracle.value,
         partition_residual=Decimal(0),
         knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
-        # The statement travels ON the row. Everything else here balances by construction, so
-        # this sentence is the only thing a reader can check the claim against.
-        evidence_ref=(
-            f"accession={document.accession} form={document.form} single_segment_statement={statement[:400]}"
+        # The declaration travels ON the row, and so does the sentence. Everything else here
+        # balances by construction, so these are the only things a reader can check the claim
+        # against. The statement goes LAST: the theme-purity reader takes everything after
+        # its marker as the description.
+        evidence_ref=" ".join(
+            [f"accession={document.accession}", f"form={document.form}", f"segment_count={declared.evidence}"]
+            + ([f"single_segment_statement={statement[:400]}"] if statement else [])
         ),
         extractor=RULE_SINGLE_SEGMENT,
         confidence=confidence_for(standard.confidence_policy_id, RULE_SINGLE_SEGMENT),
@@ -646,11 +804,11 @@ def _single_segment_outcome(
         accession=document.accession,
         form=document.form,
         filing_date=document.filing_date,
-        detail=f"{partition_id} landed {summary}: {statement[:160]}",
+        detail=f"{partition_id} landed {summary}: {(statement or '')[:160]}",
     )
 
 
-def _no_candidate_detail(text: str, *, has_oracle: bool = True) -> str:
+def _no_candidate_detail(text: str, *, has_oracle: bool = True, declared: DeclaredSegmentCount | None = None) -> str:
     """Which of FOUR things happened, because they have four different owners.
 
     The fourth is the one that hid the largest gap in this module's coverage. Nine of the
@@ -672,10 +830,10 @@ def _no_candidate_detail(text: str, *, has_oracle: bool = True) -> str:
     module keeps being caught by — twice in one day, and the second time in the comment
     describing the first. Four states, four sentences.
     """
-    if not has_oracle and single_segment_statement(text) is not None:
+    if not has_oracle and declared is not None and declared.value == 1:
         return (
-            "states a single operating segment, but this environment holds no consolidated "
-            "revenue to file the partition against"
+            f"declares a single segment ({declared.evidence}), but this environment holds no "
+            "consolidated revenue to file the partition against"
         )
     found = len(_windows(text))
     if not found:
@@ -741,26 +899,42 @@ def extract_segment_revenue(
     # miss: the one segment IS the company, so the partition is the consolidated revenue in
     # one part. It satisfies the accounting identity by construction — which is exactly why
     # it has to say so on the row: the identity gives these no independent check, and the
-    # filing's own sentence is the whole of the evidence.
+    # filer's own declaration is the whole of the evidence.
     #
-    # Checked BEFORE the tables, not as a fallback after them: an issuer that states one
+    # Checked BEFORE the tables, not as a fallback after them: an issuer that declares one
     # segment and also prints a geography or product breakdown must not have that breakdown
     # accepted as its reportable segments.
-    statement = single_segment_statement(text)
-    if statement is not None and oracle is not None:
+    declared = declared_segment_count(document.body)
+    if declared is not None and declared.value == 1 and oracle is not None:
+        if declared.period_end != oracle.period_end:
+            # The partition is filed under the ORACLE's period, so a count declared for a
+            # different one is not evidence about it: a filer that reorganized between the two
+            # would be landed as one segment for a year it had several.
+            return ExtractionOutcome(
+                cik,
+                "no_candidate",
+                accession=document.accession,
+                form=document.form,
+                filing_date=document.filing_date,
+                detail=(
+                    f"declares a single segment for {declared.period_end} ({declared.concept}), but "
+                    f"the consolidated revenue on file is for {oracle.period_end}"
+                ),
+            )
         return _single_segment_outcome(
             connection,
             cik=cik,
             record_cik=record_cik,
             document=document,
             oracle=oracle,
-            statement=statement,
+            declared=declared,
+            statement=declared.statement or single_segment_statement(text),
             standard=standard,
             write=write,
         )
 
     # Recall runs only now, so "before the tables" is the code's order and not just a claim
-    # about it — a filing that states one segment never pays for a sweep whose result is
+    # about it — a filing that declares one segment never pays for a sweep whose result is
     # already known to be unused (review on #808).
     recalled = segment_candidates(text)
     if not recalled:
@@ -770,7 +944,7 @@ def extract_segment_revenue(
             accession=document.accession,
             form=document.form,
             filing_date=document.filing_date,
-            detail=_no_candidate_detail(text, has_oracle=oracle is not None),
+            detail=_no_candidate_detail(text, has_oracle=oracle is not None, declared=declared),
         )
 
     candidates = as_candidates(recalled)
@@ -787,7 +961,7 @@ def extract_segment_revenue(
             named = ", ".join(
                 f"{recalled[i].segment_name}={recalled[i].stated_value}" for i in verdict.candidate_indices
             )
-            partition_id = partition_id_for(record_cik, oracle.period_end, parts)
+            partition_id = partition_id_for(record_cik, oracle.period_end, parts, extractor=verdict.extractor)
             summary = (
                 f"{len(parts)} segments accounting for {verdict.total} "
                 f"(residual {verdict.residual}) for {oracle.period_end}: {named}"

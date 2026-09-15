@@ -81,6 +81,22 @@ def _seed(connection, *, segments=SEGMENTS, total=TOTAL, residual="0", partition
         )
 
 
+def _seed_single_segment(
+    connection, *, extractor, evidence, partition="segment-partition:" + "a" * 64, knowable=KNOWABLE
+):
+    connection.execute(
+        """
+        insert into staging.issuer_segment_revenue_facts
+            (cik, segment_name, segment_revenue, partition_id, partition_total,
+             partition_residual, knowable_at, period_end, source, evidence_ref,
+             extractor, confidence)
+        values (%s, 'Single reportable segment', %s, %s, %s, 0, %s, '2025-12-31',
+                '10k-segment-extraction', %s, %s, 0.75)
+        """,
+        (CIK, TOTAL, partition, TOTAL, knowable, evidence, extractor),
+    )
+
+
 def _answers(*verdicts):
     """One canned classifier reply per model call, in order."""
     replies = [
@@ -340,7 +356,7 @@ def test_a_rerun_refreshes_provenance_not_just_the_numbers(connection, seated, m
 def test_a_single_segment_issuer_is_described_to_the_classifier_by_its_filing(connection, seated, monkeypatch) -> None:
     """Without this, the single-segment path lands rows and answers nothing.
 
-    Its one part is labelled `Single operating segment`. No classifier can judge that against
+    Its one part is labelled `Single reportable segment`. No classifier can judge that against
     any theme, so every pure-play would decline, fall below the coverage floor, and be
     refused — the exact outcome the single-segment path exists to prevent. The filing's own
     sentence is on the row because it says what the company DOES, and that is what the model
@@ -350,22 +366,12 @@ def test_a_single_segment_issuer_is_described_to_the_classifier_by_its_filing(co
         "Segment Information The Company has a single operating and reportable segment, "
         "providing an observability and security platform for cloud applications"
     )
-    connection.execute(
-        """
-        insert into staging.issuer_segment_revenue_facts
-            (cik, segment_name, segment_revenue, partition_id, partition_total,
-             partition_residual, knowable_at, period_end, source, evidence_ref,
-             extractor, confidence)
-        values (%s, 'Single operating segment', %s, %s, %s, 0, %s, '2025-12-31',
-                '10k-segment-extraction', %s, 'rule:single-segment:v1', 0.75)
-        """,
-        (
-            CIK,
-            TOTAL,
-            "segment-partition:" + "a" * 64,
-            TOTAL,
-            KNOWABLE,
-            f"accession=0001628280-26-008819 form=10-K single_segment_statement={statement}",
+    _seed_single_segment(
+        connection,
+        extractor="rule:single-segment:v2",
+        evidence=(
+            "accession=0001628280-26-008819 form=10-K "
+            f"segment_count=us-gaap:NumberOfReportableSegments=1@2025-12-31 single_segment_statement={statement}"
         ),
     )
     transport = _answers([{"index": 0, "in_theme": True, "reason": "observability for cloud"}])
@@ -386,4 +392,36 @@ def test_a_single_segment_issuer_is_described_to_the_classifier_by_its_filing(co
         (RUN_ID, CIK),
     ).fetchone()
     assert theme_share == Decimal(1), "a pure-play judged in the theme is 100% of it"
-    assert segment_name == "Single operating segment", "the plane keeps the row's own label"
+    assert segment_name == "Single reportable segment", "the plane keeps the row's own label"
+
+
+def test_a_withdrawn_rules_partition_is_not_read_even_when_it_is_the_newest(connection) -> None:
+    """#822. `rule:single-segment:v1` landed Berkshire Hathaway as one segment, and the plane is
+    append-only, so the row cannot be deleted. It is withdrawn instead — and the reader has to
+    act as if it were never written.
+
+    Two properties, both about WHERE the filter sits. The withdrawn partition here is newer
+    than an admissible one, so a reader that picked the newest vintage first and filtered
+    second would return nothing for an issuer that has a perfectly good partition.
+    """
+    _seed(connection)  # the admissible exhaustive partition, knowable 2025-12-12
+    _seed_single_segment(
+        connection,
+        extractor="rule:single-segment:v1",
+        evidence="accession=0001067983-26-000001 form=10-K single_segment_statement=significant for one operating segment",
+        partition="segment-partition:" + "e" * 64,
+        knowable=datetime(2026, 3, 2, tzinfo=UTC),
+    )
+    mine = [p for p in load_partitions(connection, cutoff=CUTOFF) if p.cik == CIK]
+    assert len(mine) == 1
+    assert mine[0].partition_id == PARTITION, "the older admissible partition answers, not the newer withdrawn one"
+    assert dict(mine[0].parts) == dict(SEGMENTS)
+
+
+def test_an_issuer_whose_only_partition_was_withdrawn_has_none(connection) -> None:
+    _seed_single_segment(
+        connection,
+        extractor="rule:single-segment:v1",
+        evidence="accession=0001067983-26-000001 form=10-K single_segment_statement=significant for one operating segment",
+    )
+    assert [p for p in load_partitions(connection, cutoff=CUTOFF) if p.cik == CIK] == []

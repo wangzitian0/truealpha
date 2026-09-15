@@ -38,6 +38,7 @@ from data_engine.datahub.standards.segment_extraction import (
     SEGMENT_TOLERANCE,
     _windows,
     as_candidates,
+    declared_segment_count,
     filing_scale,
     segment_candidates,
     windows_of,
@@ -56,13 +57,16 @@ TOTALS = {
 
 
 def _measure(path: Path) -> dict:
-    text = filing_plain_text(path.read_bytes())
+    body = path.read_bytes()
+    text = filing_plain_text(body)
     recalled = segment_candidates(text)
     scale = filing_scale(text)
+    declared = declared_segment_count(body)
     entry: dict = {
         "windows": len(_windows(text)),
         "candidates": len(recalled),
         "filing_scale": str(scale) if scale is not None else None,
+        "declared_segments": declared.evidence if declared is not None else None,
     }
     total = TOTALS.get(path.name)
     if total and recalled:
@@ -150,11 +154,21 @@ def test_a_filing_with_no_table_is_recorded_as_zero_rather_than_omitted(committe
     """Zeros are the census's most useful entries: they are the filings a future pattern is
     supposed to move, and a census that listed only the successes would hide them.
 
-    DDOG and DUOL state they operate as a single segment — they have no table to find, and
-    the single-segment path answers for them elsewhere. COST and ADM have tables this module
+    DDOG and DUOL declare a single segment — they have no table to find, and the
+    single-segment path answers for them elsewhere. COST and ADM have tables this module
     cannot read yet.
     """
     zeros = {name for name, e in committed.items() if e["candidates"] == 0}
     assert "DDOG_10K_000162828026008819.html" in zeros
     assert "DUOL_10K_000162828026012494.html" in zeros
     assert len(zeros) >= 4, "the corpus still holds filings recall does not reach, and says so"
+
+
+def test_the_single_segment_declaration_is_measured_per_filing(committed) -> None:
+    """#822: the path that lands a partition no identity can check is decided by the count the
+    filer tags, so that count is pinned per filing like recall is. PLUG is the case to watch —
+    its prose says one segment and it tags nothing, so it must stay undeclared."""
+    declared = {name.split("_")[0]: entry["declared_segments"] for name, entry in committed.items()}
+    assert declared["SHOP"] == "us-gaap:NumberOfReportableSegments=1@2025-12-31"
+    assert declared["AVGO"] == "us-gaap:NumberOfReportableSegments=2@2025-11-02"
+    assert declared["PLUG"] is None

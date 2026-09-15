@@ -53,6 +53,12 @@ class FactPlane(BaseModel):
     #: Source labels in winning order — init.md rule 12's declared priority, source first
     #: and recency second. A source absent from this tuple sorts last.
     source_priority: tuple[str, ...] = Field(min_length=1)
+    #: Extractor revisions whose rows are no longer admissible, because the rule was MEASURED
+    #: to land wrong values. The plane is append-only, so the rows stay — as history of what
+    #: was believed — and every reader treats them as absent: they close no planner cell, so
+    #: the next run re-extracts the issuer under the current rule, and they reach no factor.
+    #: A plane that declares any must carry an `extractor` column.
+    withdrawn_extractors: tuple[str, ...] = ()
 
 
 class EvidenceRequirement(StrEnum):
@@ -112,14 +118,15 @@ CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = Map
         "segment-revenue-confidence:v1": MappingProxyType(
             {
                 "rule:exhaustive-partition:v1": Decimal("0.90"),
-                # The issuer states it has one segment, so the "partition" is the whole
-                # company in one part. Lower than the rule above and deliberately so: that
-                # one is accepted because independently measured parts ADD UP to an
-                # independently measured total, and this one cannot fail its own check. What
-                # it rests on is a sentence in the filing, which is weaker evidence than an
-                # arithmetic agreement between two sources — and a policy that priced them
-                # the same would be paying for a tautology (#772).
-                "rule:single-segment:v1": Decimal("0.75"),
+                # The issuer declares one segment, so the "partition" is the whole company in
+                # one part. Lower than the rule above and deliberately so: that one is accepted
+                # because independently measured parts ADD UP to an independently measured
+                # total, and this one cannot fail its own check. What it rests on is the
+                # filer's own tagged count, one source's say-so, which is weaker evidence than an
+                # arithmetic agreement between two sources — and a policy that priced them the
+                # same would be paying for a tautology (#772). v1 is not priced: it is withdrawn
+                # (#822), and a withdrawn rule has nothing left to land.
+                "rule:single-segment:v2": Decimal("0.75"),
                 # Reserved for a model-proposed partition (#772). The proposal still has to
                 # balance, so the floor is the rule's minus a margin for the proposing step.
                 "model-selection": Decimal("0.85"),
@@ -190,6 +197,11 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
                 table="staging.issuer_segment_revenue_facts",
                 issuer_column="cik",
                 source_priority=("10k-segment-extraction",),
+                # Read "one segment" from a sentence. Landed Berkshire Hathaway as one segment
+                # on "expenses considered significant for one operating segment may not be
+                # significant in others"; over 106 filings it fired on 48 issuers, at least
+                # five of which report several (#822).
+                withdrawn_extractors=("rule:single-segment:v1",),
             ),
             adapter="data_engine.datahub.standards.segment_extraction:extract_segment_revenue",
         ),

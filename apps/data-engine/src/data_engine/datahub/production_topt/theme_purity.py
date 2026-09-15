@@ -30,7 +30,7 @@ from typing import Any
 from factors.base.theme_purity import ThemePurity, ThemeSegment, theme_purity
 from psycopg import Connection
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
-from truealpha_contracts.standards import confidence_for
+from truealpha_contracts.standards import STANDARDS, confidence_for
 from truealpha_contracts.theme_purity import THEMES, ThemeDefinition
 
 from data_engine.datahub.production_topt.status_dimensions import LOW_CONFIDENCE_FLOOR
@@ -41,12 +41,17 @@ from data_engine.sources import llm
 #: `distinct on (cik)` over `knowable_at desc` picks the vintage; the join then pulls that
 #: partition's rows only. A reader that took `max(knowable_at)` per ROW would mix two
 #: partitions' segments into one set — the exact double-count `partition_id` exists to stop.
+#:
+#: A withdrawn extractor's partition is not a candidate vintage at all (#822). Filtering it
+#: AFTER picking the newest would leave the issuer with nothing even when an older admissible
+#: partition exists; filtering it here lets that one answer.
 _PARTITION_SQL = """
 with vintage as (
     select distinct on (cik) cik, partition_id, knowable_at, period_end,
            partition_total, partition_residual
     from staging.issuer_segment_revenue_facts
     where knowable_at <= %(cutoff)s
+      and extractor <> all(%(withdrawn)s::text[])
     order by cik, knowable_at desc, id desc
 )
 select v.cik, v.partition_id, v.period_end, v.partition_total, v.partition_residual,
@@ -73,7 +78,7 @@ class IssuerPartition:
     #: is what the filing calls it and is judgeable on its own ("Semiconductor solutions").
     #:
     #: A SINGLE-SEGMENT issuer is the exception and the reason this field exists: its one
-    #: part is labelled `Single operating segment`, which no classifier can judge against any
+    #: part is labelled `Single reportable segment`, which no classifier can judge against any
     #: theme — every pure-play would decline, fall below the coverage floor, and be refused,
     #: which is the outcome the single-segment path was built to stop. The filing's own
     #: sentence travels in `evidence_ref` precisely because it says what the company does
@@ -93,7 +98,8 @@ class IssuerPartition:
 
 def load_partitions(connection: Connection[Any], *, cutoff: datetime) -> tuple[IssuerPartition, ...]:
     """Every issuer with a segment partition knowable at `cutoff`, newest vintage each."""
-    rows = connection.execute(_PARTITION_SQL, {"cutoff": cutoff}).fetchall()
+    withdrawn = list(STANDARDS["segment_revenue"].plane.withdrawn_extractors)
+    rows = connection.execute(_PARTITION_SQL, {"cutoff": cutoff, "withdrawn": withdrawn}).fetchall()
     grouped: dict[int, list[Any]] = {}
     meta: dict[int, tuple] = {}
     for cik, partition_id, period_end, total, residual, name, revenue, _extractor, confidence, evidence in rows:
@@ -128,7 +134,7 @@ def _descriptions_for(parts: list[tuple[str, Decimal]], evidence_ref: str) -> tu
 
     The segment's own name for a real segment table. For the one-part partition of an issuer
     that states it has a single segment, the filing's sentence instead — the label on that
-    row is `Single operating segment`, which is unjudgeable, and handing it to a model
+    row is `Single reportable segment`, which is unjudgeable, and handing it to a model
     guarantees a decline for every pure-play.
     """
     marker = evidence_ref.find(_SINGLE_SEGMENT_MARKER)
