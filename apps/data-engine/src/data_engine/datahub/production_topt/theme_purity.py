@@ -350,7 +350,7 @@ def materialize_theme_purity(
     """
     members = governed_members(connection, run_id=run_id)
     written: list[ThemePurity] = []
-    for partition in load_partitions(connection, cutoff=cutoff, ciks=members):
+    for partition in load_partitions(connection, cutoff=cutoff, ciks=members.keys()):
         subject_id = members[partition.cik]
         for definition in themes:
             purity, extractor = compute_for_theme(
