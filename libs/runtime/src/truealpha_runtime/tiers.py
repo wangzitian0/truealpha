@@ -1,6 +1,6 @@
 """Compatibility import path for the released SDK environment contract (#820)."""
 
-from infra2_sdk.runtime.environment import EnvironmentTier as EnvironmentTier
+from infra2_sdk.runtime.environment import EnvironmentTier
 from infra2_sdk.runtime.environment import resolve_environment_tier as _resolve_tier
 
 __all__ = ["EnvironmentTier", "resolve_environment_tier"]
