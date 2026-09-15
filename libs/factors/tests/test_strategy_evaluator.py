@@ -303,3 +303,33 @@ def test_an_issuer_without_a_peg_gets_no_peg_rank() -> None:
     )
     assert decisions[0].peg is None
     assert decisions[0].peg_rank is None, "an absent PEG must not be ranked as if it were the worst"
+
+
+def test_the_peg_reason_keeps_parameterised_refusals_and_drops_only_window_metadata() -> None:
+    """Review on #838: filtering by shape (`":" not in flag`) would have dropped
+    `growth_convention_unsourced:<convention>`, a refusal the factor names for the two
+    unsourced conventions. Only the window's own metadata prefixes are removed."""
+    from datetime import UTC, datetime
+
+    from factors.composite.strategy_evaluator import peg_reason_codes
+    from factors.types import FactorResult, UnitFamily
+
+    def result(value, flags):
+        return FactorResult(
+            factor="peg",
+            entity_id="issuer:x",
+            value=value,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal("0"),
+            as_of=datetime(2026, 9, 15, tzinfo=UTC),
+            data_availability="unverified",
+            flags=flags,
+        )
+
+    assert peg_reason_codes(result(None, ["growth_convention_unsourced:analyst_consensus"])) == (
+        "growth_convention_unsourced:analyst_consensus",
+    )
+    assert peg_reason_codes(result(None, ["non_positive_growth", "cagr_years:3", "window:2022-12-31..2025-12-31"])) == (
+        "non_positive_growth",
+    )
+    assert peg_reason_codes(result(Decimal("0.5"), ["cagr_years:3"])) == ()

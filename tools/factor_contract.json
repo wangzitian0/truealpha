@@ -20,6 +20,7 @@
       "created_at",
       "peg",
       "peg_rank",
+      "peg_reason_codes",
       "availability_status",
       "source_evidence_status",
       "factor_validation_status"
