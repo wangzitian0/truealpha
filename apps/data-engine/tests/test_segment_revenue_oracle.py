@@ -1086,6 +1086,9 @@ def test_a_malformed_note_is_read_as_far_as_it_is_well_formed_and_no_further() -
         contexts=contexts,
     )
     assert InlineXbrl(page_breaks).text_block(note, limit=23) == "Segment Information We "
+    # The heading is 19 characters. A limit of 20 has room for one more, so the chain is
+    # followed — the count is the joined text's length, with no separator charged after the last part.
+    assert InlineXbrl(page_breaks).text_block(note, limit=20) == "Segment Information "
 
 
 def test_visas_description_is_its_segment_note_not_the_sentence_its_count_is_tagged_in(monkeypatch) -> None:

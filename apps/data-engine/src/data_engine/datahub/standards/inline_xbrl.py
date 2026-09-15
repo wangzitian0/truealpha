@@ -195,8 +195,8 @@ class InlineXbrl:
                     break
                 text = " ".join(html.unescape(_MARKUP.sub(" ", body)).split())
                 if text:  # a part holding only markup (a page break) is neither a word gap nor length
+                    length += len(text) + (1 if parts else 0)  # exactly len(" ".join(parts))
                     parts.append(text)
-                    length += len(text) + 1
                 following = _attributes(part.group(0)).get("continuedAt")
                 if not following or following in read:
                     break
