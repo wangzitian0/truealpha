@@ -124,9 +124,9 @@ CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = Map
                 # total, and this one cannot fail its own check. What it rests on is the
                 # filer's own tagged count, one source's say-so, which is weaker evidence than an
                 # arithmetic agreement between two sources — and a policy that priced them the
-                # same would be paying for a tautology (#772). v1 and v2 are not priced: they
-                # are withdrawn (#822, #841), and a withdrawn rule has nothing left to land.
-                "rule:single-segment:v3": Decimal("0.75"),
+                # same would be paying for a tautology (#772). v1–v3 are not priced: they are
+                # withdrawn (#822, #841, #849), and a withdrawn rule has nothing left to land.
+                "rule:single-segment:v4": Decimal("0.75"),
                 # Reserved for a model-proposed partition (#772). The proposal still has to
                 # balance, so the floor is the rule's minus a margin for the proposing step.
                 "model-selection": Decimal("0.85"),
@@ -205,7 +205,10 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
                 # count was tagged in — for Visa a sentence about expenses, on which the
                 # classifier declined every theme (#841). Withdrawn so the row is re-landed with
                 # the filer's segment note as its description.
-                withdrawn_extractors=("rule:single-segment:v1", "rule:single-segment:v2"),
+                # v3's description was the note alone; Netflix's note declares one segment and
+                # says nothing about the business, and the classifier answered as NVIDIA (#849).
+                # Withdrawn so the row is re-landed with the nature-of-business opening beside it.
+                withdrawn_extractors=("rule:single-segment:v1", "rule:single-segment:v2", "rule:single-segment:v3"),
             ),
             adapter="data_engine.datahub.standards.segment_extraction:extract_segment_revenue",
         ),

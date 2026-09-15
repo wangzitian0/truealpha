@@ -114,6 +114,27 @@ def test_the_segment_note_is_read_through_its_continuation_chain() -> None:
     assert "The Company has one reportable segment, Payment Services." in description
     assert "Significant expenses" not in description
 
+    # #849: the business opening rides along when the filer tags one. SHOP's nature-of-
+    # operations block; DDOG tags no segment note at all, so its declaration is the prose
+    # pattern's, and its organization note still says what it does.
+    shop_bytes = (FILINGS / "SHOP_10K_000159480526000007.html").read_bytes()
+    shop_doc = InlineXbrl(shop_bytes)
+    shop_declared = declared_segment_count(shop_doc)
+    assert shop_declared is not None
+    shop_description = single_segment_description(shop_doc, shop_declared, shop_bytes)
+    assert shop_description is not None
+    assert "operates in one single operating and reportable segment" in shop_description
+    assert " Business: Nature of Business Shopify Inc." in shop_description
+    assert "Shopify provides essential internet infrastructure for commerce" in shop_description
+
+    ddog_bytes = (FILINGS / "DDOG_10K_000162828026008819.html").read_bytes()
+    ddog_doc = InlineXbrl(ddog_bytes)
+    ddog_declared = declared_segment_count(ddog_doc)
+    assert ddog_declared is not None and ddog_declared.statement is None
+    ddog_description = single_segment_description(ddog_doc, ddog_declared, ddog_bytes)
+    assert ddog_description is not None
+    assert "AI-powered observability" in ddog_description.split(" Business: ", 1)[1]
+
 
 def test_tagged_segment_revenue_reads_as_the_filer_tagged_it() -> None:
     """What the tags yield on the packaged filings, per concept, before any identity is applied.

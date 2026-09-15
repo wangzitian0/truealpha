@@ -394,11 +394,12 @@ def test_a_single_segment_issuer_is_described_to_the_classifier_by_its_filing(
     )
     transport = _answers([{"index": 0, "in_theme": True, "reason": "observability for cloud"}])
     monkeypatch.setattr(llm, "_gateway_transport", transport)
-    materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+    materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,), tickers={ISSUER: "DDOG"})
 
     asked = json.dumps(transport.sent)
     assert "observability and security platform" in asked, "the model is told what the company does"
     assert '"[0] Single operating segment"' not in asked, "not the unjudgeable label"
+    assert f"Issuer: DDOG ({ISSUER})." in asked, "and which issuer it is judging (#849)"
 
     theme_share, segment_name = connection.execute(
         """

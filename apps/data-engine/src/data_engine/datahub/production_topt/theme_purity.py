@@ -22,7 +22,7 @@ retroactively on a replay, the same trap `fund_consolidation` records for N-PORT
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -243,6 +243,7 @@ def compute_for_theme(
     *,
     cutoff: datetime,
     subject_id: str | None = None,
+    ticker: str | None = None,
     persist_invocations: bool = True,
 ) -> tuple[ThemePurity, str]:
     """Classify one issuer's segments against one theme and compute the share.
@@ -252,15 +253,17 @@ def compute_for_theme(
     `llm.classify_segments`.
 
     `subject_id` is the issuer as the governed run names it, and it is what the share is
-    about. The classifier is still labelled by CIK: the label is part of the replayed request,
-    and an issuer in two universes (AVGO is in both) must replay one judgement of one filing
-    rather than be asked once per spelling of its identity.
+    about. The classifier is labelled by ticker and CIK (#849): the ticker because a model
+    given an id and a segment that says only "one operating segment" answered as NVIDIA for
+    Netflix, and the CIK rather than the run's own id because the label is part of the replayed
+    request — an issuer in two universes (AVGO is in both) must replay one judgement of one
+    filing rather than be asked once per spelling of its identity.
     """
     classification = llm.classify_segments(
         connection,
         cik=partition.cik,
         accession=partition.accession,
-        issuer_label=partition.issuer_id,
+        issuer_label=f"{ticker} ({partition.issuer_id})" if ticker else partition.issuer_id,
         theme=definition.theme,
         inclusion=definition.inclusion,
         segments=list(partition.descriptions),
@@ -339,6 +342,7 @@ def materialize_theme_purity(
     run_id: str,
     cutoff: datetime,
     themes: tuple[ThemeDefinition, ...] = tuple(THEMES.values()),
+    tickers: Mapping[str, str] | None = None,
     persist_invocations: bool = True,
 ) -> tuple[ThemePurity, ...]:
     """Write one `mart.issuer_theme_purity` row per (member of the run with a partition, theme).
@@ -351,6 +355,9 @@ def materialize_theme_purity(
     attributed to `run_id` and the App serves the newest run's rows, so a partition for an
     issuer outside that universe would be ranked as if it were in it; and a row keyed by CIK
     under a run whose members are LEI-keyed is a row the coverage report can never join.
+
+    `tickers` names the members (by the run's issuer id) for the classifier (#849); a member
+    without one is labelled by id, as before.
     """
     members = governed_members(connection, run_id=run_id)
     written: list[ThemePurity] = []
@@ -363,6 +370,7 @@ def materialize_theme_purity(
                 definition,
                 cutoff=cutoff,
                 subject_id=subject_id,
+                ticker=(tickers or {}).get(subject_id),
                 persist_invocations=persist_invocations,
             )
             availability, evidence, validation = _status_dimensions(purity, definition)

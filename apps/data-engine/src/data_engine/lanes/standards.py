@@ -13,6 +13,7 @@ from truealpha_contracts.standards import STANDARDS
 from data_engine.config import settings
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
+from data_engine.datahub.standards.planner import universe_issuers
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # Sunday 09:07 UTC: after Saturday's universe refresh has published any membership
@@ -121,7 +122,10 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         if head is None:
             context.log.warning("no governed head for %s; no theme purity rows", config.universe)
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
-        rows = materialize_theme_purity(connection, run_id=head.run_id, cutoff=head.cutoff)
+        # The classifier is told which issuer it is judging (#849): the ticker, from the same
+        # universe corpus the backfill labels its own asks with.
+        tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
+        rows = materialize_theme_purity(connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers)
         connection.commit()
     context.log.info(summary_line(rows))
     published = sum(1 for row in rows if row.result.value is not None)

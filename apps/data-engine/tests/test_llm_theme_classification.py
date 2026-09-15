@@ -117,6 +117,17 @@ def test_no_provider_seated_is_an_explicit_refusal(monkeypatch) -> None:
         _classify(None, None)
 
 
+def test_the_classifier_is_told_which_issuer_it_is_judging(seated) -> None:
+    """#849: given an id and a segment that said only "one operating segment", the model
+    answered for NVIDIA and for Verizon. The label — ticker and id — is in the request, and
+    the instructions say to judge that issuer and no other."""
+    transport = _transport(_answer([{"index": 0, "in_theme": False, "reason": "r"}]))
+    _classify(_Conn(), transport)
+    sent = json.dumps(transport.request)
+    assert "Issuer: AVGO (issuer:cik:0001730168)." in sent
+    assert "never substitute a different company" in sent
+
+
 def test_the_classifier_is_never_shown_the_revenue(seated) -> None:
     """The property that makes the share defensible. A judgement made while seeing which
     segment is worth 36,858 and which 27,029 can be tuned to the answer it produces."""
@@ -223,7 +234,7 @@ def test_a_full_classification_is_recorded_with_the_task_s_own_identity(seated) 
     assert result.verdicts == (True, False)
     assert len(conn.inserts) == 1
     row = conn.inserts[0]
-    assert "segment-theme:v1" in row, "the row names this task's prompt version"
+    assert "segment-theme:v2" in row, "the row names this task's prompt version"
     assert SEGMENT_THEME_TASK.prompt_sha256 in row
     assert SEGMENT_THEME_TASK.schema_sha256 in row
     assert "segment_revenue" in row, "and the standard it was asked for"
