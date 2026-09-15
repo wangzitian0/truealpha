@@ -22,6 +22,7 @@ retroactively on a replay, the same trap `fund_consolidation` records for N-PORT
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -52,6 +53,7 @@ with vintage as (
     from staging.issuer_segment_revenue_facts
     where knowable_at <= %(cutoff)s
       and extractor <> all(%(withdrawn)s::text[])
+      and (%(ciks)s::integer[] is null or cik = any(%(ciks)s::integer[]))
     order by cik, knowable_at desc, id desc
 )
 select v.cik, v.partition_id, v.period_end, v.partition_total, v.partition_residual,
@@ -96,10 +98,16 @@ class IssuerPartition:
         return f"issuer:cik:{self.cik:010d}"
 
 
-def load_partitions(connection: Connection[Any], *, cutoff: datetime) -> tuple[IssuerPartition, ...]:
-    """Every issuer with a segment partition knowable at `cutoff`, newest vintage each."""
+def load_partitions(
+    connection: Connection[Any], *, cutoff: datetime, ciks: Collection[int] | None = None
+) -> tuple[IssuerPartition, ...]:
+    """Every issuer with a segment partition knowable at `cutoff`, newest vintage each —
+    or only the issuers in `ciks`, which is how the producer asks for one run's members."""
     withdrawn = list(STANDARDS["segment_revenue"].plane.withdrawn_extractors)
-    rows = connection.execute(_PARTITION_SQL, {"cutoff": cutoff, "withdrawn": withdrawn}).fetchall()
+    rows = connection.execute(
+        _PARTITION_SQL,
+        {"cutoff": cutoff, "withdrawn": withdrawn, "ciks": None if ciks is None else sorted(ciks)},
+    ).fetchall()
     grouped: dict[int, list[Any]] = {}
     meta: dict[int, tuple] = {}
     for cik, partition_id, period_end, total, residual, name, revenue, _extractor, confidence, evidence in rows:
@@ -342,10 +350,8 @@ def materialize_theme_purity(
     """
     members = governed_members(connection, run_id=run_id)
     written: list[ThemePurity] = []
-    for partition in load_partitions(connection, cutoff=cutoff):
-        subject_id = members.get(partition.cik)
-        if subject_id is None:
-            continue
+    for partition in load_partitions(connection, cutoff=cutoff, ciks=members):
+        subject_id = members[partition.cik]
         for definition in themes:
             purity, extractor = compute_for_theme(
                 connection,
