@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import psycopg
@@ -497,3 +497,40 @@ def test_rows_are_the_governed_runs_members_under_the_ids_the_run_gives_them(con
     assert {cell.subject_id for cell in theme_purity_cells(connection, plan.run_id)} == {member_id}, (
         "and the coverage report's join now finds it"
     )
+
+
+def test_a_run_that_fetched_unchanged_bytes_still_resolves_every_member(connection, monkeypatch) -> None:
+    """#839: the first staging tick after #829 whose SEC bytes had not changed resolved ZERO
+    members, and q6 fell from 12/20 to 0/20. Identical bytes write no new observations — they
+    stay on the obligation that first produced them — so a second run's own obligations own
+    none. What the run's GPPE rows consumed still names every member's CIK."""
+    from pathlib import Path
+
+    from data_engine.datahub.production_topt import PostgresToptCoreRepository
+    from data_engine.datahub.production_topt.theme_purity import governed_members
+    from data_engine.datahub.question_coverage import gppe_cells
+    from factors.production_topt import GppeV0Definition
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
+    import production_topt.test_persistence as persistence  # noqa: E402
+
+    core = PostgresToptCoreRepository(connection)
+    # Two daily ticks of ONE universe partition: same version, the next day's cutoff. The
+    # financial facts are the same bytes both days, which is exactly what staging fetched.
+    first = persistence._capture(connection, version="test-839")
+    monkeypatch.setattr(persistence, "CUTOFF", persistence.CUTOFF + timedelta(days=1))
+    second = persistence._capture(connection, version="test-839")
+    assert second.run_id != first.run_id
+    own = connection.execute(
+        "select count(*) from staging.capture_normalized_observations n "
+        "join raw.capture_obligations o on o.obligation_id = n.capture_obligation_id "
+        "where o.run_id = %s and n.semantic_type = 'financial-fact'",
+        (second.run_id,),
+    ).fetchone()[0]
+    assert own == 0, "the second run wrote no financial-fact observation of its own — the shape staging hit"
+
+    snapshot = core.freeze_snapshot(run_id=second.run_id, release_manifest_id=second.release_manifest_id)
+    core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    members = governed_members(connection, run_id=second.run_id)
+    assert set(members.values()) == {cell.subject_id for cell in gppe_cells(connection, second.run_id)}
+    assert len(set(members.values())) == 20
