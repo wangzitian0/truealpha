@@ -266,3 +266,60 @@ def select_exhaustive_partition(
         extractor=RULE_EXHAUSTIVE_PARTITION,
         reason=f"{len(chosen)} parts sum to {parts_sum} against a measured {total} (residual {residual})",
     )
+
+
+@dataclass(frozen=True)
+class SetPartition:
+    """Which of several candidate sets balanced, and the one completing candidate it needed.
+
+    `partition.candidate_indices` index the set as offered: the set's own candidates first and,
+    when `completion_index` is set, that completion at the end.
+    """
+
+    set_index: int
+    completion_index: int | None
+    partition: Partition
+
+
+def select_first_balancing_set(
+    candidate_sets: Sequence[Sequence[Candidate]],
+    *,
+    total: Decimal | None,
+    tolerances: Sequence[Decimal],
+    completions: Sequence[Sequence[Candidate]] | None = None,
+) -> SetPartition | tuple[PartitionRefusal, ...]:
+    """The first of several candidate sets that accounts for `total`, in the order offered (#835).
+
+    A source may state one decomposition several ways — the same revenue tagged under two
+    concepts, or in two context shapes — and only some of them are the whole. Each set is
+    offered to `select_exhaustive_partition` exactly as found, in order, and the first that
+    balances is the answer.
+
+    Only when none does is a SHORT set retried with ONE of its own `completions` (a corporate
+    line the source states beside the parts): every set as found is a stronger answer than any
+    set completed. Exactly one, never a combination — a sum found by search is not a statement
+    by the source. Returns each set's refusal, in order, when nothing balances.
+    """
+    # Misaligned inputs are the CALLER's mistake, not a source's: unlike a proposal judged by
+    # `select_exhaustive_partition`, they are refused loudly here rather than as an IndexError
+    # three frames down (review on #836).
+    if len(tolerances) != len(candidate_sets):
+        raise ValueError(f"{len(tolerances)} tolerances for {len(candidate_sets)} candidate sets")
+    if completions is not None and len(completions) != len(candidate_sets):
+        raise ValueError(f"{len(completions)} completion lists for {len(candidate_sets)} candidate sets")
+    if not candidate_sets:
+        return (PartitionRefusal.NO_CANDIDATES,)
+    refusals: list[PartitionRefusal] = []
+    for index, candidates in enumerate(candidate_sets):
+        verdict = select_exhaustive_partition(candidates, total=total, tolerance=tolerances[index])
+        if isinstance(verdict, Partition):
+            return SetPartition(index, None, verdict)
+        refusals.append(verdict)
+    for index, candidates in enumerate(candidate_sets):
+        if refusals[index] is not PartitionRefusal.SHORT or completions is None:
+            continue
+        for completion_index, completion in enumerate(completions[index]):
+            verdict = select_exhaustive_partition([*candidates, completion], total=total, tolerance=tolerances[index])
+            if isinstance(verdict, Partition):
+                return SetPartition(index, completion_index, verdict)
+    return tuple(refusals)

@@ -23,7 +23,9 @@ from factors.shared.extraction import (
     Partition,
     Partitioner,
     PartitionRefusal,
+    SetPartition,
     select_exhaustive_partition,
+    select_first_balancing_set,
 )
 
 TOL = Decimal("0.5")
@@ -170,3 +172,61 @@ def test_a_refusal_is_never_mistaken_for_a_partition(bad) -> None:
     """Callers branch on the type. A refusal that duck-typed as a `Partition` would be
     consumed as an answer."""
     assert not isinstance(bad, Partition)
+
+
+# --- #835: the first of several candidate sets that balances --------------------------------
+
+
+def _set(*values: int) -> list[Candidate]:
+    return [Candidate(value, f"part {value}") for value in values]
+
+
+def test_the_first_set_that_balances_is_the_answer() -> None:
+    """A source stating one decomposition several ways: the first set offered that accounts for
+    the whole wins, and a later one that also would is never consulted."""
+    result = select_first_balancing_set(
+        [_set(100, 20), _set(110, 40), _set(150)], total=Decimal(150), tolerances=[Decimal(0)] * 3
+    )
+    assert isinstance(result, SetPartition)
+    assert (result.set_index, result.completion_index) == (1, None)
+    assert result.partition.candidate_indices == (0, 1)
+
+
+def test_every_set_as_found_is_tried_before_any_set_is_completed() -> None:
+    """Set 0 is short by exactly its completion; set 1 balances as found. The set that is the
+    whole on its own is the stronger answer, so it wins even though it comes second."""
+    result = select_first_balancing_set(
+        [_set(100, 40), _set(110, 40)],
+        total=Decimal(150),
+        tolerances=[Decimal(0), Decimal(0)],
+        completions=[_set(10), []],
+    )
+    assert isinstance(result, SetPartition)
+    assert (result.set_index, result.completion_index) == (1, None)
+
+
+def test_a_short_set_is_completed_by_exactly_one_of_its_completions() -> None:
+    result = select_first_balancing_set(
+        [_set(100, 40)], total=Decimal(150), tolerances=[Decimal(0)], completions=[_set(3, 10, 7)]
+    )
+    assert isinstance(result, SetPartition)
+    assert (result.set_index, result.completion_index) == (0, 1), "the 10 closes it; 3 + 7 would, and is never tried"
+    assert result.partition.candidate_indices == (0, 1, 2), "the completion is indexed last"
+
+
+def test_an_over_set_is_never_completed_and_nothing_balancing_returns_each_refusal() -> None:
+    result = select_first_balancing_set(
+        [_set(100, 60), _set(100, 40)],
+        total=Decimal(150),
+        tolerances=[Decimal(0), Decimal(0)],
+        completions=[_set(-10), _set(3, 7)],
+    )
+    assert result == (PartitionRefusal.OVER, PartitionRefusal.SHORT), "no combination, and no completion for OVER"
+    assert select_first_balancing_set([], total=Decimal(1), tolerances=[]) == (PartitionRefusal.NO_CANDIDATES,)
+
+
+def test_misaligned_inputs_are_the_callers_mistake_and_say_so() -> None:
+    with pytest.raises(ValueError, match="1 tolerances for 2 candidate sets"):
+        select_first_balancing_set([_set(1), _set(2)], total=Decimal(1), tolerances=[Decimal(0)])
+    with pytest.raises(ValueError, match="0 completion lists for 1 candidate sets"):
+        select_first_balancing_set([_set(1)], total=Decimal(1), tolerances=[Decimal(0)], completions=[])

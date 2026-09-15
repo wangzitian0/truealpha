@@ -30,12 +30,11 @@ from pathlib import Path
 
 import pytest
 from data_engine.datahub.standards.segment_extraction import (
-    SEGMENT_TOLERANCE,
+    accepted_tagged_partition,
     declared_segment_count,
     segment_name_for,
     tagged_segment_revenues,
 )
-from factors.shared.extraction import Candidate, Partition, select_exhaustive_partition
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FILINGS = REPO_ROOT / "apps" / "data-engine" / "samples" / "filings"
@@ -57,7 +56,9 @@ def _measure(path: Path) -> dict:
         "tagged_segments": [
             {
                 "concept": segments.concept,
+                "shape": segments.shape,
                 "members": [member for member, _ in segments.parts],
+                "reconciling": [member for member, _ in segments.reconciling],
                 "sum": str(sum((value for _, value in segments.parts), Decimal(0))),
                 "refusal": segments.refusal,
             }
@@ -66,18 +67,11 @@ def _measure(path: Path) -> dict:
     }
     total = TOTALS.get(path.name)
     if total:
-        accepted = []
-        for segments in tagged:
-            if segments.refusal is not None:
-                continue
-            verdict = select_exhaustive_partition(
-                [Candidate(float(value), member) for member, value in segments.parts],
-                total=Decimal(total),
-                tolerance=SEGMENT_TOLERANCE * Decimal(10) ** segments.scale,
-            )
-            if isinstance(verdict, Partition):
-                accepted.append([segment_name_for(member) for member, _ in segments.parts])
-        entry["accepted_partitions"] = accepted
+        # The adapter's own selection, not a copy of it: the census measures what a run would accept.
+        accepted = accepted_tagged_partition(tagged, total=Decimal(total), period_end=None)
+        entry["accepted_partition"] = (
+            None if isinstance(accepted, list) else [segment_name_for(member) for member, _ in accepted.parts]
+        )
     return entry
 
 
@@ -118,10 +112,10 @@ def test_the_filings_with_a_known_oracle_still_balance(committed) -> None:
     against the consolidated revenue the capture plane actually holds. AAPL matters most: it is
     a filing the DEPLOYED run meets, and its five tagged geographies balance to the dollar."""
     avgo = committed["AVGO_10K_000173016825000121.html"]
-    assert avgo["accepted_partitions"] == [["Infrastructure Software", "Semiconductor Solutions"]]
+    assert avgo["accepted_partition"] == ["Infrastructure Software", "Semiconductor Solutions"]
 
     aapl = committed["AAPL_10K_000032019325000079.html"]
-    assert aapl["accepted_partitions"] == [["Americas", "Europe", "Greater China", "Japan", "Rest of Asia Pacific"]]
+    assert aapl["accepted_partition"] == ["Americas", "Europe", "Greater China", "Japan", "Rest of Asia Pacific"]
 
 
 def test_the_corpus_holds_filings_the_deployed_run_actually_meets(committed) -> None:
@@ -156,6 +150,9 @@ def test_the_tagged_segment_revenue_is_measured_per_filing(committed) -> None:
         "us-gaap:Revenues",
         "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
     }
+    assert all(entry["reconciling"] == ["us-gaap:CorporateNonSegmentMember"] for entry in by_ticker["ADM"]), (
+        "the off-axis corporate revenue a short set may be completed by (#835)"
+    )
 
 
 def test_a_filing_that_tags_nothing_is_recorded_as_empty_rather_than_omitted(committed) -> None:
