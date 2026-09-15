@@ -292,7 +292,18 @@ async function walkSignOutJourney(browser, { email, password }) {
   if ((await control.count()) === 0) {
     problems.push("no sign-out control on an authenticated page");
   } else {
-    await Promise.all([page.waitForURL(/\/login/, { timeout: 15000 }).catch(() => {}), control.first().click()]);
+    // #811: `click()` auto-waits for actionability, not for React to have attached the
+    // handler (`SignOutButton` is a client component; its `onClick` exists only after
+    // hydration). A click that lands before that does nothing, the 15 s wait times out, and
+    // BOTH assertions below fire — a security claim that is false, on ~1 in 5 staging
+    // deploys (v0.0.53 run 34482191082, v0.0.60 run 34951072929). So: click, give it a
+    // bounded wait, and click once more if the URL has not moved. A real sign-out
+    // regression still fails the second miss; only the race is gone.
+    const signedOut = () => new URL(page.url()).pathname.startsWith("/login");
+    for (let attempt = 0; attempt < 2 && !signedOut(); attempt += 1) {
+      await control.first().click({ timeout: 5000 }).catch(() => {});
+      await page.waitForURL(/\/login/, { timeout: attempt === 0 ? 8000 : 15000 }).catch(() => {});
+    }
 
     const cookies = await context.cookies();
     if (cookies.some((c) => c.name === "truealpha_session" && c.value !== "")) {
