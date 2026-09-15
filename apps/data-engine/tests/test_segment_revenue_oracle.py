@@ -471,7 +471,9 @@ def test_a_single_segment_issuer_lands_the_whole_company_as_one_part(monkeypatch
         "the filer's own tagged count is what the claim rests on (#822)"
     )
     assert "single_segment_statement=" in rows[0]["evidence_ref"], "and the sentence it is tagged in"
-    assert "it has a single reportable segment" in rows[0]["evidence_ref"]
+    assert "it has a single reportable segment" in rows[0]["evidence_ref"], (
+        "DUOL tags no segment note, so the tagged sentence stays its description (#841)"
+    )
     assert rows[0]["segment_name"] == "Single reportable segment"
     assert rows[0]["confidence"] < Decimal("0.90"), "priced below a set checked against an independent total"
 
@@ -803,6 +805,23 @@ def _ixbrl(*paragraphs: str, contexts: tuple[str, ...], hidden: str = "") -> byt
     return f"<html><body><div style='display:none'>{header}</div>{''.join(f'<p>{p}</p>' for p in paragraphs)}</body></html>".encode()
 
 
+def _segment_note(heading: str, *parts: str) -> list[str]:
+    """A tagged segment note as a filing lays it out: the `ix:nonNumeric` holds the heading and
+    the body follows in the `continuedAt` chain of `ix:continuation` elements it names."""
+    chain = [heading, *parts]
+    paragraphs = []
+    for index, text in enumerate(chain):
+        following = f' continuedAt="note-{index + 1}"' if index + 1 < len(chain) else ""
+        if index == 0:
+            paragraphs.append(
+                f'<ix:nonNumeric contextRef="c-1" name="us-gaap:SegmentReportingDisclosureTextBlock" id="note-0"'
+                f'{following} escape="true">{text}</ix:nonNumeric>'
+            )
+        else:
+            paragraphs.append(f'<ix:continuation id="note-{index}"{following}>{text}</ix:continuation>')
+    return paragraphs
+
+
 def test_a_count_tagged_for_a_subsidiary_registrant_is_not_the_filers_count() -> None:
     """AEP and Exelon file one 10-K for the parent and its subsidiary registrants, and tag
     "ComEd has a single operating segment" under the subsidiary's dimension. The parent has
@@ -950,6 +969,7 @@ def test_a_count_declared_for_another_period_than_the_total_refuses(monkeypatch)
 
 
 def test_a_declared_single_segment_lands_with_its_tagged_sentence(monkeypatch) -> None:
+    """A filer that tags no segment note is described by the sentence its count is tagged in."""
     from factors.shared.extraction import RULE_SINGLE_SEGMENT
 
     body = _ixbrl(
@@ -960,11 +980,87 @@ def test_a_declared_single_segment_lands_with_its_tagged_sentence(monkeypatch) -
     outcome, connection = _run_single(monkeypatch, body, oracle=("40000000000", "2025-09-30"), cik=1_403_161)
     assert (outcome.status, outcome.extractor) == ("resolved", RULE_SINGLE_SEGMENT), outcome.detail
     (row,) = [_row(p) for p in connection.inserts()]
-    assert row["extractor"] == "rule:single-segment:v2"
+    assert row["extractor"] == "rule:single-segment:v3"
     assert row["evidence_ref"].endswith(
         "segment_count=us-gaap:NumberOfReportableSegments=1@2025-09-30 "
         "single_segment_statement=The Company has one reportable segment, Payment Services."
     ), "the statement is LAST: the theme-purity reader takes everything after its marker"
+
+
+def test_the_description_is_the_segment_note_when_the_filer_tags_one(monkeypatch) -> None:
+    """#841. Visa tags its count in a sentence about which expenses reach the CODM, and the note
+    it tags says "one reportable segment, Payment Services". The note is the filer's statement
+    of its segments, so it is what the classifier is shown — read through the continuation
+    chain, because the tag itself holds only the heading. Against v2's precedence this is red:
+    `DeclaredSegmentCount.statement` is the expenses sentence."""
+    from data_engine.datahub.standards.segment_extraction import declared_segment_count
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
+    body = _ixbrl(
+        *_segment_note(
+            "Note 14—Segment Information",
+            "All significant operating decisions are based on analysis of Visa as a single global business.",
+            "The Company has one reportable segment, Payment Services. The CODM uses consolidated net income.",
+        ),
+        "Significant expenses that are regularly provided to the CODM for the Company's"
+        f" {_count_tag('NumberOfReportableSegments', 'c-1', 'one')} reportable segment are presented on the"
+        " consolidated statements of operations.",
+        contexts=(_context("c-1", "2025-09-30"),),
+    )
+    declared = declared_segment_count(body)
+    assert declared is not None and declared.statement is not None
+    assert "Significant expenses" in declared.statement, "the sentence the count is tagged in"
+
+    outcome, connection = _run_single(monkeypatch, body, oracle=("40000000000", "2025-09-30"), cik=1_403_161)
+    assert (outcome.status, outcome.extractor) == ("resolved", RULE_SINGLE_SEGMENT), outcome.detail
+    (row,) = [_row(p) for p in connection.inserts()]
+    description = row["evidence_ref"].split("single_segment_statement=", 1)[1]
+    assert "The Company has one reportable segment, Payment Services." in description
+    assert "single global business" in description, "the lead before the declaring sentence, from the note"
+    assert "Significant expenses" not in description, "the sentence the count is tagged in is not the description"
+
+
+def test_a_note_that_declares_in_no_pattern_is_described_by_its_opening(monkeypatch) -> None:
+    """AbbVie: "operates as a single global business segment dedicated to the research and
+    development … of innovative medicines". No pattern matches it, and the note's first sentences
+    are still what the company does — better than the count's sentence, which need not be."""
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
+    body = _ixbrl(
+        *_segment_note(
+            "Segment and Geographic Area Information",
+            "AbbVie operates as a single global business segment dedicated to the research and development,"
+            " manufacturing, commercialization and sale of innovative medicines and therapies.",
+        ),
+        f"The company has {_count_tag('NumberOfOperatingSegments', 'c-1', 'one')} operating segment.",
+        contexts=(_context("c-1", "2025-12-31"),),
+    )
+    outcome, connection = _run_single(monkeypatch, body, oracle=("60000000000", "2025-12-31"), cik=1_551_152)
+    assert (outcome.status, outcome.extractor) == ("resolved", RULE_SINGLE_SEGMENT), outcome.detail
+    (row,) = [_row(p) for p in connection.inserts()]
+    description = row["evidence_ref"].split("single_segment_statement=", 1)[1]
+    assert description.startswith("Segment and Geographic Area Information AbbVie operates as a single global business")
+    assert "innovative medicines" in description
+
+
+def test_visas_description_is_its_segment_note_not_the_sentence_its_count_is_tagged_in(monkeypatch) -> None:
+    """#841 on the packaged filing the row was landed from (staging, v0.0.58–v0.0.60): the count
+    is tagged inside "Significant expenses that are regularly provided to the CODM for the
+    Company's one reportable segment …", and Note 14 says "The Company has one reportable
+    segment, Payment Services."."""
+    from data_engine.datahub.standards.segment_extraction import declared_segment_count
+
+    visa = _packaged("V_10K_000140316125000089.html", cik=1_403_161, filed=date(2025, 11, 6))
+    declared = declared_segment_count(visa.body)
+    assert declared is not None and (declared.value, declared.period_end) == (1, date(2025, 9, 30))
+    assert declared.statement is not None and "Significant expenses" in declared.statement, "what v2 carried"
+
+    outcome, rows = _extract(monkeypatch, visa, ("40000000000", "2025-09-30"))
+    assert outcome.status == "resolved", outcome.detail
+    (row,) = rows
+    description = row["evidence_ref"].split("single_segment_statement=", 1)[1]
+    assert "The Company has one reportable segment, Payment Services." in description
+    assert "Significant expenses" not in description
 
 
 def test_a_refusal_says_which_half_of_the_answer_is_missing(monkeypatch) -> None:

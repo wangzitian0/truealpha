@@ -67,9 +67,9 @@ from data_engine.datahub.standards.inline_xbrl import InlineXbrl, TaggedFact
 #: AEP and Exelon on sentences about a subsidiary registrant. 97 of the 106 filings tag the
 #: count, and each of those five tags two or more, or one only under a subsidiary's dimension.
 _SEGMENT_COUNT_CONCEPTS = ("us-gaap:NumberOfReportableSegments", "us-gaap:NumberOfOperatingSegments")
-#: Enough of the sentence around the statement to be worth reading back. The filing usually
-#: says what the one segment DOES right there ("one reportable segment, Payment Services"),
-#: which is the only description a classifier will get.
+#: How much of a statement is read back around the words that make it — enough for the filer to
+#: say what the one segment DOES ("one reportable segment, Payment Services"), which is the only
+#: description a classifier will get.
 _SINGLE_SEGMENT_SPAN = 240
 _STATEMENT_LEAD = 90
 
@@ -345,9 +345,9 @@ def segment_name_for(member: str) -> str:
 
 
 #: The prose that USED to decide (see `_SEGMENT_COUNT_CONCEPTS` for why it no longer does).
-#: It survives for one job: when a filer tags its count only in the hidden header (DDOG, LLY,
-#: TMUS), there is no tagged sentence to read back, and this finds the sentence a classifier is
-#: shown instead. Choosing a poor description costs a declined classification, never a
+#: It survives to find the sentence a classifier is shown: in the filer's segment note first,
+#: and in the whole filing when the count was tagged only in the hidden header (DDOG, LLY, TMUS)
+#: and no note is tagged. Choosing a poor description costs a declined classification, never a
 #: partition.
 _SINGLE_SEGMENT = re.compile(
     r"\b(?:one|a\s+single|single)\s+(?:operating|reportable)"
@@ -357,12 +357,39 @@ _SINGLE_SEGMENT = re.compile(
 
 
 def single_segment_statement(text: str) -> str | None:
-    """A sentence in the filing text that talks about one segment, or None. Description only."""
+    """A sentence in `text` that talks about one segment, or None. Description only."""
     match = _SINGLE_SEGMENT.search(text)
     if match is None:
         return None
     start = max(0, match.start() - _STATEMENT_LEAD)
     return " ".join(text[start : match.end() + _SINGLE_SEGMENT_SPAN].split())
+
+
+#: The filer's own segment note, tagged as one text block (ASU 2023-07 made every filer write
+#: one, single-segment filers included): where a filer says what its segments ARE.
+_SEGMENT_NOTE = "us-gaap:SegmentReportingDisclosureTextBlock"
+#: How much of the note is read for a description. The declaration sits at its top.
+_SEGMENT_NOTE_LIMIT = 6000
+
+
+def single_segment_description(document: InlineXbrl, declared: DeclaredSegmentCount, body: bytes) -> str | None:
+    """What the filing says its one segment does, from the strongest statement it makes (#841).
+
+    v2 used the sentence the count was tagged in. Visa tags its count in a sentence about which
+    expenses reach its CODM, and the classifier declined every theme on it — a pure-play refused
+    on a description, which is what the single-segment path exists to prevent. The segment note
+    is the filer's own statement of what its segments are, so when the filer tags one it is read
+    first: the sentence in it that declares the one segment ("The Company has one reportable
+    segment, Payment Services"), else its opening (AbbVie's "single global business segment"
+    matches no pattern, and the note's first sentences say what the business is). A filer that
+    tags no note (DDOG, DUOL) is described as before: by the tagged sentence, then by the prose
+    pattern over the filing. Description only, on every path — the count decided before this is
+    asked.
+    """
+    note = document.text_block(_SEGMENT_NOTE, limit=_SEGMENT_NOTE_LIMIT)
+    if note:
+        return single_segment_statement(note) or note[: _STATEMENT_LEAD + _SINGLE_SEGMENT_SPAN]
+    return declared.statement or single_segment_statement(filing_plain_text(body))
 
 
 #: In the units the filer tagged, not in currency: parts each rounded to the tag's own last
@@ -730,8 +757,9 @@ def extract_segment_revenue(
                     f"the consolidated revenue on file is for {oracle.period_end}"
                 ),
             )
-        # The prose is read only here, and only when the count was tagged where no sentence is printed.
-        statement = declared.statement or single_segment_statement(filing_plain_text(document.body))
+        # The description (#841): the filer's segment note, then the sentence the count is tagged
+        # in, then the prose. None of it decides anything; the count already has.
+        statement = single_segment_description(xbrl, declared, document.body)
         return _land_partition(
             connection,
             record_cik=record_cik,

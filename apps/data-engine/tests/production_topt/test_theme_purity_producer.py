@@ -382,9 +382,11 @@ def test_a_single_segment_issuer_is_described_to_the_classifier_by_its_filing(
         "Segment Information The Company has a single operating and reportable segment, "
         "providing an observability and security platform for cloud applications"
     )
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
     _seed_single_segment(
         connection,
-        extractor="rule:single-segment:v2",
+        extractor=RULE_SINGLE_SEGMENT,
         evidence=(
             "accession=0001628280-26-008819 form=10-K "
             f"segment_count=us-gaap:NumberOfReportableSegments=1@2025-12-31 single_segment_statement={statement}"

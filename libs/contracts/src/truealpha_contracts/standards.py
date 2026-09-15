@@ -124,9 +124,9 @@ CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = Map
                 # total, and this one cannot fail its own check. What it rests on is the
                 # filer's own tagged count, one source's say-so, which is weaker evidence than an
                 # arithmetic agreement between two sources — and a policy that priced them the
-                # same would be paying for a tautology (#772). v1 is not priced: it is withdrawn
-                # (#822), and a withdrawn rule has nothing left to land.
-                "rule:single-segment:v2": Decimal("0.75"),
+                # same would be paying for a tautology (#772). v1 and v2 are not priced: they
+                # are withdrawn (#822, #841), and a withdrawn rule has nothing left to land.
+                "rule:single-segment:v3": Decimal("0.75"),
                 # Reserved for a model-proposed partition (#772). The proposal still has to
                 # balance, so the floor is the rule's minus a margin for the proposing step.
                 "model-selection": Decimal("0.85"),
@@ -197,11 +197,15 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
                 table="staging.issuer_segment_revenue_facts",
                 issuer_column="cik",
                 source_priority=("10k-segment-extraction",),
-                # Read "one segment" from a sentence. Landed Berkshire Hathaway as one segment
-                # on "expenses considered significant for one operating segment may not be
-                # significant in others"; over 106 filings it fired on 48 issuers, at least
+                # v1 read "one segment" from a sentence. Landed Berkshire Hathaway as one
+                # segment on "expenses considered significant for one operating segment may not
+                # be significant in others"; over 106 filings it fired on 48 issuers, at least
                 # five of which report several (#822).
-                withdrawn_extractors=("rule:single-segment:v1",),
+                # v2 decided from the tagged count and described the issuer by the sentence the
+                # count was tagged in — for Visa a sentence about expenses, on which the
+                # classifier declined every theme (#841). Withdrawn so the row is re-landed with
+                # the filer's segment note as its description.
+                withdrawn_extractors=("rule:single-segment:v1", "rule:single-segment:v2"),
             ),
             adapter="data_engine.datahub.standards.segment_extraction:extract_segment_revenue",
         ),
