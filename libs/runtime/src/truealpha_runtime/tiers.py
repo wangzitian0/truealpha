@@ -1,25 +1,14 @@
-from enum import StrEnum
+"""Compatibility import path for the released SDK environment contract (#820)."""
 
+from infra2_sdk.runtime.environment import EnvironmentTier
+from infra2_sdk.runtime.environment import resolve_environment_tier as _resolve_tier
 
-class EnvironmentTier(StrEnum):
-    LOCAL_DEV = "local_dev"
-    LOCAL_TEST = "local_test"
-    GITHUB_CI = "github_ci"
-    PREVIEW = "preview"
-    STAGING = "staging"
-    PRODUCTION = "production"
+__all__ = ["EnvironmentTier", "resolve_environment_tier"]
 
 
 def resolve_environment_tier(app_env: str, *, github_actions: bool = False) -> EnvironmentTier:
-    normalized = app_env.strip().lower()
-    if normalized in {"dev", "development", "local"}:
-        return EnvironmentTier.LOCAL_DEV
-    if normalized in {"test", "testing", "ci"}:
-        return EnvironmentTier.GITHUB_CI if github_actions else EnvironmentTier.LOCAL_TEST
-    if normalized == "preview":
-        return EnvironmentTier.PREVIEW
-    if normalized == "staging":
-        return EnvironmentTier.STAGING
-    if normalized in {"prod", "production"}:
-        return EnvironmentTier.PRODUCTION
-    raise ValueError(f"unknown APP_ENV: {app_env!r}")
+    """Keep the application keyword/error surface while sharing normalization."""
+    try:
+        return _resolve_tier(app_env, github_actions=github_actions)
+    except ValueError:
+        raise ValueError(f"unknown APP_ENV: {app_env!r}") from None
