@@ -547,7 +547,8 @@ state.** The reconnaissance baseline this section used to describe (monorepo, fo
 registry skeleton, samples, first corpus audit) is history; what exists now is a running
 system with named gaps.
 
-What runs daily on the Dagster schedule in both Staging and Production:
+What runs on the Dagster schedule — daily, and in both Staging and Production, unless the
+bullet says otherwise:
 
 - real-source capture for the TOPT 20, the QQQ 101 and a 5-issuer canary universe (SEC
   company-facts, Twelve Data, yfinance corroboration, N-PORT holdings), immutable raw bytes in
