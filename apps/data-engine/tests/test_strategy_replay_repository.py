@@ -169,3 +169,27 @@ def test_a_decision_row_carries_the_three_status_dimensions(connection) -> None:
             assert availability_status == "available"
         assert evidence == "degraded"
         assert validation == "not_evaluated"
+
+
+def test_the_peg_reason_is_persisted_outside_the_decisions_identity(connection) -> None:
+    """#837: the PEG factor's refusal flags reach the mart, and they are an annotation — the
+    decision id and content hash are the ones the same decision had before the column existed,
+    so no run already persisted conflicts on replay."""
+    from dataclasses import replace
+
+    decisions, definition = run()
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    evaluated = next(d for d in decisions if d.eligible)
+    unannotated_id = write_strategy_decision(
+        connection, replace(evaluated, peg=None, peg_reason_codes=()), strategy_run_id=run_id
+    )
+    connection.rollback()
+
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT)
+    annotated = replace(evaluated, peg=None, peg_reason_codes=("non_positive_growth",))
+    annotated_id = write_strategy_decision(connection, annotated, strategy_run_id=run_id)
+    assert annotated_id == unannotated_id, "the reason is not part of the decision's identity"
+    (codes,) = connection.execute(
+        "select peg_reason_codes from mart.strategy_decisions where strategy_decision_id = %s", (annotated_id,)
+    ).fetchone()
+    assert codes == ["non_positive_growth"]

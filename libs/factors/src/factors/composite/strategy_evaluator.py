@@ -37,7 +37,7 @@ from factors.base.gross_profit_per_employee import gross_profit_per_employee
 from factors.base.peg import peg
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation
-from factors.types import Fact, GrowthConvention
+from factors.types import Fact, FactorResult, GrowthConvention
 
 # Input-key vocabulary of the golden corpus / DataHub factor inputs, mapped to the
 # canonical metric registry names the base factors consume.
@@ -52,6 +52,8 @@ _PEG_KEYS = ("last_close", "shares_outstanding", "net_income")
 # Owner decision 2026-08-17 (#284): three years, recency-weighted. The factor takes it
 # as a required argument so no default can quietly become the convention.
 _PEG_CAGR_YEARS = 3
+#: `factors.base.peg`'s window metadata flags: what the rate was measured over, never a reason.
+_PEG_WINDOW_FLAG_PREFIXES = ("cagr_years:", "window:")
 # `truealpha_contracts.metrics.INPUT_KEY_ALIASES` is the one declaration of this mapping
 # (init.md rule 22, #770) -- this module used to keep its own copy under this name.
 _METRIC_FOR_KEY = INPUT_KEY_ALIASES
@@ -112,6 +114,25 @@ class EvaluatedDecision:
     # been decided. None when the issuer has no PEG — an absent value must not be ranked as
     # though it were the worst.
     peg_rank: int | None = None
+    # Why `peg` is None, in the PEG factor's own flag vocabulary (`non_positive_growth`,
+    # `insufficient_earnings_history`, ...). Empty when PEG is present or was never computed
+    # (an excluded issuer's reason is `exclusion_reason`). Kept because the factor already
+    # names every degenerate case, and dropping the name here left the question-coverage
+    # report able to say only `unrecorded_reason` (#837).
+    peg_reason_codes: tuple[str, ...] = ()
+
+
+def peg_reason_codes(result: FactorResult) -> tuple[str, ...]:
+    """Why a PEG is absent, in the factor's own flags; empty when it is present (#837).
+
+    A present PEG carries only window metadata (`cagr_years:3`, `window:…`), and an absent one
+    carries its refusal plus, sometimes, that metadata. Filtered by the metadata's own prefixes
+    rather than by shape, because a reason may be parameterised too
+    (`growth_convention_unsourced:<convention>`, review on #838).
+    """
+    if result.value is not None:
+        return ()
+    return tuple(flag for flag in result.flags if not flag.startswith(_PEG_WINDOW_FLAG_PREFIXES))
 
 
 def _quantize(value: Decimal, quantization: DecimalQuantization) -> Decimal:
@@ -198,13 +219,15 @@ def _evaluate_issuer(
     # Recorded, not selecting (#284 step 4): module 1 must not change who is eligible until
     # the owner decides how it enters selection, or landing the factor would silently move
     # the portfolio. So a missing or degenerate PEG leaves the decision otherwise untouched.
-    peg_value = peg(
+    peg_result = peg(
         _facts_for(issuer, _PEG_KEYS, as_of=as_of),
         entity_id=issuer.issuer_id,
         growth_convention=GrowthConvention.HISTORICAL_CAGR,
         as_of=as_of,
         cagr_years=_PEG_CAGR_YEARS,
-    ).value
+    )
+    peg_value = peg_result.value
+    peg_reasons = peg_reason_codes(peg_result)
 
     labor_efficiency = _quantize(gppe_result.value, labor_q)
     current_ps = _quantize(ps_result.value, ps_q)
@@ -233,6 +256,7 @@ def _evaluate_issuer(
                 target_price_to_sales=target_ps,
                 valuation_gap=valuation_gap,
                 peg=peg_value,
+                peg_reason_codes=peg_reasons,
                 eligible=True,
                 outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND,
                 exclusion_reason=None,
@@ -249,6 +273,7 @@ def _evaluate_issuer(
             target_price_to_sales=target_ps,
             valuation_gap=valuation_gap,
             peg=peg_value,
+            peg_reason_codes=peg_reasons,
             eligible=True,
             outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
             exclusion_reason=None,

@@ -221,6 +221,7 @@ def test_the_decision_carries_peg_when_module_1s_inputs_are_present() -> None:
     )[0]
     assert decision.peg is not None
     assert decision.peg.quantize(Decimal("0.01")) == Decimal("0.50")
+    assert decision.peg_reason_codes == (), "a present PEG's window flags are not reasons"
 
 
 def test_a_missing_growth_rate_leaves_peg_absent_without_excluding_the_issuer() -> None:
@@ -236,6 +237,7 @@ def test_a_missing_growth_rate_leaves_peg_absent_without_excluding_the_issuer() 
         risk_free_rate=Decimal("0"),
     )[0]
     assert decision.peg is None
+    assert decision.peg_reason_codes == ("missing_net_income",), "the factor's own reason travels (#837)"
     assert decision.eligible is True
     assert decision.exclusion_reason is None
     # The rest of the decision is untouched by module 1's absence.
@@ -252,6 +254,7 @@ def test_a_non_positive_growth_rate_yields_no_peg_rather_than_a_negative_one() -
         risk_free_rate=Decimal("0"),
     )[0]
     assert decision.peg is None
+    assert decision.peg_reason_codes == ("non_positive_growth",), "named, not a bare absence (#837)"
     assert decision.eligible is True
 
 
@@ -300,3 +303,33 @@ def test_an_issuer_without_a_peg_gets_no_peg_rank() -> None:
     )
     assert decisions[0].peg is None
     assert decisions[0].peg_rank is None, "an absent PEG must not be ranked as if it were the worst"
+
+
+def test_the_peg_reason_keeps_parameterised_refusals_and_drops_only_window_metadata() -> None:
+    """Review on #838: filtering by shape (`":" not in flag`) would have dropped
+    `growth_convention_unsourced:<convention>`, a refusal the factor names for the two
+    unsourced conventions. Only the window's own metadata prefixes are removed."""
+    from datetime import UTC, datetime
+
+    from factors.composite.strategy_evaluator import peg_reason_codes
+    from factors.types import FactorResult, UnitFamily
+
+    def result(value, flags):
+        return FactorResult(
+            factor="peg",
+            entity_id="issuer:x",
+            value=value,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal("0"),
+            as_of=datetime(2026, 9, 15, tzinfo=UTC),
+            data_availability="unverified",
+            flags=flags,
+        )
+
+    assert peg_reason_codes(result(None, ["growth_convention_unsourced:analyst_consensus"])) == (
+        "growth_convention_unsourced:analyst_consensus",
+    )
+    assert peg_reason_codes(result(None, ["non_positive_growth", "cagr_years:3", "window:2022-12-31..2025-12-31"])) == (
+        "non_positive_growth",
+    )
+    assert peg_reason_codes(result(Decimal("0.5"), ["cagr_years:3"])) == ()
