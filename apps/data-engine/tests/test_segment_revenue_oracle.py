@@ -1029,6 +1029,7 @@ def test_a_note_that_declares_in_no_pattern_is_described_by_its_opening(monkeypa
     body = _ixbrl(
         *_segment_note(
             "Segment and Geographic Area Information",
+            "<hr/>",  # a page break: a continuation holding only markup, which is not a word
             "AbbVie operates as a single global business segment dedicated to the research and development,"
             " manufacturing, commercialization and sale of innovative medicines and therapies.",
         ),

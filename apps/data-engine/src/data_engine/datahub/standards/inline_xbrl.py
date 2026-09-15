@@ -188,7 +188,8 @@ class InlineXbrl:
             part: re.Match[str] | None = tag
             while part is not None and length < limit:
                 text = " ".join(html.unescape(_MARKUP.sub(" ", self._element_body(part))).split())
-                parts.append(text)
+                if text:  # a part holding only markup (a page break) is not a word gap
+                    parts.append(text)
                 length += len(text) + 1
                 part = self._continuation(_attributes(part.group(0)).get("continuedAt"))
             return " ".join(parts)[:limit] or None
