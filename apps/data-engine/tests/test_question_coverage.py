@@ -99,12 +99,16 @@ def test_gppe_cells_fall_back_to_availability_for_rows_written_before_the_status
 
 def test_peg_cells_name_the_exclusion_or_admit_the_reason_is_unrecorded() -> None:
     rows = [
-        ("issuer:a", "1.2", "available", None),
-        ("issuer:b", None, "excluded", "financial_branch"),
-        ("issuer:c", None, "available", None),
+        ("issuer:a", "1.2", "available", None, []),
+        ("issuer:b", None, "excluded", "financial_branch", []),
+        ("issuer:c", None, "available", None, []),
+        ("issuer:d", None, "available", None, ["non_positive_growth"]),
     ]
     cells = peg_cells(_Rows(rows), cutoff=datetime(2026, 9, 8, tzinfo=UTC))
     assert cells[0].answered and cells[1].reason == "excluded:financial_branch" and cells[2].reason == UNRECORDED_REASON
+    # #837: an evaluated issuer without a PEG says why, in the factor's own words — the three
+    # `unrecorded_reason` cells on the 2026-09-15 staging topt report were exactly this row.
+    assert cells[3].reason == "non_positive_growth"
 
 
 def _connection():

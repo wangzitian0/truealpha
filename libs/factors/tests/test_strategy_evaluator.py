@@ -221,6 +221,7 @@ def test_the_decision_carries_peg_when_module_1s_inputs_are_present() -> None:
     )[0]
     assert decision.peg is not None
     assert decision.peg.quantize(Decimal("0.01")) == Decimal("0.50")
+    assert decision.peg_reason_codes == (), "a present PEG's window flags are not reasons"
 
 
 def test_a_missing_growth_rate_leaves_peg_absent_without_excluding_the_issuer() -> None:
@@ -236,6 +237,7 @@ def test_a_missing_growth_rate_leaves_peg_absent_without_excluding_the_issuer() 
         risk_free_rate=Decimal("0"),
     )[0]
     assert decision.peg is None
+    assert decision.peg_reason_codes == ("missing_net_income",), "the factor's own reason travels (#837)"
     assert decision.eligible is True
     assert decision.exclusion_reason is None
     # The rest of the decision is untouched by module 1's absence.
@@ -252,6 +254,7 @@ def test_a_non_positive_growth_rate_yields_no_peg_rather_than_a_negative_one() -
         risk_free_rate=Decimal("0"),
     )[0]
     assert decision.peg is None
+    assert decision.peg_reason_codes == ("non_positive_growth",), "named, not a bare absence (#837)"
     assert decision.eligible is True
 
 

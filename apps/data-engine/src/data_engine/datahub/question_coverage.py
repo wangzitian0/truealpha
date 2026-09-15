@@ -112,7 +112,7 @@ def peg_cells(connection: Connection[Any], *, cutoff: datetime) -> tuple[Cell, .
             order by max(d.cutoff_at) desc, s.executed_at desc
             limit 1
         )
-        select d.issuer_id, d.peg, d.availability_status, d.exclusion_reason
+        select d.issuer_id, d.peg, d.availability_status, d.exclusion_reason, d.peg_reason_codes
         from mart.strategy_decisions d
         where d.strategy_run_id = (select strategy_run_id from chosen)
         order by d.issuer_id
@@ -120,11 +120,14 @@ def peg_cells(connection: Connection[Any], *, cutoff: datetime) -> tuple[Cell, .
         (cutoff,),
     ).fetchall()
     cells = []
-    for subject_id, peg, availability_status, exclusion_reason in rows:
+    for subject_id, peg, availability_status, exclusion_reason, peg_reason_codes in rows:
         if peg is not None:
             cells.append(Cell(str(subject_id), True))
         elif availability_status == "excluded" and exclusion_reason:
             cells.append(Cell(str(subject_id), False, f"excluded:{exclusion_reason}"))
+        elif peg_reason_codes:
+            # The PEG factor's own refusal name (#837), for an issuer that was evaluated.
+            cells.append(Cell(str(subject_id), False, str(peg_reason_codes[0])))
         else:
             cells.append(Cell(str(subject_id), False, UNRECORDED_REASON))
     return tuple(cells)

@@ -112,6 +112,12 @@ class EvaluatedDecision:
     # been decided. None when the issuer has no PEG — an absent value must not be ranked as
     # though it were the worst.
     peg_rank: int | None = None
+    # Why `peg` is None, in the PEG factor's own flag vocabulary (`non_positive_growth`,
+    # `insufficient_earnings_history`, ...). Empty when PEG is present or was never computed
+    # (an excluded issuer's reason is `exclusion_reason`). Kept because the factor already
+    # names every degenerate case, and dropping the name here left the question-coverage
+    # report able to say only `unrecorded_reason` (#837).
+    peg_reason_codes: tuple[str, ...] = ()
 
 
 def _quantize(value: Decimal, quantization: DecimalQuantization) -> Decimal:
@@ -198,13 +204,17 @@ def _evaluate_issuer(
     # Recorded, not selecting (#284 step 4): module 1 must not change who is eligible until
     # the owner decides how it enters selection, or landing the factor would silently move
     # the portfolio. So a missing or degenerate PEG leaves the decision otherwise untouched.
-    peg_value = peg(
+    peg_result = peg(
         _facts_for(issuer, _PEG_KEYS, as_of=as_of),
         entity_id=issuer.issuer_id,
         growth_convention=GrowthConvention.HISTORICAL_CAGR,
         as_of=as_of,
         cagr_years=_PEG_CAGR_YEARS,
-    ).value
+    )
+    peg_value = peg_result.value
+    # A present PEG's flags describe its window (`cagr_years:3`, `window:…`); only an absent
+    # one's flags are reasons, and those are the ones that start with a refusal name.
+    peg_reasons = () if peg_value is not None else tuple(f for f in peg_result.flags if ":" not in f)
 
     labor_efficiency = _quantize(gppe_result.value, labor_q)
     current_ps = _quantize(ps_result.value, ps_q)
@@ -233,6 +243,7 @@ def _evaluate_issuer(
                 target_price_to_sales=target_ps,
                 valuation_gap=valuation_gap,
                 peg=peg_value,
+                peg_reason_codes=peg_reasons,
                 eligible=True,
                 outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND,
                 exclusion_reason=None,
@@ -249,6 +260,7 @@ def _evaluate_issuer(
             target_price_to_sales=target_ps,
             valuation_gap=valuation_gap,
             peg=peg_value,
+            peg_reason_codes=peg_reasons,
             eligible=True,
             outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
             exclusion_reason=None,

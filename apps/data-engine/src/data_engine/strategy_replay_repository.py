@@ -133,8 +133,8 @@ def write_strategy_decision(
             strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
             capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
             valuation_gap, eligible, outcome, exclusion_reason, rank, target_weight, peg, peg_rank,
-            availability_status, source_evidence_status, factor_validation_status
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            peg_reason_codes, availability_status, source_evidence_status, factor_validation_status
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         on conflict (strategy_decision_id) do nothing
         returning strategy_decision_id
         """,
@@ -156,6 +156,7 @@ def write_strategy_decision(
             decision.target_weight,
             decision.peg,
             decision.peg_rank,
+            list(decision.peg_reason_codes),
             availability_status.value,
             source_evidence_status.value,
             factor_validation_status.value,

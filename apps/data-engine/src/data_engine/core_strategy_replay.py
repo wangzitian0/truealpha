@@ -74,6 +74,11 @@ class Decision:
     # lets PEG enter selection it is already covered.
     peg: Decimal | None = None
     peg_rank: int | None = None
+    # Why PEG is absent (#837). Deliberately NOT in `to_json` (the content hash): it annotates
+    # the asserted values the way the §8 status dimensions do, and adding it to the identity
+    # would make every run already persisted raise `strategy decision identity conflict` on
+    # its next replay.
+    peg_reason_codes: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -136,6 +141,7 @@ def _to_decision(evaluated: EvaluatedDecision, cutoff_at: str) -> Decision:
         confidence=evaluated.confidence,
         peg=evaluated.peg,
         peg_rank=evaluated.peg_rank,
+        peg_reason_codes=evaluated.peg_reason_codes,
     )
 
 
