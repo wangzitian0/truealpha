@@ -133,20 +133,24 @@ def load_partitions(
     return tuple(partitions)
 
 
-#: The governed run's members, keyed by the CIK the run itself fetched their financials under.
+#: The governed run's members, keyed by the CIK their financials were fetched under.
 #:
 #: The partitions are CIK-keyed (the standards backfill records them that way) and the run's
-#: members need not be: the `topt` run's twenty subjects are `issuer:lei:…`. The run's own
-#: capture plane says which is which — each member listing's financial-fact obligation was
-#: fetched as `companyfacts:CIK##########` — so the join needs no vendor call and no second
-#: resolution that could disagree with the one the governed numbers were computed from.
+#: members need not be: the `topt` run's twenty subjects are `issuer:lei:…`. What the run's own
+#: GPPE rows CONSUMED says which is which — every row names its input observations, and each
+#: financial-fact observation's source vintage is `companyfacts:CIK##########` — so the join
+#: needs no vendor call and no second resolution that could disagree with the numbers.
+#:
+#: Through the consumed inputs, not through the run's own obligations (#839): a tick that
+#: fetches bytes identical to an earlier run's writes no new observations — they stay on the
+#: obligation that first produced them — so a join on this run's obligations found zero members
+#: on every unchanged-bytes head, and q6 went from 12/20 to 0/20 on the first such tick.
 _MEMBERS_SQL = """
 select distinct g.issuer_id, v.source_record_id
 from mart.topt_gppe_results g
-join raw.capture_obligations o
-  on o.run_id = g.run_id and o.subject_id = g.listing_id
+cross join lateral unnest(g.input_observation_ids) as consumed(observation_id)
 join staging.capture_normalized_observations n
-  on n.capture_obligation_id = o.obligation_id and n.semantic_type = 'financial-fact'
+  on n.observation_id = consumed.observation_id and n.semantic_type = 'financial-fact'
 join raw.capture_source_vintages v
   on v.source_vintage_id = n.source_vintage_id
 where g.run_id = %(run_id)s
