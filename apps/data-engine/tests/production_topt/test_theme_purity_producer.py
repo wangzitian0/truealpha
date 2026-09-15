@@ -57,6 +57,18 @@ def connection():
 
 
 @pytest.fixture
+def governed(monkeypatch):
+    """Make CIK the one member of RUN_ID, under ISSUER.
+
+    These tests are about the share, not about membership, and RUN_ID is not a captured run.
+    What membership resolves from a REAL run's capture plane is asserted at the bottom of
+    this file, against a run the deployed executor wrote (#828)."""
+    from data_engine.datahub.production_topt import theme_purity
+
+    monkeypatch.setattr(theme_purity, "governed_members", lambda _connection, *, run_id: {CIK: ISSUER})
+
+
+@pytest.fixture
 def seated(monkeypatch):
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
     monkeypatch.setattr(settings, "llm_model", "glm-test")
@@ -66,7 +78,7 @@ def seated(monkeypatch):
     gateway.set_writer(previous)
 
 
-def _seed(connection, *, segments=SEGMENTS, total=TOTAL, residual="0", partition=PARTITION, knowable=KNOWABLE):
+def _seed(connection, *, segments=SEGMENTS, total=TOTAL, residual="0", partition=PARTITION, knowable=KNOWABLE, cik=CIK):
     for name, revenue in segments:
         connection.execute(
             """
@@ -77,7 +89,7 @@ def _seed(connection, *, segments=SEGMENTS, total=TOTAL, residual="0", partition
             values (%s, %s, %s, %s, %s, %s, %s, '2025-11-02', '10k-segment-extraction',
                     'accession=0001730168-25-000121 form=10-K', 'rule:exhaustive-partition:v1', 0.85)
             """,
-            (CIK, name, revenue, partition, total, Decimal(residual), knowable),
+            (cik, name, revenue, partition, total, Decimal(residual), knowable),
         )
 
 
@@ -149,7 +161,7 @@ def test_a_partition_filed_after_the_cutoff_is_not_visible(connection) -> None:
     assert [p for p in load_partitions(connection, cutoff=CUTOFF) if p.cik == CIK] == []
 
 
-def test_a_published_share_is_over_the_consolidated_total(connection, seated, monkeypatch) -> None:
+def test_a_published_share_is_over_the_consolidated_total(connection, seated, governed, monkeypatch) -> None:
     """The whole point of module 6, asserted through the deployed writer: 36,858 / 63,887,
     not 36,858 / (what the classifier happened to judge)."""
     _seed(connection)
@@ -195,7 +207,7 @@ def test_a_published_share_is_over_the_consolidated_total(connection, seated, mo
     assert confidence == Decimal("0.85")
 
 
-def test_a_mostly_unclassified_issuer_is_refused_rather_than_ranked(connection, seated, monkeypatch) -> None:
+def test_a_mostly_unclassified_issuer_is_refused_rather_than_ranked(connection, seated, governed, monkeypatch) -> None:
     """The definition's floor. A share of 0.58 computed while the classifier declined on 42%
     of the issuer's revenue is not a purity — and publishing it would rank an issuer the
     model could not read against issuers it could."""
@@ -214,7 +226,9 @@ def test_a_mostly_unclassified_issuer_is_refused_rather_than_ranked(connection, 
     assert confidence == 0 and avail == "unavailable" and evidence == "degraded"
 
 
-def test_the_classifier_is_asked_once_per_theme_and_never_shown_the_revenue(connection, seated, monkeypatch) -> None:
+def test_the_classifier_is_asked_once_per_theme_and_never_shown_the_revenue(
+    connection, seated, governed, monkeypatch
+) -> None:
     themes = (THEMES["ai-infrastructure"], THEMES["semiconductors"])
     _seed(connection)
     transport = _answers(
@@ -230,7 +244,7 @@ def test_the_classifier_is_asked_once_per_theme_and_never_shown_the_revenue(conn
     assert {r[0] for r in _rows(connection)} == {t.theme_id for t in themes}
 
 
-def test_a_second_run_of_the_same_cutoff_replays_the_model(connection, seated, monkeypatch) -> None:
+def test_a_second_run_of_the_same_cutoff_replays_the_model(connection, seated, governed, monkeypatch) -> None:
     """§9: replay never silently calls the model again. This is also what makes a weekly
     recompute cost nothing — the same filings under the same themes are already answered."""
     _seed(connection)
@@ -246,7 +260,7 @@ def test_a_second_run_of_the_same_cutoff_replays_the_model(connection, seated, m
     assert len(_rows(connection)) == 1, "and replaced its own row rather than accumulating"
 
 
-def test_the_row_carries_the_definition_it_was_computed_under(connection, seated, monkeypatch) -> None:
+def test_the_row_carries_the_definition_it_was_computed_under(connection, seated, governed, monkeypatch) -> None:
     """Two runs are comparable only under the same sha: the inclusion wording IS the question
     asked, so a reworded theme is a different measurement wearing the same name."""
     _seed(connection)
@@ -263,7 +277,7 @@ def test_the_row_carries_the_definition_it_was_computed_under(connection, seated
     assert (version, sha) == (AI.factor_version, AI.content_sha256)
 
 
-def test_the_summary_names_what_was_published(connection, seated, monkeypatch) -> None:
+def test_the_summary_names_what_was_published(connection, seated, governed, monkeypatch) -> None:
     _seed(connection)
     monkeypatch.setattr(
         llm,
@@ -276,7 +290,7 @@ def test_the_summary_names_what_was_published(connection, seated, monkeypatch) -
     assert summary_line(()) == "theme purity: no issuer has a segment partition at this cutoff"
 
 
-def test_a_partition_that_rounds_still_lands(connection, seated, monkeypatch) -> None:
+def test_a_partition_that_rounds_still_lands(connection, seated, governed, monkeypatch) -> None:
     """The defect this pins: the plane's accounting check required the three masses to equal
     the consolidated total on their own. They are computed over the partition's PARTS, and
     the parts sum to `total - partition_residual` — so a filing that rounds (most of them)
@@ -316,7 +330,7 @@ def test_a_partition_that_rounds_still_lands(connection, seated, monkeypatch) ->
     assert share == Decimal("36858000000") / TOTAL, "the share is over the total, so rounding does not move it"
 
 
-def test_a_rerun_refreshes_provenance_not_just_the_numbers(connection, seated, monkeypatch) -> None:
+def test_a_rerun_refreshes_provenance_not_just_the_numbers(connection, seated, governed, monkeypatch) -> None:
     """A re-run that sees a newer partition at the same cutoff must not leave a share from
     one extraction beside the partition_id of another — a row that reads as re-checkable and
     is not."""
@@ -353,7 +367,9 @@ def test_a_rerun_refreshes_provenance_not_just_the_numbers(connection, seated, m
     assert in_theme == Decimal("40000000000"), "and the numbers are that partition's"
 
 
-def test_a_single_segment_issuer_is_described_to_the_classifier_by_its_filing(connection, seated, monkeypatch) -> None:
+def test_a_single_segment_issuer_is_described_to_the_classifier_by_its_filing(
+    connection, seated, governed, monkeypatch
+) -> None:
     """Without this, the single-segment path lands rows and answers nothing.
 
     Its one part is labelled `Single reportable segment`. No classifier can judge that against
@@ -425,3 +441,59 @@ def test_an_issuer_whose_only_partition_was_withdrawn_has_none(connection) -> No
         evidence="accession=0001067983-26-000001 form=10-K single_segment_statement=significant for one operating segment",
     )
     assert [p for p in load_partitions(connection, cutoff=CUTOFF) if p.cik == CIK] == []
+
+
+def test_rows_are_the_governed_runs_members_under_the_ids_the_run_gives_them(connection, seated, monkeypatch) -> None:
+    """#828, against a run the deployed executor wrote — not a stub of one.
+
+    The TOPT corpus is LEI-keyed, and the producer wrote every partition in the plane under
+    `issuer:cik:…`. So the coverage report joined twenty `issuer:lei:…` subjects to rows it
+    could never match (q6 on topt: `no_row` 20), and a partition for an issuer OUTSIDE the
+    universe was ranked under the run's id as if it were in it. Membership comes from the
+    run's own capture plane: the CIK each member's financials were fetched under.
+    """
+    from pathlib import Path
+
+    from data_engine.datahub.production_topt import PostgresToptCoreRepository
+    from data_engine.datahub.production_topt.theme_purity import governed_members
+    from data_engine.datahub.question_coverage import gppe_cells, theme_purity_cells
+    from factors.production_topt import GppeV0Definition
+
+    # Undone after the test, unlike a bare sys.path.insert (review on #829).
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
+    from production_topt.test_persistence import CUTOFF as CAPTURE_CUTOFF  # noqa: E402
+    from production_topt.test_persistence import _capture  # noqa: E402
+
+    plan = _capture(connection, version="test-828-governed-members")
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+
+    members = governed_members(connection, run_id=plan.run_id)
+    run_issuers = {cell.subject_id for cell in gppe_cells(connection, plan.run_id)}
+    assert run_issuers and all(issuer.startswith("issuer:lei:") for issuer in run_issuers), "the case #828 is about"
+    assert set(members.values()) == run_issuers, "every member resolves, to the id the run itself uses"
+
+    member_cik, member_id = min(members.items())
+    outsider_cik = CIK
+    assert outsider_cik not in members
+    knowable = datetime(2026, 2, 1, tzinfo=UTC)
+    _seed(connection, cik=member_cik, partition="segment-partition:" + "c" * 64, knowable=knowable)
+    _seed(connection, cik=outsider_cik, partition="segment-partition:" + "9" * 64, knowable=knowable)
+    monkeypatch.setattr(
+        llm,
+        "_gateway_transport",
+        _answers(
+            [{"index": 0, "in_theme": True, "reason": "a"}, {"index": 1, "in_theme": False, "reason": "b"}],
+        ),
+    )
+
+    materialize_theme_purity(connection, run_id=plan.run_id, cutoff=CAPTURE_CUTOFF, themes=(AI,))
+
+    rows = connection.execute(
+        "select issuer_id, cik from mart.issuer_theme_purity where run_id = %s order by issuer_id", (plan.run_id,)
+    ).fetchall()
+    assert rows == [(member_id, member_cik)], "one member, under the run's own id; the outsider is not ranked"
+    assert {cell.subject_id for cell in theme_purity_cells(connection, plan.run_id)} == {member_id}, (
+        "and the coverage report's join now finds it"
+    )

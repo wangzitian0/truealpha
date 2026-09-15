@@ -22,6 +22,7 @@ retroactively on a replay, the same trap `fund_consolidation` records for N-PORT
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -52,6 +53,7 @@ with vintage as (
     from staging.issuer_segment_revenue_facts
     where knowable_at <= %(cutoff)s
       and extractor <> all(%(withdrawn)s::text[])
+      and (%(ciks)s::integer[] is null or cik = any(%(ciks)s::integer[]))
     order by cik, knowable_at desc, id desc
 )
 select v.cik, v.partition_id, v.period_end, v.partition_total, v.partition_residual,
@@ -96,10 +98,16 @@ class IssuerPartition:
         return f"issuer:cik:{self.cik:010d}"
 
 
-def load_partitions(connection: Connection[Any], *, cutoff: datetime) -> tuple[IssuerPartition, ...]:
-    """Every issuer with a segment partition knowable at `cutoff`, newest vintage each."""
+def load_partitions(
+    connection: Connection[Any], *, cutoff: datetime, ciks: Collection[int] | None = None
+) -> tuple[IssuerPartition, ...]:
+    """Every issuer with a segment partition knowable at `cutoff`, newest vintage each —
+    or only the issuers in `ciks`, which is how the producer asks for one run's members."""
     withdrawn = list(STANDARDS["segment_revenue"].plane.withdrawn_extractors)
-    rows = connection.execute(_PARTITION_SQL, {"cutoff": cutoff, "withdrawn": withdrawn}).fetchall()
+    rows = connection.execute(
+        _PARTITION_SQL,
+        {"cutoff": cutoff, "withdrawn": withdrawn, "ciks": None if ciks is None else sorted(ciks)},
+    ).fetchall()
     grouped: dict[int, list[Any]] = {}
     meta: dict[int, tuple] = {}
     for cik, partition_id, period_end, total, residual, name, revenue, _extractor, confidence, evidence in rows:
@@ -123,6 +131,43 @@ def load_partitions(connection: Connection[Any], *, cutoff: datetime) -> tuple[I
             )
         )
     return tuple(partitions)
+
+
+#: The governed run's members, keyed by the CIK the run itself fetched their financials under.
+#:
+#: The partitions are CIK-keyed (the standards backfill records them that way) and the run's
+#: members need not be: the `topt` run's twenty subjects are `issuer:lei:…`. The run's own
+#: capture plane says which is which — each member listing's financial-fact obligation was
+#: fetched as `companyfacts:CIK##########` — so the join needs no vendor call and no second
+#: resolution that could disagree with the one the governed numbers were computed from.
+_MEMBERS_SQL = """
+select distinct g.issuer_id, v.source_record_id
+from mart.topt_gppe_results g
+join raw.capture_obligations o
+  on o.run_id = g.run_id and o.subject_id = g.listing_id
+join staging.capture_normalized_observations n
+  on n.capture_obligation_id = o.obligation_id and n.semantic_type = 'financial-fact'
+join raw.capture_source_vintages v
+  on v.source_vintage_id = n.source_vintage_id
+where g.run_id = %(run_id)s
+  and v.source_record_id like 'companyfacts:CIK%%'
+"""
+
+
+def governed_members(connection: Connection[Any], *, run_id: str) -> dict[int, str]:
+    """CIK -> the governed run's issuer id, for every member it fetched financials for (#828).
+
+    Two listings of one issuer (GOOG, GOOGL) share a CIK and an issuer, which is one member.
+    A CIK claimed by two DIFFERENT issuers is an identity conflict in the run, and it is
+    dropped rather than resolved by picking one: a row under the wrong issuer is a share
+    ranked under a name it does not belong to.
+    """
+    claims: dict[int, set[str]] = {}
+    for issuer_id, record_id in connection.execute(_MEMBERS_SQL, {"run_id": run_id}).fetchall():
+        digits = str(record_id).removeprefix("companyfacts:CIK")
+        if digits.isdigit():
+            claims.setdefault(int(digits), set()).add(str(issuer_id))
+    return {cik: next(iter(issuers)) for cik, issuers in claims.items() if len(issuers) == 1}
 
 
 #: How the single-segment adapter writes the filing's own sentence onto the row.
@@ -193,6 +238,7 @@ def compute_for_theme(
     definition: ThemeDefinition,
     *,
     cutoff: datetime,
+    subject_id: str | None = None,
     persist_invocations: bool = True,
 ) -> tuple[ThemePurity, str]:
     """Classify one issuer's segments against one theme and compute the share.
@@ -200,6 +246,11 @@ def compute_for_theme(
     Returns the factor output and the extractor identity that judged it. The classifier is
     shown the segment NAMES and the theme definition, never the revenue — see
     `llm.classify_segments`.
+
+    `subject_id` is the issuer as the governed run names it, and it is what the share is
+    about. The classifier is still labelled by CIK: the label is part of the replayed request,
+    and an issuer in two universes (AVGO is in both) must replay one judgement of one filing
+    rather than be asked once per spelling of its identity.
     """
     classification = llm.classify_segments(
         connection,
@@ -231,7 +282,7 @@ def compute_for_theme(
     # this one refused.
     purity = theme_purity(
         segments,
-        entity_id=partition.issuer_id,
+        entity_id=subject_id or partition.issuer_id,
         theme=definition.theme,
         as_of=cutoff,
         consolidated_revenue=partition.consolidated_revenue,
@@ -286,24 +337,36 @@ def materialize_theme_purity(
     themes: tuple[ThemeDefinition, ...] = tuple(THEMES.values()),
     persist_invocations: bool = True,
 ) -> tuple[ThemePurity, ...]:
-    """Write one `mart.issuer_theme_purity` row per (issuer with a partition, theme).
+    """Write one `mart.issuer_theme_purity` row per (member of the run with a partition, theme).
 
     Idempotent per (run_id, issuer, theme): a re-run of the same tick replaces its own row
     rather than accumulating, since the row is a function of the run and the definition —
     and the model is replayed, not re-asked.
+
+    Only the run's MEMBERS, under the issuer id the run gives them (#828). The rows are
+    attributed to `run_id` and the App serves the newest run's rows, so a partition for an
+    issuer outside that universe would be ranked as if it were in it; and a row keyed by CIK
+    under a run whose members are LEI-keyed is a row the coverage report can never join.
     """
+    members = governed_members(connection, run_id=run_id)
     written: list[ThemePurity] = []
-    for partition in load_partitions(connection, cutoff=cutoff):
+    for partition in load_partitions(connection, cutoff=cutoff, ciks=members.keys()):
+        subject_id = members[partition.cik]
         for definition in themes:
             purity, extractor = compute_for_theme(
-                connection, partition, definition, cutoff=cutoff, persist_invocations=persist_invocations
+                connection,
+                partition,
+                definition,
+                cutoff=cutoff,
+                subject_id=subject_id,
+                persist_invocations=persist_invocations,
             )
             availability, evidence, validation = _status_dimensions(purity, definition)
             connection.execute(
                 _INSERT_SQL,
                 (
                     run_id,
-                    partition.issuer_id,
+                    subject_id,
                     partition.cik,
                     definition.theme_id,
                     definition.theme,
