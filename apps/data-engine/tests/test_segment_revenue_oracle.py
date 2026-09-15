@@ -655,11 +655,11 @@ def test_a_reconciling_item_that_does_not_close_the_gap_or_is_negative_refuses(m
         return _extract(monkeypatch, replace(document, body=body), ("150000000", "2025-12-31"))
 
     outcome, rows = run("2")
-    assert rows == [] and "no single reconciling item closes it" in outcome.detail, (
-        "10 short, 2 offered: 8 over the tolerance of five of the tagged unit"
-    )
+    assert (
+        outcome.status == "no_candidate" and rows == [] and "no single reconciling item closes it" in outcome.detail
+    ), "10 short, 2 offered: 8 over the tolerance of five of the tagged unit"
     outcome, rows = run("10", sign="-")
-    assert rows == [], "a negative item is not revenue"
+    assert (outcome.status, rows) == ("no_candidate", []), "a negative item is not revenue"
     outcome, rows = run("10")
     assert outcome.status == "resolved" and len(rows) == 3
 

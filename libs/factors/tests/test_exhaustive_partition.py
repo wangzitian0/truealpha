@@ -223,3 +223,10 @@ def test_an_over_set_is_never_completed_and_nothing_balancing_returns_each_refus
     )
     assert result == (PartitionRefusal.OVER, PartitionRefusal.SHORT), "no combination, and no completion for OVER"
     assert select_first_balancing_set([], total=Decimal(1), tolerances=[]) == (PartitionRefusal.NO_CANDIDATES,)
+
+
+def test_misaligned_inputs_are_the_callers_mistake_and_say_so() -> None:
+    with pytest.raises(ValueError, match="1 tolerances for 2 candidate sets"):
+        select_first_balancing_set([_set(1), _set(2)], total=Decimal(1), tolerances=[Decimal(0)])
+    with pytest.raises(ValueError, match="0 completion lists for 1 candidate sets"):
+        select_first_balancing_set([_set(1)], total=Decimal(1), tolerances=[Decimal(0)], completions=[])

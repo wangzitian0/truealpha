@@ -300,6 +300,13 @@ def select_first_balancing_set(
     set completed. Exactly one, never a combination — a sum found by search is not a statement
     by the source. Returns each set's refusal, in order, when nothing balances.
     """
+    # Misaligned inputs are the CALLER's mistake, not a source's: unlike a proposal judged by
+    # `select_exhaustive_partition`, they are refused loudly here rather than as an IndexError
+    # three frames down (review on #836).
+    if len(tolerances) != len(candidate_sets):
+        raise ValueError(f"{len(tolerances)} tolerances for {len(candidate_sets)} candidate sets")
+    if completions is not None and len(completions) != len(candidate_sets):
+        raise ValueError(f"{len(completions)} completion lists for {len(candidate_sets)} candidate sets")
     if not candidate_sets:
         return (PartitionRefusal.NO_CANDIDATES,)
     refusals: list[PartitionRefusal] = []
