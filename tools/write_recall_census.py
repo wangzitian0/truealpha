@@ -20,9 +20,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from data_engine.datahub.standards.segment_extraction import (
+    accepted_tagged_partition,
     declared_segment_count,
     segment_name_for,
-    select_tagged_partition,
     tagged_segment_revenues,
 )
 
@@ -72,7 +72,7 @@ def census() -> dict[str, dict]:
         total = TOTALS.get(path.name)
         if total:
             # The adapter's own selection, not a copy of it: the census measures what a run would accept.
-            accepted = select_tagged_partition(tagged, total=Decimal(total), period_end=None)
+            accepted = accepted_tagged_partition(tagged, total=Decimal(total), period_end=None)
             entry["accepted_partition"] = (
                 None if isinstance(accepted, list) else [segment_name_for(member) for member, _ in accepted.parts]
             )

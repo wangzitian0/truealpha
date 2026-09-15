@@ -39,7 +39,8 @@ from factors.shared.extraction import (
     Candidate,
     Partition,
     PartitionRefusal,
-    select_exhaustive_partition,
+    SetPartition,
+    select_first_balancing_set,
 )
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
@@ -152,7 +153,8 @@ _REVENUE_CONCEPTS = (
 _SEGMENT_AXIS = "us-gaap:StatementBusinessSegmentsAxis"
 #: The one second dimension a segment fact may carry and still be the segment's revenue: the
 #: filer marking the value as the operating segment's own.
-_OPERATING_SEGMENTS = ("srt:ConsolidationItemsAxis", "us-gaap:OperatingSegmentsMember")
+_CONSOLIDATION_AXIS = "srt:ConsolidationItemsAxis"
+_OPERATING_SEGMENTS = (_CONSOLIDATION_AXIS, "us-gaap:OperatingSegmentsMember")
 #: A fiscal year, including 52/53-week years (AAPL's runs 364 days, some run 371).
 _ANNUAL_DAYS = range(340, 381)
 _CAMEL_CASE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
@@ -183,7 +185,8 @@ _RECONCILING_LABELS = {
 
 @dataclass(frozen=True)
 class TaggedSegments:
-    """One revenue concept's segment members in one context shape, for the filing's latest year."""
+    """One candidate set of a revenue concept's segment members for the filing's latest year: the
+    union of both context shapes (`all`), or one shape on its own."""
 
     concept: str
     shape: str
@@ -230,7 +233,7 @@ def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments,
             if len(fact.context.dimensions) != 1 or fact.value is None or fact.value <= 0:
                 continue
             ((axis, member),) = fact.context.dimensions
-            if axis == _OPERATING_SEGMENTS[0] and member.split(":", 1)[-1] in _RECONCILING_LABELS:
+            if axis == _CONSOLIDATION_AXIS and member.split(":", 1)[-1] in _RECONCILING_LABELS:
                 items.setdefault(member, set()).add(fact.value)
         reconciling = tuple(sorted((member, min(values)) for member, values in items.items() if len(values) == 1))
         by_shape: dict[str, dict[str, set[Decimal | None]]] = {}
@@ -283,47 +286,48 @@ class TaggedPartition:
     verdict: Partition
 
 
-def select_tagged_partition(
+def accepted_tagged_partition(
     tagged: Sequence[TaggedSegments], *, total: Decimal, period_end: date | None
 ) -> TaggedPartition | list[str]:
-    """The first tagged set that accounts for `total`, or every set's reason for not doing so.
+    """Map the filing's tagged sets onto the shared selection, and its answer back onto them.
 
-    Every set is tried as tagged before any is retried with a reconciling item: a set that is
-    the whole revenue on its own is a stronger answer than one completed by a corporate line.
-    A retry adds exactly ONE positive item, never a combination — the identity would accept a
-    sum found by search, and a sum found by search is not a statement by the filer.
-
-    `period_end` is the oracle's period; None skips the check (the census has no period).
+    The DECISION — sets in order, each as found before any is completed, one completion never a
+    combination — is `factors.shared.extraction.select_first_balancing_set`'s. What is filing-
+    shaped stays here: which sets are eligible at all (read cleanly, for the oracle's period),
+    and saying per set why none was the answer. `period_end` None skips the period check (the
+    recall census has no period).
     """
     refusals: list[str] = []
-    short: list[TaggedSegments] = []
+    eligible: list[TaggedSegments] = []
     for segments in tagged:
         if segments.refusal is not None:
             refusals.append(f"{segments.label}: {segments.refusal}")
-            continue
-        if period_end is not None and segments.period_end != period_end:
+        elif period_end is not None and segments.period_end != period_end:
             refusals.append(f"{segments.label}: tagged for {segments.period_end}, revenue on file is for {period_end}")
-            continue
-        verdict = _balance(segments.parts, total=total, scale=segments.scale)
-        if isinstance(verdict, Partition):
-            return TaggedPartition(segments, segments.parts, None, verdict)
-        refusals.append(f"{segments.label}: {verdict.value} ({len(segments.parts)} members)")
-        if verdict is PartitionRefusal.SHORT and segments.reconciling:
-            short.append(segments)
-    for segments in short:
-        for item in segments.reconciling:
-            parts = (*segments.parts, item)
-            verdict = _balance(parts, total=total, scale=segments.scale)
-            if isinstance(verdict, Partition):
-                return TaggedPartition(segments, parts, item[0], verdict)
-        refusals.append(f"{segments.label}: no single reconciling item closes it")
+        else:
+            eligible.append(segments)
+    result = select_first_balancing_set(
+        [[Candidate(float(value), member) for member, value in segments.parts] for segments in eligible],
+        total=total,
+        # In the units the facts were tagged in — five of whatever the filer rounds to.
+        tolerances=[SEGMENT_TOLERANCE * Decimal(10) ** segments.scale for segments in eligible],
+        completions=[
+            [Candidate(float(value), member) for member, value in segments.reconciling] for segments in eligible
+        ],
+    )
+    if isinstance(result, SetPartition):
+        segments = eligible[result.set_index]
+        parts = segments.parts
+        completion = None
+        if result.completion_index is not None:
+            completion = segments.reconciling[result.completion_index]
+            parts = (*parts, completion)
+        return TaggedPartition(segments, parts, completion[0] if completion else None, result.partition)
+    for segments, refusal in zip(eligible, result, strict=False):
+        refusals.append(f"{segments.label}: {refusal.value} ({len(segments.parts)} members)")
+        if refusal is PartitionRefusal.SHORT and segments.reconciling:
+            refusals.append(f"{segments.label}: no single reconciling item closes it")
     return refusals
-
-
-def _balance(parts: Sequence[tuple[str, Decimal]], *, total: Decimal, scale: int) -> Partition | PartitionRefusal:
-    candidates = [Candidate(float(value), member) for member, value in parts]
-    # In the units the facts were tagged in — five of whatever the filer rounds to.
-    return select_exhaustive_partition(candidates, total=total, tolerance=SEGMENT_TOLERANCE * Decimal(10) ** scale)
 
 
 def segment_name_for(member: str) -> str:
@@ -617,7 +621,7 @@ def _tagged_segments_outcome(
     if oracle is None:
         labels = "; ".join(f"{segments.label}: {PartitionRefusal.NO_TOTAL.value}" for segments in tagged)
         return refused(detail=f"tagged segment revenue accounts for no consolidated revenue ({labels})")
-    accepted = select_tagged_partition(tagged, total=oracle.value, period_end=oracle.period_end)
+    accepted = accepted_tagged_partition(tagged, total=oracle.value, period_end=oracle.period_end)
     if isinstance(accepted, list):
         return refused(detail=f"tagged segment revenue accounts for no consolidated revenue ({'; '.join(accepted)})")
     parts = [(segment_name_for(member), value) for member, value in accepted.parts]
