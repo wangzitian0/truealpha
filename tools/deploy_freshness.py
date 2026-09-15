@@ -12,8 +12,18 @@ measures how busy the repository has been, while age measures how long finished
 work has been invisible — which is the thing that actually hurts. Ten commits
 merged this morning are not a problem; one commit merged last week is.
 
+The bound is per environment (#819). ``tools/cut_release.sh`` deploys staging
+after every tag and promotes production only with ``--prod``: the owner promotes
+deliberately, so production lags staging by design, and the bound that is right
+for staging (3 days: finished work must reach the soak quickly) had the
+production leg red every day for the lag the release protocol asks for.
+Production gets 14 days — a fortnight for a deliberate promotion, still under
+the 15-day gap that went unnoticed, so the failure above would fire at this
+bound too. The caller names the bound: ``deploy-freshness.yml`` carries it in
+its matrix and passes ``--max-age-days``; this tool only measures against it.
+
 Usage:
-  python tools/deploy_freshness.py <url> [--max-age-days N] [--repo PATH]
+  python tools/deploy_freshness.py <url> [--environment NAME] [--max-age-days N] [--repo PATH]
 
 Exit codes:
   0 - the deployed release is within the bound (or main has nothing newer)
@@ -36,7 +46,15 @@ from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deploy
 # in three days). Three days is therefore comfortably above normal cadence and
 # far below the 15-day gap that went unnoticed: it cannot fire on a weekend of
 # ordinary work, and it cannot stay quiet through the failure it exists for.
-DEFAULT_MAX_AGE_DAYS = 3
+STAGING_MAX_AGE_DAYS = 3
+# Production is promoted by hand (cut_release.sh --prod) and lags by design;
+# fourteen days bounds that lag without reopening #560, whose 15-day gap is
+# still past it. deploy-freshness.yml's matrix carries both numbers and
+# test_ci_workflows.py holds them equal to these.
+PRODUCTION_MAX_AGE_DAYS = 14
+# A caller that names no bound gets the strict one: falling into the lenient
+# bound by omission is how a lag becomes invisible again.
+DEFAULT_MAX_AGE_DAYS = STAGING_MAX_AGE_DAYS
 
 
 class FreshnessFailure(RuntimeError):

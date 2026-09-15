@@ -12,6 +12,19 @@ name: deploy-freshness
 # the repository has been, age measures how long finished work has been
 # invisible. Ten commits merged this morning are not a problem; one commit
 # merged last week is.
+#
+# The bound is PER ENVIRONMENT (#819). tools/cut_release.sh deploys staging
+# after every tag and promotes production only with --prod, so production lags
+# staging by design: the owner promotes deliberately, and one tag per merged PR
+# (five on 2026-09-15, v0.0.56–v0.0.60) means several tags soak before one is
+# promoted. One bound for both legs had production red every day for exactly
+# that lag (run 34940255057: v0.0.51 served, 21 commits unreleased, oldest
+# 4d19h, limit 3d). Staging keeps 3 days — finished work must reach the soak
+# quickly. Production gets 14: a fortnight for a deliberate promotion, and
+# still under the 15-day gap this check was written for, so #560's failure
+# would fire at this bound too. The numbers live in the matrix below and in
+# tools/deploy_freshness.py (STAGING_/PRODUCTION_MAX_AGE_DAYS);
+# test_ci_workflows.py holds the two in agreement.
 
 on:
   schedule:
@@ -25,9 +38,12 @@ on:
         # context belongs to workflow_dispatch/workflow_call, and this workflow's
         # PRIMARY trigger is the schedule. A guard whose own expression can fail
         # on its main trigger is the failure mode it exists to prevent (review).
-        description: "Fail when the oldest unreleased commit is older than this"
+        # Applies to BOTH legs when set. No default on purpose: a default of
+        # "3" would flatten production's bound back to staging's on every
+        # manual dispatch. Empty runs the per-environment matrix bounds; a
+        # red-proof can pass 0 to force both legs red.
+        description: "Override the per-environment bound for both legs (empty = matrix values)"
         required: false
-        default: "3"
 
 permissions:
   contents: read
@@ -49,14 +65,19 @@ jobs:
           # ("Deploy prod v0.0.20"); `environment` is the human name used in
           # messages. Conflating them made the evidence check look for runs that
           # can never exist (review).
+          # `max_age_days` is the per-environment bound (#819, header comment):
+          # production is promoted deliberately and may lag; staging is where
+          # every tag lands and must not.
           - environment: production
             deploy_type: prod
             url: https://truealpha.club/api/health
             base: https://truealpha.club
+            max_age_days: 14
           - environment: staging
             deploy_type: staging
             url: https://truealpha-staging.truealpha.club/api/health
             base: https://truealpha-staging.truealpha.club
+            max_age_days: 3
     steps:
       # Full history AND tags: the environments report release tags, and the
       # check resolves that tag to a commit to measure the gap. A shallow clone
@@ -72,7 +93,7 @@ jobs:
           uv run --no-sync python tools/deploy_freshness.py \
             "${{ matrix.url }}" \
             --environment "${{ matrix.environment }}" \
-            --max-age-days "${{ github.event.inputs.max_age_days || '3' }}"
+            --max-age-days "${{ github.event.inputs.max_age_days || matrix.max_age_days }}"
 
       # A4 C1 (#673): the routing shape, against the REAL proxy. Four
       # production releases went into one redirect and every defect in it was

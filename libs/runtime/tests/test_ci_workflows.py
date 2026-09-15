@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from truealpha_runtime.testing import load_tool
 
 # Loaded the way every test in this directory loads its subject — the tests are
 # not a package, and pytest's importlib mode does not put this directory on the
@@ -186,6 +187,30 @@ def test_the_scheduled_gate_does_not_use_the_dispatch_inputs_context() -> None:
         text = step_text(FRESHNESS, name)
         assert "github.event.inputs.max_age_days" in text
         assert "${{ inputs." not in text, "the inputs context is absent on a schedule event"
+
+
+def test_the_freshness_bound_is_per_environment() -> None:
+    """#819: every tag soaks staging while production is promoted only by
+    `cut_release.sh --prod`, so one bound for both legs had production red every
+    day for the lag the release protocol asks for. The matrix carries the bound,
+    the step reads the matrix's value, and the numbers are the ones the tool and
+    the release script document — three files that must not drift."""
+    tool = load_tool("deploy_freshness")
+    matrix = {entry["environment"]: entry for entry in job(FRESHNESS, "freshness")["strategy"]["matrix"]["include"]}
+    assert matrix["staging"]["max_age_days"] == tool.STAGING_MAX_AGE_DAYS
+    assert matrix["production"]["max_age_days"] == tool.PRODUCTION_MAX_AGE_DAYS
+    assert matrix["production"]["max_age_days"] > matrix["staging"]["max_age_days"], (
+        "production lags staging by design; a bound at or below staging's makes deliberate promotion red"
+    )
+    text = step_text(FRESHNESS, "Check ${{ matrix.environment }} freshness")
+    assert "matrix.max_age_days" in text, "the step no longer reads the bound from the matrix"
+    # The dispatch input overrides BOTH legs; a non-empty default would flatten
+    # production's bound back to staging's on every manual run.
+    dispatch = triggers(FRESHNESS)["workflow_dispatch"]["inputs"]["max_age_days"]
+    assert not dispatch.get("default"), "a defaulted dispatch input overrides the matrix bounds on every manual run"
+    script = (REPO_ROOT / "tools" / "cut_release.sh").read_text(encoding="utf-8")
+    for phrase in (f"staging {tool.STAGING_MAX_AGE_DAYS} days", f"production {tool.PRODUCTION_MAX_AGE_DAYS} days"):
+        assert phrase in script, f"cut_release.sh's policy header does not say {phrase!r}; the two files disagree"
 
 
 def test_the_evidence_check_passes_a_deploy_type_the_release_can_produce() -> None:
