@@ -176,7 +176,9 @@ class InlineXbrl:
 
         A block about a part of the filer (a subsidiary registrant's note in a combined filing)
         is skipped for the same reason a dimensional count is. The continuation chain is
-        followed only as far as `limit` needs; a malformed chain that cycles ends there too.
+        followed only as far as `limit` needs, and a malformed chain stops where it goes wrong:
+        a part that never closes is unreadable and ends the block with what was read before it,
+        and a chain that names a part already read ends there rather than being read again.
         """
         for tag in _NON_NUMERIC.finditer(self._raw):
             attributes = _attributes(tag.group(0))
@@ -185,27 +187,35 @@ class InlineXbrl:
                 continue
             parts: list[str] = []
             length = 0
+            read: set[str] = set()
             part: re.Match[str] | None = tag
             while part is not None and length < limit:
-                text = " ".join(html.unescape(_MARKUP.sub(" ", self._element_body(part))).split())
+                body = self._element_body(part)
+                if body is None:
+                    break
+                text = " ".join(html.unescape(_MARKUP.sub(" ", body)).split())
                 if text:  # a part holding only markup (a page break) is not a word gap
                     parts.append(text)
                 length += len(text) + 1
-                part = self._continuation(_attributes(part.group(0)).get("continuedAt"))
+                following = _attributes(part.group(0)).get("continuedAt")
+                if not following or following in read:
+                    break
+                read.add(following)
+                part = self._continuation(following)
             return " ".join(parts)[:limit] or None
         return None
 
-    def _element_body(self, opening: re.Match[str]) -> str:
+    def _element_body(self, opening: re.Match[str]) -> str | None:
+        """The markup between an opening tag and its own close, or None when it never closes —
+        an unclosed element would otherwise read as the rest of the document."""
         depth = 1
         for tag in _TEXT_PART.finditer(self._raw, opening.end()):
             depth += -1 if tag.group(1) else 1
             if depth == 0:
                 return self._raw[opening.end() : tag.start()]
-        return self._raw[opening.end() :]
+        return None
 
-    def _continuation(self, part_id: str | None) -> re.Match[str] | None:
-        if not part_id:
-            return None
+    def _continuation(self, part_id: str) -> re.Match[str] | None:
         return re.search(
             rf"<ix:continuation\b[^>]*\bid\s*=\s*[\"']{re.escape(part_id)}[\"'][^>]*>", self._raw, re.IGNORECASE
         )

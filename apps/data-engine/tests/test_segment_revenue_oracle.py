@@ -1044,6 +1044,42 @@ def test_a_note_that_declares_in_no_pattern_is_described_by_its_opening(monkeypa
     assert "innovative medicines" in description
 
 
+def test_a_malformed_note_is_read_as_far_as_it_is_well_formed_and_no_further() -> None:
+    """A regex reader over HTML that is not XML: a part that never closes is unreadable rather
+    than the rest of the document, and a chain that names a part already read ends there rather
+    than being read again until the limit (review on #842)."""
+    from data_engine.datahub.standards.inline_xbrl import InlineXbrl
+
+    note = "us-gaap:SegmentReportingDisclosureTextBlock"
+    contexts = (_context("c-1", "2025-12-31"),)
+
+    unclosed = _ixbrl(
+        f'<ix:nonNumeric contextRef="c-1" name="{note}" id="note-0" escape="true">Segment Information',
+        "Everything after an unclosed tag is not its text.",
+        contexts=contexts,
+    )
+    assert InlineXbrl(unclosed).text_block(note, limit=600) is None
+
+    cycle = _ixbrl(
+        f'<ix:nonNumeric contextRef="c-1" name="{note}" id="note-0" continuedAt="note-1" escape="true">Segment'
+        " Information</ix:nonNumeric>",
+        '<ix:continuation id="note-1" continuedAt="note-1">We have one reportable segment.</ix:continuation>',
+        contexts=contexts,
+    )
+    assert InlineXbrl(cycle).text_block(note, limit=600) == "Segment Information We have one reportable segment."
+
+    unclosed_later = _ixbrl(
+        f'<ix:nonNumeric contextRef="c-1" name="{note}" id="note-0" continuedAt="note-1" escape="true">Segment'
+        " Information</ix:nonNumeric>",
+        '<ix:continuation id="note-1">We have one reportable segment.',
+        "Not the note.",
+        contexts=contexts,
+    )
+    assert InlineXbrl(unclosed_later).text_block(note, limit=600) == "Segment Information", (
+        "what was read before the unreadable part stands; the part itself is not guessed at"
+    )
+
+
 def test_visas_description_is_its_segment_note_not_the_sentence_its_count_is_tagged_in(monkeypatch) -> None:
     """#841 on the packaged filing the row was landed from (staging, v0.0.58–v0.0.60): the count
     is tagged inside "Significant expenses that are regularly provided to the CODM for the
