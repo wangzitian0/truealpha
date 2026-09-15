@@ -452,7 +452,6 @@ def test_rows_are_the_governed_runs_members_under_the_ids_the_run_gives_them(con
     universe was ranked under the run's id as if it were in it. Membership comes from the
     run's own capture plane: the CIK each member's financials were fetched under.
     """
-    import sys
     from pathlib import Path
 
     from data_engine.datahub.production_topt import PostgresToptCoreRepository
@@ -460,7 +459,8 @@ def test_rows_are_the_governed_runs_members_under_the_ids_the_run_gives_them(con
     from data_engine.datahub.question_coverage import gppe_cells, theme_purity_cells
     from factors.production_topt import GppeV0Definition
 
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    # Undone after the test, unlike a bare sys.path.insert (review on #829).
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
     from production_topt.test_persistence import CUTOFF as CAPTURE_CUTOFF  # noqa: E402
     from production_topt.test_persistence import _capture  # noqa: E402
 
