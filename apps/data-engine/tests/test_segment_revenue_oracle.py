@@ -498,39 +498,6 @@ def test_an_issuer_that_reports_segments_never_takes_the_single_segment_path(mon
     assert "Semiconductor Solutions=36858000000" in outcome.detail
 
 
-def test_the_landed_row_says_where_its_scale_came_from(monkeypatch) -> None:
-    """A scale printed beside the numbers and one inherited from the filing are different
-    evidence. The candidate carried `scale_source` and the ROW did not, so the distinction
-    existed in memory and never reached anyone who could act on it.
-
-    The TABLE path only answers a filing that tags no segment revenue (#830), so AVGO is read
-    here with its revenue tags renamed away. Its table declares its own scale, so this lands
-    `scale=table`; the assertion is that the field is there and true, not that it is always
-    the same value.
-    """
-    from data_engine.datahub.standards import segment_extraction as adapter
-
-    untagged = _avgo_filing()
-    body = untagged.body.replace(
-        b'name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"', b'name="x:Untagged"'
-    )
-    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: replace(untagged, body=body))
-    connection = _RecordingConnection()
-    adapter.extract_segment_revenue(
-        CIK,
-        connection=connection,
-        http=None,
-        gateway=None,
-        standard=STANDARDS["segment_revenue"],
-        cutoff=CUTOFF,
-        write=True,
-    )
-    rows = [_row(p) for p in connection.inserts()]
-    assert rows, "the partition landed"
-    assert all("scale=table" in r["evidence_ref"] for r in rows), "AVGO states its own scale"
-    assert all("accession=0001730168-25-000121" in r["evidence_ref"] for r in rows)
-
-
 # --- #830: segment revenue as the filer tags it ----------------------------------------------
 
 
@@ -612,9 +579,9 @@ def test_a_tagged_set_that_does_not_balance_is_refused_with_each_concepts_reason
 
 def test_a_filing_that_tags_its_segments_is_never_answered_by_a_printed_table(monkeypatch) -> None:
     """Measured on Comcast (#830): its five tagged segments do not balance (they include
-    intersegment revenue), and the table reader DID balance a table — "United States, United
-    Kingdom, Other", its geography. A filer that tags its segments has said what they are, so
-    the answer is a refusal rather than a geography recorded as segment revenue."""
+    intersegment revenue), and the retired table reader DID balance a table — "United States,
+    United Kingdom, Other", its geography. The filing below prints exactly such a table beside
+    tagged segments that do not balance, and the answer stays a refusal (#833)."""
     table = (
         "Revenue by segment (in millions) United States 100 United Kingdom 50 Total 150 "
         "Revenue by segment (in millions) United States 100 United Kingdom 50 Total 150"
@@ -899,3 +866,22 @@ def test_a_declared_single_segment_lands_with_its_tagged_sentence(monkeypatch) -
         "segment_count=us-gaap:NumberOfReportableSegments=1@2025-09-30 "
         "single_segment_statement=The Company has one reportable segment, Payment Services."
     ), "the statement is LAST: the theme-purity reader takes everything after its marker"
+
+
+def test_a_refusal_says_which_half_of_the_answer_is_missing(monkeypatch) -> None:
+    """Two refusals with different owners, kept apart (#833). DUOL declares one segment and this
+    environment has no revenue to file it against — the capture plane's gap. PLUG's 2021 filing
+    predates segment tagging and declares nothing — the filing's gap, which no amount of revenue
+    capture would close."""
+    duol = _packaged("DUOL_10K_000162828026012494.html", cik=1562088, filed=date(2026, 2, 27))
+    outcome, rows = _extract(monkeypatch, duol, None)
+    assert (outcome.status, rows) == ("no_candidate", [])
+    assert outcome.detail == (
+        "declares a single segment (us-gaap:NumberOfReportableSegments=1@2025-12-31), but this environment "
+        "holds no consolidated revenue to file the partition against"
+    )
+
+    plug = _packaged("PLUG_10K_000155837021007147.html", cik=1093691, filed=date(2021, 3, 1))
+    outcome, rows = _extract(monkeypatch, plug, ("337000000", "2020-12-31"))
+    assert (outcome.status, rows) == ("no_candidate", [])
+    assert outcome.detail == "the filing tags no segment revenue on the business-segment axis for its latest year"

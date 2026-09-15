@@ -1,31 +1,25 @@
-"""Recall of segment revenue from a filing's own text (#772, q6).
+"""Segment revenue from a filing's own tags (#772, q6).
 
-The SEC-filing adapter for `segment_revenue`, beside `filing_extraction` rather than inside
-it: it reuses that module's `latest_annual_filing` and `filing_plain_text` unchanged (both
-carry no headcount semantics — measured, not assumed) and owns only what is different, which
-is recall and the shape of the answer.
+The SEC-filing adapter for `segment_revenue`, beside `filing_extraction` rather than inside it:
+it reuses that module's fetch contract and owns only what is different, which is how a filing
+states its segments and the shape of the answer.
 
-**Recall is deliberately not clever, and that is the design.** Measured on the packaged AVGO
-10-K, a plain sweep of "revenue by segment" windows returns the real table AND a per-segment
-income statement 140k characters later, whose cost, R&D and operating-income rows sum to far
-more than the issuer earned. That is not filtered by cleverness here.
-`factors.shared.extraction.select_exhaustive_partition` refuses a set whose parts do not
-account for the issuer's consolidated revenue — a number this module never computes and
-cannot influence — so a greedy recall pass produces a REFUSAL, not a wrong answer.
+**What decides is what the filer tags, never what a pattern reads.** Two structured statements
+in the filing's inline XBRL carry the answer: the count of segments it declares, and the revenue
+it tags on the business-segment axis. A printed-table reader — heading, row and units regexes —
+answered this question until #833 and accepted 3 partitions across the 106 filings the lane
+walks, one of them a geography table taken for segments; the tags balance 54.
 
-One class IS excluded before the identity sees it, and it is not a judgement about which
-table is right: a window that states no monetary scale (AVGO restates the same segments as
-percentages, under "(As a percentage of net revenue)") holds numbers that cannot be compared
-to an absolute oracle at all. Reading the units the table declares is the difference between
-a part and a number that merely looks like one.
+**The identity owns correctness.** `factors.shared.extraction.select_exhaustive_partition`
+accepts a set only when its parts account for the issuer's consolidated revenue — a number this
+module never computes and cannot influence. A missed segment silently raises every remaining
+segment's share, so q6's "purest name under a theme" would invert while every number on the page
+still looked like a number; a set that does not balance is refused, with the reason on the
+outcome.
 
-That division matters more than it sounds. A missed segment silently raises every remaining
-segment's share, so q6's "purest name under a theme" inverts while every number on the page
-still looks like a number. Recall owns coverage; the identity owns correctness.
-
-What this module does NOT do: fetch (the caller passes a `FilingDocument`), decide (the
-partition rule decides), or write (the standard's backfill writes). It turns filing text into
-candidates with the evidence each was read from.
+What this module does NOT do: decide which parts are right (the partition rule decides), or
+plan (the standard's backfill does). It reads the filing's tags and lands what the identity
+accepts, with the evidence each part was read from.
 """
 
 from __future__ import annotations
@@ -33,7 +27,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
@@ -44,7 +37,6 @@ from typing import Any
 from factors.shared.extraction import (
     RULE_SINGLE_SEGMENT,
     Candidate,
-    Partition,
     PartitionRefusal,
     select_exhaustive_partition,
 )
@@ -56,113 +48,6 @@ from data_engine.datahub.standards.filing_extraction import (
     filing_plain_text,
 )
 from data_engine.datahub.standards.inline_xbrl import InlineXbrl, TaggedFact
-
-#: The sentence that introduces a segment revenue table. Every phrasing seen in the packaged
-#: filings AND in the ones the deployed run refused; a heading this misses costs a
-#: `no_candidates` refusal, never a wrong number.
-#:
-#: `sales` is here because the word is not always "revenue": Apple writes "net sales by
-#: reportable segment for 2025, 2024 and 2023 (dollars in millions)" and Costco reports
-#: segment "revenue" under a sentence this still does not match. Measured on the filings the
-#: staging run refused, not invented — 15 of 25 issuers refused with "no segment table
-#: matched", which is a statement about this pattern and not about the filings.
-_TABLE_HEADING = re.compile(
-    r"(?:net\s+)?(?:revenue|sales)\s+by\s+(?:reportable\s+|operating\s+)?segment"
-    r"|segment\s+(?:net\s+)?(?:revenue|sales)"
-    r"|(?:revenues?|net\s+sales)\s+from\s+external\s+customers\s+by\s+(?:reportable\s+)?segment",
-    re.IGNORECASE,
-)
-
-#: One table row: a label followed by its first numeric column, DECIMALS INCLUDED. Without
-#: the decimal, ADP is invisible: it reports millions to one place ("segment revenues 14,831.4
-#: 7,128.1 21,959.5"), so every row of its segment table failed to match and six located
-#: tables produced nothing. The SECOND column is deliberately not read — it is the prior fiscal year, and mixing the years is the trap that
-#: makes a partition sum to neither. Which column belongs to which year is stated in the
-#: header the window starts with, so the first is this year's by position within the window.
-_ROW = re.compile(r"([A-Z][A-Za-z&/,\.\-' ]{3,60}?)\s+\$?\s*([\d,]{2,15}(?:\.\d+)?)(?:\s|$)")
-
-#: A row label that is really the TAIL of a total. `_NOT_A_SEGMENT` rejects `Total Segment
-#: Revenues`, and then the row regex matches again from `Segment Revenues` — so the aggregate
-#: enters the set as a part named after the group it totals. Measured on ADM, whose grand
-#: total is literally "Total Segment Revenues 79,820".
-#:
-#: Checked against the text BEFORE the label rather than the label itself, which is the only
-#: place the word survives. Rejecting the whole WINDOW instead was tried and measured: it
-#: takes ADM from 32 candidates to 6 and loses every real leaf (Crushing 10,353, Refined
-#: Products and Other 10,855, Starches and Sweeteners 7,982 ...), because that same match is
-#: the anchor the backward window uses to find the table at all. The row is the thing to
-#: reject; the window is not.
-_TAIL_OF_A_TOTAL = re.compile(r"\btotal\s+(?:\w+\s+){0,2}$", re.IGNORECASE)
-
-#: A window wide enough for a two-to-six segment table plus its header. An upper bound only
-#: — the window really ends at the table's total row, below.
-_WINDOW = 700
-
-#: The total row ENDS a segment table. Measured on the packaged AVGO 10-K: the amounts table
-#: runs `... Infrastructure software 27,029 ... Total net revenue $ 63,887 ...` and the very
-#: next characters are the caption of a SECOND table stating the same segments as
-#: percentages. A fixed-width window swallows both, and their parts sum to neither the total
-#: nor anything else — the identity refuses, correctly, and the extraction fails when it
-#: should have succeeded. Cutting at the total is not a heuristic about which numbers look
-#: right; it is where the table itself says it is finished.
-_TABLE_END = re.compile(r"\btotal\b[^\n]{0,40}?[\d,]{2,15}", re.IGNORECASE)
-
-#: The scale the table states for itself: filings print "(In millions)" or "(in thousands)"
-#: in the caption between the heading and the first row. The oracle this set is checked
-#: against is ABSOLUTE (the observation plane stores 63,887,000,000 for the same issuer the
-#: filing prints as 63,887), so an unscaled part is short by six orders of magnitude and the
-#: identity refuses every real table.
-#:
-#: Read rather than assumed. A default of "millions" would be right for most large issuers
-#: and silently wrong for the rest — and wrong in the direction that MATTERS, because a set
-#: scaled by 1,000x too little refuses (visible) while one scaled too much can only land if
-#: it balances, which it cannot. A window that does not state its units is skipped, and
-#: `unitless_windows` counts it so the refusal says so instead of claiming recall found
-#: nothing.
-#: Every shape the packaged corpus actually uses, measured rather than guessed:
-#: `(In millions, except percentages)`, `(dollars in millions)`, `(in US $ millions, except
-#: share and per share amounts)`, `(in thousands)`. The first version required `(` to be
-#: followed immediately by `in`, and SHOP writes `(in US $ millions)` — so the filing read as
-#: declaring no scale ANYWHERE, and a test of mine asserted that as a property of the
-#: DOCUMENT when it was a property of this regex. Widening it takes SHOP from nothing to
-#: millions x70 and changes no other filing's dominant answer.
-_UNITS = re.compile(
-    r"\(\s*(?:[^()]{0,40}?\b)?in\s+(?:U\.?S\.?\s*\$\s*|\$\s*)?(thousands|millions|billions)\b",
-    re.IGNORECASE,
-)
-#: A table that says it is stated in percentages. Not cleverness about which table is right
-#: — the same document-stated fact the units are, read for the same reason.
-#:
-#: This became load-bearing when a table could inherit the FILING's scale: AVGO restates its
-#: segments as `58 / 42` under `(As a percentage of net revenue)`, and 58 + 42 inherited as
-#: millions is 100,000,000. Against the issuer this is harmless — 100M is nowhere near
-#: 63,887M — but an issuer whose consolidated revenue happens to be about $100 million would
-#: have had its PERCENTAGE table accepted as its segment revenues, balanced to the cent. A
-#: plausible-looking wrong answer is the one failure this module is built to make impossible,
-#: so the percentage table is excluded by what it says about itself.
-_PERCENTAGE_TABLE = re.compile(r"\(\s*(?:as\s+a\s+)?percentages?\b|\bas\s+a\s+percentage\s+of\b", re.IGNORECASE)
-
-_MULTIPLIERS = {
-    "thousands": Decimal("1000"),
-    "millions": Decimal("1000000"),
-    "billions": Decimal("1000000000"),
-}
-
-
-#: Labels that are never a segment. `total` is the identity's own oracle restated inside the
-#: table; a month name is a header date fragment the row pattern picks up.
-_NOT_A_SEGMENT = re.compile(
-    r"^total\b"
-    # Column headers, whose "value" is a year. Measured on Apple: its table is headed
-    # `... 2025 Change 2024 Change 2023`, and reading `Change 2024` as a 2,024-unit segment
-    # put two junk parts in the set — the five real geographies sum to the consolidated
-    # revenue exactly, and did not balance until these were out.
-    r"|^(?:change|fiscal|year|period|quarter)\b"
-    r"|^(?:january|february|march|april|may|june|july|august|september|october|november|december)\b"
-    r"|\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b",
-    re.IGNORECASE,
-)
-
 
 #: How many segments the issuer says it has, in the form it files for machines: the inline
 #: XBRL tag on the count in its own segment note. This — never a sentence — is what decides
@@ -251,8 +136,8 @@ def _whole(value: Decimal | None) -> int | None:
 #:
 #: Measured over the latest annual filing of every issuer the lane walks (106 filings,
 #: 2026-09-15): the tagged segments balance the filing's own consolidated revenue in 54, against
-#: 6 for the heading/row/units reader below — and one of that reader's six was Comcast's
-#: GEOGRAPHY table ("United States, United Kingdom, Other") accepted as its segments.
+#: 6 for the heading/row/units table reader this replaced (#833) — and one of that reader's six
+#: was Comcast's GEOGRAPHY table ("United States, United Kingdom, Other") taken for its segments.
 #:
 #: Tried in this order; the first concept whose members balance the oracle is the answer.
 _REVENUE_CONCEPTS = (
@@ -364,232 +249,10 @@ def single_segment_statement(text: str) -> str | None:
     return " ".join(text[start : match.end() + _SINGLE_SEGMENT_SPAN].split())
 
 
-@dataclass(frozen=True)
-class SegmentCandidate:
-    """One stated segment revenue, with what it was read from.
-
-    `sentence` is the row verbatim — init.md §9's anchor: the landed fact points at the text
-    that stated it, so a number is always re-readable against its source.
-    """
-
-    segment_name: str
-    #: ABSOLUTE, in the filing's currency — the units its own caption declared, applied. This
-    #: is what the identity checks and what lands, so no consumer has to know which filing
-    #: used which scale.
-    value: Decimal
-    #: The number as the row printed it (36,858), kept beside the scaled one so the evidence
-    #: span and the value a reader sees in the filing still agree.
-    stated_value: Decimal
-    #: The scale applied to this row. Per window where the table states one — an issuer may
-    #: print its segment table in millions and a supplementary table in thousands — and the
-    #: filing's own dominant declaration where it does not.
-    multiplier: Decimal
-    #: `"table"` when the window declared the scale, `"filing"` when it was inherited. Kept
-    #: because the two are different evidence: the first is stated beside the numbers, the
-    #: second is stated elsewhere and only survives because the identity would have refused
-    #: the set had it been wrong.
-    scale_source: str
-    sentence: str
-    window_start: int
-
-
-def segment_candidates(text: str) -> list[SegmentCandidate]:
-    """Every segment-looking row under every segment-table heading, first column only.
-
-    Duplicates across windows are collapsed on (name, value): the same table is commonly
-    introduced twice (a lead-in sentence and the table's own caption both match the
-    heading), and one segment stated twice would double-count into every share.
-
-    Order is discovery order, which the partition rule preserves in `candidate_indices` — an
-    adapter mapping indices back to these candidates gets the row it expected.
-    """
-    seen: set[tuple[str, Decimal]] = set()
-    found: list[SegmentCandidate] = []
-    inherited = filing_scale(text)
-    for start, window in _windows(text):
-        if _PERCENTAGE_TABLE.search(window):
-            # The table states it holds percentages. Nothing here is a revenue.
-            continue
-        units = _UNITS.search(window)
-        if units is not None:
-            multiplier, scale_source = _MULTIPLIERS[units.group(1).lower()], "table"
-        elif inherited is not None:
-            multiplier, scale_source = inherited, "filing"
-        else:
-            # Not a judgement about whether this table is the right one — that is the
-            # identity's job. A number whose scale the document states NOWHERE cannot be
-            # compared to an absolute oracle at all.
-            continue
-        for row in _ROW.finditer(window):
-            name = row.group(1).strip()
-            if _NOT_A_SEGMENT.search(name) or len(name.split()) > 6:
-                continue
-            # Against the FULL text, not the window: when the phrase matched inside the total
-            # itself the window BEGINS at the aggregate's name, so the word "Total" is behind
-            # the window's own start and a window-local look-back sees nothing.
-            at = start + row.start(1)
-            if _TAIL_OF_A_TOTAL.search(text[max(0, at - 12) : at]):
-                continue
-            stated = Decimal(row.group(2).replace(",", ""))
-            key = (name, stated)
-            if key in seen:
-                continue
-            seen.add(key)
-            found.append(
-                SegmentCandidate(
-                    segment_name=name,
-                    value=stated * multiplier,
-                    stated_value=stated,
-                    multiplier=multiplier,
-                    scale_source=scale_source,
-                    sentence=row.group(0).strip(),
-                    window_start=start,
-                )
-            )
-    return found
-
-
-#: How far back to look for a units caption when the forward window has none. Measured, not
-#: guessed: ADM's caption sits ~700 characters before the phrase this module matches on.
-_LOOKBACK = 900
-
-
-def _rows_in(window: str) -> int:
-    """How many segment-looking rows a span holds. The window's direction is chosen by this
-    rather than by where a units caption sits, because a caption is optional and the rows are
-    the thing being looked for.
-
-    Applies the same three filters `segment_candidates` does — not a segment label, at most six
-    words, not the tail of a total — so the two cannot disagree about what a row is.
-
-    It differs in ONE way, and only because it can: the total-tail check here reads the
-    WINDOW, while `segment_candidates` reads the full text. A tail whose "Total" sits before
-    the window's own start is therefore counted here and rejected there. That is harmless for
-    what this is used for — comparing two spans of the same document to pick a direction —
-    and it is stated rather than left for someone to find, because the two filters looking
-    identical while behaving differently is exactly the kind of drift this module keeps
-    paying for.
-    """
-    return sum(
-        1
-        for row in _ROW.finditer(window)
-        if not _NOT_A_SEGMENT.search(row.group(1).strip())
-        and len(row.group(1).split()) <= 6
-        and not _TAIL_OF_A_TOTAL.search(window[max(0, row.start(1) - 12) : row.start(1)])
-    )
-
-
-def filing_scale(text: str) -> Decimal | None:
-    """The scale this filing declares most often, or None if it declares none.
-
-    Measured on the packaged corpus, where the dominant declaration is never close: ADM says
-    millions 51 times and thousands twice, DDOG says thousands 39 times and millions once,
-    JPM says millions 253 times. A filing declares its units once at the top of the financial
-    statements and every table below inherits them, so a table that states no scale of its own
-    is not scaleless — it is using the filing's.
-
-    Safe to fall back to precisely because it CANNOT hide an error. A scale wrong by 1000x
-    makes the parts miss the consolidated total by 1000x, and
-    `select_exhaustive_partition` refuses the set. Unlike a classification, a wrong guess here
-    produces a refusal rather than a plausible number — which is what earns this a fallback
-    instead of a refusal (measured on ADP: its segment table states no scale within 900
-    characters in either direction, and the backward window recovered nothing).
-    """
-    counts = Counter(match.group(1).lower() for match in _UNITS.finditer(text))
-    if not counts:
-        return None
-    return _MULTIPLIERS[counts.most_common(1)[0][0]]
-
-
-def _windows(text: str) -> list[tuple[int, str]]:
-    """Each segment table, as a span that contains both its rows and its declared scale.
-
-    A segment table is bounded by a units caption on one side and a total row on the other,
-    and the phrase this module matches on can be at EITHER end — which is the thing the first
-    version got wrong by assuming one shape:
-
-    - AVGO prints `Net Revenue by Segment ... (In millions, except percentages) ... Total net
-      revenue $ 63,887`. The match is the caption's heading; the window runs forward to the
-      total.
-    - ADM's total row is itself called `Segment Revenues 79,820 85,099`, so the match lands on
-      the table's LAST line. Everything this module wants — the caption and every segment row
-      — is BEHIND the match, and a forward-only window captured none of it. Six tables on that
-      one filing, found and thrown away.
-
-    So: try forward first, and when the forward span states no scale, fall back to the span
-    from the nearest preceding caption up to the match. A window is still offered to the
-    identity as a whole; this only changes where its edges are.
-    """
-    windows = []
-    for heading in _TABLE_HEADING.finditer(text):
-        forward = text[heading.start() : heading.start() + _WINDOW]
-        # Stop at the table's own total row, so a second table under the same heading (the
-        # percentage restatement) is a SEPARATE window rather than extra parts in this one.
-        end = _TABLE_END.search(forward)
-        if end:
-            forward = forward[: end.start()]
-        # The caption may be behind the match — take the NEAREST preceding one, never an
-        # earlier table's; without one, the whole look-back span is the candidate.
-        back_start = max(0, heading.start() - _LOOKBACK)
-        behind = text[back_start : heading.start()]
-        captions = list(_UNITS.finditer(behind))
-        backward = behind[captions[-1].start() :] if captions else behind
-        backward_start = back_start + (captions[-1].start() if captions else 0)
-
-        if _UNITS.search(forward) and _rows_in(forward):
-            windows.append((heading.start(), forward))
-        elif _rows_in(backward) > _rows_in(forward):
-            # The direction follows the ROWS, not the caption. ADP states no scale in either
-            # direction, so a caption-driven choice sent it forward — into the half of the
-            # table with nothing in it. A match that lands on a table's TOTAL row has
-            # everything worth reading behind it, whether or not a caption is there too.
-            windows.append((backward_start, backward))
-        else:
-            windows.append((heading.start(), forward))
-    return windows
-
-
-def unitless_windows(text: str) -> int:
-    """How many segment tables were found in a filing that declares no scale ANYWHERE.
-
-    Zero once the filing declares one, because every window then inherits it. Reported so a
-    filing whose tables were all skipped refuses with that reason instead of "no segment table
-    matched" — two different problems with two different fixes (a heading this module cannot
-    read vs. a document that never states its units).
-    """
-    if filing_scale(text) is not None:
-        return 0
-    return sum(1 for _, window in _windows(text) if _UNITS.search(window) is None)
-
-
-def as_candidates(segments: list[SegmentCandidate]) -> list[Candidate]:
-    """The primitive's provenance-neutral view of the same rows.
-
-    `Candidate.value` is `int | float` by that module's contract; the Decimal above is what
-    LANDS, and `select_exhaustive_partition` re-reads through `str()` so no binary error
-    reaches the acceptance.
-    """
-    return [Candidate(float(item.value), item.sentence) for item in segments]
-
-
-def windows_of(segments: list[SegmentCandidate]) -> dict[int, list[int]]:
-    """Candidate indices grouped by the table they came from, discovery order preserved.
-
-    A filing states its segments in one table; a second table under a matching heading is a
-    different statement of them (percentages, a prior-year-only breakout, a geography split).
-    Offering each window to the identity separately is what lets the right table be accepted
-    without the wrong one having to be recognised as wrong.
-    """
-    grouped: dict[int, list[int]] = {}
-    for index, item in enumerate(segments):
-        grouped.setdefault(item.window_start, []).append(index)
-    return grouped
-
-
-#: In the units the TABLE states, not in currency: a table rounding each part to its own last
-#: printed digit can miss its own total by a few of them, and more than that is a missing or
-#: double-counted part rather than rounding. The caller multiplies by the window's declared
-#: scale, so five means "five of whatever this table counts in".
+#: In the units the filer tagged, not in currency: parts each rounded to the tag's own last
+#: digit can miss their total by a few of them, and more than that is a missing or double-counted
+#: part rather than rounding. The caller multiplies by the tags' declared scale, so five means
+#: "five of whatever the filer counts in".
 #:
 #: Declared here rather than taken from the standard because it is a property of how filings
 #: round, and it moves with evidence rather than with a metric definition.
@@ -627,7 +290,7 @@ limit 1
 class ConsolidatedRevenue:
     """The oracle, with the period it describes.
 
-    The period is not decoration and it is not read from the filing's table header. The
+    The period is not decoration and it is not read from the filing's own tags. The
     identity's whole premise is that these parts and this total describe the SAME period, and
     the only way to hold that without asserting it is to take the period from the number the
     parts are checked against. A total whose period the source never stated cannot certify any
@@ -645,9 +308,9 @@ def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> Cons
     against is the number a reader sees beside them. Point-in-time by construction: only
     observations knowable at or before the cutoff are eligible, and the newest of those wins.
 
-    ABSOLUTE, in the issuer's reporting currency. The parts are scaled to match at recall
-    (`segment_candidates`) from the units each table declares, so the identity compares two
-    numbers on the same scale rather than one that is right and one that is off by 10^6.
+    ABSOLUTE, in the issuer's reporting currency. The tagged parts carry their own `scale`
+    and are read absolute too, so the identity compares two numbers on the same scale rather
+    than one that is right and one that is off by 10^6.
 
     Returns None when the issuer has no revenue observation — or has one whose period the
     source never stated — which the caller turns into a `no_total` refusal rather than a
@@ -778,8 +441,8 @@ def _land_partition(
     note: str = "",
 ) -> ExtractionOutcome:
     """Land — or, in a probe, report — one accepted set. Every path that accepts a partition
-    (a declared single segment, tagged segment revenue, a printed table) ends here, so what a
-    landed set carries cannot depend on how it was found."""
+    (a declared single segment, tagged segment revenue) ends here, so what a landed set
+    carries cannot depend on how it was found."""
     partition_id = partition_id_for(record_cik, oracle.period_end, parts, extractor=extractor)
     outcome = partial(
         ExtractionOutcome,
@@ -827,10 +490,9 @@ def _tagged_segments_outcome(
 ) -> ExtractionOutcome:
     """Offer each tagged concept's segments to the identity; land the first that balances.
 
-    When none does, the answer is a refusal naming each concept's reason — and NOT the printed
-    tables. A filer that tags its segments has said what they are; a table that happens to
-    balance where the tagged set does not is the table reader finding something else (Comcast's
-    geography table balanced, its five tagged segments did not).
+    When none does, the answer is a refusal naming each concept's reason. A filer that tags its
+    segments has said what they are; the retired table reader balanced a table where Comcast's
+    five tagged segments did not, and the table was its geography (#830, #833).
     """
     refusals: list[str] = []
     for segments in tagged:
@@ -883,42 +545,6 @@ def _tagged_segments_outcome(
     )
 
 
-def _no_candidate_detail(text: str, *, has_oracle: bool = True, declared: DeclaredSegmentCount | None = None) -> str:
-    """Which of FOUR things happened, because they have four different owners.
-
-    The fourth is the one that hid the largest gap in this module's coverage. Nine of the
-    thirteen refusing QQQ issuers measured on 2026-09-10 — ABNB, ADI, ADSK, ALAB, APP, ARM,
-    ASML, BKNG, CDNS — STATE that they operate as a single segment, and the single-segment
-    path is deployed and would answer for them. It never fired because it needs a
-    consolidated revenue to file the partition against, and staging holds one for 12 of 101
-    issuers. So they fell through to the table path and reported "no segment table matched",
-    which is true and points at the heading pattern — the one thing that was never their
-    problem.
-
-    A fourth state appeared the moment a table could inherit the filing's scale, and it was
-    reported as the first: ADP matches six headings and parses no rows from them, and the
-    message said "no segment table matched". That sent the next reader to the heading pattern
-    when the fault was in the row pattern — its numbers carry a decimal ("14,831.4") and the
-    row regex could not read one.
-
-    Collapsing problems with different owners into one refusal string is the thing this
-    module keeps being caught by — twice in one day, and the second time in the comment
-    describing the first. Four states, four sentences.
-    """
-    if not has_oracle and declared is not None and declared.value == 1:
-        return (
-            f"declares a single segment ({declared.evidence}), but this environment holds no "
-            "consolidated revenue to file the partition against"
-        )
-    found = len(_windows(text))
-    if not found:
-        return "no segment table matched in the filing text"
-    unitless = unitless_windows(text)
-    if unitless:
-        return f"{unitless} segment table(s) state no scale, so no part could be compared"
-    return f"{found} segment table(s) matched but no row parsed as a segment"
-
-
 def extract_segment_revenue(
     cik: int,
     *,
@@ -933,19 +559,16 @@ def extract_segment_revenue(
     issuer_label: str | None = None,
     **_unused: Any,
 ) -> ExtractionOutcome:
-    """The standard's adapter: fetch, recall, and accept the ONE table that balances.
+    """The standard's adapter: fetch, read what the filer tags, and land what balances.
 
     Same signature as `extract_headcount` because `backfill._resolve` calls whichever adapter
     the standard declares (#800) — the loop no longer knows which is which.
 
-    Every window recall found is offered to the identity separately, and the FIRST that
-    balances wins. Two balancing windows would be two answers to one question; the tests on
-    the packaged filing assert exactly one balances, and if a filing ever produces two the
-    honest outcome is the refusal below rather than a silent pick.
-
-    In write mode the accepted set is landed as one row per segment, all sharing a
-    content-addressed `partition_id`, inside the caller's transaction — the rows are
-    admissible only together, so they commit together or not at all.
+    Two statements answer, in order: a declared single segment (#822), then the revenue tagged
+    on the business-segment axis (#830). Anything else is a refusal that says which half is
+    missing. In write mode the accepted set is landed as one row per segment, all sharing a
+    content-addressed `partition_id`, inside the caller's transaction — the rows are admissible
+    only together, so they commit together or not at all.
     """
     del issuer_label  # accepted for signature parity; not used by this adapter
     # #496, the same split `extract_headcount` makes: `cik` is where the FILING is fetched
@@ -967,8 +590,6 @@ def extract_segment_revenue(
     # parts were read from sits under a predecessor. Checking a holdco's segments against the
     # predecessor's revenue would balance two different entities against each other.
     oracle = consolidated_revenue(connection, record_cik, cutoff=cutoff)
-    total = None if oracle is None else oracle.value
-    text = filing_plain_text(document.body)
 
     # A single-segment issuer has no segment TABLE, and that is an answer rather than a
     # miss: the one segment IS the company, so the partition is the consolidated revenue in
@@ -976,9 +597,9 @@ def extract_segment_revenue(
     # it has to say so on the row: the identity gives these no independent check, and the
     # filer's own declaration is the whole of the evidence.
     #
-    # Checked BEFORE the tables, not as a fallback after them: an issuer that declares one
-    # segment and also prints a geography or product breakdown must not have that breakdown
-    # accepted as its reportable segments.
+    # Checked FIRST: an issuer that declares one segment is answered by the declaration, and a
+    # geography or product breakdown it also tags must not be accepted as its reportable
+    # segments.
     xbrl = InlineXbrl(document.body)
     declared = declared_segment_count(xbrl)
     if declared is not None and declared.value == 1 and oracle is not None:
@@ -997,7 +618,8 @@ def extract_segment_revenue(
                     f"the consolidated revenue on file is for {oracle.period_end}"
                 ),
             )
-        statement = declared.statement or single_segment_statement(text)
+        # The prose is read only here, and only when the count was tagged where no sentence is printed.
+        statement = declared.statement or single_segment_statement(filing_plain_text(document.body))
         return _land_partition(
             connection,
             record_cik=record_cik,
@@ -1023,8 +645,8 @@ def extract_segment_revenue(
             note=f": {(statement or '')[:160]}",
         )
 
-    # Next, what the filer tags (#830). A filing that tags segment revenue is answered from the
-    # tags or refused — the printed tables below are for filings that tag none.
+    # Next, the revenue the filer tags on the segment axis (#830): answered from the tags, or
+    # refused with each concept's reason.
     tagged = tagged_segment_revenues(xbrl)
     if tagged:
         return _tagged_segments_outcome(
@@ -1038,70 +660,23 @@ def extract_segment_revenue(
             write=write,
         )
 
-    # Recall runs only now, so "before the tables" is the code's order and not just a claim
-    # about it — a filing that declares one segment never pays for a sweep whose result is
-    # already known to be unused (review on #808).
-    recalled = segment_candidates(text)
-    if not recalled:
-        return ExtractionOutcome(
-            cik,
-            "no_candidate",
-            accession=document.accession,
-            form=document.form,
-            filing_date=document.filing_date,
-            detail=_no_candidate_detail(text, has_oracle=oracle is not None, declared=declared),
+    # Neither statement: the filing does not say, in a form this adapter trusts, how its revenue
+    # divides. Two different things, with two different owners, can leave it there — a single
+    # segment declared where this environment has no revenue to file it against, and a filing
+    # that tags no segment revenue at all (an IFRS filer, a custom axis) — and the refusal says
+    # which.
+    if declared is not None and declared.value == 1:
+        detail = (
+            f"declares a single segment ({declared.evidence}), but this environment holds no "
+            "consolidated revenue to file the partition against"
         )
-
-    candidates = as_candidates(recalled)
-    refusals: list[PartitionRefusal] = []
-    for indices in windows_of(recalled).values():
-        # In the units THIS table declared. A tolerance fixed in absolute currency would be
-        # a thousand times too tight for a table stated in thousands and a thousand times
-        # too loose for one stated in billions.
-        tolerance = SEGMENT_TOLERANCE * recalled[indices[0]].multiplier
-        verdict = select_exhaustive_partition(candidates, total=total, tolerance=tolerance, indices=indices)
-        if isinstance(verdict, Partition):
-            assert oracle is not None  # a Partition cannot be returned without a total
-            parts = [(recalled[i].segment_name, recalled[i].value) for i in verdict.candidate_indices]
-            named = ", ".join(
-                f"{recalled[i].segment_name}={recalled[i].stated_value}" for i in verdict.candidate_indices
-            )
-            return _land_partition(
-                connection,
-                record_cik=record_cik,
-                document=document,
-                oracle=oracle,
-                parts=parts,
-                residual=Decimal(str(verdict.residual)),
-                extractor=verdict.extractor,
-                # `scale=` is not decoration: a scale printed beside the numbers and one inherited
-                # from the filing are different evidence, and a row that does not say which leaves
-                # a reader unable to tell them apart. It is the honest cost of letting a table
-                # inherit — the identity proves the scale was RIGHT, and this says where it came
-                # from.
-                evidence_ref=(
-                    f"accession={document.accession} form={document.form} "
-                    f"scale={recalled[verdict.candidate_indices[0]].scale_source}"
-                ),
-                standard=standard,
-                write=write,
-                summary=(
-                    f"{len(parts)} segments accounting for {verdict.total} "
-                    f"(residual {verdict.residual}) for {oracle.period_end}: {named}"
-                ),
-            )
-        refusals.append(verdict)
-
-    # No window balanced. The refusals say WHY, and they differ: `no_total` is a missing
-    # consolidated revenue (this issuer has no wide-row number to check against), while
-    # short/over means recall missed or over-collected. Reporting the set rather than the
-    # first keeps that distinction visible.
-    reasons = ", ".join(sorted({refusal.value for refusal in refusals}))
+    else:
+        detail = "the filing tags no segment revenue on the business-segment axis for its latest year"
     return ExtractionOutcome(
         cik,
         "no_candidate",
         accession=document.accession,
         form=document.form,
         filing_date=document.filing_date,
-        detail=f"no segment table accounts for the consolidated revenue ({reasons})",
+        detail=detail,
     )

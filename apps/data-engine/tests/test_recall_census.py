@@ -1,29 +1,25 @@
-"""The corpus-wide recall census (#772).
+"""The corpus-wide census of what the segment adapter reads (#772, #822, #830, #833).
 
 This exists because of a specific mistake, made three times in one day, in three places:
 
-1. `segment_extraction`'s heading pattern, window shape and units rule were all developed
-   against ONE real 10-K, and every test was written from that same document — so the suite
-   proved the module worked on the document it was fitted to. The first deployed run over 25
-   issuers resolved one: the same one. Measured across the packaged corpus at the time: 13
-   candidates on AVGO, **zero on eight other filings**.
-2. A pull request's body predicted that the backward window would recover ADP's six tables.
-   The deployed run returned an identical refusal distribution.
+1. The adapter's first reader — heading, row and units regexes — was developed against ONE real
+   10-K, and every test was written from that same document, so the suite proved it worked on
+   the document it was fitted to. The first deployed run over 25 issuers resolved one: the same
+   one. Measured across the packaged corpus at the time: 13 candidates on AVGO, **zero on eight
+   other filings**.
+2. A pull request's body predicted that a backward window would recover ADP's six tables. The
+   deployed run returned an identical refusal distribution.
 3. A test asserted "SHOP declares no scale anywhere". SHOP writes `(in US $ millions)` — the
    assertion was about the regex, not the document.
 
-Every one of those is the same shape: something was measured, and reported as a measurement
-of something else. The fix is not a better regex, it is a cheaper measurement — run the rule
+Every one of those is the same shape: something was measured, and reported as a measurement of
+something else. The fix is not a better pattern, it is a cheaper measurement — run the reader
 over every filing already in the repository and commit the per-file result, so a change that
-scores on one document and zero elsewhere says so in the diff.
+scores on one document and nowhere else says so in the diff.
 
-A DROP counts as much as a gain. AVGO went 13 -> 12 candidates during one change and nothing
-said so; that is exactly the silent movement this pins.
-
-The census is not a quality bar. Zeros are in it on purpose: DDOG and DUOL are single-segment
-issuers with no table to find, and COST and ADM lay their tables out vertically or nest
-sub-totals, which needs a table model this module does not have. What the census asserts is
-that those numbers are *known*, not that they are good.
+That reader is retired (#833): the filing's own tags answer instead. The census outlived it on
+purpose, because the lesson is about measurement, not about regexes — the tag readers are pinned
+per filing the same way.
 """
 
 from __future__ import annotations
@@ -33,18 +29,13 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from data_engine.datahub.standards.filing_extraction import filing_plain_text
 from data_engine.datahub.standards.segment_extraction import (
     SEGMENT_TOLERANCE,
-    _windows,
-    as_candidates,
     declared_segment_count,
-    filing_scale,
-    segment_candidates,
+    segment_name_for,
     tagged_segment_revenues,
-    windows_of,
 )
-from factors.shared.extraction import Partition, select_exhaustive_partition
+from factors.shared.extraction import Candidate, Partition, select_exhaustive_partition
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FILINGS = REPO_ROOT / "apps" / "data-engine" / "samples" / "filings"
@@ -59,40 +50,33 @@ TOTALS = {
 
 def _measure(path: Path) -> dict:
     body = path.read_bytes()
-    text = filing_plain_text(body)
-    recalled = segment_candidates(text)
-    scale = filing_scale(text)
     declared = declared_segment_count(body)
+    tagged = tagged_segment_revenues(body)
     entry: dict = {
-        "windows": len(_windows(text)),
-        "candidates": len(recalled),
-        "filing_scale": str(scale) if scale is not None else None,
         "declared_segments": declared.evidence if declared is not None else None,
-        # #830: what the tagged segment revenue yields, per concept — a change to the reader
-        # shows which filings it moved, like every other field here.
         "tagged_segments": [
             {
-                "concept": tagged.concept,
-                "members": [member for member, _ in tagged.parts],
-                "sum": str(sum((value for _, value in tagged.parts), Decimal(0))),
-                "refusal": tagged.refusal,
+                "concept": segments.concept,
+                "members": [member for member, _ in segments.parts],
+                "sum": str(sum((value for _, value in segments.parts), Decimal(0))),
+                "refusal": segments.refusal,
             }
-            for tagged in tagged_segment_revenues(body)
+            for segments in tagged
         ],
     }
     total = TOTALS.get(path.name)
-    if total and recalled:
-        candidates = as_candidates(recalled)
+    if total:
         accepted = []
-        for indices in windows_of(recalled).values():
+        for segments in tagged:
+            if segments.refusal is not None:
+                continue
             verdict = select_exhaustive_partition(
-                candidates,
+                [Candidate(float(value), member) for member, value in segments.parts],
                 total=Decimal(total),
-                tolerance=SEGMENT_TOLERANCE * recalled[indices[0]].multiplier,
-                indices=indices,
+                tolerance=SEGMENT_TOLERANCE * Decimal(10) ** segments.scale,
             )
             if isinstance(verdict, Partition):
-                accepted.append([recalled[i].segment_name for i in verdict.candidate_indices])
+                accepted.append([segment_name_for(member) for member, _ in segments.parts])
         entry["accepted_partitions"] = accepted
     return entry
 
@@ -113,73 +97,46 @@ def test_the_census_covers_every_packaged_annual_filing(committed) -> None:
     )
 
 
-def test_recall_on_every_filing_matches_the_committed_census(committed) -> None:
-    """The whole point. A pattern change that moves one filing and not the others shows
-    exactly that, per file, in the diff of this JSON — and has to be explained in the same
-    pull request rather than described as general."""
+def test_every_filing_reads_as_the_committed_census_says(committed) -> None:
+    """The whole point. A reader change that moves one filing and not the others shows exactly
+    that, per file, in the diff of this JSON — and has to be explained in the same pull request
+    rather than described as general."""
     drift = {}
     for name, expected in sorted(committed.items()):
         actual = _measure(FILINGS / name)
         if actual != expected:
             drift[name] = {"expected": expected, "actual": actual}
     assert drift == {}, (
-        "recall moved on these filings. If the change is intended, regenerate the census in "
-        "the SAME pull request (uv run python tools/write_recall_census.py) and say in the "
-        f"body which filings moved and why:\n{json.dumps(drift, indent=2)}"
+        "the readers moved on these filings. If the change is intended, regenerate the census in "
+        "the SAME pull request (uv run python tools/write_recall_census.py) and say in the body "
+        f"which filings moved and why:\n{json.dumps(drift, indent=2)}"
     )
 
 
 def test_the_filings_with_a_known_oracle_still_balance(committed) -> None:
-    """Coverage can move for many reasons; an acceptance cannot move quietly.
-
-    Both are checked against the consolidated revenue the capture plane actually holds, and
-    AAPL is the one that matters most: it is a filing the DEPLOYED run meets, its five
-    geographies balance to the cent, and it refused for a day while three separate causes
-    were mistaken for one.
-    """
+    """Coverage can move for many reasons; an acceptance cannot move quietly. Both are checked
+    against the consolidated revenue the capture plane actually holds. AAPL matters most: it is
+    a filing the DEPLOYED run meets, and its five tagged geographies balance to the dollar."""
     avgo = committed["AVGO_10K_000173016825000121.html"]
-    assert avgo["accepted_partitions"] == [["Semiconductor solutions", "Infrastructure software"]]
+    assert avgo["accepted_partitions"] == [["Infrastructure Software", "Semiconductor Solutions"]]
 
     aapl = committed["AAPL_10K_000032019325000079.html"]
     assert aapl["accepted_partitions"] == [["Americas", "Europe", "Greater China", "Japan", "Rest of Asia Pacific"]]
 
 
 def test_the_corpus_holds_filings_the_deployed_run_actually_meets(committed) -> None:
-    """The census's own blind spot, closed and pinned.
-
-    For a day it held ADM, JPM, NICE, PLUG and SHOP — **none of them in the universe the
-    standards lane walks**. So it could catch a regression and could not measure progress: a
-    change could move every packaged filing and nothing the deployed run refuses. AAPL and ADP
-    are in that universe, and their behaviour was measured through the deployed gateway
-    before either was packaged.
-    """
+    """The census's own blind spot, closed and pinned: AAPL and ADP are in the universe the
+    standards lane walks, and their behaviour was measured through the deployed gateway before
+    either was packaged."""
     assert "AAPL_10K_000032019325000079.html" in committed
-    assert "ADP_10K_000000867026000030.html" in committed
     adp = committed["ADP_10K_000000867026000030.html"]
-    assert adp["candidates"] > 0, (
-        "ADP produced zero candidates from six located tables until its rows were read with a "
-        "decimal; a regression there is invisible without it in the corpus"
-    )
-
-
-def test_a_filing_with_no_table_is_recorded_as_zero_rather_than_omitted(committed) -> None:
-    """Zeros are the census's most useful entries: they are the filings a future pattern is
-    supposed to move, and a census that listed only the successes would hide them.
-
-    DDOG and DUOL declare a single segment — they have no table to find, and the
-    single-segment path answers for them elsewhere. COST and ADM have tables this module
-    cannot read yet.
-    """
-    zeros = {name for name, e in committed.items() if e["candidates"] == 0}
-    assert "DDOG_10K_000162828026008819.html" in zeros
-    assert "DUOL_10K_000162828026012494.html" in zeros
-    assert len(zeros) >= 4, "the corpus still holds filings recall does not reach, and says so"
+    assert adp["tagged_segments"], "ADP tags its two segments; that they exceed its revenue is the identity's call"
 
 
 def test_the_single_segment_declaration_is_measured_per_filing(committed) -> None:
     """#822: the path that lands a partition no identity can check is decided by the count the
-    filer tags, so that count is pinned per filing like recall is. PLUG is the case to watch —
-    its prose says one segment and it tags nothing, so it must stay undeclared."""
+    filer tags, so that count is pinned per filing. PLUG is the case to watch — its prose says
+    one segment and it tags nothing, so it must stay undeclared."""
     declared = {name.split("_")[0]: entry["declared_segments"] for name, entry in committed.items()}
     assert declared["SHOP"] == "us-gaap:NumberOfReportableSegments=1@2025-12-31"
     assert declared["AVGO"] == "us-gaap:NumberOfReportableSegments=2@2025-11-02"
@@ -187,9 +144,9 @@ def test_the_single_segment_declaration_is_measured_per_filing(committed) -> Non
 
 
 def test_the_tagged_segment_revenue_is_measured_per_filing(committed) -> None:
-    """#830: segment revenue the filer tags is read before any table, so what the reader makes of
-    each packaged filing is pinned like recall is. AAPL and AVGO balance their oracles; ADM's
-    three tagged segments are short of its revenue by the off-axis "Other Business"."""
+    """#830: segment revenue the filer tags is what answers, so what the reader makes of each
+    packaged filing is pinned. AAPL and AVGO balance their oracles; ADM's three tagged segments
+    are short of its revenue by the off-axis "Other Business"."""
     by_ticker = {name.split("_")[0]: entry["tagged_segments"] for name, entry in committed.items()}
     (aapl,) = by_ticker["AAPL"]
     assert aapl["sum"] == TOTALS["AAPL_10K_000032019325000079.html"]
@@ -199,4 +156,11 @@ def test_the_tagged_segment_revenue_is_measured_per_filing(committed) -> None:
         "us-gaap:Revenues",
         "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
     }
-    assert by_ticker["DDOG"] == [], "a single-segment filer tags no segment revenue"
+
+
+def test_a_filing_that_tags_nothing_is_recorded_as_empty_rather_than_omitted(committed) -> None:
+    """Empty entries are the census's most useful ones: they are the filings the adapter answers
+    only by declaration (DDOG, DUOL, SHOP) or not at all (PLUG's 2021 filings predate tagging),
+    and a census that listed only the successes would hide them."""
+    empty = {name.split("_")[0] for name, entry in committed.items() if not entry["tagged_segments"]}
+    assert {"DDOG", "DUOL", "SHOP", "PLUG"} <= empty
