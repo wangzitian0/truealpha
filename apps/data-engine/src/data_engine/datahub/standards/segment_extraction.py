@@ -222,7 +222,7 @@ _MARK = "⦃segment-count⦄"
 
 @dataclass(frozen=True)
 class DeclaredSegmentCount:
-    """The filer's own count of its segments, for the latest period it tags one."""
+    """The filer's own count of its segments (one, two, seven …), at the latest period it tags a count for."""
 
     concept: str
     #: None when the tags at that period disagree or cannot be read — which refuses the
