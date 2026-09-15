@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import pytest
 from botocore.exceptions import ClientError
 from truealpha_contracts.models import DataSource, RawCapture
 from truealpha_runtime import (
@@ -43,6 +44,33 @@ def test_manifest_declares_database_graph_and_object_storage_for_every_tier():
 def test_environment_resolution_is_explicit():
     assert resolve_environment_tier("dev") is EnvironmentTier.LOCAL_DEV
     assert resolve_environment_tier("ci", github_actions=True) is EnvironmentTier.GITHUB_CI
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("local_dev", "local_dev"),
+        ("local_test", "local_test"),
+        ("github_ci", "github_ci"),
+        ("pr-42", "preview"),
+        ("staging", "staging"),
+        ("prod", "production"),
+    ],
+)
+def test_runtime_accepts_the_shared_sdk_environment_vocabulary(value, expected):
+    from infra2_sdk.runtime.environment import EnvironmentTier as SDKEnvironmentTier
+
+    assert resolve_environment_tier(value) is SDKEnvironmentTier(expected)
+    assert DEPENDENCY_MANIFEST.required_for(resolve_environment_tier(value)) == {
+        "database",
+        "graph_store",
+        "object_storage",
+    }
+
+
+def test_unknown_environment_keeps_the_app_error_contract():
+    with pytest.raises(ValueError, match="unknown APP_ENV"):
+        resolve_environment_tier("unknown-tier")
 
 
 def test_runtime_dependency_environment_keys_do_not_drift():

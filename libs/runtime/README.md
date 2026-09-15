@@ -11,6 +11,12 @@ database with missing KG migrations still fails runtime validation.
 
 Environment model:
 
+`infra2_sdk.runtime.environment` owns the tier enum and alias normalization.
+`truealpha_runtime.tiers` preserves the application's import path, `app_env=` keyword
+and unknown-environment error. Canonical tier names and preview aliases are accepted;
+the dependency instances and which tiers require each service remain TrueAlpha-owned.
+`tests/test_runtime.py` proves this compatibility against the released SDK (#820).
+
 - Six logical tiers model dependency substitution: `local_dev`, `local_test`,
   `github_ci`, `preview`, `staging`, and `production`.
 - The target rollout uses four actual environments: Local (covering both local
