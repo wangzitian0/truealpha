@@ -492,14 +492,13 @@ def _parse_theme_verdicts(content: str, segments: Sequence[str]) -> dict[str, An
     """
     verdicts: list[bool | None] = [None] * len(segments)
     reasons: list[str] = [""] * len(segments)
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
+    items = _verdict_items(content)
+    if items is None:
         return {
             "verdicts": verdicts,
             "reasons": [f"unparseable model answer: {content[:120]!r}"] * len(segments),
         }
-    for item in parsed.get("verdicts") or []:
+    for item in items:
         if not isinstance(item, dict):
             continue
         index = item.get("index")
@@ -509,6 +508,32 @@ def _parse_theme_verdicts(content: str, segments: Sequence[str]) -> dict[str, An
         verdicts[index] = value if isinstance(value, bool) else None
         reasons[index] = str(item.get("reason", ""))[:400]
     return {"verdicts": verdicts, "reasons": reasons}
+
+
+def _verdict_items(content: str) -> list[Any] | None:
+    """The verdict items in the model's answer, or None when the answer has no readable shape.
+
+    The prompt shows one object, `{"verdicts": [...]}`, and the seated model answers with it
+    13 times in 15 — and twice with a LIST of such objects, the first echoing the prompt's own
+    placeholder (`"index": "int>"`) and the second carrying the verdict (#845, NFLX and MA on
+    2026-09-15). Reading the items out of each object in the list invents nothing: every item
+    still has to name a real index and a boolean to count, and the placeholder fails both.
+    Any other top-level shape (a string, a number, null) is unreadable, never a crash — one
+    off-schema reply must cost one refusal, not the run.
+    """
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    objects = parsed if isinstance(parsed, list) else [parsed]
+    if not all(isinstance(entry, dict) for entry in objects):
+        return None
+    items: list[Any] = []
+    for entry in objects:
+        found = entry.get("verdicts")
+        if isinstance(found, list):
+            items.extend(found)
+    return items
 
 
 def classify_segments(
@@ -573,6 +598,8 @@ def _parse_decision(content: str, candidates: Sequence[Candidate]) -> dict[str, 
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, dict):  # a list, a string, a number: not the shape asked for (#845)
         return {"value": None, "candidate_index": None, "reason": f"unparseable model answer: {content[:120]!r}"}
     value = parsed.get("value")
     index = parsed.get("candidate_index")
