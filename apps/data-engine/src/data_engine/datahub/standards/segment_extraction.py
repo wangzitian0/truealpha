@@ -37,6 +37,7 @@ from typing import Any
 from factors.shared.extraction import (
     RULE_SINGLE_SEGMENT,
     Candidate,
+    Partition,
     PartitionRefusal,
     select_exhaustive_partition,
 )
@@ -159,25 +160,57 @@ _CAMEL_CASE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _MINOR_WORDS = frozenset({"And", "Of", "The", "For", "In", "To", "On"})
 
 
+#: The two shapes a segment fact's context takes (#835). Most filers use one, or split one
+#: consistent set across both — Kraft Heinz tags North America and International on the segment
+#: axis alone and Emerging Markets with `OperatingSegmentsMember`, and only the UNION is its
+#: revenue. Some tag both shapes with different members and values: Berkshire's segment-axis set
+#: is its consolidated revenue to the dollar, while its operating-segments set leaves corporate
+#: revenue off, and merged the two looked like one member making two claims. So the union is
+#: offered first, and each shape on its own after it.
+_SHAPES = (("segment-axis", ()), ("operating-segments", (_OPERATING_SEGMENTS,)))
+#: Revenue the filer earns outside any segment, tagged on the consolidation axis alone. Named
+#: here because the member's own words ("CorporateNonSegment") read badly as a part's name.
+#: Eliminations are not here: they are negative, and a negative part is not revenue anyone is
+#: the purest name under.
+_RECONCILING_LABELS = {
+    "CorporateNonSegmentMember": "Corporate and other",
+    "CorporateAndReconcilingItemsMember": "Corporate and reconciling items",
+    "CorporateReconcilingItemsAndEliminationsMember": "Corporate items",
+    "MaterialReconcilingItemsMember": "Reconciling items",
+    "SegmentReconcilingItemsMember": "Reconciling items",
+}
+
+
 @dataclass(frozen=True)
 class TaggedSegments:
-    """One revenue concept's segment members, as tagged for the filing's latest annual period."""
+    """One revenue concept's segment members in one context shape, for the filing's latest year."""
 
     concept: str
+    shape: str
     period_end: date
     #: (axis member, value), member-sorted. Empty when the set is refused before any sum.
     parts: tuple[tuple[str, Decimal], ...]
     scale: int
     #: Why the set cannot be offered to the identity at all, or None.
     refusal: str | None = None
+    #: Positive off-axis corporate or reconciling items of the same concept and period, as
+    #: (member, value): what a set that falls short may be retried with, one at a time.
+    reconciling: tuple[tuple[str, Decimal], ...] = ()
+
+    @property
+    def label(self) -> str:
+        concept = self.concept.split(":", 1)[-1]
+        return concept if self.shape == "all" else f"{concept} ({self.shape.replace('-', ' ')} only)"
 
 
 def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments, ...]:
-    """Every revenue concept the filing tags on the business-segment axis, for its latest year.
+    """Every candidate segment set the filing tags for its latest year, in the order to try them.
 
-    A set is refused rather than summed when a member carries two different values (two
-    claims about one segment), a value the reader cannot parse, or a negative value: an
-    elimination is a reconciling item, not a segment anyone is the purest name under.
+    Per revenue concept: the union of both context shapes first, then each shape on its own when
+    it differs from the union. A set is refused rather than summed when a member carries two
+    different values (two claims about one segment), a value the reader cannot parse, or a
+    negative value: an elimination is a reconciling item, not a segment anyone is the purest name
+    under.
     """
     document = filing if isinstance(filing, InlineXbrl) else InlineXbrl(filing)
     facts = [
@@ -190,30 +223,107 @@ def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments,
     latest = max(fact.context.end for fact in facts)
     found = []
     for concept in _REVENUE_CONCEPTS:
-        members: dict[str, set[Decimal | None]] = {}
+        current = [fact for fact in facts if fact.concept == concept and fact.context.end == latest]
+        # Deduplicated, and a member tagged with two different values is no item at all.
+        items: dict[str, set[Decimal]] = {}
+        for fact in current:
+            if len(fact.context.dimensions) != 1 or fact.value is None or fact.value <= 0:
+                continue
+            ((axis, member),) = fact.context.dimensions
+            if axis == _OPERATING_SEGMENTS[0] and member.split(":", 1)[-1] in _RECONCILING_LABELS:
+                items.setdefault(member, set()).add(fact.value)
+        reconciling = tuple(sorted((member, min(values)) for member, values in items.items() if len(values) == 1))
+        by_shape: dict[str, dict[str, set[Decimal | None]]] = {}
         scale = 0
-        for fact in facts:
-            if fact.concept != concept or fact.context.end != latest:
-                continue
-            dimensions = dict(fact.context.dimensions)
-            member = dimensions.pop(_SEGMENT_AXIS, None)
-            if member is None or (dimensions and tuple(dimensions.items()) != (_OPERATING_SEGMENTS,)):
-                continue
-            members.setdefault(member, set()).add(fact.value)
-            scale = max(scale, fact.scale)
-        if not members:
-            continue
-        if any(None in tagged for tagged in members.values()):
-            found.append(TaggedSegments(concept, latest, (), scale, "unreadable_value"))
-        elif any(len(tagged) > 1 for tagged in members.values()):
-            found.append(TaggedSegments(concept, latest, (), scale, "member_tagged_twice"))
-        else:
-            parts = tuple(sorted((member, value) for member, (value,) in members.items() if value is not None))
-            if any(value < 0 for _, value in parts):
-                found.append(TaggedSegments(concept, latest, (), scale, "negative_part"))
-            else:
-                found.append(TaggedSegments(concept, latest, parts, scale))
+        for shape, extra in _SHAPES:
+            for fact in current:
+                dimensions = dict(fact.context.dimensions)
+                member = dimensions.pop(_SEGMENT_AXIS, "")
+                if not member or tuple(dimensions.items()) != extra:
+                    continue
+                by_shape.setdefault(shape, {}).setdefault(member, set()).add(fact.value)
+                scale = max(scale, fact.scale)
+        union: dict[str, set[Decimal | None]] = {}
+        for members in by_shape.values():
+            for member, values in members.items():
+                union.setdefault(member, set()).update(values)
+        candidates = [("all", union)] if union else []
+        candidates += [(shape, members) for shape, members in by_shape.items() if members != union]
+        for shape, members in candidates:
+            found.append(_tagged_set(concept, shape, latest, members, scale, reconciling))
     return tuple(found)
+
+
+def _tagged_set(
+    concept: str,
+    shape: str,
+    period_end: date,
+    members: dict[str, set[Decimal | None]],
+    scale: int,
+    reconciling: tuple[tuple[str, Decimal], ...],
+) -> TaggedSegments:
+    if any(None in tagged for tagged in members.values()):
+        return TaggedSegments(concept, shape, period_end, (), scale, "unreadable_value")
+    if any(len(tagged) > 1 for tagged in members.values()):
+        return TaggedSegments(concept, shape, period_end, (), scale, "member_tagged_twice")
+    parts = tuple(sorted((member, value) for member, (value,) in members.items() if value is not None))
+    if any(value < 0 for _, value in parts):
+        return TaggedSegments(concept, shape, period_end, (), scale, "negative_part")
+    return TaggedSegments(concept, shape, period_end, parts, scale, None, reconciling)
+
+
+@dataclass(frozen=True)
+class TaggedPartition:
+    """The tagged set the identity accepted, with the one reconciling item it needed, if any."""
+
+    segments: TaggedSegments
+    #: (member, value) as accepted, the reconciling item last when one was used.
+    parts: tuple[tuple[str, Decimal], ...]
+    reconciling: str | None
+    verdict: Partition
+
+
+def select_tagged_partition(
+    tagged: Sequence[TaggedSegments], *, total: Decimal, period_end: date | None
+) -> TaggedPartition | list[str]:
+    """The first tagged set that accounts for `total`, or every set's reason for not doing so.
+
+    Every set is tried as tagged before any is retried with a reconciling item: a set that is
+    the whole revenue on its own is a stronger answer than one completed by a corporate line.
+    A retry adds exactly ONE positive item, never a combination — the identity would accept a
+    sum found by search, and a sum found by search is not a statement by the filer.
+
+    `period_end` is the oracle's period; None skips the check (the census has no period).
+    """
+    refusals: list[str] = []
+    short: list[TaggedSegments] = []
+    for segments in tagged:
+        if segments.refusal is not None:
+            refusals.append(f"{segments.label}: {segments.refusal}")
+            continue
+        if period_end is not None and segments.period_end != period_end:
+            refusals.append(f"{segments.label}: tagged for {segments.period_end}, revenue on file is for {period_end}")
+            continue
+        verdict = _balance(segments.parts, total=total, scale=segments.scale)
+        if isinstance(verdict, Partition):
+            return TaggedPartition(segments, segments.parts, None, verdict)
+        refusals.append(f"{segments.label}: {verdict.value} ({len(segments.parts)} members)")
+        if verdict is PartitionRefusal.SHORT and segments.reconciling:
+            short.append(segments)
+    for segments in short:
+        for item in segments.reconciling:
+            parts = (*segments.parts, item)
+            verdict = _balance(parts, total=total, scale=segments.scale)
+            if isinstance(verdict, Partition):
+                return TaggedPartition(segments, parts, item[0], verdict)
+        refusals.append(f"{segments.label}: no single reconciling item closes it")
+    return refusals
+
+
+def _balance(parts: Sequence[tuple[str, Decimal]], *, total: Decimal, scale: int) -> Partition | PartitionRefusal:
+    candidates = [Candidate(float(value), member) for member, value in parts]
+    # In the units the facts were tagged in — five of whatever the filer rounds to.
+    return select_exhaustive_partition(candidates, total=total, tolerance=SEGMENT_TOLERANCE * Decimal(10) ** scale)
 
 
 def segment_name_for(member: str) -> str:
@@ -223,6 +333,8 @@ def segment_name_for(member: str) -> str:
     same words, CamelCased, and they are enough for a reader and for the classifier.
     """
     local = member.split(":", 1)[-1]
+    if local in _RECONCILING_LABELS:
+        return _RECONCILING_LABELS[local]
     local = re.sub(r"(?:Segments?)?Member$", "", local) or local
     words = _CAMEL_CASE.sub(" ", local).split()
     return " ".join([words[0], *(word.lower() if word in _MINOR_WORDS else word for word in words[1:])])
@@ -488,60 +600,56 @@ def _tagged_segments_outcome(
     standard: MetricStandard,
     write: bool,
 ) -> ExtractionOutcome:
-    """Offer each tagged concept's segments to the identity; land the first that balances.
+    """Land the first tagged set that balances the oracle; refuse with every set's reason otherwise.
 
-    When none does, the answer is a refusal naming each concept's reason. A filer that tags its
-    segments has said what they are; the retired table reader balanced a table where Comcast's
-    five tagged segments did not, and the table was its geography (#830, #833).
+    A filer that tags its segments has said what they are; the retired table reader balanced a
+    table where Comcast's five tagged segments did not, and the table was its geography (#830,
+    #833).
     """
-    refusals: list[str] = []
-    for segments in tagged:
-        concept = segments.concept.split(":", 1)[-1]
-        if segments.refusal is not None:
-            refusals.append(f"{concept}: {segments.refusal}")
-            continue
-        if oracle is None:
-            refusals.append(f"{concept}: {PartitionRefusal.NO_TOTAL.value}")
-            continue
-        if segments.period_end != oracle.period_end:
-            refusals.append(f"{concept}: tagged for {segments.period_end}, revenue on file is for {oracle.period_end}")
-            continue
-        candidates = [Candidate(float(value), member) for member, value in segments.parts]
-        # In the units the facts were tagged in — five of whatever the filer rounds to.
-        tolerance = SEGMENT_TOLERANCE * Decimal(10) ** segments.scale
-        verdict = select_exhaustive_partition(candidates, total=oracle.value, tolerance=tolerance)
-        if isinstance(verdict, PartitionRefusal):
-            refusals.append(f"{concept}: {verdict.value} ({len(segments.parts)} members)")
-            continue
-        parts = [(segment_name_for(member), value) for member, value in segments.parts]
-        named = ", ".join(f"{name}={value}" for name, value in parts)
-        return _land_partition(
-            connection,
-            record_cik=record_cik,
-            document=document,
-            oracle=oracle,
-            parts=parts,
-            residual=Decimal(str(verdict.residual)),
-            extractor=verdict.extractor,
-            # `recall=xbrl` and the members: a reader can find every part's tag in the filing.
-            evidence_ref=(
-                f"accession={document.accession} form={document.form} recall=xbrl "
-                f"concept={segments.concept} members={','.join(member for member, _ in segments.parts)}"
-            ),
-            standard=standard,
-            write=write,
-            summary=(
-                f"{len(parts)} segments accounting for {verdict.total} "
-                f"(residual {verdict.residual}) for {oracle.period_end}: {named}"
-            ),
-        )
-    return ExtractionOutcome(
+    refused = partial(
+        ExtractionOutcome,
         cik,
         "no_candidate",
         accession=document.accession,
         form=document.form,
         filing_date=document.filing_date,
-        detail=f"tagged segment revenue accounts for no consolidated revenue ({'; '.join(refusals)})",
+    )
+    if oracle is None:
+        labels = "; ".join(f"{segments.label}: {PartitionRefusal.NO_TOTAL.value}" for segments in tagged)
+        return refused(detail=f"tagged segment revenue accounts for no consolidated revenue ({labels})")
+    accepted = select_tagged_partition(tagged, total=oracle.value, period_end=oracle.period_end)
+    if isinstance(accepted, list):
+        return refused(detail=f"tagged segment revenue accounts for no consolidated revenue ({'; '.join(accepted)})")
+    parts = [(segment_name_for(member), value) for member, value in accepted.parts]
+    named = ", ".join(f"{name}={value}" for name, value in parts)
+    verdict = accepted.verdict
+    return _land_partition(
+        connection,
+        record_cik=record_cik,
+        document=document,
+        oracle=oracle,
+        parts=parts,
+        residual=Decimal(str(verdict.residual)),
+        extractor=verdict.extractor,
+        # `recall=xbrl`, the concept, the shape and the members: a reader can find every part's tag
+        # in the filing, including the one reconciling item a set needed.
+        evidence_ref=" ".join(
+            [
+                f"accession={document.accession}",
+                f"form={document.form}",
+                "recall=xbrl",
+                f"concept={accepted.segments.concept}",
+                f"shape={accepted.segments.shape}",
+                f"members={','.join(member for member, _ in accepted.segments.parts)}",
+            ]
+            + ([f"reconciling={accepted.reconciling}"] if accepted.reconciling else [])
+        ),
+        standard=standard,
+        write=write,
+        summary=(
+            f"{len(parts)} parts accounting for {verdict.total} (residual {verdict.residual}) "
+            f"for {oracle.period_end}: {named}"
+        ),
     )
 
 

@@ -20,12 +20,11 @@ from decimal import Decimal
 from pathlib import Path
 
 from data_engine.datahub.standards.segment_extraction import (
-    SEGMENT_TOLERANCE,
     declared_segment_count,
     segment_name_for,
+    select_tagged_partition,
     tagged_segment_revenues,
 )
-from factors.shared.extraction import Candidate, Partition, select_exhaustive_partition
 
 ROOT = Path(__file__).resolve().parent.parent
 FILINGS = ROOT / "apps" / "data-engine" / "samples" / "filings"
@@ -61,7 +60,9 @@ def census() -> dict[str, dict]:
             "tagged_segments": [
                 {
                     "concept": segments.concept,
+                    "shape": segments.shape,
                     "members": [member for member, _ in segments.parts],
+                    "reconciling": [member for member, _ in segments.reconciling],
                     "sum": str(sum((value for _, value in segments.parts), Decimal(0))),
                     "refusal": segments.refusal,
                 }
@@ -70,18 +71,11 @@ def census() -> dict[str, dict]:
         }
         total = TOTALS.get(path.name)
         if total:
-            accepted = []
-            for segments in tagged:
-                if segments.refusal is not None:
-                    continue
-                verdict = select_exhaustive_partition(
-                    [Candidate(float(value), member) for member, value in segments.parts],
-                    total=Decimal(total),
-                    tolerance=SEGMENT_TOLERANCE * Decimal(10) ** segments.scale,
-                )
-                if isinstance(verdict, Partition):
-                    accepted.append([segment_name_for(member) for member, _ in segments.parts])
-            entry["accepted_partitions"] = accepted
+            # The adapter's own selection, not a copy of it: the census measures what a run would accept.
+            accepted = select_tagged_partition(tagged, total=Decimal(total), period_end=None)
+            entry["accepted_partition"] = (
+                None if isinstance(accepted, list) else [segment_name_for(member) for member, _ in accepted.parts]
+            )
         out[path.name] = entry
     return out
 

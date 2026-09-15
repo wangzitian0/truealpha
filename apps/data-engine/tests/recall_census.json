@@ -6,6 +6,7 @@
       "tagged_segments": [
         {
           "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "shape": "all",
           "members": [
             "aapl:AmericasSegmentMember",
             "aapl:EuropeSegmentMember",
@@ -13,18 +14,17 @@
             "aapl:JapanSegmentMember",
             "aapl:RestOfAsiaPacificSegmentMember"
           ],
+          "reconciling": [],
           "sum": "416161000000",
           "refusal": null
         }
       ],
-      "accepted_partitions": [
-        [
-          "Americas",
-          "Europe",
-          "Greater China",
-          "Japan",
-          "Rest of Asia Pacific"
-        ]
+      "accepted_partition": [
+        "Americas",
+        "Europe",
+        "Greater China",
+        "Japan",
+        "Rest of Asia Pacific"
       ]
     },
     "ADM_10K_000000708426000011.html": {
@@ -32,20 +32,28 @@
       "tagged_segments": [
         {
           "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "shape": "all",
           "members": [
             "adm:AgServicesandOilseedsMember",
             "adm:CarbohydrateSolutionsMember",
             "adm:NutritionMember"
+          ],
+          "reconciling": [
+            "us-gaap:CorporateNonSegmentMember"
           ],
           "sum": "24507000000",
           "refusal": null
         },
         {
           "concept": "us-gaap:Revenues",
+          "shape": "all",
           "members": [
             "adm:AgServicesandOilseedsMember",
             "adm:CarbohydrateSolutionsMember",
             "adm:NutritionMember"
+          ],
+          "reconciling": [
+            "us-gaap:CorporateNonSegmentMember"
           ],
           "sum": "79820000000",
           "refusal": null
@@ -57,10 +65,12 @@
       "tagged_segments": [
         {
           "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "shape": "all",
           "members": [
             "adp:EmployerServicesSegmentMember",
             "adp:ProfessionalEmployeeOrganizationServicesSegmentMember"
           ],
+          "reconciling": [],
           "sum": "21959500000.0",
           "refusal": null
         }
@@ -71,19 +81,19 @@
       "tagged_segments": [
         {
           "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "shape": "all",
           "members": [
             "avgo:InfrastructureSoftwareMember",
             "avgo:SemiconductorSolutionsMember"
           ],
+          "reconciling": [],
           "sum": "63887000000",
           "refusal": null
         }
       ],
-      "accepted_partitions": [
-        [
-          "Infrastructure Software",
-          "Semiconductor Solutions"
-        ]
+      "accepted_partition": [
+        "Infrastructure Software",
+        "Semiconductor Solutions"
       ]
     },
     "DDOG_10K_000162828026008819.html": {
@@ -99,10 +109,14 @@
       "tagged_segments": [
         {
           "concept": "us-gaap:RevenuesNetOfInterestExpense",
+          "shape": "all",
           "members": [
             "jpm:AssetandWealthManagementSegmentMember",
             "jpm:CommercialAndInvestmentBankMember",
             "jpm:ConsumerCommunityBankingMember"
+          ],
+          "reconciling": [
+            "us-gaap:CorporateNonSegmentMember"
           ],
           "sum": "178556000000",
           "refusal": null
@@ -114,10 +128,12 @@
       "tagged_segments": [
         {
           "concept": "us-gaap:Revenues",
+          "shape": "all",
           "members": [
             "nice:CustomerEngagementMember",
             "nice:FinancialCrimeAndComplianceSolutionsMember"
           ],
+          "reconciling": [],
           "sum": "2945399000",
           "refusal": null
         }

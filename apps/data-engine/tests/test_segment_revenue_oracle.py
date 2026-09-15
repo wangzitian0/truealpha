@@ -555,26 +555,113 @@ def test_tagged_segment_revenue_lands_before_any_table_is_read(monkeypatch) -> N
     assert "aapl:GreaterChinaSegmentMember" in evidence
 
 
-def test_a_tagged_set_that_does_not_balance_is_refused_with_each_concepts_reason(monkeypatch) -> None:
-    """ADM tags its three segments under two concepts and neither accounts for its revenue —
-    "Other Business" is tagged off the segment axis. ADP's two segments exceed its total by the
-    intersegment revenue. JPM's three bank segments fall short by Corporate. Each is a refusal
-    that says which concept and which way, never a landed set."""
-    adm = _packaged("ADM_10K_000000708426000011.html", cik=7084, filed=date(2026, 2, 17))
-    outcome, rows = _extract(monkeypatch, adm, ("80269000000", "2025-12-31"))
-    assert outcome.status == "no_candidate" and rows == []
-    assert "RevenueFromContractWithCustomerExcludingAssessedTax: sums_short_of_total (3 members)" in outcome.detail
-    assert "Revenues: sums_short_of_total (3 members)" in outcome.detail
-
+def test_a_tagged_set_that_does_not_balance_is_refused_with_each_sets_reason(monkeypatch) -> None:
+    """ADP's two segments exceed its total by the intersegment revenue; JPM's three bank segments
+    fall short by Corporate, whose +7,025M is off by the -3,134M reconciling item beside it. Each is
+    a refusal naming the set, its shape and which way — never a landed set, and never a negative
+    part to make one balance."""
     adp = _packaged("ADP_10K_000000867026000030.html", cik=8670, filed=date(2026, 8, 6))
     outcome, rows = _extract(monkeypatch, adp, ("21947400000", "2026-06-30"))
     assert outcome.status == "no_candidate" and rows == []
-    assert "sums_over_total (2 members)" in outcome.detail
+    assert "RevenueFromContractWithCustomerExcludingAssessedTax: sums_over_total (2 members)" in outcome.detail
 
     jpm = _packaged("JPM_10K_000162828026008131.html", cik=19617, filed=date(2026, 2, 13))
     outcome, rows = _extract(monkeypatch, jpm, ("182447000000", "2025-12-31"))
     assert outcome.status == "no_candidate" and rows == []
     assert "RevenuesNetOfInterestExpense: sums_short_of_total (3 members)" in outcome.detail
+    assert "no single reconciling item closes it" in outcome.detail
+
+
+def test_a_short_set_is_completed_by_one_positive_corporate_item(monkeypatch) -> None:
+    """#835, measured on ADM: its three tagged segments are short of its 80,269M revenue by exactly
+    the 449M it tags as `CorporateNonSegmentMember`. That is revenue ADM earns, so the set lands
+    with it as a named part — and the row says which item completed it."""
+    adm = _packaged("ADM_10K_000000708426000011.html", cik=7084, filed=date(2026, 2, 17))
+    outcome, rows = _extract(monkeypatch, adm, ("80269000000", "2025-12-31"))
+    assert outcome.status == "resolved", outcome.detail
+    parts = {r["segment_name"]: r["segment_revenue"] for r in rows}
+    assert parts["Corporate and other"] == Decimal("449000000")
+    assert sum(parts.values()) == Decimal("80269000000")
+    assert "reconciling=us-gaap:CorporateNonSegmentMember" in rows[0]["evidence_ref"]
+
+
+def test_each_context_shape_is_its_own_set(monkeypatch) -> None:
+    """#835, measured on Berkshire: it tags its segments twice, on the segment axis alone and with
+    `OperatingSegmentsMember`, with different values. Merged, one member carried two values and
+    the set was refused; apart, the segment-axis set IS the consolidated revenue."""
+    both = ("srt:ConsolidationItemsAxis", "us-gaap:OperatingSegmentsMember")
+    contexts = (
+        _annual_context("c-1", "x:InsuranceMember"),
+        _annual_context("c-2", "x:RailMember"),
+        _annual_context("c-3", "x:InsuranceMember", extra=both),
+        _annual_context("c-4", "x:RailMember", extra=both),
+    )
+    body = _ixbrl(
+        _revenue_tag("c-1", "Insurance", "110"),
+        _revenue_tag("c-2", "Rail", "40"),
+        _revenue_tag("c-3", "Insurance", "100"),
+        _revenue_tag("c-4", "Rail", "40"),
+        contexts=contexts,
+    )
+    document = _packaged("AVGO_10K_000173016825000121.html", cik=1067983, filed=date(2026, 3, 2))
+    outcome, rows = _extract(monkeypatch, replace(document, body=body), ("150000000", "2025-12-31"))
+    assert outcome.status == "resolved", outcome.detail
+    assert {r["segment_name"]: r["segment_revenue"] for r in rows} == {
+        "Insurance": Decimal("110000000"),
+        "Rail": Decimal("40000000"),
+    }
+    assert "shape=segment-axis " in rows[0]["evidence_ref"], "the one shape that is the whole revenue"
+
+
+def test_one_consistent_set_split_across_both_shapes_is_answered_by_their_union(monkeypatch) -> None:
+    """#835, measured on Kraft Heinz: North America and International are tagged on the segment
+    axis alone, Emerging Markets with `OperatingSegmentsMember`. Neither shape is the revenue on its
+    own; the union, with no member tagged twice, is exactly it."""
+    both = ("srt:ConsolidationItemsAxis", "us-gaap:OperatingSegmentsMember")
+    contexts = (
+        _annual_context("c-1", "x:NorthAmericaMember"),
+        _annual_context("c-2", "x:InternationalMember"),
+        _annual_context("c-3", "x:EmergingMarketsMember", extra=both),
+    )
+    body = _ixbrl(
+        _revenue_tag("c-1", "NA", "110"),
+        _revenue_tag("c-2", "Intl", "25"),
+        _revenue_tag("c-3", "EM", "15"),
+        contexts=contexts,
+    )
+    document = _packaged("AVGO_10K_000173016825000121.html", cik=1637459, filed=date(2026, 2, 12))
+    outcome, rows = _extract(monkeypatch, replace(document, body=body), ("150000000", "2025-12-31"))
+    assert outcome.status == "resolved", outcome.detail
+    assert {r["segment_name"] for r in rows} == {"North America", "International", "Emerging Markets"}
+    assert "shape=all " in rows[0]["evidence_ref"]
+
+
+def test_a_reconciling_item_that_does_not_close_the_gap_or_is_negative_refuses(monkeypatch) -> None:
+    corporate = "us-gaap:CorporateNonSegmentMember"
+    contexts = (
+        _annual_context("c-1", "x:AMember"),
+        _annual_context("c-2", "x:BMember"),
+        _consolidation_context("c-3", corporate),
+    )
+
+    def run(corporate_value: str, *, sign: str = ""):
+        body = _ixbrl(
+            _revenue_tag("c-1", "A", "100"),
+            _revenue_tag("c-2", "B", "40"),
+            _revenue_tag("c-3", "Corporate", corporate_value, sign=sign),
+            contexts=contexts,
+        )
+        document = _packaged("AVGO_10K_000173016825000121.html", cik=1166691, filed=date(2026, 1, 29))
+        return _extract(monkeypatch, replace(document, body=body), ("150000000", "2025-12-31"))
+
+    outcome, rows = run("2")
+    assert rows == [] and "no single reconciling item closes it" in outcome.detail, (
+        "10 short, 2 offered: 8 over the tolerance of five of the tagged unit"
+    )
+    outcome, rows = run("10", sign="-")
+    assert rows == [], "a negative item is not revenue"
+    outcome, rows = run("10")
+    assert outcome.status == "resolved" and len(rows) == 3
 
 
 def test_a_filing_that_tags_its_segments_is_never_answered_by_a_printed_table(monkeypatch) -> None:
@@ -628,11 +715,23 @@ def test_a_segment_tagged_twice_a_negative_part_or_another_period_refuses(monkey
     assert rows == [] and "tagged for 2025-12-31, revenue on file is for 2024-12-31" in outcome.detail
 
 
-def _annual_context(context: str, member: str, *, end: str = "2025-12-31") -> str:
+def _annual_context(context: str, member: str, *, end: str = "2025-12-31", extra: tuple[str, str] | None = None) -> str:
+    second = f'<xbrldi:explicitMember dimension="{extra[0]}">{extra[1]}</xbrldi:explicitMember>' if extra else ""
     return (
         f'<xbrli:context id="{context}"><xbrli:entity>'
         '<xbrli:identifier scheme="http://www.sec.gov/CIK">0000000001</xbrli:identifier>'
         '<xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">'
+        f"{member}</xbrldi:explicitMember>{second}</xbrli:segment></xbrli:entity>"
+        f"<xbrli:period><xbrli:startDate>2025-01-01</xbrli:startDate><xbrli:endDate>{end}</xbrli:endDate>"
+        "</xbrli:period></xbrli:context>"
+    )
+
+
+def _consolidation_context(context: str, member: str, *, end: str = "2025-12-31") -> str:
+    return (
+        f'<xbrli:context id="{context}"><xbrli:entity>'
+        '<xbrli:identifier scheme="http://www.sec.gov/CIK">0000000001</xbrli:identifier>'
+        '<xbrli:segment><xbrldi:explicitMember dimension="srt:ConsolidationItemsAxis">'
         f"{member}</xbrldi:explicitMember></xbrli:segment></xbrli:entity>"
         f"<xbrli:period><xbrli:startDate>2025-01-01</xbrli:startDate><xbrli:endDate>{end}</xbrli:endDate>"
         "</xbrli:period></xbrli:context>"
