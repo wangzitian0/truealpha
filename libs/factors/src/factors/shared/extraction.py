@@ -59,9 +59,14 @@ RULE_EXHAUSTIVE_PARTITION = "rule:exhaustive-partition:v1"
 #: sentence, landed Berkshire Hathaway as one segment, and is withdrawn — its rows stay in the
 #: plane (append-only) and are no longer admissible (`FactPlane.withdrawn_extractors`).
 #:
+#: v3 (#841): the row's description — the only thing a classifier is shown for a one-part
+#: partition — is the filer's segment note, not the sentence its count happens to be tagged in.
+#: v2 decided rightly and carried the wrong sentence (Visa's is about expenses), and a row is what
+#: it carries; v2 is withdrawn the same way.
+#:
 #: Same persistence contract as the ids above — it lands in `evidence_ref` and is compared
 #: verbatim.
-RULE_SINGLE_SEGMENT = "rule:single-segment:v2"
+RULE_SINGLE_SEGMENT = "rule:single-segment:v3"
 
 
 @dataclass(frozen=True)

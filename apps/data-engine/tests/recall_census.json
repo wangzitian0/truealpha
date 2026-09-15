@@ -150,6 +150,10 @@
     "SHOP_10K_000159480526000007.html": {
       "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31",
       "tagged_segments": []
+    },
+    "V_10K_000140316125000089.html": {
+      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-09-30",
+      "tagged_segments": []
     }
   }
 }

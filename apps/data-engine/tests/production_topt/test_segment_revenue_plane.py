@@ -211,4 +211,9 @@ def test_a_withdrawn_rules_row_does_not_close_the_planner_cell(connection) -> No
     assert [cell.reason for cell in open_cells(connection, [issuer], standard=standard, cutoff=cutoff)] == ["no_fact"]
 
     insert("rule:single-segment:v2", "segment-partition:" + "2" * 64)
+    assert [cell.reason for cell in open_cells(connection, [issuer], standard=standard, cutoff=cutoff)] == [
+        "no_fact"
+    ], "v2 is withdrawn too (#841): its description was the sentence the count was tagged in"
+
+    insert("rule:single-segment:v3", "segment-partition:" + "3" * 64)
     assert open_cells(connection, [issuer], standard=standard, cutoff=cutoff) == [], "an admissible row closes it"

@@ -61,6 +61,7 @@ def test_the_filers_tagged_count_decides_one_segment_and_a_sentence_does_not() -
         "PLUG_10KA_000155837022003577": None,
         "PLUG_10K_000155837021007147": None,
         "SHOP_10K_000159480526000007": 1,
+        "V_10K_000140316125000089": 1,
     }
     plug = filing_plain_text((root / "PLUG_10K_000155837021007147.html").read_bytes())
     assert single_segment_statement(plug) is not None, "PLUG's prose does say one segment"
@@ -81,6 +82,37 @@ def test_the_statement_is_the_sentence_the_count_is_tagged_in() -> None:
     ddog = declared_segment_count((root / "DDOG_10K_000162828026008819.html").read_bytes())
     assert ddog is not None and ddog.value == 1
     assert ddog.statement is None, "a hidden fact has no printed sentence"
+
+
+def test_the_segment_note_is_read_through_its_continuation_chain() -> None:
+    """The note's `ix:nonNumeric` holds its heading; the body follows in the `ix:continuation`
+    elements the tag names (#841). SHOP: the heading, then two parts; AVGO: 20 bytes, then five.
+    DDOG tags no note at all. Visa's note is what its row is described by, in place of the
+    sentence its count is tagged in."""
+    from data_engine.datahub.standards.inline_xbrl import InlineXbrl
+    from data_engine.datahub.standards.segment_extraction import single_segment_description
+
+    def note(name: str) -> str | None:
+        return InlineXbrl((FILINGS / name).read_bytes()).text_block(
+            "us-gaap:SegmentReportingDisclosureTextBlock", limit=600
+        )
+
+    shop = note("SHOP_10K_000159480526000007.html")
+    assert shop is not None and shop.startswith("Segment and Geographical Information The Company")
+    assert "operates in one single operating and reportable segment" in shop
+    avgo = note("AVGO_10K_000173016825000121.html")
+    assert avgo is not None and "two reportable segments: semiconductor solutions and infrastructure software" in avgo
+    assert note("DDOG_10K_000162828026008819.html") is None
+
+    visa = (FILINGS / "V_10K_000140316125000089.html").read_bytes()
+    document = InlineXbrl(visa)
+    declared = declared_segment_count(document)
+    assert declared is not None and declared.statement is not None
+    assert "Significant expenses" in declared.statement
+    description = single_segment_description(document, declared, visa)
+    assert description is not None
+    assert "The Company has one reportable segment, Payment Services." in description
+    assert "Significant expenses" not in description
 
 
 def test_tagged_segment_revenue_reads_as_the_filer_tagged_it() -> None:

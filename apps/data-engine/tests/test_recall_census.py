@@ -133,6 +133,7 @@ def test_the_single_segment_declaration_is_measured_per_filing(committed) -> Non
     one segment and it tags nothing, so it must stay undeclared."""
     declared = {name.split("_")[0]: entry["declared_segments"] for name, entry in committed.items()}
     assert declared["SHOP"] == "us-gaap:NumberOfReportableSegments=1@2025-12-31"
+    assert declared["V"] == "us-gaap:NumberOfReportableSegments=1@2025-09-30", "packaged for #841"
     assert declared["AVGO"] == "us-gaap:NumberOfReportableSegments=2@2025-11-02"
     assert declared["PLUG"] is None
 

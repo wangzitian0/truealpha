@@ -8,8 +8,9 @@ from them, is the adapter's.
 
 A regex reader rather than an XML parser, on purpose: an SEC primary document is HTML that embeds
 XBRL elements and is frequently not well-formed XML, while the few elements read here
-(`xbrli:context`, `ix:nonFraction`, `ix:header`) have a fixed, machine-generated shape. Anything
-it cannot read comes back as unreadable rather than guessed, so a reader failure costs a refusal.
+(`xbrli:context`, `ix:nonFraction`, `ix:nonNumeric` with its `ix:continuation` chain, `ix:header`)
+have a fixed, machine-generated shape. Anything it cannot read comes back as unreadable rather
+than guessed, so a reader failure costs a refusal.
 """
 
 from __future__ import annotations
@@ -37,6 +38,12 @@ _EXPLICIT_MEMBER = re.compile(
 _TYPED_MEMBER = re.compile(r"<xbrldi:typedMember\b", re.IGNORECASE)
 _NON_FRACTION = re.compile(r"<ix:nonFraction\b[^>]*>", re.IGNORECASE)
 _NON_FRACTION_END = re.compile(r"</ix:nonFraction\s*>", re.IGNORECASE)
+_NON_NUMERIC = re.compile(r"<ix:nonNumeric\b[^>]*>", re.IGNORECASE)
+#: A text block's body is not where its tag is. The `ix:nonNumeric` holds the heading (AVGO's
+#: segment note: "Segment Information", 20 bytes) and names, in `continuedAt`, the
+#: `ix:continuation` carrying the next part, which names the next. Both elements nest — a policy
+#: block inside a note, a fact inside either — so an element's close is found by depth over both.
+_TEXT_PART = re.compile(r"<(/?)ix:(?:nonNumeric|continuation)\b[^>]*>", re.IGNORECASE)
 _ATTRIBUTE = re.compile(r"([\w:.-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
 #: The hidden header: where the contexts live, and where a filer may tag a value it never prints.
 _HIDDEN_HEADER = re.compile(r"<ix:header\b.*?</ix:header\s*>", re.IGNORECASE | re.DOTALL)
@@ -124,7 +131,7 @@ class InlineXbrl:
         """Every `ix:nonFraction` tagged with one of `concepts`, in document order."""
         found = []
         for tag in _NON_FRACTION.finditer(self._raw):
-            attributes = {name: double or single for name, double, single in _ATTRIBUTE.findall(tag.group(0))}
+            attributes = _attributes(tag.group(0))
             concept = attributes.get("name", "")
             context = self.contexts.get(attributes.get("contextRef", ""))
             if concept not in concepts or context is None:
@@ -162,6 +169,60 @@ class InlineXbrl:
             return None
         before = text[max(0, at - lead) : at]
         return " ".join((before + text[at + len(_MARK) : at + len(_MARK) + span]).split())
+
+    def text_block(self, concept: str, *, limit: int) -> str | None:
+        """The printed text of the first block tagged `concept` about the whole filer — markup
+        stripped, whitespace collapsed, at most `limit` characters — or None when it tags none.
+
+        A block about a part of the filer (a subsidiary registrant's note in a combined filing)
+        is skipped for the same reason a dimensional count is. The continuation chain is
+        followed only as far as `limit` needs, and a malformed chain stops where it goes wrong:
+        a part that never closes is unreadable and ends the block with what was read before it,
+        and a chain that names a part already read ends there rather than being read again.
+        """
+        for tag in _NON_NUMERIC.finditer(self._raw):
+            attributes = _attributes(tag.group(0))
+            context = self.contexts.get(attributes.get("contextRef", ""))
+            if attributes.get("name") != concept or context is None or context.dimensions:
+                continue
+            parts: list[str] = []
+            length = 0
+            read: set[str] = set()
+            part: re.Match[str] | None = tag
+            while part is not None and length < limit:
+                body = self._element_body(part)
+                if body is None:
+                    break
+                text = " ".join(html.unescape(_MARKUP.sub(" ", body)).split())
+                if text:  # a part holding only markup (a page break) is neither a word gap nor length
+                    length += len(text) + (1 if parts else 0)  # exactly len(" ".join(parts))
+                    parts.append(text)
+                following = _attributes(part.group(0)).get("continuedAt")
+                if not following or following in read:
+                    break
+                read.add(following)
+                part = self._continuation(following)
+            return " ".join(parts)[:limit] or None
+        return None
+
+    def _element_body(self, opening: re.Match[str]) -> str | None:
+        """The markup between an opening tag and its own close, or None when it never closes —
+        an unclosed element would otherwise read as the rest of the document."""
+        depth = 1
+        for tag in _TEXT_PART.finditer(self._raw, opening.end()):
+            depth += -1 if tag.group(1) else 1
+            if depth == 0:
+                return self._raw[opening.end() : tag.start()]
+        return None
+
+    def _continuation(self, part_id: str) -> re.Match[str] | None:
+        return re.search(
+            rf"<ix:continuation\b[^>]*\bid\s*=\s*[\"']{re.escape(part_id)}[\"'][^>]*>", self._raw, re.IGNORECASE
+        )
+
+
+def _attributes(tag: str) -> dict[str, str]:
+    return {name: double or single for name, double, single in _ATTRIBUTE.findall(tag)}
 
 
 def _integer(text: str) -> int | None:
