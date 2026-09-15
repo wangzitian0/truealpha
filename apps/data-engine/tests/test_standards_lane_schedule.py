@@ -120,3 +120,61 @@ def test_each_op_body_actually_runs(monkeypatch) -> None:
     config = StandardBackfillConfig(executed_at="2026-09-13T09:07:00+00:00", universe="topt")
     out = _json.loads(run_theme_purity(context, config, "{}"))
     assert out == {"universe": "topt", "rows": 0, "reason": "no_governed_head"}
+
+
+def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deployment(monkeypatch) -> None:
+    """#826. On staging this op logged "no governed head" on every weekly tick and wrote no
+    q6 row, while `run_question_coverage` in the SAME run found the head and persisted its
+    report. The pointer's `environment` is the capture tier the A1 registration stamps
+    (`CaptureEnvironment.PRODUCTION`, for staging's real-vendor capture too); the op asked for
+    `settings.app_env`, which is `staging` there.
+
+    The test above cannot see that: its connection answers nothing to every query, so it
+    passes whatever environment the op asks for. This one answers ONLY for the stamped tier,
+    and runs with the deployment set to staging, which is where the defect lived.
+    """
+    import json as _json
+
+    import psycopg
+    from data_engine.config import settings
+    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.lanes.standards import StandardBackfillConfig, run_theme_purity
+    from truealpha_contracts.common import CaptureEnvironment
+
+    stamped = CaptureEnvironment.PRODUCTION.value  # what a1_evidence.register_run_evidence writes
+    head = ("universe:topt-us-2026-03-31", "capture-run:" + "a" * 64, datetime(2026, 9, 14, 22, 45, tzinfo=UTC))
+
+    class _Pointer:
+        def __init__(self) -> None:
+            self._row = None
+
+        def execute(self, sql, params=()):
+            asked_for_stamped_tier = "current_pointer_head" in sql and stamped in tuple(params)
+            self._row = head if asked_for_stamped_tier else None
+            return self
+
+        def fetchone(self):
+            return self._row
+
+        def commit(self) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _Pointer())
+    materialized = []
+    monkeypatch.setattr(
+        theme_purity, "materialize_theme_purity", lambda _c, **kwargs: materialized.append(kwargs) or ()
+    )
+
+    config = StandardBackfillConfig(executed_at="2026-09-20T09:07:00+00:00", universe="topt")
+    out = _json.loads(run_theme_purity(dg.build_op_context(), config, "{}"))
+
+    assert out.get("reason") != "no_governed_head", "staging must find the head its own capture registered"
+    assert out["run_id"] == head[1]
+    assert materialized == [{"run_id": head[1], "cutoff": head[2]}], "rows are written for THAT run, at ITS cutoff"

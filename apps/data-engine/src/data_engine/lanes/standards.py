@@ -7,6 +7,7 @@ from datetime import datetime
 
 import dagster as dg
 import psycopg
+from truealpha_contracts.common import CaptureEnvironment
 from truealpha_contracts.standards import STANDARDS
 
 from data_engine.config import settings
@@ -111,7 +112,12 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     # after the head was published change a row attributed to it.
     prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
     with psycopg.connect(settings.database_url) as connection:
-        head = governed_head(connection, universe_prefix=prefix, environment=settings.app_env)
+        # Resolved under the capture TIER the tick registers its pointer with
+        # (`CaptureEnvironment.PRODUCTION`, which staging's real-vendor capture stamps too),
+        # never under `APP_ENV`. Asking for `settings.app_env` found no head on staging on any
+        # tick, while the coverage op in the same run found one (#826). Named here rather than
+        # left to `governed_head`'s default, so a change to that default cannot bring it back.
+        head = governed_head(connection, universe_prefix=prefix, environment=CaptureEnvironment.PRODUCTION.value)
         if head is None:
             context.log.warning("no governed head for %s; no theme purity rows", config.universe)
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
