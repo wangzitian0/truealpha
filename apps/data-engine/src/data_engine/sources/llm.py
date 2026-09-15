@@ -422,17 +422,21 @@ def select_headcount(
 #: identity covers "how to judge a segment against a stated theme" while the theme itself
 #: still enters `request_sha256` and therefore the replay key. A per-theme prompt would
 #: make every theme a new prompt version and every wording tweak a migration.
-SEGMENT_THEME_PROMPT_VERSION = "segment-theme:v1"
+SEGMENT_THEME_PROMPT_VERSION = "segment-theme:v2"
+# v2 (#849): the issuer is named, and the model is told to judge that issuer and no other. v1
+# labelled the issuer by id alone, and given a segment that said only "one operating segment"
+# the model answered for NVIDIA and for Verizon — neither of which was the issuer.
 SEGMENT_THEME_INSTRUCTIONS = (
     "You judge whether each of an issuer's reportable segments belongs to a stated investment "
-    "theme. You are given the theme, the definition of what counts as in-theme, and the "
-    "segments as the issuer's own filing names them. Judge each segment on the theme "
-    "definition alone. Answer true when the segment's revenue is predominantly in the theme, "
-    "false when it predominantly is not, and null when the segment name does not carry enough "
-    "information to decide — null is a correct answer and is preferred over a guess. Return "
-    "one verdict per segment, using the [index] given. Respond ONLY with a JSON object of "
-    'exactly this shape: {"verdicts": [{"index": <int>, "in_theme": <true|false|null>, '
-    '"reason": <one short sentence>}]}'
+    "theme. You are given the issuer's ticker and id, the theme, the definition of what counts "
+    "as in-theme, and the segments as the issuer's own filing names and describes them. Judge "
+    "that issuer and no other: never substitute a different company for it. Judge each segment "
+    "on the theme definition alone. Answer true when the segment's revenue is predominantly in "
+    "the theme, false when it predominantly is not, and null when the segment's name and "
+    "description do not carry enough information to decide — null is a correct answer and is "
+    "preferred over a guess. Return one verdict per segment, using the [index] given. Respond "
+    'ONLY with a JSON object of exactly this shape: {"verdicts": [{"index": <int>, '
+    '"in_theme": <true|false|null>, "reason": <one short sentence>}]}'
 )
 SEGMENT_THEME_SCHEMA: dict[str, Any] = {
     "type": "object",

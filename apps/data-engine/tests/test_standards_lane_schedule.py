@@ -171,10 +171,19 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
     monkeypatch.setattr(
         theme_purity, "materialize_theme_purity", lambda _c, **kwargs: materialized.append(kwargs) or ()
     )
+    # The corpus the op names its members from (#849); the pointer stub answers no corpus query.
+    from data_engine.datahub.standards.planner import UniverseIssuer
+    from data_engine.lanes import standards as lane
+
+    monkeypatch.setattr(
+        lane, "universe_issuers", lambda _c, _u: [UniverseIssuer("issuer:lei:X", "NFLX", "listing:x", None)]
+    )
 
     config = StandardBackfillConfig(executed_at="2026-09-20T09:07:00+00:00", universe="topt")
     out = _json.loads(run_theme_purity(dg.build_op_context(), config, "{}"))
 
     assert out.get("reason") != "no_governed_head", "staging must find the head its own capture registered"
     assert out["run_id"] == head[1]
-    assert materialized == [{"run_id": head[1], "cutoff": head[2]}], "rows are written for THAT run, at ITS cutoff"
+    assert materialized == [{"run_id": head[1], "cutoff": head[2], "tickers": {"issuer:lei:X": "NFLX"}}], (
+        "rows are written for THAT run, at ITS cutoff, and the classifier is told the ticker (#849)"
+    )

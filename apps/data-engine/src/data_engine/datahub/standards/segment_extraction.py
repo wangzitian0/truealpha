@@ -370,26 +370,58 @@ def single_segment_statement(text: str) -> str | None:
 _SEGMENT_NOTE = "us-gaap:SegmentReportingDisclosureTextBlock"
 #: How much of the note is read for a description. The declaration sits at its top.
 _SEGMENT_NOTE_LIMIT = 6000
+#: Where a filer says what its BUSINESS is, in the order the corpus tags them: the nature-of-
+#: operations block, or the organization/description-of-business note that opens the financial
+#: statements. A segment note can declare one segment without saying what the company does —
+#: Netflix's says "operates as one operating segment" and nothing else — and a classifier given
+#: that and no name answered as NVIDIA (#849). The business opening travels beside the
+#: declaration so there is nothing left to guess.
+_BUSINESS_CONCEPTS = (
+    "us-gaap:NatureOfOperations",
+    "us-gaap:BusinessDescriptionAndBasisOfPresentationTextBlock",
+    "us-gaap:OrganizationConsolidationAndPresentationOfFinancialStatementsDisclosureTextBlock",
+    "us-gaap:OrganizationConsolidationAndPresentationOfFinancialStatementsDisclosureAndSignificantAccountingPoliciesTextBlock",
+    "us-gaap:OrganizationConsolidationBasisOfPresentationBusinessDescriptionAndAccountingPoliciesTextBlock",
+)
+#: Enough of the business opening to get past the incorporation boilerplate to the sentence
+#: that says what the company does ("Shopify provides essential internet infrastructure for
+#: commerce" arrives at character 180 of its block).
+_BUSINESS_SPAN = 320
+_BUSINESS_MARKER = " Business: "
+#: The declaration and the business opening together, as carried on the row.
+_DESCRIPTION_LIMIT = 720
 
 
 def single_segment_description(document: InlineXbrl, declared: DeclaredSegmentCount, body: bytes) -> str | None:
-    """What the filing says its one segment does, from the strongest statement it makes (#841).
+    """What the filing says its one segment does, from the strongest statements it makes.
 
-    v2 used the sentence the count was tagged in. Visa tags its count in a sentence about which
-    expenses reach its CODM, and the classifier declined every theme on it — a pure-play refused
-    on a description, which is what the single-segment path exists to prevent. The segment note
-    is the filer's own statement of what its segments are, so when the filer tags one it is read
-    first: the sentence in it that declares the one segment ("The Company has one reportable
-    segment, Payment Services"), else its opening (AbbVie's "single global business segment"
-    matches no pattern, and the note's first sentences say what the business is). A filer that
-    tags no note (DDOG, DUOL) is described as before: by the tagged sentence, then by the prose
-    pattern over the filing. Description only, on every path — the count decided before this is
-    asked.
+    Two parts. The DECLARATION (#841): v2 used the sentence the count was tagged in; Visa tags
+    its count in a sentence about which expenses reach its CODM, and the classifier declined
+    every theme on it. The segment note is the filer's own statement of what its segments are,
+    so when the filer tags one it is read first — the sentence in it that declares the one
+    segment ("The Company has one reportable segment, Payment Services"), else its opening. A
+    filer that tags no note (DDOG, DUOL) is described by the tagged sentence, then by the prose
+    pattern over the filing.
+
+    The BUSINESS (#849): the opening of the filer's nature-of-operations or organization note,
+    when it tags one, appended after `Business:`. A declaration alone can say nothing about the
+    company (Netflix), and a classifier given nothing invents something.
+
+    Description only, on every path — the count decided before this is asked.
     """
     note = document.text_block(_SEGMENT_NOTE, limit=_SEGMENT_NOTE_LIMIT)
+    declaration: str | None
     if note:
-        return single_segment_statement(note) or note[: _STATEMENT_LEAD + _SINGLE_SEGMENT_SPAN]
-    return declared.statement or single_segment_statement(filing_plain_text(body))
+        declaration = single_segment_statement(note) or note[: _STATEMENT_LEAD + _SINGLE_SEGMENT_SPAN]
+    else:
+        declaration = declared.statement or single_segment_statement(filing_plain_text(body))
+    business = next(
+        (found for concept in _BUSINESS_CONCEPTS if (found := document.text_block(concept, limit=_BUSINESS_SPAN))),
+        None,
+    )
+    if business is None:
+        return declaration
+    return f"{declaration or ''}{_BUSINESS_MARKER}{business}".strip()
 
 
 #: In the units the filer tagged, not in currency: parts each rounded to the tag's own last
@@ -774,7 +806,7 @@ def extract_segment_revenue(
             # its marker as the description.
             evidence_ref=" ".join(
                 [f"accession={document.accession}", f"form={document.form}", f"segment_count={declared.evidence}"]
-                + ([f"single_segment_statement={statement[:400]}"] if statement else [])
+                + ([f"single_segment_statement={statement[:_DESCRIPTION_LIMIT]}"] if statement else [])
             ),
             standard=standard,
             write=write,

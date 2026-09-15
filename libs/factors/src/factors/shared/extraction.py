@@ -64,9 +64,13 @@ RULE_EXHAUSTIVE_PARTITION = "rule:exhaustive-partition:v1"
 #: v2 decided rightly and carried the wrong sentence (Visa's is about expenses), and a row is what
 #: it carries; v2 is withdrawn the same way.
 #:
+#: v4 (#849): the description also carries the opening of the filer's nature-of-business note. A
+#: segment note can declare one segment and say nothing about the company (Netflix's does), and
+#: a classifier given that answered as NVIDIA; v3 is withdrawn the same way.
+#:
 #: Same persistence contract as the ids above — it lands in `evidence_ref` and is compared
 #: verbatim.
-RULE_SINGLE_SEGMENT = "rule:single-segment:v3"
+RULE_SINGLE_SEGMENT = "rule:single-segment:v4"
 
 
 @dataclass(frozen=True)

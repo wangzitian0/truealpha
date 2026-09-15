@@ -980,7 +980,7 @@ def test_a_declared_single_segment_lands_with_its_tagged_sentence(monkeypatch) -
     outcome, connection = _run_single(monkeypatch, body, oracle=("40000000000", "2025-09-30"), cik=1_403_161)
     assert (outcome.status, outcome.extractor) == ("resolved", RULE_SINGLE_SEGMENT), outcome.detail
     (row,) = [_row(p) for p in connection.inserts()]
-    assert row["extractor"] == "rule:single-segment:v3"
+    assert row["extractor"] == "rule:single-segment:v4"
     assert row["evidence_ref"].endswith(
         "segment_count=us-gaap:NumberOfReportableSegments=1@2025-09-30 "
         "single_segment_statement=The Company has one reportable segment, Payment Services."
@@ -1042,6 +1042,40 @@ def test_a_note_that_declares_in_no_pattern_is_described_by_its_opening(monkeypa
     description = row["evidence_ref"].split("single_segment_statement=", 1)[1]
     assert description.startswith("Segment and Geographic Area Information AbbVie operates as a single global business")
     assert "innovative medicines" in description
+
+
+def test_a_note_that_declares_without_describing_is_joined_by_the_business_opening(monkeypatch) -> None:
+    """#849. Netflix's note says "operates as one operating segment" and nothing about the
+    company; on that alone the classifier answered as NVIDIA. The filing's organization note
+    says what the company does, so it travels on the row after `Business:` — and a filing that
+    tags no such note (Visa, below in the packaged test) keeps the declaration alone."""
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
+    organization = (
+        '<ix:nonNumeric contextRef="c-1" name="us-gaap:OrganizationConsolidationAndPresentationOfFinancialStatements'
+        'DisclosureAndSignificantAccountingPoliciesTextBlock" id="org-0" escape="true">Organization and Summary of'
+        " Significant Accounting Policies Description of Business Netflix, Inc. (the “Company”) was incorporated on"
+        " August 29, 1997. The Company is one of the world’s leading entertainment services offering TV series, films,"
+        " games and live programming.</ix:nonNumeric>"
+    )
+    body = _ixbrl(
+        organization,
+        *_segment_note(
+            "Segment and Geographic Information",
+            "The Company operates as one operating segment. The CODM reviews financial information on a"
+            " consolidated basis.",
+        ),
+        f"The Company has {_count_tag('NumberOfReportableSegments', 'c-1', 'one')} reportable segment.",
+        contexts=(_context("c-1", "2025-12-31"),),
+    )
+    outcome, connection = _run_single(monkeypatch, body, oracle=("45183036000", "2025-12-31"), cik=1_065_280)
+    assert (outcome.status, outcome.extractor) == ("resolved", RULE_SINGLE_SEGMENT), outcome.detail
+    (row,) = [_row(p) for p in connection.inserts()]
+    description = row["evidence_ref"].split("single_segment_statement=", 1)[1]
+    declaration, business = description.split(" Business: ", 1)
+    assert "The Company operates as one operating segment." in declaration
+    assert business.startswith("Organization and Summary of Significant Accounting Policies")
+    assert "leading entertainment services offering TV series, films, games" in business
 
 
 def test_a_malformed_note_is_read_as_far_as_it_is_well_formed_and_no_further() -> None:
@@ -1109,6 +1143,7 @@ def test_visas_description_is_its_segment_note_not_the_sentence_its_count_is_tag
     description = row["evidence_ref"].split("single_segment_statement=", 1)[1]
     assert "The Company has one reportable segment, Payment Services." in description
     assert "Significant expenses" not in description
+    assert " Business: " not in description, "Visa tags no nature-of-business block; the declaration stands alone"
 
 
 def test_a_refusal_says_which_half_of_the_answer_is_missing(monkeypatch) -> None:
