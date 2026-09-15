@@ -124,9 +124,60 @@ const coverageRows = [
   },
 ];
 
+const confidenceRows = [
+  {
+    universe_id: "universe:qqq-us-2026-06-30",
+    run_id: "capture-run:" + "9".repeat(64),
+    cutoff: "2026-09-14 23:20:00+00",
+    created_at: "2026-09-16 00:45:00+00",
+    payload: {
+      generated_at: "2026-09-16T00:45:00+00:00",
+      sources_connected: ["nasdaq-index", "sec-company-facts", "sec-nport", "twelve-data", "yahoo"],
+      families: {
+        close: {
+          semantic_type: "market-price",
+          cells: 102,
+          high: 101,
+          medium: 0,
+          low: 1,
+          missing: 0,
+          compared: 101,
+          agreement_rate: "1.0000",
+          tolerance: "reconciliation-policy:" + "b".repeat(64),
+          origins: ["origin:twelve-data:v1", "origin:yahoo:v1"],
+        },
+        revenue: {
+          semantic_type: "financial-fact",
+          cells: 102,
+          high: 0,
+          medium: 0,
+          low: 97,
+          missing: 5,
+          compared: 0,
+          agreement_rate: null,
+          tolerance: null,
+          origins: ["origin:sec-company-facts:v1"],
+        },
+      },
+      accuracy: {
+        close: { matches_quality_report: true },
+        sec_oracle: {
+          issuers_compared: 5,
+          per_field: {
+            revenue: { compared: 5, agreed: 4, agreement_rate: "0.8000" },
+          },
+        },
+      },
+      metadata: { stored_confidence: { used_for_bands: false } },
+    },
+  },
+];
+
 {
   __setTestOpsClient({
     query: async (sql: string) => {
+      if (typeof sql === "string" && sql.includes("datahub_confidence_report"))
+        return { rows: confidenceRows } as never;
       if (typeof sql === "string" && sql.includes("current_pointer_head"))
         return { rows: headRows } as never;
       // "as check" FIRST: capacity SQLs also mention raw.fetches, and matching the
@@ -163,6 +214,25 @@ const coverageRows = [
   assert(
     stats.questionCoverage.length === 1,
     "the newest coverage report per universe is surfaced",
+  );
+  assert(
+    stats.confidence.length === 1 && stats.confidence[0].families.length === 2,
+    "the newest confidence report per universe is surfaced with its families",
+  );
+  const close = stats.confidence[0].families.find((f) => f.family === "close");
+  assert(
+    close !== undefined &&
+      close.high === 101 &&
+      close.agreement_rate === "1.0000" &&
+      close.origins.length === 2,
+    "close is banded from two origins with its agreement rate",
+  );
+  assert(
+    stats.confidence[0].oracle_fields[0].field === "revenue" &&
+      stats.confidence[0].oracle_fields[0].agreed === 4 &&
+      stats.confidence[0].close_matches_quality_report === true &&
+      stats.confidence[0].stored_confidence_used_for_bands === false,
+    "the accuracy oracle and the stored-confidence disclaimer pass through",
   );
   const q1 = stats.questionCoverage[0].questions.find(
     (q) => q.question === "q1",

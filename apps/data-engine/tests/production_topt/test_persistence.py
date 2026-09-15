@@ -426,6 +426,58 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
     assert all(cell["outcome"] == cell["fields"]["close"]["outcome"] for cell in cells.values())
 
 
+def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -> None:
+    """The confidence report's loaders read the same persisted observations the quality
+    report grades: with the second price origin wired, every close cell is HIGH; every
+    SEC-only fundamental is LOW; headcount, written by one fixture producer, is LOW; and
+    the stored confidence column is reported as measured and marked unused. Same real
+    schema, same fake vendors — the SQL is what this proves."""
+    from data_engine.datahub import confidence_report
+    from data_engine.datahub.question_coverage import GovernedHead
+
+    plan = _capture(connection, version="test-confidence", corroborate=True)
+    quality_report.persist(connection, quality_report.build_report(connection, plan.run_id))
+    head = GovernedHead(universe_id="universe:topt-us-2026-03-31", run_id=plan.run_id, cutoff=CUTOFF)
+    report = confidence_report.build_report(
+        connection, universe="topt", head=head, executed_at=CUTOFF, environment="test"
+    )
+
+    assert report["subjects"] == 21
+    close = report["families"]["close"]
+    assert (close["high"], close["cells"], close["agreement_rate"]) == (21, 21, "1.0000")
+    assert close["origins"] == ["origin:twelve-data:v1", "origin:yahoo:v1"]
+    assert report["accuracy"]["close"]["matches_quality_report"] is True
+    revenue = report["families"]["revenue"]
+    assert (revenue["low"], revenue["high"], revenue["medium"]) == (21, 0, 0)
+    assert revenue["origins"] == ["origin:sec-company-facts:v1"]
+    headcount = report["families"]["headcount"]
+    assert headcount["low"] == 21 and headcount["origins"] == ["origin:headcount:test-fixture"]
+    # The financial branch's numerator is the only one filled for a bank; the others are
+    # honest gaps, not zeros.
+    assert report["families"]["pre_provision_profit"]["low"] == 1
+    assert report["families"]["pre_provision_profit"]["missing"] == 20
+    # TOPT is not a filing fund: neither plane family is graded, rather than graded empty.
+    assert {"index_membership", "etf_weight"}.isdisjoint(report["families"])
+    assert set(report["sources_connected"]) == {"sec-company-facts", "test-fixture", "twelve-data", "yahoo"}
+    # Measured from the run's own rows (whether a semantic's stamp is constant is a fact
+    # about the data, asserted on production, not here) and never read by the bands.
+    stored = report["metadata"]["stored_confidence"]
+    assert stored["used_for_bands"] is False
+    assert set(stored["values_by_semantic"]) == {
+        "financial-fact",
+        "listing-identity",
+        "market-price",
+        "universe-membership",
+    }
+    # The sample names TOPT issuers the harness captured, with a value from each origin.
+    sample = report["sample"]["listing:xnys:jpm"]
+    assert sample["in_universe"] and sample["close"]["verdict"] == "high"
+    assert set(sample["close"]["values"]) == {"origin:twelve-data:v1", "origin:yahoo:v1"}
+    assert report["accuracy"]["sec_oracle"]["reason"] == "no_sec_user_agent"
+    report_id = confidence_report.persist(connection, report)
+    assert report_id.startswith("datahub-confidence-report:")
+
+
 def _cell_objects(connection, run_id: str) -> list[tuple[str, str]]:
     """(obligation_id, object_uri) for every landed pointer this run's cells rest on."""
     return connection.execute(

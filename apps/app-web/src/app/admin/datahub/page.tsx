@@ -31,6 +31,71 @@ export default async function AdminDatahubPage() {
       </p>
 
       <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Confidence &amp; accuracy (nightly)</h2>
+        <p className="text-sm text-gray-500">
+          Every (metric family, subject) cell of the governed head banded from what its origins asserted:
+          high = two independent origins reconciled agreed, medium = two origins present but no policy /
+          disagreement / one lineage, low = one origin, missing = none. The stored observation confidence
+          column is a constant and is not read. Agreement is judged only over compared cells.
+        </p>
+        {stats.confidence.length === 0 && (
+          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No confidence report yet.</p>
+        )}
+        {stats.confidence.map((report) => (
+          <div key={report.universe_id} className="rounded-lg border border-border bg-card p-4">
+            <div className="flex flex-wrap items-baseline gap-3">
+              <span className="font-mono">{report.universe_id}</span>
+              <span className="text-gray-400">cutoff {report.cutoff}</span>
+              <span className="text-gray-400">generated {report.generated_at}</span>
+              <span className="text-gray-400">
+                sources connected: {report.sources_connected.length} ({report.sources_connected.join(", ")})
+              </span>
+            </div>
+            <table className="mt-3 w-full text-left text-sm">
+              <thead>
+                <tr className="text-gray-500">
+                  <th className="pr-4 font-normal">family</th>
+                  <th className="pr-4 font-normal">high</th>
+                  <th className="pr-4 font-normal">medium</th>
+                  <th className="pr-4 font-normal">low</th>
+                  <th className="pr-4 font-normal">missing</th>
+                  <th className="pr-4 font-normal">agreement (compared)</th>
+                  <th className="font-normal">origins</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.families.map((family) => (
+                  <tr key={family.family} className="border-t border-border">
+                    <td className="pr-4 font-mono">{family.family}</td>
+                    <td className="pr-4">{family.high}</td>
+                    <td className="pr-4">{family.medium}</td>
+                    <td className="pr-4">{family.low}</td>
+                    <td className="pr-4">{family.missing}</td>
+                    <td className="pr-4">
+                      {family.agreement_rate ?? "—"} ({family.compared}/{family.cells})
+                    </td>
+                    <td className="font-mono text-gray-400">{family.origins.join(", ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-2 text-sm text-gray-400">
+              close outcomes match the quality report:{" "}
+              {report.close_matches_quality_report === null ? "—" : String(report.close_matches_quality_report)}
+              {" · "}SEC oracle: {report.oracle_issuers_compared} issuers re-derived
+              {report.oracle_fields.map((field) => (
+                <span key={field.field}>
+                  {" · "}
+                  <span className="font-mono">{field.field}</span> {field.agreed}/{field.compared} agree
+                </span>
+              ))}
+              {" · "}stored confidence used for bands: {String(report.stored_confidence_used_for_bands)}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-3">
         <h2 className="text-lg font-semibold">Question coverage (init.md §0, weekly)</h2>
         <p className="text-sm text-gray-500">
           Expected from the question registry, observed from the governed head&apos;s status dimensions.
