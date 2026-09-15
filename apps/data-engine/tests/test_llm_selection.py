@@ -146,6 +146,23 @@ def test_null_and_garbage_answers_decline_rather_than_guess(seated):
     )
     assert null.value is None and null.reason == "no total stated"
     assert garbage.value is None and "unparseable" in garbage.reason
+    # Valid JSON that is not the object asked for — a list, a number — is a refusal too, never
+    # a crash (#845: the theme parser died on a list-shaped answer and took the op with it).
+    for content in ('[{"value": 305}]', "305", "null"):
+        shaped = select_headcount(
+            _Conn(),
+            cik=1,
+            accession="c",
+            form="10-K",
+            issuer_label="X",
+            candidates=AEP,
+            caller="t",
+            transport=lambda *_, content=content: (
+                200,
+                json.dumps({"choices": [{"message": {"content": content}}], "usage": {}}).encode(),
+            ),
+        )
+        assert shaped.value is None and "unparseable" in shaped.reason, content
 
 
 def test_a_prior_invocation_is_replayed_without_calling_the_provider(seated):

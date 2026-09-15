@@ -68,6 +68,17 @@ def _answer(verdicts, served="glm-served"):
     return json.dumps(body).encode()
 
 
+def _raw_answer(content: str, served="glm-served"):
+    """A provider reply whose content is whatever the model wrote — not necessarily the object
+    the prompt shows (#845)."""
+    body = {
+        "model": served,
+        "choices": [{"message": {"content": content}}],
+        "usage": {"prompt_tokens": 300, "completion_tokens": 90, "total_tokens": 390},
+    }
+    return json.dumps(body).encode()
+
+
 def _transport(payload):
     def transport(url, headers, body):  # noqa: ARG001
         transport.request = json.loads(body)
@@ -167,6 +178,32 @@ def test_an_unparseable_answer_classifies_nothing(seated) -> None:
     result = _classify(_Conn(), _transport(json.dumps(body).encode()))
     assert result.verdicts == (None, None)
     assert "unparseable" in result.reasons[0]
+
+
+def test_a_list_shaped_answer_yields_its_well_formed_verdict_and_never_a_crash(seated) -> None:
+    """#845: the seated model answered 2 of 15 asks with a LIST — the prompt's own placeholder
+    echoed first, the verdict second — and `parsed.get` raised, which failed the whole
+    `run_theme_purity` op on staging. The items in each object are read under the same rules
+    (a real index, a boolean): the placeholder counts for nothing, the verdict counts once."""
+    one = ("Single reportable segment",)
+    echoed = json.dumps(
+        [
+            {"verdicts": [{"index": "int>", "in_theme": True, "reason": "one short sentence>"}]},
+            {"verdicts": [{"index": 0, "in_theme": False, "reason": "Company operates as one consolidated segment"}]},
+        ]
+    )
+    result = _classify(_Conn(), _transport(_raw_answer(echoed)), segments=one)
+    assert result.verdicts == (False,)
+    assert result.reasons == ("Company operates as one consolidated segment",)
+
+    for content in ('"yes"', "42", "null", "[1, 2]"):
+        result = _classify(_Conn(), _transport(_raw_answer(content)), segments=one)
+        assert result.verdicts == (None,), content
+        assert result.reasons[0].startswith("unparseable model answer"), content
+
+    # Readable, and answering nothing: an object whose `verdicts` is not a list.
+    result = _classify(_Conn(), _transport(_raw_answer('[{"verdicts": "none"}]')), segments=one)
+    assert (result.verdicts, result.reasons) == ((None,), ("",))
 
 
 def test_a_full_classification_is_recorded_with_the_task_s_own_identity(seated) -> None:
