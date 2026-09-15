@@ -6,6 +6,20 @@
       "candidates": 6,
       "filing_scale": "1000000",
       "declared_segments": null,
+      "tagged_segments": [
+        {
+          "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "members": [
+            "aapl:AmericasSegmentMember",
+            "aapl:EuropeSegmentMember",
+            "aapl:GreaterChinaSegmentMember",
+            "aapl:JapanSegmentMember",
+            "aapl:RestOfAsiaPacificSegmentMember"
+          ],
+          "sum": "416161000000",
+          "refusal": null
+        }
+      ],
       "accepted_partitions": [
         [
           "Americas",
@@ -20,19 +34,63 @@
       "windows": 18,
       "candidates": 32,
       "filing_scale": "1000000",
-      "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31"
+      "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31",
+      "tagged_segments": [
+        {
+          "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "members": [
+            "adm:AgServicesandOilseedsMember",
+            "adm:CarbohydrateSolutionsMember",
+            "adm:NutritionMember"
+          ],
+          "sum": "24507000000",
+          "refusal": null
+        },
+        {
+          "concept": "us-gaap:Revenues",
+          "members": [
+            "adm:AgServicesandOilseedsMember",
+            "adm:CarbohydrateSolutionsMember",
+            "adm:NutritionMember"
+          ],
+          "sum": "79820000000",
+          "refusal": null
+        }
+      ]
     },
     "ADP_10K_000000867026000030.html": {
       "windows": 6,
       "candidates": 18,
       "filing_scale": "1000000",
-      "declared_segments": "us-gaap:NumberOfReportableSegments=2@2026-06-30"
+      "declared_segments": "us-gaap:NumberOfReportableSegments=2@2026-06-30",
+      "tagged_segments": [
+        {
+          "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "members": [
+            "adp:EmployerServicesSegmentMember",
+            "adp:ProfessionalEmployeeOrganizationServicesSegmentMember"
+          ],
+          "sum": "21959500000.0",
+          "refusal": null
+        }
+      ]
     },
     "AVGO_10K_000173016825000121.html": {
       "windows": 4,
       "candidates": 12,
       "filing_scale": "1000000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=2@2025-11-02",
+      "tagged_segments": [
+        {
+          "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "members": [
+            "avgo:InfrastructureSoftwareMember",
+            "avgo:SemiconductorSolutionsMember"
+          ],
+          "sum": "63887000000",
+          "refusal": null
+        }
+      ],
       "accepted_partitions": [
         [
           "Semiconductor solutions",
@@ -44,43 +102,71 @@
       "windows": 0,
       "candidates": 0,
       "filing_scale": "1000",
-      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31"
+      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31",
+      "tagged_segments": []
     },
     "DUOL_10K_000162828026012494.html": {
       "windows": 0,
       "candidates": 0,
       "filing_scale": "1000",
-      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31"
+      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31",
+      "tagged_segments": []
     },
     "JPM_10K_000162828026008131.html": {
       "windows": 0,
       "candidates": 0,
       "filing_scale": "1000000",
-      "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31"
+      "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31",
+      "tagged_segments": [
+        {
+          "concept": "us-gaap:RevenuesNetOfInterestExpense",
+          "members": [
+            "jpm:AssetandWealthManagementSegmentMember",
+            "jpm:CommercialAndInvestmentBankMember",
+            "jpm:ConsumerCommunityBankingMember"
+          ],
+          "sum": "178556000000",
+          "refusal": null
+        }
+      ]
     },
     "NICE_20F_000100393526000010.html": {
       "windows": 0,
       "candidates": 0,
       "filing_scale": "1000000",
-      "declared_segments": "us-gaap:NumberOfReportableSegments=2@2025-12-31"
+      "declared_segments": "us-gaap:NumberOfReportableSegments=2@2025-12-31",
+      "tagged_segments": [
+        {
+          "concept": "us-gaap:Revenues",
+          "members": [
+            "nice:CustomerEngagementMember",
+            "nice:FinancialCrimeAndComplianceSolutionsMember"
+          ],
+          "sum": "2945399000",
+          "refusal": null
+        }
+      ]
     },
     "PLUG_10KA_000155837022003577.html": {
       "windows": 0,
       "candidates": 0,
       "filing_scale": "1000",
-      "declared_segments": null
+      "declared_segments": null,
+      "tagged_segments": []
     },
     "PLUG_10K_000155837021007147.html": {
       "windows": 0,
       "candidates": 0,
       "filing_scale": "1000",
-      "declared_segments": null
+      "declared_segments": null,
+      "tagged_segments": []
     },
     "SHOP_10K_000159480526000007.html": {
       "windows": 0,
       "candidates": 0,
       "filing_scale": "1000000",
-      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31"
+      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31",
+      "tagged_segments": []
     }
   }
 }

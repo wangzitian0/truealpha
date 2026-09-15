@@ -41,6 +41,7 @@ from data_engine.datahub.standards.segment_extraction import (
     declared_segment_count,
     filing_scale,
     segment_candidates,
+    tagged_segment_revenues,
     windows_of,
 )
 from factors.shared.extraction import Partition, select_exhaustive_partition
@@ -67,6 +68,17 @@ def _measure(path: Path) -> dict:
         "candidates": len(recalled),
         "filing_scale": str(scale) if scale is not None else None,
         "declared_segments": declared.evidence if declared is not None else None,
+        # #830: what the tagged segment revenue yields, per concept — a change to the reader
+        # shows which filings it moved, like every other field here.
+        "tagged_segments": [
+            {
+                "concept": tagged.concept,
+                "members": [member for member, _ in tagged.parts],
+                "sum": str(sum((value for _, value in tagged.parts), Decimal(0))),
+                "refusal": tagged.refusal,
+            }
+            for tagged in tagged_segment_revenues(body)
+        ],
     }
     total = TOTALS.get(path.name)
     if total and recalled:
@@ -172,3 +184,19 @@ def test_the_single_segment_declaration_is_measured_per_filing(committed) -> Non
     assert declared["SHOP"] == "us-gaap:NumberOfReportableSegments=1@2025-12-31"
     assert declared["AVGO"] == "us-gaap:NumberOfReportableSegments=2@2025-11-02"
     assert declared["PLUG"] is None
+
+
+def test_the_tagged_segment_revenue_is_measured_per_filing(committed) -> None:
+    """#830: segment revenue the filer tags is read before any table, so what the reader makes of
+    each packaged filing is pinned like recall is. AAPL and AVGO balance their oracles; ADM's
+    three tagged segments are short of its revenue by the off-axis "Other Business"."""
+    by_ticker = {name.split("_")[0]: entry["tagged_segments"] for name, entry in committed.items()}
+    (aapl,) = by_ticker["AAPL"]
+    assert aapl["sum"] == TOTALS["AAPL_10K_000032019325000079.html"]
+    (avgo,) = by_ticker["AVGO"]
+    assert avgo["sum"] == TOTALS["AVGO_10K_000173016825000121.html"]
+    assert {entry["concept"] for entry in by_ticker["ADM"]} == {
+        "us-gaap:Revenues",
+        "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+    }
+    assert by_ticker["DDOG"] == [], "a single-segment filer tags no segment revenue"
