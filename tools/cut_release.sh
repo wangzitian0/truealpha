@@ -17,6 +17,17 @@
 # --dry-run performs every read-only assertion and prints the plan.
 # Without --prod it stops after a verified staging deploy; rerun with --prod to
 # promote (the staging run URL is printed for it).
+#
+# Promotion policy (#819) — deploy-freshness.yml and tools/deploy_freshness.py
+# bound the same policy, so the three files must agree:
+#   - every tag soaks staging: the staging deploy below is unconditional, and
+#     because step 3 requires a named PR's merge commit to BE main HEAD, that
+#     is one tag per merged PR;
+#   - prod moves only with --prod: the owner promotes deliberately, so prod
+#     lags staging by design and several tags can soak before one is promoted;
+#   - the daily freshness check bounds that lag at staging 3 days and
+#     production 14 days. Past the bound the leg is red and files an issue
+#     (#680); the answer is a --prod run, not a wider bound.
 set -euo pipefail
 
 REPO="wangzitian0/truealpha"
