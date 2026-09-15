@@ -133,9 +133,10 @@ def _descriptions_for(parts: list[tuple[str, Decimal]], evidence_ref: str) -> tu
     """What to show the classifier for each part.
 
     The segment's own name for a real segment table. For the one-part partition of an issuer
-    that states it has a single segment, the filing's sentence instead — the label on that
-    row is `Single reportable segment`, which is unjudgeable, and handing it to a model
-    guarantees a decline for every pure-play.
+    that declares a single segment, the filing's sentence instead — the label on that row is
+    `Single reportable segment`, which is unjudgeable, and handing it to a model guarantees a
+    decline for every pure-play. The sentence is description only: the declaration that
+    decided the partition is the tagged count before it on the row (#822).
     """
     marker = evidence_ref.find(_SINGLE_SEGMENT_MARKER)
     if len(parts) == 1 and marker != -1:
