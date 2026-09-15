@@ -1079,6 +1079,14 @@ def test_a_malformed_note_is_read_as_far_as_it_is_well_formed_and_no_further() -
         "what was read before the unreadable part stands; the part itself is not guessed at"
     )
 
+    # Three page breaks between the heading and the sentence: parts that hold only markup are
+    # neither a word gap nor length, so a limit the sentence would fit under is not spent on them.
+    page_breaks = _ixbrl(
+        *_segment_note("Segment Information", "<hr/>", "<hr/>", "<hr/>", "We have one reportable segment."),
+        contexts=contexts,
+    )
+    assert InlineXbrl(page_breaks).text_block(note, limit=23) == "Segment Information We "
+
 
 def test_visas_description_is_its_segment_note_not_the_sentence_its_count_is_tagged_in(monkeypatch) -> None:
     """#841 on the packaged filing the row was landed from (staging, v0.0.58–v0.0.60): the count
