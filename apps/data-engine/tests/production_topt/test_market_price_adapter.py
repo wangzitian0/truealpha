@@ -181,3 +181,66 @@ def test_price_confidence_grades_by_session_lag() -> None:
     assert graded_price_confidence(as_of=friday, expected_session=next_monday) == _D("0.75")
     # Deep staleness floors at 0.50 rather than going negative.
     assert graded_price_confidence(as_of=_date(2026, 7, 1), expected_session=tuesday) == _D("0.50")
+
+
+def test_success_payload_carries_the_full_ohlcv_bar_from_both_origins() -> None:
+    """Only `close` reached the payload until now, so the confidence report could grade
+    exactly one price metric HIGH. Both vendors send the whole daily bar; the primary AND
+    the corroborating assertion must carry open/high/low/volume as base-10 strings so the
+    fusion engine can reconcile each field on its own."""
+    from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin
+
+    item = _work_item("9" * 64)
+    bar = MarketPriceQuote(
+        raw_bytes=b"GOOG:2026-03-31:bar",
+        close=Decimal("150.25"),
+        as_of=date(2026, 3, 31),
+        knowable_at=datetime(2026, 3, 31, tzinfo=UTC),
+        open=Decimal("149.10"),
+        high=Decimal("151.00"),
+        low=Decimal("148.75"),
+        volume=Decimal("28186700"),
+    )
+    second = CorroboratingOrigin(
+        origin="twelve-data",
+        parser_version="twelve-data-parser:v3",
+        mapping_version="twelve-data-map:v3",
+        value_key="close",
+        confidence=Decimal("0.85"),
+        fetch=lambda symbol, cutoff: bar,
+    )
+    adapter = MarketPriceAdapter(
+        {
+            item.work_item_id: MarketPriceTarget(
+                "GOOG", _CUTOFF, "issuer:lei:X", "security:cusip:Y", "listing:xnas:goog"
+            )
+        },
+        lambda symbol, cutoff: bar,
+        corroborating_origins=(second,),
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record is not None
+    expected = {"open": "149.10", "high": "151.00", "low": "148.75", "close": "150.25", "volume": "28186700"}
+    assert {key: result.record.payload[key] for key in expected} == expected
+    assert result.corroborations, "the second origin must corroborate the same bar"
+    assert {key: result.corroborations[0].record.payload[key] for key in expected} == expected
+    for payload in (result.record.payload, result.corroborations[0].record.payload):
+        assert not any(isinstance(value, float) for value in payload.values()), "binary float reached a payload"
+
+
+def test_a_bar_field_the_vendor_did_not_send_is_an_explicit_null() -> None:
+    """A key that is absent and a key that is null are different claims: the payload
+    always carries the four bar keys, so a null under this vintage means "the source
+    asserted nothing" rather than "nobody asked" (the v6/v7 lesson in parser_identity)."""
+    item = _work_item("a" * 64)
+    adapter = _adapter(item, lambda symbol, cutoff: _quote(date(2026, 3, 31), "150.25"))
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record is not None
+    assert {key: result.record.payload[key] for key in ("open", "high", "low", "volume")} == {
+        "open": None,
+        "high": None,
+        "low": None,
+        "volume": None,
+    }

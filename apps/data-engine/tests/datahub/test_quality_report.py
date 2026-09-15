@@ -508,3 +508,190 @@ def test_factor_availability_with_no_graded_subjects_is_zero() -> None:
 
     out = _factor_availability({})
     assert out["gross_profit_per_employee"]["ratio"] == "0"
+
+
+# -- every bar field is its own reconciliation cell -------------------------------------
+
+
+def _bar_entry(source_id: str, day: str, **values: str | None):
+    """A market-price observation carrying the whole bar (the parser v10 / twelve-data
+    v3 payload shape) as `_reconcile_market_price_cells` folds it."""
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    origin = "origin:yahoo:v1" if source_id == "yahoo-chart:v1" else "origin:twelve-data:v1"
+    bar = {"open": None, "high": None, "low": None, "close": None, "volume": None, **values}
+    return (
+        source_id,
+        datetime.fromisoformat(day).replace(tzinfo=UTC),
+        Decimal("0.85"),
+        hashlib.sha256(f"{source_id}:{day}:{sorted(bar.items())}".encode()).hexdigest(),
+        "normalized-observation:" + hashlib.sha256(f"{source_id}{day}".encode()).hexdigest(),
+        "source-vintage:" + "a" * 64,
+        "raw-object:" + "b" * 64,
+        {"origin_group": origin, "values": bar},
+    )
+
+
+def _reconcile(entries):
+    from datetime import UTC, date, datetime
+
+    from data_engine.datahub.quality_report import reconcile_price_bar
+
+    return reconcile_price_bar(
+        "listing:xnas:aapl",
+        entries,
+        partition=date(2026, 8, 14),
+        cutoff=datetime(2026, 8, 15, 4, 30, tzinfo=UTC),
+    )
+
+
+def test_each_bar_field_gets_its_own_outcome_under_its_own_policy() -> None:
+    """The 2026-08-14 AAPL cassette pair, as fusion grades it: five fields, five cells,
+    five agreed outcomes — the report can now say more than one metric is HIGH."""
+    from data_engine.datahub.quality_report import (
+        FIELD_RECONCILIATION_POLICIES,
+        RECONCILIATION_POLICY,
+        VOLUME_RECONCILIATION_POLICY,
+    )
+
+    cell = _reconcile(
+        [
+            _bar_entry(
+                "yahoo-chart:v1",
+                "2026-08-14",
+                open="306.00",
+                high="307.49",
+                low="304.30",
+                close="305.93",
+                volume="28186700",
+            ),
+            _bar_entry(
+                "twelve-data:v1",
+                "2026-08-14",
+                open="306",
+                high="307.48999",
+                low="304.29999",
+                close="305.92999",
+                volume="28186700",
+            ),
+        ]
+    )
+    assert set(cell["fields"]) == {"open", "high", "low", "close", "volume"}
+    assert {field: grade["outcome"] for field, grade in cell["fields"].items()} == dict.fromkeys(
+        ("open", "high", "low", "close", "volume"), "agreed"
+    )
+    assert all(grade["origin_groups"] == 2 for grade in cell["fields"].values())
+    assert cell["fields"]["volume"]["policy_id"] == VOLUME_RECONCILIATION_POLICY.policy_id
+    assert cell["fields"]["open"]["policy_id"] == RECONCILIATION_POLICY.policy_id
+    assert FIELD_RECONCILIATION_POLICIES["close"] is RECONCILIATION_POLICY
+    # The headline keys stay the close's grade, byte-for-byte what the a1 gate and the
+    # admin page read today.
+    assert {k: cell[k] for k in ("outcome", "origin_groups", "selected_source", "selected_value", "conflicting")} == {
+        "outcome": "agreed",
+        "origin_groups": 2,
+        "selected_source": "yahoo-chart:v1",
+        "selected_value": "305.93",
+        "conflicting": 0,
+    }
+
+
+def test_a_volume_conflict_does_not_touch_the_close_grade() -> None:
+    """One field's disagreement is that field's finding. A primary-listing-only volume
+    (roughly half the consolidated tape) conflicts on `volume` while every price field,
+    and the headline outcome the pointer gate reads, stays agreed."""
+    cell = _reconcile(
+        [
+            _bar_entry(
+                "yahoo-chart:v1",
+                "2026-08-14",
+                open="306.00",
+                high="307.49",
+                low="304.30",
+                close="305.93",
+                volume="28186700",
+            ),
+            _bar_entry(
+                "twelve-data:v1",
+                "2026-08-14",
+                open="306",
+                high="307.48999",
+                low="304.29999",
+                close="305.92999",
+                volume="14500000",
+            ),
+        ]
+    )
+    assert cell["fields"]["volume"]["outcome"] == "conflict_abstained"
+    assert cell["fields"]["volume"]["conflicting"] == 1
+    assert cell["fields"]["close"]["outcome"] == "agreed"
+    assert cell["outcome"] == "agreed"
+
+
+def test_a_field_one_origin_did_not_assert_is_single_origin_for_that_field_only() -> None:
+    """A Twelve Data bar refused because a post-close print had moved it corroborates
+    close alone: open/high/low/volume grade insufficient_independent_origins, close
+    grades agreed. Nothing is inferred from a null."""
+    cell = _reconcile(
+        [
+            _bar_entry(
+                "yahoo-chart:v1",
+                "2026-08-14",
+                open="306.00",
+                high="307.49",
+                low="304.30",
+                close="305.93",
+                volume="28186700",
+            ),
+            _bar_entry("twelve-data:v1", "2026-08-14", close="305.92999"),
+        ]
+    )
+    assert cell["fields"]["close"]["outcome"] == "agreed"
+    for field in ("open", "high", "low", "volume"):
+        assert cell["fields"][field]["outcome"] == "insufficient_independent_origins", field
+        assert cell["fields"][field]["origin_groups"] == 1
+        assert cell["fields"][field]["selected_source"] == "yahoo-chart:v1"
+
+
+def test_a_field_no_origin_asserted_is_unavailable_not_agreed() -> None:
+    """Observations written before parser v10 carry no bar at all; a report rebuilt
+    over such a run must say the field is unavailable — never that two nulls agree."""
+    cell = _reconcile(
+        [
+            _bar_entry("yahoo-chart:v1", "2026-08-14", close="305.93"),
+            _bar_entry("twelve-data:v1", "2026-08-14", close="305.92999"),
+        ]
+    )
+    assert cell["outcome"] == "agreed"
+    for field in ("open", "high", "low", "volume"):
+        assert cell["fields"][field]["outcome"] == "unavailable", field
+        assert cell["fields"][field]["origin_groups"] == 0
+        assert cell["fields"][field]["selected_value"] is None
+
+
+def test_the_volume_tolerance_absorbs_late_prints_and_still_catches_a_different_quantity() -> None:
+    """The declared volume policy: 2% absorbs a consolidated tape still absorbing late
+    prints (the settled bars on the cassette pair agree exactly), while a
+    primary-listing-only figure — the different quantity a volume mix-up produces —
+    stays a conflict by an order of magnitude."""
+    from decimal import Decimal
+
+    from data_engine.datahub.quality_report import VOLUME_RECONCILIATION_POLICY
+
+    assert VOLUME_RECONCILIATION_POLICY.relative_tolerance == Decimal("0.02")
+    assert VOLUME_RECONCILIATION_POLICY.absolute_tolerance == Decimal("0")
+    assert VOLUME_RECONCILIATION_POLICY.policy_version == "market-volume-fusion:v1"
+    late_prints = _reconcile(
+        [
+            _bar_entry("yahoo-chart:v1", "2026-08-14", close="305.93", volume="28186700"),
+            _bar_entry("twelve-data:v1", "2026-08-14", close="305.92999", volume="28600000"),  # +1.47%
+        ]
+    )
+    assert late_prints["fields"]["volume"]["outcome"] == "agreed"
+    primary_listing_only = _reconcile(
+        [
+            _bar_entry("yahoo-chart:v1", "2026-08-14", close="305.93", volume="28186700"),
+            _bar_entry("twelve-data:v1", "2026-08-14", close="305.92999", volume="26000000"),  # -7.8%
+        ]
+    )
+    assert primary_listing_only["fields"]["volume"]["outcome"] == "conflict_abstained"

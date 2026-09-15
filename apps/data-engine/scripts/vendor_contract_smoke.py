@@ -75,6 +75,14 @@ def check_yahoo() -> None:
             f"{newest.date} close {newest.close}",
         )
         _check("yahoo: newest bar is recent", today - newest.date <= timedelta(days=7), str(newest.date))
+        # Parser v10 asserts the whole bar; a chart that stopped carrying one of these
+        # would land four honest nulls per cell and every bar field single-origin.
+        _check(
+            "yahoo: newest bar carries open/high/low as Decimal and an integer volume",
+            all(isinstance(value, Decimal) for value in (newest.open, newest.high, newest.low))
+            and isinstance(newest.volume, int),
+            f"open {newest.open} high {newest.high} low {newest.low} volume {newest.volume}",
+        )
 
 
 def check_twelve_data() -> None:
@@ -102,15 +110,25 @@ def check_twelve_data() -> None:
         key,
     )
     ok_rows = False
+    ok_bar = False
     detail = f"status {status}"
+    bar_detail = detail
     if status == 200:
         try:
             rows = json.loads(body).get("values", [])
             ok_rows = bool(rows) and all("datetime" in r and isinstance(r.get("close"), str) for r in rows)
             detail = f"{len(rows)} rows, close is a string"
+            # The twelve-data v3 assumption: the bar the origin attaches to a settled
+            # close lives on these rows as strings (volume documented optional; for a
+            # US common stock it is present).
+            ok_bar = bool(rows) and all(
+                isinstance(r.get(key), str) for r in rows for key in ("open", "high", "low", "volume")
+            )
+            bar_detail = f"{len(rows)} rows carry open/high/low/volume as strings"
         except json.JSONDecodeError:
-            detail = "body not JSON"
+            detail = bar_detail = "body not JSON"
     _check("twelvedata: time_series rows carry datetime + string close", ok_rows, detail)
+    _check("twelvedata: time_series rows carry the open/high/low/volume bar as strings", ok_bar, bar_detail)
 
     # A settled session must resolve through /eod directly (the primary path).
     weekday = datetime.now(UTC).date() - timedelta(days=1)

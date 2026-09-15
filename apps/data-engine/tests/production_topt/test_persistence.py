@@ -78,11 +78,19 @@ def connection():
 
 def _quote(close: str) -> MarketPriceQuote:
     day = date(2026, 3, 31)
+    price = Decimal(close)
     return MarketPriceQuote(
         raw_bytes=f"bar:{day}:{close}".encode(),
-        close=Decimal(close),
+        close=price,
         as_of=day,
         knowable_at=datetime.combine(day, datetime.min.time(), tzinfo=UTC),
+        # The rest of the bar, derived from the close so the fixture carries no second
+        # literal that has to stay consistent with it: open at the close, high/low a
+        # dollar either side, one fixed share count.
+        open=price,
+        high=price + Decimal("1"),
+        low=price - Decimal("1"),
+        volume=Decimal("1000000"),
     )
 
 
@@ -390,6 +398,32 @@ def test_second_origin_reaches_two_independent_origins(connection) -> None:
     two_origin_cells = [cell for cell in report["reconciliation_cells"].values() if cell["origin_groups"] >= 2]
     assert len(two_origin_cells) == 21
     assert Decimal(report["independent_reconciliation"]) > 0
+
+
+def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
+    """The report grades five fields per market-price cell, each from two real
+    assertions written through the deployed sink and read back through the deployed
+    report — not only the close. This is the standing check behind "several metrics
+    at HIGH confidence": each field's `agreed` count is the number of listings whose
+    two origins agreed on THAT field."""
+    plan = _capture(connection, version="test-ohlcv-recon", corroborate=True)
+    report = quality_report.build_report(connection, plan.run_id)
+    cells = report["reconciliation_cells"]
+    graded = len(cells)
+    assert graded == 21
+    for field in quality_report.PRICE_BAR_FIELDS:
+        outcomes = {cell["fields"][field]["outcome"] for cell in cells.values()}
+        assert outcomes == {"agreed"}, (field, outcomes)
+        assert {cell["fields"][field]["origin_groups"] for cell in cells.values()} == {2}, field
+        assert report["field_reconciliation"][field] == {
+            "agreed": graded,
+            "cells": graded,
+            "share": "1.0000",
+            "policy_id": quality_report.FIELD_RECONCILIATION_POLICIES[field].policy_id,
+        }
+    assert report["field_reconciliation"]["volume"]["policy_id"] != report["field_reconciliation"]["close"]["policy_id"]
+    # The headline keys are still the close's grade — what the a1 gate reads.
+    assert all(cell["outcome"] == cell["fields"]["close"]["outcome"] for cell in cells.values())
 
 
 def _cell_objects(connection, run_id: str) -> list[tuple[str, str]]:

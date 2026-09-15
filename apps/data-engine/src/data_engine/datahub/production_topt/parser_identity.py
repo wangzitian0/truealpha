@@ -38,6 +38,7 @@ PARSER_VERSION_HISTORY = (
     "production-topt-live-parser:v7",
     "production-topt-live-parser:v8",
     "production-topt-live-parser:v9",
+    "production-topt-live-parser:v10",
 )
 MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v1",
@@ -49,6 +50,7 @@ MAPPING_VERSION_HISTORY = (
     "production-topt-live-map:v7",
     "production-topt-live-map:v8",
     "production-topt-live-map:v9",
+    "production-topt-live-map:v10",
 )
 
 PARSER_VERSION = PARSER_VERSION_HISTORY[-1]
@@ -138,3 +140,14 @@ MAPPING_VERSION = MAPPING_VERSION_HISTORY[-1]
 # v9 payload whose financial side was filed after its operating side is knowable later than
 # the v8 payload was — a different, more honest claim, not a changed number. v9 additionally
 # asserts where each number came from and what the issuer's financial side earns and holds.
+
+# v9 -> v10: the market-price payload gains the rest of the session's bar — `open`, `high`,
+# `low`, `volume` — from the primary (Yahoo's float32 undone at the parse boundary exactly
+# as `close` already was; volume an exact share count), so the quality report can grade
+# each field as its own two-origin cell instead of only the close. `close` does not move:
+# a v9 and a v10 payload agree on every number they share. It takes a version because the
+# four keys are ALWAYS written under v10 and null where the vendor asserted nothing, so a
+# v10 null and a v9 absence are different claims (the v6/v7 distinction above), and because
+# observation reuse never crosses a vintage (#788) — the first v10 tick recaptures every
+# cell rather than reusing a bar-less v9 observation. The financial-fact and identity
+# payloads are unchanged in value; they take v10 because the identity is shared (header).

@@ -124,3 +124,67 @@ def test_the_two_origins_agree_within_the_declared_tolerance() -> None:
         abs(yahoo_close), abs(twelve.close)
     )
     assert abs(yahoo_close - twelve.close) <= tolerance
+
+
+# -- the whole bar, not just the close --------------------------------------------------
+#
+# Both cassettes carry open/high/low/volume for the 2026-08-14 session. What the
+# deployed parsers must now write for these exact bytes (Yahoo after float32
+# recovery, Twelve Data verbatim):
+#   yahoo      open 306.00  high 307.49     low 304.30     close 305.93     volume 28186700
+#   twelvedata open 306     high 307.48999  low 304.29999  close 305.92999  volume 28186700
+
+
+def _yahoo_quote():
+    from data_engine.datahub.production_topt.market_price_adapter import quote_from_chart
+
+    body = _bytes(_YAHOO)
+    bars = _parse_chart_response(json.loads(body, parse_float=Decimal))
+    return quote_from_chart(body, bars, cutoff=_PARTITION)
+
+
+def test_yahoo_quote_carries_the_bar_the_production_bytes_encode() -> None:
+    """The deployed fetcher's quote — the thing the adapter turns into a payload —
+    carries the recovered bar, not only its close."""
+    quote = _yahoo_quote()
+    assert quote is not None and quote.as_of == date(2026, 8, 14)
+    assert (quote.open, quote.high, quote.low, quote.close) == (
+        Decimal("306.00"),
+        Decimal("307.49"),
+        Decimal("304.30"),
+        Decimal("305.93"),
+    )
+    assert quote.volume == Decimal("28186700")
+    assert quote.raw_bytes == _bytes(_YAHOO)
+
+
+def test_twelve_data_settled_row_carries_the_bar_the_production_bytes_encode() -> None:
+    quote = parse_last_settled_close(_bytes(_TWELVE), partition=_PARTITION)
+    assert quote is not None and quote.as_of == date(2026, 8, 14)
+    assert (quote.open, quote.high, quote.low, quote.close) == (
+        Decimal("306"),
+        Decimal("307.48999"),
+        Decimal("304.29999"),
+        Decimal("305.92999"),
+    )
+    assert quote.volume == Decimal("28186700")
+
+
+def test_every_bar_field_agrees_within_its_declared_tolerance_over_real_bytes() -> None:
+    """Per-field fusion over real bytes: each of the five fields under the policy that
+    grades it in production. Volume is the field whose tolerance is not the price
+    tolerance — consolidated-tape volumes are the vendor's own aggregation — so its
+    observed spread on the settled bar is measured here, not assumed: it is zero."""
+    from data_engine.datahub.quality_report import FIELD_RECONCILIATION_POLICIES, PRICE_BAR_FIELDS
+
+    yahoo = _yahoo_quote()
+    twelve = parse_last_settled_close(_bytes(_TWELVE), partition=_PARTITION)
+    assert yahoo is not None and twelve is not None
+    assert set(PRICE_BAR_FIELDS) == {"open", "high", "low", "close", "volume"}
+    for field in PRICE_BAR_FIELDS:
+        policy = FIELD_RECONCILIATION_POLICIES[field]
+        left, right = getattr(yahoo, field), getattr(twelve, field)
+        assert left is not None and right is not None, field
+        tolerance = policy.absolute_tolerance + policy.relative_tolerance * max(abs(left), abs(right))
+        assert abs(left - right) <= tolerance, f"{field}: {left} vs {right} exceeds {policy.policy_version}"
+    assert yahoo.volume == twelve.volume, "the settled consolidated volumes are identical on these bytes"

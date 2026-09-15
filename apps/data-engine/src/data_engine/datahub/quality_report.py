@@ -13,6 +13,13 @@ assertions are reconciled under a declared tolerance/priority policy, the
 per-cell outcome is persisted in the report payload, and only AGREED cells
 count as independently reconciled — a raw origin count never does.
 
+Every field of the price bar is its own reconciliation cell (`reconcile_price_bar`):
+open, high, low and close under the price policy, volume under its own. A cell's
+headline outcome stays the close's (the served value, what the a1 pointer gate and
+the admin page read); the per-field grades sit under `fields` and are summarised in
+`field_reconciliation`, so the report can say how many metrics — not how many
+cells — reached two agreeing origins.
+
 `availability` and `lineage_completeness` are falsifiable (#537): each is
 computed from the thing a row claims rather than from the row existing. Both
 metrics used to read `1.0000` no matter what the run actually produced —
@@ -27,7 +34,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -77,6 +84,40 @@ RECONCILIATION_POLICY = ReconciliationPolicy(
     relative_tolerance=Decimal("0.003"),
     minimum_independent_origin_groups=2,
 )
+# Volume is not a price. It is each vendor's own aggregation of the consolidated tape,
+# and it settles later than the prices do (late prints, corrections), so it gets its
+# own policy rather than the 30bp one. The number is measured where it can be: the
+# settled 2026-08-14 AAPL bars on the cassette pair agree EXACTLY on volume
+# (28,186,700 from both vendors, `test_real_vendor_bytes`), so the tolerance exists
+# for the same-evening capture, where the primary's consolidated figure is still
+# absorbing late prints. 2% (200bp) covers that regime with margin, while a
+# primary-listing-only count — roughly half the consolidated tape, the different
+# quantity a volume mix-up produces — stays a conflict by an order of magnitude.
+# Provisional the way the price policy's v1 was: the staging soak measures the real
+# spread and this number moves from that measurement, in a version (#719's lesson).
+# A volume conflict never touches the close's grade, so miscalibration here cannot
+# freeze the governed pointer the way #719's did.
+VOLUME_RECONCILIATION_POLICY = ReconciliationPolicy(
+    policy_version="market-volume-fusion:v1",
+    source_priority=RECONCILIATION_POLICY.source_priority,
+    absolute_tolerance=Decimal("0"),
+    relative_tolerance=Decimal("0.02"),
+    minimum_independent_origin_groups=2,
+)
+# The served value: its grade is the cell's headline outcome.
+_HEADLINE_FIELD = "close"
+# Every field of the session's bar, each reconciled as its own cell under its own
+# policy. Open/high/low are the same quantity class as close, from the same two
+# tapes, and share its policy.
+PRICE_BAR_FIELDS: tuple[str, ...] = ("open", "high", "low", "close", "volume")
+FIELD_RECONCILIATION_POLICIES: dict[str, ReconciliationPolicy] = {
+    "open": RECONCILIATION_POLICY,
+    "high": RECONCILIATION_POLICY,
+    "low": RECONCILIATION_POLICY,
+    "close": RECONCILIATION_POLICY,
+    "volume": VOLUME_RECONCILIATION_POLICY,
+}
+_FIELD_UNITS: dict[str, str] = {"open": "USD", "high": "USD", "low": "USD", "close": "USD", "volume": "shares"}
 # Which origin group each parser vintage's observations belong to.
 #
 # EVERY primary vintage is enumerated, not just the current one, and the enumeration comes
@@ -414,6 +455,7 @@ def build_report(
     fresh = sum(1 for cell in cells.values() if cell.fresh)
     reconciliation = _reconcile_market_price_cells(conn, run_id)
     independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
+    field_reconciliation = _field_reconciliation(reconciliation)
     confidences = [cell.confidence for cell in cells.values() if cell.confidence is not None]
     mean_conf = (sum(confidences) / requested) if requested else Decimal(0)
 
@@ -423,6 +465,7 @@ def build_report(
     return {
         "reconciliation_policy_id": RECONCILIATION_POLICY.policy_id,
         "reconciliation_cells": reconciliation,
+        "field_reconciliation": field_reconciliation,
         "plausibility_cells": plausibility,
         "implausible_count": sum(1 for cell in plausibility.values() if cell["outcome"] == "implausible"),
         "run_id": run_id,
@@ -473,16 +516,96 @@ def _served_day_assertions(
     return [entry for entry in entries if entry[1].date() == anchor.date()]
 
 
+def _field_reconciliation(cells: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per bar field: how many graded market-price cells reached AGREED, over every
+    graded cell — the figure that answers "how many metrics are HIGH". The headline
+    `independent_reconciliation` stays the close's, over the full requested denominator."""
+    graded = len(cells)
+    out: dict[str, dict[str, Any]] = {}
+    for field in PRICE_BAR_FIELDS:
+        agreed = sum(
+            1 for cell in cells.values() if cell["fields"][field]["outcome"] == ReconciliationOutcome.AGREED.value
+        )
+        share = (Decimal(agreed) / Decimal(graded)).quantize(Decimal("0.0001")) if graded else Decimal(0)
+        out[field] = {
+            "agreed": agreed,
+            "cells": graded,
+            "share": str(share),
+            "policy_id": FIELD_RECONCILIATION_POLICIES[field].policy_id,
+        }
+    return out
+
+
+def reconcile_price_bar(
+    listing_id: str,
+    entries: list[tuple[str, Any, Decimal, str, str, str, str, dict]],
+    *,
+    partition: date,
+    cutoff: datetime,
+) -> dict[str, Any]:
+    """One listing's served-day assertions, reconciled one bar field at a time.
+
+    Each field is its own `ReconciliationCell` (its own semantics id, unit and policy)
+    and an origin contributes an assertion to a field only when its payload carries a
+    value for it: a field one origin left null grades `insufficient_independent_origins`
+    for that field alone; a field no origin asserted grades `unavailable`; two nulls
+    never agree. The returned cell keeps the close's grade under the headline keys the
+    a1 gate and the admin page read, with every field's grade under `fields`.
+    """
+    fields: dict[str, dict[str, Any]] = {}
+    for field in PRICE_BAR_FIELDS:
+        policy = FIELD_RECONCILIATION_POLICIES[field]
+        cell = ReconciliationCell(
+            requirement_id=f"data-requirement:{canonical_sha256({'requirement': 'market-price:v1'})}",
+            subject=SubjectRef(kind=SubjectKind.LISTING, id=listing_id),
+            field_name=field,
+            field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'market-price-{field}:v1'})}",
+            unit=_FIELD_UNITS[field],
+            valid_from=partition,
+            valid_to=cutoff.date(),
+        )
+        assertions = tuple(
+            SourceAssertion(
+                cell_id=cell.cell_id,
+                observation_id=obs_id,
+                source_id=source_id,
+                origin_group_id=extra["origin_group"],
+                knowable_at=knowable_at,
+                normalized_value_sha256=payload_sha,
+                numeric_value=Decimal(str(extra["values"][field])),
+                confidence_assessment_id=f"confidence-assessment:{payload_sha}",
+                confidence_score=confidence,
+                lineage_node_ids=(vintage_id, raw_object),
+                lineage_complete=True,
+            )
+            for source_id, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, extra in entries
+            if extra["values"].get(field) is not None
+        )
+        result = reconcile_source_assertions(cell=cell, assertions=assertions, policy=policy, cutoff=cutoff)
+        fields[field] = {
+            "outcome": result.outcome.value,
+            "origin_groups": len(result.origin_group_ids),
+            "selected_source": next(
+                (a.source_id for a in assertions if a.assertion_id == result.selected_assertion_id), None
+            ),
+            "selected_value": None if result.selected_numeric_value is None else str(result.selected_numeric_value),
+            "conflicting": len(result.conflicting_assertion_ids),
+            "policy_id": policy.policy_id,
+        }
+    headline = {key: value for key, value in fields[_HEADLINE_FIELD].items() if key != "policy_id"}
+    return {**headline, "fields": fields}
+
+
 def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) -> dict[str, dict[str, Any]]:
     """Run the accepted fusion engine over every market-price cell's assertions.
 
-    Each observation (Yahoo primary + Twelve Data second origin) becomes a
-    SourceAssertion; the declared policy reconciles them. Returns per-listing
-    outcomes for the report payload. Single-assertion cells honestly resolve
-    INSUFFICIENT_INDEPENDENT_ORIGINS — counting origins never reconciles values.
-    Assertions are first narrowed to the served bar's trading day
-    (`_served_day_assertions`) so a publication lag grades as a missing second
-    origin, never as a value conflict (#622).
+    Each observation (Yahoo primary + Twelve Data second origin) becomes one
+    SourceAssertion per bar field it carries; the field's declared policy reconciles
+    them (`reconcile_price_bar`). Returns per-listing outcomes for the report payload.
+    Single-assertion cells honestly resolve INSUFFICIENT_INDEPENDENT_ORIGINS —
+    counting origins never reconciles values. Assertions are first narrowed to the
+    served bar's trading day (`_served_day_assertions`) so a publication lag grades
+    as a missing second origin, never as a value conflict (#622).
     """
     status = conn.execute("select cutoff from mart.topt_capture_status where run_id = %s", (run_id,)).fetchone()
     if status is None:
@@ -515,6 +638,10 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
         value = payload.get(value_key)
         if value is None:
             continue
+        # The close under the origin's declared key (v1 of the second origin wrote
+        # `price`); every other bar field under its own name, absent on payloads
+        # written before parser v10 / twelve-data v3.
+        values = {field: (value if field == _HEADLINE_FIELD else payload.get(field)) for field in PRICE_BAR_FIELDS}
         by_listing.setdefault(subject_id, []).append(
             (
                 source_id,
@@ -524,50 +651,18 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
                 obs_id,
                 vintage_id,
                 raw_object,
-                {"origin_group": origin_group, "value": value},
+                {"origin_group": origin_group, "values": values},
             )
         )
 
     outcomes: dict[str, dict[str, Any]] = {}
     for listing_id, entries in sorted(by_listing.items()):
-        entries = _served_day_assertions(entries)
-        cell = ReconciliationCell(
-            requirement_id=f"data-requirement:{canonical_sha256({'requirement': 'market-price:v1'})}",
-            subject=SubjectRef(kind=SubjectKind.LISTING, id=listing_id),
-            field_name="close",
-            field_semantics_id=f"field-semantics:{canonical_sha256({'field': 'market-price-close:v1'})}",
-            unit="USD",
-            valid_from=partition or cutoff.date(),
-            valid_to=cutoff.date(),
+        outcomes[listing_id] = reconcile_price_bar(
+            listing_id,
+            _served_day_assertions(entries),
+            partition=partition or cutoff.date(),
+            cutoff=cutoff,
         )
-        assertions = tuple(
-            SourceAssertion(
-                cell_id=cell.cell_id,
-                observation_id=obs_id,
-                source_id=source_id,
-                origin_group_id=extra["origin_group"],
-                knowable_at=knowable_at,
-                normalized_value_sha256=payload_sha,
-                numeric_value=Decimal(str(extra["value"])),
-                confidence_assessment_id=f"confidence-assessment:{payload_sha}",
-                confidence_score=confidence,
-                lineage_node_ids=(vintage_id, raw_object),
-                lineage_complete=True,
-            )
-            for source_id, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, extra in entries
-        )
-        result = reconcile_source_assertions(
-            cell=cell, assertions=assertions, policy=RECONCILIATION_POLICY, cutoff=cutoff
-        )
-        outcomes[listing_id] = {
-            "outcome": result.outcome.value,
-            "origin_groups": len(result.origin_group_ids),
-            "selected_source": next(
-                (a.source_id for a in assertions if a.assertion_id == result.selected_assertion_id), None
-            ),
-            "selected_value": None if result.selected_numeric_value is None else str(result.selected_numeric_value),
-            "conflicting": len(result.conflicting_assertion_ids),
-        }
     return outcomes
 
 

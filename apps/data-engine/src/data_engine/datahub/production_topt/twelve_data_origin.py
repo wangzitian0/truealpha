@@ -27,6 +27,22 @@ raises `NotASessionCloseError` and the origin is absent, so a wrong quantity can
 again become a silent corroboration input. When the partition date has no end of day at
 all — a weekend, a holiday, a tick that runs before the session — the last session that
 has *settled* is used instead, which is the same session the primary resolves to.
+
+## The whole bar, under the same discipline (v3)
+
+`/eod` carries the close and nothing else (vendor contract); the session's open, high,
+low and volume live only on a `time_series` row. v3 fetches that window after a settled
+`/eod` and attaches the bar from the row for the settled session — but only when that
+row closes AT the `/eod` close. On the partition date the row is the in-progress bar
+until the day rolls over (the #535 defect), and a row still absorbing post-close prints
+has a close other than the settled one: equal closes are the falsifier that says the
+row's open/high/low/volume are the regular session's. A moved row, a missing row or an
+error body leaves the cell exactly what v2 made it — a corroborated close, four honest
+nulls — so the fusion engine grades those fields `insufficient_independent_origins`
+rather than comparing a settled Yahoo bar against an extended-hours one within
+tolerance. The no-end-of-day fallback already fetched the series; its settled row now
+carries its bar at no extra credit. A settled weekday therefore costs two credits per
+listing where v2 spent one; the weekend/holiday path still spends two.
 """
 
 from __future__ import annotations
@@ -125,12 +141,31 @@ def _decimal_close(value: object) -> Decimal:
         raise NotASessionCloseError(f"Twelve Data close {value!r} is not a number") from error
 
 
-def _quote(*, raw_bytes: bytes, as_of: date, close: Decimal) -> MarketPriceQuote:
+def _decimal_or_absent(value: object, *, field: str) -> Decimal | None:
+    """A bar field the row may legitimately omit (`volume` is documented optional): an
+    absent or empty figure is an absent assertion, never zero."""
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation as error:
+        raise NotASessionCloseError(f"Twelve Data {field} {value!r} is not a number") from error
+
+
+def _bar(row: Mapping[str, Any]) -> dict[str, Decimal | None]:
+    """The series row's open/high/low/volume, Decimal each, None where the row has none."""
+    return {field: _decimal_or_absent(row.get(field), field=field) for field in ("open", "high", "low", "volume")}
+
+
+def _quote(
+    *, raw_bytes: bytes, as_of: date, close: Decimal, bar: Mapping[str, Decimal | None] | None = None
+) -> MarketPriceQuote:
     return MarketPriceQuote(
         raw_bytes=raw_bytes,
         close=close,
         as_of=as_of,
         knowable_at=datetime.combine(as_of, datetime.min.time(), tzinfo=UTC),
+        **(bar or {}),
     )
 
 
@@ -176,16 +211,56 @@ def parse_last_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPric
         as_of = _session_date(row.get("datetime"))
         if as_of >= partition:
             continue
-        return _quote(raw_bytes=raw_bytes, as_of=as_of, close=_decimal_close(row.get("close")))
+        return _quote(raw_bytes=raw_bytes, as_of=as_of, close=_decimal_close(row.get("close")), bar=_bar(row))
     return None
 
 
-class TwelveDataQuoteFetcher:
-    """`MarketPriceFetcher` over Twelve Data's end-of-day close.
+def attach_settled_bar(raw_bytes: bytes, *, settled: MarketPriceQuote) -> MarketPriceQuote:
+    """`settled` (the `/eod` close) with its session's bar from a `time_series` window,
+    when that window has a row for the session that closes AT the settled close.
 
-    Memoized per symbol for the life of one run and throttled to the free tier's rate, so
-    a tick issues one request per listing — two only on a partition date that has no end
-    of day, where the second request resolves the last settled session instead.
+    `/eod` carries only the close. The bar lives on the series row, and on the partition
+    date that row is the in-progress bar until the day rolls over (#535). A row still
+    moving has a close other than the settled one — that is the falsifier: equal closes
+    mean no post-close print has entered the bar, so its open/high/low/volume are the
+    regular session's. Anything else — a moved row, no row for the session, an error
+    body, a live quote — returns `settled` untouched and the cell corroborates close
+    alone. The bar is additive; it can never make the close-only cell worse.
+
+    When the bar IS attached the landed bytes become the series body: every number the
+    corroboration then asserts is in it, the close included, verbatim.
+    """
+    try:
+        payload = _decode(raw_bytes)
+        _reject_live_quote(payload)
+    except NotASessionCloseError:
+        return settled
+    rows = payload.get("values")
+    if not isinstance(rows, list):
+        return settled
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        try:
+            _reject_live_quote(row)
+            if _session_date(row.get("datetime")) != settled.as_of:
+                continue
+            if _decimal_close(row.get("close")) != settled.close:
+                return settled  # still moving: not the session's settled bar
+            bar = _bar(row)
+        except NotASessionCloseError:
+            return settled
+        return _quote(raw_bytes=raw_bytes, as_of=settled.as_of, close=settled.close, bar=bar)
+    return settled
+
+
+class TwelveDataQuoteFetcher:
+    """`MarketPriceFetcher` over Twelve Data's end-of-day close and its session's bar.
+
+    Memoized per symbol for the life of one run and throttled to the free tier's rate.
+    A tick issues two requests per listing: `/eod` for the settled close, then the
+    `time_series` window that carries the bar — or, on a partition date with no end of
+    day, resolves the last settled session (bar included) instead.
     """
 
     def __init__(self, api_key: str, *, throttle_seconds: int = _THROTTLE_SECONDS) -> None:
@@ -218,25 +293,25 @@ class TwelveDataQuoteFetcher:
             self._get(_EOD_URL, {"symbol": symbol, "date": str(cutoff)}),
             partition=cutoff,
         )
-        if settled is not None:
-            return settled
-        # No end of day for the partition date itself. Resolve the last session that HAS
-        # settled — the same session the primary resolves to on a weekend or holiday.
         if self._throttle_seconds:
             time.sleep(self._throttle_seconds)
-        return parse_last_settled_close(
-            self._get(
-                _TIME_SERIES_URL,
-                {
-                    "symbol": symbol,
-                    "interval": "1day",
-                    "start_date": str(cutoff - timedelta(days=_LOOKBACK_DAYS)),
-                    "end_date": str(cutoff),
-                    "outputsize": "12",
-                },
-            ),
-            partition=cutoff,
+        series = self._get(
+            _TIME_SERIES_URL,
+            {
+                "symbol": symbol,
+                "interval": "1day",
+                "start_date": str(cutoff - timedelta(days=_LOOKBACK_DAYS)),
+                "end_date": str(cutoff),
+                "outputsize": "12",
+            },
         )
+        if settled is not None:
+            # The close is settled by `/eod`; the bar comes from the series window and is
+            # attached only when its row closes at that settled close (v3, header).
+            return attach_settled_bar(series, settled=settled)
+        # No end of day for the partition date itself. Resolve the last session that HAS
+        # settled — the same session the primary resolves to on a weekend or holiday.
+        return parse_last_settled_close(series, partition=cutoff)
 
     def _get(self, url: str, params: dict[str, str]) -> bytes:
         query = urllib.parse.urlencode({**params, "apikey": self._api_key})
@@ -250,7 +325,8 @@ class TwelveDataQuoteFetcher:
         # parser refuses it, so the fallback gets its turn. Since #729 that 400 is also a
         # ledger row (`ok = false`, the vendor's message as `error`) — every weekend tick
         # spends two credits per listing this way, and until the ledger existed nothing
-        # recorded it (raw.fetches only ever saw the landed successes).
+        # recorded it (raw.fetches only ever saw the landed successes). Since v3 every
+        # tick spends two: the second request is the bar's on a settled day.
         _status, body = gateway.urlopen(
             "twelvedata", url.rsplit("/", 1)[-1], f"{url}?{query}", caller="twelve_data_origin", timeout=20
         )

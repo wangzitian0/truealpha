@@ -173,8 +173,13 @@ class SourceRegistration:
 # Twelve Data is the second origin behind market-price: its identity lives here (not
 # in the adapter) so the quality report can recognise its vintages from the registry.
 TWELVE_DATA_ORIGIN = "twelve-data"
-TWELVE_DATA_PARSER_VERSION = "twelve-data-parser:v2"
-TWELVE_DATA_MAPPING_VERSION = "twelve-data-map:v2"
+# Every second-origin vintage that writes its close under `close`, oldest first; the
+# current one is the LAST entry, so a bump and the record of it are one edit (the same
+# rule `PARSER_VERSION_HISTORY` follows, for the same #543 reason). v1 wrote `price` and
+# is registered separately below.
+TWELVE_DATA_PARSER_VERSION_HISTORY = ("twelve-data-parser:v2", "twelve-data-parser:v3")
+TWELVE_DATA_PARSER_VERSION = TWELVE_DATA_PARSER_VERSION_HISTORY[-1]
+TWELVE_DATA_MAPPING_VERSION = "twelve-data-map:v3"
 TWELVE_DATA_VALUE_KEY = "close"
 
 REGISTRATIONS: tuple[SourceRegistration, ...] = (
@@ -200,7 +205,7 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 origin_source="twelve-data:v1",
                 origin_id="origin:twelve-data:v1",
                 value_key=TWELVE_DATA_VALUE_KEY,
-                parser_versions=(TWELVE_DATA_PARSER_VERSION,),
+                parser_versions=TWELVE_DATA_PARSER_VERSION_HISTORY,
                 # Free tier: 8 requests per minute, 800 per day, one key shared by
                 # both environments (#491, #574).
                 capacity=CapacityDeclaration(calls_per_window=8, window_seconds=60, daily_budget=800),
