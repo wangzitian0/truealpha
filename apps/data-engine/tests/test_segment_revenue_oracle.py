@@ -357,13 +357,21 @@ def test_the_partition_id_is_addressed_by_what_the_set_is() -> None:
     look like a re-run."""
     from data_engine.datahub.standards.segment_extraction import partition_id_for
 
+    rule = "rule:exhaustive-partition:v1"
     parts = [("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27029000000"))]
-    first = partition_id_for(CIK, date(2025, 11, 2), parts)
-    assert first == partition_id_for(CIK, date(2025, 11, 2), list(reversed(parts))), "a set is not an order"
-    assert first != partition_id_for(CIK, date(2024, 11, 3), parts), "a different period is a different set"
-    assert first != partition_id_for(CIK + 1, date(2025, 11, 2), parts)
+    first = partition_id_for(CIK, date(2025, 11, 2), parts, extractor=rule)
+    assert first == partition_id_for(CIK, date(2025, 11, 2), list(reversed(parts)), extractor=rule), (
+        "a set is not an order"
+    )
+    assert first != partition_id_for(CIK, date(2024, 11, 3), parts, extractor=rule), (
+        "a different period is a different set"
+    )
+    assert first != partition_id_for(CIK + 1, date(2025, 11, 2), parts, extractor=rule)
     changed = [parts[0], ("Infrastructure software", Decimal("27029000001"))]
-    assert first != partition_id_for(CIK, date(2025, 11, 2), changed), "a restatement is a new set"
+    assert first != partition_id_for(CIK, date(2025, 11, 2), changed, extractor=rule), "a restatement is a new set"
+    # #822: the same parts accepted by another rule are another claim. Were they the same id, a
+    # withdrawn rule's rows would block the replacement rule from landing the parts it accepts.
+    assert first != partition_id_for(CIK, date(2025, 11, 2), parts, extractor="rule:exhaustive-partition:v2")
 
 
 def test_a_holding_company_files_under_the_issuer_it_is_now(monkeypatch) -> None:
@@ -458,8 +466,12 @@ def test_a_single_segment_issuer_lands_the_whole_company_as_one_part(monkeypatch
     assert len(rows) == 1
     assert rows[0]["segment_revenue"] == Decimal("748000000"), "the one part IS the consolidated revenue"
     assert rows[0]["partition_residual"] == Decimal(0), "exhaustive by construction"
-    assert "single_segment_statement=" in rows[0]["evidence_ref"], "the sentence the claim rests on"
-    assert "single operating segment" in rows[0]["evidence_ref"]
+    assert "segment_count=us-gaap:NumberOfReportableSegments=1@2025-12-31" in rows[0]["evidence_ref"], (
+        "the filer's own tagged count is what the claim rests on (#822)"
+    )
+    assert "single_segment_statement=" in rows[0]["evidence_ref"], "and the sentence it is tagged in"
+    assert "it has a single reportable segment" in rows[0]["evidence_ref"]
+    assert rows[0]["segment_name"] == "Single reportable segment"
     assert rows[0]["confidence"] < Decimal("0.90"), "priced below a set checked against an independent total"
 
 
@@ -510,3 +522,201 @@ def test_the_landed_row_says_where_its_scale_came_from(monkeypatch) -> None:
     assert rows, "the partition landed"
     assert all("scale=table" in r["evidence_ref"] for r in rows), "AVGO states its own scale"
     assert all("accession=0001730168-25-000121" in r["evidence_ref"] for r in rows)
+
+
+# --- #822: what decides that an issuer has ONE segment ----------------------------------------
+
+
+def _count_tag(concept: str, context: str, shown: str) -> str:
+    return (
+        f'<ix:nonFraction unitRef="segment" contextRef="{context}" decimals="INF" '
+        f'name="us-gaap:{concept}" format="ixt-sec:numwordsen" scale="0">{shown}</ix:nonFraction>'
+    )
+
+
+def _context(context: str, end: str, *, subsidiary: str | None = None) -> str:
+    dimension = (
+        '<xbrli:segment><xbrldi:explicitMember dimension="dei:LegalEntityAxis">'
+        f"{subsidiary}</xbrldi:explicitMember></xbrli:segment>"
+        if subsidiary
+        else ""
+    )
+    return (
+        f'<xbrli:context id="{context}"><xbrli:entity>'
+        f'<xbrli:identifier scheme="http://www.sec.gov/CIK">0000000001</xbrli:identifier>{dimension}'
+        f"</xbrli:entity><xbrli:period><xbrli:startDate>2025-01-01</xbrli:startDate>"
+        f"<xbrli:endDate>{end}</xbrli:endDate></xbrli:period></xbrli:context>"
+    )
+
+
+def _ixbrl(*paragraphs: str, contexts: tuple[str, ...], hidden: str = "") -> bytes:
+    """The smallest inline-XBRL filing that carries a segment count: contexts and any hidden
+    facts in the header, then the printed paragraphs. Constructed rather than packaged because
+    each one isolates the ONE property a real filing broke; the packaged filings are measured in
+    test_segment_extraction.py and the recall census."""
+    header = f"<ix:header><ix:hidden>{hidden}</ix:hidden><ix:resources>{''.join(contexts)}</ix:resources></ix:header>"
+    return f"<html><body><div style='display:none'>{header}</div>{''.join(f'<p>{p}</p>' for p in paragraphs)}</body></html>".encode()
+
+
+def test_a_count_tagged_for_a_subsidiary_registrant_is_not_the_filers_count() -> None:
+    """AEP and Exelon file one 10-K for the parent and its subsidiary registrants, and tag
+    "ComEd has a single operating segment" under the subsidiary's dimension. The parent has
+    several; a dimensional fact is about a part of the filer."""
+    from data_engine.datahub.standards.segment_extraction import declared_segment_count
+
+    body = _ixbrl(
+        f"ComEd has a {_count_tag('NumberOfReportableSegments', 'c-2', 'one')} reportable segment.",
+        contexts=(_context("c-1", "2025-12-31"), _context("c-2", "2025-12-31", subsidiary="exc:ComEdMember")),
+    )
+    assert declared_segment_count(body) is None
+
+
+def test_the_latest_period_decides() -> None:
+    """Western Digital tags `two` for the day before its Flash separation and `one` for the
+    fiscal year. The first tag in the document is the stale one."""
+    from data_engine.datahub.standards.segment_extraction import declared_segment_count
+
+    body = _ixbrl(
+        f"Prior to the Separation, the Company operated under {_count_tag('NumberOfReportableSegments', 'c-1', 'two')}"
+        " reportable segments: HDD and Flash.",
+        f"The Company has {_count_tag('NumberOfReportableSegments', 'c-2', 'one')} reportable segment: HDD.",
+        contexts=(_context("c-1", "2025-02-20"), _context("c-2", "2026-07-03")),
+    )
+    declared = declared_segment_count(body)
+    assert declared is not None
+    assert (declared.value, declared.period_end) == (1, date(2026, 7, 3))
+    assert declared.statement is not None and "one reportable segment: HDD" in declared.statement
+
+
+def test_the_reportable_count_outranks_the_operating_count() -> None:
+    """Booking tags five operating segments aggregated into one reportable segment. The
+    standard measures reportable segments, so it is one — and an issuer that tags only the
+    operating count is answered by that."""
+    from data_engine.datahub.standards.segment_extraction import declared_segment_count
+
+    contexts = (_context("c-1", "2025-12-31"),)
+    booking = _ixbrl(
+        f"The portfolio is organized into {_count_tag('NumberOfOperatingSegments', 'c-1', 'five')} operating segments.",
+        f"They are aggregated into {_count_tag('NumberOfReportableSegments', 'c-1', 'one')} reportable segment.",
+        contexts=contexts,
+    )
+    declared = declared_segment_count(booking)
+    assert declared is not None
+    assert (declared.concept, declared.value) == ("us-gaap:NumberOfReportableSegments", 1)
+
+    operating_only = _ixbrl(
+        f"We have {_count_tag('NumberOfOperatingSegments', 'c-1', 'one')} operating segment.", contexts=contexts
+    )
+    declared = declared_segment_count(operating_only)
+    assert declared is not None
+    assert (declared.concept, declared.value) == ("us-gaap:NumberOfOperatingSegments", 1)
+
+
+def test_tags_that_disagree_at_the_latest_period_declare_nothing_usable() -> None:
+    from data_engine.datahub.standards.segment_extraction import declared_segment_count
+
+    body = _ixbrl(
+        f"We operate in {_count_tag('NumberOfReportableSegments', 'c-1', 'one')} reportable segment.",
+        f"Our {_count_tag('NumberOfReportableSegments', 'c-1', 'two')} reportable segments are:",
+        contexts=(_context("c-1", "2026-06-27"),),
+    )
+    declared = declared_segment_count(body)
+    assert declared is not None and declared.value is None
+
+
+def _run_single(monkeypatch, body: bytes, *, oracle=("371444000000", "2025-12-31"), cik: int = 1_067_983):
+    from datetime import date as _date
+
+    from data_engine.datahub.standards import segment_extraction as adapter
+    from data_engine.datahub.standards.filing_extraction import FilingDocument
+
+    document = FilingDocument(
+        cik=cik,
+        accession="0000000000-26-000001",
+        form="10-K",
+        filing_date=_date(2026, 3, 2),
+        primary_document="constructed.htm",
+        url="https://www.sec.gov/Archives/edgar/data/constructed.htm",
+        body=body,
+    )
+    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: document)
+    connection = _RecordingConnection(oracle)
+    outcome = adapter.extract_segment_revenue(
+        cik,
+        connection=connection,
+        http=None,
+        gateway=None,
+        standard=STANDARDS["segment_revenue"],
+        cutoff=CUTOFF,
+        write=True,
+    )
+    return outcome, connection
+
+
+def test_berkshire_is_not_one_segment_because_a_sentence_mentions_one(monkeypatch) -> None:
+    """The row that was landed on staging (#822): CIK 1067983 recorded as ONE segment of
+    371,444M on the sentence below, which is about how its chief operating decision maker
+    weighs expenses ACROSS segments. The filing tags seven.
+
+    A one-part partition balances by construction, so this was not refused — it replaced
+    Berkshire's segment table with one undifferentiated part, and every theme purity computed
+    from it would have been 0 or 1."""
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
+    body = _ixbrl(
+        "Expenses considered significant for one operating segment may not be significant in others.",
+        f"Berkshire has {_count_tag('NumberOfReportableSegments', 'c-1', 'seven')} reportable business segments.",
+        contexts=(_context("c-1", "2025-12-31"),),
+    )
+    outcome, connection = _run_single(monkeypatch, body)
+    assert outcome.extractor != RULE_SINGLE_SEGMENT, outcome.detail
+    assert outcome.status == "no_candidate"
+    assert connection.inserts() == [], "no partition lands from a sentence"
+
+
+def test_a_filing_that_tags_no_count_is_not_one_segment_whatever_its_prose_says(monkeypatch) -> None:
+    """Visa's row rested on ASU 2023-07 boilerplate — "new segment disclosure requirements for
+    entities with a single reportable segment" — which every adopter may print. It was right by
+    accident; the next issuer to print it need not be."""
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
+    body = _ixbrl(
+        "The standard provides new segment disclosure requirements for entities with a single reportable segment.",
+        contexts=(_context("c-1", "2025-09-30"),),
+    )
+    outcome, connection = _run_single(monkeypatch, body, oracle=("40000000000", "2025-09-30"), cik=1_403_161)
+    assert outcome.extractor != RULE_SINGLE_SEGMENT, outcome.detail
+    assert connection.inserts() == []
+
+
+def test_a_count_declared_for_another_period_than_the_total_refuses(monkeypatch) -> None:
+    """The partition is filed under the ORACLE's period. A count declared for a different year
+    says nothing about that one — an issuer that reorganized in between would be landed as one
+    segment for a year it had several."""
+    body = _ixbrl(
+        f"The Company has {_count_tag('NumberOfReportableSegments', 'c-1', 'one')} reportable segment.",
+        contexts=(_context("c-1", "2025-12-31"),),
+    )
+    outcome, connection = _run_single(monkeypatch, body, oracle=("65179000000", "2024-12-31"), cik=59_478)
+    assert outcome.status == "no_candidate"
+    assert "declares a single segment for 2025-12-31" in outcome.detail
+    assert "on file is for 2024-12-31" in outcome.detail
+    assert connection.inserts() == []
+
+
+def test_a_declared_single_segment_lands_with_its_tagged_sentence(monkeypatch) -> None:
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
+    body = _ixbrl(
+        f"The Company has {_count_tag('NumberOfReportableSegments', 'c-1', 'one')} reportable segment, Payment"
+        " Services.",
+        contexts=(_context("c-1", "2025-09-30"),),
+    )
+    outcome, connection = _run_single(monkeypatch, body, oracle=("40000000000", "2025-09-30"), cik=1_403_161)
+    assert (outcome.status, outcome.extractor) == ("resolved", RULE_SINGLE_SEGMENT), outcome.detail
+    (row,) = [_row(p) for p in connection.inserts()]
+    assert row["extractor"] == "rule:single-segment:v2"
+    assert row["evidence_ref"].endswith(
+        "segment_count=us-gaap:NumberOfReportableSegments=1@2025-09-30 "
+        "single_segment_statement=The Company has one reportable segment, Payment Services."
+    ), "the statement is LAST: the theme-purity reader takes everything after its marker"

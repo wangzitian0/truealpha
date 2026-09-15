@@ -25,6 +25,7 @@ from data_engine.datahub.standards.segment_extraction import (
     SEGMENT_TOLERANCE,
     _windows,
     as_candidates,
+    declared_segment_count,
     filing_scale,
     segment_candidates,
     windows_of,
@@ -63,13 +64,18 @@ def census() -> dict[str, dict]:
     for path in sorted(FILINGS.glob("*.html")):
         if "8K" in path.name:
             continue  # 8-Ks carry no segment table; they are in the corpus for other adapters
-        text = filing_plain_text(path.read_bytes())
+        body = path.read_bytes()
+        text = filing_plain_text(body)
         recalled = segment_candidates(text)
         scale = filing_scale(text)
+        # What decides the single-segment path (#822), recorded for the same reason the recall
+        # counts are: a change to how the count is read shows WHICH filings it moved.
+        declared = declared_segment_count(body)
         entry: dict = {
             "windows": len(_windows(text)),
             "candidates": len(recalled),
             "filing_scale": str(scale) if scale is not None else None,
+            "declared_segments": declared.evidence if declared is not None else None,
         }
         total = TOTALS.get(path.name)
         if total and recalled:

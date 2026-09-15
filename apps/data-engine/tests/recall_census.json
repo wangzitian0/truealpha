@@ -5,6 +5,7 @@
       "windows": 2,
       "candidates": 6,
       "filing_scale": "1000000",
+      "declared_segments": null,
       "accepted_partitions": [
         [
           "Americas",
@@ -18,17 +19,20 @@
     "ADM_10K_000000708426000011.html": {
       "windows": 18,
       "candidates": 32,
-      "filing_scale": "1000000"
+      "filing_scale": "1000000",
+      "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31"
     },
     "ADP_10K_000000867026000030.html": {
       "windows": 6,
       "candidates": 18,
-      "filing_scale": "1000000"
+      "filing_scale": "1000000",
+      "declared_segments": "us-gaap:NumberOfReportableSegments=2@2026-06-30"
     },
     "AVGO_10K_000173016825000121.html": {
       "windows": 4,
       "candidates": 12,
       "filing_scale": "1000000",
+      "declared_segments": "us-gaap:NumberOfReportableSegments=2@2025-11-02",
       "accepted_partitions": [
         [
           "Semiconductor solutions",
@@ -39,37 +43,44 @@
     "DDOG_10K_000162828026008819.html": {
       "windows": 0,
       "candidates": 0,
-      "filing_scale": "1000"
+      "filing_scale": "1000",
+      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31"
     },
     "DUOL_10K_000162828026012494.html": {
       "windows": 0,
       "candidates": 0,
-      "filing_scale": "1000"
+      "filing_scale": "1000",
+      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31"
     },
     "JPM_10K_000162828026008131.html": {
       "windows": 0,
       "candidates": 0,
-      "filing_scale": "1000000"
+      "filing_scale": "1000000",
+      "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31"
     },
     "NICE_20F_000100393526000010.html": {
       "windows": 0,
       "candidates": 0,
-      "filing_scale": "1000000"
+      "filing_scale": "1000000",
+      "declared_segments": "us-gaap:NumberOfReportableSegments=2@2025-12-31"
     },
     "PLUG_10KA_000155837022003577.html": {
       "windows": 0,
       "candidates": 0,
-      "filing_scale": "1000"
+      "filing_scale": "1000",
+      "declared_segments": null
     },
     "PLUG_10K_000155837021007147.html": {
       "windows": 0,
       "candidates": 0,
-      "filing_scale": "1000"
+      "filing_scale": "1000",
+      "declared_segments": null
     },
     "SHOP_10K_000159480526000007.html": {
       "windows": 0,
       "candidates": 0,
-      "filing_scale": "1000000"
+      "filing_scale": "1000000",
+      "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31"
     }
   }
 }

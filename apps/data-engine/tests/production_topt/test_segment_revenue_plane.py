@@ -143,7 +143,7 @@ def test_the_writer_and_the_plane_agree(connection) -> None:
 
     period_end = date(2025, 11, 2)
     parts = [("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27029000000"))]
-    partition_id = partition_id_for(CIK, period_end, parts)
+    partition_id = partition_id_for(CIK, period_end, parts, extractor="rule:exhaustive-partition:v1")
 
     assert not partition_already_recorded(connection, partition_id), "nothing written yet"
     landed = record_segment_partition(
@@ -178,3 +178,37 @@ def test_the_writer_and_the_plane_agree(connection) -> None:
     )
     assert {r[6] for r in rows} == {datetime(2025, 12, 12, tzinfo=UTC)}
     assert partition_already_recorded(connection, partition_id), "a re-run must see what it wrote"
+
+
+def test_a_withdrawn_rules_row_does_not_close_the_planner_cell(connection) -> None:
+    """#822. If the planner counted a withdrawn rule's row as a fact, the cell would stay closed
+    and the issuer would never be re-extracted under the rule that replaced it: the reader
+    ignores the row, the planner trusts it, and the gap is permanent. Run against the real
+    plane because the filter is SQL and a recording fake would prove only that it was sent."""
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.standards.planner import UniverseIssuer, open_cells
+    from truealpha_contracts.standards import STANDARDS
+
+    standard = STANDARDS["segment_revenue"]
+    issuer = UniverseIssuer(issuer_id=f"issuer:cik:{CIK:010d}", ticker="TEST", listing_id="listing:test", cik=CIK)
+    cutoff = datetime.now(UTC)
+
+    def insert(extractor: str, partition: str) -> None:
+        connection.execute(
+            f"""
+            insert into {TABLE}
+                (cik, segment_name, segment_revenue, partition_id, partition_total,
+                 partition_residual, knowable_at, period_end, source, evidence_ref,
+                 extractor, confidence)
+            values (%s, 'Single reportable segment', 250, %s, 250, 0, now() - interval '30 days',
+                    '2025-12-31', '10k-segment-extraction', 'accession=0000000000-26-000001', %s, 0.75)
+            """,  # noqa: S608 - TABLE is a module constant, not input
+            (CIK, partition, extractor),
+        )
+
+    insert("rule:single-segment:v1", "segment-partition:" + "1" * 64)
+    assert [cell.reason for cell in open_cells(connection, [issuer], standard=standard, cutoff=cutoff)] == ["no_fact"]
+
+    insert("rule:single-segment:v2", "segment-partition:" + "2" * 64)
+    assert open_cells(connection, [issuer], standard=standard, cutoff=cutoff) == [], "an admissible row closes it"

@@ -111,15 +111,21 @@ def open_cells(
         # one hardcoded table. The identifiers are interpolated because they are code (a
         # `FactPlane` is declared in `STANDARDS`, not supplied by a caller); the values
         # stay parameterised.
+        #
+        # A withdrawn extractor's row is not a fact (#822). Were it one here, the cell would
+        # stay closed and the issuer would never be re-extracted under the rule that replaced
+        # it — the wrong value would be permanent while every reader ignored it.
+        withdrawn = list(plane.withdrawn_extractors)
         row = connection.execute(
             f"""
             select source, knowable_at
             from {plane.table}
             where {plane.issuer_column} = %s and knowable_at <= %s
+            {"and extractor <> all(%s::text[])" if withdrawn else ""}
             order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
             limit 1
             """,  # noqa: S608 - identifiers come from the standard's declared plane, not input
-            (issuer.cik, cutoff, list(plane.source_priority)),
+            (issuer.cik, cutoff, *([withdrawn] if withdrawn else []), list(plane.source_priority)),
         ).fetchone()
         if row is None:
             cells.append(OpenCell(issuer, "no_fact", None, None))

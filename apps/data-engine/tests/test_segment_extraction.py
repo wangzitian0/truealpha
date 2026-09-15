@@ -30,6 +30,7 @@ from data_engine.datahub.standards.segment_extraction import (
     SEGMENT_TOLERANCE,
     _windows,
     as_candidates,
+    declared_segment_count,
     filing_scale,
     segment_candidates,
     single_segment_statement,
@@ -266,26 +267,57 @@ def test_adm_still_refuses_because_its_table_is_nested(adm_recalled) -> None:
     assert not any(isinstance(v, Partition) for v in accepted), "no window balances, so none is landed"
 
 
-def test_a_single_segment_issuer_is_a_determinate_answer_not_a_miss() -> None:
-    """The failure this fixes is the one that would have hurt q6 most: a pure-play IS the
-    purest name under its theme, and every single-segment issuer was being refused. The
-    ranking would have systematically excluded exactly the companies it exists to find.
+def test_the_filers_tagged_count_decides_one_segment_and_a_sentence_does_not() -> None:
+    """A pure-play IS the purest name under its theme, so a single-segment issuer is a
+    determinate answer — and because its one-part partition cannot fail the identity, what
+    decides it has to be the strongest statement the filing makes (#822).
 
-    Measured against the packaged corpus — the statement is detected on the four issuers that
-    make it, and on none of the ones that report segments.
+    A sentence was not that. Over the 106 filings the deployed lane walks, "one/single
+    operating/reportable segment" matched 48 issuers and at least five of them report several;
+    Berkshire Hathaway was landed as one segment. The packaged corpus holds both halves of why
+    the inline-XBRL count replaced it: every filing here that reports several segments tags how
+    many, and PLUG writes the sentence while tagging nothing — so the sentence alone now
+    decides nothing.
     """
     root = Path(__file__).resolve().parents[1] / "samples" / "filings"
-    single = {"DDOG", "DUOL", "PLUG", "SHOP"}
+    measured = {}
     for path in sorted(root.glob("*.html")):
         if "8K" in path.name:
             continue
-        ticker = path.name.split("_")[0]
-        statement = single_segment_statement(filing_plain_text(path.read_bytes()))
-        if ticker in single:
-            assert statement is not None, f"{ticker} states one segment and must be detected"
-            assert "segment" in statement.lower()
-        else:
-            assert statement is None, f"{ticker} reports segments; a false positive would replace its table"
+        declared = declared_segment_count(path.read_bytes())
+        measured[path.name.removesuffix(".html")] = None if declared is None else declared.value
+    assert measured == {
+        "AAPL_10K_000032019325000079": None,
+        "ADM_10K_000000708426000011": 3,
+        "ADP_10K_000000867026000030": 2,
+        "AVGO_10K_000173016825000121": 2,
+        "DDOG_10K_000162828026008819": 1,
+        "DUOL_10K_000162828026012494": 1,
+        "JPM_10K_000162828026008131": 3,
+        "NICE_20F_000100393526000010": 2,
+        "PLUG_10KA_000155837022003577": None,
+        "PLUG_10K_000155837021007147": None,
+        "SHOP_10K_000159480526000007": 1,
+    }
+    plug = filing_plain_text((root / "PLUG_10K_000155837021007147.html").read_bytes())
+    assert single_segment_statement(plug) is not None, "PLUG's prose does say one segment"
+
+
+def test_the_statement_is_the_sentence_the_count_is_tagged_in() -> None:
+    """The row's description is the filer's own tagged sentence, not the first sentence that
+    mentions a segment. SHOP tags the word with BOTH concepts, one tag nested in the other, and
+    both must read "one". DDOG tags its count only in the hidden header, where there is no
+    printed sentence to read back."""
+    root = Path(__file__).resolve().parents[1] / "samples" / "filings"
+    shop = declared_segment_count((root / "SHOP_10K_000159480526000007.html").read_bytes())
+    assert shop is not None and shop.concept == "us-gaap:NumberOfReportableSegments"
+    assert shop.statement is not None
+    assert "the Company operates in one single operating and reportable segment" in shop.statement
+    assert "segment-count" not in shop.statement, "the mark that located the tag is not part of the sentence"
+
+    ddog = declared_segment_count((root / "DDOG_10K_000162828026008819.html").read_bytes())
+    assert ddog is not None and ddog.value == 1
+    assert ddog.statement is None, "a hidden fact has no printed sentence"
 
 
 def test_a_table_that_states_no_scale_inherits_the_filing_scale(adm_recalled, adm_text) -> None:
@@ -457,17 +489,24 @@ def test_a_single_segment_issuer_with_no_oracle_says_which_half_is_missing() -> 
     pointing at the heading pattern, the one thing that was never their problem. Two halves
     are needed and the message now says WHICH one is missing.
     """
-    from data_engine.datahub.standards.segment_extraction import _no_candidate_detail
+    from datetime import date
+
+    from data_engine.datahub.standards.segment_extraction import DeclaredSegmentCount, _no_candidate_detail
 
     single = "The Company operates as a single operating segment and derives revenues from subscriptions."
-    detail = _no_candidate_detail(single, has_oracle=False)
-    assert "single operating segment" in detail
+    one = DeclaredSegmentCount("us-gaap:NumberOfReportableSegments", 1, date(2025, 12, 31), None)
+    detail = _no_candidate_detail(single, has_oracle=False, declared=one)
+    assert "declares a single segment (us-gaap:NumberOfReportableSegments=1@2025-12-31)" in detail
     assert "no consolidated revenue" in detail
     assert "no segment table matched" not in detail, "the heading pattern is not the problem here"
 
     # With the oracle present the same filing takes the single-segment path instead, so this
     # message is never the answer for it.
-    assert _no_candidate_detail(single, has_oracle=True) == "no segment table matched in the filing text"
-    assert _no_candidate_detail("a filing with no segment language", has_oracle=False) == (
+    assert _no_candidate_detail(single, has_oracle=True, declared=one) == "no segment table matched in the filing text"
+    assert _no_candidate_detail(single, has_oracle=False) == "no segment table matched in the filing text", (
+        "a sentence declares nothing on its own (#822)"
+    )
+    several = DeclaredSegmentCount("us-gaap:NumberOfReportableSegments", 7, date(2025, 12, 31), None)
+    assert _no_candidate_detail(single, has_oracle=False, declared=several) == (
         "no segment table matched in the filing text"
-    ), "and an issuer that states nothing is still the plain miss"
+    ), "and an issuer that declares several is still the plain miss"
