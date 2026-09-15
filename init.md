@@ -441,7 +441,7 @@ routes, identity-provider bindings, retention policy, replay execution, or shari
 
 Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`libs/factors/composite`) — it reloads other modules' materialized mart outputs, and its confidence cannot exceed the minimum confidence consumed; a declared versioned policy may be stricter.
 
-1. **PEG**: switchable growth-rate conventions
+1. **PEG**: switchable growth-rate conventions. *Status 2026-09-15: computed on every tick under the historical-CAGR convention only (`factors.base.peg`, #284); on the Staging TOPT head 14/20 issuers carry a PEG and the six that do not say why on the row — `mart.strategy_decisions.peg_reason_codes` (#837: `non_positive_growth` TSLA, ABBV; `insufficient_earnings_history` MU; three excluded upstream for a missing gross-profit fact or market-value input). The analyst-consensus convention has no source until q4's moomoo capture exists (#771), and no plane carries company guidance, so the switch has one position.*
 2. **Gross profit per employee**: operating and financial components computed for every issuer and merged into one wide row (rule 17, #59 round 2; v0.2.0 still publishes one uniform capital-adjusted number, #528), headcount gaps explicitly flagged rather than silently dropped
 3. **Supply-chain relationship graph + confidence-gated scenario exposure**: graph first (KG `supplies_to` edges); path propagation must declare a versioned shock/exposure scenario, direction, materiality/sensitivity, and confidence kill condition. It may be described as causal only after independent causal evidence, not merely because an edge is high-confidence. *Status 2026-09-10: `staging.kg_edges` holds 219 rows — `holds` 111, `same_as` 108, **`supplies_to` 0**. The blocker is not recall but the absence of an oracle: a disclosed concentration ("48% of net revenue to distributors") can be re-derived from nothing the warehouse holds, so unlike segment revenue a wrong extraction is a plausible number nothing catches. Candidate sources of safety are recorded on #37.*
 4. **Analyst backtesting**: moomoo historical rating depth is confirmed, but only events with independently defensible public availability may enter PIT scoring; backfilled rows remain unavailable before that time. *Status 2026-09-10: zero moomoo calls in `staging.api_call_ledger`, ever, and `staging.analyst_rating_events` is empty. This is a capture blocker — it needs an OpenD host and a read-only credential, and nothing in `libs/factors` moves it (#771).*
@@ -542,12 +542,13 @@ merge enforcement.
 
 ## 11. Current Baseline and Next Gate
 
-**Baseline as of 2026-09-08, measured on the deployed environments rather than on tracker
+**Baseline as of 2026-09-15, measured on the deployed environments rather than on tracker
 state.** The reconnaissance baseline this section used to describe (monorepo, four schemas,
 registry skeleton, samples, first corpus audit) is history; what exists now is a running
 system with named gaps.
 
-What runs daily on the Dagster schedule in both Staging and Production:
+What runs on the Dagster schedule — daily, and in both Staging and Production, unless the
+bullet says otherwise:
 
 - real-source capture for the TOPT 20, the QQQ 101 and a 5-issuer canary universe (SEC
   company-facts, Twelve Data, yfinance corroboration, N-PORT holdings), immutable raw bytes in
@@ -557,14 +558,22 @@ What runs daily on the Dagster schedule in both Staging and Production:
   historical convention only) and the `large_model_value_v0` strategy, materialized into
   `mart.topt_core_results` and `mart.strategy_*` behind a governed `current_pointer` that
   advances with each accepted tick;
+- the standards lane (`standard_backfill_pipeline`, Sundays 09:07 UTC, and on demand through
+  the same job): the `headcount` and `segment_revenue` standards' open cells are extracted
+  from each issuer's latest annual filing through the gateway, module 6 (theme purity) is
+  materialized over the accepted segment partitions for the governed head's members, and the
+  question-coverage report (`mart.question_coverage_report`, #748) is written for that head —
+  Staging only until Production is promoted past v0.0.51;
 - the App (`/research/*`, `/admin/*`, behind login), the MCP endpoint, and a `/chat` v0 that
   answers one question class deterministically — all reading `mart` only.
 
 What is verified and what is not, with the owning issue:
 
-| claim | state on 2026-09-08 | owner |
+| claim | state (dated per row; 2026-09-15 where undated) | owner |
 |---|---|---|
-| the chain is non-empty and scheduled | at the 2026-09-07 TOPT cutoff 17/20 issuers are `available`, QQQ 72/101; PEG resolves for 14/20; the pointer advances each tick | #434 (root) |
+| the chain is non-empty and scheduled | on the Staging TOPT head of 2026-09-15 18/20 issuers are `available` (q1), QQQ 72/101 (2026-09-07); PEG resolves for 14/20 and every refusal is named on the row (#837); the pointer advances each tick | #434 (root) |
+| the six questions are measured per head | `mart.question_coverage_report`, written by every standards tick for the governed head (#748). Staging TOPT head `capture-run:8259…`, 2026-09-15: **q1 18/20 · q2 14/20** (`non_positive_growth` 2, `insufficient_earnings_history` 1, excluded upstream 3) **· q3 0/20 `missing`** (no column: relationship extraction has no oracle a wrong edge could fail, #37) **· q4 0/20 `missing`** (moomoo has never written a ledger row, #771) **· q5 0/0** (the registry counts issuers; the funds are not in the denominator) **· q6 12/20** (`no_row` 4: GOOG, JPM, WMT, XOM; `unclassified_revenue` 4: AAPL, COST, MU, V — #841). Production has not run module 6 or the report: v0.0.51 there predates both | #773, #772 |
+| segment revenue is what the filer tags | `staging.issuer_segment_revenue_facts` holds a partition for 16 of the 20 TOPT issuers, each balanced against the capture plane's consolidated revenue; over the 106 filings the lane walks, the inline-XBRL tags balance 64 where the retired printed-table reader balanced 3 (#831, #836; reader retired in #834, −1,146 lines). A single segment is decided by the filer's tagged count, never a sentence (#824; v1 withdrawn after landing Berkshire as one segment). Members of a head are resolved from what its GPPE rows consumed, so a tick whose SEC bytes were unchanged keeps its q6 rows (#840) | #772 |
 | the published numbers are possible | a tick now refuses its own run: plausibility policy v1 judges every published row against the previous accepted run inside the tick's transaction, and the nightly invariant suite runs on both environments. JPM's GPPE is still negative under the uniform capital charge until #528's decomposition merges, and the citation/quality invariants still do not run against Production at deploy time | #528, #581, #544 |
 | the denominator is real | 106 headcount facts covering 89 issuers, 85 of them selected by the seated model from 10-K text rather than hand-seeded; the shared primitive is no longer a stub — `factors.shared.extraction.select_single_candidate` is what production's `filing_extraction` calls (#769/#782, v0.0.49); ~25 cells remain `no_candidate` | #70, #769 |
 | the vintage is a measurement | `knowable_at` is real on every plane (16 distinct times across 21 financial-fact entries on the 2026-09-09 governed TOPT head; identity/membership and price are one value each, which is correct — a head publishes once and a session settles once). #774's per-input filing vintage IS captured, in the observation payload; it does NOT reach mart — every `mart.topt_core_meta_info` lineage entry carries a `vintage` key whose value is `null`, so a mart reader still cannot name the filing behind a number. `valid_from` and the cutoff remain near-constant, so a historical replay would still see the future | #530 |
