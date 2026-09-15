@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # A4 D5 (#673): the release, as one command instead of ~7 hand steps.
 #
-# Encodes, as hard preconditions, the two mistakes actually made by hand in the
-# 2026-08 sprint:
+# Encodes, as hard preconditions, mistakes actually made by hand:
 #   - v0.0.29 was tagged while the PR it described was still OPEN (an unresolved
 #     review thread had blocked the merge and nobody checked) — so this script
 #     refuses to tag unless every named PR is MERGED with zero unresolved
@@ -10,11 +9,27 @@
 #   - v0.0.21/v0.0.24 were taken by a parallel agent mid-preparation — so the
 #     remote tag existence check runs FIRST and the failure says "pick the next
 #     number", because the tag push is the lock (docs/release-protocol.md).
+#   - v0.0.60 (2026-09-15) died after the tag push twice — a killed process and
+#     a flaky post-deploy walk — and re-running the plain command failed at the
+#     tag-collision check even though the right move was to keep watching what
+#     was already in flight (#811). `--resume` treats an existing tag as this
+#     release already underway IF it points at local main's HEAD (never
+#     otherwise — the tag push stays the lock); `--redeploy` re-runs just the
+#     deploy leg once the tag and its CI are already green.
 #
 # Usage:
-#   tools/cut_release.sh vX.Y.Z --prs "663,665" --message "one-line summary" [--prod] [--dry-run]
+#   tools/cut_release.sh vX.Y.Z --prs "663,665" --message "one-line summary" \
+#     [--prod] [--dry-run] [--resume] [--redeploy]
 #
 # --dry-run performs every read-only assertion and prints the plan.
+# --resume: $TAG already exists on origin (script was killed, laptop slept, the
+#   post-deploy walk flaked after the tag was pushed) — verify the tag is at
+#   local main's HEAD instead of failing the collision check, skip re-tagging,
+#   and continue from the tag ci-required wait (already green, it falls
+#   straight through).
+# --redeploy: the tag and its ci-required are already known green (#811 — only
+#   the deploy run's gate flaked); skip tagging and the tag-CI wait entirely
+#   and go straight to dispatching the staging deploy.
 # Without --prod it stops after a verified staging deploy; rerun with --prod to
 # promote (the staging run URL is printed for it).
 #
@@ -34,18 +49,20 @@ REPO="wangzitian0/truealpha"
 STAGING_URL="https://truealpha-staging.truealpha.club"
 PROD_URL="https://truealpha.club"
 
-TAG="${1:?usage: cut_release.sh vX.Y.Z --prs \"N,N\" --message \"...\" [--prod] [--dry-run]}"
+TAG="${1:?usage: cut_release.sh vX.Y.Z --prs \"N,N\" --message \"...\" [--prod] [--dry-run] [--resume] [--redeploy]}"
 shift
 # deploy-release.yml requires a stable vX.Y.Z tag; a malformed one would be
 # pushed (the lock!) and then rejected downstream, wasting the number (review).
 echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "cut_release: $TAG is not vX.Y.Z" >&2; exit 2; }
-PRS="" MESSAGE="" PROD=0 DRY=0
+PRS="" MESSAGE="" PROD=0 DRY=0 RESUME=0 REDEPLOY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --prs) PRS="$2"; shift 2 ;;
     --message) MESSAGE="$2"; shift 2 ;;
     --prod) PROD=1; shift ;;
     --dry-run) DRY=1; shift ;;
+    --resume) RESUME=1; shift ;;
+    --redeploy) REDEPLOY=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -58,11 +75,24 @@ note() { echo "  $*"; }
 echo "== preconditions for $TAG =="
 
 # 1. The tag push is the lock; check the lock first so a taken number fails in
-#    seconds, not after minutes of PR verification.
+#    seconds, not after minutes of PR verification. --resume/--redeploy (#811)
+#    treat an existing tag as this release already in flight rather than a
+#    collision — but only once step 2 below confirms it points at local main;
+#    otherwise the lock still fires exactly as it always has.
+[ "$REDEPLOY" = "1" ] && [ "$RESUME" = "1" ] && fail "--resume and --redeploy are exclusive — redeploy already implies the tag is done"
+TAG_EXISTS=0
 if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
-  fail "$TAG already exists on origin — release identity is immutable; pick the next number"
+  if [ "$RESUME" = "1" ] || [ "$REDEPLOY" = "1" ]; then
+    TAG_EXISTS=1
+    note "tag $TAG exists on origin — verifying it is local main before resuming"
+  else
+    fail "$TAG already exists on origin — release identity is immutable; pick the next number"
+  fi
+elif [ "$REDEPLOY" = "1" ]; then
+  fail "--redeploy requires $TAG to already exist on origin — nothing to redeploy"
+else
+  note "tag $TAG is free"
 fi
-note "tag $TAG is free"
 
 # 2. Local main must BE origin/main; tagging a stale or diverged checkout ships
 #    the wrong tree under the right name. A stale checkout fast-forwards itself
@@ -83,6 +113,17 @@ if [ "$LOCAL_MAIN" != "$REMOTE_MAIN" ]; then
   note "main fast-forwarded to ${LOCAL_MAIN:0:8}"
 fi
 note "main is current at ${LOCAL_MAIN:0:8}"
+
+# 2b. --resume/--redeploy's existing tag must point at local main, or it is a
+#     genuine collision — the tag push is the lock and this is the one check
+#     that must never be weakened (#811).
+if [ "$TAG_EXISTS" = "1" ]; then
+  TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk '{print $1}')
+  [ -n "$TAG_COMMIT" ] || TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
+  [ "$TAG_COMMIT" = "$LOCAL_MAIN" ] \
+    || fail "$TAG already exists on origin — release identity is immutable; pick the next number"
+  note "$TAG on origin already points at main HEAD ${LOCAL_MAIN:0:8} — this is the same release"
+fi
 
 # 3. Every named PR: MERGED, zero unresolved threads, merge commit on main.
 IFS=',' read -ra PR_LIST <<< "$PRS"
@@ -122,7 +163,7 @@ note "reviewed change for prod: #$REVIEWED_PR (merge == HEAD)"
 #    merged HEAD has CI still running; wait bounded instead of failing on the
 #    spot (v0.0.35's first attempt died here five minutes after its merge).
 MAIN_RUN=""
-for _ in $(seq 1 30); do
+for _ in $(seq 1 90); do
   STATE=$(gh run list --repo "$REPO" --workflow ci-required.yml --limit 20 \
     --json databaseId,headSha,status,conclusion \
     -q "[.[]|select(.headSha==\"$LOCAL_MAIN\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
@@ -130,51 +171,90 @@ for _ in $(seq 1 30); do
     *"completed success") MAIN_RUN=$(echo "$STATE" | awk '{print $1}'); break ;;
     *completed*) fail "ci-required for main HEAD ${LOCAL_MAIN:0:8} finished non-green: $STATE" ;;
   esac
-  sleep 30
+  sleep 10
 done
 [ -n "$MAIN_RUN" ] || fail "ci-required for main HEAD ${LOCAL_MAIN:0:8} not green after 15 minutes"
 note "main HEAD green (run $MAIN_RUN)"
 
 if [ "$DRY" = "1" ]; then
-  echo "== dry run: would tag ${LOCAL_MAIN:0:8} as $TAG, deploy staging$([ "$PROD" = "1" ] && echo ', then prod') =="
+  if [ "$REDEPLOY" = "1" ]; then
+    echo "== dry run: would redeploy $TAG (already tagged + green) to staging$([ "$PROD" = "1" ] && echo ', then prod') =="
+  elif [ "$RESUME" = "1" ] && [ "$TAG_EXISTS" = "1" ]; then
+    echo "== dry run: would resume $TAG from the tag ci-required wait, deploy staging$([ "$PROD" = "1" ] && echo ', then prod') =="
+  else
+    echo "== dry run: would tag ${LOCAL_MAIN:0:8} as $TAG, deploy staging$([ "$PROD" = "1" ] && echo ', then prod') =="
+  fi
   exit 0
 fi
 
-echo "== tagging =="
-git tag -a "$TAG" "$LOCAL_MAIN" -m "$MESSAGE"
-git push origin "$TAG"
-note "$TAG pushed — the lock is claimed"
-
-echo "== waiting for tag ci-required =="
-TAG_RUN=""
-for _ in $(seq 1 40); do
+if [ "$REDEPLOY" = "1" ]; then
+  # #811: the release is live and its tag CI is green — only the deploy run's
+  # gate flaked. Require green here rather than waiting for it; a wait would
+  # mask the case where the tag CI was never actually green.
+  echo "== redeploy: tag and tag ci-required already required green =="
   TAG_RUN=$(gh run list --repo "$REPO" --limit 30 --json databaseId,headBranch,event,status,conclusion \
     -q "[.[]|select(.headBranch==\"$TAG\" and .event==\"push\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
   case "$TAG_RUN" in
-    *completed\ success) break ;;
-    *completed*) fail "tag ci-required failed: $TAG_RUN" ;;
+    *completed\ success) ;;
+    *) fail "--redeploy requires a green tag ci-required run for $TAG; found: ${TAG_RUN:-none}" ;;
   esac
-  sleep 30
-done
-TAG_RUN_ID=$(echo "$TAG_RUN" | awk '{print $1}')
-[ -n "$TAG_RUN_ID" ] || fail "tag run never appeared"
-note "tag run $TAG_RUN_ID green"
+  TAG_RUN_ID=$(echo "$TAG_RUN" | awk '{print $1}')
+  note "tag run $TAG_RUN_ID already green — skipping straight to the staging deploy"
+else
+  if [ "$RESUME" = "1" ] && [ "$TAG_EXISTS" = "1" ]; then
+    echo "== resume: $TAG already pushed — continuing from the tag ci-required wait (#811) =="
+  else
+    echo "== tagging =="
+    git tag -a "$TAG" "$LOCAL_MAIN" -m "$MESSAGE"
+    git push origin "$TAG"
+    note "$TAG pushed — the lock is claimed"
+  fi
+
+  echo "== waiting for tag ci-required =="
+  TAG_RUN=""
+  for _ in $(seq 1 120); do
+    TAG_RUN=$(gh run list --repo "$REPO" --limit 30 --json databaseId,headBranch,event,status,conclusion \
+      -q "[.[]|select(.headBranch==\"$TAG\" and .event==\"push\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
+    case "$TAG_RUN" in
+      *completed\ success) break ;;
+      *completed*) fail "tag ci-required failed: $TAG_RUN" ;;
+    esac
+    sleep 10
+  done
+  TAG_RUN_ID=$(echo "$TAG_RUN" | awk '{print $1}')
+  [ -n "$TAG_RUN_ID" ] || fail "tag run never appeared"
+  note "tag run $TAG_RUN_ID green"
+fi
 
 deploy() { # $1=staging|prod, extra -f args after
   local TYPE="$1"; shift
+  # A blind `sleep 12` here sometimes read the run list before GitHub's API had
+  # registered the new run, and on a retry could pick up a stale run instead
+  # (#811). Poll for the run this dispatch actually created — matched by its
+  # run-name (`Deploy $TYPE $TAG`, see deploy-release.yml) and creation time —
+  # bounded at 60s, failing loudly rather than guessing.
+  local DISPATCHED_AT
+  DISPATCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   gh workflow run deploy-release.yml --repo "$REPO" \
     -f deploy_type="$TYPE" -f version_ref="$TAG" -f source_run_id="$TAG_RUN_ID" "$@" >/dev/null
-  sleep 12
-  local RUN
-  RUN=$(gh run list --repo "$REPO" --workflow deploy-release.yml --limit 1 --json databaseId -q '.[0].databaseId')
-  for _ in $(seq 1 40); do
+  local TITLE="Deploy $TYPE $TAG"
+  local RUN=""
+  for _ in $(seq 1 12); do
+    RUN=$(gh run list --repo "$REPO" --workflow deploy-release.yml --limit 10 \
+      --json databaseId,displayTitle,createdAt \
+      -q "[.[]|select(.displayTitle==\"$TITLE\" and .createdAt>=\"$DISPATCHED_AT\")][0].databaseId // empty")
+    [ -n "$RUN" ] && break
+    sleep 5
+  done
+  [ -n "$RUN" ] || fail "$TYPE deploy dispatch for $TAG never appeared in the run list after 60s"
+  for _ in $(seq 1 120); do
     local S
     S=$(gh run view "$RUN" --repo "$REPO" --json status,conclusion -q '"\(.status) \(.conclusion)"')
     case "$S" in
       completed\ success) echo "$RUN"; return 0 ;;
       completed*) fail "$TYPE deploy run $RUN: $S" ;;
     esac
-    sleep 30
+    sleep 10
   done
   fail "$TYPE deploy run $RUN timed out"
 }
