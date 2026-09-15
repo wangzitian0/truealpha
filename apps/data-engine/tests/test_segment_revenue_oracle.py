@@ -21,6 +21,7 @@ the number comes from and WHAT SHAPE the key has, not about the arithmetic on to
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -192,8 +193,8 @@ def test_the_whole_adapter_resolves_the_real_filing_against_the_real_total(monke
         write=False,
     )
     assert outcome.status == "resolved", outcome.detail
-    assert "Semiconductor solutions=36858" in outcome.detail
-    assert "Infrastructure software=27029" in outcome.detail
+    assert "Semiconductor Solutions=36858000000" in outcome.detail
+    assert "Infrastructure Software=27029000000" in outcome.detail
     assert "residual 0" in outcome.detail
     assert outcome.accession == "0001730168-25-000121"
 
@@ -307,7 +308,7 @@ def test_write_lands_one_row_per_segment_under_one_partition_id(monkeypatch) -> 
 
     assert outcome.status == "resolved"
     assert len(rows) == 2
-    assert {r["segment_name"] for r in rows} == {"Semiconductor solutions", "Infrastructure software"}
+    assert {r["segment_name"] for r in rows} == {"Semiconductor Solutions", "Infrastructure Software"}
     assert {r["segment_revenue"] for r in rows} == {Decimal("36858000000"), Decimal("27029000000")}
     assert len({r["partition_id"] for r in rows}) == 1
     assert rows[0]["partition_id"].startswith("segment-partition:")
@@ -494,7 +495,7 @@ def test_an_issuer_that_reports_segments_never_takes_the_single_segment_path(mon
     )
     assert outcome.status == "resolved"
     assert outcome.extractor == RULE_EXHAUSTIVE_PARTITION, "AVGO's two segments, checked against its total"
-    assert "Semiconductor solutions=36858" in outcome.detail
+    assert "Semiconductor Solutions=36858000000" in outcome.detail
 
 
 def test_the_landed_row_says_where_its_scale_came_from(monkeypatch) -> None:
@@ -502,12 +503,18 @@ def test_the_landed_row_says_where_its_scale_came_from(monkeypatch) -> None:
     evidence. The candidate carried `scale_source` and the ROW did not, so the distinction
     existed in memory and never reached anyone who could act on it.
 
-    AVGO's table declares its own, so this lands `scale=table`; the assertion is that the
-    field is there and true, not that it is always the same value.
+    The TABLE path only answers a filing that tags no segment revenue (#830), so AVGO is read
+    here with its revenue tags renamed away. Its table declares its own scale, so this lands
+    `scale=table`; the assertion is that the field is there and true, not that it is always
+    the same value.
     """
     from data_engine.datahub.standards import segment_extraction as adapter
 
-    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: _avgo_filing())
+    untagged = _avgo_filing()
+    body = untagged.body.replace(
+        b'name="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"', b'name="x:Untagged"'
+    )
+    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: replace(untagged, body=body))
     connection = _RecordingConnection()
     adapter.extract_segment_revenue(
         CIK,
@@ -522,6 +529,178 @@ def test_the_landed_row_says_where_its_scale_came_from(monkeypatch) -> None:
     assert rows, "the partition landed"
     assert all("scale=table" in r["evidence_ref"] for r in rows), "AVGO states its own scale"
     assert all("accession=0001730168-25-000121" in r["evidence_ref"] for r in rows)
+
+
+# --- #830: segment revenue as the filer tags it ----------------------------------------------
+
+
+def _packaged(name: str, *, cik: int, filed: date):
+    from data_engine.datahub.standards.filing_extraction import FilingDocument
+
+    return FilingDocument(
+        cik=cik,
+        accession="0000000000-26-000830",
+        form="10-K",
+        filing_date=filed,
+        primary_document=name,
+        url=f"https://www.sec.gov/Archives/edgar/data/{cik}/{name}",
+        body=(REPO_ROOT / "apps" / "data-engine" / "samples" / "filings" / name).read_bytes(),
+    )
+
+
+def _extract(monkeypatch, document, oracle, *, write: bool = True):
+    from data_engine.datahub.standards import segment_extraction as adapter
+
+    monkeypatch.setattr(adapter, "fetch_annual_filing", lambda *a, **k: document)
+    connection = _RecordingConnection(oracle)
+    outcome = adapter.extract_segment_revenue(
+        document.cik,
+        connection=connection,
+        http=None,
+        gateway=None,
+        standard=STANDARDS["segment_revenue"],
+        cutoff=CUTOFF,
+        write=write,
+    )
+    return outcome, [_row(p) for p in connection.inserts()]
+
+
+def test_tagged_segment_revenue_lands_before_any_table_is_read(monkeypatch) -> None:
+    """AAPL tags its five geographic reportable segments, and they sum to the consolidated
+    revenue the capture plane holds to the dollar. The row says the parts were TAGGED and names
+    each member, so every part can be found in the filing."""
+    from factors.shared.extraction import RULE_EXHAUSTIVE_PARTITION
+
+    aapl = _packaged("AAPL_10K_000032019325000079.html", cik=320193, filed=date(2025, 10, 31))
+    outcome, rows = _extract(monkeypatch, aapl, ("416161000000", "2025-09-27"))
+
+    assert (outcome.status, outcome.extractor) == ("resolved", RULE_EXHAUSTIVE_PARTITION), outcome.detail
+    assert {r["segment_name"]: r["segment_revenue"] for r in rows} == {
+        "Americas": Decimal("178353000000"),
+        "Europe": Decimal("111032000000"),
+        "Greater China": Decimal("64377000000"),
+        "Japan": Decimal("28703000000"),
+        "Rest of Asia Pacific": Decimal("33696000000"),
+    }
+    assert {r["partition_residual"] for r in rows} == {Decimal(0)}
+    evidence = rows[0]["evidence_ref"]
+    assert "recall=xbrl concept=us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" in evidence
+    assert "aapl:GreaterChinaSegmentMember" in evidence
+
+
+def test_a_tagged_set_that_does_not_balance_is_refused_with_each_concepts_reason(monkeypatch) -> None:
+    """ADM tags its three segments under two concepts and neither accounts for its revenue —
+    "Other Business" is tagged off the segment axis. ADP's two segments exceed its total by the
+    intersegment revenue. JPM's three bank segments fall short by Corporate. Each is a refusal
+    that says which concept and which way, never a landed set."""
+    adm = _packaged("ADM_10K_000000708426000011.html", cik=7084, filed=date(2026, 2, 17))
+    outcome, rows = _extract(monkeypatch, adm, ("80269000000", "2025-12-31"))
+    assert outcome.status == "no_candidate" and rows == []
+    assert "RevenueFromContractWithCustomerExcludingAssessedTax: sums_short_of_total (3 members)" in outcome.detail
+    assert "Revenues: sums_short_of_total (3 members)" in outcome.detail
+
+    adp = _packaged("ADP_10K_000000867026000030.html", cik=8670, filed=date(2026, 8, 6))
+    outcome, rows = _extract(monkeypatch, adp, ("21947400000", "2026-06-30"))
+    assert outcome.status == "no_candidate" and rows == []
+    assert "sums_over_total (2 members)" in outcome.detail
+
+    jpm = _packaged("JPM_10K_000162828026008131.html", cik=19617, filed=date(2026, 2, 13))
+    outcome, rows = _extract(monkeypatch, jpm, ("182447000000", "2025-12-31"))
+    assert outcome.status == "no_candidate" and rows == []
+    assert "RevenuesNetOfInterestExpense: sums_short_of_total (3 members)" in outcome.detail
+
+
+def test_a_filing_that_tags_its_segments_is_never_answered_by_a_printed_table(monkeypatch) -> None:
+    """Measured on Comcast (#830): its five tagged segments do not balance (they include
+    intersegment revenue), and the table reader DID balance a table — "United States, United
+    Kingdom, Other", its geography. A filer that tags its segments has said what they are, so
+    the answer is a refusal rather than a geography recorded as segment revenue."""
+    table = (
+        "Revenue by segment (in millions) United States 100 United Kingdom 50 Total 150 "
+        "Revenue by segment (in millions) United States 100 United Kingdom 50 Total 150"
+    )
+    body = _ixbrl(
+        table,
+        f"Media {_revenue_tag('c-1', 'Media', '100')} Studios {_revenue_tag('c-2', 'Studios', '80')}",
+        contexts=(
+            _annual_context("c-1", "cmcsa:MediaSegmentMember"),
+            _annual_context("c-2", "cmcsa:StudiosSegmentMember"),
+        ),
+    )
+    document = _packaged("AVGO_10K_000173016825000121.html", cik=1166691, filed=date(2026, 1, 29))
+    outcome, rows = _extract(monkeypatch, replace(document, body=body), ("150000000", "2025-12-31"))
+    assert rows == [], outcome.detail
+    assert outcome.status == "no_candidate"
+    assert "sums_over_total (2 members)" in outcome.detail
+
+
+def test_a_segment_tagged_twice_a_negative_part_or_another_period_refuses(monkeypatch) -> None:
+    def run(*tags: str, contexts: tuple[str, ...], oracle=("150000000", "2025-12-31")):
+        document = _packaged("AVGO_10K_000173016825000121.html", cik=1166691, filed=date(2026, 1, 29))
+        body = _ixbrl(" ".join(tags), contexts=contexts)
+        return _extract(monkeypatch, replace(document, body=body), oracle)
+
+    contexts = (_annual_context("c-1", "x:AMember"), _annual_context("c-2", "x:BMember"))
+    outcome, rows = run(
+        _revenue_tag("c-1", "A", "100"),
+        _revenue_tag("c-1", "A", "90"),
+        _revenue_tag("c-2", "B", "50"),
+        contexts=contexts,
+    )
+    assert rows == [] and "member_tagged_twice" in outcome.detail
+
+    outcome, rows = run(_revenue_tag("c-1", "A", "200"), _revenue_tag("c-2", "B", "50", sign="-"), contexts=contexts)
+    assert rows == [] and "negative_part" in outcome.detail, "an elimination is not a segment"
+
+    outcome, rows = run(
+        _revenue_tag("c-1", "A", "100"),
+        _revenue_tag("c-2", "B", "50"),
+        contexts=contexts,
+        oracle=("150000000", "2024-12-31"),
+    )
+    assert rows == [] and "tagged for 2025-12-31, revenue on file is for 2024-12-31" in outcome.detail
+
+
+def _annual_context(context: str, member: str, *, end: str = "2025-12-31") -> str:
+    return (
+        f'<xbrli:context id="{context}"><xbrli:entity>'
+        '<xbrli:identifier scheme="http://www.sec.gov/CIK">0000000001</xbrli:identifier>'
+        '<xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">'
+        f"{member}</xbrldi:explicitMember></xbrli:segment></xbrli:entity>"
+        f"<xbrli:period><xbrli:startDate>2025-01-01</xbrli:startDate><xbrli:endDate>{end}</xbrli:endDate>"
+        "</xbrli:period></xbrli:context>"
+    )
+
+
+def _revenue_tag(context: str, _label: str, shown: str, *, sign: str = "") -> str:
+    signed = f' sign="{sign}"' if sign else ""
+    return (
+        f'<ix:nonFraction unitRef="usd" contextRef="{context}" decimals="-6" scale="6"{signed} '
+        f'name="us-gaap:Revenues" format="ixt:num-dot-decimal">{shown}</ix:nonFraction>'
+    )
+
+
+def test_the_reader_applies_scale_sign_words_and_formats() -> None:
+    """Every value the adapters trust passes through one parser, so its edge cases are pinned
+    once: scale, a negative sign, a tagged word, a fixed zero, and a comma-decimal number."""
+    from data_engine.datahub.standards.inline_xbrl import InlineXbrl
+
+    context = _context("c-1", "2025-12-31")
+
+    def value(attributes: str, shown: str):
+        body = _ixbrl(
+            f'<ix:nonFraction contextRef="c-1" name="us-gaap:Revenues" {attributes}>{shown}</ix:nonFraction>',
+            contexts=(context,),
+        )
+        (fact,) = InlineXbrl(body).facts({"us-gaap:Revenues"})
+        return fact.value
+
+    assert value('scale="6" format="ixt:num-dot-decimal"', "36,858") == Decimal("36858000000")
+    assert value('scale="6" sign="-" format="ixt:num-dot-decimal"', "449") == Decimal("-449000000")
+    assert value('scale="0" format="ixt-sec:numwordsen"', "seven") == Decimal(7)
+    assert value('scale="6" format="ixt:fixed-zero"', "—") == Decimal(0)
+    assert value('scale="3" format="ixt:num-comma-decimal"', "1.234,5") == Decimal("1234500")
+    assert value('scale="6"', "n/a") is None, "unreadable is None, never a guessed number"
 
 
 # --- #822: what decides that an issuer has ONE segment ----------------------------------------

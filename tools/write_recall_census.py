@@ -28,6 +28,7 @@ from data_engine.datahub.standards.segment_extraction import (
     declared_segment_count,
     filing_scale,
     segment_candidates,
+    tagged_segment_revenues,
     windows_of,
 )
 from factors.shared.extraction import Partition, select_exhaustive_partition
@@ -76,6 +77,17 @@ def census() -> dict[str, dict]:
             "candidates": len(recalled),
             "filing_scale": str(scale) if scale is not None else None,
             "declared_segments": declared.evidence if declared is not None else None,
+            # #830: what the tagged segment revenue yields, per concept — a change to the reader
+            # shows which filings it moved, like every other field here.
+            "tagged_segments": [
+                {
+                    "concept": tagged.concept,
+                    "members": [member for member, _ in tagged.parts],
+                    "sum": str(sum((value for _, value in tagged.parts), Decimal(0))),
+                    "refusal": tagged.refusal,
+                }
+                for tagged in tagged_segment_revenues(body)
+            ],
         }
         total = TOTALS.get(path.name)
         if total and recalled:

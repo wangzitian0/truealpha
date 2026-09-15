@@ -31,7 +31,6 @@ candidates with the evidence each was read from.
 from __future__ import annotations
 
 import hashlib
-import html
 import json
 import re
 from collections import Counter
@@ -39,6 +38,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from functools import partial
 from typing import Any
 
 from factors.shared.extraction import (
@@ -55,6 +55,7 @@ from data_engine.datahub.standards.filing_extraction import (
     fetch_annual_filing,
     filing_plain_text,
 )
+from data_engine.datahub.standards.inline_xbrl import InlineXbrl, TaggedFact
 
 #: The sentence that introduces a segment revenue table. Every phrasing seen in the packaged
 #: filings AND in the ones the deployed run refused; a heading this misses costs a
@@ -179,45 +180,11 @@ _NOT_A_SEGMENT = re.compile(
 #: AEP and Exelon on sentences about a subsidiary registrant. 97 of the 106 filings tag the
 #: count, and each of those five tags two or more, or one only under a subsidiary's dimension.
 _SEGMENT_COUNT_CONCEPTS = ("us-gaap:NumberOfReportableSegments", "us-gaap:NumberOfOperatingSegments")
-_NON_FRACTION = re.compile(r"<ix:nonFraction\b[^>]*>", re.IGNORECASE)
-_NON_FRACTION_END = re.compile(r"</ix:nonFraction\s*>", re.IGNORECASE)
-_ATTRIBUTE = re.compile(r"([\w:.-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
-_CONTEXT = re.compile(
-    r"<xbrli:context\b[^>]*\bid\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</xbrli:context\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-_PERIOD_END = re.compile(r"<xbrli:(?:endDate|instant)>\s*(\d{4}-\d{2}-\d{2})\s*<", re.IGNORECASE)
-#: A context qualified by a dimension describes PART of the filer: a subsidiary registrant in
-#: a combined filing (AEP, Exelon) or one of several segments (CSX's railroad).
-_DIMENSIONAL = re.compile(r"<xbrli:(?:segment|scenario)\b", re.IGNORECASE)
-#: The hidden header, where a filer may tag a count it never prints.
-_HIDDEN_HEADER = re.compile(r"<ix:header\b.*?</ix:header\s*>", re.IGNORECASE | re.DOTALL)
-_TAG_MARKUP = re.compile(r"<[^>]+>")
-#: `ixt-sec:numwordsen` is how a filer tags the word ("one reportable segment"); the others tag
-#: digits. Every form met in the 106 filings is one of the two.
-_NUMBER_WORDS = {
-    "no": 0,
-    "none": 0,
-    "zero": 0,
-    "one": 1,
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-    "ten": 10,
-    "eleven": 11,
-    "twelve": 12,
-}
 #: Enough of the sentence around the statement to be worth reading back. The filing usually
 #: says what the one segment DOES right there ("one reportable segment, Payment Services"),
 #: which is the only description a classifier will get.
 _SINGLE_SEGMENT_SPAN = 240
 _STATEMENT_LEAD = 90
-_MARK = "⦃segment-count⦄"
 
 
 @dataclass(frozen=True)
@@ -237,85 +204,143 @@ class DeclaredSegmentCount:
         return f"{self.concept}={self.value}@{self.period_end.isoformat()}"
 
 
-def declared_segment_count(body: bytes) -> DeclaredSegmentCount | None:
+def declared_segment_count(filing: bytes | InlineXbrl) -> DeclaredSegmentCount | None:
     """The segment count the filing's inline XBRL states, or None when it tags none.
 
     Three rules, each taken from a filing that breaks the simpler one:
 
-    - Only a fact about the whole filer counts. A dimensional context is about a part of it.
+    - Only a fact about the whole filer counts. A dimensional context is about a part of it:
+      a subsidiary registrant in a combined filing (AEP, Exelon), or one segment (CSX's
+      railroad).
     - The latest period decides. Western Digital tags `two` for the day before its Flash
       separation and `one` for the fiscal year.
     - The reportable count outranks the operating count. Ross and Booking aggregate several
       operating segments into ONE reportable segment, and a reportable segment is what the
       standard measures; the operating count answers only when no reportable count is tagged.
     """
-    raw = body.decode("utf-8", "ignore")
-    periods: dict[str, date] = {}
-    for context_id, inner in _CONTEXT.findall(raw):
-        ends = _PERIOD_END.findall(inner)
-        if ends and not _DIMENSIONAL.search(inner):
-            periods[context_id] = date.fromisoformat(ends[-1])
-    hidden = [header.span() for header in _HIDDEN_HEADER.finditer(raw)]
-
-    stated: dict[str, list[tuple[date, int | None, int]]] = {}
-    for tag in _NON_FRACTION.finditer(raw):
-        attributes = {name: double or single for name, double, single in _ATTRIBUTE.findall(tag.group(0))}
-        concept = attributes.get("name", "")
-        period_end = periods.get(attributes.get("contextRef", ""))
-        if concept not in _SEGMENT_COUNT_CONCEPTS or period_end is None:
-            continue
-        # To the NEXT close, with markup stripped: a filer tagging one printed word with both
-        # concepts nests one tag inside the other (DUOL, SHOP), and both read the same word.
-        end = _NON_FRACTION_END.search(raw, tag.end())
-        shown = _TAG_MARKUP.sub(" ", raw[tag.end() : end.start() if end else tag.end()])
-        stated.setdefault(concept, []).append((period_end, _count(html.unescape(shown)), tag.start()))
-
+    document = filing if isinstance(filing, InlineXbrl) else InlineXbrl(filing)
+    stated: dict[str, list[TaggedFact]] = {}
+    for fact in document.facts(_SEGMENT_COUNT_CONCEPTS):
+        if not fact.context.dimensions:
+            stated.setdefault(fact.concept, []).append(fact)
     for concept in _SEGMENT_COUNT_CONCEPTS:
         facts = stated.get(concept)
         if not facts:
             continue
-        latest = max(period_end for period_end, _, _ in facts)
-        values = {value for period_end, value, _ in facts if period_end == latest}
+        latest = max(fact.context.end for fact in facts)
+        at_latest = [fact for fact in facts if fact.context.end == latest]
+        values = {_whole(fact.value) for fact in at_latest}
         value = values.pop() if len(values) == 1 else None
-        printed = [
-            offset
-            for period_end, _, offset in facts
-            if period_end == latest and not any(start <= offset < stop for start, stop in hidden)
-        ]
-        statement = _statement_at(raw, printed[0], hidden) if value is not None and printed else None
+        printed = [fact.offset for fact in at_latest if not fact.hidden]
+        statement = (
+            document.sentence_at(printed[0], lead=_STATEMENT_LEAD, span=_SINGLE_SEGMENT_SPAN)
+            if value is not None and printed
+            else None
+        )
         return DeclaredSegmentCount(concept, value, latest, statement)
     return None
 
 
-def _count(shown: str) -> int | None:
-    word = " ".join(shown.split()).lower()
-    if word in _NUMBER_WORDS:
-        return _NUMBER_WORDS[word]
-    try:
-        number = Decimal(word.replace(",", ""))
-    except ArithmeticError:
-        return None
-    return int(number) if number.is_finite() and number == number.to_integral_value() else None
+def _whole(value: Decimal | None) -> int | None:
+    return int(value) if value is not None and value == value.to_integral_value() else None
 
 
-def _statement_at(raw: str, offset: int, hidden: list[tuple[int, int]]) -> str | None:
-    """The printed sentence around the tag at `offset`, read back as plain text.
+#: Segment revenue as the filer TAGS it (#830): a revenue fact whose context names one member of
+#: the business-segment axis. Since ASU 2023-07 a 10-K tags its segment note, and this is the
+#: part of the filing that says, in a form nothing has to interpret, which segment earned what.
+#:
+#: Measured over the latest annual filing of every issuer the lane walks (106 filings,
+#: 2026-09-15): the tagged segments balance the filing's own consolidated revenue in 54, against
+#: 6 for the heading/row/units reader below — and one of that reader's six was Comcast's
+#: GEOGRAPHY table ("United States, United Kingdom, Other") accepted as its segments.
+#:
+#: Tried in this order; the first concept whose members balance the oracle is the answer.
+_REVENUE_CONCEPTS = (
+    "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+    "us-gaap:Revenues",
+    "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
+    "us-gaap:SalesRevenueNet",
+    # A bank's top line (JPM): net revenue is what its segments report and what the oracle holds.
+    "us-gaap:RevenuesNetOfInterestExpense",
+)
+_SEGMENT_AXIS = "us-gaap:StatementBusinessSegmentsAxis"
+#: The one second dimension a segment fact may carry and still be the segment's revenue: the
+#: filer marking the value as the operating segment's own.
+_OPERATING_SEGMENTS = ("srt:ConsolidationItemsAxis", "us-gaap:OperatingSegmentsMember")
+#: A fiscal year, including 52/53-week years (AAPL's runs 364 days, some run 371).
+_ANNUAL_DAYS = range(340, 381)
+_CAMEL_CASE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+#: CamelCase capitalizes every word; a printed segment name does not ("Rest of Asia Pacific").
+_MINOR_WORDS = frozenset({"And", "Of", "The", "For", "In", "To", "On"})
 
-    The tag's own position is marked before the markup is stripped, because the printed word
-    ("one") occurs thousands of times in a filing and only the mark says which is the tagged
-    one. The fragment starts and ends on a tag boundary so no half-tag reads as text, and never
-    reaches back into a hidden header.
+
+@dataclass(frozen=True)
+class TaggedSegments:
+    """One revenue concept's segment members, as tagged for the filing's latest annual period."""
+
+    concept: str
+    period_end: date
+    #: (axis member, value), member-sorted. Empty when the set is refused before any sum.
+    parts: tuple[tuple[str, Decimal], ...]
+    scale: int
+    #: Why the set cannot be offered to the identity at all, or None.
+    refusal: str | None = None
+
+
+def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments, ...]:
+    """Every revenue concept the filing tags on the business-segment axis, for its latest year.
+
+    A set is refused rather than summed when a member carries two different values (two
+    claims about one segment), a value the reader cannot parse, or a negative value: an
+    elimination is a reconciling item, not a segment anyone is the purest name under.
     """
-    start = max([offset - 6000] + [stop for _, stop in hidden if stop <= offset])
-    start = raw.find("<", max(0, start))
-    stop = raw.rfind(">", offset, offset + 3000) + 1
-    fragment = f"{raw[start:offset]} {_MARK} {raw[offset:stop]}"
-    text = filing_plain_text(fragment.encode("utf-8"))
-    at = text.find(_MARK)
-    if at < 0:
-        return None
-    lead = text[max(0, at - _STATEMENT_LEAD) : at]
-    return " ".join((lead + text[at + len(_MARK) : at + len(_MARK) + _SINGLE_SEGMENT_SPAN]).split())
+    document = filing if isinstance(filing, InlineXbrl) else InlineXbrl(filing)
+    facts = [
+        fact
+        for fact in document.facts(_REVENUE_CONCEPTS)
+        if fact.context.days is not None and fact.context.days in _ANNUAL_DAYS
+    ]
+    if not facts:
+        return ()
+    latest = max(fact.context.end for fact in facts)
+    found = []
+    for concept in _REVENUE_CONCEPTS:
+        members: dict[str, set[Decimal | None]] = {}
+        scale = 0
+        for fact in facts:
+            if fact.concept != concept or fact.context.end != latest:
+                continue
+            dimensions = dict(fact.context.dimensions)
+            member = dimensions.pop(_SEGMENT_AXIS, None)
+            if member is None or (dimensions and tuple(dimensions.items()) != (_OPERATING_SEGMENTS,)):
+                continue
+            members.setdefault(member, set()).add(fact.value)
+            scale = max(scale, fact.scale)
+        if not members:
+            continue
+        if any(None in tagged for tagged in members.values()):
+            found.append(TaggedSegments(concept, latest, (), scale, "unreadable_value"))
+        elif any(len(tagged) > 1 for tagged in members.values()):
+            found.append(TaggedSegments(concept, latest, (), scale, "member_tagged_twice"))
+        else:
+            parts = tuple(sorted((member, value) for member, (value,) in members.items() if value is not None))
+            if any(value < 0 for _, value in parts):
+                found.append(TaggedSegments(concept, latest, (), scale, "negative_part"))
+            else:
+                found.append(TaggedSegments(concept, latest, parts, scale))
+    return tuple(found)
+
+
+def segment_name_for(member: str) -> str:
+    """The segment's name from its axis member: `msft:IntelligentCloudMember` -> "Intelligent Cloud".
+
+    The filer's printed label lives in a separate label linkbase; the member's own words are the
+    same words, CamelCased, and they are enough for a reader and for the classifier.
+    """
+    local = member.split(":", 1)[-1]
+    local = re.sub(r"(?:Segments?)?Member$", "", local) or local
+    words = _CAMEL_CASE.sub(" ", local).split()
+    return " ".join([words[0], *(word.lower() if word in _MINOR_WORDS else word for word in words[1:])])
 
 
 #: The prose that USED to decide (see `_SEGMENT_COUNT_CONCEPTS` for why it no longer does).
@@ -737,45 +762,40 @@ def record_segment_partition(
 SINGLE_SEGMENT_NAME = "Single reportable segment"
 
 
-def _single_segment_outcome(
+def _land_partition(
     connection: Any,
     *,
-    cik: int,
     record_cik: int,
     document: Any,
     oracle: ConsolidatedRevenue,
-    declared: DeclaredSegmentCount,
-    statement: str | None,
+    parts: Sequence[tuple[str, Decimal]],
+    residual: Decimal,
+    extractor: str,
+    evidence_ref: str,
     standard: MetricStandard,
     write: bool,
+    summary: str,
+    note: str = "",
 ) -> ExtractionOutcome:
-    """Land (or report) the determinate partition of an issuer that declares one segment."""
-    parts = [(SINGLE_SEGMENT_NAME, oracle.value)]
-    partition_id = partition_id_for(record_cik, oracle.period_end, parts, extractor=RULE_SINGLE_SEGMENT)
-    summary = (
-        f"1 segment (the whole issuer) accounting for {oracle.value} for {oracle.period_end}, "
-        f"declared as {declared.evidence}"
+    """Land — or, in a probe, report — one accepted set. Every path that accepts a partition
+    (a declared single segment, tagged segment revenue, a printed table) ends here, so what a
+    landed set carries cannot depend on how it was found."""
+    partition_id = partition_id_for(record_cik, oracle.period_end, parts, extractor=extractor)
+    outcome = partial(
+        ExtractionOutcome,
+        record_cik,
+        extractor=extractor,
+        accession=document.accession,
+        form=document.form,
+        filing_date=document.filing_date,
     )
     if not write:
-        return ExtractionOutcome(
-            record_cik,
-            "resolved",
-            extractor=RULE_SINGLE_SEGMENT,
-            accession=document.accession,
-            form=document.form,
-            filing_date=document.filing_date,
-            detail=f"would land {summary}: {(statement or '')[:160]}",
-        )
+        return outcome("resolved", detail=f"would land {summary}{note}")
     if partition_already_recorded(connection, partition_id):
-        return ExtractionOutcome(
-            record_cik,
-            "already_recorded",
-            extractor=RULE_SINGLE_SEGMENT,
-            accession=document.accession,
-            form=document.form,
-            filing_date=document.filing_date,
-            detail=f"{partition_id} already holds {summary}",
-        )
+        # The same filing re-extracted addresses the same set. Saying so is the point: a second
+        # identical run must be visible as a no-op rather than as a fresh landing, or an operator
+        # cannot tell a backfill that worked from one that ran twice.
+        return outcome("already_recorded", detail=f"{partition_id} already holds {summary}")
     record_segment_partition(
         connection,
         cik=record_cik,
@@ -783,28 +803,83 @@ def _single_segment_outcome(
         period_end=oracle.period_end,
         parts=parts,
         partition_total=oracle.value,
-        partition_residual=Decimal(0),
+        partition_residual=residual,
+        # WHEN the breakdown became knowable: the filing's own date, never now(). An insertion
+        # clock here is look-ahead for every historical cutoff.
         knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
-        # The declaration travels ON the row, and so does the sentence. Everything else here
-        # balances by construction, so these are the only things a reader can check the claim
-        # against. The statement goes LAST: the theme-purity reader takes everything after
-        # its marker as the description.
-        evidence_ref=" ".join(
-            [f"accession={document.accession}", f"form={document.form}", f"segment_count={declared.evidence}"]
-            + ([f"single_segment_statement={statement[:400]}"] if statement else [])
-        ),
-        extractor=RULE_SINGLE_SEGMENT,
-        confidence=confidence_for(standard.confidence_policy_id, RULE_SINGLE_SEGMENT),
+        evidence_ref=evidence_ref,
+        extractor=extractor,
+        confidence=confidence_for(standard.confidence_policy_id, extractor),
     )
-    del cik  # the filing's CIK; the fact is recorded under record_cik
+    return outcome("resolved", detail=f"{partition_id} landed {summary}{note}")
+
+
+def _tagged_segments_outcome(
+    connection: Any,
+    *,
+    cik: int,
+    record_cik: int,
+    document: Any,
+    oracle: ConsolidatedRevenue | None,
+    tagged: Sequence[TaggedSegments],
+    standard: MetricStandard,
+    write: bool,
+) -> ExtractionOutcome:
+    """Offer each tagged concept's segments to the identity; land the first that balances.
+
+    When none does, the answer is a refusal naming each concept's reason — and NOT the printed
+    tables. A filer that tags its segments has said what they are; a table that happens to
+    balance where the tagged set does not is the table reader finding something else (Comcast's
+    geography table balanced, its five tagged segments did not).
+    """
+    refusals: list[str] = []
+    for segments in tagged:
+        concept = segments.concept.split(":", 1)[-1]
+        if segments.refusal is not None:
+            refusals.append(f"{concept}: {segments.refusal}")
+            continue
+        if oracle is None:
+            refusals.append(f"{concept}: {PartitionRefusal.NO_TOTAL.value}")
+            continue
+        if segments.period_end != oracle.period_end:
+            refusals.append(f"{concept}: tagged for {segments.period_end}, revenue on file is for {oracle.period_end}")
+            continue
+        candidates = [Candidate(float(value), member) for member, value in segments.parts]
+        # In the units the facts were tagged in — five of whatever the filer rounds to.
+        tolerance = SEGMENT_TOLERANCE * Decimal(10) ** segments.scale
+        verdict = select_exhaustive_partition(candidates, total=oracle.value, tolerance=tolerance)
+        if isinstance(verdict, PartitionRefusal):
+            refusals.append(f"{concept}: {verdict.value} ({len(segments.parts)} members)")
+            continue
+        parts = [(segment_name_for(member), value) for member, value in segments.parts]
+        named = ", ".join(f"{name}={value}" for name, value in parts)
+        return _land_partition(
+            connection,
+            record_cik=record_cik,
+            document=document,
+            oracle=oracle,
+            parts=parts,
+            residual=Decimal(str(verdict.residual)),
+            extractor=verdict.extractor,
+            # `recall=xbrl` and the members: a reader can find every part's tag in the filing.
+            evidence_ref=(
+                f"accession={document.accession} form={document.form} recall=xbrl "
+                f"concept={segments.concept} members={','.join(member for member, _ in segments.parts)}"
+            ),
+            standard=standard,
+            write=write,
+            summary=(
+                f"{len(parts)} segments accounting for {verdict.total} "
+                f"(residual {verdict.residual}) for {oracle.period_end}: {named}"
+            ),
+        )
     return ExtractionOutcome(
-        record_cik,
-        "resolved",
-        extractor=RULE_SINGLE_SEGMENT,
+        cik,
+        "no_candidate",
         accession=document.accession,
         form=document.form,
         filing_date=document.filing_date,
-        detail=f"{partition_id} landed {summary}: {(statement or '')[:160]}",
+        detail=f"tagged segment revenue accounts for no consolidated revenue ({'; '.join(refusals)})",
     )
 
 
@@ -904,7 +979,8 @@ def extract_segment_revenue(
     # Checked BEFORE the tables, not as a fallback after them: an issuer that declares one
     # segment and also prints a geography or product breakdown must not have that breakdown
     # accepted as its reportable segments.
-    declared = declared_segment_count(document.body)
+    xbrl = InlineXbrl(document.body)
+    declared = declared_segment_count(xbrl)
     if declared is not None and declared.value == 1 and oracle is not None:
         if declared.period_end != oracle.period_end:
             # The partition is filed under the ORACLE's period, so a count declared for a
@@ -921,14 +997,43 @@ def extract_segment_revenue(
                     f"the consolidated revenue on file is for {oracle.period_end}"
                 ),
             )
-        return _single_segment_outcome(
+        statement = declared.statement or single_segment_statement(text)
+        return _land_partition(
+            connection,
+            record_cik=record_cik,
+            document=document,
+            oracle=oracle,
+            parts=[(SINGLE_SEGMENT_NAME, oracle.value)],
+            residual=Decimal(0),
+            extractor=RULE_SINGLE_SEGMENT,
+            # The declaration travels ON the row, and so does the sentence. Everything else here
+            # balances by construction, so these are the only things a reader can check the claim
+            # against. The statement goes LAST: the theme-purity reader takes everything after
+            # its marker as the description.
+            evidence_ref=" ".join(
+                [f"accession={document.accession}", f"form={document.form}", f"segment_count={declared.evidence}"]
+                + ([f"single_segment_statement={statement[:400]}"] if statement else [])
+            ),
+            standard=standard,
+            write=write,
+            summary=(
+                f"1 segment (the whole issuer) accounting for {oracle.value} for {oracle.period_end}, "
+                f"declared as {declared.evidence}"
+            ),
+            note=f": {(statement or '')[:160]}",
+        )
+
+    # Next, what the filer tags (#830). A filing that tags segment revenue is answered from the
+    # tags or refused — the printed tables below are for filings that tag none.
+    tagged = tagged_segment_revenues(xbrl)
+    if tagged:
+        return _tagged_segments_outcome(
             connection,
             cik=cik,
             record_cik=record_cik,
             document=document,
             oracle=oracle,
-            declared=declared,
-            statement=declared.statement or single_segment_statement(text),
+            tagged=tagged,
             standard=standard,
             write=write,
         )
@@ -961,66 +1066,29 @@ def extract_segment_revenue(
             named = ", ".join(
                 f"{recalled[i].segment_name}={recalled[i].stated_value}" for i in verdict.candidate_indices
             )
-            partition_id = partition_id_for(record_cik, oracle.period_end, parts, extractor=verdict.extractor)
-            summary = (
-                f"{len(parts)} segments accounting for {verdict.total} "
-                f"(residual {verdict.residual}) for {oracle.period_end}: {named}"
-            )
-            if not write:
-                return ExtractionOutcome(
-                    record_cik,
-                    "resolved",
-                    extractor=verdict.extractor,
-                    accession=document.accession,
-                    form=document.form,
-                    filing_date=document.filing_date,
-                    detail=f"would land {summary}",
-                )
-            if partition_already_recorded(connection, partition_id):
-                # The same filing re-extracted addresses the same set. Saying so is the
-                # point: a second identical run must be visible as a no-op rather than as a
-                # fresh landing, or an operator cannot tell a backfill that worked from one
-                # that ran twice.
-                return ExtractionOutcome(
-                    record_cik,
-                    "already_recorded",
-                    extractor=verdict.extractor,
-                    accession=document.accession,
-                    form=document.form,
-                    filing_date=document.filing_date,
-                    detail=f"{partition_id} already holds {summary}",
-                )
-            record_segment_partition(
+            return _land_partition(
                 connection,
-                cik=record_cik,
-                partition_id=partition_id,
-                period_end=oracle.period_end,
+                record_cik=record_cik,
+                document=document,
+                oracle=oracle,
                 parts=parts,
-                partition_total=oracle.value,
-                partition_residual=Decimal(str(verdict.residual)),
-                # WHEN the breakdown became knowable: the filing's own date, never now().
-                # An insertion clock here is look-ahead for every historical cutoff.
-                knowable_at=datetime.combine(document.filing_date, time.min, tzinfo=UTC),
-                # `scale=` is not decoration: a scale printed beside the numbers and one
-                # inherited from the filing are different evidence, and a row that does not
-                # say which leaves a reader unable to tell them apart. It is the honest cost
-                # of letting a table inherit — the identity proves the scale was RIGHT, and
-                # this says where it came from.
+                residual=Decimal(str(verdict.residual)),
+                extractor=verdict.extractor,
+                # `scale=` is not decoration: a scale printed beside the numbers and one inherited
+                # from the filing are different evidence, and a row that does not say which leaves
+                # a reader unable to tell them apart. It is the honest cost of letting a table
+                # inherit — the identity proves the scale was RIGHT, and this says where it came
+                # from.
                 evidence_ref=(
                     f"accession={document.accession} form={document.form} "
                     f"scale={recalled[verdict.candidate_indices[0]].scale_source}"
                 ),
-                extractor=verdict.extractor,
-                confidence=confidence_for(standard.confidence_policy_id, verdict.extractor),
-            )
-            return ExtractionOutcome(
-                record_cik,
-                "resolved",
-                extractor=verdict.extractor,
-                accession=document.accession,
-                form=document.form,
-                filing_date=document.filing_date,
-                detail=f"{partition_id} landed {summary}",
+                standard=standard,
+                write=write,
+                summary=(
+                    f"{len(parts)} segments accounting for {verdict.total} "
+                    f"(residual {verdict.residual}) for {oracle.period_end}: {named}"
+                ),
             )
         refusals.append(verdict)
 
