@@ -1,10 +1,7 @@
 {
-  "_comment": "Per-filing recall census over apps/data-engine/samples/filings. Committed so a change to the extraction patterns shows WHICH filings it moved, in the diff, rather than being described as general because it scored on the one it was developed against. A drop counts as much as a gain. Regenerate with: uv run python tools/write_recall_census.py",
+  "_comment": "Per-filing census of what the segment adapter reads from apps/data-engine/samples/filings: the declared segment count and the segment revenue each filing tags. Committed so a change to either reader shows WHICH filings it moved, in the diff, rather than being described as general because it scored on the one it was developed against. A drop counts as much as a gain. Regenerate with: uv run python tools/write_recall_census.py",
   "filings": {
     "AAPL_10K_000032019325000079.html": {
-      "windows": 2,
-      "candidates": 6,
-      "filing_scale": "1000000",
       "declared_segments": null,
       "tagged_segments": [
         {
@@ -31,9 +28,6 @@
       ]
     },
     "ADM_10K_000000708426000011.html": {
-      "windows": 18,
-      "candidates": 32,
-      "filing_scale": "1000000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31",
       "tagged_segments": [
         {
@@ -59,9 +53,6 @@
       ]
     },
     "ADP_10K_000000867026000030.html": {
-      "windows": 6,
-      "candidates": 18,
-      "filing_scale": "1000000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=2@2026-06-30",
       "tagged_segments": [
         {
@@ -76,9 +67,6 @@
       ]
     },
     "AVGO_10K_000173016825000121.html": {
-      "windows": 4,
-      "candidates": 12,
-      "filing_scale": "1000000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=2@2025-11-02",
       "tagged_segments": [
         {
@@ -93,29 +81,20 @@
       ],
       "accepted_partitions": [
         [
-          "Semiconductor solutions",
-          "Infrastructure software"
+          "Infrastructure Software",
+          "Semiconductor Solutions"
         ]
       ]
     },
     "DDOG_10K_000162828026008819.html": {
-      "windows": 0,
-      "candidates": 0,
-      "filing_scale": "1000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31",
       "tagged_segments": []
     },
     "DUOL_10K_000162828026012494.html": {
-      "windows": 0,
-      "candidates": 0,
-      "filing_scale": "1000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31",
       "tagged_segments": []
     },
     "JPM_10K_000162828026008131.html": {
-      "windows": 0,
-      "candidates": 0,
-      "filing_scale": "1000000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31",
       "tagged_segments": [
         {
@@ -131,9 +110,6 @@
       ]
     },
     "NICE_20F_000100393526000010.html": {
-      "windows": 0,
-      "candidates": 0,
-      "filing_scale": "1000000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=2@2025-12-31",
       "tagged_segments": [
         {
@@ -148,23 +124,14 @@
       ]
     },
     "PLUG_10KA_000155837022003577.html": {
-      "windows": 0,
-      "candidates": 0,
-      "filing_scale": "1000",
       "declared_segments": null,
       "tagged_segments": []
     },
     "PLUG_10K_000155837021007147.html": {
-      "windows": 0,
-      "candidates": 0,
-      "filing_scale": "1000",
       "declared_segments": null,
       "tagged_segments": []
     },
     "SHOP_10K_000159480526000007.html": {
-      "windows": 0,
-      "candidates": 0,
-      "filing_scale": "1000000",
       "declared_segments": "us-gaap:NumberOfReportableSegments=1@2025-12-31",
       "tagged_segments": []
     }

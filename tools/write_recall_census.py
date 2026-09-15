@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Regenerate `apps/data-engine/tests/recall_census.json` (#772).
+"""Regenerate `apps/data-engine/tests/recall_census.json` (#772, #822, #830, #833).
 
-The census is what stops a recall rule being fitted to one document and described as
-general. `segment_extraction`'s heading pattern, window shape and units rule were all
-developed against ONE real 10-K, every test was written from that same document, and the
-suite proved the module worked on the document it was fitted to. The first deployed run over
-25 issuers resolved one — the same one.
+The census is what stops an extraction rule being fitted to one document and described as
+general. The segment adapter's first reader — heading, row and units regexes — was developed
+against ONE real 10-K, every test was written from that same document, and the suite proved it
+worked on the document it was fitted to: the first deployed run over 25 issuers resolved one.
 
-So the counts are committed per filing. A change that scores on a single document and zero
-elsewhere shows that in the diff, and a DROP is as visible as a gain (AVGO went 13 -> 12
-candidates during one change and nothing said so).
+So what the adapter reads is committed per filing: the segment count each filing declares and
+the segment revenue it tags. A change to either reader shows WHICH filings it moved, in the
+diff, and a drop is as visible as a gain.
 
 Run: uv run python tools/write_recall_census.py
 """
@@ -20,43 +19,32 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
-from data_engine.datahub.standards.filing_extraction import filing_plain_text
 from data_engine.datahub.standards.segment_extraction import (
     SEGMENT_TOLERANCE,
-    _windows,
-    as_candidates,
     declared_segment_count,
-    filing_scale,
-    segment_candidates,
+    segment_name_for,
     tagged_segment_revenues,
-    windows_of,
 )
-from factors.shared.extraction import Partition, select_exhaustive_partition
+from factors.shared.extraction import Candidate, Partition, select_exhaustive_partition
 
 ROOT = Path(__file__).resolve().parent.parent
 FILINGS = ROOT / "apps" / "data-engine" / "samples" / "filings"
 CENSUS = ROOT / "apps" / "data-engine" / "tests" / "recall_census.json"
 
-#: Consolidated revenue as the CAPTURE PLANE holds it, for the filings whose oracle is known
-#: — absolute, read from Production, the same number a run checks the identity against. Only
-#: these can have an accepted partition recorded; the rest record recall alone.
-#:
-#: Two entries rather than one because the corpus gained the filings the DEPLOYED run refuses.
-#: The packaged set held none of them: ADM, JPM, NICE, PLUG and SHOP are not in the universe
-#: the standards lane walks, so the census could catch a regression and could not measure
-#: progress. AAPL and ADP are in it, their behaviour was measured through the deployed
-#: gateway, and AAPL's five geographies balance to the cent — so an acceptance, not just a
-#: recall count, is now pinned for a filing production actually meets.
+#: Consolidated revenue as the CAPTURE PLANE holds it, for the filings whose oracle is known —
+#: absolute, read from Production, the same number a run checks the identity against. Only these
+#: can have an accepted partition recorded; the rest record what the tags say alone.
 TOTALS = {
     "AVGO_10K_000173016825000121.html": "63887000000",
     "AAPL_10K_000032019325000079.html": "416161000000",
 }
 
 COMMENT = (
-    "Per-filing recall census over apps/data-engine/samples/filings. Committed so a change to "
-    "the extraction patterns shows WHICH filings it moved, in the diff, rather than being "
-    "described as general because it scored on the one it was developed against. A drop counts "
-    "as much as a gain. Regenerate with: uv run python tools/write_recall_census.py"
+    "Per-filing census of what the segment adapter reads from apps/data-engine/samples/filings: "
+    "the declared segment count and the segment revenue each filing tags. Committed so a change "
+    "to either reader shows WHICH filings it moved, in the diff, rather than being described as "
+    "general because it scored on the one it was developed against. A drop counts as much as a "
+    "gain. Regenerate with: uv run python tools/write_recall_census.py"
 )
 
 
@@ -64,52 +52,42 @@ def census() -> dict[str, dict]:
     out: dict[str, dict] = {}
     for path in sorted(FILINGS.glob("*.html")):
         if "8K" in path.name:
-            continue  # 8-Ks carry no segment table; they are in the corpus for other adapters
+            continue  # 8-Ks carry no segment note; they are in the corpus for other adapters
         body = path.read_bytes()
-        text = filing_plain_text(body)
-        recalled = segment_candidates(text)
-        scale = filing_scale(text)
-        # What decides the single-segment path (#822), recorded for the same reason the recall
-        # counts are: a change to how the count is read shows WHICH filings it moved.
         declared = declared_segment_count(body)
+        tagged = tagged_segment_revenues(body)
         entry: dict = {
-            "windows": len(_windows(text)),
-            "candidates": len(recalled),
-            "filing_scale": str(scale) if scale is not None else None,
             "declared_segments": declared.evidence if declared is not None else None,
-            # #830: what the tagged segment revenue yields, per concept — a change to the reader
-            # shows which filings it moved, like every other field here.
             "tagged_segments": [
                 {
-                    "concept": tagged.concept,
-                    "members": [member for member, _ in tagged.parts],
-                    "sum": str(sum((value for _, value in tagged.parts), Decimal(0))),
-                    "refusal": tagged.refusal,
+                    "concept": segments.concept,
+                    "members": [member for member, _ in segments.parts],
+                    "sum": str(sum((value for _, value in segments.parts), Decimal(0))),
+                    "refusal": segments.refusal,
                 }
-                for tagged in tagged_segment_revenues(body)
+                for segments in tagged
             ],
         }
         total = TOTALS.get(path.name)
-        if total and recalled:
-            candidates = as_candidates(recalled)
+        if total:
             accepted = []
-            for indices in windows_of(recalled).values():
+            for segments in tagged:
+                if segments.refusal is not None:
+                    continue
                 verdict = select_exhaustive_partition(
-                    candidates,
+                    [Candidate(float(value), member) for member, value in segments.parts],
                     total=Decimal(total),
-                    tolerance=SEGMENT_TOLERANCE * recalled[indices[0]].multiplier,
-                    indices=indices,
+                    tolerance=SEGMENT_TOLERANCE * Decimal(10) ** segments.scale,
                 )
                 if isinstance(verdict, Partition):
-                    accepted.append([recalled[i].segment_name for i in verdict.candidate_indices])
+                    accepted.append([segment_name_for(member) for member, _ in segments.parts])
             entry["accepted_partitions"] = accepted
         out[path.name] = entry
     return out
 
 
 def main() -> int:
-    # Once, and the number printed is the number written. Computing it twice doubles a full
-    # parse of every packaged filing and lets the log disagree with the file (review on #813).
+    # Once, and the number printed is the number written (review on #813).
     filings = census()
     CENSUS.write_text(json.dumps({"_comment": COMMENT, "filings": filings}, indent=2) + "\n")
     print(f"recall census written: {len(filings)} filings")
