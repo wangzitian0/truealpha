@@ -826,8 +826,16 @@ class SourceGateway:
 
     def capacity(self, source: str) -> SourceCapacity:
         capacity = self.capacities.get(source)
-        if capacity is None or not capacity.enforceable:
+        if capacity is None:
             _refuse(CapacityExceeded(source, "no declared capacity — register the source before calling it"))
+        if not capacity.enforceable:
+            _refuse(
+                CapacityExceeded(
+                    source,
+                    "declared capacity is not enforceable here — SourceGateway.call needs a rate window "
+                    "and a daily budget",
+                )
+            )
         return capacity
 
     def call(self, source: str, endpoint: str, fn: Callable[[], T]) -> T:

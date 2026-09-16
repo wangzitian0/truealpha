@@ -394,9 +394,10 @@ def test_a_tick_names_the_cells_served_by_failover(monkeypatch) -> None:
 def _spent_today(call_ledger, source: str, count: int) -> None:
     from data_engine.sources import gateway
 
-    at = datetime.now(UTC) - timedelta(minutes=5)  # today, outside every rate window
-    if at.date() != datetime.now(UTC).date():
-        at = datetime.now(UTC)
+    now = datetime.now(UTC)
+    # Today, and (except in the first minutes after midnight) outside every rate window;
+    # the gate checks the budget before it queues, so the exception is harmless.
+    at = max(now - timedelta(minutes=5), datetime.combine(now.date(), datetime.min.time(), tzinfo=UTC))
     call_ledger.extend(
         [gateway.CallRecord(source=source, endpoint="x", caller="earlier", called_at=at, ok=True)] * count
     )

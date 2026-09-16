@@ -491,7 +491,7 @@ def test_an_undeclared_or_unbudgeted_source_cannot_be_called_through_the_gateway
     with pytest.raises(gateway.CapacityExceeded, match="no declared capacity"):
         gw.call("yahoo", "quote", lambda: None)
     gw_default = gateway.SourceGateway(_Ledger(), caller="test")
-    with pytest.raises(gateway.CapacityExceeded, match="no declared capacity"):
+    with pytest.raises(gateway.CapacityExceeded, match="needs a rate window and a daily budget"):
         gw_default.call("openfigi", "mapping", lambda: None)  # declared, but paced only: no daily budget
 
 

@@ -24,8 +24,9 @@ def test_dispositions_are_as_specified() -> None:
     assert disposition_for(ObligationReasonCode.TIMEOUT) is ObligationDisposition.RETRY
     assert disposition_for(ObligationReasonCode.FIELD_UNAVAILABLE) is ObligationDisposition.TRACE_ONLY
     assert disposition_for(ObligationReasonCode.NOT_YET_KNOWABLE) is ObligationDisposition.TRACE_ONLY
-    # #729: a call the source gateway refused for spent capacity is deferred to the next
-    # window — recorded and continued, never retried inside the run, never "field absent".
+    # #729: a call the source gateway refused because the day's budget is spent waits for
+    # the next UTC-day reset — recorded and continued, never retried inside the run (nor
+    # after a rate window), never "field absent".
     assert disposition_for(ObligationReasonCode.DEFERRED_CAPACITY) is ObligationDisposition.TRACE_ONLY
     assert ObligationReasonCode.DEFERRED_CAPACITY.value == "deferred_capacity"
 
