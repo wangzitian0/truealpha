@@ -176,7 +176,7 @@ def test_a_throttled_token_endpoint_is_retried_like_the_manifest_read() -> None:
             return tool.Response(exhausted.pop(0), {})
         return tool.Response(401, {"Www-Authenticate": CHALLENGE.format(image="truealpha-data-engine")})
 
-    with pytest.raises(tool.RegistryError, match=r"anonymous pull token refused .* status 503"):
+    with pytest.raises(tool.RegistryError, match=r"anonymous pull token refused .*status 503"):
         tool.published_digest(
             "wangzitian0/truealpha-data-engine", "sha-7de7813", transport=throttled, sleep=slept.append
         )
