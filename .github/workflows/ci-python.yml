@@ -265,7 +265,7 @@ jobs:
           echo "CODE_SERVER_PID=$!" >> "$GITHUB_ENV"
           # An explicit failure, not a fall-through: the loop's `break` is the
           # only success path, so 30 fruitless attempts used to start the daemon
-          # anyway and let this job fail 120s later inside the churn assertion --
+          # anyway and let this job fail 75s later inside the churn assertion --
           # a socket that never came up reported as a heartbeat regression, which
           # is the wrong diagnosis for the wrong reason (review).
           ready=""
@@ -285,9 +285,20 @@ jobs:
             > daemon.log 2>&1 &
           echo "DAEMON_PID=$!" >> "$GITHUB_ENV"
           echo "SOCK=$SOCK" >> "$GITHUB_ENV"
-      - name: Observe for 120s (over one old ~68-70s churn cycle) and assert no heartbeat churn
+      # #860: the window is ONE full churn cycle of the old regime plus margin. Under
+      # plain `-m` the code-server self-terminated every ~68-70s (the job comment
+      # above, measured on staging and in the local reproduction), so if that
+      # regression is back, "No heartbeat received" is in the log by ~70s of daemon
+      # uptime; 75s is the far end of that cadence plus a 5-7s margin. The first
+      # version slept 120s -- also "over one cycle", as its own name said, not two;
+      # the extra 50s was margin nobody had sized, and it made this job the pole of
+      # every PR's and every main push's critical path at 2.5 min (runs 35051480691,
+      # 35051670287). If the cadence is ever re-measured longer, raise this number
+      # and the comment above together: test_ci_workflows.py holds the window above
+      # the cadence the job documents, and refuses a drift back toward two cycles.
+      - name: Observe for 75s (one full old ~68-70s churn cycle, plus margin) and assert no heartbeat churn
         run: |
-          sleep 120
+          sleep 75
           echo "--- code_server.log ---"
           cat code_server.log
           if grep -q "No heartbeat received" code_server.log; then
