@@ -56,6 +56,12 @@ class RegistryError(RuntimeError):
     """The registry answered something other than "here is the digest" or "no such tag"."""
 
 
+class TransportError(RegistryError):
+    """No answer at all -- DNS, a refused connection, a timeout. Retried like a 5xx, then red
+    through the same `::error::` path; a traceback from a tag run would say nothing about
+    which image or which SHA (Copilot review on #868)."""
+
+
 @dataclass(frozen=True)
 class Response:
     status: int
@@ -77,6 +83,33 @@ def urllib_transport(method: str, url: str, headers: dict[str, str]) -> Response
             return Response(response.status, dict(response.headers.items()), response.read())
     except urllib.error.HTTPError as exc:
         return Response(exc.code, dict(exc.headers.items()), exc.read())
+    except OSError as exc:  # URLError, socket timeouts and refusals are all OSError
+        raise TransportError(f"{method} {url}: no answer ({exc})") from exc
+
+
+def _send(
+    transport: Transport,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    sleep: Callable[[float], None],
+) -> Response:
+    """One request under the retry policy: 429/5xx and no-answer are retried with backoff,
+    everything else is returned for the caller to judge. The policy lives here, once, so the
+    token fetch and the manifest read cannot drift apart on what counts as transient."""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            response = transport(method, url, headers)
+        except TransportError as exc:
+            if attempt < ATTEMPTS:
+                sleep(float(2**attempt))
+                continue
+            raise RegistryError(f"{exc} after {ATTEMPTS} attempts") from exc
+        if response.status in _RETRIED_STATUSES and attempt < ATTEMPTS:
+            sleep(float(2**attempt))
+            continue
+        return response
+    raise AssertionError("unreachable: every attempt returns or raises")
 
 
 def short_sha(sha: str) -> str:
@@ -86,7 +119,7 @@ def short_sha(sha: str) -> str:
     return sha[:SHORT_SHA_LENGTH]
 
 
-def _anonymous_token(transport: Transport, challenge: str) -> str:
+def _anonymous_token(transport: Transport, challenge: str, sleep: Callable[[float], None]) -> str:
     if not challenge.lower().startswith("bearer "):
         raise RegistryError(f"the registry's challenge is not a Bearer challenge: {challenge!r}")
     params = dict(re.findall(r'(\w+)="([^"]*)"', challenge))
@@ -94,7 +127,7 @@ def _anonymous_token(transport: Transport, challenge: str) -> str:
     if not realm:
         raise RegistryError(f"the registry's Bearer challenge names no realm: {challenge!r}")
     query = urllib.parse.urlencode({key: params[key] for key in ("service", "scope") if key in params})
-    response = transport("GET", f"{realm}?{query}", {})
+    response = _send(transport, "GET", f"{realm}?{query}", {}, sleep)
     if response.status != 200:
         raise RegistryError(f"anonymous pull token refused by {realm} (status {response.status})")
     payload = json.loads(response.body or b"{}")
@@ -119,28 +152,21 @@ def published_digest(
     """
     url = f"https://{registry}/v2/{repository}/manifests/{reference}"
     headers = {"Accept": MANIFEST_ACCEPT}
-    for attempt in range(1, ATTEMPTS + 1):
-        response = transport("HEAD", url, headers)
-        if response.status == 401:
-            token = _anonymous_token(transport, response.header("www-authenticate"))
-            response = transport("HEAD", url, {**headers, "Authorization": f"Bearer {token}"})
-        if response.status == 404:
-            return None
-        if 200 <= response.status < 300:
-            digest = response.header("docker-content-digest")
-            if not _DIGEST_RE.fullmatch(digest):
-                raise RegistryError(
-                    f"{registry}/{repository}:{reference} answered without a usable digest ({digest!r})"
-                )
-            return digest
-        if response.status in _RETRIED_STATUSES and attempt < ATTEMPTS:
-            sleep(float(2**attempt))
-            continue
-        raise RegistryError(
-            f"{registry}/{repository}:{reference} answered status {response.status} — refusing to guess whether "
-            f"main published it; a rebuild here would hide a registry problem behind a slower green"
-        )
-    raise AssertionError("unreachable: every attempt returns or raises")
+    response = _send(transport, "HEAD", url, headers, sleep)
+    if response.status == 401:
+        token = _anonymous_token(transport, response.header("www-authenticate"), sleep)
+        response = _send(transport, "HEAD", url, {**headers, "Authorization": f"Bearer {token}"}, sleep)
+    if response.status == 404:
+        return None
+    if 200 <= response.status < 300:
+        digest = response.header("docker-content-digest")
+        if not _DIGEST_RE.fullmatch(digest):
+            raise RegistryError(f"{registry}/{repository}:{reference} answered without a usable digest ({digest!r})")
+        return digest
+    raise RegistryError(
+        f"{registry}/{repository}:{reference} answered status {response.status} — refusing to guess whether "
+        f"main published it; a rebuild here would hide a registry problem behind a slower green"
+    )
 
 
 def split(

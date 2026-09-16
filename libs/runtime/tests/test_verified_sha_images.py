@@ -147,6 +147,74 @@ def test_a_transient_registry_failure_is_retried_and_then_fails() -> None:
         tool.split([PLAN[2]], owner="wangzitian0", sha=SHA, transport=exhausted, sleep=slept.append)
 
 
+def test_a_throttled_token_endpoint_is_retried_like_the_manifest_read() -> None:
+    """Copilot review on #868: the manifest HEAD retried 429/5xx and the token GET did
+    not, so a throttled token endpoint failed a tag run the manifest policy would have
+    ridden out. One `_send` now carries the policy for both."""
+    tool = load_tool("verified_sha_images")
+    token_answers = [503, 429, 200]
+    slept: list[float] = []
+
+    def registry(method: str, url: str, headers: dict[str, str]) -> tool.Response:
+        if url.startswith("https://ghcr.io/token?"):
+            status = token_answers.pop(0)
+            return tool.Response(status, {}, b'{"token": "anon"}' if status == 200 else b"")
+        if "Authorization" not in headers:
+            return tool.Response(401, {"Www-Authenticate": CHALLENGE.format(image="truealpha-data-engine")})
+        return tool.Response(200, {"Docker-Content-Digest": DIGEST})
+
+    digest = tool.published_digest(
+        "wangzitian0/truealpha-data-engine", "sha-7de7813", transport=registry, sleep=slept.append
+    )
+    assert digest == DIGEST
+    assert len(slept) == 2 and token_answers == []
+
+    exhausted = [503] * tool.ATTEMPTS
+
+    def throttled(method: str, url: str, headers: dict[str, str]) -> tool.Response:
+        if url.startswith("https://ghcr.io/token?"):
+            return tool.Response(exhausted.pop(0), {})
+        return tool.Response(401, {"Www-Authenticate": CHALLENGE.format(image="truealpha-data-engine")})
+
+    with pytest.raises(tool.RegistryError, match=r"anonymous pull token refused .* status 503"):
+        tool.published_digest(
+            "wangzitian0/truealpha-data-engine", "sha-7de7813", transport=throttled, sleep=slept.append
+        )
+    assert exhausted == [], "the token fetch gave up before spending its attempts"
+
+
+def test_no_answer_at_all_is_retried_and_then_red_through_the_same_path() -> None:
+    """Copilot review on #868: a refused connection or a DNS failure escaped as a
+    traceback, which says nothing about the image or the SHA and skips the `::error::`
+    line. The transport turns any OSError into a TransportError, which `_send` retries
+    like a 5xx and then raises as the one RegistryError the CLI reports."""
+    tool = load_tool("verified_sha_images")
+    failures = [tool.TransportError("HEAD https://ghcr.io/x: no answer (refused)")] * 2
+    slept: list[float] = []
+
+    def flaky(method: str, url: str, headers: dict[str, str]) -> tool.Response:
+        if failures:
+            raise failures.pop(0)
+        return tool.Response(200, {"Docker-Content-Digest": DIGEST})
+
+    digest = tool.published_digest(
+        "wangzitian0/truealpha-data-engine", "sha-7de7813", transport=flaky, sleep=slept.append
+    )
+    assert digest == DIGEST
+    assert len(slept) == 2
+
+    def dead(method: str, url: str, headers: dict[str, str]) -> tool.Response:
+        raise tool.TransportError(f"{method} {url}: no answer (refused)")
+
+    with pytest.raises(tool.RegistryError, match=r"no answer \(refused\) after 3 attempts"):
+        tool.published_digest("wangzitian0/truealpha-data-engine", "sha-7de7813", transport=dead, sleep=slept.append)
+
+    # The real transport, against a port nothing listens on: the OSError becomes the
+    # TransportError above, not a traceback.
+    with pytest.raises(tool.TransportError, match="no answer"):
+        tool.urllib_transport("HEAD", "https://127.0.0.1:9/v2/x/manifests/y", {})
+
+
 def test_a_challenge_that_is_not_bearer_is_refused() -> None:
     tool = load_tool("verified_sha_images")
 
