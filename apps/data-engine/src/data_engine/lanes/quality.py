@@ -20,7 +20,7 @@ import contextlib
 import io
 import json
 import runpy
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import dagster as dg
@@ -69,9 +69,35 @@ def run_output_invariants(context: dg.OpExecutionContext) -> str:
     return report.getvalue()
 
 
+@dg.op
+def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
+    """Every report surface serves the governed head (#855 C1): replay each App reader's own
+    run selection and the coverage report's recomputation against this environment's
+    database; one line per surface in the log; fail the run on any surface that serves
+    another run than the pointer names, or a report the tables no longer agree with."""
+    from data_engine.quality.surface_proof import prove, summary_lines
+
+    with psycopg.connect(settings.database_url) as connection:
+        verdicts = prove(connection, executed_at=datetime.now(UTC))
+    for line in summary_lines(verdicts):
+        context.log.info(line)
+    failed = [verdict for verdict in verdicts if not verdict.ok]
+    context.add_output_metadata({"surfaces": len(verdicts), "mismatched": len(failed)})
+    if failed:
+        raise dg.Failure(
+            "report surface proof: "
+            + "; ".join(verdict.line for verdict in failed)
+            + " — the App shows a head the pointer does not name (#855 C1)"
+        )
+    return json.dumps([verdict.line for verdict in verdicts])
+
+
 @dg.job(name=OUTPUT_INVARIANTS_JOB_NAME)
 def output_invariants_job() -> None:
+    # Two independent verdicts in one nightly run: the numbers are possible (the suite), and
+    # every surface serves the head the pointer names (the proof). Neither waits on the other.
     run_output_invariants()
+    run_report_surface_proof()
 
 
 @dg.schedule(
