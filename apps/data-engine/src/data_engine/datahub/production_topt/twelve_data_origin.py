@@ -43,11 +43,30 @@ rather than comparing a settled Yahoo bar against an extended-hours one within
 tolerance. The no-end-of-day fallback already fetched the series; its settled row now
 carries its bar at no extra credit. A settled weekday therefore costs two credits per
 listing where v2 spent one; the weekend/holiday path still spends two.
+
+## An error body is classified, and only "no data" reads as absent (#885)
+
+Twelve Data answers every failure with a JSON error body (`"status": "error"` and the
+real status in `code`), usually under the same HTTP status. Exactly one of them means
+"the vendor has no end of day for this date": a 400 whose message says no data is
+available — the weekend/holiday answer the fallback exists for. Everything else is
+raised as a `TwelveDataError` naming its class: a revoked or invalid key
+(`TwelveDataAuthError`, 401/403), an exhausted minute or day
+(`TwelveDataRateLimited` / `TwelveDataCreditsExhausted`, 429), and any other vendor
+error (`TwelveDataVendorError`: an unknown symbol, a 5xx, a non-JSON error). Until this,
+a revoked key's 401 body fell through the parser's error-body branch, read as "no end
+of day", and the only trace was an `ok = false` ledger row. A raised error is a counted
+lost corroboration (`corroboration_audit`), named in the tick summary.
+
+A request the rule-6 capacity gate refuses (`gateway.CapacityExceeded`, #729) was never
+sent: it costs no throttle wait, and a refused bar request leaves the settled close
+exactly as corroborated as a failed one does.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.parse
 import urllib.request
@@ -66,6 +85,8 @@ from data_engine.datahub.production_topt.source_registrations import (
     TWELVE_DATA_VALUE_KEY,
 )
 from data_engine.sources import gateway
+
+log = logging.getLogger(__name__)
 
 ORIGIN = TWELVE_DATA_ORIGIN
 # v1 -> v2 (#535): the asserted quantity changed from Twelve Data's last trade (the
@@ -92,6 +113,73 @@ _LIVE_QUOTE_KEYS = ("price", "extended_price", "extended_change", "extended_perc
 # A settled close is stamped with its session's date and nothing finer; a live quote or an
 # intraday bar carries an instant ("2026-07-29 15:59:00").
 _SESSION_DATE_LENGTH = 10
+
+
+class TwelveDataError(RuntimeError):
+    """Twelve Data answered with an error that is not "no data for this date".
+
+    ``code`` is the vendor's own status (the body's ``code``, else the HTTP status);
+    ``message`` its words. Raised by the fetcher so the loss is counted and named rather
+    than read as an honest absence.
+    """
+
+    def __init__(self, code: int | None, message: str, *, http_status: int | None) -> None:
+        super().__init__(f"Twelve Data {code if code is not None else 'error'}: {message}")
+        self.code = code
+        self.message = message
+        self.http_status = http_status
+
+
+class TwelveDataAuthError(TwelveDataError):
+    """401/403: the key is invalid, revoked or not entitled to the endpoint."""
+
+
+class TwelveDataRateLimited(TwelveDataError):
+    """429: the key's per-minute credits are spent."""
+
+
+class TwelveDataCreditsExhausted(TwelveDataRateLimited):
+    """429 for the day: the key's daily credits are spent — by any environment sharing it."""
+
+
+class TwelveDataVendorError(TwelveDataError):
+    """Any other error body: an unknown symbol, a server error, a body that is not JSON."""
+
+
+# The one error Twelve Data uses for "this date has no end of day" (verbatim prefix of
+# both the `/eod` and the `/time_series` wording, cassettes under tests/production_topt).
+_NO_DATA_PREFIX = "no data is available"
+
+
+def classify_error_body(http_status: int | None, body: bytes) -> TwelveDataError | None:
+    """The error a Twelve Data answer carries, or None when it carries none — a
+    successful payload, or the "no data is available" answer the parser reads as an
+    honest absence."""
+    try:
+        payload = json.loads(body.decode())
+    except (UnicodeDecodeError, ValueError):
+        payload = None
+    if not isinstance(payload, Mapping):
+        if http_status is not None and http_status >= 400:
+            return TwelveDataVendorError(
+                http_status, f"HTTP {http_status} with a non-JSON body", http_status=http_status
+            )
+        return None
+    is_error = payload.get("status") == "error" or (http_status is not None and http_status >= 400)
+    if not is_error:
+        return None
+    raw_code = payload.get("code")
+    code = raw_code if isinstance(raw_code, int) and not isinstance(raw_code, bool) else http_status
+    message = str(payload.get("message") or "")
+    if code in (400, 404) and message.strip().lower().startswith(_NO_DATA_PREFIX):
+        return None
+    if code in (401, 403):
+        return TwelveDataAuthError(code, message, http_status=http_status)
+    if code == 429:
+        exhausted = "for the day" in message.lower()
+        kind = TwelveDataCreditsExhausted if exhausted else TwelveDataRateLimited
+        return kind(code, message, http_status=http_status)
+    return TwelveDataVendorError(code, message, http_status=http_status)
 
 
 class NotASessionCloseError(ValueError):
@@ -174,13 +262,18 @@ def parse_session_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuot
     """The settled end-of-day close Twelve Data reports for `partition`.
 
     Returns None when the vendor honestly has no end of day for that date — a weekend, a
-    holiday, a session that has not run yet, or an error body. Raises
-    `NotASessionCloseError` when the payload asserts a *different quantity*: a live or
-    extended-hours quote, an intraday bar, or a session after the partition date.
+    holiday, a session that has not run yet (the "no data is available" error body).
+    Raises `NotASessionCloseError` when the payload asserts a *different quantity*: a live
+    or extended-hours quote, an intraday bar, or a session after the partition date; and
+    the classified `TwelveDataError` for any other error body (a revoked key is not a
+    missing end of day).
     """
     payload = _decode(raw_bytes)
     _reject_live_quote(payload)
     if payload.get("status") == "error":
+        error = classify_error_body(None, raw_bytes)
+        if error is not None:
+            raise error
         return None
     if "datetime" not in payload and "close" not in payload:
         return None
@@ -202,6 +295,9 @@ def parse_last_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPric
     """
     payload = _decode(raw_bytes)
     _reject_live_quote(payload)
+    error = classify_error_body(None, raw_bytes)
+    if error is not None:
+        raise error
     rows = payload.get("values")
     if not isinstance(rows, list):
         return None
@@ -275,6 +371,7 @@ class TwelveDataQuoteFetcher:
         key = (symbol, cutoff)
         if key in self._cache:
             return self._cache[key]
+        sent_last = True
         try:
             quote = self._fetch(symbol, cutoff)
         except Exception as error:  # noqa: BLE001 - a second origin that errors is simply absent
@@ -283,12 +380,15 @@ class TwelveDataQuoteFetcher:
             # immediately and rate-limit the rest of the tick with it. A
             # `NotASessionCloseError` lands here too — a refused quantity leaves the cell
             # honestly single-origin instead of corroborating it with the wrong number.
-            # Absent, but not silent (#885): a revoked key and a refused quantity are
-            # logged with their type and counted in the tick's summary.
+            # Absent, but not silent (#885): a revoked key, a spent minute, a refused
+            # quantity and a gate refusal are logged with their type and counted in the
+            # tick's summary.
             record_lost_corroboration(ORIGIN, FETCH, symbol, error)
             quote = None
+            # A call the rule-6 gate refused was never sent: there is no request to wait out.
+            sent_last = not isinstance(error, gateway.CapacityExceeded)
         self._cache[key] = quote
-        if self._throttle_seconds:
+        if self._throttle_seconds and sent_last:
             time.sleep(self._throttle_seconds)
         return quote
 
@@ -299,25 +399,37 @@ class TwelveDataQuoteFetcher:
         )
         if self._throttle_seconds:
             time.sleep(self._throttle_seconds)
-        series = self._get(
-            _TIME_SERIES_URL,
-            {
-                "symbol": symbol,
-                "interval": "1day",
-                "start_date": str(cutoff - timedelta(days=_LOOKBACK_DAYS)),
-                "end_date": str(cutoff),
-                "outputsize": "12",
-            },
-        )
+        series_params = {
+            "symbol": symbol,
+            "interval": "1day",
+            "start_date": str(cutoff - timedelta(days=_LOOKBACK_DAYS)),
+            "end_date": str(cutoff),
+            "outputsize": "12",
+        }
         if settled is not None:
             # The close is settled by `/eod`; the bar comes from the series window and is
-            # attached only when its row closes at that settled close (v3, header).
+            # attached only when its row closes at that settled close (v3, header). The
+            # bar is additive: a series request that errors or is refused by the gate
+            # leaves the settled close exactly what it was — said, not swallowed.
+            try:
+                series = self._get(_TIME_SERIES_URL, series_params)
+            except (TwelveDataError, gateway.CapacityExceeded) as error:
+                log.warning(
+                    "twelve-data bar for %s not attached (%s: %s); the settled close corroborates alone",
+                    symbol,
+                    type(error).__name__,
+                    error,
+                )
+                return settled
             return attach_settled_bar(series, settled=settled)
+        series = self._get(_TIME_SERIES_URL, series_params)
         # No end of day for the partition date itself. Resolve the last session that HAS
         # settled — the same session the primary resolves to on a weekend or holiday.
         return parse_last_settled_close(series, partition=cutoff)
 
     def _get(self, url: str, params: dict[str, str]) -> bytes:
+        """The vendor's body for one request, or the classified `TwelveDataError` it
+        carries; the "no data is available" body is returned for the parser to read."""
         query = urllib.parse.urlencode({**params, "apikey": self._api_key})
         # Twelve Data answers "no end of day for this date" with HTTP 400 and a JSON
         # error body — and urlopen RAISES on any non-2xx. Letting that raise propagate
@@ -331,9 +443,12 @@ class TwelveDataQuoteFetcher:
         # spends two credits per listing this way, and until the ledger existed nothing
         # recorded it (raw.fetches only ever saw the landed successes). Since v3 every
         # tick spends two: the second request is the bar's on a settled day.
-        _status, body = gateway.urlopen(
+        status, body = gateway.urlopen(
             "twelvedata", url.rsplit("/", 1)[-1], f"{url}?{query}", caller="twelve_data_origin", timeout=20
         )
+        error = classify_error_body(status, body)
+        if error is not None:
+            raise error
         return body
 
 
