@@ -42,7 +42,7 @@ of cells whose close did:
 
 | field | policy | relative tolerance | unit |
 |---|---|---|---|
-| open, high, low, close | `market-price-fusion:v2` | 0.3% (30 bp) | USD |
+| open, high, low, close | `market-price-fusion:v3` | 0.3% (30 bp) | USD |
 | volume | `market-volume-fusion:v1` | 2% (200 bp) | shares |
 
 Volume is not a price: it is each vendor's own aggregation of the consolidated tape and
