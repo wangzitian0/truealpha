@@ -70,6 +70,7 @@ from truealpha_contracts.reconciliation import (
 )
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 
+from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 from data_engine.datahub.production_topt.source_registrations import (
     RELEASE_SEMANTICS,
@@ -205,6 +206,9 @@ class OriginValue:
     #: The fiscal period end the value describes, for a period-bound family: the primary's
     #: own, or the period a corroborating figure was read at (#866).
     period_end: date | None = None
+    #: The observation served its cell because the primary could not (#862): the payload
+    #: declared `served_by_failover`. A lone failover assertion grades LOW under that name.
+    served_by_failover: bool = False
 
 
 @dataclass(frozen=True)
@@ -524,7 +528,11 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
     asserted = tuple(sorted(origin.origin_id for origin in valued))
     independent = len({origin.lineage for origin in valued})
     if len(valued) == 1:
-        if other_day_ids:
+        if valued[0].served_by_failover:
+            # The primary could not serve the cell and the origin that did stands alone
+            # (#862): named, so a gap in the primary never reads as ordinary single-origin.
+            reason = SERVED_BY_FAILOVER
+        elif other_day_ids:
             reason = "second_origin_other_day"
         elif other_period_ids:
             reason = "second_origin_other_period"
@@ -840,6 +848,7 @@ def bar_origins(
     """
     origin_source, origin_id, value_key = coordinate
     close = payload.get(value_key)
+    served_by_failover = payload.get(SERVED_BY_FAILOVER) is not None
     origins: dict[str, OriginValue] = {}
     for family in PRICE_BAR_FIELDS:
         value = close if family == CLOSE_FAMILY or close is None else payload.get(family)
@@ -850,6 +859,7 @@ def bar_origins(
             value=None if value is None else str(value),
             knowable_at=knowable_at,
             observation_id=observation_id,
+            served_by_failover=served_by_failover,
         )
     return origins
 

@@ -334,6 +334,10 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     # leaves its cell single-origin without failing the tick; the count (per origin and
     # stage) is what tells a revoked key or a dead OpenD from "the vendor had nothing".
     summary += f"; {corroborations.summary()}"
+    # #862: cells the primary price source could not serve and a further registered origin
+    # did. Zero is said, not omitted: a nonzero count is the primary's outage, visible here.
+    served_by_failover = int(pipeline.quality.get("served_by_failover_count", 0))
+    summary += f"; served by failover {served_by_failover}"
     if registration.accepted:
         context.log.info(f"{summary}; pointer sequence {registration.sequence}")
     else:
@@ -351,6 +355,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         **strategy,
         **fund_consolidation,
         "corroborations_refused": corroborations.total,
+        "served_by_failover": served_by_failover,
         "pointer_advanced": registration.accepted,
         "pointer_sequence": registration.sequence,
         "unmet_service_objectives": registration.summary,

@@ -523,7 +523,7 @@ merge enforcement.
 ## 9. Known Risks / Pitfalls
 
 - SEC XBRL tags are inconsistent across industries — don't assume field names/units are uniform
-- yfinance has no SLA — can't be the sole dependency on a critical path
+- yfinance has no SLA — can't be the sole dependency on a critical path. Since #862 a price cell it cannot serve fails over to the registered origins in the fusion policy's order (Twelve Data, then moomoo K-line), served under that origin's own identity one confidence grade lower and never counted as corroborated on its own (`docs/datahub-quality-report.md`, "Primary failover")
 - Arbitrary SQL touching raw/staging carries silent look-ahead risk; roles deny it and MCP/chat expose typed mart reads only
 - dlt schema evolution must use frozen mode for core tables
 - **Dagster's `code_version`/`data_version` assumes deterministic inputs.** LLM extraction is therefore a separate, versioned, append-only step. Its invocation binds model, instructions, schema, and decoding settings; the stored semantic result and evidence spans determine downstream `data_version`. Replay reuses that stored result and never silently calls the model again. A new extraction is a new invocation/vintage, not sampling noise hidden behind the old ID.

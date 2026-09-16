@@ -124,8 +124,29 @@ def _primary_market_price_parser() -> str:
         return "production-topt-live-parser"
 
 
+def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
+    """(parser family, fusion rank) for every registered market-price origin vintage, ranked
+    by the fusion policy's `source_priority` (#862: a cell the primary could not serve is
+    served by the next origin in that order); a literal only where the registry is not
+    importable."""
+    try:
+        from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER, registration_for
+        from data_engine.datahub.quality_report import RECONCILIATION_POLICY
+    except ImportError:
+        return (("production-topt-live-parser", 0), ("twelve-data-parser", 1), ("moomoo-kline-parser", 2))
+    market = {origin.origin_id for origin in registration_for("market-price").origins}
+    priority = RECONCILIATION_POLICY.source_priority
+    ranks: dict[str, int] = {}
+    for vintage, (source_id, origin_id, _value_key) in SOURCE_BY_PARSER.items():
+        if origin_id in market and source_id in priority:
+            family, rank = vintage.split(":")[0], priority.index(source_id)
+            ranks[family] = min(rank, ranks.get(family, rank))
+    return tuple(sorted(ranks.items(), key=lambda item: (item[1], item[0])))
+
+
 EXPECTED_INPUT_KEYS = _expected_input_keys()
 PRIMARY_MARKET_PRICE_PARSER = _primary_market_price_parser()
+MARKET_PRICE_PARSER_RANKS = _market_price_parser_ranks()
 
 
 @dataclass(frozen=True)
@@ -257,9 +278,15 @@ INVARIANTS: tuple[Invariant, ...] = (
         # market-price cell once the second origin landed (3,102 on production) — while the
         # snapshots had selected the primary parser for all of them. The population is the
         # selected observations on contested obligations; a violation is one whose parser is
-        # not the declared primary for its semantic (the registration's first origin).
+        # not the declared primary for its semantic (the registration's first origin) —
+        # unless the primary could not serve the cell (#862): then the next origin in the
+        # fusion policy's order serves it, and that selection holds only when the payload
+        # declares it (`served_by_failover`), the origin is one the policy ranks, and no
+        # higher-ranked origin asserted the same session on the same obligation.
         violations="""
-            with selected as (
+            with ranks(family, rank) as (
+                values __MARKET_PRICE_PARSER_RANKS__
+            ), selected as (
                 -- what consumers see today: the snapshots of the governed heads only, not
                 -- every snapshot ever frozen (review on #750)
                 select s.run_id, sel.observation_id
@@ -282,10 +309,29 @@ INVARIANTS: tuple[Invariant, ...] = (
             select selected.run_id, o.semantic_type, split_part(o.parser_version, ':', 1) as selected_parser
             from selected
             join staging.capture_normalized_observations o on o.observation_id = selected.observation_id
+            join staging.capture_observation_payloads p on p.observation_id = o.observation_id
             join staging.capture_observation_obligations uo on uo.observation_id = o.observation_id
             join contested on contested.capture_obligation_id = uo.capture_obligation_id
+            left join ranks selected_rank on selected_rank.family = split_part(o.parser_version, ':', 1)
             where o.semantic_type = 'market-price'
               and split_part(o.parser_version, ':', 1) <> '{PRIMARY_MARKET_PRICE_PARSER}'
+              and (
+                  -- an origin the fusion policy does not rank reached the snapshot
+                  selected_rank.rank is null
+                  -- a substitute the payload does not declare is a silent one (#862)
+                  or p.normalized_payload ->> 'served_by_failover' is null
+                  -- a higher-ranked origin asserted the same session and was passed over
+                  or exists (
+                      select 1
+                      from staging.capture_observation_obligations peer_link
+                      join staging.capture_normalized_observations peer
+                        on peer.observation_id = peer_link.observation_id
+                      join ranks peer_rank on peer_rank.family = split_part(peer.parser_version, ':', 1)
+                      where peer_link.capture_obligation_id = uo.capture_obligation_id
+                        and peer_rank.rank < selected_rank.rank
+                        and (peer.knowable_at at time zone 'UTC')::date = (o.knowable_at at time zone 'UTC')::date
+                  )
+              )
         """,
         population="""
             with selected as (
@@ -343,14 +389,15 @@ INVARIANTS: tuple[Invariant, ...] = (
 
 
 def _render(invariant: Invariant) -> Invariant:
-    """The two derived facts enter the SQL as literals, once, here — never at query time."""
+    """The derived facts enter the SQL as literals, once, here — never at query time."""
     values = ", ".join(f"('{key}')" for key in EXPECTED_INPUT_KEYS)
+    ranks = ", ".join(f"('{family}', {rank})" for family, rank in MARKET_PRICE_PARSER_RANKS)
     return Invariant(
         id=invariant.id,
         claim=invariant.claim,
-        violations=invariant.violations.replace("__EXPECTED_VALUES__", values).replace(
-            "{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER
-        ),
+        violations=invariant.violations.replace("__EXPECTED_VALUES__", values)
+        .replace("{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER)
+        .replace("__MARKET_PRICE_PARSER_RANKS__", ranks),
         population=invariant.population,
     )
 

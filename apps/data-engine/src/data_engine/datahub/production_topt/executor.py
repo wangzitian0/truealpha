@@ -7,6 +7,14 @@ slices; this module owns the loop, the error-code governance, and the evidence w
 
 A run succeeds when every obligation reaches a terminal state with no STOP outstanding — not
 only when every obligation is `available` (see #366).
+
+A source may declare further origins able to serve a cell its primary could not (#862):
+its port then also implements `FailoverFetchPort`. The executor asks for a failover only
+once the primary is exhausted — every RETRY spent, or a TRACE_ONLY answer — never on a
+STOP. A served failover resolves the obligation SUCCESS while its attempts keep the
+primary's failure reasons, so the ledger never forgets why the primary did not serve.
+Which origins exist, in which order, and what counts as the same datum stay the source's
+business; this loop only knows that one was asked.
 """
 
 from __future__ import annotations
@@ -16,7 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
@@ -33,6 +41,10 @@ from truealpha_contracts.models import DataSource
 from truealpha_contracts.obligation_reason_codes import ObligationDisposition, ObligationReasonCode, disposition_for
 
 _HEX64 = 64
+# The token a failover-served obligation carries beside the primary's reason codes, and the
+# payload key its served observation declares the serving origin under (#862). One name, so
+# the ledger, the payload and every report read the same word.
+SERVED_BY_FAILOVER = "served_by_failover"
 
 
 def _require_digest(digest: str) -> None:
@@ -130,6 +142,10 @@ class FetchSuccess:
     transaction_time: datetime
     record: NormalizedRecord | None = None
     corroborations: tuple[Corroboration, ...] = field(default=())
+    # Set only on a success a `FailoverFetchPort` returned: the origin that served the
+    # cell the primary could not (#862). The record is that origin's own assertion — its
+    # parser identity, its bytes — and its payload names the origin under the same key.
+    served_by_failover: str | None = None
 
     @property
     def raw_sha256(self) -> str:
@@ -141,6 +157,13 @@ class FetchSuccess:
             raise ValueError("confidence must be in [0, 1]")
         if self.record is not None and canonical_sha256(dict(self.record.payload)) != self.normalized_sha256:
             raise ValueError("normalized payload does not match its normalized digest")
+        if self.served_by_failover is not None:
+            if not self.served_by_failover:
+                raise ValueError("a failover success must name the origin that served it")
+            if self.record is None or self.record.payload.get(SERVED_BY_FAILOVER) != self.served_by_failover:
+                # The payload is what the snapshot binds and every report reads; a
+                # substitution it does not declare is a silent one.
+                raise ValueError("a failover success must declare its serving origin in its payload")
 
 
 @dataclass(frozen=True)
@@ -159,12 +182,27 @@ class SourceFetchPort(Protocol):
     def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome: ...
 
 
+@runtime_checkable
+class FailoverFetchPort(Protocol):
+    """A `SourceFetchPort` whose source declares further origins for the same cell (#862).
+
+    Asked once, after the primary could not serve (`primary_reason` is its last
+    classified failure). Returns the next origin's success — marked with
+    `served_by_failover` — or None when no origin holds the datum, in which case the
+    obligation resolves exactly as it would have without a failover.
+    """
+
+    def failover(self, work_item: CaptureWorkItem, primary_reason: ObligationReasonCode) -> FetchSuccess | None: ...
+
+
 class ObligationSink(Protocol):
     """Persists what a terminally resolved obligation produced.
 
     Injected so the generic executor never learns the storage shape (init.md rule
     22): it hands over the work item, its attempt history and the terminal state,
-    and the sink decides which tables that becomes.
+    and the sink decides which tables that becomes. A failover-served obligation arrives as
+    SUCCESS with `success.served_by_failover` set and the primary's failure as its last
+    attempt reason (#862).
     """
 
     def record_outcome(
@@ -183,6 +221,9 @@ class ObligationOutcome:
     terminal_state: ObligationTerminalState
     reason_code: ObligationReasonCode | None
     attempts: int
+    # The origin that served the cell when the primary could not (#862); `reason_code`
+    # is then the primary's last failure, not None.
+    served_by_failover: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +248,11 @@ class ToptCaptureRunReport:
     @property
     def failed(self) -> int:
         return sum(o.terminal_state is ObligationTerminalState.FAILED for o in self.outcomes)
+
+    @property
+    def served_by_failover(self) -> int:
+        """Obligations the primary could not serve and a further origin did (#862)."""
+        return sum(o.served_by_failover is not None for o in self.outcomes)
 
     @property
     def succeeded(self) -> bool:
@@ -269,20 +315,43 @@ class ToptCaptureExecutor:
         recorded_at: datetime,
     ) -> tuple[ObligationOutcome, bool]:
         reasons: list[ObligationReasonCode | None] = []
+        primary_reason: ObligationReasonCode | None = None
         while len(reasons) < self._max_attempts:
             result = fetch.fetch(item)
             if isinstance(result, FetchSuccess):
+                if result.served_by_failover is not None:
+                    raise ValueError(f"{item.work_item_id}: a failover success must come from `failover`, not `fetch`")
                 reasons.append(None)
                 self._write_success(item, result, run_ref, recorded_at)
                 return self._terminal(item, reasons, ObligationTerminalState.SUCCESS, result), False
             reasons.append(result.reason_code)
+            primary_reason = result.reason_code
             disposition = disposition_for(result.reason_code)
             if disposition is ObligationDisposition.STOP:
                 return self._terminal(item, reasons, ObligationTerminalState.FAILED, None), True
             if disposition is ObligationDisposition.TRACE_ONLY:
-                return self._terminal(item, reasons, ObligationTerminalState.UNAVAILABLE, None), False
+                break
             # RETRY: loop again until max_attempts, then resolve unavailable.
+        # The primary could not serve: every retry spent, or a trace-only answer.
+        assert primary_reason is not None
+        served = self._failover(item, fetch, primary_reason)
+        if served is not None:
+            # The attempts keep the primary's failure; the served origin never erases it.
+            self._write_success(item, served, run_ref, recorded_at)
+            return self._terminal(item, reasons, ObligationTerminalState.SUCCESS, served), False
         return self._terminal(item, reasons, ObligationTerminalState.UNAVAILABLE, None), False
+
+    @staticmethod
+    def _failover(
+        item: CaptureWorkItem, fetch: SourceFetchPort, primary_reason: ObligationReasonCode
+    ) -> FetchSuccess | None:
+        """The source's next origin for a cell its primary could not serve, if it declares one."""
+        if not isinstance(fetch, FailoverFetchPort):
+            return None
+        served = fetch.failover(item, primary_reason)
+        if served is not None and served.served_by_failover is None:
+            raise ValueError(f"{item.work_item_id}: a failover success must name the origin that served it")
+        return served
 
     def _terminal(
         self,
@@ -298,7 +367,13 @@ class ToptCaptureExecutor:
                 terminal_state=terminal_state,
                 success=success,
             )
-        return ObligationOutcome(item.work_item_id, terminal_state, reasons[-1], len(reasons))
+        return ObligationOutcome(
+            item.work_item_id,
+            terminal_state,
+            reasons[-1],
+            len(reasons),
+            served_by_failover=None if success is None else success.served_by_failover,
+        )
 
     def _write_success(
         self,

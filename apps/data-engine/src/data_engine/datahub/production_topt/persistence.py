@@ -10,6 +10,12 @@ row — the exact tables `freeze_snapshot` → `materialize` → `mart.topt_*` r
 Everything lands on the caller's connection, so the capture-control writes and the
 executor's evidence-graph append commit as one transaction per run.
 
+A cell the primary could not serve and a further registered origin did (#862) lands on the
+same tables through the same path: its vintage sits under the cell's planned request — the
+one the snapshot's request-identity guard admits — with the serving origin's own bytes and
+record id, the terminal attempt names that vintage while still carrying the primary's
+failure reason, and the obligation result adds `served_by_failover` to the primary's codes.
+
 Content-addressed identities derive from the run's `cutoff`, so a retried tick
 reproduces the same rows and the conflict-tolerant inserts make the replay
 idempotent. Audit stamps are the opposite by design (#530): `raw.fetches`
@@ -45,7 +51,12 @@ from truealpha_contracts.ports import RawObjectStore
 from data_engine import raw_store
 from data_engine.datahub.control_plane import AttemptLedger
 from data_engine.datahub.production_topt.corroboration_audit import PERSIST, record_lost_corroboration
-from data_engine.datahub.production_topt.executor import Corroboration, FetchSuccess, RawResponse
+from data_engine.datahub.production_topt.executor import (
+    SERVED_BY_FAILOVER,
+    Corroboration,
+    FetchSuccess,
+    RawResponse,
+)
 from data_engine.datahub.production_topt.source_registrations import registration_for
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 
@@ -197,6 +208,19 @@ class PostgresCaptureControlSink:
             # resolved with no observation behind it, and `freeze_snapshot` would then
             # refuse the run for a reason far from its cause.
             raise ValueError(f"{work_item.work_item_id} succeeded without a normalized record to persist")
+        if success is not None:
+            # The ledger and the served value must tell one story (#862): a failover is a
+            # success whose terminal attempt still names the primary's failure, and a
+            # primary success is one whose terminal attempt failed nothing. Anything else
+            # is a substitution the ledger would hide, or a failure it would invent.
+            served_by_failover = success.served_by_failover is not None
+            if terminal_state is not ObligationTerminalState.SUCCESS:
+                raise ValueError(f"{work_item.work_item_id} handed over a success under {terminal_state.value}")
+            if served_by_failover != (attempt_reasons[-1] is not None):
+                raise ValueError(
+                    f"{work_item.work_item_id}: a failover success must follow a primary failure, "
+                    "and a primary success must end its attempts cleanly"
+                )
 
         ledger = AttemptLedger(work_item_id=work_item.work_item_id, retry_policy=self._retry)
         vintage_id: str | None = None
@@ -214,7 +238,10 @@ class PostgresCaptureControlSink:
             for corroboration in success.corroborations:
                 self._persist_corroboration_or_record_loss(binding, corroboration)
 
-        reasons = tuple(sorted({reason.value for reason in attempt_reasons if reason is not None}))
+        codes = {reason.value for reason in attempt_reasons if reason is not None}
+        if success is not None and success.served_by_failover is not None:
+            codes.add(SERVED_BY_FAILOVER)
+        reasons = tuple(sorted(codes))
         self._repository.put_obligation_result(
             binding.obligation.obligation_id,
             ListObligationResult(
@@ -363,7 +390,10 @@ class PostgresCaptureControlSink:
         """Persist a second origin as its own request/vintage/observation for the same cell.
 
         The fusion engine then reconciles two real assertions (#343); the materializer
-        ignores it, because a snapshot binds only the terminal attempt's vintage.
+        ignores it, because a snapshot binds only the terminal attempt's vintage. That is
+        also why a failover (#862) is NOT persisted here: the origin that serves a cell
+        must be the terminal attempt's vintage, under the planned request, or the served
+        number would never reach the snapshot.
         """
         source = f"{corroboration.origin}-{self._source_label}"
         request = self._corroborating_request(binding, origin=corroboration.origin, source=source)

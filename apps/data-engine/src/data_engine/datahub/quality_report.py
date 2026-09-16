@@ -20,6 +20,11 @@ the admin page read); the per-field grades sit under `fields` and are summarised
 `field_reconciliation`, so the report can say how many metrics — not how many
 cells — reached two agreeing origins.
 
+A cell the primary could not serve and a further registered origin did (#862) is graded on
+what actually asserted it: its `selected_source` is that origin, it is `agreed` only when a
+second independent origin asserted the same session, and it carries `served_by_failover`
+(the serving origin) beside the headline keys; `served_by_failover_count` totals them.
+
 `availability` and `lineage_completeness` are falsifiable (#537): each is
 computed from the thing a row claims rather than from the row existing. Both
 metrics used to read `1.0000` no matter what the run actually produced —
@@ -56,6 +61,7 @@ from truealpha_contracts.reconciliation import (
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_runtime import S3RawObjectStore
 
+from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.materialization import (
     FinancialFactPayload,
     IdentityPayload,
@@ -488,6 +494,7 @@ def build_report(
     fresh = sum(1 for cell in cells.values() if cell.fresh)
     reconciliation = _reconcile_market_price_cells(conn, run_id)
     independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
+    served_by_failover = sum(1 for cell in reconciliation.values() if SERVED_BY_FAILOVER in cell)
     field_reconciliation = _field_reconciliation(reconciliation)
     # The financial-fact agreement is its own KPI beside the price one: the headline
     # `independent_reconciliation` keeps meaning market-price (close) agreement, which is
@@ -539,6 +546,8 @@ def build_report(
         "available_count": available,
         "fresh_count": fresh,
         "independently_reconciled_count": independent,
+        # Cells the primary could not serve and a further registered origin did (#862).
+        "served_by_failover_count": served_by_failover,
         "lineage_complete_count": lineage_complete,
         "terminal_coverage": ratio(status[1]),
         "availability": ratio(available),
@@ -588,8 +597,10 @@ def _served_day_assertions(
 
     Anchor choice: the primary's newest day when the primary asserted anything
     (that is the day whose value consumers read), else the newest day any origin
-    asserted (a primary-less cell is already insufficient; anchoring keeps the
-    grade attached to one day rather than a cross-day pair).
+    asserted (anchoring keeps the grade attached to one day rather than a cross-day
+    pair). A failover-served cell (#862) is exactly that primary-less case: the
+    serving origin holds the target's settled session, the newest any origin can
+    assert, so the anchor is the served day.
     """
     primary_days = [knowable_at for source_id, knowable_at, *_ in entries if source_id == _PRIMARY_PRICE_SOURCE]
     anchor = max(primary_days, default=None) or max(knowable_at for _, knowable_at, *_ in entries)
@@ -709,6 +720,7 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
     ).fetchall()
 
     by_listing: dict[str, list[tuple[str, Any, Decimal, str, str, str, str, dict]]] = {}
+    served_by_failover: dict[str, str] = {}
     partition: date | None = None
     for subject_id, parser, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, payload, part in rows:
         if parser not in _SOURCE_BY_PARSER:
@@ -718,6 +730,10 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
         value = payload.get(value_key)
         if value is None:
             continue
+        if payload.get(SERVED_BY_FAILOVER):
+            # The observation that served the cell in the primary's place (#862). It is
+            # graded like any assertion of its own origin; the marker only names it.
+            served_by_failover[subject_id] = payload[SERVED_BY_FAILOVER]
         # The close under the origin's declared key (v1 of the second origin wrote
         # `price`); every other bar field under its own name, absent on payloads
         # written before parser v10 / twelve-data v3.
@@ -743,6 +759,8 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
             partition=partition or utc_day(cutoff),
             cutoff=cutoff,
         )
+        if listing_id in served_by_failover:
+            outcomes[listing_id][SERVED_BY_FAILOVER] = served_by_failover[listing_id]
     return outcomes
 
 

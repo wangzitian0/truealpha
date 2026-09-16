@@ -85,6 +85,40 @@ the close's, over the full requested denominator.
   (`insufficient_independent_origins`), never a conflict. See
   `docs/price-source-calibration.md` for the measured tolerance.
 
+### Primary failover (#862)
+
+Yahoo has no SLA (init.md §5, §9). When it cannot serve a market-price cell —
+`SourceUnavailableError` (`transient_network`) or `TimeoutError` (`timeout`) after every
+retry, or no bar at all (`field_unavailable`) — the capture executor asks the source for a
+failover, and the market-price adapter asks the registered origins in
+`market-price-fusion:v3` priority order (`twelve-data:v1`, then `moomoo-kline:v1`) for the
+close of the target's settled session. The first that has it serves the cell:
+
+- as itself: its parser vintage, its bytes under its own vendor prefix, its record id
+  (`<origin>:<symbol>:<session>`), its vintage under the cell's planned request — so the
+  terminal attempt names it and the snapshot binds it; the mart serves that origin's number;
+- declared: the payload carries `served_by_failover: "<origin>"`, and the obligation result
+  carries `served_by_failover` beside the primary's reason codes (the attempts keep the
+  primary's failure; the terminal attempt is `success` with the primary's reason);
+- one grade lower: the origin's normal confidence minus the 0.10 step a session of lag
+  costs (Twelve Data 0.85 -> 0.75, moomoo 0.80 -> 0.70), floored at 0.50;
+- only for the same session, knowable by the run's cutoff instant: another day's close, or
+  one knowable after the cutoff, cannot serve. Without a market calendar a holiday tick's
+  target session has no bar at any origin, so a primary failure on a holiday still leaves
+  the cell unavailable.
+
+The remaining origins still corroborate. The report grades the cell on what asserted it:
+`selected_source` is the serving origin, `agreed` only when a second independent origin
+asserted the same session (then the pointer gate counts it), otherwise
+`insufficient_independent_origins` — never agreed on one origin. The cell carries
+`served_by_failover` beside its headline keys and `served_by_failover_count` totals the
+run; the tick's summary line says `served by failover N`. When no origin can serve, the
+cell resolves exactly as before the failover existed. A failover-served observation never
+anchors cross-run reuse (#635 requires the primary's parser vintage), so the next tick asks
+the primary again. The `fusion-selects-by-priority-not-recency` output invariant accepts a
+non-primary selection only when the payload declares the failover, the policy ranks the
+origin, and no higher-ranked origin asserted the same session on that obligation.
+
 ## Fixed Denominator
 
 `VersionedDataHubQualityReport.cells` contains exactly one row per requested cell,

@@ -344,7 +344,7 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
         lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
 
     [summary] = [line for line in lines if line.startswith(f"topt live tick {TICK}: capture ")]
-    assert "; corroborations refused 2 (twelve-data fetch 2); pointer sequence 11" in summary
+    assert "; corroborations refused 2 (twelve-data fetch 2); served by failover 0; pointer sequence 11" in summary
     assert metadata["corroborations_refused"] == 2
     warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 2 and all("twelve-data" in w and "PermissionError" in w for w in warnings)
@@ -360,9 +360,33 @@ def test_a_tick_that_lost_nothing_says_so(monkeypatch) -> None:
     lines, metadata = _logged_tick(monkeypatch, run_canary_live_tick, registration)
     assert lines[-1] == (
         f"canary tick {TICK}: capture capture-run:{'a' * 64} (available 84/84); "
-        "corroborations refused 0; pointer sequence 3"
+        "corroborations refused 0; served by failover 0; pointer sequence 3"
     )
     assert metadata["corroborations_refused"] == 0
+    assert metadata["served_by_failover"] == 0
+
+
+def test_a_tick_names_the_cells_served_by_failover(monkeypatch) -> None:
+    """#862: a primary outage no longer empties cells, so it must not vanish either — the
+    quality report's count of failover-served cells reaches the tick's summary line and
+    its op metadata."""
+    registration = PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=4, unmet=())
+    _fake_tick(monkeypatch, registration)
+    monkeypatch.setattr(
+        capture,
+        "run_topt_pipeline",
+        lambda *args, **kwargs: ToptPipelineResult(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            core_result_count=20,
+            quality_report_id="datahub-quality-report:" + "c" * 64,
+            quality={**_QUALITY, "served_by_failover_count": 2},
+        ),
+    )
+    lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
+    [summary] = [line for line in lines if line.startswith(f"topt live tick {TICK}: capture ")]
+    assert "; corroborations refused 0; served by failover 2; pointer sequence 4" in summary
+    assert metadata["served_by_failover"] == 2
 
 
 def test_the_two_environments_never_tick_at_the_same_instant() -> None:
