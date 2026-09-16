@@ -747,7 +747,7 @@ def test_a_tag_re_tags_what_main_published_instead_of_rebuilding_it() -> None:
     skips an image the merge left untouched). What makes that safe:
 
     - only a tag reuses; a main push and the manual force ARE the publisher, and the PR-time
-      `images_check` never sees the input, so a PR still proves its image builds;
+      `images_build` never sees the input, so a PR still proves its image builds;
     - `plan` decides per image through tools/verified_sha_images.py, whose own tests pin
       that 404 is the one answer that means "build" and everything else is red;
     - `retag` publishes nothing but a pointer: `imagetools create` at the digest `plan`
@@ -760,7 +760,7 @@ def test_a_tag_re_tags_what_main_published_instead_of_rebuilding_it() -> None:
     assert str(release["with"]["reuse_verified_sha"]) == "${{ github.ref_type == 'tag' }}", (
         "images_release must reuse on a tag and only on a tag — main and the manual force are the publisher"
     )
-    assert "reuse_verified_sha" not in (job(REQUIRED, "images_check").get("with") or {}), (
+    assert "reuse_verified_sha" not in (job(REQUIRED, "images_build").get("with") or {}), (
         "a PR must still prove its image BUILDS; reuse would let a broken Dockerfile merge green"
     )
     reuse = triggers(IMAGES)["workflow_call"]["inputs"]["reuse_verified_sha"]
@@ -781,7 +781,7 @@ def test_a_tag_re_tags_what_main_published_instead_of_rebuilding_it() -> None:
     retag = job(IMAGES, "retag")
     assert retag["needs"] == "plan", "retag depends on the plan and on nothing that builds"
     assert "inputs.publish" in str(retag["if"]) and "has_retag == 'true'" in str(retag["if"]), (
-        "a publish: false call (images_check) must never push a tag"
+        "a publish: false call (images_build) must never push a tag"
     )
     assert "fromJSON(needs.plan.outputs.retag_matrix)" in str(retag["strategy"]["matrix"])
     pointer = step(IMAGES, "Re-tag ${{ matrix.image }} at the digest main published")
