@@ -308,7 +308,7 @@
       "id": "workflow-contract/dagster-liveness-is-gated-on-a-pr",
       "guard": "libs/runtime/tests/test_ci_workflows.py",
       "file": ".github/workflows/ci-python.yml",
-      "find": "  dagster-code-server-liveness:\n    if: github.event_name == 'schedule' || inputs.dagster_liveness_required",
+      "find": "  dagster-code-server-liveness:\n    if: inputs.dagster_liveness_only || inputs.dagster_liveness_required",
       "replace": "  dagster-code-server-liveness:",
       "command": [
         "uv",

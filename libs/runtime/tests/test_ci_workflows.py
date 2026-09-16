@@ -993,12 +993,13 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
     """#855 A4, the other half of the property above: what actually reads the filter.
 
     ci-required.yml's `python` job computes the decision (not `github.event_name` read
-    inside the called workflow, whose value in a called workflow is not this repo's to
-    assume) and passes it as a `workflow_call` input; ci-python.yml's liveness job is
-    gated on that input, except on this workflow's own nightly `schedule` trigger, which
-    always runs it — the standing check that PR-gating does not mean "only tested by
-    accident". The three heavier jobs skip on `schedule` so the nightly is liveness-only,
-    not a timer that re-runs the whole suite.
+    inside the called workflow, whose value in a called workflow is the CALLER's and not
+    this repo's to assume) and passes it as a `workflow_call` input; ci-python.yml's
+    liveness job is gated on that input, or on `dagster_liveness_only`, which the nightly
+    caller sets — the standing check that PR-gating does not mean "only tested by
+    accident". The three heavier jobs skip on that same input so the nightly is
+    liveness-only, not a timer that re-runs the whole suite. Every gate here is an input
+    the caller names, never a read of the caller's event.
     """
     caller = job(REQUIRED, "python")
     decision = str(caller["with"]["dagster_liveness_required"])
@@ -1011,10 +1012,11 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
         f"PR that touches the dagster surface would never run the liveness job either"
     )
 
-    liveness_input = triggers(PYTHON)["workflow_call"]["inputs"]["dagster_liveness_required"]
-    assert liveness_input["type"] == "boolean" and liveness_input["default"] is False, (
-        "dagster_liveness_required must default closed — an unset input on a direct call must not silently run the job"
-    )
+    for name in ("dagster_liveness_required", "dagster_liveness_only"):
+        liveness_input = triggers(PYTHON)["workflow_call"]["inputs"][name]
+        assert liveness_input["type"] == "boolean" and liveness_input["default"] is False, (
+            f"{name} must default closed — an unset input on a direct call must not silently change what runs"
+        )
 
     # The nightly is a scheduled CALLER, and ci-python.yml stays `workflow_call`-only: a
     # reusable workflow that also declares its own triggers and permissions gets NO run on a
@@ -1031,7 +1033,7 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
     assert "workflow_dispatch" in nightly, f"{NIGHTLY} must be runnable by hand for a drill"
     caller = job(NIGHTLY, "python")
     assert caller["uses"] == "./.github/workflows/ci-python.yml"
-    assert caller["with"]["dagster_liveness_required"] is True, "the nightly must force the liveness job on"
+    assert caller["with"]["dagster_liveness_only"] is True, "the nightly must force the liveness job on, alone"
     assert caller["permissions"].get("actions") == "write", "setup-uv's cache saves only with actions: write (#645)"
 
     liveness = job(PYTHON, "dagster-code-server-liveness")
@@ -1040,14 +1042,18 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
         f"the liveness job's if is {condition!r} — it no longer reads the caller's decision, so "
         f"it either always runs (back on the PR critical path) or never does"
     )
-    assert "github.event_name == 'schedule'" in condition, (
-        f"the liveness job's if is {condition!r} — the nightly trigger no longer forces it on, so "
-        f"a schedule run would tick green while testing nothing"
+    assert "inputs.dagster_liveness_only" in condition, (
+        f"the liveness job's if is {condition!r} — the nightly's input no longer forces it on, so "
+        f"a nightly run would tick green while testing nothing"
+    )
+    assert "github.event_name" not in condition, (
+        f"the liveness job's if is {condition!r} — inside a reusable workflow that context is the "
+        f"caller's; the contract is the named inputs"
     )
 
     for lane in ("gates", "test-core", "test-data-engine"):
-        assert str(job(PYTHON, lane)["if"]) == "github.event_name != 'schedule'", (
-            f"{lane} runs on the nightly schedule too — the nightly is meant to be liveness-only, "
+        assert str(job(PYTHON, lane)["if"]) == "${{ !inputs.dagster_liveness_only }}", (
+            f"{lane} runs on the nightly too — the nightly is meant to be liveness-only, "
             f"not a timer that re-runs the whole suite"
         )
 
@@ -1091,7 +1097,7 @@ def test_main_pushes_never_collide_and_a_tag_run_can_never_be_cancelled() -> Non
     on for every event, so main pushes collapse instead of each burst queueing
     ~16 extra jobs in front of every open PR. Re-measured 2026-09-16 (#860): 6 of
     27 main-push runs were cancelled (22%, five times #708's rate), and one of
-    them — 57d2531 — was a run `cut_release` was WAITING ON: it died mid-flight
+    them — 57d25316 — was a run `cut_release` was WAITING ON: it died mid-flight
     with "finished non-green: cancelled" and the release ceremony restarted from
     scratch instead of resuming. Collapsing collisions is not the same as
     preventing them, and #708 did not measure what happens when the collision

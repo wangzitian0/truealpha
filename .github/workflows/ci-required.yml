@@ -32,7 +32,7 @@ permissions:
 # run collapses the older one instead of ~16 extra jobs queueing in front of
 # every open PR. Re-measured 2026-09-16 (#860): 6 of 27 main-push runs were
 # cancelled — d7fafd59, e1cda5fb, a35bc1a3, 2ea74035, fbf5eb48, 57d25316 — 22%,
-# five times #708's rate. One of the six, 57d2531, was a run `cut_release` was
+# five times #708's rate. One of the six, 57d25316, was a run `cut_release` was
 # WAITING ON: it died with "finished non-green: cancelled" and the release
 # ceremony restarted from scratch instead of resuming. #708's "re-attributed,
 # not lost" reasoning holds for the CODE — the newer run does cover the older
