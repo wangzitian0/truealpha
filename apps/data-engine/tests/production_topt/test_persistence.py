@@ -36,6 +36,7 @@ from data_engine.datahub.production_topt.market_price_adapter import (
     MarketPriceAdapter,
     MarketPriceQuote,
     MarketPriceTarget,
+    SourceUnavailableError,
 )
 from data_engine.datahub.production_topt.persistence import PostgresCaptureControlSink
 from data_engine.datahub.production_topt.release_derived_adapter import (
@@ -80,8 +81,7 @@ def connection():
         active.close()
 
 
-def _quote(close: str) -> MarketPriceQuote:
-    day = date(2026, 3, 31)
+def _quote(close: str, day: date = date(2026, 3, 31)) -> MarketPriceQuote:
     price = Decimal(close)
     return MarketPriceQuote(
         raw_bytes=f"bar:{day}:{close}".encode(),
@@ -118,6 +118,29 @@ class _OneBrokenCell:
     # The listing-identity payload lands without its required `ticker`: bytes are stored
     # and the row is written, but the payload does not satisfy its own semantic contract.
     identity_payload: bool = False
+
+
+@dataclass(frozen=True)
+class _PrimaryOutage:
+    """#862: the primary price vendor cannot serve ONE listing (the first by listing id);
+    the registered origins are asked in fusion-policy order. Each flag says whether that
+    origin holds the victim's settled close; the other listings are untouched."""
+
+    twelve_data: bool = True
+    moomoo: bool = True
+
+
+# The failover origins' close for the victim, distinct from the primary's 40 so a test can
+# tell which vendor's number the mart serves, and inside the 0.3% price tolerance so the
+# two failover origins agree with each other.
+_FAILOVER_CLOSE = "40.02"
+
+
+def _victim(plan: PlannedRun) -> tuple[str, str]:
+    """(listing_id, ticker) of the listing `_PrimaryOutage` and `_OneBrokenCell` target."""
+    listing_id = min(coordinate[2] for coordinate in plan.coordinates.values())
+    ticker = next(coordinate[3] for coordinate in plan.coordinates.values() if coordinate[2] == listing_id)
+    return listing_id, ticker
 
 
 def _bundle(branch: OperatingBranch, *, blank_numerator: bool = False) -> FinancialFactsBundle:
@@ -164,6 +187,7 @@ def _routes(
     corroborate: bool,
     headcount_extractor=None,
     broken: _OneBrokenCell = _OneBrokenCell(),
+    outage: _PrimaryOutage | None = None,
 ) -> dict[str, SourceFetchPort]:
     """The deployed adapters over fake fetchers, routed exactly as the composition root does."""
     cutoff_date = CUTOFF.date()
@@ -187,6 +211,7 @@ def _routes(
                 issuer_id=issuer_id,
                 instrument_id=instrument_id,
                 listing_id=listing_id,
+                run_cutoff=CUTOFF,
             )
         elif semantic_type == "financial-fact":
             sec_targets[work_item_id] = SecTarget(
@@ -226,13 +251,42 @@ def _routes(
                 knowable_at=plan.universe_published_at or plan.timeline.partition_start,
             )
 
-    second_origin = CorroboratingOrigin(
-        origin="twelve-data",
-        parser_version="twelve-data-parser:v1",
-        mapping_version="twelve-data-map:v1",
-        value_key="price",
-        confidence=Decimal("0.85"),
-        fetch=lambda symbol, cutoff: _quote("40"),
+    victim_ticker = _victim(plan)[1]
+
+    def origin_fetch(holds_victim: bool):
+        def fetch(symbol: str, cutoff: date) -> MarketPriceQuote | None:
+            if outage is None or symbol != victim_ticker:
+                return _quote("40")
+            # A failover serves only the target's own settled session: the one asked for.
+            return _quote(_FAILOVER_CLOSE, day=cutoff) if holds_victim else None
+
+        return fetch
+
+    def primary_fetch(symbol: str, cutoff: date) -> MarketPriceQuote:
+        if outage is not None and symbol == victim_ticker:
+            raise SourceUnavailableError("chart endpoint answered 502")
+        return _quote("40")
+
+    second_origin = (
+        CorroboratingOrigin(
+            origin="twelve-data",
+            parser_version="twelve-data-parser:v1",
+            mapping_version="twelve-data-map:v1",
+            value_key="price",
+            confidence=Decimal("0.85"),
+            fetch=lambda symbol, cutoff: _quote("40"),
+        )
+        if outage is None
+        # The current vintage writes the close under `close`, which is what lets it
+        # serve a cell (v1's `price` cannot satisfy the mart's payload contract).
+        else CorroboratingOrigin(
+            origin="twelve-data",
+            parser_version="twelve-data-parser:v3",
+            mapping_version="twelve-data-map:v3",
+            value_key="close",
+            confidence=Decimal("0.85"),
+            fetch=origin_fetch(outage.twelve_data),
+        )
     )
     # The moomoo K-line third origin and the moomoo statements second origin, over the
     # same fake vendor answers, so a corroborated run persists three price assertions
@@ -243,7 +297,7 @@ def _routes(
         mapping_version="moomoo-kline-map:v1",
         value_key="close",
         confidence=Decimal("0.80"),
-        fetch=lambda symbol, cutoff: _quote("40"),
+        fetch=origin_fetch(outage.moomoo if outage is not None else True),
         raw_source=DataSource.MOOMOO,
     )
     financial_second_origin = FinancialFactCorroboratingOrigin(
@@ -255,7 +309,7 @@ def _routes(
     )
     price = MarketPriceAdapter(
         price_targets,
-        lambda symbol, cutoff: _quote("40"),
+        primary_fetch,
         corroborating_origins=(second_origin, third_origin) if corroborate else (),
     )
     financial = SecFinancialFactAdapter(
@@ -332,6 +386,8 @@ def _capture(
     corroborate: bool = False,
     object_store: _InMemoryObjectStore | None = None,
     broken: _OneBrokenCell = _OneBrokenCell(),
+    outage: _PrimaryOutage | None = None,
+    expect_complete: bool = True,
 ) -> PlannedRun:
     plan = plan_and_persist(connection, cutoff=CUTOFF, version=version)
     _seed_headcounts(connection, plan)
@@ -353,6 +409,7 @@ def _capture(
             corroborate=corroborate,
             headcount_extractor=PostgresHeadcountExtractor(connection),
             broken=broken,
+            outage=outage,
         ),
         PostgresEvidenceGraphRepository(connection),
         sink=sink,
@@ -361,7 +418,8 @@ def _capture(
     )
     assert not report.halted
     assert report.total == 84
-    assert all(outcome.terminal_state is ObligationTerminalState.SUCCESS for outcome in report.outcomes)
+    if expect_complete:
+        assert all(outcome.terminal_state is ObligationTerminalState.SUCCESS for outcome in report.outcomes)
     return plan
 
 
@@ -928,6 +986,55 @@ def test_sink_refuses_a_success_it_cannot_persist(connection) -> None:
         )
 
 
+def test_sink_refuses_a_ledger_that_contradicts_the_served_value(connection) -> None:
+    """#862: a failover success must follow a primary failure, and a primary success must
+    end its attempts cleanly. Either contradiction would let the ledger hide a
+    substitution or invent a failure, so the sink refuses it before writing anything."""
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-862-ledger-guard")
+    sink = PostgresCaptureControlSink(
+        connection,
+        plan.bindings,
+        source_label=plan.source_label,
+        timeline=plan.timeline,
+        retry=plan.retry,
+        object_store=_InMemoryObjectStore(),
+    )
+    work_item = next(
+        item
+        for item in plan.work_items
+        if plan.bindings[item.work_item_id].obligation.capture_requirement_id == "market-price:v1"
+    )
+
+    def success(payload: dict, served_by_failover: str | None) -> FetchSuccess:
+        return FetchSuccess(
+            raw=RawResponse(body=b"bar", source=DataSource.TWELVE_DATA, record_id="twelve-data:X:2026-03-31"),
+            normalized_sha256=canonical_sha256(payload),
+            confidence=Decimal("0.75"),
+            valid_from=date(2026, 3, 31),
+            transaction_time=datetime(2026, 3, 31, tzinfo=UTC),
+            record=NormalizedRecord(
+                payload=payload, parser_version="twelve-data-parser:v3", mapping_version="twelve-data-map:v3"
+            ),
+            served_by_failover=served_by_failover,
+        )
+
+    failover = success({"close": "40.02", "served_by_failover": "twelve-data"}, "twelve-data")
+    primary = success({"close": "40"}, None)
+    refused = (
+        ((None,), ObligationTerminalState.SUCCESS, failover, "must follow a primary failure"),
+        ((ObligationReasonCode.TRANSIENT_NETWORK,), ObligationTerminalState.SUCCESS, primary, "end its attempts"),
+        ((ObligationReasonCode.TIMEOUT,), ObligationTerminalState.UNAVAILABLE, failover, "under unavailable"),
+    )
+    for attempt_reasons, terminal_state, handed_over, message in refused:
+        with pytest.raises(ValueError, match=message):
+            sink.record_outcome(
+                work_item, attempt_reasons=attempt_reasons, terminal_state=terminal_state, success=handed_over
+            )
+    assert connection.execute(
+        "select count(*) from raw.capture_attempts where work_item_id = %s", (work_item.work_item_id,)
+    ).fetchone() == (0,)
+
+
 def test_sink_refuses_more_attempts_than_the_retry_policy_permits(connection) -> None:
     plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-a1-attempts")
     sink = PostgresCaptureControlSink(
@@ -1431,3 +1538,300 @@ def test_the_release_identity_the_run_stamps_is_measured_not_minted_from_a_liter
         (first.release_manifest_id,),
     ).fetchone()[0]
     assert in_database == measured[0]
+
+
+# -- a cell the primary cannot serve (#862) -------------------------------------------------
+
+
+def _price_obligation(connection, run_id: str, listing_id: str) -> tuple:
+    """The victim's market-price obligation as the ledger and the mart record it."""
+    return connection.execute(
+        """
+        select result.terminal_state, result.reason_codes,
+               attempt.outcome, attempt.reason_codes, attempt.source_vintage_id,
+               vintage.source_request_id = work.source_request_id as under_the_planned_request,
+               vintage.source_record_id, landing.source,
+               array(
+                   select r.outcome
+                   from raw.capture_attempts a
+                   join raw.capture_attempt_results r using (attempt_id)
+                   where a.work_item_id = work.work_item_id
+                   order by a.attempt_number
+               ) as attempt_outcomes
+        from raw.capture_obligations ob
+        join raw.capture_obligation_results result on result.capture_obligation_id = ob.obligation_id
+        join raw.capture_attempt_results attempt on attempt.attempt_id = result.final_attempt_id
+        join raw.capture_obligation_work_bindings binding on binding.obligation_id = ob.obligation_id
+        join raw.capture_work_items work on work.work_item_id = binding.work_item_id
+        left join raw.capture_source_vintages vintage on vintage.source_vintage_id = attempt.source_vintage_id
+        left join raw.fetches landing on landing.id = vintage.raw_fetch_id
+        where ob.run_id = %s and ob.subject_id = %s and ob.capture_requirement_id = 'market-price:v1'
+        """,
+        (run_id, listing_id),
+    ).fetchone()
+
+
+def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin(connection) -> None:
+    """#862: Yahoo raises on one listing for every retry; Twelve Data holds its settled
+    close. The run still resolves all 84 cells (`_capture` asserts it), and:
+
+    * the ledger keeps the primary's failure — three attempts, the first two transport
+      errors, the terminal one a success that names the failover vintage and still reads
+      `transient_network` — and the obligation result says `served_by_failover`;
+    * the vintage sits under the cell's PLANNED request (the one the snapshot's
+      request-identity guard admits) with Twelve Data's record id and bytes;
+    * the snapshot binds that vintage's observation, so the mart serves Twelve Data's
+      number at Twelve Data's grade one step down, and the meta-info view and the
+      strategy bridge carry the same served close.
+    """
+    plan = _capture(connection, version="test-862-served", corroborate=True, outage=_PrimaryOutage())
+    victim_listing, victim_ticker = _victim(plan)
+
+    (
+        terminal_state,
+        result_reasons,
+        final_outcome,
+        final_reasons,
+        vintage_id,
+        under_planned_request,
+        record_id,
+        landed_source,
+        attempt_outcomes,
+    ) = _price_obligation(connection, plan.run_id, victim_listing)
+    assert (terminal_state, result_reasons) == ("success", ["served_by_failover", "transient_network"])
+    assert (final_outcome, final_reasons) == ("success", ["transient_network"])
+    assert attempt_outcomes == ["transport_error", "transport_error", "success"]
+    assert vintage_id is not None and under_planned_request is True
+    assert (record_id, landed_source) == (f"twelve-data:{victim_ticker}:{CUTOFF.date().isoformat()}", "twelvedata")
+    # Every other price cell is the primary's, with an untouched ledger.
+    others = connection.execute(
+        """
+        select distinct result.reason_codes
+        from raw.capture_obligations ob
+        join raw.capture_obligation_results result on result.capture_obligation_id = ob.obligation_id
+        where ob.run_id = %s and ob.subject_id <> %s
+        """,
+        (plan.run_id, victim_listing),
+    ).fetchall()
+    assert others == [(["success"],)]
+
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    member = next(member for member in snapshot.members if member.listing_id == victim_listing)
+    assert member.market_price.value == Decimal(_FAILOVER_CLOSE)
+    assert member.market_price.confidence == Decimal("0.75")
+    bound = connection.execute(
+        """
+        select o.parser_version, o.source_vintage_id, p.normalized_payload->>'served_by_failover'
+        from staging.capture_normalized_observations o
+        join staging.capture_observation_payloads p using (observation_id)
+        where o.observation_id = %s
+        """,
+        (member.market_price.input_id,),
+    ).fetchone()
+    assert bound == ("twelve-data-parser:v3", vintage_id, "twelve-data")
+    assert all(m.market_price.value == Decimal("40") for m in snapshot.members if m.listing_id != victim_listing)
+    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    assert len(results) == 20
+
+    meta = connection.execute(
+        """
+        select parser_version, confidence, reason_codes from mart.topt_capture_meta_info
+        where run_id = %s and subject_id = %s and capture_requirement_id = 'market-price:v1'
+        """,
+        (plan.run_id, victim_listing),
+    ).fetchone()
+    assert meta == ("twelve-data-parser:v3", Decimal("0.75"), ["served_by_failover", "transient_network"])
+
+    from data_engine.datahub.strategy_bridge import seed_strategy_inputs_from_capture
+
+    victim_issuer = next(c[0] for c in plan.coordinates.values() if c[2] == victim_listing)
+    connection.execute("delete from staging.strategy_backtest_inputs where cutoff_at = %s", (CUTOFF,))
+    seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
+    closes = connection.execute(
+        """
+        select issuer_id, value, confidence from staging.strategy_backtest_inputs
+        where cutoff_at = %s and input_key = 'last_close'
+        """,
+        (CUTOFF,),
+    ).fetchall()
+    by_issuer = {issuer: (value, confidence) for issuer, value, confidence in closes}
+    assert by_issuer[victim_issuer] == (Decimal(_FAILOVER_CLOSE), Decimal("0.75"))
+    assert len(by_issuer) == len({c[0] for c in plan.coordinates.values()})
+
+
+@pytest.mark.parametrize("corroborated", [True, False], ids=["second-origin-asserts", "single-origin"])
+def test_a_failover_cell_is_graded_on_what_actually_corroborated_it(connection, corroborated: bool) -> None:
+    """#862: the reports grade a failover-served cell honestly. `selected_source` is the
+    real source; the cell is `agreed` only when a SECOND independent origin (moomoo) also
+    asserted the served session — then the pointer gate counts it — and otherwise it is
+    single-origin: `insufficient_independent_origins` in the quality report, LOW
+    `served_by_failover` in the confidence report, and outside the gate's corroborated
+    share. The fusion invariant holds either way: the snapshot selected the highest-
+    priority origin present, and the substitution is declared."""
+    from data_engine.datahub import confidence_report
+    from data_engine.datahub.a1_evidence import _corroborated_share, unmet_objectives
+    from data_engine.datahub.question_coverage import GovernedHead
+
+    store = _InMemoryObjectStore()
+    plan = _capture(
+        connection,
+        version=f"test-862-graded-{corroborated}",
+        corroborate=True,
+        object_store=store,
+        outage=_PrimaryOutage(moomoo=corroborated),
+    )
+    victim_listing, _ticker = _victim(plan)
+    report = quality_report.build_report(connection, plan.run_id, object_store=store)
+
+    cells = report["reconciliation_cells"]
+    cell = cells[victim_listing]
+    assert cell["served_by_failover"] == "twelve-data"
+    assert (cell["selected_source"], cell["selected_value"]) == ("twelve-data:v1", _FAILOVER_CLOSE)
+    if corroborated:
+        assert (cell["outcome"], cell["origin_groups"]) == ("agreed", 2)
+    else:
+        assert (cell["outcome"], cell["origin_groups"]) == ("insufficient_independent_origins", 1)
+    assert all("served_by_failover" not in other for listing, other in cells.items() if listing != victim_listing)
+    assert all(other["origin_groups"] == 3 for listing, other in cells.items() if listing != victim_listing)
+    assert report["served_by_failover_count"] == 1
+    assert (report["available_count"], report["lineage_complete_count"]) == (84, 84)
+    assert report["independently_reconciled_count"] == (21 if corroborated else 20)
+    share = _corroborated_share(cells, minimum_origin_groups=2)
+    assert share == Decimal(21 if corroborated else 20) / Decimal(21)
+    assert not [u for u in unmet_objectives(report) if u.objective == "corroborated_share"]
+
+    quality_report.persist(connection, report)
+    head = GovernedHead(universe_id="universe:topt-us-2026-03-31", run_id=plan.run_id, cutoff=CUTOFF)
+    confidence = confidence_report.build_report(
+        connection, universe="topt", head=head, executed_at=CUTOFF, environment="test"
+    )
+    close = confidence["families"]["close"]
+    graded = confidence["cells"]["close"][victim_listing]
+    if corroborated:
+        assert (graded["band"], graded["reason"]) == ("high", "independent_origins_agree")
+        assert close["reasons"] == {"independent_origins_agree": 21}
+    else:
+        assert (graded["band"], graded["reason"], graded["origins"]) == (
+            "low",
+            "served_by_failover",
+            ["origin:twelve-data:v1"],
+        )
+        assert close["reasons"] == {"independent_origins_agree": 20, "served_by_failover": 1}
+    assert confidence["accuracy"]["close"]["matches_quality_report"] is True
+
+    # The fusion invariant judges the governed head: point the pointer at this run.
+    tool = _output_invariants_tool()
+    fusion = next(
+        invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"
+    )
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
+    )
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, 'production', %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+    assert (
+        tool.check(
+            "postgresql://borrowed", invariants=(fusion,), exemptions={}, connect=lambda _url: _Borrowed(connection)
+        )
+        == 0
+    )
+
+
+def test_a_failover_substitution_the_payload_does_not_declare_is_a_fusion_violation(connection, capsys) -> None:
+    """The invariant's red case for #862: strip the marker from the served observation —
+    the shape of a silent substitution — and the selection no longer passes."""
+    tool = _output_invariants_tool()
+    fusion = next(
+        invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"
+    )
+    plan = _capture(connection, version="test-862-silent", corroborate=True, outage=_PrimaryOutage())
+    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+        run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
+    )
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, 'production', %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+    run = lambda: tool.check(  # noqa: E731
+        "postgresql://borrowed", invariants=(fusion,), exemptions={}, connect=lambda _url: _Borrowed(connection)
+    )
+    assert run() == 0
+    capsys.readouterr()
+    # Payloads are append-only by trigger; the red case bypasses it for this transaction.
+    connection.execute("set local session_replication_role = replica")
+    stripped = connection.execute(
+        """
+        update staging.capture_observation_payloads
+           set normalized_payload = normalized_payload - 'served_by_failover'
+         where normalized_payload ? 'served_by_failover'
+           and observation_id in (
+               select oo.observation_id
+               from raw.capture_obligations ob
+               join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+               where ob.run_id = %s
+           )
+        returning observation_id
+        """,
+        (plan.run_id,),
+    ).fetchall()
+    assert len(stripped) == 1
+    assert run() == 1
+    assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
+
+
+def test_when_every_origin_fails_the_cell_stays_unavailable_as_before(connection) -> None:
+    """#862: no registered origin holds the victim's close. The obligation resolves exactly
+    as it did before failover existed — UNAVAILABLE after three transport errors, the
+    primary's reason alone, no vintage, no observation — and the run cannot freeze."""
+    plan = _capture(
+        connection,
+        version="test-862-all-fail",
+        corroborate=True,
+        outage=_PrimaryOutage(twelve_data=False, moomoo=False),
+        expect_complete=False,
+    )
+    victim_listing, _ticker = _victim(plan)
+    row = _price_obligation(connection, plan.run_id, victim_listing)
+    assert row[:5] == ("unavailable", ["transient_network"], "unavailable", ["transient_network"], None)
+    assert row[8] == ["transport_error", "transport_error", "unavailable"]
+    bound = connection.execute(
+        """
+        select count(*)
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        where ob.run_id = %s and ob.subject_id = %s and ob.capture_requirement_id = 'market-price:v1'
+        """,
+        (plan.run_id, victim_listing),
+    ).fetchone()
+    assert bound == (0,)
+    with pytest.raises(ValueError, match="completely successful"):
+        PostgresToptCoreRepository(connection).freeze_snapshot(
+            run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
+        )

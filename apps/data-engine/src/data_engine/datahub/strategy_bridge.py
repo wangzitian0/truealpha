@@ -28,6 +28,7 @@ from truealpha_contracts.metrics import METRICS, input_key_for_metric, is_regist
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 from data_engine.core_strategy_replay import _load_corpus, _to_decision
+from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import write_replay
@@ -77,7 +78,10 @@ def seed_strategy_inputs_from_capture(
 
     ``parser_version`` selects which parser vintage of the run's observations crosses the
     bridge; the deployed tick uses the live default, and the #395 end-to-end test drives
-    the integration-corpus vintage through the same code.
+    the integration-corpus vintage through the same code. A price cell the primary could
+    not serve crosses under the vintage of the origin that served it (#862): its payload
+    declares ``served_by_failover``, which no corroboration ever carries, and it is the
+    value the snapshot bound for that cell.
     """
     rows = connection.execute(
         """
@@ -87,10 +91,13 @@ def seed_strategy_inputs_from_capture(
         join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
         join staging.capture_observation_payloads p on p.observation_id = o.observation_id
         where ob.run_id = %s
-          and o.parser_version = %s
           and o.semantic_type in ('financial-fact', 'market-price')
+          and (
+              o.parser_version = %s
+              or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null)
+          )
         """,
-        (run_id, parser_version),
+        (run_id, parser_version, SERVED_BY_FAILOVER),
     ).fetchall()
 
     # issuer -> (canonical listing, payload, confidence, the observation's own knowable_at)

@@ -4,7 +4,9 @@ A market-price cell is only independently reconciled when two origins assert it,
 module supplies the second: a Decimal-safe close at/before the cutoff from Twelve Data,
 shaped as a `CorroboratingOrigin` the market-price adapter attaches to its success. The
 fusion engine (#343) then reconciles two real assertions under the declared tolerance
-policy — counting origins never reconciles values.
+policy — counting origins never reconciles values. When the primary cannot serve a cell at
+all, this origin is the first failover (#862): its settled close for the target's session
+serves the cell under this origin's identity, one confidence grade down.
 
 The key comes from `settings.twelve_data_api_key` (rendered into the runtime env from
 Vault by infra2's `20.data_engine/secrets.ctmpl`), never `os.environ` in-line. With no key

@@ -150,6 +150,10 @@ class MarketPricePayload(_FrozenModel):
     high: Decimal | None = None
     low: Decimal | None = None
     volume: Decimal | None = None
+    # The registered origin that served this cell because the primary could not (#862);
+    # absent on every primary-served payload. The observation's parser vintage says the
+    # same thing — this is the declaration the reports and the fusion invariant read.
+    served_by_failover: str | None = Field(default=None, min_length=1)
 
     @field_validator("close", "open", "high", "low", "volume", mode="before")
     @classmethod

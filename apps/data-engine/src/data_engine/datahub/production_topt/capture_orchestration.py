@@ -4,7 +4,8 @@ Wires the executor to the per-semantic source adapters. A `CompositeSourceFetchP
 each work item to the adapter that owns its semantic, and `run_topt_capture` runs the executor
 over the planned work items, writing the append-only evidence graph and returning the run
 report. The routing table is built from the plan by the caller (each adapter already holds its
-own per-work-item targets).
+own per-work-item targets). The router forwards a failover request (#862) to the adapter that
+owns the work item when that adapter declares further origins, and answers None otherwise.
 """
 
 from __future__ import annotations
@@ -17,8 +18,10 @@ from truealpha_contracts.evidence_graph import EvidenceGraphWriter
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 from data_engine.datahub.production_topt.executor import (
+    FailoverFetchPort,
     FetchFailure,
     FetchOutcome,
+    FetchSuccess,
     ObligationSink,
     SourceFetchPort,
     ToptCaptureExecutor,
@@ -37,6 +40,12 @@ class CompositeSourceFetchPort:
         if adapter is None:
             return FetchFailure(ObligationReasonCode.CONTRACT_VIOLATION)
         return adapter.fetch(work_item)
+
+    def failover(self, work_item: CaptureWorkItem, primary_reason: ObligationReasonCode) -> FetchSuccess | None:
+        adapter = self._routes.get(work_item.work_item_id)
+        if not isinstance(adapter, FailoverFetchPort):
+            return None
+        return adapter.failover(work_item, primary_reason)
 
 
 def run_topt_capture(

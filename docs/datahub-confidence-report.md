@@ -27,7 +27,7 @@ oracle's answer is a new row.
 |---|---|
 | `high` | at least two **independent** origins asserted a value and the family's declared, content-addressed reconciliation policy graded them `agreed` (`reconcile_source_assertions`, #343) |
 | `medium` | at least two origins asserted a value, but: no agreement policy exists for the family (`no_agreement_policy`), or they disagree beyond tolerance (`not_agreed_within_tolerance`), or they share one lineage (`same_lineage`) |
-| `low` | exactly one origin asserted a value (`single_origin`; `second_origin_other_day` when a session-bound second origin published a different day, #622; `second_origin_other_period` when a period-bound second origin never published the primary's fiscal period, #866) |
+| `low` | exactly one origin asserted a value (`single_origin`; `served_by_failover` when the primary could not serve the cell and the lone origin is the registered origin that did, #862; `second_origin_other_day` when a session-bound second origin published a different day, #622; `second_origin_other_period` when a period-bound second origin never published the primary's fiscal period, #866) |
 | `missing` | no origin asserted a value |
 
 **An origin asserts once.** Two rows of one origin in a run (a retried capture and a

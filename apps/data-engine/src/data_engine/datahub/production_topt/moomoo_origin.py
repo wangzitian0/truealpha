@@ -8,7 +8,10 @@ The owner's standard needs three price origins and a second origin for fundament
 that revenue / net income can reach HIGH when two vendors agree. Both origins here are
 corroborators: the primary (Yahoo, SEC company-facts) still selects the served value, the
 fusion engine (#343) reconciles under a declared tolerance and abstains on conflict, and a
-moomoo outage leaves cells honestly single-origin rather than failing the tick.
+moomoo outage leaves cells honestly single-origin rather than failing the tick. The one
+exception is a price cell neither Yahoo nor Twelve Data can serve: the K-line close then
+serves it as a failover (#862, `MarketPriceAdapter.failover`), under its own identity and
+one confidence grade down.
 
 ## The client is injectable
 
