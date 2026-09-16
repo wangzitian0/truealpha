@@ -1,0 +1,103 @@
+name: main-health
+
+# #876 (W12): a red `ci-required` on a push to main alerted nobody; it was found
+# at the next release attempt. Branch protection runs with strict up-to-date
+# OFF, so the main run is the only place two PRs' changes are tested together —
+# on 2026-09-16 #868 merged on top of #869 and turned main red (fixed by #873)
+# with every PR check green.
+#
+# So each completed main-push run of ci-required files or resolves ONE issue:
+#   failure -> open (or comment on) "main is red: ci-required failed on push"
+#   success -> resolve it: main is green again, so the alert closes itself
+#   anything else (cancelled, skipped, ...) -> nothing; that run judged nothing.
+# A red commit followed by a green one closes the issue — intended: the alert
+# means "main HEAD's ci-required is red NOW", the same verdict cut_release reads
+# before it tags. With #883's sha-keyed groups main runs no longer cancel each
+# other, so every main commit reports its own conclusion (before it, a
+# superseded run concludes `cancelled` and is ignored here). Known limit: a
+# path-filtered green (a docs-only commit skips the python lane) closes the
+# issue too, exactly as it turns main's status green for cut_release.
+#
+# workflow_run executes THIS file from the default branch with a write token,
+# so nothing from the triggering run is ever interpolated into a `run:` — the
+# commit message and SHA reach the shell only through `env:`.
+
+on:
+  workflow_run:
+    workflows: [ci-required]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  # `gh run view` names the failed jobs in the issue body.
+  actions: read
+  issues: write
+
+# Serialised, never cancelled mid-write: two completions close together must
+# not race an open against a close. GitHub keeps only the newest pending run,
+# which is the one whose conclusion should stand.
+concurrency:
+  group: main-health
+  cancel-in-progress: false
+
+env:
+  ESCALATION_TITLE: "main is red: ci-required failed on push"
+
+jobs:
+  report:
+    # `branches: [main]` matches the head BRANCH name, which a pull_request from
+    # a fork's own `main` also carries; only a push event is a main commit.
+    if: github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      # The default branch's tools/, not the triggering commit's: a privileged
+      # workflow_run never executes code from the run it reports on.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+          persist-credentials: false
+
+      - name: File the red-main issue
+        if: github.event.workflow_run.conclusion == 'failure'
+        run: |
+          set -euo pipefail
+          COMMIT_TITLE="${COMMIT_MESSAGE%%$'\n'*}"
+          FAILED_JOBS="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+            --jq '.jobs[] | select(.conclusion == "failure") | "- " + .name' || echo "- (could not list the jobs; open the run)")"
+          {
+            echo "ci-required failed on a push to main."
+            echo
+            echo "- commit: $HEAD_SHA"
+            echo "- title: $COMMIT_TITLE"
+            echo "- run: $RUN_URL"
+            echo
+            echo "Failed jobs:"
+            echo "$FAILED_JOBS"
+            echo
+            echo "Filed automatically (#876). One open issue while main is red: later red pushes comment here; the next green push closes it."
+          } > body.md
+          python3 tools/escalate_issue.py open --title "$ESCALATION_TITLE" --body-file body.md
+
+      - name: Resolve the red-main issue
+        if: github.event.workflow_run.conclusion == 'success'
+        run: |
+          set -euo pipefail
+          COMMIT_TITLE="${COMMIT_MESSAGE%%$'\n'*}"
+          {
+            echo "Resolved: ci-required passed on a push to main."
+            echo
+            echo "- commit: $HEAD_SHA"
+            echo "- title: $COMMIT_TITLE"
+            echo "- run: $RUN_URL"
+            echo
+            echo "Closed automatically (#876). The next red push files a new issue."
+          } > body.md
+          python3 tools/escalate_issue.py resolve --title "$ESCALATION_TITLE" --body-file body.md
