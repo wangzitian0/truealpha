@@ -36,11 +36,17 @@ def responses(
     reviews: list[dict[str, Any]] | None = None,
     unresolved: int = 0,
     total: int | None = None,
+    author: str = "lane-agent",
 ) -> Any:
     """One fake `gh` for the three calls the tool makes, in order."""
     threads = [{"isResolved": False}] * unresolved + [{"isResolved": True}]
     payloads = {
-        "pr": {"headRefOid": HEAD, "mergeStateStatus": merge_state, "state": state},
+        "pr": {
+            "author": {"login": author},
+            "headRefOid": HEAD,
+            "mergeStateStatus": merge_state,
+            "state": state,
+        },
         "reviews": reviews if reviews is not None else [],
         "graphql": {
             "data": {
@@ -70,8 +76,49 @@ def responses(
     return fake
 
 
-def review(commit: str, *, state: str = "COMMENTED", who: str = "copilot") -> dict[str, Any]:
-    return {"commit_id": commit, "state": state, "user": {"login": who}, "submitted_at": "2026-09-01T04:32:11Z"}
+def review(commit: str, *, state: str = "COMMENTED", who: str = "copilot", body: str = "a finding") -> dict[str, Any]:
+    return {
+        "commit_id": commit,
+        "state": state,
+        "user": {"login": who},
+        "submitted_at": "2026-09-01T04:32:11Z",
+        "body": body,
+    }
+
+
+def test_the_authors_own_thread_reply_is_not_a_review_of_the_head(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """#850 on 2026-09-16: Copilot reviewed the previous push; the author replied to its
+    thread from the account gh runs as, which GitHub records as a body-less COMMENTED
+    review ON THE NEW HEAD. That reply is not a reading of the new diff — the head must
+    still settle."""
+    monkeypatch.setattr(
+        merge_ready,
+        "gh_json",
+        responses(reviews=[review(OLDER), review(HEAD, who="owner", body="")], author="owner", head_age_minutes=2),
+    )
+    problems = merge_ready.blockers(1)
+    assert any("no review covers it yet" in p for p in problems), problems
+
+
+def test_a_body_less_comment_review_from_anyone_is_not_a_reading(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(merge_ready, "gh_json", responses(reviews=[review(HEAD, who="human", body="")]))
+    problems = merge_ready.blockers(1)
+    assert any("nothing has reviewed" in p for p in problems), problems
+
+
+def test_the_authors_own_approval_does_not_count_but_another_persons_does(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        merge_ready,
+        "gh_json",
+        responses(reviews=[review(HEAD, state="APPROVED", who="owner", body="")], author="owner"),
+    )
+    assert any("nothing has reviewed" in p for p in merge_ready.blockers(1))
+    monkeypatch.setattr(
+        merge_ready,
+        "gh_json",
+        responses(reviews=[review(HEAD, state="APPROVED", who="human", body="")], author="owner"),
+    )
+    assert merge_ready.blockers(1) == []
 
 
 def test_a_reviewed_and_clean_pr_passes(monkeypatch) -> None:  # type: ignore[no-untyped-def]
