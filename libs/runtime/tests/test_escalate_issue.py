@@ -217,8 +217,19 @@ def test_the_cli_defaults_the_repo_from_the_runner(body: str, monkeypatch) -> No
 
 def test_the_cli_refuses_an_empty_title(body: str) -> None:
     gh = FakeGh([])
-    assert _module.main(["open", "--title", "  ", "--body-file", body], gh=gh) == 1
+    assert _module.main(["open", "--title", "  ", "--body-file", body, "--repo", REPO], gh=gh) == 1
     assert gh.calls == []
+
+
+@pytest.mark.parametrize("action", ["open", "resolve"])
+def test_the_cli_has_no_fallback_repository(action: str, body: str, monkeypatch, capsys) -> None:  # noqa: ANN001
+    """A hand run outside Actions that forgot --repo must not write to whichever
+    repository a constant names (review)."""
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    gh = FakeGh([])
+    assert _module.main([action, "--title", TITLE, "--body-file", body], gh=gh) == 1
+    assert gh.calls == [], "the tool reached gh without knowing which repository it is writing to"
+    assert "GITHUB_REPOSITORY" in capsys.readouterr().err
 
 
 def test_the_cli_rejects_an_unknown_action(body: str) -> None:

@@ -27,13 +27,17 @@ permission regression, and a silent one is exactly how #818 stayed open.
 Stdlib and the `gh` CLI only, so a workflow can run it with `python3` and no
 workspace install.
 
+The repository comes from `--repo` or the runner's `GITHUB_REPOSITORY`, and
+there is no fallback: a hand run that forgot `--repo` must not write to
+whichever repository a constant names (review).
+
 Usage:
   python3 tools/escalate_issue.py open --title T --body-file F [--repo OWNER/NAME]
   python3 tools/escalate_issue.py resolve --title T --body-file F [--repo OWNER/NAME]
 
 Exit codes:
   0 - done, nothing to do, or skipped because the open issues could not be listed
-  1 - a create, comment or close failed
+  1 - a create, comment or close failed, or the title or repository is missing
 """
 
 from __future__ import annotations
@@ -45,7 +49,6 @@ import subprocess
 import sys
 from collections.abc import Callable, Sequence
 
-DEFAULT_REPO = "wangzitian0/truealpha"
 # Enough that a handful of superstring matches cannot push the exact title off
 # the page; gh's own default is 30.
 LIST_LIMIT = 100
@@ -105,7 +108,7 @@ def _write(arguments: Sequence[str], *, gh: Gh) -> bool:
     return True
 
 
-def escalate(title: str, body_file: str, *, repo: str = DEFAULT_REPO, gh: Gh = _gh) -> int:
+def escalate(title: str, body_file: str, *, repo: str, gh: Gh = _gh) -> int:
     """Comment on the open issue with this exact title, or file it."""
     try:
         existing = open_issues_titled(title, repo=repo, gh=gh)
@@ -124,7 +127,7 @@ def escalate(title: str, body_file: str, *, repo: str = DEFAULT_REPO, gh: Gh = _
     return 0 if ok else 1
 
 
-def resolve(title: str, body_file: str, *, repo: str = DEFAULT_REPO, gh: Gh = _gh) -> int:
+def resolve(title: str, body_file: str, *, repo: str, gh: Gh = _gh) -> int:
     """Comment the resolution on, and close, every open issue with this exact title."""
     try:
         existing = open_issues_titled(title, repo=repo, gh=gh)
@@ -150,7 +153,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("action", choices=("open", "resolve"))
     parser.add_argument("--title", required=True)
     parser.add_argument("--body-file", required=True)
-    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY") or DEFAULT_REPO)
+    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     return parser
 
 
@@ -160,6 +163,9 @@ def main(argv: Sequence[str] | None = None, *, gh: Gh = _gh) -> int:
         # An empty title would search for everything and match nothing exactly,
         # then file an untitled issue. A caller bug, named at the cause.
         print("escalate_issue: --title is empty", file=sys.stderr)
+        return 1
+    if not args.repo.strip():
+        print("escalate_issue: no repository — pass --repo OWNER/NAME or set GITHUB_REPOSITORY", file=sys.stderr)
         return 1
     action = escalate if args.action == "open" else resolve
     return action(args.title, args.body_file, repo=args.repo, gh=gh)
