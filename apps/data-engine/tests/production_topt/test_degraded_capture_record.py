@@ -1335,14 +1335,13 @@ def test_a_withheld_forced_tick_never_displaces_the_governed_strategy_run(tick_d
         assert reader.execute("select strategy_run_id from mart.governed_strategy_run").fetchall() == [
             (scheduled["strategy_run_id"],)
         ]
-        peg_run = {
-            row[0]
-            for row in reader.execute(
-                "select distinct strategy_run_id from mart.strategy_decisions where issuer_id = any(%s)",
-                ([cell.subject_id for cell in peg_cells(reader, run_id=head)],),
-            ).fetchall()
-        }
-        assert scheduled["strategy_run_id"] in peg_run
+        # PEG coverage reads the head's strategy run: its cells are that run's decisions.
+        head_decisions = reader.execute(
+            "select issuer_id, peg is not null from mart.strategy_decisions where strategy_run_id = %s",
+            (scheduled["strategy_run_id"],),
+        ).fetchall()
+        assert {(cell.subject_id, cell.answered) for cell in peg_cells(reader, run_id=head)} == set(head_decisions)
+        assert peg_cells(reader, run_id=withheld["capture_run_id"]) != ()
         scheduled_confidence = _core_confidence(reader, scheduled["capture_run_id"])
 
     report = _served_report(tick_database_url)

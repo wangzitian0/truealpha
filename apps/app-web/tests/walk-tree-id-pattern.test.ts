@@ -33,6 +33,8 @@ const RAW_IDS = [
   "security:figi:BBG001S5N8V8", // the same FIGI as OpenFIGI prints it
   "listing:xnas:aapl",
   "listing:xnys:brk.b",
+  "listing:xnas:t001", // a symbol with digits (the data-engine fixtures mint these)
+  "listing:xhkg:0700", // an all-digit symbol, as non-US venues list them
 ];
 for (const id of RAW_IDS) {
   const match = `Ranked first: ${id} with a gap of 12%`.match(ID_PATTERN);
