@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import urllib.parse
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -387,7 +387,9 @@ def test_a_settled_partition_date_attaches_the_bar_from_time_series(http) -> Non
         Decimal("51234500"),
     )
     assert [urllib.parse.urlsplit(url).path for url in requested] == ["/eod", "/time_series"]
-    assert _query(requested[1])["end_date"] == str(_PARTITION)
+    # Exclusive upper bound (vendor contract): asking for the partition's own row needs
+    # the next day, or the settled session never arrives and no bar is ever attached.
+    assert _query(requested[1])["end_date"] == str(_PARTITION + timedelta(days=1))
     assert quote.raw_bytes == _TIME_SERIES_WITH_SETTLED_ROW
 
 

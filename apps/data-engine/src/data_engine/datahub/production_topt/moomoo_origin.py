@@ -223,7 +223,7 @@ def parse_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuot
         raise NotASessionCloseError("moomoo K-line response is not JSON") from error
     if not isinstance(bars, list):
         raise NotASessionCloseError("moomoo K-line response is not a list of bars")
-    settled: tuple[date, Decimal] | None = None
+    settled: tuple[date, Mapping[str, Any]] | None = None
     for bar in bars:
         if not isinstance(bar, Mapping):
             continue
@@ -231,16 +231,33 @@ def parse_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuot
         if as_of > partition:
             raise NotASessionCloseError(f"moomoo returned session {as_of}, after the {partition} partition")
         if settled is None or as_of > settled[0]:
-            settled = (as_of, _decimal(bar.get("close"), "close"))
+            settled = (as_of, bar)
     if settled is None:
         return None
-    as_of, close = settled
+    as_of, bar = settled
+    # The whole regular-session bar, not only its close: the K-line is requested
+    # unadjusted and without extended hours, so its open/high/low/volume are the same
+    # quantities the primary's bar carries, and each fused field gains an independent
+    # origin (staging, 2026-09-16: bar fields graded single-origin with moomoo present).
+    # A field the bar lacks stays None — an absent assertion, never zero.
     return MarketPriceQuote(
         raw_bytes=raw_bytes,
-        close=close,
+        close=_decimal(bar.get("close"), "close"),
         as_of=as_of,
         knowable_at=datetime.combine(as_of, datetime.min.time(), tzinfo=UTC),
+        open=_optional_decimal(bar.get("open"), "open"),
+        high=_optional_decimal(bar.get("high"), "high"),
+        low=_optional_decimal(bar.get("low"), "low"),
+        volume=_optional_decimal(bar.get("volume"), "volume"),
     )
+
+
+def _optional_decimal(value: object, what: str) -> Decimal | None:
+    """A bar field moomoo may omit: absent (None/empty) stays absent; a present value is
+    read exactly like the close."""
+    if value is None or value == "":
+        return None
+    return _decimal(value, what)
 
 
 class MoomooKlineFetcher:

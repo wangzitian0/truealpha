@@ -405,7 +405,14 @@ class TwelveDataQuoteFetcher:
             "symbol": symbol,
             "interval": "1day",
             "start_date": str(cutoff - timedelta(days=_LOOKBACK_DAYS)),
-            "end_date": str(cutoff),
+            # Twelve Data's `end_date` is EXCLUSIVE for a daily series: `end_date=D`
+            # returns rows up to D-1, so the settled session's own row — the one the bar
+            # is attached from — was never in the window and every v3 cell corroborated
+            # close alone (staging, 2026-09-16: 0/21 bar fields from Twelve Data; the
+            # vendor smoke asked for `tomorrow` and never saw it). The partition's own row
+            # is safe to receive: `attach_settled_bar` takes it only when it closes at the
+            # `/eod` close, and the no-end-of-day fallback reads strictly earlier rows.
+            "end_date": str(cutoff + timedelta(days=1)),
             "outputsize": "12",
         }
         if settled is not None:
