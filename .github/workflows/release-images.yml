@@ -19,6 +19,15 @@ on:
         description: Build the data-engine image when its inputs changed.
         required: true
         type: boolean
+      # #860: the caller already ran this workflow with `publish: false` at the same SHA
+      # (ci-required's images_build, beside the test lanes), so every selected image is
+      # proven to build and the GHA cache is warm. `publish` then builds from that cache
+      # and pushes, without the build job running a second time on the critical path.
+      prebuilt:
+        description: The caller already proved every selected image builds at this SHA; skip the build job.
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   plan:
@@ -57,7 +66,7 @@ jobs:
           fi
 
   build:
-    if: needs.plan.outputs.has_images == 'true'
+    if: needs.plan.outputs.has_images == 'true' && !inputs.prebuilt
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -78,8 +87,15 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
+  # `!cancelled()` rather than the implicit success(): with `prebuilt` the build job is
+  # skipped by design, and a job that `needs` a skipped job is itself skipped unless its
+  # condition says otherwise. The condition then spells out the only two ways in: every
+  # image built here, or the caller vouched for the build and none ran here. A failed
+  # or cancelled build is neither.
   publish:
-    if: inputs.publish && needs.plan.outputs.has_images == 'true'
+    if: >-
+      !cancelled() && inputs.publish && needs.plan.outputs.has_images == 'true' &&
+      (needs.build.result == 'success' || (inputs.prebuilt && needs.build.result == 'skipped'))
     needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
