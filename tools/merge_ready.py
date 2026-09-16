@@ -95,7 +95,7 @@ def blockers(number: int) -> list[str]:
         return [f"#{number} is {view['state']}, not OPEN"]
 
     head = str(view["headRefOid"])
-    author = str((view.get("author") or {}).get("login", ""))
+    pr_author = str((view.get("author") or {}).get("login", ""))
     problems: list[str] = []
 
     if view["mergeStateStatus"] != "CLEAN":
@@ -106,7 +106,7 @@ def blockers(number: int) -> list[str]:
 
     listed = gh_json(["api", f"repos/{REPO}/pulls/{number}/reviews"])
     assert isinstance(listed, list)
-    reviews = [r for r in listed if is_external_review(r, author)]
+    reviews = [r for r in listed if is_external_review(r, pr_author)]
     for_head = [r for r in reviews if isinstance(r, dict) and r.get("commit_id") == head]
     if not for_head:
         # A review of the head is the strong form, but it cannot be REQUIRED:

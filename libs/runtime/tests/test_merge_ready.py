@@ -38,7 +38,9 @@ def responses(
     total: int | None = None,
     author: str = "lane-agent",
 ) -> Any:
-    """One fake `gh` for the three calls the tool makes, in order."""
+    """One fake `gh` for every call the tool makes — `pr view` (with and without
+    `commits`), the reviews list and the threads GraphQL — dispatched on the arguments,
+    not on call order."""
     threads = [{"isResolved": False}] * unresolved + [{"isResolved": True}]
     payloads = {
         "pr": {
