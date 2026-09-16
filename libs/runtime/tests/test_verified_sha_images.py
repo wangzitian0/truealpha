@@ -215,6 +215,35 @@ def test_no_answer_at_all_is_retried_and_then_red_through_the_same_path() -> Non
         tool.urllib_transport("HEAD", "https://127.0.0.1:9/v2/x/manifests/y", {})
 
 
+def test_a_token_body_that_is_not_json_is_refused() -> None:
+    """Copilot review on #868 (Low): a proxy or gateway can answer the token realm with a
+    200 and an HTML page; `json.loads` on that was a traceback, not the `::error::` line."""
+    tool = load_tool("verified_sha_images")
+    for body in (b"<html>maintenance</html>", b"[]", b'"anon"'):
+
+        def registry(method: str, url: str, headers: dict[str, str], body: bytes = body) -> tool.Response:
+            if url.startswith("https://ghcr.io/token?"):
+                return tool.Response(200, {}, body)
+            return tool.Response(401, {"Www-Authenticate": CHALLENGE.format(image="truealpha-data-engine")})
+
+        with pytest.raises(tool.RegistryError, match="the token response from https://ghcr.io/token is not"):
+            tool.published_digest("wangzitian0/truealpha-data-engine", "sha-7de7813", transport=registry)
+
+
+def test_the_cli_refuses_a_plan_that_is_not_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tool = load_tool("verified_sha_images")
+    seen: list[tuple[str, str, dict[str, str]]] = []
+    monkeypatch.setattr(tool, "urllib_transport", _registry({}, seen))
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+
+    assert tool.main(["--owner", "wangzitian0", "--sha", SHA]) == 2
+    assert seen == []
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.startswith("::error::stdin is not JSON")
+
+
 def test_a_challenge_that_is_not_bearer_is_refused() -> None:
     tool = load_tool("verified_sha_images")
 

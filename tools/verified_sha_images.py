@@ -130,7 +130,12 @@ def _anonymous_token(transport: Transport, challenge: str, sleep: Callable[[floa
     response = _send(transport, "GET", f"{realm}?{query}", {}, sleep)
     if response.status != 200:
         raise RegistryError(f"anonymous pull token refused by {realm} (status {response.status})")
-    payload = json.loads(response.body or b"{}")
+    try:
+        payload = json.loads(response.body or b"{}")
+    except ValueError as exc:  # a proxy's HTML page with a 200 on it is not a token
+        raise RegistryError(f"the token response from {realm} is not JSON ({exc})") from exc
+    if not isinstance(payload, dict):
+        raise RegistryError(f"the token response from {realm} is not a JSON object")
     token = payload.get("token") or payload.get("access_token")
     if not token:
         raise RegistryError(f"the token response from {realm} names no token")
@@ -202,7 +207,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--registry", default="ghcr.io")
     args = parser.parse_args(argv)
 
-    images = json.load(sys.stdin)
+    try:
+        images = json.load(sys.stdin)
+    except ValueError as exc:
+        print(f"::error::stdin is not JSON ({exc}); expected the plan's list of images", file=sys.stderr)
+        return 2
     if not isinstance(images, list):
         print("::error::stdin must be the plan's JSON list of images", file=sys.stderr)
         return 2
