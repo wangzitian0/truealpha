@@ -73,11 +73,13 @@ jobs:
             url: https://truealpha.club/api/health
             base: https://truealpha.club
             max_age_days: 14
+            pointer_max_age_hours: 72
           - environment: staging
             deploy_type: staging
             url: https://truealpha-staging.truealpha.club/api/health
             base: https://truealpha-staging.truealpha.club
             max_age_days: 3
+            pointer_max_age_hours: 72
     steps:
       # Full history AND tags: the environments report release tags, and the
       # check resolves that tag to a commit to measure the gap. A shallow clone
@@ -109,6 +111,18 @@ jobs:
           # probe builds its own paths from the base. Passing url would have
           # requested /api/health/api/health and reported the surface down.
           python3 tools/surface_contract.py "${{ matrix.base }}"
+
+      # The governed pointer's age, per universe (tools/datahub_freshness.py): the
+      # a1 gate may withhold the pointer for days with every check above green.
+      # `if: always()` for the same reason as the routing shape — a frozen head and a
+      # stale release are separate facts.
+      - name: Check ${{ matrix.environment }} governed pointer freshness
+        if: always()
+        run: |
+          uv run --no-sync python tools/datahub_freshness.py \
+            "${{ matrix.url }}" \
+            --environment "${{ matrix.environment }}" \
+            --max-age-hours "${{ matrix.pointer_max_age_hours }}"
 
       - name: Check ${{ matrix.environment }} surface-walk evidence
         if: always()

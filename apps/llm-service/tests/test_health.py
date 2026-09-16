@@ -10,7 +10,12 @@ def test_health():
     # data_engine_parser is asserted separately (libs/runtime test_health_check.py): it
     # reports the DATA ENGINE's vintage, which has no HTTP surface of its own (#712). With
     # no database in a unit test the honest answer is "unknown" -- and it must never raise.
-    assert resp.json() == {
+    payload = resp.json()
+    # With a migrated but empty database (CI) the pointer view exists and reports no
+    # head; with no database at all the read fails closed to "unknown". Both are honest
+    # answers to "which pointers advanced"; a value that is neither is the bug.
+    assert payload.pop("governed_pointers") in ([], "unknown")
+    assert payload == {
         "status": "ok",
         "git_sha": "unknown",
         "data_engine_parser": "unknown",
@@ -28,7 +33,9 @@ def test_health_reports_the_deployed_git_sha(monkeypatch):
     monkeypatch.setattr(main, "settings", Settings(_env_file=None, git_commit_sha="abc1234"))
     monkeypatch.setenv("GIT_COMMIT_SHA", "def5678-from-the-environment")
     resp = TestClient(app).get("/health")
-    assert resp.json() == {
+    payload = resp.json()
+    assert payload.pop("governed_pointers") in ([], "unknown")
+    assert payload == {
         "status": "ok",
         "git_sha": "abc1234",
         "data_engine_parser": "unknown",
