@@ -23,7 +23,7 @@ Usage:
 
 A release caught mid-flight is not judged mid-flight (2026-09-16, #876): the
 environment starts serving a tag minutes before its deploy run ends and its walk
-runs, so a check that lands in that window read "no walk for v0.0.72" and filed
+runs, so a check that landed in that window read "no walk for v0.0.72" and filed
 an alert for a release that was about to be walked. When the served release's
 deploy run or walk run is still running — or its deploy finished moments ago and
 the walk has not been created yet — this waits (bounded) and judges the outcome.
@@ -132,8 +132,8 @@ def in_flight(deploy_type: str, release: str, *, gh_api: GhApi, now: datetime) -
 
     Three in-flight shapes, each measured rather than assumed: the deploy run for the
     release has not completed; a walk run for it has not completed; or the newest deploy
-    run completed green less than `WALK_START_GRACE` ago and no walk run was created after
-    it yet (the `workflow_run` hand-off). A deploy that finished non-green is an outcome —
+    run completed green less than `WALK_START_GRACE` ago and no walk run has been created
+    since (the `workflow_run` hand-off). A deploy that finished non-green is an outcome —
     walk-release never runs for it — so it is judged at once, as unwalked.
     """
     deploy_title = f"Deploy {deploy_type} {release}"
