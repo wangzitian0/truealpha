@@ -154,7 +154,10 @@ jobs:
   # tests ran again on this ref" to "an identical-SHA green main run was
   # verified, and the images published". Strictly tighter in one case: a tag on
   # a SHA that never reached main used to re-run tests and could go green — now
-  # it fails here, before any image is published.
+  # it fails here, before any image is published. #860 took the second half
+  # further: "published" means re-tagged from what main already published at
+  # this SHA (release-images `retag`), with a build only for an image main did
+  # not publish there (#731 skips an image the merge left untouched).
   tag_verified:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
@@ -297,6 +300,10 @@ jobs:
     uses: ./.github/workflows/release-images.yml
     with:
       publish: true
+      # #860: a tag re-tags the digests main published for this SHA instead of rebuilding
+      # them (2.2 min measured, all of it re-minting images the SHA already had). A main
+      # push and the manual force are the publisher, so they never reuse.
+      reuse_verified_sha: ${{ github.ref_type == 'tag' }}
       # A tag publishes every image under its version (deploy-release.yml promotes all
       # three by tag), and the manual force does the same by definition. A main push
       # publishes only what changed: before #731 every uv.lock or libs/** merge rebuilt
