@@ -255,22 +255,35 @@ jobs:
       pull-requests: read
       actions: write
 
-  images_check:
+  # #860: this was `images_check`, PR/merge-queue only, while a main push built its
+  # images inside images_release AFTER every test lane -- measured on run 35051670287:
+  # tests 2.6 min, then build 89 s, then publish 60 s, 6.0 min end to end. A build
+  # depends on nothing the tests prove, so it now runs beside them on every event
+  # that can publish too (push and the manual force), with `publish: false`. Only
+  # images_release below waits for the lanes, because only publishing must: a red
+  # test never publishes, and a red build never reaches images_release either.
+  images_build:
     if: >-
       always() &&
-      (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
-      (needs.changes.outputs.image_app_web == 'true' ||
-       needs.changes.outputs.image_llm_service == 'true' ||
-       needs.changes.outputs.image_data_engine == 'true')
+      (((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') &&
+        (needs.changes.outputs.image_app_web == 'true' ||
+         needs.changes.outputs.image_llm_service == 'true' ||
+         needs.changes.outputs.image_data_engine == 'true' ||
+         github.ref_type == 'tag')) ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main' &&
+        inputs.force_images))
     needs: changes
     permissions:
       contents: read
     uses: ./.github/workflows/release-images.yml
     with:
       publish: false
-      app_web: ${{ github.event_name == 'merge_group' || needs.changes.outputs.image_app_web == 'true' }}
-      llm_service: ${{ github.event_name == 'merge_group' || needs.changes.outputs.image_llm_service == 'true' }}
-      data_engine: ${{ github.event_name == 'merge_group' || needs.changes.outputs.image_data_engine == 'true' }}
+      # The same selection images_release publishes, plus the merge queue's "all three"
+      # (the queue proves the merged tree builds whatever the PR touched).
+      app_web: ${{ github.event_name == 'merge_group' || github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
+      llm_service: ${{ github.event_name == 'merge_group' || github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
+      data_engine: ${{ github.event_name == 'merge_group' || github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
 
   images_release:
     if: >-
@@ -289,8 +302,13 @@ jobs:
       (needs.qlib.result == 'success' || needs.qlib.result == 'skipped') &&
       (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') &&
       (needs.web.result == 'success' || needs.web.result == 'skipped') &&
-      (needs.tag_verified.result == 'success' || needs.tag_verified.result == 'skipped')
-    needs: [changes, security, db, python, qlib, runtime, web, tag_verified]
+      (needs.tag_verified.result == 'success' || needs.tag_verified.result == 'skipped') &&
+      needs.images_build.result == 'success'
+    # images_build is required to have SUCCEEDED, not merely not-failed: whenever this
+    # job's own trigger clause is true, images_build's is too (its clause is a superset),
+    # so "skipped" here can only mean the build never happened -- and nothing publishes
+    # what was not built at this SHA.
+    needs: [changes, security, db, python, qlib, runtime, web, tag_verified, images_build]
     permissions:
       contents: read
       packages: write
@@ -305,11 +323,16 @@ jobs:
       app_web: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
       llm_service: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
       data_engine: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
+      # images_build already proved every selected image builds at this SHA and left the
+      # GHA cache warm; the publish step builds from that cache and pushes. Without this
+      # the inner build job would run a second time (~25 s of cache hits) on the critical
+      # path, after the tests, which is the serialisation #860 removes.
+      prebuilt: true
 
   required:
     name: ci-required
     if: always()
-    needs: [changes, security, db, python, qlib, runtime, web, images_check, images_release, tag_verified]
+    needs: [changes, security, db, python, qlib, runtime, web, images_build, images_release, tag_verified]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

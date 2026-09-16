@@ -55,6 +55,7 @@ CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
 WEB = "ci-web.yml"
+IMAGES = "release-images.yml"
 
 
 # --- the locator itself ------------------------------------------------------
@@ -100,6 +101,75 @@ def test_manual_image_release_is_explicit_and_waits_for_required_jobs() -> None:
     text = source(REQUIRED)
     assert text.index("  images_release:\n") < text.index("\n  required:\n"), (
         "the required job must summarise images_release, so it comes after it"
+    )
+
+
+def test_images_build_beside_the_tests_and_publish_only_after_them() -> None:
+    """#860: a main push measured 6.0 min because images_release `needs:` every test
+    lane and the 89 s build + 60 s publish started only after the 2.6 min test wave. A
+    build depends on nothing the tests prove, so images_build runs beside them on every
+    event (it absorbed the PR-time images_check) and images_release keeps the wait, since
+    only PUBLISHING must: a red test never publishes, and neither does a red build.
+
+    - images_build needs `changes` alone and waits for no lane's result;
+    - images_release still waits for every lane (asserted above) AND requires images_build
+      to have succeeded -- strictly, not "or skipped", because its own trigger clause is a
+      subset of images_build's, so a skipped build under a true trigger is a build that
+      never happened, and nothing publishes what was not built at this SHA;
+    - images_release passes `prebuilt`, and release-images honours it exactly once: the
+      build job stands down, publish is let through past the skipped dependency with
+      `!cancelled()`, and only a success or a vouched-for skip opens the door;
+    - the two callers select the same images, so what publishes is what was built;
+    - `required` summarises images_build, so a broken Dockerfile is red on main.
+    """
+    build = job(REQUIRED, "images_build")
+    assert build["needs"] == "changes", "images_build must depend on the paths filter and nothing slower"
+    assert "needs." not in str(build["if"]).replace("needs.changes.outputs", ""), (
+        "images_build waits for a lane's result — the build is back on the critical path"
+    )
+    assert build["with"]["publish"] is False
+    for event in ("pull_request", "merge_group", "push", "workflow_dispatch"):
+        assert f"github.event_name == '{event}'" in str(build["if"]), f"images_build no longer runs on {event}"
+    assert "github.ref_type == 'tag'" in str(build["if"])
+    assert "prebuilt" not in build["with"], "the pre-build cannot itself be pre-built"
+
+    release = job(REQUIRED, "images_release")
+    assert "images_build" in release["needs"]
+    assert "needs.images_build.result == 'success'" in str(release["if"]), (
+        "images_release publishes without a successful build at this SHA"
+    )
+    assert "needs.images_build.result == 'skipped'" not in str(release["if"]), (
+        "a skipped build under a true trigger is a build that never happened; it must not publish"
+    )
+    assert release["with"]["prebuilt"] is True
+    for image in ("app_web", "llm_service", "data_engine"):
+        for clause in (
+            f"needs.changes.outputs.image_{image} == 'true'",
+            "github.ref_type == 'tag'",
+            "inputs.force_images",
+        ):
+            assert clause in str(build["with"][image]) and clause in str(release["with"][image]), (
+                f"{image}: images_build and images_release select images differently on {clause!r}"
+            )
+
+    prebuilt = triggers(IMAGES)["workflow_call"]["inputs"]["prebuilt"]
+    assert prebuilt["type"] == "boolean" and prebuilt["default"] is False and prebuilt["required"] is False
+    assert "!inputs.prebuilt" in str(job(IMAGES, "build")["if"]), "the inner build runs a second time when pre-built"
+    publish = job(IMAGES, "publish")
+    condition = " ".join(str(publish["if"]).split())
+    assert condition.startswith("!cancelled() &&"), (
+        "publish needs a skipped build job; without !cancelled() it is skipped along with it"
+    )
+    assert "inputs.publish" in condition and "needs.plan.outputs.has_images == 'true'" in condition
+    assert "needs.build.result == 'success'" in condition
+    assert "(inputs.prebuilt && needs.build.result == 'skipped')" in condition, (
+        "a skipped build opens publish only when the caller vouched for it"
+    )
+    assert "needs.build.result == 'failure'" not in condition and "always()" not in condition
+
+    required = job(REQUIRED, "required")
+    assert "images_build" in required["needs"] and "images_check" not in required["needs"], (
+        "required must summarise images_build — a broken Dockerfile would otherwise merge green on main"
     )
 
 
