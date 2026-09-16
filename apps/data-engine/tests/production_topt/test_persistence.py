@@ -12,6 +12,7 @@ Real schema, no network: the adapters are the deployed ones, wired to fake fetch
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphR
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.datahub.production_topt.capture_orchestration import run_topt_capture
 from data_engine.datahub.production_topt.composition import PlannedRun, plan_and_persist
+from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
 from data_engine.datahub.production_topt.executor import FetchSuccess, NormalizedRecord, RawResponse, SourceFetchPort
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor, record_headcount
 from data_engine.datahub.production_topt.market_price_adapter import (
@@ -445,6 +447,100 @@ def test_second_origin_reaches_two_independent_origins(connection) -> None:
     two_origin_cells = [cell for cell in report["reconciliation_cells"].values() if cell["origin_groups"] >= 2]
     assert len(two_origin_cells) == 21
     assert Decimal(report["independent_reconciliation"]) > 0
+
+
+class _CorroborationBlipStore(_InMemoryObjectStore):
+    """Object storage that fails under ONE vendor's bytes: the second origin's (#885).
+
+    `object_store` is MinIO blinking while Twelve Data's bytes land — the raise the sink
+    used to propagate out of `record_outcome`, failing a tick whose primary capture was
+    complete. `database` is the same loss surfacing as a failed statement on the tick's
+    own transaction, which aborts it: only a savepoint keeps the rest of the tick usable.
+    """
+
+    def __init__(self, connection, *, failing: DataSource, mode: str) -> None:
+        super().__init__()
+        self._connection = connection
+        self._failing = failing
+        self._mode = mode
+        self.refused = 0
+
+    def store(self, capture: RawCapture) -> RawIngestionEnvelope:
+        if capture.source is not self._failing:
+            return super().store(capture)
+        self.refused += 1
+        if self._mode == "database":
+            self._connection.execute("select 1 / 0")
+        raise ConnectionError("object store unavailable")
+
+
+@pytest.mark.parametrize("mode", ["object_store", "database"])
+def test_a_corroboration_that_cannot_be_persisted_never_fails_the_primary(connection, caplog, mode: str) -> None:
+    """#885 item 1: every cell's Twelve Data bytes fail to land. The capture still resolves
+    all 84 obligations successfully (`_capture` asserts it), each loss is a warning and a
+    count, the lost corroboration leaves nothing behind (its savepoint rolled back its
+    source request), the NEXT corroboration of the same cell (moomoo) still lands, and
+    the run freezes and materializes on the same transaction."""
+    store = _CorroborationBlipStore(connection, failing=DataSource.TWELVE_DATA, mode=mode)
+    with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
+        plan = _capture(connection, version=f"test-885-corroboration-{mode}", corroborate=True, object_store=store)
+
+    assert store.refused == 21
+    assert tally.summary() == "corroborations refused 21 (twelve-data persist 21)"
+    expected_error = "DivisionByZero" if mode == "database" else "ConnectionError"
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 21
+    assert all("twelve-data" in warning and expected_error in warning for warning in warnings)
+
+    parsers = dict(
+        connection.execute(
+            """
+            select o.parser_version, count(*)
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+            join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+            where ob.run_id = %s and o.semantic_type = 'market-price'
+            group by o.parser_version
+            """,
+            (plan.run_id,),
+        ).fetchall()
+    )
+    assert "twelve-data-parser:v1" not in parsers
+    assert parsers["moomoo-kline-parser:v1"] == 21, "one lost corroboration must not take the next with it"
+
+    sink = PostgresCaptureControlSink(
+        connection,
+        plan.bindings,
+        source_label=plan.source_label,
+        timeline=plan.timeline,
+        retry=plan.retry,
+        object_store=_InMemoryObjectStore(),
+    )
+    price_bindings = [
+        binding
+        for binding in plan.bindings.values()
+        if binding.obligation.capture_requirement_id.startswith("market-price")
+    ]
+    assert len(price_bindings) == 21
+    orphaned = [
+        request.source_request_id
+        for binding in price_bindings
+        if (
+            request := sink._corroborating_request(
+                binding, origin="twelve-data", source=f"twelve-data-{plan.source_label}"
+            )
+        )
+        and connection.execute(
+            "select 1 from raw.capture_source_requests where source_request_id = %s", (request.source_request_id,)
+        ).fetchone()
+    ]
+    assert orphaned == [], "the savepoint must roll back the lost corroboration's request"
+
+    report = quality_report.build_report(connection, plan.run_id)
+    assert {cell["origin_groups"] for cell in report["reconciliation_cells"].values()} == {2}
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+    assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
 
 
 def test_every_bar_field_reaches_two_independent_origins(connection) -> None:

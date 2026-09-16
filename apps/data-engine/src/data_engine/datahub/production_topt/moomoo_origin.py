@@ -59,6 +59,7 @@ from zoneinfo import ZoneInfo
 from truealpha_contracts.models import DataSource
 
 from data_engine.config import settings
+from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
 from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin, MarketPriceQuote
 from data_engine.datahub.production_topt.sec_financial_adapter import (
     FinancialFactAssertion,
@@ -257,7 +258,10 @@ class MoomooKlineFetcher:
             return self._cache[key]
         try:
             quote = self._fetch(symbol, cutoff)
-        except Exception:  # noqa: BLE001 - a corroborating origin that errors is simply absent
+        except Exception as error:  # noqa: BLE001 - a corroborating origin that errors is simply absent
+            # Absent, but not silent (#885): OpenD down and a refused bar are logged with
+            # their type and counted in the tick's summary.
+            record_lost_corroboration(KLINE_ORIGIN, FETCH, symbol, error)
             quote = None
         self._cache[key] = quote
         return quote
@@ -430,7 +434,8 @@ class MoomooFinancialsFetcher:
             return self._cache[key]
         try:
             assertion = self._fetch(symbol, cutoff)
-        except Exception:  # noqa: BLE001 - a corroborating origin that errors is simply absent
+        except Exception as error:  # noqa: BLE001 - a corroborating origin that errors is simply absent
+            record_lost_corroboration(FINANCIALS_ORIGIN, FETCH, symbol, error)
             assertion = None
         self._cache[key] = assertion
         return assertion

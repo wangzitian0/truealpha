@@ -244,3 +244,48 @@ def test_a_bar_field_the_vendor_did_not_send_is_an_explicit_null() -> None:
         "low": None,
         "volume": None,
     }
+
+
+def test_an_origin_that_raises_is_absent_logged_and_counted(caplog) -> None:
+    """#885: a second origin never fails the primary capture, and it is never silent
+    either. The raising origin is absent from the success; the one that answered still
+    corroborates; the warning names the origin and the exception type; the tick's tally
+    counts one lost fetch."""
+    import logging
+
+    from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
+    from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin
+
+    def revoked(symbol: str, cutoff: date) -> MarketPriceQuote:
+        raise PermissionError("api key revoked")
+
+    def origin(name: str, fetch) -> CorroboratingOrigin:
+        return CorroboratingOrigin(
+            origin=name,
+            parser_version=f"{name}-parser:v1",
+            mapping_version=f"{name}-map:v1",
+            value_key="close",
+            confidence=Decimal("0.85"),
+            fetch=fetch,
+        )
+
+    item = _work_item("b" * 64)
+    quote = _quote(date(2026, 3, 31), "150.25")
+    adapter = MarketPriceAdapter(
+        {
+            item.work_item_id: MarketPriceTarget(
+                "GOOG", _CUTOFF, "issuer:lei:X", "security:cusip:Y", "listing:xnas:goog"
+            )
+        },
+        lambda symbol, cutoff: quote,
+        corroborating_origins=(origin("twelve-data", revoked), origin("moomoo-kline", lambda s, c: quote)),
+    )
+    with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
+        result = adapter.fetch(item)
+
+    assert isinstance(result, FetchSuccess)
+    assert [corroboration.origin for corroboration in result.corroborations] == ["moomoo-kline"]
+    assert tally.total == 1 and tally.summary() == "corroborations refused 1 (twelve-data fetch 1)"
+    [record] = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert "twelve-data" in record.getMessage() and "PermissionError" in record.getMessage()
+    assert "GOOG" in record.getMessage() and record.exc_info is not None

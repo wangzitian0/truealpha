@@ -1280,3 +1280,43 @@ def test_the_payload_carries_the_financial_side_and_its_basis() -> None:
     bare = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda c, cut, b: _bundle()).fetch(item)
     assert bare.record.payload["financial_assets"] is None
     assert bare.record.payload["financial_basis"] == {"assets": None, "returns": None, "returns_is_proxy": False}
+
+
+def test_a_second_origin_that_raises_is_absent_logged_and_counted(caplog) -> None:
+    """#885: an origin whose fetcher raises past its own guard leaves the financial cell
+    single-origin — logged with the origin and the exception type, counted for the tick."""
+    import logging
+
+    from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
+    from data_engine.datahub.production_topt.sec_financial_adapter import FinancialFactCorroboratingOrigin
+
+    def unreachable(ticker: str, cutoff: date):
+        raise TimeoutError("statements endpoint timed out")
+
+    item = _work_item("e" * 64)
+    target = SecTarget(
+        cik=320193,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnas:aapl",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        ticker="AAPL",
+    )
+    origin = FinancialFactCorroboratingOrigin(
+        origin="moomoo-financials",
+        parser_version="moomoo-financials-parser:v1",
+        mapping_version="moomoo-financials-map:v1",
+        confidence=Decimal("0.75"),
+        fetch=unreachable,
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: _bundle(), corroborating_origins=(origin,)
+    )
+    with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
+        result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess) and result.corroborations == ()
+    [warning] = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert "moomoo-financials" in warning.getMessage() and "TimeoutError" in warning.getMessage()
+    assert "AAPL" in warning.getMessage() and warning.exc_info is not None
+    assert tally.summary() == "corroborations refused 1 (moomoo-financials fetch 1)"

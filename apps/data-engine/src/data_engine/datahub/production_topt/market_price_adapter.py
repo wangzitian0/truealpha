@@ -28,6 +28,7 @@ from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
+from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
 from data_engine.datahub.production_topt.executor import (
     Corroboration,
     FetchFailure,
@@ -174,7 +175,9 @@ class MarketPriceAdapter:
         for origin in self._corroborating_origins:
             try:
                 quote = origin.fetch(target.symbol, target.cutoff)
-            except Exception:  # noqa: BLE001 - a second origin never fails the primary capture
+            except Exception as error:  # noqa: BLE001 - a second origin never fails the primary capture
+                # ...but it is never silent either (#885): logged with its type, counted.
+                record_lost_corroboration(origin.origin, FETCH, target.symbol, error)
                 continue
             if quote is None or quote.knowable_at.date() > target.cutoff:
                 continue

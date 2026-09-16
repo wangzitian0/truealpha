@@ -240,6 +240,114 @@ def test_an_accepted_pointer_reports_the_advance_it_made(monkeypatch) -> None:
     assert metadata["unmet_service_objectives"] == "every objective met"
 
 
+def _logged_tick(monkeypatch, op, registration: PointerRegistration) -> tuple[list[str], dict]:
+    """Run `op` with its info/warning lines recorded (Dagster's log manager does not
+    reach caplog) and return (lines, output metadata)."""
+    context = dg.build_op_context()
+    lines: list[str] = []
+    monkeypatch.setattr(context.log, "info", lambda message, *args, **kwargs: lines.append(message))
+    monkeypatch.setattr(context.log, "warning", lambda message, *args, **kwargs: lines.append(message))
+    op(context, ToptLiveTickConfig(executed_at=TICK))
+    return lines, context.get_output_metadata("result")
+
+
+def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None:
+    """#885: the adapters' "a second origin never fails the primary" is kept, but a
+    revoked key or a dead OpenD must be told apart from "the vendor had nothing". The
+    capture runs the DEPLOYED market-price adapter with a second origin that raises on
+    every cell; each loss is a warning, and the tick summary and op metadata carry the
+    per-origin count that the tick bound around the capture."""
+    import logging
+    from datetime import date
+    from decimal import Decimal
+
+    from data_engine.datahub.production_topt.executor import FetchSuccess
+    from data_engine.datahub.production_topt.market_price_adapter import (
+        CorroboratingOrigin,
+        MarketPriceAdapter,
+        MarketPriceQuote,
+        MarketPriceTarget,
+    )
+    from truealpha_contracts.datahub import CaptureWorkItem
+
+    registration = PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=11, unmet=())
+    _fake_tick(monkeypatch, registration)
+
+    def revoked(symbol: str, cutoff: date) -> MarketPriceQuote:
+        raise PermissionError("twelve data key revoked")
+
+    quote = MarketPriceQuote(
+        raw_bytes=b"bar",
+        close=Decimal("150.25"),
+        as_of=date(2026, 7, 30),
+        knowable_at=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+    items = [
+        CaptureWorkItem(
+            campaign_id="capture-campaign:" + "1" * 64,
+            source_request_id="source-request:" + digit * 64,
+            schedule_policy_id="schedule-policy:" + "2" * 64,
+        )
+        for digit in ("3", "4")
+    ]
+    adapter = MarketPriceAdapter(
+        {
+            item.work_item_id: MarketPriceTarget(
+                symbol, date(2026, 7, 30), "issuer:x", "security:y", f"listing:{symbol}"
+            )
+            for item, symbol in zip(items, ("AAPL", "MSFT"), strict=True)
+        },
+        lambda symbol, cutoff: quote,
+        corroborating_origins=(
+            CorroboratingOrigin(
+                origin="twelve-data",
+                parser_version="twelve-data-parser:v3",
+                mapping_version="twelve-data-map:v3",
+                value_key="close",
+                confidence=Decimal("0.85"),
+                fetch=revoked,
+            ),
+        ),
+    )
+    pipeline = ToptPipelineResult(
+        run_id="capture-run:" + "a" * 64,
+        release_manifest_id="release-manifest:" + "b" * 64,
+        core_result_count=20,
+        quality_report_id="datahub-quality-report:" + "c" * 64,
+        quality=dict(_QUALITY),
+    )
+
+    def capture_through_the_adapter(*args, **kwargs) -> ToptPipelineResult:
+        for item in items:
+            assert isinstance(adapter.fetch(item), FetchSuccess), "the primary capture must not fail"
+        return pipeline
+
+    monkeypatch.setattr(capture, "run_topt_pipeline", capture_through_the_adapter)
+    with caplog.at_level(logging.WARNING):
+        lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
+
+    [summary] = [line for line in lines if line.startswith(f"topt live tick {TICK}: capture ")]
+    assert "; corroborations refused 2 (twelve-data fetch 2); pointer sequence 11" in summary
+    assert metadata["corroborations_refused"] == 2
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 2 and all("twelve-data" in w and "PermissionError" in w for w in warnings)
+
+
+def test_a_tick_that_lost_nothing_says_so(monkeypatch) -> None:
+    """The canary's summary shape (`… (available x/y)`) carries the count too, and a tick
+    whose origins all answered reports zero rather than omitting the figure."""
+    from data_engine.lanes.capture import run_canary_live_tick
+
+    registration = PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=3, unmet=())
+    _fake_tick(monkeypatch, registration)
+    lines, metadata = _logged_tick(monkeypatch, run_canary_live_tick, registration)
+    assert lines[-1] == (
+        f"canary tick {TICK}: capture capture-run:{'a' * 64} (available 84/84); "
+        "corroborations refused 0; pointer sequence 3"
+    )
+    assert metadata["corroborations_refused"] == 0
+
+
 def test_the_two_environments_never_tick_at_the_same_instant() -> None:
     """One shared Twelve Data key, an 8-requests-per-MINUTE ceiling, two environments:
     same-instant crons put ~15 req/min on it and each env lost ~6 of 21 second-origin
