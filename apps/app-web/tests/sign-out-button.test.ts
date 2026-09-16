@@ -57,18 +57,36 @@ class FakeNode {
 	get firstChild(): FakeNode | null {
 		return this.childNodes[0] ?? null;
 	}
+	// DOM semantics for the three tree edits. Inserting a node moves it out of its
+	// current parent. A null reference node means "append". A reference or removed
+	// node that is not a child is a NotFoundError, not a silent splice(-1).
+	private static detach(child: FakeNode): void {
+		const parent = child.parentNode;
+		if (!parent) return;
+		parent.childNodes.splice(parent.childNodes.indexOf(child), 1);
+		child.parentNode = null;
+	}
+	private ownChild(node: FakeNode, role: string): void {
+		if (node.parentNode !== this) throw new Error(`NotFoundError: the ${role} node is not a child of ${this.nodeName}`);
+	}
 	appendChild(child: FakeNode): FakeNode {
+		FakeNode.detach(child);
 		child.parentNode = this;
 		this.childNodes.push(child);
 		return child;
 	}
-	insertBefore(child: FakeNode, before: FakeNode): FakeNode {
+	insertBefore(child: FakeNode, before: FakeNode | null): FakeNode {
+		if (before === null) return this.appendChild(child);
+		this.ownChild(before, "reference");
+		if (child === before) return child;
+		FakeNode.detach(child);
 		child.parentNode = this;
 		this.childNodes.splice(this.childNodes.indexOf(before), 0, child);
 		return child;
 	}
 	removeChild(child: FakeNode): FakeNode {
-		this.childNodes.splice(this.childNodes.indexOf(child), 1);
+		this.ownChild(child, "removed");
+		FakeNode.detach(child);
 		return child;
 	}
 	addEventListener(): void {}
@@ -95,7 +113,7 @@ class FakeElement extends FakeNode {
 		return this.attributes.get(name) ?? null;
 	}
 	set textContent(text: string) {
-		this.childNodes = [];
+		for (const child of [...this.childNodes]) this.removeChild(child);
 		if (text !== "") this.appendChild(fakeDocument.createTextNode(text));
 	}
 }
