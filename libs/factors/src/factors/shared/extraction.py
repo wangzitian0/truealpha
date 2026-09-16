@@ -71,6 +71,12 @@ RULE_EXHAUSTIVE_PARTITION = "rule:exhaustive-partition:v1"
 #: Same persistence contract as the ids above — it lands in `evidence_ref` and is compared
 #: verbatim.
 RULE_SINGLE_SEGMENT = "rule:single-segment:v4"
+#: A one-part partition whose row carries no description is refused before any classifier is
+#: asked (#855 B6): its one part is the whole issuer under an unjudgeable label, and a model given
+#: nothing to judge fills the vacuum (#849). Minted here because rule identities are this module's;
+#: the refusal itself is the theme-purity producer's, and it lands under this id in
+#: `mart.issuer_theme_purity.extractor` where a model's identity would otherwise stand.
+RULE_NO_DESCRIPTION = "rule:no-description:v1"
 
 
 @dataclass(frozen=True)

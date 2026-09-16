@@ -537,3 +537,37 @@ def test_a_run_that_fetched_unchanged_bytes_still_resolves_every_member(connecti
     members = governed_members(connection, run_id=second.run_id)
     assert set(members.values()) == {cell.subject_id for cell in gppe_cells(connection, second.run_id)}
     assert len(set(members.values())) == 20
+
+
+def test_a_single_segment_row_with_no_description_is_refused_before_any_model_call(
+    connection, seated, governed, monkeypatch
+) -> None:
+    """#855 B6, after #849: a one-part row whose only description is the label `Single
+    reportable segment` gives a classifier nothing to judge — the model filled the vacuum with
+    NVIDIA. Refused on this side, named `no_description` first among its reasons, with no
+    model call at all; the coverage report counts the reason."""
+    from data_engine.datahub.production_topt.theme_purity import NO_DESCRIPTION, NO_DESCRIPTION_EXTRACTOR
+    from factors.shared.extraction import RULE_SINGLE_SEGMENT
+
+    _seed_single_segment(
+        connection,
+        extractor=RULE_SINGLE_SEGMENT,
+        evidence="accession=0001065280-26-000034 form=10-K segment_count=us-gaap:NumberOfReportableSegments=1@2025-12-31",
+    )
+
+    def never(url, headers, body):  # noqa: ARG001
+        raise AssertionError("the classifier must not be asked about a row that describes nothing")
+
+    monkeypatch.setattr(llm, "_gateway_transport", never)
+    written = materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+    assert len(written) == 1 and written[0].result.value is None
+    assert written[0].result.flags[0] == NO_DESCRIPTION
+    row = connection.execute(
+        "select availability_status, reason_codes, extractor from mart.issuer_theme_purity where run_id = %s and cik = %s",
+        (RUN_ID, CIK),
+    ).fetchone()
+    assert row == (
+        "unavailable",
+        [NO_DESCRIPTION, "unclassified_revenue", "below_minimum_classified_share"],
+        NO_DESCRIPTION_EXTRACTOR,
+    )
