@@ -1622,3 +1622,26 @@ def test_no_job_holds_a_cache_grant_it_does_not_use() -> None:
         f"these jobs hold a cache-write token they never use: {offenders}. A caller grant is a "
         f"ceiling for the whole called workflow; narrow it per job."
     )
+
+
+def test_every_buildx_setup_retries_once_after_a_docker_hub_failure() -> None:
+    """2026-09-16, run 35076694921: `docker/setup-buildx-action` pulls moby/buildkit from
+    Docker Hub, a TLS handshake timeout there failed main's data-engine publish with every
+    test green, and the re-run passed. Each job that sets up buildx does so twice: once with
+    `continue-on-error`, then — only if that failed — after a pause. A job that drops the
+    retry is back to one flaky pull deciding main's colour."""
+    for name in ("build", "publish", "retag"):
+        steps = job(IMAGES, name)["steps"]
+        setups = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("docker/setup-buildx-action@")]
+        assert len(setups) == 2, f"{name} sets up buildx {len(setups)} time(s); expected a first try and one retry"
+        first, retry = (steps[i] for i in setups)
+        assert first.get("id") == "buildx" and first.get("continue-on-error") is True, (
+            f"{name}'s first buildx setup must be `id: buildx` with continue-on-error, or its failure ends the job"
+        )
+        assert retry.get("if") == "steps.buildx.outcome == 'failure'", (
+            f"{name}'s retry runs {retry.get('if')!r}; it must run only when the first try failed"
+        )
+        pause = steps[setups[1] - 1]
+        assert pause.get("if") == "steps.buildx.outcome == 'failure'" and "sleep" in str(pause.get("run", "")), (
+            f"{name} retries without a pause — an immediate retry meets the same timeout"
+        )
