@@ -69,7 +69,9 @@ def corroboration_tally() -> Iterator[CorroborationTally]:
 def record_lost_corroboration(origin: str, stage: str, subject: str, error: BaseException) -> None:
     """Log one lost corroboration and count it in the active tally, if any.
 
-    Called from inside the `except` that absorbed `error`, so the traceback is attached.
+    The traceback attached is `error`'s own: `exc_info=<exception instance>` is the
+    stdlib form `Logger._log` expands to `(type, error, error.__traceback__)` (Python
+    3.5+), so it never falls back to whatever `sys.exc_info()` holds at call time.
     """
     log.warning(
         "corroborating origin %s lost at %s for %s: %s: %s — the cell stays single-origin",
