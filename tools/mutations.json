@@ -656,6 +656,22 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "pytest-shard/the-packer-uses-measured-seconds",
+      "guard": "libs/runtime/tests/test_pytest_shard.py",
+      "file": "tools/pytest_shard.py",
+      "find": "    if key in weights:\n        return weights[key]\n    return float(test_functions(path)) * rate\n",
+      "replace": "    return float(test_functions(path)) * rate\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_pytest_shard.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

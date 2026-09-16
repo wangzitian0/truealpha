@@ -174,12 +174,31 @@ def test_the_shards_carry_equal_measured_work() -> None:
 
     loads = [sum(seconds(path) for path in pytest_shard.shard(files, index, 3)) for index in range(3)]
     assert min(loads) > 0
-    # The floor is the heaviest single FILE, which cannot be split: 42 s inside
-    # a 210 s suite. 1.4 is loose enough to survive files moving and tight
-    # enough that position packing (2.4x) or count packing (2.1x) fails.
-    assert max(loads) / min(loads) <= 1.4, (
-        f"the three shards carry {[round(x) for x in loads]} measured seconds — the slowest lane "
-        f"sets the CI wall, and this spread means the packing stopped using measured time"
+    # The floor is the heaviest single FILE, which cannot be split. While it stays under a
+    # fair share (42 s inside a 210 s suite when this was written), 1.4 is loose enough to
+    # survive files moving and tight enough that position packing (2.4x) or count packing
+    # (2.1x) fails.
+    heaviest_path = max(files, key=seconds)
+    heaviest = seconds(heaviest_path)
+    if heaviest <= sum(loads) / 3:
+        assert max(loads) / min(loads) <= 1.4, (
+            f"the three shards carry {[round(x) for x in loads]} measured seconds — the slowest lane "
+            f"sets the CI wall, and this spread means the packing stopped using measured time"
+        )
+        return
+    # 2026-09-16 harvest (run 35089913590): one file, 77 s of a 182 s suite, is heavier than a
+    # fair share, so no file-level packing can beat 77 s. The best a packer can do is give
+    # that file a lane of its own and balance the rest; that is what is asserted, and the
+    # file is named so its owner can split it (the only thing that lowers this wall).
+    rest = sorted(loads)[:2]
+    assert max(loads) <= heaviest * 1.1, (
+        f"the three shards carry {[round(x) for x in loads]} measured seconds; "
+        f"{heaviest_path.relative_to(REPO_ROOT)} alone is {heaviest:.0f} s, and the packing put more "
+        f"beside it instead of isolating it"
+    )
+    assert max(rest) / min(rest) <= 1.4, (
+        f"the two lanes beside {heaviest_path.name} carry {[round(x) for x in rest]} measured seconds — "
+        f"the packing stopped using measured time"
     )
 
 
