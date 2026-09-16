@@ -1,0 +1,124 @@
+name: scheduler-liveness
+
+# #876 (W5, gap 4): the watchdog of the watchdogs.
+#
+# Every standing check in the estate is a GitHub `schedule` workflow, and a
+# schedule that stops firing is indistinguishable from a quiet green one:
+# GitHub delays or drops scheduled runs under load, disables them in a public
+# repository after 60 days without activity, and never runs a workflow file
+# that is not valid YAML. tools/scheduler_liveness.py discovers every scheduled
+# workflow in the four repositories below and fails when one is not active, has
+# not ticked within twice its own largest cron gap plus an hour, never ticked
+# at all, or cannot be read. The bounds are measured from each file's crons;
+# nothing here names a workflow or a period.
+#
+# This workflow is in its own list (truealpha), so it watches itself too — but
+# only while its own scheduler is alive, which is exactly the case that needs
+# no watching. A dead scheduler for THIS workflow is caught only by a peer in
+# another repository (infra2's ops-checks running the same tool; follow-up on
+# #876).
+
+on:
+  schedule:
+    # Every 6 hours at an off-minute, clear of the top-of-hour load where
+    # GitHub delays and drops scheduled runs most. Bound for itself: 13 h.
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      bound_cap_hours:
+        # Read below as `github.event.inputs.*`, not `inputs.*`: the primary
+        # trigger is the schedule, where the `inputs` context is absent. No
+        # default on purpose: empty runs the measured bounds. The cap can only
+        # TIGHTEN a bound (the tool takes the minimum), and `0` forces every
+        # scheduled workflow red — the drill. A dispatch with any value set
+        # never closes the alert (the resolve guard below).
+        description: "Cap every workflow's bound at this many hours (empty = measured bounds; 0 = drill red)"
+        required: false
+
+permissions:
+  contents: read
+  # The runs listings of all four repositories (public reads).
+  actions: read
+  # A red run files or updates the tracking issue; a green scheduled run closes
+  # it. No pull_request trigger here, so the workflow-level grant reaches no
+  # PR-controlled code.
+  issues: write
+
+concurrency:
+  # An open and a close must not cancel each other.
+  group: scheduler-liveness
+  cancel-in-progress: false
+
+jobs:
+  liveness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # One definition for the escalate and resolve steps: the issue a red run
+      # opens is the issue the next green run closes.
+      ESCALATION_TITLE: "scheduler-liveness is red: a scheduled workflow stopped ticking"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+      # The tool needs PyYAML, which truealpha-runtime's dev group declares;
+      # the full workspace (Dagster, pandas) is not needed to read workflows.
+      - run: uv sync --package truealpha-runtime --frozen
+      - name: Check every scheduled workflow in the estate is still ticking
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUND_CAP_HOURS: ${{ github.event.inputs.bound_cap_hours }}
+        # tee stdout only, so the escalation can name the red workflows; the
+        # tool's `::error::` lines stay annotations. pipefail keeps the step's
+        # verdict the tool's own.
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tools/scheduler_liveness.py \
+            --bound-cap-hours "$BOUND_CAP_HOURS" \
+            wangzitian0/truealpha \
+            wangzitian0/infra2 \
+            wangzitian0/finance_report \
+            wangzitian0/infra2-sdk \
+            | tee liveness.log
+
+      # Reports, never rescues: the run's conclusion is already failure when
+      # this fires. tools/escalate_issue.py owns the open-or-comment rule
+      # (exact-title match; a failed LIST never falls through to create).
+      - name: Escalate a scheduled failure to an issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Scheduled/dispatched run failed: $RUN_URL"
+            echo
+            echo "Red workflows:"
+            echo '~~~'
+            grep -m 40 -E ', (STALE|DISABLED|NEVER|INVALID|UNVERIFIABLE)$' liveness.log || echo "see the run log"
+            echo '~~~'
+            echo
+            echo "Filed automatically (#876). One open issue per breakage: reruns comment here instead of filing again; the next green scheduled run closes it."
+          } > body.md
+          python3 tools/escalate_issue.py open --title "$ESCALATION_TITLE" --body-file body.md
+
+      # Only a run that measured with the MEASURED bounds may close: a dispatch
+      # with `bound_cap_hours` set is a drill or an experiment. main only: a
+      # dispatch on a branch runs that branch's tool, not the one the alert was
+      # raised under. A dispatch with the input empty runs exactly the
+      # schedule's check, so it may close (the drill's second half).
+      - name: Resolve the issue once every scheduler is ticking
+        if: success() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !github.event.inputs.bound_cap_hours))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Resolved: every scheduled workflow in the estate ticked within its measured bound in $RUN_URL"
+            echo
+            echo "Closed automatically (#876). A later failure files a new issue."
+          } > body.md
+          python3 tools/escalate_issue.py resolve --title "$ESCALATION_TITLE" --body-file body.md

@@ -227,6 +227,70 @@
       "cwd": "."
     },
     {
+      "id": "scheduler-liveness/the-bound-follows-the-measured-gap",
+      "guard": "libs/runtime/tests/test_scheduler_liveness.py",
+      "file": "tools/scheduler_liveness.py",
+      "find": "    bound = bound_for(gap)\n",
+      "replace": "    bound = timedelta(hours=24)\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_scheduler_liveness.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "scheduler-liveness/a-workflow-github-will-not-schedule-is-red",
+      "guard": "libs/runtime/tests/test_scheduler_liveness.py",
+      "file": "tools/scheduler_liveness.py",
+      "find": "    if workflow_state != ACTIVE:\n",
+      "replace": "    if workflow_state == \"disabled_manually\":\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_scheduler_liveness.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "scheduler-liveness/an-unreadable-listing-is-not-a-pass",
+      "guard": "libs/runtime/tests/test_scheduler_liveness.py",
+      "file": "tools/scheduler_liveness.py",
+      "find": "        return [Verdict(repo, LISTING, UNVERIFIABLE, f\"cannot verify: {error}\")], 0\n",
+      "replace": "        return [], 0\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_scheduler_liveness.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "workflow-contract/a-capped-liveness-drill-cannot-close-the-alert",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/scheduler-liveness.yml",
+      "find": " && !github.event.inputs.bound_cap_hours))",
+      "replace": "))",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
       "id": "factor-contract/a-parameter-gaining-a-default-is-caught",
       "guard": "tools/check_factor_contract.py",
       "file": "libs/factors/src/factors/base/peg.py",

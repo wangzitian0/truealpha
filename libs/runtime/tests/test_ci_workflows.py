@@ -21,7 +21,9 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
+import shlex
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -60,6 +62,7 @@ PYTHON = "ci-python.yml"
 NIGHTLY = "nightly-dagster-liveness.yml"
 WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
+LIVENESS = "scheduler-liveness.yml"
 
 
 # --- the locator itself ------------------------------------------------------
@@ -663,6 +666,138 @@ def test_the_condition_evaluator_keeps_githubs_precedence() -> None:
     assert _decides(None, {}) is True
     with pytest.raises(AssertionError, match="unsupported"):
         _decides("contains(github.a, 'b')", {})
+
+
+# --- scheduler-liveness (#876 W5) ----------------------------------------------
+
+# The estate the watchdog of watchdogs covers. Every repository here runs, or
+# may run, a scheduled check; dropping one from the workflow's list makes its
+# dead schedules invisible again.
+ESTATE_REPOS = {
+    "wangzitian0/truealpha",
+    "wangzitian0/infra2",
+    "wangzitian0/finance_report",
+    "wangzitian0/infra2-sdk",
+}
+LIVENESS_CHECK = "Check every scheduled workflow in the estate is still ticking"
+
+
+def _liveness_arguments() -> list[str]:
+    """The tool's command line in the check step, with shell continuations joined."""
+    run = str(step(LIVENESS, LIVENESS_CHECK)["run"]).replace("\\\n", " ")
+    lines = [line for line in run.splitlines() if "tools/scheduler_liveness.py" in line]
+    assert len(lines) == 1, f"expected one scheduler_liveness.py call, found {lines}"
+    tokens = shlex.split(lines[0].split("|", 1)[0])
+    return tokens[tokens.index("tools/scheduler_liveness.py") + 1 :]
+
+
+def test_scheduler_liveness_covers_the_whole_estate_on_its_own_schedule() -> None:
+    """#876 W5: the check runs on a schedule and by hand, never on a PR (it holds
+    `issues: write` at workflow level), over all four repositories, reading the
+    runs listings it needs and nothing more."""
+    on = triggers(LIVENESS)
+    assert set(on) == {"schedule", "workflow_dispatch"}, f"scheduler-liveness triggers on {sorted(on)}"
+    workflow = yaml.safe_load(source(LIVENESS))
+    assert workflow["permissions"] == {"contents": "read", "actions": "read", "issues": "write"}
+    assert "permissions" not in job(LIVENESS, "liveness"), "a job-level grant would replace the pinned one"
+    assert workflow["concurrency"]["cancel-in-progress"] is False, "an open and a close must not cancel each other"
+
+    # Every positional argument is a repository, and together they are the
+    # estate: nothing else narrows the run.
+    positional = [argument for argument in _liveness_arguments() if not argument.startswith("-")]
+    positional.remove("$BOUND_CAP_HOURS")
+    assert sorted(positional) == sorted(ESTATE_REPOS), (
+        f"scheduler-liveness checks {sorted(positional)}; the estate is {sorted(ESTATE_REPOS)} — a repository "
+        f"missing here has its dead schedules invisible again"
+    )
+
+    tool = load_tool("scheduler_liveness")
+    crons = [tool.Cron.parse(expression) for expression in tool.schedule_of(source(LIVENESS))]
+    gap = tool.largest_gap(crons, datetime.now(UTC))
+    assert gap == timedelta(hours=6), f"scheduler-liveness ticks every {gap}, not every 6 hours"
+    assert all(0 not in cron.minutes for cron in crons), "top-of-hour schedules are the ones GitHub drops first"
+
+
+def test_scheduler_liveness_passes_the_cap_through_env_and_installs_what_it_reads_with() -> None:
+    """The dispatch input reaches the tool through env (never spliced into the
+    shell), under the context that exists on a schedule event, with no default
+    that would cap every manual run."""
+    check = step(LIVENESS, LIVENESS_CHECK)
+    assert check["env"]["BOUND_CAP_HOURS"] == "${{ github.event.inputs.bound_cap_hours }}"
+    assert check["env"]["GH_TOKEN"] == "${{ github.token }}"
+    run = str(check["run"])
+    assert "${{" not in run, "an expression is interpolated into the shell; pass it through env"
+    assert "set -euo pipefail" in run, "without pipefail the tee decides the step's verdict, not the tool"
+    arguments = _liveness_arguments()
+    assert arguments[arguments.index("--bound-cap-hours") + 1] == "$BOUND_CAP_HOURS"
+    dispatch = triggers(LIVENESS)["workflow_dispatch"]["inputs"]["bound_cap_hours"]
+    assert not dispatch.get("default"), "a defaulted cap would apply to every manual run, including the close"
+    # The tool reads workflow files with PyYAML; the sync must install it.
+    steps = job(LIVENESS, "liveness")["steps"]
+    sync = [str(item.get("run", "")) for item in steps if "uv sync" in str(item.get("run", ""))]
+    assert sync == ["uv sync --package truealpha-runtime --frozen"], sync
+    runtime = (REPO_ROOT / "libs/runtime/pyproject.toml").read_text(encoding="utf-8")
+    assert '"pyyaml>=' in runtime, "truealpha-runtime no longer declares PyYAML; the liveness sync would not install it"
+
+
+def test_the_liveness_alert_opens_on_red_and_closes_only_at_the_measured_bounds() -> None:
+    """The deploy-freshness lifecycle, with the cap in place of `max_age_days`: a
+    capped dispatch is a drill, and must never close a real alert."""
+    assert job(LIVENESS, "liveness")["env"]["ESCALATION_TITLE"] == (
+        "scheduler-liveness is red: a scheduled workflow stopped ticking"
+    ), "an open issue under an old title is never closed"
+    escalate = step(LIVENESS, "Escalate a scheduled failure to an issue")
+    resolve = step(LIVENESS, "Resolve the issue once every scheduler is ticking")
+    _assert_calls_the_tool(escalate, "open", "liveness escalate")
+    _assert_calls_the_tool(resolve, "resolve", "liveness resolve")
+
+    main = "refs/heads/main"
+    closes = [
+        ({"event_name": "schedule", "ref": main}, "the scheduled run"),
+        (
+            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"bound_cap_hours": ""}}},
+            "a dispatch at the measured bounds",
+        ),
+        ({"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {}}}, "a dispatch without the input"),
+    ]
+    for github, what in closes:
+        assert _decides(resolve["if"], github), f"{what} is green at the measured bounds and must close the alert"
+        assert not _decides(resolve["if"], github, succeeded=False), f"a red {what} closed the alert"
+        assert _decides(escalate["if"], github, succeeded=False), f"a red {what} no longer escalates"
+        assert not _decides(escalate["if"], github), f"a green {what} escalates"
+    never = [
+        (
+            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"bound_cap_hours": "0"}}},
+            "the drill",
+        ),
+        (
+            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"bound_cap_hours": "999"}}},
+            "a capped dispatch",
+        ),
+        (
+            {"event_name": "workflow_dispatch", "ref": "refs/heads/feature", "event": {"inputs": {}}},
+            "a branch dispatch",
+        ),
+        ({"event_name": "schedule", "ref": "refs/heads/feature"}, "a run off main"),
+        ({"event_name": "pull_request", "ref": "refs/pull/1/merge"}, "a pull_request run"),
+        ({"event_name": "push", "ref": main}, "a push run"),
+    ]
+    for github, what in never:
+        assert not _decides(resolve["if"], github), f"{what} can close the scheduler-liveness alert"
+
+
+def test_every_schedule_in_this_repository_is_one_the_liveness_check_can_read() -> None:
+    """The live run reads every repository's files; this one's are checked at
+    review time too, so a cron the tool cannot read fails here before it turns
+    the watchdog red on main."""
+    tool = load_tool("scheduler_liveness")
+    now = datetime.now(UTC)
+    scheduled = {}
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        expressions = tool.schedule_of(path.read_text(encoding="utf-8"))
+        if expressions is not None:
+            scheduled[path.name] = tool.largest_gap([tool.Cron.parse(item) for item in expressions], now)
+    assert {FRESHNESS, REPROOF, NIGHTLY, LIVENESS} <= set(scheduled), sorted(scheduled)
 
 
 # --- issue-close-guard -------------------------------------------------------

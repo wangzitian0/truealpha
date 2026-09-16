@@ -35,6 +35,7 @@ on:
       - ".github/workflows/walk-release.yml"
       - ".github/workflows/deploy-freshness.yml"
       - ".github/workflows/main-health.yml"
+      - ".github/workflows/scheduler-liveness.yml"
       - "apps/app-web/src/app/login/page.tsx"
       - "apps/llm-service/src/llm_service/main.py"
       - "apps/app-web/src/app/research/coverage/page.tsx"
@@ -60,6 +61,7 @@ on:
       - "libs/runtime/tests/test_migration_chain.py"
       - "libs/runtime/tests/test_nightly_verdicts.py"
       - "libs/runtime/tests/test_output_invariants.py"
+      - "libs/runtime/tests/test_scheduler_liveness.py"
       - "libs/runtime/tests/test_walk_evidence.py"
       - "tools/check_factor_contract.py"
       - "tools/escalate_issue.py"
@@ -69,6 +71,7 @@ on:
       - "tools/walk_evidence.py"
       - "tools/nightly_verdicts.py"
       - "tools/output_invariants.py"
+      - "tools/scheduler_liveness.py"
 
 concurrency:
   group: mutation-reproof-${{ github.event.pull_request.number || github.ref }}
