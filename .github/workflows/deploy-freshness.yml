@@ -56,7 +56,9 @@ permissions:
 jobs:
   freshness:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 10 min of checks plus tools/walk_evidence.py's bounded wait for a release caught mid-flight
+    # (IN_FLIGHT_WAIT, 15 min; a test keeps the two in step).
+    timeout-minutes: 25
     env:
       # One definition for the escalate and resolve steps at the end: the
       # issue a red leg opens is the issue its next green run closes.

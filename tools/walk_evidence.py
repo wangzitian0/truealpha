@@ -21,9 +21,17 @@ shape, different run to look inside.
 Usage:
   python tools/walk_evidence.py --deploy-type prod --environment production --release v0.0.20
 
+A release caught mid-flight is not judged mid-flight (2026-09-16, #876): the
+environment starts serving a tag minutes before its deploy run ends and its walk
+runs, so a check that landed in that window read "no walk for v0.0.72" and filed
+an alert for a release that was about to be walked. When the served release's
+deploy run or walk run is still running — or its deploy finished moments ago and
+the walk has not been created yet — this waits (bounded) and judges the outcome.
+A release still in flight after the bound is red: that is its own problem.
+
 Exit codes:
   0 - the deployed release has a successful surface walk
-  1 - it does not, or the evidence cannot be found
+  1 - it does not, or the evidence cannot be found, or it stayed in flight past the bound
 """
 
 from __future__ import annotations
@@ -32,7 +40,9 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 
 from infra2_sdk.deploy_health import HttpGet, default_http_get
 from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
@@ -44,6 +54,14 @@ WALK_STEP_NAME = "Walk the deployed surface"
 # unhelpful.
 RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/walk-release.yml/runs?per_page=100"
 WINDOW = "the last 100 walk-release runs"
+DEPLOY_RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/deploy-release.yml/runs?per_page=100"
+#: A staging release measured 12-13 min from tag to walked on 2026-09-16, of which the
+#: deploy run is ~9 min and the walk ~2 min; the check can land anywhere in that span.
+IN_FLIGHT_WAIT = timedelta(minutes=15)
+POLL_SECONDS = 30.0
+#: workflow_run creates the walk seconds after the deploy run completes; allow for a
+#: slow GitHub before calling a completed-green deploy with no walk "unwalked".
+WALK_START_GRACE = timedelta(minutes=3)
 GhApi = Callable[[str], str]
 
 
@@ -102,8 +120,93 @@ def find_walk(deploy_type: str, release: str, *, environment: str = "", gh_api: 
     )
 
 
-def check_walk_evidence(deploy_type: str, release: str, *, environment: str = "", gh_api: GhApi = _gh_api) -> int:
+def _utc(stamp: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def in_flight(deploy_type: str, release: str, *, gh_api: GhApi, now: datetime) -> str | None:
+    """What of this release is still running, or None once there is an outcome to judge.
+
+    Three in-flight shapes, each measured rather than assumed: the deploy run for the
+    release has not completed; a walk run for it has not completed; or the newest deploy
+    run completed green less than `WALK_START_GRACE` ago and no walk run has been created
+    since (the `workflow_run` hand-off). A deploy that finished non-green is an outcome —
+    walk-release never runs for it — so it is judged at once, as unwalked.
+    """
+    deploy_title = f"Deploy {deploy_type} {release}"
+    walk_title = f"Walk {deploy_title}"
+    deploys = [
+        run
+        for run in json.loads(gh_api(DEPLOY_RUNS_PATH)).get("workflow_runs", [])
+        if run.get("display_title") == deploy_title
+    ]
+    walks = [
+        run for run in json.loads(gh_api(RUNS_PATH)).get("workflow_runs", []) if run.get("display_title") == walk_title
+    ]
+    for run in (*deploys, *walks):
+        if run.get("status") != "completed":
+            return f"{run.get('display_title')!r} (run {run.get('id')}) is {run.get('status')}"
+    if deploys:
+        newest = max(deploys, key=lambda run: str(run.get("updated_at", "")))
+        finished = _utc(newest.get("updated_at"))
+        walked_after = any(str(walk.get("created_at", "")) >= str(newest.get("updated_at", "")) for walk in walks)
+        if (
+            newest.get("conclusion") == "success"
+            and finished is not None
+            and not walked_after
+            and now - finished < WALK_START_GRACE
+        ):
+            return f"{deploy_title!r} (run {newest.get('id')}) finished at {newest.get('updated_at')} and its walk has not started yet"
+    return None
+
+
+def wait_until_settled(
+    deploy_type: str,
+    release: str,
+    *,
+    gh_api: GhApi,
+    wait: timedelta = IN_FLIGHT_WAIT,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> str | None:
+    """Poll `in_flight` until the release has an outcome; the still-running description if the bound ran out."""
+    deadline = clock() + wait
+    while True:
+        pending = in_flight(deploy_type, release, gh_api=gh_api, now=clock())
+        if pending is None:
+            return None
+        if clock() >= deadline:
+            return pending
+        print(f"waiting for the release to settle: {pending}", flush=True)
+        sleep(POLL_SECONDS)
+
+
+def check_walk_evidence(
+    deploy_type: str,
+    release: str,
+    *,
+    environment: str = "",
+    gh_api: GhApi = _gh_api,
+    wait: timedelta = IN_FLIGHT_WAIT,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> int:
     environment = environment or deploy_type
+    try:
+        pending = wait_until_settled(deploy_type, release, gh_api=gh_api, wait=wait, sleep=sleep, clock=clock)
+    except MissingWalkEvidence as exc:
+        print(f"walk evidence missing: {exc}", file=sys.stderr)
+        return 1
+    if pending is not None:
+        print(
+            f"walk evidence missing: {environment} serves {release}, and after {int(wait.total_seconds() // 60)} min "
+            f"the release is still in flight — {pending}. A release that does not settle in that long is stuck",
+            file=sys.stderr,
+        )
+        return 1
     try:
         found = find_walk(deploy_type, release, environment=environment, gh_api=gh_api)
     except MissingWalkEvidence as exc:

@@ -56,11 +56,13 @@ on:
       - "libs/runtime/tests/test_escalate_issue.py"
       - "libs/runtime/tests/test_migration_chain.py"
       - "libs/runtime/tests/test_output_invariants.py"
+      - "libs/runtime/tests/test_walk_evidence.py"
       - "tools/check_factor_contract.py"
       - "tools/escalate_issue.py"
       - "tools/factor_contract.json"
       - "tools/mutation_reproof.py"
       - "tools/mutations.json"
+      - "tools/walk_evidence.py"
       - "tools/output_invariants.py"
 
 concurrency:

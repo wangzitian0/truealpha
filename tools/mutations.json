@@ -399,6 +399,22 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "walk-evidence/a-release-in-flight-is-waited-for",
+      "guard": "libs/runtime/tests/test_walk_evidence.py",
+      "file": "tools/walk_evidence.py",
+      "find": "    for run in (*deploys, *walks):\n        if run.get(\"status\") != \"completed\":",
+      "replace": "    for run in ():\n        if run.get(\"status\") != \"completed\":",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_walk_evidence.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }
