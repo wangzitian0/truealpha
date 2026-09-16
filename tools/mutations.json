@@ -251,6 +251,30 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "factor-contract/a-factor-no-question-counts-is-caught",
+      "guard": "tools/check_factor_contract.py",
+      "file": "libs/contracts/src/truealpha_contracts/question_requirements.py",
+      "find": "columns=(FactorColumn(\"mart.issuer_theme_purity\", \"theme_share\", \"theme_purity\", 6),),",
+      "replace": "columns=(),",
+      "command": [
+        "python3",
+        "tools/check_factor_contract.py"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "factor-contract/a-question-column-must-name-a-registered-factor",
+      "guard": "tools/check_factor_contract.py",
+      "file": "libs/contracts/src/truealpha_contracts/question_requirements.py",
+      "find": "FactorColumn(\"mart.topt_gppe_results\", \"gppe\", \"gross_profit_per_employee\", 2)",
+      "replace": "FactorColumn(\"mart.topt_gppe_results\", \"gppe\", \"gross_profit_per_employe\", 2)",
+      "command": [
+        "python3",
+        "tools/check_factor_contract.py"
+      ],
+      "cwd": "."
     }
   ]
 }
