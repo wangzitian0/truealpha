@@ -103,10 +103,15 @@ def test_factor_module_identity() -> None:
     # Every base factor lives in modules 1-6 except the one documented exception above;
     # module 7 is the composite (init.md: "Modules 1-6 are base factors ... Module 7 is a
     # composite factor").
+    composite_modules = {spec.module for spec in FACTOR_REGISTRY.values() if spec.kind == "composite"}
     for name, spec in FACTOR_REGISTRY.items():
-        if name == "price_to_sales":
-            continue
         if spec.kind == "composite":
             assert spec.module == 7, f"{name!r} is composite but registers module={spec.module}, not 7"
+        elif spec.kind == "feeder":
+            # A feeder answers no question of its own; it registers the module it feeds, which
+            # has to be one a composite actually reduces (#855 B3).
+            assert spec.module in composite_modules, (
+                f"{name!r} is a feeder registering module={spec.module}, which no composite reduces"
+            )
         else:
             assert 1 <= spec.module <= 6, f"{name!r} is base but registers module={spec.module}, outside 1-6"

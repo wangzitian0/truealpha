@@ -437,7 +437,7 @@ routes, identity-provider bindings, retention policy, replay execution, or shari
 
 ## 7. The Seven Analytics Modules
 
-**The module number is an identity, and `libs/factors`' `@factor(..., module=N)` must match this list**, checked by `libs/factors/tests/test_module_identity.py` against this exact section. `price_to_sales` is the one base factor that does not answer one of the seven questions on its own -- it is the market-value input `three_tier_valuation` (module 7, the composite) reduces alongside gross profit per employee -- so it registers `module=7` too rather than a number of its own (#770).
+**The module number is an identity, and `libs/factors`' `@factor(..., module=N)` must match this list**, checked by `libs/factors/tests/test_module_identity.py` against this exact section. A **feeder** (`@factor(..., kind="feeder")`) answers none of the seven questions on its own -- it is an input a composite reduces -- and registers the module it feeds rather than a number of its own, so it needs no item here and no question column (#855 B3). `price_to_sales` is one: the market-value input `three_tier_valuation` (module 7, the composite) reduces alongside gross profit per employee, so it registers `module=7` (#770).
 
 Modules 1-6 are **base factors** (Section 4, `libs/factors/base`) — the runner projects provenance-neutral snapshot inputs for them. Module 7 is a **composite factor** (`libs/factors/composite`) — it reloads other modules' materialized mart outputs, and its confidence cannot exceed the minimum confidence consumed; a declared versioned policy may be stricter.
 
