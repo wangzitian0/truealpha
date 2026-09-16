@@ -172,7 +172,133 @@ function questionCoverageRows(
   });
 }
 
+/** The nightly confidence & accuracy report: one family row per metric family. */
+export interface ConfidenceFamilyRow {
+  family: string;
+  semantic_type: string;
+  cells: number;
+  high: number;
+  medium: number;
+  low: number;
+  missing: number;
+  compared: number;
+  agreement_rate: string | null;
+  tolerance: string | null;
+  origins: string[];
+}
+
+export interface ConfidenceOracleField {
+  field: string;
+  compared: number;
+  agreed: number;
+  agreement_rate: string | null;
+}
+
+export interface ConfidenceReportRow {
+  universe_id: string;
+  run_id: string;
+  cutoff: string;
+  generated_at: string;
+  sources_connected: string[];
+  families: ConfidenceFamilyRow[];
+  close_matches_quality_report: boolean | null;
+  oracle_issuers_compared: number;
+  oracle_fields: ConfidenceOracleField[];
+  stored_confidence_used_for_bands: boolean;
+}
+
+interface ConfidenceReportDbRow {
+  universe_id: string;
+  run_id: string;
+  cutoff: string;
+  created_at: string;
+  payload: {
+    generated_at?: string;
+    sources_connected?: string[];
+    families?: Record<
+      string,
+      {
+        semantic_type?: string;
+        cells?: number;
+        high?: number;
+        medium?: number;
+        low?: number;
+        missing?: number;
+        compared?: number;
+        agreement_rate?: string | null;
+        tolerance?: string | null;
+        origins?: string[];
+      }
+    >;
+    accuracy?: {
+      close?: { matches_quality_report?: boolean | null };
+      sec_oracle?: {
+        issuers_compared?: number;
+        per_field?: Record<
+          string,
+          { compared?: number; agreed?: number; agreement_rate?: string | null }
+        >;
+      };
+    };
+    metadata?: { stored_confidence?: { used_for_bands?: boolean } };
+  };
+}
+
+/** The newest nightly confidence & accuracy report per governed universe. */
+const CONFIDENCE_REPORT_SQL = `
+  select distinct on (universe_id) universe_id, run_id, cutoff::text, created_at::text, payload
+  from mart.datahub_confidence_report
+  order by universe_id, created_at desc
+`;
+
+function confidenceReportRows(
+  rows: ConfidenceReportDbRow[],
+): ConfidenceReportRow[] {
+  return rows.map((row) => {
+    const payload = row.payload ?? {};
+    const oracle = payload.accuracy?.sec_oracle ?? {};
+    return {
+      universe_id: row.universe_id,
+      run_id: row.run_id,
+      cutoff: row.cutoff,
+      generated_at: payload.generated_at ?? row.created_at,
+      sources_connected: payload.sources_connected ?? [],
+      families: Object.entries(payload.families ?? {}).map(
+        ([family, entry]) => ({
+          family,
+          semantic_type: entry.semantic_type ?? "",
+          cells: entry.cells ?? 0,
+          high: entry.high ?? 0,
+          medium: entry.medium ?? 0,
+          low: entry.low ?? 0,
+          missing: entry.missing ?? 0,
+          compared: entry.compared ?? 0,
+          agreement_rate: entry.agreement_rate ?? null,
+          tolerance: entry.tolerance ?? null,
+          origins: entry.origins ?? [],
+        }),
+      ),
+      close_matches_quality_report:
+        payload.accuracy?.close?.matches_quality_report ?? null,
+      oracle_issuers_compared: oracle.issuers_compared ?? 0,
+      oracle_fields: Object.entries(oracle.per_field ?? {}).map(
+        ([field, entry]) => ({
+          field,
+          compared: entry.compared ?? 0,
+          agreed: entry.agreed ?? 0,
+          agreement_rate: entry.agreement_rate ?? null,
+        }),
+      ),
+      // Defaults to false on purpose: the column is a constant, and a report that does
+      // not say otherwise must not be read as having used it.
+      stored_confidence_used_for_bands:
+        payload.metadata?.stored_confidence?.used_for_bands ?? false,
+    };
+  });
+}
+
 export interface DatahubStats {
+  confidence: ConfidenceReportRow[];
   questionCoverage: QuestionCoverageRow[];
   heads: HeadStatusRow[];
   sources: SourceStatRow[];
@@ -375,6 +501,7 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       traffic,
       recentCalls,
       questionCoverage,
+      confidence,
     ] = await Promise.all([
       client.query<HeadDbRow>(HEADS_SQL),
       client.query<SourceStatRow>(SOURCES_SQL),
@@ -390,8 +517,10 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       client.query<TrafficSourceRow>(TRAFFIC_SQL),
       client.query<RecentCallRow>(RECENT_CALLS_SQL),
       client.query<QuestionCoverageDbRow>(QUESTION_COVERAGE_SQL),
+      client.query<ConfidenceReportDbRow>(CONFIDENCE_REPORT_SQL),
     ]);
     return {
+      confidence: confidenceReportRows(confidence.rows),
       questionCoverage: questionCoverageRows(questionCoverage.rows),
       heads: heads.rows.map((row: HeadDbRow) => ({
         universe_id: row.universe_id,

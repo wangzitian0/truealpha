@@ -7,20 +7,39 @@ run by hand against production that day it found two stale invariants and no new
 defect. This lane runs the same suite, from the copy baked into the image, against the
 environment's own database after the nightly ticks — a red Dagster run, in the daemon's
 log and in `dagster.runs`, is the verdict.
+
+The second job here is the datahub CONFIDENCE & ACCURACY report (owner standard,
+2026-09-15): after the invariants have judged the day's heads, grade every (metric family,
+subject) cell of each governed head into high / medium / low / missing from what its
+origins asserted, sample ten well-known subjects across every origin, re-derive a sample
+of fundamentals from SEC through the independent oracle, and append one content-addressed
+`mart.datahub_confidence_report` row per universe.
 """
 
 import contextlib
 import io
+import json
 import runpy
+from datetime import datetime
 from pathlib import Path
 
 import dagster as dg
+import psycopg
+from truealpha_contracts.common import CaptureEnvironment
 
 from data_engine.config import settings
+from data_engine.sources import gateway
 
 OUTPUT_INVARIANTS_JOB_NAME = "output_invariants_check"
 # 00:15 UTC: after the canary (23:47) has published, before anything reads the day's head.
 OUTPUT_INVARIANTS_CRON = "15 0 * * *"
+
+CONFIDENCE_REPORT_JOB_NAME = "datahub_confidence_report"
+# 00:45 UTC: after the invariants (00:15) have had their say on the same heads, and the
+# SEC oracle's handful of company-facts reads land in a quiet window for the shared
+# 10 req/s seat. Manual runs launch the same job by name with an explicit `executed_at`.
+CONFIDENCE_REPORT_CRON = "45 0 * * *"
+CONFIDENCE_REPORT_UNIVERSES = ("universe-list:qqq", "topt")
 
 #: The suite as the image carries it (Dockerfile), or the repository copy for local runs.
 _IMAGE_COPY = Path("/app/tools/output_invariants.py")
@@ -65,4 +84,84 @@ def output_invariants_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunR
     return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
 
 
-defs = dg.Definitions(jobs=[output_invariants_job], schedules=[output_invariants_schedule])
+class ConfidenceReportConfig(dg.Config):
+    """`executed_at` is the schedule's tick time (ISO 8601), never the wall clock. An empty
+    `sample_subjects` takes the module's default (five QQQ names, five TOPT issuers);
+    `oracle_issuers` bounds the live SEC re-derivation."""
+
+    executed_at: str
+    universe: str = "universe-list:qqq"
+    sample_subjects: list[str] = []
+    oracle_issuers: int = 5
+
+
+@dg.op
+def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceReportConfig) -> str:
+    from data_engine.datahub.confidence_report import SecOracle, compile_report, persist, summary_line
+
+    executed_at = datetime.fromisoformat(config.executed_at)
+    # The oracle needs the SEC user agent; without one it reports "not compared" rather
+    # than failing the report that carries every other section.
+    oracle = SecOracle(settings.sec_user_agent) if settings.sec_user_agent else None
+    # Every SEC read is attributed to this Dagster run in the external call ledger (#729).
+    with gateway.run_scope(f"dagster:{context.run_id}"), psycopg.connect(settings.database_url) as connection:
+        report = compile_report(
+            connection,
+            universe=config.universe,
+            executed_at=executed_at,
+            # The capture tier the ticks register their pointer with, never APP_ENV (#826).
+            environment=CaptureEnvironment.PRODUCTION.value,
+            sample_subjects=config.sample_subjects or None,
+            oracle_issuers=config.oracle_issuers,
+            oracle=oracle,
+        )
+        if report is None:
+            context.log.warning("no governed head for %s; no confidence report", config.universe)
+            return json.dumps({"universe": config.universe, "report": None})
+        report_id = persist(connection, report)
+        connection.commit()
+    context.log.info("confidence report %s: %s", report_id, summary_line(report))
+    context.add_output_metadata(
+        {
+            "report_id": report_id,
+            "universe_id": report["universe_id"],
+            "run_id": report["run_id"],
+            "sources_connected": ", ".join(report["sources_connected"]),
+            **{
+                f"{name}_{band}": family[band]
+                for name, family in report["families"].items()
+                for band in ("high", "medium", "low", "missing")
+            },
+            "close_agreement_rate": str(report["accuracy"]["close"]["agreement_rate"]),
+            "sec_oracle_issuers_compared": report["accuracy"]["sec_oracle"]["issuers_compared"],
+        }
+    )
+    return json.dumps({"report_id": report_id, "summary": summary_line(report)})
+
+
+@dg.job(name=CONFIDENCE_REPORT_JOB_NAME)
+def datahub_confidence_report_job() -> None:
+    run_confidence_report()
+
+
+@dg.schedule(
+    job=datahub_confidence_report_job,
+    cron_schedule=CONFIDENCE_REPORT_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
+    executed_at = context.scheduled_execution_time.isoformat()
+    for universe in CONFIDENCE_REPORT_UNIVERSES:
+        yield dg.RunRequest(
+            run_key=f"{executed_at}:{universe}",
+            run_config=dg.RunConfig(
+                ops={"run_confidence_report": ConfidenceReportConfig(executed_at=executed_at, universe=universe)}
+            ),
+        )
+
+
+defs = dg.Definitions(
+    jobs=[output_invariants_job, datahub_confidence_report_job],
+    schedules=[output_invariants_schedule, datahub_confidence_report_schedule],
+)
