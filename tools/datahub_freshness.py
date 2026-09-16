@@ -60,7 +60,9 @@ def read_pointers(url: str, http_get: HttpGet) -> list[PointerHead] | None:
         payload = json.loads(body)
     except json.JSONDecodeError as exc:
         raise PointerFreshnessFailure(f"{url} did not answer JSON: {body[:80]!r}") from exc
-    if not isinstance(payload, dict) or "governed_pointers" not in payload:
+    if not isinstance(payload, dict):
+        raise PointerFreshnessFailure(f"{url} did not answer a JSON object: {body[:80]!r}")
+    if "governed_pointers" not in payload:
         return None
     reported = payload["governed_pointers"]
     if reported == "unknown":
@@ -70,13 +72,12 @@ def read_pointers(url: str, http_get: HttpGet) -> list[PointerHead] | None:
     heads: list[PointerHead] = []
     for entry in reported:
         try:
-            heads.append(
-                PointerHead(
-                    str(entry["universe_id"]),
-                    datetime.fromisoformat(str(entry["advanced_at"])),
-                    float(entry["age_hours"]),
-                )
-            )
+            advanced_at = datetime.fromisoformat(str(entry["advanced_at"]))
+            if advanced_at.tzinfo is None:
+                # The service writes a timestamptz's isoformat (offset-aware); a naive stamp
+                # is read as UTC rather than crashing the subtraction against our clock.
+                advanced_at = advanced_at.replace(tzinfo=UTC)
+            heads.append(PointerHead(str(entry["universe_id"]), advanced_at, float(entry["age_hours"])))
         except (KeyError, TypeError, ValueError) as exc:
             raise PointerFreshnessFailure(f"{url} reports a malformed pointer entry: {entry!r}") from exc
     return heads

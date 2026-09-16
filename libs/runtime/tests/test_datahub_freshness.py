@@ -86,3 +86,24 @@ def test_unreachable_or_non_json_fails() -> None:
 
 def test_a_malformed_entry_fails_loudly() -> None:
     assert check(URL, http_get=_health([{"universe_id": "universe:topt"}]), now=NOW) == 1
+
+
+def test_a_non_object_json_body_is_malformed_not_an_older_release(capsys: pytest.CaptureFixture[str]) -> None:
+    def http_get(url: str) -> tuple[int, str]:
+        return 200, json.dumps(["not", "a", "health", "payload"])
+
+    assert check(URL, http_get=http_get, now=NOW) == 1
+    assert "JSON object" in capsys.readouterr().err
+
+
+def test_a_naive_timestamp_is_read_as_utc_not_a_crash() -> None:
+    naive = {
+        **_head("universe:topt", 10.0),
+        "advanced_at": (NOW - timedelta(hours=10)).replace(tzinfo=None).isoformat(),
+    }
+    assert check(URL, http_get=_health([naive]), now=NOW) == 0
+    stale = {
+        **_head("universe:topt", 90.0),
+        "advanced_at": (NOW - timedelta(hours=90)).replace(tzinfo=None).isoformat(),
+    }
+    assert check(URL, http_get=_health([stale]), now=NOW) == 1
