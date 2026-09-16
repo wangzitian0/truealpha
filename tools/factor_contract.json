@@ -94,7 +94,7 @@
     },
     "price_to_sales": {
       "function": "price_to_sales",
-      "kind": "base",
+      "kind": "feeder",
       "module": 7,
       "module_path": "libs/factors/src/factors/base/price_to_sales.py",
       "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime) -> FactorResult",

@@ -97,7 +97,7 @@ def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     return matches[0] if matches else None
 
 
-@factor("price_to_sales", kind="base", module=7, inputs=("price", "shares_outstanding", "revenue"))
+@factor("price_to_sales", kind="feeder", module=7, inputs=("price", "shares_outstanding", "revenue"))
 def price_to_sales(
     facts: Sequence[Fact],
     *,

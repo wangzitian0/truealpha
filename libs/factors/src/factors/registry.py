@@ -10,7 +10,12 @@ from typing import Literal
 
 from truealpha_contracts.metrics import METRICS
 
-FactorKind = Literal["base", "composite"]
+#: `base` answers one of init.md §7's questions on its own; `composite` reloads other
+#: factors' outputs (module 7); `feeder` answers no question of its own — it is an input a
+#: composite reduces, and it registers the module it FEEDS (#855 B3). `price_to_sales` is
+#: one: the market-value input `three_tier_valuation` reads beside gross profit per employee.
+#: A feeder needs no init.md item and no question column; the gates excuse it by kind.
+FactorKind = Literal["base", "composite", "feeder"]
 
 
 @dataclass(frozen=True)

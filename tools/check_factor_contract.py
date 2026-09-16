@@ -39,10 +39,6 @@ QUESTIONS = REPO / "libs" / "contracts" / "src" / "truealpha_contracts" / "quest
 #: (I5, #855). Anything else registered and unnamed is a factor the coverage report can never
 #: count — it lands in `mart`, every gate stays green, and no head ever reports it.
 NOT_A_QUESTION_COLUMN = {
-    "price_to_sales": (
-        "feeds three_tier_valuation (module 7); `current_price_to_sales` is the strategy's input, "
-        "not a question's answer (#770)"
-    ),
     "three_tier_valuation": "the module-7 composite; `tier` is the strategy's sorting, and q1 is answered by gppe (#770)",
     "registered_semantic_probe": "a registry probe (#770): exercises the registration path and writes no mart column",
     "registered_composite_probe": "a registry probe (#770): exercises the registration path and writes no mart column",
@@ -191,22 +187,21 @@ def main() -> int:
             failures.append(f"{table}: new column(s) {added} are not in the freeze; add them deliberately")
 
     # --- I4: the module number is an identity; init.md Section 7 is the authority ---
-    # `price_to_sales` is the one documented exception to "module 7 is the composite":
-    # it is a base factor that exists only to feed `three_tier_valuation` (module 7) and
-    # answers none of init.md's seven questions on its own, so it registers `module=7`
-    # too (#770; see the docstrings on both files). This coarse check cannot express that
-    # distinction without re-deriving init.md's table itself, so it carves out the one
-    # name the exact per-factor identity check
-    # (`libs/factors/tests/test_module_identity.py`) already covers, and keeps catching
-    # any OTHER base factor that claims module 7 by mistake -- the `registered_semantic_probe`
-    # bug this rule was written for.
+    # Module 7 is the composite. A FEEDER registers the module it feeds, so a feeder may
+    # claim 7 (`price_to_sales`, #770 — until #855 B3 a name carve-out here); a base factor
+    # may not — the `registered_semantic_probe` bug this rule was written for. The exact
+    # per-factor identity check is `libs/factors/tests/test_module_identity.py`.
     for name, spec in sorted(actual_factors.items()):
         module, kind = spec.get("module"), spec.get("kind")
         if not isinstance(module, int) or not 1 <= module <= 7:
             failures.append(f"factor {name!r}: module {module!r} is outside init.md Section 7's 1-7")
-        elif module == 7 and kind != "composite" and name != "price_to_sales":
+        elif module == 7 and kind not in ("composite", "feeder"):
             failures.append(
                 f"factor {name!r}: module 7 is the composite (three-tier valuation); a base factor cannot claim it"
+            )
+        elif kind == "feeder" and module != 7:
+            failures.append(
+                f"factor {name!r}: a feeder registers the module it feeds, and only module 7 has a composite"
             )
 
     # --- I5: a factor the coverage report cannot count is invisible, not unavailable ---
@@ -218,7 +213,9 @@ def main() -> int:
     # column a migration creates, under the module the factor registers.
     question_columns = observed_question_columns()
     named = {str(column["factor"]) for column in question_columns}
-    for name in sorted(set(actual_factors) - named - set(NOT_A_QUESTION_COLUMN)):
+    # A feeder answers no question of its own by definition (#855 B3): excused by kind.
+    feeders = {name for name, spec in actual_factors.items() if spec.get("kind") == "feeder"}
+    for name in sorted(set(actual_factors) - named - set(NOT_A_QUESTION_COLUMN) - feeders):
         failures.append(
             f"factor {name!r} lands nowhere the coverage report counts: add a FactorColumn to "
             "QUESTION_REQUIREMENTS, or name it in NOT_A_QUESTION_COLUMN with the issue that owns its absence"
