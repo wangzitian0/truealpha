@@ -160,7 +160,12 @@ const confidenceRows = [
         },
       },
       accuracy: {
-        close: { matches_quality_report: true },
+        open: { matches_quality_report: true, quality_report_mismatches: [] },
+        close: { matches_quality_report: true, quality_report_mismatches: [] },
+        volume: {
+          matches_quality_report: false,
+          quality_report_mismatches: ["listing:xnas:aapl"],
+        },
         sec_oracle: {
           issuers_compared: 5,
           per_field: {
@@ -233,6 +238,15 @@ const confidenceRows = [
       stats.confidence[0].close_matches_quality_report === true &&
       stats.confidence[0].stored_confidence_used_for_bands === false,
     "the accuracy oracle and the stored-confidence disclaimer pass through",
+  );
+  assert(
+    JSON.stringify(stats.confidence[0].quality_report_matches) ===
+      JSON.stringify([
+        { family: "open", matches: true, mismatches: 0 },
+        { family: "close", matches: true, mismatches: 0 },
+        { family: "volume", matches: false, mismatches: 1 },
+      ]),
+    "every family the report cross-checks against the quality report is surfaced per field (#865), the oracle never among them",
   );
   const q1 = stats.questionCoverage[0].questions.find(
     (q) => q.question === "q1",

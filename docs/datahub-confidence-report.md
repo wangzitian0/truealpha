@@ -37,16 +37,32 @@ report measures the distinct values per semantic in the run and records
 
 | family | semantic | origins today | policy |
 |---|---|---|---|
-| `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1`, `origin:moomoo-kline:v1` (when the flag is on) | `market-price-fusion:v3` (`quality_report.RECONCILIATION_POLICY`, 30 bp relative), served-day narrowing |
+| `open`, `high`, `low`, `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1`, `origin:moomoo-kline:v1` (when the flag is on) | `market-price-fusion:v3` (`quality_report.RECONCILIATION_POLICY`, 30 bp relative), unit USD, served-day narrowing; one family per bar field (#865) |
+| `volume` | market-price | the same origins | `market-volume-fusion:v1` (`quality_report.VOLUME_RECONCILIATION_POLICY`, 2 % relative), unit shares, served-day narrowing |
 | `revenue`, `gross_profit`, `pre_provision_profit`, `total_assets`, `shares_outstanding`, `net_income` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | none in this report yet — single origin grades `low`, two lineages `medium` (`no_agreement_policy`); the quality report's `financial-fact-fusion:v1` carries the per-field agreement |
 | `headcount` | financial-fact | `origin:headcount:<producer>` per producer in `staging.issuer_headcount_facts` | none — one lineage, `medium` at most |
 | `index_membership` | index-membership plane (QQQ) | `origin:nasdaq-index:v1` (`staging.etf_constituent_facts`), `origin:nport:v1` (`mart.fund_holdings_resolved`) | `index-membership-fusion:v1` (new), presence compared exactly |
 | `etf_weight` | index-membership plane (QQQ) | `origin:nport:v1` today; `origin:nasdaq-index:v1` once the operator route carries a weight | `index-membership-fusion:v1`, weights compared at the stated tolerance |
 
-`close` is exactly what the pointer gate calls corroborated: the report re-runs the same
-engine over the same observations and records whether its per-listing outcomes match the
+**Every field of the bar is its own family (#865).** The close is read under the origin's
+registered value key (the v1 second origin wrote `price`); open, high, low and volume under
+their own names, which is how every bar-carrying vintage writes them. An origin whose
+payload lacks a field — Twelve Data v2 carried the close alone — asserts nothing for that
+family: it is present with no value, so the cell is `low` (`single_origin`), never a
+conflict. A payload without a close asserts no bar at all, exactly as the quality report
+reads it, so the two reports grade the same assertions field by field. The families follow
+the quality report's per-field fusion (#850): open/high/low/close share the price policy
+and volume has its own, so "how many metrics are HIGH" is five bar fields, not one.
+
+Each bar field is exactly what the quality report calls agreed for that field: the report
+re-runs the same engine over the same observations and records, per field, whether its
+per-listing outcomes match `reconciliation_cells[*].fields[<field>].outcome` in the
 persisted `mart.datahub_quality_report` row for the run
-(`accuracy.close.matches_quality_report`).
+(`accuracy.<field>.matches_quality_report`; the close is what the pointer gate reads). A
+cell this report never compared while the quality report graded it `agreed` or
+`conflict_abstained` is a mismatch. A quality report persisted before the bar was fused
+per field is compared on the close alone; the other fields say `null` rather than a
+vacuous match.
 
 ### Index membership policy (new)
 
@@ -78,8 +94,9 @@ families.<family>: cells, high, medium, low, missing, share, compared, agreement
 cells.<family>.<subject>: band, reason, origins, independent_origins, outcome, delta,
                           relative_delta, comparison, excluded
 sample.<subject>.<family>: values{origin: value}, delta, relative_delta, verdict, reason
-accuracy.close: origins, compared, agreed, agreement_rate, tolerance_policy,
-                quality_report_id, matches_quality_report
+accuracy.<bar field>: origins, compared, agreed, agreement_rate, tolerance_policy,
+                      quality_report_id, quality_report_cells, matches_quality_report,
+                      quality_report_mismatches   (open, high, low, close, volume)
 accuracy.sec_oracle: fields, issuers_requested, issuers_compared, rows[], per_field, skipped
 metadata.stored_confidence: used_for_bands=false, values_by_semantic, constant_per_semantic
 ```
@@ -94,8 +111,9 @@ config overrides it.
 
 ## Accuracy
 
-- **close**: the yahoo ↔ twelve-data agreement the engine computed, with the policy and
-  the cross-check against the persisted quality report.
+- **bar fields** (`open`, `high`, `low`, `close`, `volume`): the origin agreement the engine
+  computed per field, with the field's policy and the per-field cross-check against the
+  persisted quality report.
 - **fundamentals**: `quality.vendor_oracle`'s deliberately independent SEC re-derivation
   (wider concept lists, latest period across variants — it does not import the adapter)
   for a sample of issuers (default 5: the sample subjects first, then the universe in
@@ -106,7 +124,9 @@ config overrides it.
 
 ## What it shows today, honestly
 
-- `high`: `close` (QQQ 2026-09-14 head: 101/102 agreed; TOPT: 21/21) and
+- `high`: `close` (QQQ 2026-09-14 head: 101/102 agreed; TOPT: 21/21), `open`/`high`/`low`/
+  `volume` wherever the second origin wrote the whole bar (Twelve Data v3 and moomoo K-line
+  do; v2 observations corroborate the close alone, so those cells are `low`), and
   `index_membership` (QQQ: 101 of 102 constituents are also in the 2026-06-30 N-PORT
   vintage; the one constituent-only name and the one unresolved N-PORT line grade `low`).
 - `medium`: `headcount` where both 10-K producers wrote (one lineage; 20 TOPT issuers on

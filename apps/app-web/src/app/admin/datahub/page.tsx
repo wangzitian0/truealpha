@@ -80,8 +80,16 @@ export default async function AdminDatahubPage() {
               </tbody>
             </table>
             <p className="mt-2 text-sm text-gray-400">
-              close outcomes match the quality report:{" "}
-              {report.close_matches_quality_report === null ? "—" : String(report.close_matches_quality_report)}
+              matches the quality report per family:
+              {report.quality_report_matches.length === 0 && " —"}
+              {report.quality_report_matches.map((match) => (
+                <span key={match.family}>
+                  {" "}
+                  <span className="font-mono">{match.family}</span>{" "}
+                  {match.matches === null ? "—" : String(match.matches)}
+                  {match.mismatches > 0 ? ` (${match.mismatches} cells)` : ""}
+                </span>
+              ))}
               {" · "}SEC oracle: {report.oracle_issuers_compared} issuers re-derived
               {report.oracle_fields.map((field) => (
                 <span key={field.field}>

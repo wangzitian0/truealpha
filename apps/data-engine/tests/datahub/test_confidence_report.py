@@ -6,7 +6,10 @@ shaped like the persisted observations; the independence rule (two producers of 
 are not two sources) has its own test because it is the rule most likely to be quietly
 relaxed. The families the report grades are asserted against `source_registrations`, so a
 registered semantic cannot go ungraded and the report cannot grade a semantic nothing
-captures.
+captures. Every field of the bar is its own family (#865), driven here from payloads shaped
+like the persisted observations, so a field one origin never wrote is a missing assertion
+rather than a conflict, and the per-field accuracy cross-check is driven from the shape the
+quality report persists.
 """
 
 from __future__ import annotations
@@ -36,7 +39,13 @@ from data_engine.datahub.confidence_report import (
     stored_confidence_metadata,
 )
 from data_engine.datahub.production_topt import source_registrations as registry
-from data_engine.datahub.quality_report import RECONCILIATION_POLICY
+from data_engine.datahub.quality_report import (
+    FIELD_RECONCILIATION_POLICIES,
+    FIELD_UNITS,
+    PRICE_BAR_FIELDS,
+    RECONCILIATION_POLICY,
+    VOLUME_RECONCILIATION_POLICY,
+)
 from truealpha_contracts.reconciliation import ReconciliationOutcome
 
 CUTOFF = datetime(2026, 9, 15, 0, 0, tzinfo=UTC)
@@ -148,6 +157,167 @@ def test_a_dated_primary_row_without_a_value_does_not_move_the_served_day() -> N
     )
     assert grade.band is Band.LOW and grade.reason == "single_origin"
     assert grade.origins == ("origin:twelve-data:v1",) and grade.excluded == ()
+
+
+# -- every field of the bar is its own family (#865) -------------------------------------------
+
+_YAHOO = ("yahoo-chart:v1", "origin:yahoo:v1", "close")
+_TWELVE = ("twelve-data:v1", "origin:twelve-data:v1", "close")
+# The settled 2026-08-14 AAPL bars of the cassette pair (test_quality_report): every field agrees.
+_YAHOO_BAR = {"open": "306.00", "high": "307.49", "low": "304.30", "close": "305.93", "volume": "28186700"}
+_TWELVE_BAR = {"open": "306", "high": "307.48999", "low": "304.29999", "close": "305.92999", "volume": "28186700"}
+_QUALITY_REPORT_ID = "datahub-quality-report:" + "c" * 64
+
+
+def _bar_grades(*bars: tuple[tuple[str, str, str], dict]) -> dict[str, cr.CellGrade]:
+    """One listing's grade per bar family, from what each origin's payload carries."""
+    origins: dict[str, list[OriginValue]] = {}
+    for coordinate, payload in bars:
+        for family, origin in cr.bar_origins(coordinate, payload, knowable_at=DAY).items():
+            origins.setdefault(family, []).append(origin)
+    return {name: classify_cell(family_policy(name), "listing:xnas:aapl", origins[name], CUTOFF) for name in origins}
+
+
+def test_every_bar_field_is_its_own_family_under_the_quality_reports_policy() -> None:
+    """open/high/low/close under the price policy, volume under its own, each in the unit the
+    quality report's cell declares, all session-bound like the close: a HIGH here is what
+    `field_reconciliation[<field>]` calls agreed."""
+    assert [policy.family for policy in FAMILIES[: len(PRICE_BAR_FIELDS)]] == list(PRICE_BAR_FIELDS)
+    for name in PRICE_BAR_FIELDS:
+        policy = family_policy(name)
+        assert policy.semantic_type == "market-price" and policy.session_bound, name
+        assert policy.reconciliation is FIELD_RECONCILIATION_POLICIES[name], name
+        assert policy.unit == FIELD_UNITS[name], name
+        if name != CLOSE_FAMILY:
+            assert policy.value_keys == (name,), name
+    assert family_policy("volume").reconciliation is VOLUME_RECONCILIATION_POLICY
+    assert family_policy("volume").unit == "shares" and family_policy("open").unit == "USD"
+
+
+def test_a_two_origin_agreed_bar_is_high_on_all_five_fields() -> None:
+    grades = _bar_grades((_YAHOO, _YAHOO_BAR), (_TWELVE, _TWELVE_BAR))
+    assert set(grades) == set(PRICE_BAR_FIELDS)
+    assert {name: grade.band for name, grade in grades.items()} == dict.fromkeys(PRICE_BAR_FIELDS, Band.HIGH)
+    assert all(
+        grade.reason == "independent_origins_agree" and grade.independent_origins == 2 for grade in grades.values()
+    )
+    assert grades["volume"].tolerance == VOLUME_RECONCILIATION_POLICY.policy_id
+    assert grades["open"].tolerance == RECONCILIATION_POLICY.policy_id
+    assert grades["volume"].delta == "0" and grades["high"].delta == "0.00001"
+
+
+def test_a_close_only_second_origin_corroborates_the_close_alone() -> None:
+    """A Twelve Data v2 observation carries the close and no bar keys: it asserts nothing for
+    open/high/low/volume — present with no value, never a conflict — so those families are
+    honestly single-origin while the close is HIGH."""
+    grades = _bar_grades((_YAHOO, _YAHOO_BAR), (_TWELVE, {"close": "305.92999"}))
+    assert grades[CLOSE_FAMILY].band is Band.HIGH
+    for name in ("open", "high", "low", "volume"):
+        assert grades[name].band is Band.LOW and grades[name].reason == "single_origin", name
+        assert grades[name].origins == ("origin:yahoo:v1",) and grades[name].outcome is None, name
+        assert grades[name].values == {"origin:twelve-data:v1": None, "origin:yahoo:v1": _YAHOO_BAR[name]}, name
+
+
+def test_a_volume_conflict_is_the_volume_familys_finding_alone() -> None:
+    """A primary-listing-only count (roughly half the consolidated tape) disagrees on volume
+    under the 2% policy while every price field, the close included, stays HIGH."""
+    grades = _bar_grades((_YAHOO, _YAHOO_BAR), (_TWELVE, {**_TWELVE_BAR, "volume": "14500000"}))
+    volume = grades["volume"]
+    assert volume.band is Band.MEDIUM and volume.reason == "not_agreed_within_tolerance"
+    assert volume.outcome == ReconciliationOutcome.CONFLICT_ABSTAINED.value
+    assert volume.tolerance == VOLUME_RECONCILIATION_POLICY.policy_id
+    assert volume.delta == "13686700" and volume.relative_delta == "0.485573"
+    prices = ("open", "high", "low", "close")
+    assert {name: grades[name].band for name in prices} == dict.fromkeys(prices, Band.HIGH)
+
+
+def test_a_bar_without_a_close_asserts_nothing_and_the_v1_close_is_read_under_price() -> None:
+    """The quality report skips an observation whose close is null; this report asserts no
+    field from it either, so the two grade the same assertions. The v1 second origin wrote
+    its close under `price`, and the registry's value key is what reads it."""
+    nulled = cr.bar_origins(_YAHOO, {**_YAHOO_BAR, "close": None}, knowable_at=DAY)
+    assert set(nulled) == set(PRICE_BAR_FIELDS) and all(origin.value is None for origin in nulled.values())
+    v1 = cr.bar_origins(("twelve-data:v1", "origin:twelve-data:v1", "price"), {"price": "305.92999", "open": "306"})
+    assert v1[CLOSE_FAMILY].value == "305.92999" and v1["open"].value == "306" and v1["volume"].value is None
+    assert all(origin.lineage == "twelve-data" and origin.source_id == "twelve-data:v1" for origin in v1.values())
+
+
+def test_accuracy_compares_each_bar_field_with_the_quality_reports_grade_of_that_field() -> None:
+    """The cross-check reads `reconciliation_cells[*].fields[<field>].outcome` (#850) per field:
+    a volume conflict the quality report also recorded matches; a persisted `agreed` this
+    report graded otherwise — or never compared at all — is a mismatch for that field alone."""
+    grades = _bar_grades((_YAHOO, _YAHOO_BAR), (_TWELVE, {**_TWELVE_BAR, "volume": "14500000"}))
+    fields = {name: {"outcome": grades[name].outcome, "origin_groups": 2} for name in PRICE_BAR_FIELDS}
+    persisted = cr.quality_report_field_outcomes(
+        {"reconciliation_cells": {"listing:xnas:aapl": {"outcome": "agreed", "fields": fields}}}
+    )
+    assert persisted["volume"] == {"listing:xnas:aapl": "conflict_abstained"}
+    assert persisted["close"] == {"listing:xnas:aapl": "agreed"}
+    cells = {name: {"listing:xnas:aapl": grades[name]} for name in PRICE_BAR_FIELDS}
+    entries = {
+        name: cr.field_accuracy(
+            family_policy(name),
+            aggregate(family_policy(name), cells[name].values()),
+            cells[name],
+            quality_report_id=_QUALITY_REPORT_ID,
+            persisted=persisted[name],
+        )
+        for name in PRICE_BAR_FIELDS
+    }
+    for name, entry in entries.items():
+        assert entry["matches_quality_report"] is True and entry["quality_report_mismatches"] == [], name
+        assert entry["quality_report_id"] == _QUALITY_REPORT_ID and entry["quality_report_cells"] == 1
+        assert entry["tolerance_policy"]["policy_id"] == FIELD_RECONCILIATION_POLICIES[name].policy_id
+        assert entry["origins"] == ["origin:twelve-data:v1", "origin:yahoo:v1"] and entry["compared"] == 1
+    assert (entries["close"]["agreed"], entries["volume"]["agreed"]) == (1, 0)
+    assert (entries["close"]["agreement_rate"], entries["volume"]["agreement_rate"]) == ("1.0000", "0.0000")
+    # The quality report claiming the volume agreed when this report graded a conflict.
+    claimed = cr.field_accuracy(
+        family_policy("volume"),
+        {},
+        cells["volume"],
+        quality_report_id=_QUALITY_REPORT_ID,
+        persisted={"listing:xnas:aapl": "agreed"},
+    )
+    assert claimed["matches_quality_report"] is False and claimed["quality_report_mismatches"] == ["listing:xnas:aapl"]
+    # A persisted comparison over a cell this report saw one origin for is a mismatch too;
+    # the quality report's own single-origin grade for it is not.
+    single = _bar_grades((_YAHOO, _YAHOO_BAR))["open"]
+    assert single.band is Band.LOW and single.outcome is None
+    for outcome, matches in (
+        ("agreed", False),
+        ("conflict_abstained", False),
+        ("insufficient_independent_origins", True),
+    ):
+        entry = cr.field_accuracy(
+            family_policy("open"),
+            {},
+            {"listing:xnas:aapl": single},
+            quality_report_id=_QUALITY_REPORT_ID,
+            persisted={"listing:xnas:aapl": outcome},
+        )
+        assert entry["matches_quality_report"] is matches, outcome
+
+
+def test_a_quality_report_from_before_per_field_fusion_is_compared_on_the_close_alone() -> None:
+    """Reports persisted before #850 carry the close's grade under the headline keys and no
+    `fields`: the close is still cross-checked, and the other fields report nothing to
+    compare rather than a vacuous match."""
+    persisted = cr.quality_report_field_outcomes({"reconciliation_cells": {"listing:xnas:aapl": {"outcome": "agreed"}}})
+    assert persisted["close"] == {"listing:xnas:aapl": "agreed"}
+    assert all(persisted[name] == {} for name in ("open", "high", "low", "volume"))
+    grades = _bar_grades((_YAHOO, _YAHOO_BAR), (_TWELVE, _TWELVE_BAR))
+    entry = cr.field_accuracy(
+        family_policy("open"),
+        {},
+        {"listing:xnas:aapl": grades["open"]},
+        quality_report_id=_QUALITY_REPORT_ID,
+        persisted=persisted["open"],
+    )
+    assert entry["matches_quality_report"] is None and entry["quality_report_cells"] == 0
+    none = cr.field_accuracy(family_policy("close"), {}, {}, quality_report_id=None, persisted={})
+    assert none["matches_quality_report"] is None and none["quality_report_id"] is None
+    assert cr.quality_report_field_outcomes({}) == {name: {} for name in PRICE_BAR_FIELDS}
 
 
 # -- index membership: the policy this report adds ------------------------------------------
