@@ -1645,3 +1645,17 @@ def test_every_buildx_setup_retries_once_after_a_docker_hub_failure() -> None:
         assert pause.get("if") == "steps.buildx.outcome == 'failure'" and "sleep" in str(pause.get("run", "")), (
             f"{name} retries without a pause — an immediate retry meets the same timeout"
         )
+
+
+def test_walk_evidence_can_finish_waiting_inside_the_freshness_job() -> None:
+    """tools/walk_evidence.py waits (bounded) for a release caught mid-flight (#876). A wait
+    longer than the freshness job's own timeout would turn "stuck release" into a cancelled
+    job, which reports nothing and escalates nothing."""
+    from datetime import timedelta
+
+    walk_evidence = load_tool("walk_evidence")
+    timeout = job(FRESHNESS, "freshness")["timeout-minutes"]
+    # The checks before that step take well under 5 min; leave them that much.
+    assert walk_evidence.IN_FLIGHT_WAIT <= timedelta(minutes=timeout - 5), (
+        f"walk_evidence may wait {walk_evidence.IN_FLIGHT_WAIT} but the freshness job times out at {timeout} min"
+    )
