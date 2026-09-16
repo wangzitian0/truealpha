@@ -28,6 +28,10 @@ The #635 reuse window lives here too, and so does its operator override (#874): 
 forced tick fetches every obligation even when fresh observations sit committed inside
 the window, under a capture identity of its own, and a retry of that forced launch is
 as idempotent as any other.
+
+So does what a forced tick shares with the scheduled one, its cutoff (#877): the readers
+that paired rows by cutoff are driven here through the deployed op, next to the runs
+that made them ambiguous.
 """
 
 from __future__ import annotations
@@ -221,14 +225,19 @@ def _offline_routes(
     quote: Callable[[], MarketPriceQuote] = _quote,
     price_cutoff: date | None = None,
     corroborating_origins: tuple[CorroboratingOrigin, ...] = (),
+    cutoff_date: date | None = None,
 ) -> dict[str, SourceFetchPort]:
     """The deployed adapters over fake fetchers, routed exactly as `build_routes` does.
 
     Stands in for `build_routes`, which resolves CIKs from SEC over the network. Every
     layer under it — executor, sink, freeze, materialize, quality report — is the real
     one, because the gate this exercises reads what those layers persisted.
+
+    `cutoff_date` is the date the non-price routes judge look-ahead by; it defaults to the
+    module's CUTOFF, and a run whose universe partition lies after that date (the QQQ
+    corpus, 2026-06-30) passes its own.
     """
-    cutoff_date = CUTOFF.date()
+    cutoff_date = cutoff_date or CUTOFF.date()
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
     release_targets: dict[str, ReleaseDerivedRecord] = {}
@@ -1094,3 +1103,362 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
     finally:
         probe.rollback()
         probe.close()
+
+
+# -- run scope: a cutoff is not a run (#877 PR-1) ---------------------------------------
+#
+# Since #874 a forced tick captures again at the SAME executed_at as the scheduled tick,
+# so one cutoff carries two TOPT capture runs, two sets of core results and two strategy
+# runs. Every reader that paired rows on (issuer_id, cutoff) — or picked "the" strategy run
+# by cutoff — then read both. These tests drive the deployed TOPT op end to end and read
+# back through the shipped readers; the statements main carried before #877 are kept
+# verbatim below so each test shows what they returned on the same rows.
+
+#: `mart.governed_strategy_run` as 20260907T0630 defined it (the head's cutoff is the link).
+_MAIN_GOVERNED_STRATEGY_RUN_SQL = """
+    with head as (
+        select environment, universe_id, universe_version, factor_id, target_run_id, sequence, advanced_at
+        from mart.current_pointer_head
+        where environment = 'production'
+          and factor_id = 'gross_profit_per_employee'
+          and universe_id like 'universe:topt-%'
+        order by advanced_at desc
+        limit 1
+    )
+    select head.target_run_id, run.strategy_run_id
+    from head
+    join mart.topt_capture_status status on status.run_id = head.target_run_id
+    join mart.strategy_runs run on run.executed_at = status.cutoff
+"""
+#: Both twins' LATEST_RUN_SQL over the view above (its `like` escaped for a bound parameter).
+_MAIN_LATEST_RUN_SQL = f"""
+    select r.strategy_run_id,
+           exists (select 1 from ({_MAIN_GOVERNED_STRATEGY_RUN_SQL.replace("%", "%%")}) g
+                   where g.strategy_run_id = r.strategy_run_id) as is_governed
+    from mart.strategy_runs r
+    where r.strategy_key = %s
+    order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
+    limit 1
+"""
+#: Both twins' decision read (strategy_run_postgres._DECISIONS_SQL, strategy-run-repository.ts).
+_MAIN_DECISIONS_SQL = """
+    select d.issuer_id, t.confidence, t.run_id
+    from mart.strategy_decisions d
+    left join mart.topt_core_results t
+      on t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
+    where d.strategy_run_id = %s
+    order by d.cutoff_at, d.issuer_id
+"""
+#: plausibility_gate._ROWS_SQL.
+_MAIN_GATE_ROWS_SQL = """
+    select r.listing_id, p.value as last_close
+    from mart.topt_core_results r
+    left join staging.strategy_backtest_inputs p
+      on p.issuer_id = r.issuer_id and p.cutoff_at = r.cutoff and p.input_key = 'last_close'
+    where r.run_id = %s
+    order by r.listing_id
+"""
+#: question_coverage.peg_cells' choice of strategy run, given the head's cutoff.
+_MAIN_PEG_RUN_SQL = """
+    select s.strategy_run_id
+    from mart.strategy_runs s
+    join mart.strategy_decisions d on d.strategy_run_id = s.strategy_run_id
+    where d.cutoff_at <= %s
+    group by s.strategy_run_id, s.executed_at
+    order by max(d.cutoff_at) desc, s.executed_at desc
+"""
+_STRATEGY = "large_model_value_v0"
+
+
+def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch: bool = False, accept: bool) -> dict:
+    """The deployed TOPT op (`lanes/capture.py`) on this module's database: capture,
+    freeze, materialize, strategy seed/replay/binding, plausibility gate, pointer.
+
+    The only verdict the test chooses is the service-objective one (`accept`): the offline
+    fixtures carry no second origin, so the real grade would withhold every advance, and
+    the forced-run question is precisely what happens on each side of that verdict."""
+    import dagster as dg
+    from data_engine.datahub import a1_evidence
+    from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+
+    monkeypatch.setattr(settings, "database_url", url)
+    unmet = (
+        () if accept else (a1_evidence.UnmetObjective(objective="corroborated_share", required="0.95", observed="0"),)
+    )
+    monkeypatch.setattr(a1_evidence, "unmet_objectives", lambda *_args, **_kwargs: unmet)
+    context = dg.build_op_context()
+    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=executed_at.isoformat(), force_fetch=force_fetch))
+    metadata = context.get_output_metadata("result")
+    assert metadata["pointer_advanced"] is accept
+    assert metadata["forced_fetch"] is force_fetch
+    return metadata
+
+
+def _context():
+    from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+
+    issued = datetime(2026, 9, 16, tzinfo=UTC)
+    return AccessContext(
+        context_id="ctx:run-scope",
+        principal_id="principal:run-scope",
+        tenant_id="tenant:run-scope",
+        session_id="session:run-scope",
+        authentication_method=AuthenticationMethod.SERVICE_IDENTITY,
+        principal_kind=PrincipalKind.SERVICE,
+        issued_at=issued,
+        expires_at=issued + timedelta(hours=1),
+    )
+
+
+def _served_report(url: str):
+    from truealpha_contracts.strategy_run import StrategyRunReport
+    from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+
+    report = PostgresStrategyRunRepository(database_url=url).get_latest(strategy_id=_STRATEGY, context=_context())
+    assert isinstance(report, StrategyRunReport), report
+    return report
+
+
+def _core_confidence(reader, run_id: str) -> dict[str, Decimal]:
+    return dict(
+        reader.execute(
+            "select issuer_id, confidence from mart.topt_core_results where run_id = %s", (run_id,)
+        ).fetchall()
+    )
+
+
+def _gate_closes(reader, sql: str, run_id: str) -> list[tuple[str, Decimal | None]]:
+    return [(str(listing), close) for listing, close in reader.execute(sql, (run_id,)).fetchall()]
+
+
+def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(tick_database_url, monkeypatch) -> None:
+    """#877's live defect, confirmed: a forced TOPT tick (#892) shares the scheduled tick's
+    cutoff. With the forced run on the head, main's twins returned all 20 decisions twice
+    (once per capture run's core result), main's view marked both strategy runs governed,
+    main's gate read two `last_close` vintages per listing, and main's PEG choice tied.
+    Scoped by run, each reader sees the forced run alone."""
+    from data_engine.datahub.production_topt import plausibility_gate
+    from data_engine.datahub.question_coverage import peg_cells
+    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
+
+    day = date(2026, 5, 5)  # a Tuesday; nothing else in this module captures near it
+    cutoff = datetime(2026, 5, 5, 22, 15, tzinfo=UTC)
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
+    scheduled = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
+    # The operator's correction of the same tick: the vendor's close moved.
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("41.5")), price_cutoff=day)
+    forced = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, force_fetch=True, accept=True)
+
+    with psycopg.connect(tick_database_url) as reader:
+        # The shape: one cutoff, two TOPT capture runs, two strategy runs, the forced one heads.
+        assert scheduled["capture_run_id"] != forced["capture_run_id"]
+        assert scheduled["strategy_run_id"] != forced["strategy_run_id"]
+        assert forced["pointer_sequence"] == scheduled["pointer_sequence"] + 1
+        core_runs = reader.execute(
+            "select count(distinct run_id) from mart.topt_core_results where cutoff = %s", (cutoff,)
+        ).fetchone()[0]
+        assert core_runs == 2
+
+        # BEFORE (main's statements on these rows).
+        main_governed = reader.execute(_MAIN_GOVERNED_STRATEGY_RUN_SQL).fetchall()
+        assert sorted(run for _head, run in main_governed) == sorted(
+            [scheduled["strategy_run_id"], forced["strategy_run_id"]]
+        ), "main marked BOTH strategy runs at the head's cutoff governed"
+        main_decisions = reader.execute(_MAIN_DECISIONS_SQL, (forced["strategy_run_id"],)).fetchall()
+        assert len(main_decisions) == 40 and len({issuer for issuer, *_ in main_decisions}) == 20, (
+            "main returned every one of the 20 decisions twice"
+        )
+        main_gate = _gate_closes(reader, _MAIN_GATE_ROWS_SQL, forced["capture_run_id"])
+        # One core result per issuer (GOOG carries Alphabet), each read against both vintages.
+        assert len(main_gate) == 40 and {close for _listing, close in main_gate} == {Decimal("40"), Decimal("41.5")}
+        main_peg_runs = [row[0] for row in reader.execute(_MAIN_PEG_RUN_SQL, (cutoff,)).fetchall()[:2]]
+        assert set(main_peg_runs) == {scheduled["strategy_run_id"], forced["strategy_run_id"]}, (
+            "main's PEG choice tied between the two runs at the head's cutoff"
+        )
+
+        # AFTER: the view resolves the head's own strategy run, and only it.
+        governed = reader.execute("select target_run_id, strategy_run_id from mart.governed_strategy_run").fetchall()
+        assert governed == [(forced["capture_run_id"], forced["strategy_run_id"])]
+        latest = reader.execute(LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
+        assert (latest[0], latest[3]) == (forced["strategy_run_id"], True)
+
+        # The gate judges each run by its own price, one row per listing.
+        forced_gate = plausibility_gate._rows(reader, forced["capture_run_id"])
+        scheduled_gate = plausibility_gate._rows(reader, scheduled["capture_run_id"])
+        assert len(forced_gate) == 20 and {row.last_close for row in forced_gate} == {Decimal("41.5")}
+        assert len(scheduled_gate) == 20 and {row.last_close for row in scheduled_gate} == {Decimal("40")}
+
+        # PEG coverage reads the head's strategy run.
+        peg = peg_cells(reader, run_id=forced["capture_run_id"])
+        assert len(peg) == 20
+        forced_confidence = _core_confidence(reader, forced["capture_run_id"])
+
+    # The twin MCP ships: 20 decisions, each read against the forced run's core result.
+    report = _served_report(tick_database_url)
+    assert len(report.decisions) == 20
+    assert {decision.issuer_id for decision in report.decisions} == set(forced_confidence)
+    assert all(decision.confidence == forced_confidence[decision.issuer_id] for decision in report.decisions)
+
+
+def test_a_withheld_forced_tick_never_displaces_the_governed_strategy_run(tick_database_url, monkeypatch) -> None:
+    """The other side of the verdict: a forced tick whose pointer advance is withheld
+    commits its capture, core results and strategy run, and the head stays on the
+    scheduled run. Main's view still marked the forced strategy run governed (same
+    cutoff), and both twins then served it because it was created last — a run the
+    pointer refused. The binding keeps the served run on the head."""
+    from data_engine.datahub.question_coverage import peg_cells
+    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
+
+    day = date(2026, 5, 7)  # a Thursday; nothing else in this module captures near it
+    cutoff = datetime(2026, 5, 7, 22, 15, tzinfo=UTC)
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
+    scheduled = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("38")), price_cutoff=day)
+    withheld = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, force_fetch=True, accept=False)
+    assert withheld["pointer_sequence"] == scheduled["pointer_sequence"], "the head did not move"
+    assert withheld["strategy_run_id"] != scheduled["strategy_run_id"]
+
+    with psycopg.connect(tick_database_url) as reader:
+        head = reader.execute(
+            "select target_run_id from mart.current_pointer_head "
+            "where universe_id like 'universe:topt-%' order by advanced_at desc limit 1"
+        ).fetchone()[0]
+        assert head == scheduled["capture_run_id"]
+
+        # BEFORE: main served the withheld run's strategy run.
+        main_latest = reader.execute(_MAIN_LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
+        assert main_latest == (withheld["strategy_run_id"], True), main_latest
+
+        # AFTER: the head's own strategy run, read against the head's core results.
+        latest = reader.execute(LATEST_RUN_SQL, (_STRATEGY,)).fetchone()
+        assert (latest[0], latest[3]) == (scheduled["strategy_run_id"], True)
+        assert reader.execute("select strategy_run_id from mart.governed_strategy_run").fetchall() == [
+            (scheduled["strategy_run_id"],)
+        ]
+        # PEG coverage reads the head's strategy run: its cells are that run's decisions.
+        head_decisions = reader.execute(
+            "select issuer_id, peg is not null from mart.strategy_decisions where strategy_run_id = %s",
+            (scheduled["strategy_run_id"],),
+        ).fetchall()
+        assert {(cell.subject_id, cell.answered) for cell in peg_cells(reader, run_id=head)} == set(head_decisions)
+        assert peg_cells(reader, run_id=withheld["capture_run_id"]) != ()
+        scheduled_confidence = _core_confidence(reader, scheduled["capture_run_id"])
+
+    report = _served_report(tick_database_url)
+    assert len(report.decisions) == 20
+    assert all(decision.confidence == scheduled_confidence[decision.issuer_id] for decision in report.decisions)
+
+
+def _key_topt_like_the_planes(monkeypatch) -> dict[str, tuple[str, str]]:
+    """#877 PR-4's world, ahead of PR-4: TOPT's plan keys every listing it shares with the
+    QQQ corpus by the QQQ corpus's (issuer, instrument) — CIK/FIGI — instead of its own
+    LEI/CUSIP. Returns listing -> the shared (issuer, instrument)."""
+    from data_engine.datahub.production_topt.universe_corpus import load_corpus
+
+    plane = {
+        str(row[2]): (str(row[0]), str(row[1]))
+        for row in load_corpus("corpus.qqq.v1.json")["topt_denominator"]["instruments"]
+    }
+    real = composition.plan_and_persist
+
+    def plan_and_persist(connection, **kwargs):
+        planned = real(connection, **kwargs)
+        if kwargs.get("corpus_filename", "corpus.v1.json") != "corpus.v1.json":
+            return planned
+        return dataclasses.replace(
+            planned,
+            coordinates={
+                subject: (*plane.get(subject, (issuer, instrument)), listing, ticker)
+                for subject, (issuer, instrument, listing, ticker) in planned.coordinates.items()
+            },
+        )
+
+    monkeypatch.setattr(composition, "plan_and_persist", plan_and_persist)
+    topt = {str(row[2]) for row in load_corpus("corpus.v1.json")["topt_denominator"]["instruments"]}
+    return {listing: ids for listing, ids in plane.items() if listing in topt}
+
+
+def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_database_url, monkeypatch) -> None:
+    """#877 H1 and H3 together, in the world where TOPT and QQQ key an issuer alike.
+
+    H1: a QQQ tick froze its observations for partition 2026-06-30 (their `valid_from`).
+    A TOPT tick inside its window matches their trio, and main reused them — resolving the
+    cells UNCHANGED and then failing to freeze them, because TOPT freezes 2026-03-31. Reuse
+    now requires the anchor to be valid for the obligation's partition, so TOPT fetches.
+
+    H3: both runs then hold core results for the same issuers at the same cutoff. Main's
+    twins returned each shared issuer's decision twice, and main's gate gave the QQQ run
+    TOPT's seeded price. Scoped by run, neither happens."""
+    from data_engine.datahub.production_topt import plausibility_gate
+
+    day = date(2026, 7, 14)  # a Tuesday after the QQQ partition; nothing else captures near it
+    cutoff = datetime(2026, 7, 14, 22, 15, tzinfo=UTC)
+    shared = _key_topt_like_the_planes(monkeypatch)
+    assert len(shared) == 13, "TOPT and QQQ share 13 listings"
+    aapl_issuer = shared["listing:xnas:aapl"][0]
+
+    # A QQQ run launched with the same executed_at (a manual launch of both universes, or
+    # any universe a tick shares its cutoff with): its captures complete 59 minutes before
+    # the cutoff, so they sit inside the TOPT tick's reuse window.
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("50")), price_cutoff=day, cutoff_date=day)
+    with psycopg.connect(tick_database_url) as tick:
+        qqq = run_topt_pipeline(
+            tick,
+            cutoff=cutoff,
+            version=composition.live_version_for(cutoff),
+            corpus_filename="corpus.qqq.v1.json",
+            label_prefix="production-qqq",
+        )
+        tick.commit()
+
+    # H1, at the reuse step itself.
+    probe = psycopg.connect(tick_database_url)
+    try:
+        plan = composition.plan_and_persist(probe, cutoff=cutoff, version="run-scope-h1-probe")
+        assert all(plan.coordinates[listing][:2] == ids for listing, ids in shared.items())
+        satisfied = composition._satisfy_from_recent_observations(probe, plan, cutoff=cutoff)
+        reused = [
+            binding.obligation.subject.id
+            for work_item_id, binding in plan.bindings.items()
+            if work_item_id in satisfied
+        ]
+        assert reused == [], f"observations frozen for a later partition must not be reused: {sorted(set(reused))}"
+    finally:
+        probe.rollback()
+        probe.close()
+
+    # H1 end to end, through the deployed op: the TOPT tick fetches, freezes, publishes.
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day, cutoff_date=day)
+    topt = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
+    assert _status_row(tick_database_url, topt["capture_run_id"])[:4] == (OBLIGATIONS, OBLIGATIONS, OBLIGATIONS, 0)
+    assert _materialized(tick_database_url, topt["capture_run_id"]) == (1, 20, 20)
+
+    with psycopg.connect(tick_database_url) as reader:
+        # The shape: the same issuer, one core result per universe.
+        per_run = reader.execute(
+            "select run_id from mart.topt_core_results where issuer_id = %s and cutoff = %s",
+            (aapl_issuer, cutoff),
+        ).fetchall()
+        assert sorted(row[0] for row in per_run) == sorted([qqq.run_id, topt["capture_run_id"]])
+
+        # BEFORE: main's join duplicated each shared issuer's decision (12 issuers: GOOG
+        # and GOOGL are one), and handed the QQQ run TOPT's seeded price.
+        main_decisions = reader.execute(_MAIN_DECISIONS_SQL, (topt["strategy_run_id"],)).fetchall()
+        shared_issuers = {issuer for issuer, _instrument in shared.values()}
+        assert len(shared_issuers) == 12
+        assert len(main_decisions) == 20 + len(shared_issuers)
+        main_qqq_gate = dict(_gate_closes(reader, _MAIN_GATE_ROWS_SQL, qqq.run_id))
+        assert main_qqq_gate["listing:xnas:aapl"] == Decimal("40"), "main read TOPT's price into the QQQ run"
+
+        # AFTER: each run's rows carry each run's own price.
+        qqq_gate = {row.listing_id: row.last_close for row in plausibility_gate._rows(reader, qqq.run_id)}
+        topt_gate = {row.listing_id: row.last_close for row in plausibility_gate._rows(reader, topt["capture_run_id"])}
+        assert qqq_gate["listing:xnas:aapl"] == Decimal("50") and set(qqq_gate.values()) == {Decimal("50")}
+        assert topt_gate["listing:xnas:aapl"] == Decimal("40") and len(topt_gate) == 20
+        topt_confidence = _core_confidence(reader, topt["capture_run_id"])
+
+    report = _served_report(tick_database_url)
+    assert len(report.decisions) == 20
+    assert len({decision.issuer_id for decision in report.decisions}) == 20
+    assert aapl_issuer in {decision.issuer_id for decision in report.decisions}
+    assert all(decision.confidence == topt_confidence[decision.issuer_id] for decision in report.decisions)

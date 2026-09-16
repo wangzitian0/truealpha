@@ -172,6 +172,23 @@ def write_strategy_decision(
     return decision_id
 
 
+def bind_strategy_run_to_capture(connection: Connection[Any], *, strategy_run_id: str, capture_run_id: str) -> None:
+    """Record which capture run the strategy was evaluated for (#877).
+
+    The cutoff used to be the only link, and since a forced tick (#874) shares its cutoff
+    with the scheduled tick it corrects, a cutoff can name two capture runs. Readers
+    (`mart.governed_strategy_run`, `mart.strategy_run_capture`) resolve through this row.
+    Idempotent: a retried tick re-binds the same pair and changes nothing."""
+    connection.execute(
+        """
+        insert into mart.strategy_run_capture_bindings (capture_run_id, strategy_run_id, bound_by)
+        values (%s, %s, 'tick')
+        on conflict (capture_run_id, strategy_run_id) do nothing
+        """,
+        (capture_run_id, strategy_run_id),
+    )
+
+
 def write_replay(
     connection: Connection[Any],
     decisions: list[Decision],

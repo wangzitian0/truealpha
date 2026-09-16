@@ -97,19 +97,21 @@ def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     return tuple(cells)
 
 
-def peg_cells(connection: Connection[Any], *, cutoff: datetime) -> tuple[Cell, ...]:
-    """PEG from the strategy run whose decisions describe the same cutoff as the governed
-    head (the newest run whose decision cutoff is at or before it) — never simply the
-    newest run, which could carry a different vintage (Copilot on #779)."""
+def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
+    """PEG from the strategy run the governed head's capture run was evaluated with — never
+    simply the newest run, which could carry a different vintage (Copilot on #779), and
+    never "the run at the head's cutoff" either (#877): a forced tick (#874) shares its
+    cutoff with the scheduled one, so a cutoff can name two strategy runs and the old
+    `order by max(cutoff), executed_at` tied between them. The tick binds its strategy run
+    to its capture run (`mart.strategy_run_capture_bindings`); a head with no binding has
+    no PEG cells, which the report grades `no_row` rather than borrowing another run's."""
     rows = connection.execute(
         """
         with chosen as (
-            select s.strategy_run_id
-            from mart.strategy_runs s
-            join mart.strategy_decisions d on d.strategy_run_id = s.strategy_run_id
-            where d.cutoff_at <= %s
-            group by s.strategy_run_id, s.executed_at
-            order by max(d.cutoff_at) desc, s.executed_at desc
+            select binding.strategy_run_id
+            from mart.strategy_run_capture_bindings binding
+            where binding.capture_run_id = %s
+            order by binding.bound_at desc, binding.strategy_run_id desc
             limit 1
         )
         select d.issuer_id, d.peg, d.availability_status, d.exclusion_reason, d.peg_reason_codes
@@ -117,7 +119,7 @@ def peg_cells(connection: Connection[Any], *, cutoff: datetime) -> tuple[Cell, .
         where d.strategy_run_id = (select strategy_run_id from chosen)
         order by d.issuer_id
         """,
-        (cutoff,),
+        (run_id,),
     ).fetchall()
     cells = []
     for subject_id, peg, availability_status, exclusion_reason, peg_reason_codes in rows:
@@ -272,7 +274,7 @@ def compile_report(
     funds = [cell.subject_id for cell in funds_observed]
     cells_by_column = {
         "mart.topt_gppe_results.gppe": gppe,
-        "mart.strategy_decisions.peg": peg_cells(connection, cutoff=head.cutoff) if prefix == "universe:topt-" else (),
+        "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id) if prefix == "universe:topt-" else (),
         "mart.fund_virtual_company.weighted_valuation_gap": funds_observed,
         "mart.issuer_theme_purity.theme_share": theme_purity_cells(connection, head.run_id),
     }

@@ -37,12 +37,27 @@ _EXEMPTIONS_REPO = Path(__file__).resolve().parents[6] / "tools" / "output_invar
 #: Gate rule -> nightly invariant whose exemption also defers the gate.
 _SHARED_EXEMPTION = {RULE_SIGN_PER_BRANCH: "gppe-not-negative"}
 
+# `last_close` is the price the run's own core result was computed from: the market-price
+# observation among the result's `input_observation_ids` for the result's own listing (a
+# dual-class issuer's result carries one per class). It used to be joined from
+# `staging.strategy_backtest_inputs` on (issuer_id, cutoff), which has no run at all
+# (#877): a forced tick (#874) or a re-published tick seeds a second vintage at the same
+# cutoff and every row came back once per vintage, with either run's price; and a QQQ or
+# canary result read TOPT's seeded price for an issuer the two universes key alike. The
+# run's own observation is what `current_ps` was computed from, so a forced correction of
+# a price is judged against the price it corrected, not against the run it replaced.
 _ROWS_SQL = """
     select r.listing_id, r.operating_branch, r.availability, r.operating_efficiency, r.current_ps,
-           p.value as last_close
+           price.last_close
     from mart.topt_core_results r
-    left join staging.strategy_backtest_inputs p
-      on p.issuer_id = r.issuer_id and p.cutoff_at = r.cutoff and p.input_key = 'last_close'
+    left join lateral (
+        select (payload.normalized_payload->>'close')::numeric as last_close
+        from staging.capture_normalized_observations observation
+        join staging.capture_observation_payloads payload using (observation_id)
+        where observation.observation_id = any(r.input_observation_ids)
+          and observation.semantic_type = 'market-price'
+          and payload.normalized_payload->>'listing_id' = r.listing_id
+    ) price on true
     where r.run_id = %s
     order by r.listing_id
 """

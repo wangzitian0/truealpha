@@ -261,8 +261,15 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
             # #496: the L2 funnel metric, same transaction as the seed it measures.
             l2_complete, l2_total = persist_strategy_input_coverage(connection, pipeline.run_id, cutoff=cutoff)
+            # #877: the strategy run is bound to THIS capture. A forced tick (#874) shares
+            # its cutoff with the scheduled one, so the cutoff cannot say which capture a
+            # strategy run belongs to; readers resolve through the binding.
             strategy_run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
-                connection, cutoff=cutoff, executed_at=cutoff, risk_free_rate=Decimal("0.05")
+                connection,
+                cutoff=cutoff,
+                executed_at=cutoff,
+                risk_free_rate=Decimal("0.05"),
+                capture_run_id=pipeline.run_id,
             )
             strategy = {
                 "strategy_inputs_seeded": seeded,

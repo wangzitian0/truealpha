@@ -1385,8 +1385,9 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
     """#575: both strategy-run twins served `order by executed_at desc limit 1` — a bare
     mutable latest. Prod 2026-09-05: a manual replay at 03:10Z displaced the governed
     22:15Z run on every surface for a day. The rule now ranks the run the governed
-    capture head resolves to first (mart.governed_strategy_run, keyed by the head's
-    snapshot cutoff) and falls back to recency only when no head resolves a run.
+    capture head resolves to first (mart.governed_strategy_run, keyed by the strategy
+    run the tick bound to the head's capture run since #877) and falls back to recency
+    only when no head resolves a run.
     Red against the old rule: the later fake run below would win."""
     from data_engine.datahub.strategy_bridge import (
         run_strategy_replay_for_cutoff,
@@ -1399,7 +1400,7 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
     governed_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
-        connection, cutoff=CUTOFF, executed_at=CUTOFF, risk_free_rate=Decimal("0.05")
+        connection, cutoff=CUTOFF, executed_at=CUTOFF, risk_free_rate=Decimal("0.05"), capture_run_id=plan.run_id
     )
     pointer_sha = canonical_sha256({"probe": plan.run_id})
     connection.execute(

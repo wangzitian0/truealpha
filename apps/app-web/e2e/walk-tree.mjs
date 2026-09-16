@@ -53,7 +53,13 @@ const livePages = frozen.routes
   .filter((r) => r.live && !r.path.startsWith("/api/") && !r.path.includes("[") && r.path !== "/" && !r.path.startsWith("/admin/api"))
   .map((r) => r.path);
 
-const ID_PATTERN = /(issuer:lei:[A-Z0-9]{10,}|listing:x[a-z]+:[a-z.]+)/;
+// Every scheme a raw entity id is minted in, not only TOPT's (#877 H5): the planes key
+// issuers by CIK and instruments by FIGI, TOPT by LEI and CUSIP. A guard that knew only
+// `issuer:lei:` passed a raw QQQ issuer id on a first screen, and would stop catching
+// TOPT's too once TOPT resolves to CIK/FIGI. A listing's symbol may carry digits
+// (`listing:xnas:t001` in the data-engine fixtures, numeric symbols on other venues).
+const ID_PATTERN =
+  /(issuer:(?:lei|cik):[A-Z0-9]{10,}|security:(?:cusip|figi):[A-Za-z0-9]{9,}|listing:x[a-z]+:[a-z0-9.]+)/;
 
 /**
  * (a) No raw entity id as VISIBLE text on a research first screen. innerText

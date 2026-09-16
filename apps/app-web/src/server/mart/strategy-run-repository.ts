@@ -12,9 +12,10 @@
  *  - the run the governed capture head resolves to per `strategy_key` (#575), else the
  *    newest by `executed_at desc, created_at desc, strategy_run_id desc`;
  *  - decisions ordered by `cutoff_at, issuer_id`;
- *  - `confidence` and the input vintages come from mart.topt_core_results,
- *    joined on (issuer_id, cutoff) — mart.strategy_decisions records the verdict
- *    and nothing about what it was reached from;
+ *  - `confidence` and the input vintages come from mart.topt_core_results of the
+ *    capture run the strategy run was evaluated for (`mart.strategy_run_capture`,
+ *    #877) — mart.strategy_decisions records the verdict and nothing about what it
+ *    was reached from;
  *  - a query error → `database_unavailable`; no run → `no_runs_recorded`;
  *    a row that no longer matches the DTO shape → `schema_mismatch`.
  *
@@ -100,6 +101,13 @@ const DECISIONS_SQL = `
          -- missing_gross_profit_fact rows, 0.80 for missing_market_value_input,
          -- 0.85 for everything available.
          --
+         -- #877: the core result is the one of the capture run this strategy run
+         -- was evaluated for. A cutoff is not a run: a forced tick (#874) shares
+         -- its cutoff with the scheduled tick, and the cutoff-only join returned
+         -- every decision once per capture run. The FROM clause below is the
+         -- Python twin's DECISIONS_FROM_SQL modulo placeholder syntax, pinned by
+         -- test_strategy_run_selection_parity.
+         --
          -- A join is a read, not a computation: init.md principle 2 keeps
          -- metric computation in libs/factors, and this adds no metric.
          t.confidence,
@@ -107,8 +115,9 @@ const DECISIONS_SQL = `
          t.universe_version, t.universe_sha256,
          t.gppe_definition_sha256, t.tier_definition_sha256
   from mart.strategy_decisions d
+  left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
   left join mart.topt_core_results t
-    on t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
+    on t.run_id = scope.capture_run_id and t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
   where d.strategy_run_id = $1
   order by d.cutoff_at, d.issuer_id
 `;
