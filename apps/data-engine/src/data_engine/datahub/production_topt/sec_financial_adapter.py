@@ -193,7 +193,7 @@ class SecTarget:
 FinancialFactsFetcher = Callable[[int, date, OperatingBranch], FinancialFactsBundle | None]
 
 # The financial fields a second origin may corroborate, in payload-key order. A key here
-# is what `quality_report._FINANCIAL_FACT_FUSION_FIELDS` reconciles by name; an origin
+# is what `quality_report.FINANCIAL_FACT_FUSION_FIELDS` reconciles by name; an origin
 # that does not carry one leaves it None, and the cell is honestly single-origin for it.
 CORROBORATED_FINANCIAL_FIELDS: tuple[str, ...] = (
     "revenue",

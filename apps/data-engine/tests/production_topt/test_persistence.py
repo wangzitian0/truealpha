@@ -480,11 +480,11 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     """The confidence report's loaders read the same persisted observations the quality
     report grades: with the second price origin wired, every bar field's cell is HIGH from
     the same origins and matches the quality report's grade of that field (#865); every
-    fundamental the second statements origin also asserts is MEDIUM (two lineages, no
-    agreement policy in this report yet — the quality report's financial fusion carries the
-    per-field agreement); headcount, written by one fixture producer, is LOW; and
-    the stored confidence column is reported as measured and marked unused. Same real
-    schema, same fake vendors — the SQL is what this proves."""
+    dated fundamental the second statements origin also asserts at the primary's period is
+    HIGH under the financial policy and matches the quality report's per-field grade
+    (#866), while an undated one stays single-origin; headcount, written by one fixture
+    producer, is LOW; and the stored confidence column is reported as measured and marked
+    unused. Same real schema, same fake vendors — the SQL is what this proves."""
     from data_engine.datahub import confidence_report
     from data_engine.datahub.question_coverage import GovernedHead
 
@@ -512,9 +512,23 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
         assert accuracy["matches_quality_report"] is True and accuracy["quality_report_mismatches"] == [], name
         assert (accuracy["quality_report_cells"], accuracy["agreed"], accuracy["compared"]) == (21, 21, 21), name
     assert report["families"]["volume"]["tolerance"] != close["tolerance"]
-    revenue = report["families"]["revenue"]
-    assert (revenue["low"], revenue["high"], revenue["medium"]) == (0, 0, 21)
-    assert revenue["origins"] == ["origin:moomoo-financials:v1", "origin:sec-company-facts:v1"]
+    # The fixture bundle dates revenue and the operating numerator, and the statements origin
+    # publishes both at that period: HIGH under financial-fact-fusion:v1, matching the quality
+    # report field for field. total_assets is undated in the bundle, so nothing can be aligned
+    # to it and it is honestly single-origin; net_income is asserted by neither origin.
+    for name in ("revenue", "gross_profit"):
+        family = report["families"][name]
+        assert (family["low"], family["high"], family["medium"]) == (0, 21, 0), name
+        assert family["origins"] == ["origin:moomoo-financials:v1", "origin:sec-company-facts:v1"], name
+        assert family["tolerance"] == quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
+        accuracy = report["accuracy"][name]
+        assert accuracy["matches_quality_report"] is True and accuracy["quality_report_cells"] == 21, name
+        assert (accuracy["agreed"], accuracy["compared"]) == (21, 21), name
+    total_assets = report["families"]["total_assets"]
+    assert (total_assets["low"], total_assets["reasons"]) == (21, {"single_origin": 21})
+    assert total_assets["origins"] == ["origin:sec-company-facts:v1"]
+    assert report["accuracy"]["total_assets"]["matches_quality_report"] is None
+    assert report["families"]["net_income"]["missing"] == 21
     headcount = report["families"]["headcount"]
     assert headcount["low"] == 21 and headcount["origins"] == ["origin:headcount:test-fixture"]
     # The financial branch's numerator is the only one filled for a bank; the others are

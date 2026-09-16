@@ -9,13 +9,16 @@ registered semantic cannot go ungraded and the report cannot grade a semantic no
 captures. Every field of the bar is its own family (#865), driven here from payloads shaped
 like the persisted observations, so a field one origin never wrote is a missing assertion
 rather than a conflict, and the per-field accuracy cross-check is driven from the shape the
-quality report persists.
+quality report persists. The fused fundamentals (#866) are driven from payloads shaped like
+the primary's and the statements origin's, so period alignment and the currency gate are
+exercised where they live.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import dagster as dg
@@ -42,6 +45,8 @@ from data_engine.datahub.production_topt import source_registrations as registry
 from data_engine.datahub.quality_report import (
     FIELD_RECONCILIATION_POLICIES,
     FIELD_UNITS,
+    FINANCIAL_FACT_FUSION_FIELDS,
+    FINANCIAL_FACT_RECONCILIATION_POLICY,
     PRICE_BAR_FIELDS,
     RECONCILIATION_POLICY,
     VOLUME_RECONCILIATION_POLICY,
@@ -94,12 +99,13 @@ def test_two_independent_origins_disagreeing_beyond_tolerance_are_medium() -> No
 
 def test_two_origins_with_no_agreement_policy_are_medium() -> None:
     """Multiple sources present, nothing declared to compare them: MEDIUM by the standard,
-    never HIGH by accident."""
-    revenue = family_policy("revenue")
-    assert revenue.reconciliation is None
-    sec = OriginValue("origin:sec-company-facts:v1", "sec-company-facts:v1", "sec-company-facts", "416161000000")
-    other = OriginValue("origin:moomoo:v1", "moomoo:v1", "moomoo", "416161000000")
-    grade = classify_cell(revenue, "listing:xnas:aapl", (sec, other), CUTOFF)
+    never HIGH by accident. Shares outstanding is a fundamental no policy fuses (#866 fuses
+    revenue, gross profit, net income and total assets)."""
+    shares = family_policy("shares_outstanding")
+    assert shares.reconciliation is None
+    sec = OriginValue("origin:sec-company-facts:v1", "sec-company-facts:v1", "sec-company-facts", "15000000000")
+    other = OriginValue("origin:moomoo:v1", "moomoo:v1", "moomoo", "15000000000")
+    grade = classify_cell(shares, "listing:xnas:aapl", (sec, other), CUTOFF)
     assert grade.band is Band.MEDIUM and grade.reason == "no_agreement_policy"
 
 
@@ -317,7 +323,259 @@ def test_a_quality_report_from_before_per_field_fusion_is_compared_on_the_close_
     assert entry["matches_quality_report"] is None and entry["quality_report_cells"] == 0
     none = cr.field_accuracy(family_policy("close"), {}, {}, quality_report_id=None, persisted={})
     assert none["matches_quality_report"] is None and none["quality_report_id"] is None
-    assert cr.quality_report_field_outcomes({}) == {name: {} for name in PRICE_BAR_FIELDS}
+    assert cr.quality_report_field_outcomes({}) == {name: {} for name in cr.CROSS_CHECKED_FAMILIES}
+
+
+# -- the fused fundamentals reconcile under the quality report's policy (#866) ----------------
+
+_SEC = ("sec-company-facts:v1", "origin:sec-company-facts:v1")
+_MOOMOO = ("moomoo-financials:v1", "origin:moomoo-financials:v1")
+FILED = datetime(2026, 2, 18, tzinfo=UTC)
+# The fixture pair of test_quality_report's financial fusion: every dated field agrees at
+# 2025-12-31, net income by the measured 0.67% ProfitLoss-vs-NetIncomeLoss gap, inside 1%.
+_PRIMARY_FACT = {
+    "revenue": "100000000",
+    "revenue_period_end": "2025-12-31",
+    "gross_profit": "40000000",
+    "operating_period_end": "2025-12-31",
+    "net_income": "9000000",
+    "total_assets": "500000000",
+    "vintage": {"net_income": {"period_end": "2025-12-31"}, "total_assets": {"period_end": "2025-12-31"}},
+}
+_MOOMOO_FACT = {
+    "origin": "moomoo-financials",
+    "period_end": "2025-12-31",
+    "revenue": "100000000",
+    "gross_profit": "40000000",
+    "net_income": "9060000",
+    "total_assets": "500000000",
+    "by_period_end": {
+        "2024-12-31": {"revenue": "80000000", "gross_profit": "30000000", "net_income": "5000000"},
+        "2025-12-31": {
+            "revenue": "100000000",
+            "gross_profit": "40000000",
+            "net_income": "9060000",
+            "total_assets": "500000000",
+        },
+    },
+}
+
+
+def _financial(
+    coordinate: tuple[str, str], payload: dict, *, primary: bool | None = None, filed: datetime = FILED
+) -> cr.FinancialObservation:
+    source, origin = coordinate
+    return cr.FinancialObservation(
+        primary=coordinate is _SEC if primary is None else primary,
+        origin_source=source,
+        origin_id=origin,
+        payload=payload,
+        knowable_at=filed,
+        observation_id="normalized-observation:" + hashlib.sha256(f"{origin}{filed}".encode()).hexdigest(),
+    )
+
+
+def _financial_grades(*observations: cr.FinancialObservation) -> dict[str, cr.CellGrade]:
+    """One issuer's grade per financial family from what its observations carry."""
+    origins = cr.financial_origins(observations)
+    return {name: classify_cell(family_policy(name), "listing:xnas:t", origins[name], CUTOFF) for name in origins}
+
+
+def test_the_fused_fundamentals_carry_the_quality_reports_policy_and_the_others_none() -> None:
+    assert set(FINANCIAL_FACT_FUSION_FIELDS) == {"revenue", "gross_profit", "net_income", "total_assets"}
+    for name in FINANCIAL_FACT_FUSION_FIELDS:
+        policy = family_policy(name)
+        assert policy.reconciliation is FINANCIAL_FACT_RECONCILIATION_POLICY and policy.period_bound, name
+        assert policy.semantic_type == "financial-fact" and not policy.session_bound, name
+    for name in ("headcount", "pre_provision_profit", "shares_outstanding"):
+        assert family_policy(name).reconciliation is None and not family_policy(name).period_bound, name
+    assert cr.CROSS_CHECKED_FAMILIES == (*PRICE_BAR_FIELDS, *FINANCIAL_FACT_FUSION_FIELDS)
+
+
+def test_two_lineages_agreeing_at_the_primarys_period_are_high() -> None:
+    """SEC company-facts and moomoo's statements agree on every fused field at the primary's
+    fiscal period end: HIGH under `financial-fact-fusion:v1`, the net income gap inside 1%."""
+    grades = _financial_grades(_financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, _MOOMOO_FACT))
+    for name in FINANCIAL_FACT_FUSION_FIELDS:
+        grade = grades[name]
+        assert grade.band is Band.HIGH and grade.reason == "independent_origins_agree", name
+        assert grade.outcome == ReconciliationOutcome.AGREED.value and grade.independent_origins == 2, name
+        assert grade.tolerance == FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
+        assert grade.origins == ("origin:moomoo-financials:v1", "origin:sec-company-facts:v1"), name
+        assert grade.excluded == (), name
+    assert grades["net_income"].values == {
+        "origin:moomoo-financials:v1": "9060000",
+        "origin:sec-company-facts:v1": "9000000",
+    }
+    assert grades["net_income"].delta == "60000" and grades["net_income"].relative_delta == "0.006623"
+    # The fields no policy fuses are unchanged: the statements origin asserts none of them.
+    assert grades["shares_outstanding"].band is Band.MISSING
+    assert grades["pre_provision_profit"].band is Band.MISSING
+
+
+def test_two_lineages_disagreeing_beyond_tolerance_are_medium() -> None:
+    conflicting = {
+        **_MOOMOO_FACT,
+        "by_period_end": {"2025-12-31": {**_MOOMOO_FACT["by_period_end"]["2025-12-31"], "revenue": "103000000"}},
+    }
+    grades = _financial_grades(_financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, conflicting))
+    revenue = grades["revenue"]
+    assert revenue.band is Band.MEDIUM and revenue.reason == "not_agreed_within_tolerance"
+    assert revenue.outcome == ReconciliationOutcome.CONFLICT_ABSTAINED.value
+    assert revenue.delta == "3000000" and revenue.relative_delta == "0.029126"
+    assert grades["gross_profit"].band is Band.HIGH, "one field's disagreement is that field's finding"
+
+
+def test_a_second_origin_without_the_primarys_period_is_low_other_period() -> None:
+    """The financial analogue of #622: a vendor that has not published the primary's fiscal
+    period has not corroborated it and has not disagreed with it. Its newest figure is
+    recorded, dated, and excluded — never compared."""
+    stale = {**_MOOMOO_FACT, "by_period_end": {"2024-12-31": _MOOMOO_FACT["by_period_end"]["2024-12-31"]}}
+    grades = _financial_grades(_financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, stale))
+    for name in ("revenue", "gross_profit", "net_income"):
+        grade = grades[name]
+        assert grade.band is Band.LOW and grade.reason == "second_origin_other_period", name
+        assert grade.origins == ("origin:sec-company-facts:v1",) and grade.outcome is None, name
+        assert grade.excluded == ("origin:moomoo-financials:v1",), name
+    assert grades["revenue"].values == {
+        "origin:moomoo-financials:v1": "80000000",
+        "origin:sec-company-facts:v1": "100000000",
+    }
+    # The stale vintage never carried total assets at all: nothing to exclude, plain single origin.
+    assert grades["total_assets"].band is Band.LOW and grades["total_assets"].reason == "single_origin"
+    assert grades["total_assets"].excluded == ()
+
+
+def test_a_single_financial_origin_is_low_whichever_origin_it_is() -> None:
+    primary_only = _financial_grades(_financial(_SEC, _PRIMARY_FACT))
+    assert all(primary_only[name].band is Band.LOW for name in FINANCIAL_FACT_FUSION_FIELDS)
+    assert all(primary_only[name].reason == "single_origin" for name in FINANCIAL_FACT_FUSION_FIELDS)
+    # Without a primary there is no period to align on: the statements origin's headline
+    # figure covers the field alone, as the quality report's `unavailable` says.
+    second_only = _financial_grades(_financial(_MOOMOO, _MOOMOO_FACT))
+    assert second_only["revenue"].band is Band.LOW and second_only["revenue"].reason == "single_origin"
+    assert second_only["revenue"].origins == ("origin:moomoo-financials:v1",)
+    assert second_only["revenue"].values == {"origin:moomoo-financials:v1": "100000000"}
+
+
+def test_a_second_origin_in_another_currency_never_corroborates() -> None:
+    """The cell's unit is the primary's reporting currency: a figure in another currency is
+    not the same number, so the origin is present with no comparable value. The same
+    currency on both sides compares as usual; a payload without one reads as USD."""
+    eur_primary = {**_PRIMARY_FACT, "currency": "EUR"}
+    mismatched = _financial_grades(
+        _financial(_SEC, eur_primary), _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "HKD"})
+    )
+    for name in FINANCIAL_FACT_FUSION_FIELDS:
+        assert mismatched[name].band is Band.LOW and mismatched[name].reason == "single_origin", name
+        assert mismatched[name].values["origin:moomoo-financials:v1"] is None, name
+    agreed = _financial_grades(_financial(_SEC, eur_primary), _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "EUR"}))
+    assert all(agreed[name].band is Band.HIGH for name in FINANCIAL_FACT_FUSION_FIELDS)
+    legacy = _financial_grades(
+        _financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "USD"})
+    )
+    assert all(legacy[name].band is Band.HIGH for name in FINANCIAL_FACT_FUSION_FIELDS)
+
+
+def test_an_undated_primary_figure_is_not_corroborated_and_an_absent_one_leaves_the_second_alone() -> None:
+    """A primary figure without a fiscal period cannot be aligned, so nothing corroborates it
+    (the quality report compares it no more); a field the primary does not assert at all
+    is covered by the second origin's headline figure alone."""
+    undated = {name: value for name, value in _PRIMARY_FACT.items() if name != "vintage"}
+    grades = _financial_grades(_financial(_SEC, undated), _financial(_MOOMOO, _MOOMOO_FACT))
+    assert grades["revenue"].band is Band.HIGH and grades["gross_profit"].band is Band.HIGH
+    for name in ("net_income", "total_assets"):
+        assert grades[name].band is Band.LOW and grades[name].reason == "single_origin", name
+        assert grades[name].values["origin:moomoo-financials:v1"] is None, name
+    absent = _financial_grades(
+        _financial(_SEC, {**_PRIMARY_FACT, "net_income": None}), _financial(_MOOMOO, _MOOMOO_FACT)
+    )
+    assert absent["net_income"].band is Band.LOW and absent["net_income"].origins == ("origin:moomoo-financials:v1",)
+    assert absent["net_income"].values["origin:moomoo-financials:v1"] == "9060000"
+
+
+def test_an_origin_asserts_from_its_newest_observation_whichever_order_the_rows_came_in() -> None:
+    """Two rows from one origin are one origin (Copilot on #875): the newest by knowable_at
+    is what it asserts — the quality report's selection of the primary, applied to every
+    origin — and reversing the rows changes nothing."""
+    earlier = datetime(2025, 2, 20, tzinfo=UTC)
+    restated = {**_MOOMOO_FACT, "by_period_end": {"2025-12-31": {"revenue": "103000000"}}}
+    rows = (
+        _financial(_SEC, {**_PRIMARY_FACT, "revenue": "90000000"}, filed=earlier),  # superseded
+        _financial(_SEC, _PRIMARY_FACT),
+        _financial(_MOOMOO, restated, filed=earlier),  # superseded
+        _financial(_MOOMOO, _MOOMOO_FACT),
+    )
+    forward, backward = _financial_grades(*rows), _financial_grades(*reversed(rows))
+    assert forward == backward
+    revenue = forward["revenue"]
+    assert revenue.band is Band.HIGH and revenue.origins == (
+        "origin:moomoo-financials:v1",
+        "origin:sec-company-facts:v1",
+    )
+    assert revenue.values == {"origin:moomoo-financials:v1": "100000000", "origin:sec-company-facts:v1": "100000000"}
+    assert revenue.independent_origins == 2 and revenue.delta == "0"
+
+
+def test_two_readers_of_one_lineage_stay_medium_under_the_financial_policy() -> None:
+    """The independence rule survives the policy: a mirror of the SEC facts agreeing to the
+    cent is one source, MEDIUM at most, never HIGH."""
+    sec = OriginValue(
+        "origin:sec-company-facts:v1",
+        "sec-company-facts:v1",
+        "sec-company-facts",
+        "100000000",
+        period_end=date(2025, 12, 31),
+    )
+    mirror = OriginValue(
+        "origin:sec-mirror:v1", "sec-mirror:v1", "sec-company-facts", "100000000", period_end=date(2025, 12, 31)
+    )
+    grade = classify_cell(family_policy("revenue"), "listing:xnas:t", (sec, mirror), CUTOFF)
+    assert grade.band is Band.MEDIUM and grade.reason == "same_lineage" and grade.independent_origins == 1
+
+
+def test_accuracy_compares_each_fused_fundamental_with_the_quality_reports_grade() -> None:
+    """The cross-check reads `financial_fact_reconciliation_cells[*].fields[<field>].outcome`
+    (#854) per field; a subject the quality report graded no field for (no primary, or an
+    undated one) is not compared."""
+    grades = _financial_grades(_financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, _MOOMOO_FACT))
+    fields = {
+        name: {"outcome": "agreed", "period_end": "2025-12-31", "unit": "USD"} for name in FINANCIAL_FACT_FUSION_FIELDS
+    }
+    persisted = cr.quality_report_field_outcomes(
+        {
+            "financial_fact_reconciliation_cells": {
+                "listing:xnas:t": {"outcome": "agreed", "fields": fields},
+                "listing:xnas:u": {"outcome": "unavailable", "fields": {}, "origin_groups": 0},
+            }
+        }
+    )
+    assert all(persisted[name] == {"listing:xnas:t": "agreed"} for name in FINANCIAL_FACT_FUSION_FIELDS)
+    assert all(persisted[name] == {} for name in PRICE_BAR_FIELDS)
+    for name in FINANCIAL_FACT_FUSION_FIELDS:
+        cells = {"listing:xnas:t": grades[name]}
+        entry = cr.field_accuracy(
+            family_policy(name),
+            aggregate(family_policy(name), cells.values()),
+            cells,
+            quality_report_id=_QUALITY_REPORT_ID,
+            persisted=persisted[name],
+        )
+        assert entry["matches_quality_report"] is True and entry["quality_report_cells"] == 1, name
+        assert entry["tolerance_policy"]["policy_id"] == FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
+        assert (entry["compared"], entry["agreed"], entry["agreement_rate"]) == (1, 1, "1.0000"), name
+    conflicting = _financial_grades(
+        _financial(_SEC, _PRIMARY_FACT),
+        _financial(_MOOMOO, {**_MOOMOO_FACT, "by_period_end": {"2025-12-31": {"revenue": "103000000"}}}),
+    )
+    claimed = cr.field_accuracy(
+        family_policy("revenue"),
+        {},
+        {"listing:xnas:t": conflicting["revenue"]},
+        quality_report_id=_QUALITY_REPORT_ID,
+        persisted={"listing:xnas:t": "agreed"},
+    )
+    assert claimed["matches_quality_report"] is False and claimed["quality_report_mismatches"] == ["listing:xnas:t"]
 
 
 # -- index membership: the policy this report adds ------------------------------------------
@@ -430,7 +688,7 @@ def test_aggregate_counts_shares_and_agreement_rate_over_compared_cells() -> Non
 
 
 def test_aggregate_with_nothing_compared_has_no_agreement_rate() -> None:
-    policy = family_policy("revenue")
+    policy = family_policy("shares_outstanding")
     sec = OriginValue("origin:sec-company-facts:v1", "sec-company-facts:v1", "sec-company-facts", "1")
     summary = aggregate(policy, [classify_cell(policy, "listing:xnas:a", (sec,), CUTOFF)])
     assert summary["compared"] == 0 and summary["agreement_rate"] is None and summary["tolerance"] is None

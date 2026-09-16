@@ -737,8 +737,9 @@ _PRIMARY_FINANCIAL_VINTAGES = frozenset(PARSER_VERSION_HISTORY)
 # Per reconciled field: which primary-payload key carries the value and which carries
 # the fiscal period end it describes (a dotted path into `vintage` where the payload
 # has no dedicated column). A second origin's payload carries the same field names
-# inside `by_period_end[<period_end>]`, so alignment is by the primary's period.
-_FINANCIAL_FACT_FUSION_FIELDS: dict[str, tuple[str, str]] = {
+# inside `by_period_end[<period_end>]`, so alignment is by the primary's period. Public
+# because the confidence report grades exactly these fields under this policy (#866).
+FINANCIAL_FACT_FUSION_FIELDS: dict[str, tuple[str, str]] = {
     "revenue": ("revenue", "revenue_period_end"),
     "gross_profit": ("gross_profit", "operating_period_end"),
     "net_income": ("net_income", "vintage.net_income.period_end"),
@@ -769,7 +770,7 @@ def primary_financial_fields(payload: Mapping[str, Any]) -> dict[str, tuple[Deci
     """field -> (value, period_end) for every fusion field the primary payload asserts
     WITH a dated period. An undated value cannot be aligned and is not compared."""
     out: dict[str, tuple[Decimal, date]] = {}
-    for field_name, (value_key, period_path) in _FINANCIAL_FACT_FUSION_FIELDS.items():
+    for field_name, (value_key, period_path) in FINANCIAL_FACT_FUSION_FIELDS.items():
         value = payload.get(value_key)
         period = _payload_path(payload, period_path)
         if value is None or not isinstance(period, str):
