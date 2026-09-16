@@ -392,8 +392,11 @@ def test_the_nightly_verdicts_are_bounded_on_both_legs_after_the_pointer() -> No
     assert steps.index(pointer) < steps.index(name) < steps.index(escalate)
     text = step_text(FRESHNESS, name)
     assert "tools/nightly_verdicts.py" in text and "matrix.url" in text and "--repo ." in text
+    # The grace for a newly introduced check reads deploy-release runs by their run-name word.
+    assert '--deploy-type "${{ matrix.deploy_type }}"' in text, "without it a new check is red until its first tick"
     assert "--environment" in text
     step = next(s for s in job(FRESHNESS, "freshness")["steps"] if s.get("name") == name)
+    assert step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}", "the deploy-run lookup needs the token"
     assert step.get("if") == "always()", "a stale release must not hide a red nightly check"
     checkout = next(
         s for s in job(FRESHNESS, "freshness")["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
