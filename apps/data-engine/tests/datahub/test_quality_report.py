@@ -839,6 +839,38 @@ def test_a_subject_without_a_primary_is_unavailable_and_an_unknown_vintage_is_ig
     )
 
 
+def test_the_cell_unit_is_the_primarys_currency_and_another_currency_never_corroborates() -> None:
+    """The primary names its reporting currency per payload and the cell carries it; a
+    second origin's figure in another currency is absent for the field, never compared,
+    and a payload from before the currency column reads as USD."""
+    from datetime import UTC, datetime
+
+    from data_engine.datahub.quality_report import reconcile_financial_fact_entries
+
+    cutoff = datetime(2026, 3, 31, tzinfo=UTC)
+    eur_primary, eur_second = {**_PRIMARY_FACT, "currency": "EUR"}, {**_MOOMOO_FACT, "currency": "EUR"}
+    agreed = reconcile_financial_fact_entries(
+        "listing:xetr:sap",
+        [_financial_entry("sec", eur_primary), _financial_entry("moomoo", eur_second)],
+        cutoff=cutoff,
+    )
+    assert agreed["outcome"] == "agreed" and {f["unit"] for f in agreed["fields"].values()} == {"EUR"}
+    hkd_second = {**_MOOMOO_FACT, "currency": "HKD"}
+    mismatched = reconcile_financial_fact_entries(
+        "listing:xetr:sap",
+        [_financial_entry("sec", eur_primary), _financial_entry("moomoo", hkd_second)],
+        cutoff=cutoff,
+    )
+    assert mismatched["outcome"] == "insufficient_independent_origins"
+    assert all(f["origin_groups"] == 1 and f["unit"] == "EUR" for f in mismatched["fields"].values())
+    legacy = reconcile_financial_fact_entries(
+        "listing:xnas:t",
+        [_financial_entry("sec", _PRIMARY_FACT), _financial_entry("moomoo", _MOOMOO_FACT)],
+        cutoff=cutoff,
+    )
+    assert legacy["outcome"] == "agreed" and {f["unit"] for f in legacy["fields"].values()} == {"USD"}
+
+
 def test_the_financial_policy_is_the_measured_one_and_the_price_policy_names_the_third_origin() -> None:
     from decimal import Decimal
 

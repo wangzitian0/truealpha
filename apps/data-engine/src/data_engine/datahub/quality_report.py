@@ -33,6 +33,7 @@ broken cell per failure mode must drive the corresponding metric below 1.0.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -730,7 +731,16 @@ _FINANCIAL_FACT_FUSION_FIELDS: dict[str, tuple[str, str]] = {
     "net_income": ("net_income", "vintage.net_income.period_end"),
     "total_assets": ("total_assets", "vintage.total_assets.period_end"),
 }
+# The unit of a primary payload that names no currency (vintages before the adapter wrote one).
 _FINANCIAL_FACT_UNIT = "USD"
+_ISO_CURRENCY = re.compile(r"[A-Z]{3}")
+
+
+def financial_fact_unit(payload: Mapping[str, Any]) -> str:
+    """The currency a financial-fact payload reports in: `sec_financial_adapter` and every
+    corroborating origin write `currency` per payload; a payload without one is USD."""
+    currency = payload.get("currency")
+    return currency if isinstance(currency, str) and _ISO_CURRENCY.fullmatch(currency) else _FINANCIAL_FACT_UNIT
 
 
 def _payload_path(payload: Mapping[str, Any], path: str) -> Any:
@@ -821,14 +831,17 @@ def reconcile_financial_fact_entries(
 
     Alignment is on the PRIMARY's fiscal period for each field: a second origin asserting
     a different period has not corroborated the served number, so it is absent for that
-    field (honest `insufficient_independent_origins`), never a value conflict. The
-    subject's outcome is AGREED only when every compared field agreed and at least one
-    was compared; any conflicting field abstains the subject.
+    field (honest `insufficient_independent_origins`), never a value conflict. The cell's
+    unit is the primary's reporting currency, and a second origin reporting in another
+    currency is absent the same way — a figure in another unit is not the same number.
+    The subject's outcome is AGREED only when every compared field agreed and at least
+    one was compared; any conflicting field abstains the subject.
     """
     primaries = [entry for entry in entries if entry.is_primary]
     if not primaries:
         return {"outcome": ReconciliationOutcome.UNAVAILABLE.value, "fields": {}, "origin_groups": 0}
     primary = max(primaries, key=lambda entry: (entry.knowable_at, entry.observation_id))
+    unit = financial_fact_unit(primary.payload)
     fields: dict[str, dict[str, Any]] = {}
     outcomes: list[str] = []
     for field_name, (value, period_end) in sorted(primary_financial_fields(primary.payload).items()):
@@ -837,13 +850,13 @@ def reconcile_financial_fact_entries(
             subject=SubjectRef(kind=SubjectKind.LISTING, id=listing_id),
             field_name=field_name,
             field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'financial-fact-{field_name}:v1'})}",
-            unit=_FINANCIAL_FACT_UNIT,
+            unit=unit,
             valid_from=period_end,
             valid_to=max(period_end, cutoff.date()),
         )
         assertions = [_financial_assertion(cell, primary, value)]
         for entry in entries:
-            if entry.is_primary:
+            if entry.is_primary or financial_fact_unit(entry.payload) != unit:
                 continue
             other = corroborating_financial_value(entry.payload, field_name, period_end)
             if other is not None:
@@ -854,6 +867,7 @@ def reconcile_financial_fact_entries(
         fields[field_name] = {
             "outcome": result.outcome.value,
             "period_end": period_end.isoformat(),
+            "unit": unit,
             "origin_groups": len(result.origin_group_ids),
             "selected_source": next(
                 (a.source_id for a in assertions if a.assertion_id == result.selected_assertion_id), None
