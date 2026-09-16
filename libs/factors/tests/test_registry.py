@@ -13,6 +13,7 @@ import factors.composite.registered_composite_probe  # noqa: F401
 import factors.composite.three_tier_valuation  # noqa: F401
 import pytest
 from factors import FACTOR_REGISTRY, Fact, FactorResult, UnitFamily
+from factors.registry import factor
 from pydantic import ValidationError
 
 
@@ -98,9 +99,6 @@ def test_a_factor_declares_its_inputs_as_registered_metrics_or_fails_at_import()
     """#855 B2: the evaluator derives what to project from the registry, so the declaration
     has to be true at import — a metric the registry does not know is a traceback here, not
     an issuer silently `missing` its input on every run."""
-    import pytest
-    from factors.registry import FACTOR_REGISTRY, factor
-
     assert FACTOR_REGISTRY["peg"].inputs == ("price", "shares_outstanding", "net_income")
     assert FACTOR_REGISTRY["gross_profit_per_employee"].inputs == ("gross_profit", "total_assets", "employees_total")
     assert FACTOR_REGISTRY["three_tier_valuation"].inputs == (), "a composite consumes results, not metrics"
