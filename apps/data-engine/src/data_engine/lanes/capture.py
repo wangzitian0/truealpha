@@ -76,9 +76,17 @@ TOPT_LIVE_CRON = live_topt_cron(settings.app_env)
 
 class ToptLiveTickConfig(dg.Config):
     """`executed_at` is injected by the schedule from its tick time (ISO 8601),
-    never read from the wall clock inside the run."""
+    never read from the wall clock inside the run.
+
+    `force_fetch` is an operator's choice and never a schedule's (#874): the run
+    fetches every obligation instead of reusing observations committed in the last
+    twelve hours (#635), under a capture identity of its own. Launch it through the
+    admin page or Dagster GraphQL (docs/datahub-quality-report.md); the run plan,
+    the quality report and this op's output metadata record `forced_fetch`.
+    """
 
     executed_at: str
+    force_fetch: bool = False
 
 
 def _production_only(app_env: str) -> dg.DefaultScheduleStatus:
@@ -239,6 +247,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             version=version,
             universe_head_kind=tick.universe_head_kind,
             label_prefix=tick.label_prefix,
+            force_fetch=config.force_fetch,
         )
         strategy: dict[str, Any] = {}
         if tick.run_strategy:
@@ -302,7 +311,8 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         connection.commit()
 
     summary = (
-        f"{tick.log_label} {config.executed_at}: capture {pipeline.run_id} "
+        f"{tick.log_label} {config.executed_at}{' (forced fetch)' if pipeline.forced_fetch else ''}: "
+        f"capture {pipeline.run_id} "
         f"(available {pipeline.quality['available_count']}/{pipeline.quality['requested_count']}"
     )
     if tick.run_strategy:
@@ -325,6 +335,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     metadata: dict[str, Any] = {
         "capture_run_id": pipeline.run_id,
         "quality_report_id": pipeline.quality_report_id,
+        "forced_fetch": pipeline.forced_fetch,
         "independent_reconciliation": pipeline.quality["independent_reconciliation"],
         **strategy,
         **fund_consolidation,
@@ -362,9 +373,12 @@ def build_tick(tick: UniverseTick) -> tuple[dg.OpDefinition, dg.JobDefinition, d
             executed_at = context.scheduled_execution_time.isoformat()
             return dg.RunRequest(
                 # run_key == the tick time: the daemon dedupes a re-evaluated tick to a
-                # single run, so an identical tick retry is idempotent.
+                # single run, so an identical tick retry is idempotent. A schedule never
+                # forces a fetch (#874): #635's reuse is what the nightly budget relies on.
                 run_key=executed_at,
-                run_config=dg.RunConfig(ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at)}),
+                run_config=dg.RunConfig(
+                    ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at, force_fetch=False)}
+                ),
             )
 
         schedule = tick_schedule

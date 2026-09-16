@@ -7,7 +7,9 @@ network path between app and daemon:
   * the sensor turns a pending row into exactly one RunRequest carrying the
     requested executed_at, and marks the row consumed with the run_key;
   * a second evaluation yields nothing (consume-once);
-  * consumed rows are immutable and nothing can DELETE the audit trail.
+  * consumed rows are immutable and nothing can DELETE the audit trail;
+  * a request may ask for a forced vendor fetch (#874), and the launched run's config
+    says so; a request that does not ask launches an ordinary tick.
 
 Skips without a local Postgres; ci-python/ci-db run it migrated.
 """
@@ -39,11 +41,19 @@ def connection():
         active.close()
 
 
-def _insert_request(connection, dedupe_key: str) -> int:
+def _insert_request(connection, dedupe_key: str, *, force_fetch: bool | None = None) -> int:
+    if force_fetch is None:
+        # The pre-#874 statement shape, verbatim: an app that never names the column
+        # must keep working, and must launch an unforced tick.
+        return connection.execute(
+            "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) "
+            "values ('topt_live_pipeline', %s, 'principal:owner', %s) returning request_id",
+            (_EXECUTED_AT, dedupe_key),
+        ).fetchone()[0]
     return connection.execute(
-        "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) "
-        "values ('topt_live_pipeline', %s, 'principal:owner', %s) returning request_id",
-        (_EXECUTED_AT, dedupe_key),
+        "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) "
+        "values ('topt_live_pipeline', %s, 'principal:owner', %s, %s) returning request_id",
+        (_EXECUTED_AT, dedupe_key, force_fetch),
     ).fetchone()[0]
 
 
@@ -78,6 +88,7 @@ def test_sensor_launches_once_with_requested_executed_at_and_consumes(connection
         assert requests[0].run_key == f"manual:{dedupe_key}"
         tick_config = requests[0].run_config["ops"]["run_topt_live_tick"]["config"]
         assert tick_config["executed_at"] == _EXECUTED_AT.isoformat()
+        assert tick_config["force_fetch"] is False
 
         consumed_at, run_key = connection.execute(
             "select consumed_at, launched_run_key from staging.pipeline_trigger_requests where request_id = %s",
@@ -155,3 +166,37 @@ def test_sensor_dispatches_every_declared_tick_to_its_own_op(connection, monkeyp
     finally:
         connection.rollback()
         _cleanup(connection)
+
+
+@pytest.mark.parametrize("force_fetch", [True, False])
+def test_sensor_passes_the_requested_force_fetch_to_the_tick(connection, monkeypatch, force_fetch) -> None:
+    """#874: the admin page's "force a fresh vendor fetch" reaches the op config the
+    tick reads; the run_key stays the request's own, so redelivery is still harmless."""
+    import uuid
+
+    dedupe_key = f"test-sensor-force-{uuid.uuid4().hex[:12]}"
+    connection.execute("set local role app_runtime")  # the app's grant, as the admin route writes it
+    _insert_request(connection, dedupe_key, force_fetch=force_fetch)
+    connection.commit()
+    try:
+        monkeypatch.setattr(psycopg, "connect", lambda *a, **k: _reuse(connection))
+        requests = [
+            r for r in pipeline_trigger_sensor(dg.build_sensor_context()) if r.run_key == f"manual:{dedupe_key}"
+        ]
+        assert len(requests) == 1
+        tick_config = requests[0].run_config["ops"]["run_topt_live_tick"]["config"]
+        assert tick_config == {"executed_at": _EXECUTED_AT.isoformat(), "force_fetch": force_fetch}
+    finally:
+        connection.rollback()
+        _cleanup(connection)
+
+
+def test_force_fetch_is_immutable_once_requested(connection) -> None:
+    """The request row is an audit trail: what was asked for cannot be rewritten
+    before the sensor reads it."""
+    request_id = _insert_request(connection, "test-force-immutable", force_fetch=True)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        connection.execute(
+            "update staging.pipeline_trigger_requests set force_fetch = false where request_id = %s",
+            (request_id,),
+        )

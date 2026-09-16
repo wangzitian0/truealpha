@@ -15,7 +15,10 @@ service objective withheld the governed pointer) is asserted without a database.
 from __future__ import annotations
 
 import inspect
+import json
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import dagster as dg
 import psycopg
@@ -118,6 +121,20 @@ def test_schedule_is_enabled_hourly_with_tick_driven_identity() -> None:
 
     later = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 7, 20, 7, 15, 0, tzinfo=UTC))
     assert topt_live_schedule(later).run_key != first.run_key
+
+
+def test_no_schedule_ever_forces_a_fetch() -> None:
+    """#874: forcing is an operator's decision. A scheduled tick keeps #635's reuse
+    window, which is what protects the vendor budget across the night's three ticks."""
+    tick = datetime(2026, 7, 20, 6, 15, 0, tzinfo=UTC)
+    for declared in capture.TICKS:
+        if declared.cron is None:
+            continue
+        schedule = defs.get_schedule_def(declared.schedule_name)
+        request = schedule(dg.build_schedule_context(scheduled_execution_time=tick))
+        config = request.run_config["ops"][declared.op_name]["config"]
+        assert config.get("force_fetch", False) is False, declared.key
+    assert ToptLiveTickConfig(executed_at=tick.isoformat()).force_fetch is False
 
 
 def test_live_version_is_tick_deterministic() -> None:
@@ -284,3 +301,68 @@ def test_every_declared_tick_is_deployed_under_its_own_names_and_is_a_trigger_ta
             assert schedule.cron_schedule == tick.cron and schedule.job.name == tick.job_name
         assert tick.job_name in sensor_targets, f"{tick.key} is not a manual-trigger target"
     assert capture.TICK_BY_JOB == {tick.job_name: tick for tick in capture.TICKS}
+
+
+# -- #874: a manual tick can force a fresh vendor fetch -----------------------------------------
+
+
+def _capturing_tick(monkeypatch, calls: list[dict]) -> None:
+    """`_fake_tick`, except the pipeline records the keywords the op called it with and
+    reports back the forcing it was asked for, the way the real one does."""
+    _fake_tick(monkeypatch, PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=10, unmet=()))
+
+    def pipeline(*args, **kwargs):
+        calls.append(kwargs)
+        return ToptPipelineResult(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            core_result_count=20,
+            quality_report_id="datahub-quality-report:" + "c" * 64,
+            quality=dict(_QUALITY),
+            forced_fetch=kwargs.get("force_fetch", False),
+        )
+
+    monkeypatch.setattr(capture, "run_topt_pipeline", pipeline)
+
+
+def test_a_forced_launch_reaches_the_pipeline_and_says_so_in_op_metadata(monkeypatch) -> None:
+    """Through the deployed op, not the pipeline function: the config an operator
+    launches with (GraphQL or the admin trigger) must arrive at `run_topt_pipeline`."""
+    calls: list[dict] = []
+    _capturing_tick(monkeypatch, calls)
+
+    forced = dg.build_op_context()
+    run_topt_live_tick(forced, ToptLiveTickConfig(executed_at=TICK, force_fetch=True))
+    ordinary = dg.build_op_context()
+    run_topt_live_tick(ordinary, ToptLiveTickConfig(executed_at=TICK))
+
+    assert [call["force_fetch"] for call in calls] == [True, False]
+    # One tick time, one version handed down; the pipeline owns the forced identity.
+    assert calls[0]["version"] == calls[1]["version"] == live_version_for(datetime.fromisoformat(TICK))
+    assert forced.get_output_metadata("result")["forced_fetch"] is True
+    assert ordinary.get_output_metadata("result")["forced_fetch"] is False
+
+
+def _documented_launch() -> dict:
+    root = next(parent for parent in Path(__file__).resolve().parents if (parent / "docs").is_dir())
+    text = (root / "docs" / "datahub-quality-report.md").read_text(encoding="utf-8")
+    section = text.split("## Manual re-run with a forced fetch", 1)
+    assert len(section) == 2, "docs/datahub-quality-report.md lost its forced re-run section"
+    blocks = re.findall(r"```json\n(.*?)```", section[1], flags=re.DOTALL)
+    variables = [json.loads(block) for block in blocks if '"executionParams"' in block]
+    assert len(variables) == 1, "the section documents exactly one GraphQL launch payload"
+    return variables[0]
+
+
+def test_the_documented_graphql_launch_is_a_valid_forced_topt_tick() -> None:
+    """The operator doc is copied verbatim into a GraphQL client, so it is checked like
+    code: the job, the op and the config it names must be the deployed ones."""
+    params = _documented_launch()["executionParams"]
+    assert params["selector"]["jobName"] == capture.topt_live_pipeline_job.name
+    assert params["selector"]["repositoryName"] == "__repository__"
+    run_config = params["runConfigData"]
+    assert set(run_config["ops"]) == {"run_topt_live_tick"}
+    config = run_config["ops"]["run_topt_live_tick"]["config"]
+    assert set(config) == {"executed_at", "force_fetch"} and config["force_fetch"] is True
+    datetime.fromisoformat(config["executed_at"])
+    assert dg.validate_run_config(capture.topt_live_pipeline_job, run_config)
