@@ -66,8 +66,8 @@ export function TriggerRunButton() {
       {state.kind === "accepted" && (
         <span role="status" className="text-sm text-emerald-400">
           Accepted — the sensor launches <code>{state.runKey}</code> within ~30s
-          {state.forced ? " with a forced fetch of every obligation" : ""}. Idempotent: same
-          timestamp reproduces the same run.
+          {state.forced ? " with a forced fetch of every obligation" : ""}. Each click is a new
+          launch at the current time; a retry of that launched run reproduces its capture.
         </span>
       )}
       {state.kind === "failed" && (
