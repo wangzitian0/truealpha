@@ -9,6 +9,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
@@ -127,7 +128,7 @@ app.mount("/mcp", mcp.streamable_http_app())
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, Any]:
     # git_sha lets tools/health_check.py confirm the deployed release tag is
     # actually live post-deploy, not just that something answers (#508).
     #
@@ -142,7 +143,7 @@ def health() -> dict[str, str]:
     # because this service already holds a mart-scoped connection, so the deploy lane can
     # read it over a surface it already calls, with no new secret and no database access
     # from the runner.
-    parser, git_sha, image_digest = _data_engine_facts()
+    parser, git_sha, image_digest, pointers = _data_engine_facts()
     return {
         "status": "ok",
         # Through `settings`, not the process environment (#784): the manifest this service
@@ -156,12 +157,17 @@ def health() -> dict[str, str]:
         # a deploy identity, not a parser vintage, so a stale data engine is visible.
         "data_engine_git_sha": git_sha,
         "data_engine_image_digest": image_digest,
+        # The governed pointer per universe and when it last advanced (#536's gate can
+        # withhold it for days with every deploy check green; the admin funnel showed
+        # the age but nothing paged). `tools/datahub_freshness.py` reads this daily.
+        # "unknown" when the read failed; an empty list when no pointer has ever advanced.
+        "governed_pointers": pointers,
     }
 
 
-def _data_engine_facts() -> tuple[str, str, str]:
+def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str]:
     """(parser vintage behind the newest observation, git sha, image digest of the build
-    behind the newest run), each "unknown" when unreadable.
+    behind the newest run, governed pointers per universe), each "unknown" when unreadable.
 
     One connection for both reads (review on #753: the endpoint is polled, and two
     connections per poll is churn for nothing). Each read is guarded on its own, so a
@@ -173,6 +179,7 @@ def _data_engine_facts() -> tuple[str, str, str]:
     which `tools/health_check.py` treats as un-assertable rather than as a pass.
     """
     parser, git_sha, image_digest = "unknown", "unknown", "unknown"
+    pointers: list[dict[str, Any]] | str = "unknown"
     try:
         import psycopg
         from truealpha_runtime import runtime_settings
@@ -194,6 +201,25 @@ def _data_engine_facts() -> tuple[str, str, str]:
                     git_sha, image_digest = str(row[0] or "unknown"), str(row[1] or "unknown")
             except psycopg.Error:
                 connection.rollback()
+            try:
+                # Per universe, never collapsed (the funnel's lesson): one universe's fresh
+                # pointer must not hide another's frozen one. The newest head per universe
+                # across its factors and versions is what "still advancing" means.
+                rows = connection.execute(
+                    "select universe_id, max(advanced_at), "
+                    "extract(epoch from (now() - max(advanced_at))) / 3600.0 "
+                    "from mart.current_pointer_head group by universe_id order by universe_id"
+                ).fetchall()
+                pointers = [
+                    {
+                        "universe_id": str(universe_id),
+                        "advanced_at": advanced_at.isoformat(),
+                        "age_hours": round(float(age_hours), 1),
+                    }
+                    for universe_id, advanced_at, age_hours in rows
+                ]
+            except psycopg.Error:
+                connection.rollback()
     except Exception:  # noqa: BLE001 - health must not fail on a read it only reports
         pass
-    return parser, git_sha, image_digest
+    return parser, git_sha, image_digest, pointers

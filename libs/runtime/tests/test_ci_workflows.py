@@ -213,6 +213,21 @@ def test_the_freshness_bound_is_per_environment() -> None:
         assert phrase in script, f"cut_release.sh's policy header does not say {phrase!r}; the two files disagree"
 
 
+def test_the_governed_pointer_bound_is_the_tools_and_runs_on_both_legs() -> None:
+    """The pointer freshness step reads its bound from the matrix, the matrix carries
+    the tool's number for both environments, and the step runs even after an earlier
+    failure — a frozen head and a stale release are separate facts."""
+    tool = load_tool("datahub_freshness")
+    matrix = {entry["environment"]: entry for entry in job(FRESHNESS, "freshness")["strategy"]["matrix"]["include"]}
+    for environment in ("staging", "production"):
+        assert matrix[environment]["pointer_max_age_hours"] == tool.MAX_AGE_HOURS
+    name = "Check ${{ matrix.environment }} governed pointer freshness"
+    text = step_text(FRESHNESS, name)
+    assert "matrix.pointer_max_age_hours" in text and "tools/datahub_freshness.py" in text
+    step = next(s for s in job(FRESHNESS, "freshness")["steps"] if s.get("name") == name)
+    assert step.get("if") == "always()"
+
+
 def test_the_evidence_check_passes_a_deploy_type_the_release_can_produce() -> None:
     """#560: the release run-name is built from `deploy_type` ("prod") while the
     matrix names environments for humans ("production"). Passing the latter looks
