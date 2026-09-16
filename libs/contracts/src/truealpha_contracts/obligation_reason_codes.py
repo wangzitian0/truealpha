@@ -49,8 +49,9 @@ class ObligationReasonCode(StrEnum):
     FIELD_UNAVAILABLE = "field_unavailable"
     LOW_CONFIDENCE = "low_confidence"
     # The source gateway refused the call before it was made: the source's declared
-    # daily budget (this environment's share) is spent. Not "the field is absent" — the
-    # next window asks again (#729 criterion 4). Retrying inside the run cannot help.
+    # daily budget (this environment's share) is spent for the UTC day. Not "the field is
+    # absent" — the first run after the budget resets (the next UTC day's tick) asks again
+    # (#729 criterion 4). Retrying inside the run, or after a rate window, cannot help.
     DEFERRED_CAPACITY = "deferred_capacity"
 
 
