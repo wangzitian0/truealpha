@@ -17,6 +17,8 @@ NOW = datetime(2026, 9, 16, 0, 15, tzinfo=UTC)
 NEW = "capture-run:" + "a" * 64
 OLD = "capture-run:" + "b" * 64
 QQQ = "capture-run:" + "c" * 64
+TOPT_UNIVERSE = "universe:topt-us-2026-03-31"
+QQQ_UNIVERSE = "universe:qqq-us-2026"
 REPORT = {"questions": {"q1": {"answered": 18, "unavailable": {"x": 2}, "missing": 0}}}
 
 
@@ -60,7 +62,8 @@ def _heads(monkeypatch, *, topt=NEW, qqq=QQQ):
     def governed_head(_connection, *, universe_prefix, environment):
         assert environment == "production"
         run = topt if universe_prefix.startswith("universe:topt") else qqq
-        return None if run is None else surface_proof.GovernedHead(universe_prefix + "us-2026", run, NOW)
+        universe_id = TOPT_UNIVERSE if universe_prefix.startswith("universe:topt") else QQQ_UNIVERSE
+        return None if run is None else surface_proof.GovernedHead(universe_id, run, NOW)
 
     monkeypatch.setattr(surface_proof, "governed_head", governed_head)
 
@@ -74,7 +77,7 @@ def test_a_surface_serving_the_previous_head_is_a_mismatch_by_name(monkeypatch) 
     themes and the coverage report still served yesterday's."""
     _heads(monkeypatch, qqq=None)
     _reports(monkeypatch, REPORT)
-    tables = _Tables(strategy=NEW, themes=OLD, coverage=[("universe:topt-us-2026-03-31", OLD, REPORT)])
+    tables = _Tables(strategy=NEW, themes=OLD, coverage=[(TOPT_UNIVERSE, OLD, REPORT)])
     verdicts = prove(tables, executed_at=NOW)
     by_surface = {v.surface: v for v in verdicts}
     assert by_surface["/research/rankings, /strategy, /compare, /trace, /coverage"].ok
@@ -93,7 +96,7 @@ def test_every_surface_on_the_head_with_an_agreeing_report_is_green(monkeypatch)
         themes=NEW,
         holdings=QQQ,
         funds=1,
-        coverage=[("universe:qqq-us-2026", QQQ, REPORT), ("universe:topt-us-2026-03-31", NEW, REPORT)],
+        coverage=[(QQQ_UNIVERSE, QQQ, REPORT), (TOPT_UNIVERSE, NEW, REPORT)],
     )
     verdicts = prove(tables, executed_at=NOW)
     assert all(v.ok for v in verdicts), [v.line for v in verdicts if not v.ok]
@@ -106,7 +109,7 @@ def test_a_stored_report_the_tables_no_longer_agree_with_is_stale_even_on_the_ri
     _heads(monkeypatch, qqq=None)
     fresh = {"questions": {"q1": {"answered": 19, "unavailable": {"x": 1}, "missing": 0}}}
     _reports(monkeypatch, fresh)
-    tables = _Tables(strategy=NEW, themes=NEW, coverage=[("universe:topt-us-2026-03-31", NEW, REPORT)])
+    tables = _Tables(strategy=NEW, themes=NEW, coverage=[(TOPT_UNIVERSE, NEW, REPORT)])
     coverage = next(v for v in prove(tables, executed_at=NOW) if v.surface == "/admin/datahub coverage [topt]")
     assert coverage.served_run == NEW and not coverage.ok
     assert coverage.detail == "q1: stored 18 answered, tables say 19"
@@ -122,3 +125,14 @@ def test_a_head_with_no_strategy_run_and_a_holdings_head_with_no_fund_row_are_na
     holdings = by_surface["/research/holdings"]
     assert holdings.served_run == QQQ and not holdings.ok, "the pointer is right and the page has nothing to value"
     assert by_surface["/admin/datahub coverage [topt]"].detail == "no stored report"
+
+
+def test_the_coverage_report_is_matched_to_the_heads_own_universe_id(monkeypatch) -> None:
+    """Two TOPT partitions share a prefix; the report that counts is the one stored for the
+    universe id the head names, not the first row whose id starts the same way (review on #859)."""
+    _heads(monkeypatch, qqq=None)
+    _reports(monkeypatch, REPORT)
+    other = ("universe:topt-us-2025-12-31", OLD, REPORT)
+    tables = _Tables(strategy=NEW, themes=NEW, coverage=[other, (TOPT_UNIVERSE, NEW, REPORT)])
+    coverage = next(v for v in prove(tables, executed_at=NOW) if v.surface == "/admin/datahub coverage [topt]")
+    assert coverage.ok and coverage.served_run == NEW

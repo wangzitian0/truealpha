@@ -151,7 +151,13 @@ def prove(connection: Connection[Any], *, executed_at: datetime) -> tuple[Surfac
     }
     for universe, prefix in UNIVERSE_PREFIXES.items():
         head = heads[universe]
-        match = next((entry for universe_id, entry in stored.items() if universe_id.startswith(prefix)), None)
+        # The report for the head's OWN universe id when there is a head (two TOPT partitions
+        # would share a prefix; review on #859); by prefix only to say "nothing stored" for a
+        # universe with no head.
+        if head is not None:
+            match = stored.get(head.universe_id)
+        else:
+            match = next((entry for universe_id, entry in stored.items() if universe_id.startswith(prefix)), None)
         if head is None and match is None:
             verdicts.append(
                 SurfaceVerdict(
