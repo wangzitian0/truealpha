@@ -301,7 +301,14 @@ async function walkSignOutJourney(browser, { email, password }) {
     // regression still fails the second miss; only the race is gone.
     const signedOut = () => new URL(page.url()).pathname.startsWith("/login");
     for (let attempt = 0; attempt < 2 && !signedOut(); attempt += 1) {
-      await control.first().click({ timeout: 5000 }).catch(() => {});
+      try {
+        await control.first().click({ timeout: 5000 });
+      } catch (error) {
+        // The one click failure that is not a defect: the first click DID sign out, and the
+        // navigation detached the control between the wait and this click. Anything else
+        // (not visible, not enabled, a closed context) is a real finding and surfaces.
+        if (!signedOut()) throw error;
+      }
       await page.waitForURL(/\/login/, { timeout: attempt === 0 ? 8000 : 15000 }).catch(() => {});
     }
 
