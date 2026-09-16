@@ -59,6 +59,7 @@ from truealpha_contracts.reconciliation import (
 )
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 
+from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 from data_engine.datahub.production_topt.source_registrations import (
     RELEASE_SEMANTICS,
     SOURCE_BY_PARSER,
@@ -738,11 +739,25 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
             )
         elif semantic_type == "financial-fact":
             subject.issuer_id = subject.issuer_id or payload.get("issuer_id")
+            # The primary's parser vintage is the shared primary identity (as the quality
+            # report classifies it); any other vintage is a registered corroborating origin
+            # (moomoo statements) and asserts under ITS origin, never as the primary's.
+            if parser_version in PARSER_VERSION_HISTORY:
+                primary, origin_source, origin_id = True, SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN
+            else:
+                coordinate = SOURCE_BY_PARSER.get(parser_version)
+                if coordinate is None:
+                    continue
+                primary, origin_source, origin_id = False, coordinate[0], coordinate[1]
             vintage = payload.get("vintage") or {}
             for name in FINANCIAL_FIELDS:
                 value = payload.get(name)
-                subject.financial[name] = _decimal(None if value is None else str(value))
+                if primary:
+                    # The served figures (and the factor inputs) are the primary's alone.
+                    subject.financial[name] = _decimal(None if value is None else str(value))
                 if name == "headcount":
+                    if not primary:
+                        continue
                     producer = str((vintage.get("headcount") or {}).get("source") or "unknown")
                     subject.add(
                         name,
@@ -759,9 +774,9 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
                 subject.add(
                     name,
                     OriginValue(
-                        origin_id=SEC_COMPANY_FACTS_ORIGIN,
-                        source_id=SEC_COMPANY_FACTS_SOURCE,
-                        lineage=lineage_of(SEC_COMPANY_FACTS_ORIGIN),
+                        origin_id=origin_id,
+                        source_id=origin_source,
+                        lineage=lineage_of(origin_id),
                         value=None if value is None else str(value),
                         knowable_at=knowable_at,
                         observation_id=observation_id,

@@ -479,7 +479,9 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
 def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -> None:
     """The confidence report's loaders read the same persisted observations the quality
     report grades: with the second price origin wired, every close cell is HIGH; every
-    SEC-only fundamental is LOW; headcount, written by one fixture producer, is LOW; and
+    fundamental the second statements origin also asserts is MEDIUM (two lineages, no
+    agreement policy in this report yet — the quality report's financial fusion carries the
+    per-field agreement); headcount, written by one fixture producer, is LOW; and
     the stored confidence column is reported as measured and marked unused. Same real
     schema, same fake vendors — the SQL is what this proves."""
     from data_engine.datahub import confidence_report
@@ -498,8 +500,8 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     assert close["origins"] == ["origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"]
     assert report["accuracy"]["close"]["matches_quality_report"] is True
     revenue = report["families"]["revenue"]
-    assert (revenue["low"], revenue["high"], revenue["medium"]) == (21, 0, 0)
-    assert revenue["origins"] == ["origin:sec-company-facts:v1"]
+    assert (revenue["low"], revenue["high"], revenue["medium"]) == (0, 0, 21)
+    assert revenue["origins"] == ["origin:moomoo-financials:v1", "origin:sec-company-facts:v1"]
     headcount = report["families"]["headcount"]
     assert headcount["low"] == 21 and headcount["origins"] == ["origin:headcount:test-fixture"]
     # The financial branch's numerator is the only one filled for a bank; the others are
