@@ -532,13 +532,8 @@ def check_workflow(
         status = STALE if age > bound else OK
         return Verdict(repo, path, status, f"last scheduled run {human(age)} ago{failures}, {budget}")
     if ticks.not_started:
-        return Verdict(
-            repo,
-            path,
-            STALE,
-            f"none of the {ticks.not_started} scheduled runs read started a job "
-            f"(startup failure or still queued), {budget}",
-        )
+        summary = f"{ticks.not_started} scheduled runs listed, and none has started a job"
+        return Verdict(repo, path, STALE, f"{summary} (startup failure or still queued), {budget}")
     # Only a workflow with no scheduled run at all needs its file's age, so only
     # it depends on the history read (review: a startup-failure verdict is
     # already decided and must not turn UNVERIFIABLE on an unrelated read).

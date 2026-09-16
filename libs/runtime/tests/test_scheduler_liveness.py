@@ -397,7 +397,7 @@ def test_only_startup_failures_is_stale_not_new() -> None:
     gh.add("broken.yml", _workflow_text("0 7 * * *"), runs=[_run(HOUR, conclusion="startup_failure")], changed=HOUR)
     status, detail = _verdicts(gh)["broken.yml"]
     assert status == "STALE"
-    assert "none of the 1 scheduled runs read started a job" in detail
+    assert detail == "1 scheduled runs listed, and none has started a job (startup failure or still queued), bound 2d1h"
 
 
 @pytest.mark.parametrize("status", ["queued", "waiting", "pending", "requested", None])
