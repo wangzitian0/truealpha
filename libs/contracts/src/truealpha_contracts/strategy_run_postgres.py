@@ -8,8 +8,9 @@ and a real writer populating them (still #26's own open gap — this
 repository reports an honest `no_runs_recorded` until one exists).
 
 `mart.strategy_decisions` (#355's migration) has no `confidence` column;
-`confidence` is read from `mart.topt_core_results` on (issuer_id, cutoff),
-the same join the TypeScript twin makes, so MCP and the web report one number.
+`confidence` is read from `mart.topt_core_results` of the capture run the strategy
+run was evaluated for (`mart.strategy_run_capture`, #877), the same join the
+TypeScript twin makes, so MCP and the web report one number.
 
 Which run is "latest" is decided by the governed capture head (#575), see
 `LATEST_RUN_SQL`; the newest recorded run is only a fallback.
@@ -45,9 +46,10 @@ _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, InvalidOperation, Val
 # The run the governed capture head resolves to comes first (#575); only when no head
 # resolves a run for this strategy — a fresh database, a preview run, a fixture — does
 # the newest recorded run stand in. `mart.governed_strategy_run` holds the join (the
-# head's snapshot cutoff is the strategy run's executed_at, by construction of the
-# tick); the twins only rank by it. The TypeScript twin carries the same statement
-# modulo placeholder syntax, and test_strategy_run_selection_parity pins the two texts.
+# strategy run the tick bound to the head's capture run, #877 — not the head's cutoff,
+# which a forced tick shares with the scheduled one); the twins only rank by it. The
+# TypeScript twin carries the same statement modulo placeholder syntax, and
+# test_strategy_run_selection_parity pins the two texts.
 LATEST_RUN_SQL = """
     select r.strategy_run_id, r.corpus_sha256, r.executed_at,
            exists (select 1 from mart.governed_strategy_run g
@@ -59,21 +61,33 @@ LATEST_RUN_SQL = """
 """
 _LATEST_RUN_SQL = LATEST_RUN_SQL
 
-# `confidence` is joined from mart.topt_core_results on (issuer_id, cutoff), exactly as
-# the TypeScript twin does: mart.strategy_decisions has no confidence column (#355), and
-# the Python twin hard-coded None while the web rendered 0.85 — the two surfaces
-# disagreed on the same decision. A join is a read, not a computation.
-_DECISIONS_SQL = """
+# `confidence` is joined from mart.topt_core_results, exactly as the TypeScript twin does:
+# mart.strategy_decisions has no confidence column (#355), and the Python twin hard-coded
+# None while the web rendered 0.85 — the two surfaces disagreed on the same decision. A
+# join is a read, not a computation.
+#
+# The core result is the one of the capture run this strategy run was evaluated for
+# (#877), never any core result at the same (issuer, cutoff): a forced tick (#874) shares
+# its cutoff with the scheduled tick, and the cutoff-only join returned every decision
+# once per capture run. `DECISIONS_FROM_SQL` is the clause both twins must carry;
+# test_strategy_run_selection_parity pins the TypeScript text to it.
+DECISIONS_FROM_SQL = """
+    from mart.strategy_decisions d
+    left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
+    left join mart.topt_core_results t
+      on t.run_id = scope.capture_run_id and t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
+    where d.strategy_run_id = %s
+    order by d.cutoff_at, d.issuer_id
+"""
+_DECISIONS_SQL = (
+    """
     select d.issuer_id, d.cutoff_at, d.capital_adjusted_labor_efficiency, d.tier,
            d.current_price_to_sales, d.target_price_to_sales, d.valuation_gap,
            d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
            t.confidence
-    from mart.strategy_decisions d
-    left join mart.topt_core_results t
-      on t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
-    where d.strategy_run_id = %s
-    order by d.cutoff_at, d.issuer_id
 """
+    + DECISIONS_FROM_SQL
+)
 
 
 def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
@@ -93,7 +107,8 @@ def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
         target_price_to_sales=row["target_price_to_sales"],
         valuation_gap=row["valuation_gap"],
         # From mart.topt_core_results (same join as the TypeScript twin); None when the
-        # decision has no core result at its cutoff, e.g. a fixture or preview run.
+        # run is bound to no capture or its capture has no core result for the issuer,
+        # e.g. a fixture or preview run.
         confidence=row["confidence"],
         exclusion_reason=row["exclusion_reason"],
         rank=row["rank"],

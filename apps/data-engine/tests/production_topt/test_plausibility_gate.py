@@ -191,3 +191,40 @@ def test_an_empty_eligible_set_is_judged_here_not_on_a_second_issue(connection, 
         today=date(2026, 9, 8),
     )
     assert verdict.refused and [v.rule for v in verdict.violations] == [RULE_EMPTY_ELIGIBLE]
+
+
+def test_the_price_a_row_is_judged_by_is_its_own_runs(connection) -> None:
+    """#877: the gate joined `last_close` from `staging.strategy_backtest_inputs` on
+    (issuer_id, cutoff), a table with no run. Another run's seed at the same cutoff — a
+    forced re-run (#874), a re-published tick, or another universe keyed alike — made every
+    row come back once per vintage, carrying either run's price. The price is now the
+    market-price observation the row's own core result was computed from."""
+    run_id, _snapshot = _materialized_run(connection)
+    own = plausibility_gate._rows(connection, run_id)
+    assert len(own) == 20
+    # The seeded fixture's close is 40 on every listing (test_materialization's payloads).
+    assert {row.last_close for row in own} == {Decimal("40")}
+
+    # A foreign seed for every issuer at this run's cutoff, at another price.
+    connection.execute(
+        """
+        insert into staging.strategy_backtest_inputs (issuer_id, cutoff_at, input_key, value, confidence, knowable_at)
+        select distinct issuer_id, cutoff, 'last_close', 97, 0.9, cutoff
+        from mart.topt_core_results where run_id = %s
+        """,
+        (run_id,),
+    )
+    assert plausibility_gate._rows(connection, run_id) == own
+    # The run-less join on the same rows: this run seeded no strategy input, so every row
+    # carried the foreign price as its own.
+    unscoped = connection.execute(
+        """
+        select r.listing_id, p.value
+        from mart.topt_core_results r
+        left join staging.strategy_backtest_inputs p
+          on p.issuer_id = r.issuer_id and p.cutoff_at = r.cutoff and p.input_key = 'last_close'
+        where r.run_id = %s
+        """,
+        (run_id,),
+    ).fetchall()
+    assert len(unscoped) == 20 and {value for _listing, value in unscoped} == {Decimal("97")}

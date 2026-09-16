@@ -30,7 +30,7 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition
 from data_engine.core_strategy_replay import _load_corpus, _to_decision
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
-from data_engine.strategy_replay_repository import write_replay
+from data_engine.strategy_replay_repository import bind_strategy_run_to_capture, write_replay
 
 # Every registered metric except `price` surfaces here as the scalar half of its
 # financial-fact input -- one row with `fiscal_period` NULL, via the registry's own
@@ -164,10 +164,17 @@ def run_strategy_replay_for_cutoff(
     cutoff: datetime,
     executed_at: datetime,
     risk_free_rate: Decimal,
+    capture_run_id: str,
 ) -> tuple[str, int, str]:
     """Evaluate the frozen strategy over the captured staging inputs for one cutoff and
     persist ``mart.strategy_runs``/``mart.strategy_decisions``. The risk-free rate is the
-    same 0.05 the GPPE materialization pins, supplied explicitly by the caller."""
+    same 0.05 the GPPE materialization pins, supplied explicitly by the caller.
+
+    ``capture_run_id`` is the capture this evaluation belongs to, and the run is bound to
+    it (#877): a cutoff alone can name two captures since forced ticks (#874) exist, so
+    every reader that pairs a decision with a core result, or a strategy run with the
+    governed head, resolves through that binding. Required, so a caller cannot publish a
+    strategy run that no capture owns."""
     definition = load_strategy_definition()
     gateway = StrategyBacktestGateway(connection)
     issuer_inputs = gateway.issuer_inputs(cutoff)
@@ -181,6 +188,7 @@ def run_strategy_replay_for_cutoff(
     run_id, decision_ids = write_replay(
         connection, decisions, definition, executed_at=executed_at, snapshot_id=snapshot_id
     )
+    bind_strategy_run_to_capture(connection, strategy_run_id=run_id, capture_run_id=capture_run_id)
     return run_id, len(decision_ids), snapshot_id
 
 
