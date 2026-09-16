@@ -145,6 +145,15 @@ def test_an_undeclared_name_records_nothing(written) -> None:
     assert written == []
 
 
+def test_a_malformed_tick_tag_dates_the_verdict_by_completion_instead_of_failing() -> None:
+    """Raising here would fail the run before `verdict()` is entered, leaving no row at all."""
+    context = dg.build_op_context(run_tags={nightly_verdicts.TICK_TAG: "yesterday-ish"})
+    assert nightly_verdicts.tick_of(context) is None
+    context = dg.build_op_context(run_tags={nightly_verdicts.TICK_TAG: "2026-09-16T00:15:00"})
+    assert nightly_verdicts.tick_of(context) == datetime(2026, 9, 16, 0, 15, tzinfo=UTC)
+    assert nightly_verdicts.tick_of(dg.build_op_context()) is None
+
+
 def test_a_summary_is_one_bounded_line() -> None:
     assert nightly_verdicts.bounded("a\nb   c") == "a b c"
     assert len(nightly_verdicts.bounded("x" * 1000)) == nightly_verdicts.SUMMARY_LIMIT

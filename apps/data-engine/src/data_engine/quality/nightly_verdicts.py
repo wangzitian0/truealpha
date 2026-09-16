@@ -68,9 +68,19 @@ def is_valid_name(name: str) -> bool:
 
 
 def tick_of(context: Any) -> datetime | None:
-    """The schedule tick a run carries in its tags, or None for a manual launch."""
+    """The schedule tick a run carries in its tags, or None for a manual launch.
+
+    A tag that is present but unreadable (a hand-launched run with a typo) is treated as no
+    tick, with a warning: raising here would fail the run before `verdict()` is entered, so
+    the check would leave no row at all."""
     value = (getattr(context, "run_tags", None) or {}).get(TICK_TAG)
-    return _aware(datetime.fromisoformat(value)) if value else None
+    if not value:
+        return None
+    try:
+        return _aware(datetime.fromisoformat(value))
+    except (TypeError, ValueError):
+        log.warning("run tag %s=%r is not an ISO 8601 time; dating the verdict by its completion", TICK_TAG, value)
+        return None
 
 
 def tick_from_config(executed_at: str) -> datetime:

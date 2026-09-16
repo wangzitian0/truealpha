@@ -46,6 +46,10 @@ EXPECTATIONS_PATH = Path(__file__).with_name("nightly_verdicts.json")
 RELEASE_EXPECTATIONS_PATH = "tools/nightly_verdicts.json"
 #: A daily check that missed one tick is late; one that missed two has stopped.
 STALE_AFTER_CADENCES = 2
+#: Clock skew allowed between the environment and this runner. A verdict dated further
+#: ahead than this cannot vouch for today: the health read orders by `ran_at`, so a run
+#: launched with a future tick would stand in front of every real one and never go stale.
+FUTURE_TOLERANCE_HOURS = 1.0
 
 
 class VerdictCheckFailure(RuntimeError):
@@ -209,6 +213,12 @@ def judge(verdicts: Sequence[Verdict], expectations: dict[str, Expectation], now
             continue
         # Our clock, not the service's: a service with a wrong clock reports a wrong age.
         age = (now - verdict.ran_at).total_seconds() / 3600.0
+        if age < -FUTURE_TOLERANCE_HOURS:
+            failures.append(
+                f"{name}: newest verdict is dated {verdict.ran_at.isoformat()} ({-age:.1f} h in the future) — "
+                f"a run launched with a future tick masks every real one, so this verdict cannot vouch for today"
+            )
+            continue
         if not verdict.ok:
             failures.append(f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}")
             continue

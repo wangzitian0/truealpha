@@ -112,6 +112,18 @@ def test_the_age_is_measured_against_the_checkers_clock() -> None:
     assert _run(verdicts) == 1
 
 
+def test_a_future_dated_verdict_fails_instead_of_masking_the_schedule(capsys: pytest.CaptureFixture[str]) -> None:
+    """The health read orders by ran_at, so a run launched with a future tick would stand in
+    front of every scheduled one and never age: green forever, whatever the daemon does."""
+    verdicts = [v for v in _all_green() if v["check"] != "output_invariants"]
+    verdicts.append(_verdict("output_invariants", -30.0))
+    assert _run(verdicts) == 1
+    assert "in the future" in capsys.readouterr().err
+    skewed = [v for v in _all_green() if v["check"] != "output_invariants"]
+    skewed.append(_verdict("output_invariants", -_module.FUTURE_TOLERANCE_HOURS / 2))
+    assert _run(skewed) == 0, "ordinary clock skew is not a failure"
+
+
 def test_a_release_before_the_report_is_not_a_failure(capsys: pytest.CaptureFixture[str]) -> None:
     def http_get(url: str) -> tuple[int, str]:
         return 200, json.dumps({"status": "ok", "git_sha": "v0.0.56"})
