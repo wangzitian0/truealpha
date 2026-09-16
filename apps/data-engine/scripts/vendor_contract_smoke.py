@@ -119,16 +119,20 @@ def check_twelve_data() -> None:
             ok_rows = bool(rows) and all("datetime" in r and isinstance(r.get("close"), str) for r in rows)
             detail = f"{len(rows)} rows, close is a string"
             # The twelve-data v3 assumption: the bar the origin attaches to a settled
-            # close lives on these rows as strings (volume documented optional; for a
-            # US common stock it is present).
-            ok_bar = bool(rows) and all(
-                isinstance(r.get(key), str) for r in rows for key in ("open", "high", "low", "volume")
+            # close lives on these rows as strings. `volume` is documented optional and
+            # `twelve_data_origin._decimal_or_absent` reads an absent or empty volume as
+            # an absent assertion, so only its type is checked here, never its presence.
+            ok_bar = (
+                bool(rows)
+                and all(isinstance(r.get(key), str) for r in rows for key in ("open", "high", "low"))
+                and all(r.get("volume") in (None, "") or isinstance(r.get("volume"), str) for r in rows)
             )
-            bar_detail = f"{len(rows)} rows carry open/high/low/volume as strings"
+            with_volume = sum(1 for r in rows if isinstance(r.get("volume"), str) and r.get("volume") != "")
+            bar_detail = f"{len(rows)} rows carry open/high/low as strings, volume on {with_volume}"
         except json.JSONDecodeError:
             detail = bar_detail = "body not JSON"
     _check("twelvedata: time_series rows carry datetime + string close", ok_rows, detail)
-    _check("twelvedata: time_series rows carry the open/high/low/volume bar as strings", ok_bar, bar_detail)
+    _check("twelvedata: time_series rows carry the open/high/low bar as strings (volume optional)", ok_bar, bar_detail)
 
     # A settled session must resolve through /eod directly (the primary path).
     weekday = datetime.now(UTC).date() - timedelta(days=1)
