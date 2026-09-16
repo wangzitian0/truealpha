@@ -294,7 +294,9 @@ class FakeGitHub:
         if rest[:2] == ["actions", "workflows"] and rest[3:] == ["runs"]:
             workflow_id = int(rest[2])
             runs = self.scheduled[workflow_id] if query.get("event") == "schedule" else self.unfiltered[workflow_id]
-            return 0, json.dumps({"total_count": len(runs), "workflow_runs": runs[: int(query["per_page"])]}), ""
+            size, page = int(query["per_page"]), int(query["page"])
+            body = {"total_count": len(runs), "workflow_runs": runs[(page - 1) * size : page * size]}
+            return 0, json.dumps(body), ""
         if rest[0] == "contents":
             path = urllib.parse.unquote("/".join(rest[1:]))
             assert query.get("ref") == self.repos[repo]["default_branch"], "read the file off the default branch"
@@ -477,6 +479,54 @@ def test_the_unfiltered_witness_counts_only_scheduled_runs() -> None:
         unfiltered=[_run(10 * timedelta(minutes=1), event="push"), _run(HOUR, event="workflow_dispatch")],
     )
     assert _status(gh, "hourly.yml") == "STALE"
+
+
+def test_the_second_witness_reads_past_a_page_of_busy_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review: push and PR runs can push a workflow's scheduled runs off the
+    first page of the unfiltered listing."""
+    monkeypatch.setattr(_module, "PER_PAGE", 2)
+    gh = FakeGitHub()
+    busy = [_run(timedelta(minutes=minute), event="pull_request") for minute in (5, 10, 15, 20)]
+    workflow_id = gh.add(
+        "hourly.yml", _workflow_text("47 * * * *"), runs=[_run(12 * DAY)], unfiltered=[*busy, _run(HOUR)]
+    )
+    status, detail = _verdicts(gh)["hourly.yml"]
+    assert status == "OK", detail
+    pages = [url for url in gh.calls if url.startswith(f"/repos/{REPO}/actions/workflows/{workflow_id}/runs?per")]
+    assert len(pages) == 3, pages
+
+
+def test_the_second_witness_stops_at_the_first_tick_inside_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_module, "PER_PAGE", 2)
+    gh = FakeGitHub()
+    busy = [_run(timedelta(minutes=minute), event="push") for minute in (5, 10, 15, 20, 25, 30)]
+    workflow_id = gh.add(
+        "hourly.yml", _workflow_text("47 * * * *"), runs=[_run(12 * DAY)], unfiltered=[busy[0], _run(HOUR), *busy[1:]]
+    )
+    assert _status(gh, "hourly.yml") == "OK"
+    pages = [url for url in gh.calls if url.startswith(f"/repos/{REPO}/actions/workflows/{workflow_id}/runs?per")]
+    assert len(pages) == 1, pages
+
+
+def test_the_second_witness_stops_at_a_page_older_than_the_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_module, "PER_PAGE", 2)
+    gh = FakeGitHub()
+    old = [_run(age * DAY, event="push") for age in range(3, 13)]
+    workflow_id = gh.add("hourly.yml", _workflow_text("47 * * * *"), runs=[_run(12 * DAY)], unfiltered=old)
+    assert _status(gh, "hourly.yml") == "STALE"
+    pages = [url for url in gh.calls if url.startswith(f"/repos/{REPO}/actions/workflows/{workflow_id}/runs?per")]
+    assert len(pages) == 1, "a page with nothing inside the bound cannot hold a tick; reading on is waste"
+
+
+def test_the_second_witness_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_module, "PER_PAGE", 1)
+    monkeypatch.setattr(_module, "MAX_PAGES", 3)
+    gh = FakeGitHub()
+    busy = [_run(timedelta(minutes=minute), event="push") for minute in range(1, 10)]
+    workflow_id = gh.add("hourly.yml", _workflow_text("47 * * * *"), runs=[_run(12 * DAY)], unfiltered=busy)
+    assert _status(gh, "hourly.yml") == "STALE"
+    pages = [url for url in gh.calls if url.startswith(f"/repos/{REPO}/actions/workflows/{workflow_id}/runs?per")]
+    assert len(pages) == 3
 
 
 def test_a_healthy_workflow_costs_no_second_witness() -> None:

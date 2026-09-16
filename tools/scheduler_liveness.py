@@ -213,7 +213,9 @@ class Cron:
         in_weekdays = day.isoweekday() % 7 in self.weekdays
         if self.days_restricted and self.weekdays_restricted:
             return in_days or in_weekdays
-        # An unrestricted field holds every value, so this is the other field alone.
+        # Otherwise both must match. For a plain `*` that is the other field
+        # alone; for `*/n`, which Vixie's rule also calls unrestricted, it is
+        # the intersection — fewer days, never more (review).
         return in_days and in_weekdays
 
     def _times(self, day: date) -> list[datetime]:
@@ -390,6 +392,27 @@ def _ticks(runs: Iterable[dict], path: str) -> Ticks:
     return Ticks(newest=newest, not_started=waiting)
 
 
+def _recent_runs(url: str, cutoff: datetime, path: str, gh: Gh) -> list[dict]:
+    """The unfiltered runs listing, page by page, for as long as a page still
+    holds a run created after `cutoff`.
+
+    A busy workflow's push and PR runs can push its scheduled runs off the first
+    page (review). Reading stops at the first page holding a tick inside the
+    bound, at a page with nothing newer than the cutoff (it cannot hold one),
+    at the listing's end, or at MAX_PAGES — whichever comes first.
+    """
+    collected: list[dict] = []
+    for page in range(1, MAX_PAGES + 1):
+        items, total = _page(url, "workflow_runs", gh, page)
+        collected += items
+        recent = [run for run in items if _timestamp(run.get("created_at"), f"a run of {path}") > cutoff]
+        if _ticks(recent, path).newest is not None:
+            break  # a tick inside the bound: nothing further down can change the verdict
+        if not items or not recent or len(collected) >= total:
+            break
+    return collected
+
+
 def _file_text(repo: str, path: str, branch: str, gh: Gh) -> str:
     quoted = urllib.parse.quote(path)
     body = _object(f"/repos/{repo}/contents/{quoted}?ref={urllib.parse.quote(branch, safe='')}", gh)
@@ -517,7 +540,7 @@ def check_workflow(
         ticks = _ticks(runs, path)
         if ticks.newest is None or now - ticks.newest > bound:
             # The second witness: the unfiltered listing (see the module docstring).
-            everything, _ = _page(f"/repos/{repo}/actions/workflows/{workflow_id}/runs", "workflow_runs", gh)
+            everything = _recent_runs(f"/repos/{repo}/actions/workflows/{workflow_id}/runs", now - bound, path, gh)
             ticks = _ticks([*runs, *everything], path)
     except ApiError as error:
         return Verdict(repo, path, UNVERIFIABLE, f"cannot verify: {error}, {budget}")
