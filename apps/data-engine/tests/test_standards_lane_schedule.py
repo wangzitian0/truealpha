@@ -187,3 +187,26 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
     assert materialized == [{"run_id": head[1], "cutoff": head[2], "tickers": {"issuer:lei:X": "NFLX"}}], (
         "rows are written for THAT run, at ITS cutoff, and the classifier is told the ticker (#849)"
     )
+
+
+def test_the_daily_head_reports_job_configures_every_op_for_its_universe() -> None:
+    """#855 C1/C2: module 6 and the coverage report follow TODAY's head every day, not only
+    the Sunday backfill — otherwise /research/themes and /admin/datahub serve yesterday's head
+    while /research/rankings serves today's (measured on staging 2026-09-16)."""
+    from data_engine.lanes.standards import head_reports_pipeline_job, head_reports_schedule
+
+    assert [node.name for node in head_reports_pipeline_job.graph.node_defs] == [
+        "head_reports_start",
+        "run_theme_purity",
+        "run_question_coverage",
+    ]
+    context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 16, 23, 30, tzinfo=UTC))
+    requests = list(head_reports_schedule.evaluate_tick(context).run_requests)
+    assert [request.run_key for request in requests] == [
+        f"2026-09-16T23:30:00+00:00:{universe}" for universe in STANDARD_BACKFILL_UNIVERSES
+    ]
+    for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
+        ops = request.run_config["ops"]
+        assert set(ops) == {"head_reports_start", "run_theme_purity", "run_question_coverage"}
+        assert all(op["config"]["universe"] == universe for op in ops.values())
+    assert dg.validate_run_config(head_reports_pipeline_job, requests[0].run_config)

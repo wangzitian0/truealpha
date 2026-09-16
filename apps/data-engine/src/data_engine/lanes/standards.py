@@ -194,4 +194,55 @@ def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
         )
 
 
-defs = dg.Definitions(jobs=[standard_backfill_pipeline_job], schedules=[standard_backfill_schedule])
+HEAD_REPORTS_JOB_NAME = "head_reports_pipeline"
+#: 23:30 UTC, after the TOPT (22:45) and QQQ (23:20) ticks have advanced their heads and before
+#: the nightly proof (00:15) asks whether every surface serves them.
+HEAD_REPORTS_CRON = "30 23 * * *"
+
+
+@dg.op
+def head_reports_start(config: StandardBackfillConfig) -> str:
+    """The daily job's stand-in for the backfill summary the purity op sequences after: no
+    cells are extracted here, only the head's own reports are refreshed."""
+    return json.dumps({"universe": config.universe, "mode": "head-reports", "executed_at": config.executed_at})
+
+
+@dg.job(name=HEAD_REPORTS_JOB_NAME)
+def head_reports_pipeline_job() -> None:
+    """Module 6 and the coverage report for TODAY's head, every day (#855 C1/C2).
+
+    The weekly backfill wrote both, so on every other day the head advanced and
+    `/research/themes` and `/admin/datahub` kept serving the previous one while
+    `/research/rankings` served the new one — the App contradicting its own pointer, with every
+    gate green (measured on staging 2026-09-16: rankings on `capture-run:15a2…`, themes and
+    coverage on `capture-run:8259…`). Purity replays every judgement it has already made, so
+    a day with the same filings costs no model call; the coverage report is SQL.
+    """
+    run_question_coverage(run_theme_purity(head_reports_start()))
+
+
+@dg.schedule(
+    job=head_reports_pipeline_job,
+    cron_schedule=HEAD_REPORTS_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def head_reports_schedule(context: dg.ScheduleEvaluationContext):
+    executed_at = context.scheduled_execution_time.isoformat()
+    for universe in STANDARD_BACKFILL_UNIVERSES:
+        yield dg.RunRequest(
+            run_key=f"{executed_at}:{universe}",
+            run_config=dg.RunConfig(
+                ops={
+                    "head_reports_start": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                    "run_theme_purity": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                    "run_question_coverage": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                }
+            ),
+        )
+
+
+defs = dg.Definitions(
+    jobs=[standard_backfill_pipeline_job, head_reports_pipeline_job],
+    schedules=[standard_backfill_schedule, head_reports_schedule],
+)
