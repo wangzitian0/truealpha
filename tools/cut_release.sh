@@ -121,7 +121,7 @@ if [ "$TAG_EXISTS" = "1" ]; then
   TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk '{print $1}')
   [ -n "$TAG_COMMIT" ] || TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
   [ "$TAG_COMMIT" = "$LOCAL_MAIN" ] \
-    || fail "$TAG already exists on origin — release identity is immutable; pick the next number"
+    || fail "$TAG already exists on origin at ${TAG_COMMIT:0:8}, not at main HEAD ${LOCAL_MAIN:0:8} — that is another release's tag, not this one resumed; release identity is immutable, pick the next number"
   note "$TAG on origin already points at main HEAD ${LOCAL_MAIN:0:8} — this is the same release"
 fi
 
@@ -221,6 +221,12 @@ else
     esac
     sleep 10
   done
+  # The loop can also end by exhausting its budget with the run still pending, or never
+  # seen: only a run that finished green may become the deploy's source_run_id (review).
+  case "$TAG_RUN" in
+    *completed\ success) ;;
+    *) fail "tag ci-required for $TAG is not green after 20 minutes (last seen: ${TAG_RUN:-nothing}) — not dispatching a deploy on it" ;;
+  esac
   TAG_RUN_ID=$(echo "$TAG_RUN" | awk '{print $1}')
   [ -n "$TAG_RUN_ID" ] || fail "tag run never appeared"
   note "tag run $TAG_RUN_ID green"
