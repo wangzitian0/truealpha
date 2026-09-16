@@ -33,14 +33,22 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
     (idempotent, content-addressed, #491). `run_key = manual:<dedupe_key>`
     makes redelivery harmless: if the consume-UPDATE races a daemon restart
     after the yield, the daemon dedupes the run_key and no second run
-    launches.
+    launches. A request that asks for `force_fetch` (#874) launches a tick
+    that skips the reuse window; one that does not is an ordinary tick.
     """
     with psycopg.connect(settings.database_url) as connection:
         pending = connection.execute(
-            "select request_id, executed_at, dedupe_key, job_name from staging.pipeline_trigger_requests "
+            # `force_fetch` is read through `to_jsonb(request)` rather than by name:
+            # migrations apply when llm-service boots, so this image can start before
+            # the #874 column exists. On that schema no request can ask for a forced
+            # fetch, and the sensor keeps launching ordinary ticks instead of failing
+            # every poll (Copilot on #892).
+            "select request_id, executed_at, dedupe_key, job_name, "
+            "coalesce((to_jsonb(request)->>'force_fetch')::boolean, false) "
+            "from staging.pipeline_trigger_requests request "
             "where consumed_at is null order by request_id limit 5"
         ).fetchall()
-        for request_id, executed_at, dedupe_key, job_name in pending:
+        for request_id, executed_at, dedupe_key, job_name, force_fetch in pending:
             run_key = f"manual:{dedupe_key}"
             # Dispatch by the request's declared job (#539 QQQ): the same thin
             # trigger drives any declared universe's pipeline; an unknown job name
@@ -50,7 +58,12 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
                 run_key=run_key,
                 job_name=tick.job_name,
                 run_config=dg.RunConfig(
-                    ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at.astimezone(UTC).isoformat())}
+                    ops={
+                        tick.op_name: ToptLiveTickConfig(
+                            executed_at=executed_at.astimezone(UTC).isoformat(),
+                            force_fetch=bool(force_fetch),
+                        )
+                    }
                 ),
             )
             connection.execute(

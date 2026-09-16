@@ -23,6 +23,11 @@ regression.
 One further test covers the price of recording: a committed run's outcomes are history, so
 replaying the same tick is refused up front with the reason already on file instead of
 colliding inside the sink after a wasted round of vendor calls.
+
+The #635 reuse window lives here too, and so does its operator override (#874): a
+forced tick fetches every obligation even when fresh observations sit committed inside
+the window, under a capture identity of its own, and a retry of that forced launch is
+as idempotent as any other.
 """
 
 from __future__ import annotations
@@ -32,9 +37,12 @@ import hashlib
 import os
 import subprocess
 import uuid
+from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -53,6 +61,7 @@ from data_engine.datahub.production_topt.executor import (
 )
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor, record_headcount
 from data_engine.datahub.production_topt.market_price_adapter import (
+    CorroboratingOrigin,
     MarketPriceAdapter,
     MarketPriceQuote,
     MarketPriceTarget,
@@ -67,7 +76,7 @@ from factors.production_topt import OperatingBranch
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from truealpha_contracts.datahub import CaptureWorkItem
-from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 REPOSITORY_ROOT = next(
@@ -164,11 +173,29 @@ class _FailingPort:
         return FetchFailure(self._reason)
 
 
-def _quote() -> MarketPriceQuote:
-    day = date(2026, 3, 31)
+class _CountingPort:
+    """Records every fetch a route actually served, then delegates.
+
+    The record is (run id, work item, semantic): which run asked, for which cell, of
+    which kind. A cell #635 satisfied never reaches its port, so absence from this log
+    is the evidence that no vendor was consulted for it.
+    """
+
+    def __init__(self, inner: SourceFetchPort, *, run_id: str, semantic: str, log: list[tuple[str, str, str]]):
+        self._inner = inner
+        self._run_id = run_id
+        self._semantic = semantic
+        self._log = log
+
+    def fetch(self, work_item: CaptureWorkItem) -> FetchOutcome:
+        self._log.append((self._run_id, work_item.work_item_id, self._semantic))
+        return self._inner.fetch(work_item)
+
+
+def _quote(day: date = date(2026, 3, 31), close: Decimal = Decimal("40")) -> MarketPriceQuote:
     return MarketPriceQuote(
-        raw_bytes=b"bar:2026-03-31:40",
-        close=Decimal("40"),
+        raw_bytes=f"bar:{day.isoformat()}:{close}".encode(),
+        close=close,
         as_of=day,
         knowable_at=datetime.combine(day, datetime.min.time(), tzinfo=UTC),
     )
@@ -187,7 +214,14 @@ def _bundle(branch: OperatingBranch) -> FinancialFactsBundle:
     )
 
 
-def _offline_routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
+def _offline_routes(
+    plan: PlannedRun,
+    connection,
+    *,
+    quote: Callable[[], MarketPriceQuote] = _quote,
+    price_cutoff: date | None = None,
+    corroborating_origins: tuple[CorroboratingOrigin, ...] = (),
+) -> dict[str, SourceFetchPort]:
     """The deployed adapters over fake fetchers, routed exactly as `build_routes` does.
 
     Stands in for `build_routes`, which resolves CIKs from SEC over the network. Every
@@ -206,7 +240,7 @@ def _offline_routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
         if semantic_type == "market-price":
             price_targets[work_item_id] = MarketPriceTarget(
                 symbol=ticker,
-                cutoff=cutoff_date,
+                cutoff=price_cutoff or cutoff_date,
                 issuer_id=issuer_id,
                 instrument_id=instrument_id,
                 listing_id=listing_id,
@@ -246,7 +280,11 @@ def _offline_routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
             confidence=Decimal("0.7"),
         )
 
-    price = MarketPriceAdapter(price_targets, lambda symbol, cutoff: _quote())
+    price = MarketPriceAdapter(
+        price_targets,
+        lambda symbol, cutoff: quote(),
+        corroborating_origins=corroborating_origins,
+    )
     financial = SecFinancialFactAdapter(
         sec_targets,
         lambda cik, cutoff, branch: _bundle(branch),
@@ -266,28 +304,41 @@ def _arm(
     *,
     sabotage: tuple[int, ObligationReasonCode] | None = None,
     spy: list[str] | None = None,
+    fetched: list[tuple[str, str, str]] | None = None,
+    **route_options,
 ) -> None:
     """Route the tick through offline adapters, optionally failing one obligation.
 
     `spy` records each entry into route building. In production that step resolves CIKs
     from SEC over the network, so an empty spy is the evidence that a tick was refused
-    before it reached a vendor at all.
+    before it reached a vendor at all. `fetched` records each fetch a route served (see
+    `_CountingPort`); `route_options` reach `_offline_routes`.
     """
     monkeypatch.setattr(raw_store, "object_store", _InMemoryObjectStore)
 
     def build(plan: PlannedRun, connection=None) -> dict[str, SourceFetchPort]:
         if spy is not None:
             spy.append(plan.run_id)
-        routes = _offline_routes(plan, connection)
+        routes = _offline_routes(plan, connection, **route_options)
         if sabotage is not None:
             index, reason = sabotage
             routes[plan.work_items[index].work_item_id] = _FailingPort(reason)
+        if fetched is not None:
+            routes = {
+                work_item_id: _CountingPort(
+                    port,
+                    run_id=plan.run_id,
+                    semantic=plan.bindings[work_item_id].obligation.capture_requirement_id.removesuffix(":v1"),
+                    log=fetched,
+                )
+                for work_item_id, port in routes.items()
+            }
         return routes
 
     monkeypatch.setattr(composition, "build_routes", build)
 
 
-def _run_tick(url: str, *, version: str, cutoff: datetime = CUTOFF):
+def _run_tick(url: str, *, version: str, cutoff: datetime = CUTOFF, force_fetch: bool = False):
     """One tick, shaped exactly like `dagster_defs.run_topt_live_tick`: a single
     connection, a single transaction, rolled back by the context manager when the tick
     raises. Anything that survives this survived the abort.
@@ -298,7 +349,7 @@ def _run_tick(url: str, *, version: str, cutoff: datetime = CUTOFF):
     cutoff, more than the reuse window apart. The reuse test itself runs two ticks
     at ONE cutoff, which is the feature."""
     with psycopg.connect(url) as tick:
-        result = run_topt_pipeline(tick, cutoff=cutoff, version=version)
+        result = run_topt_pipeline(tick, cutoff=cutoff, version=version, force_fetch=force_fetch)
         tick.commit()
         return result
 
@@ -724,6 +775,322 @@ def test_reuse_requires_parser_vintage_equality(tick_database_url, monkeypatch) 
             "a parser bump must force a fresh capture; reusing the old vintage produces a "
             "COMPLETE run that seeds nothing (#788)"
         )
+    finally:
+        probe.rollback()
+        probe.close()
+
+
+# -- forced fetch: the operator's override of the reuse window (#874) -------------------
+
+_VENDOR_SEMANTICS = ("market-price", "financial-fact")
+# The reuse tests' shared window: the offline price bar is the settled session here.
+_REUSE_CUTOFF = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
+
+
+def _run_plan(url: str, run_id: str) -> dict:
+    with psycopg.connect(url) as reader:
+        return reader.execute(
+            "select payload from raw.production_topt_run_plans where run_id = %s", (run_id,)
+        ).fetchone()[0]
+
+
+def _fetch_row_count(url: str) -> int:
+    with psycopg.connect(url) as reader:
+        return reader.execute("select count(*) from raw.fetches").fetchone()[0]
+
+
+def _served_closes(url: str, run_id: str) -> set[str]:
+    """The primary close every market-price cell of the run is bound to."""
+    with psycopg.connect(url) as reader:
+        rows = reader.execute(
+            """
+            select distinct p.normalized_payload->>'close'
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations link on link.capture_obligation_id = ob.obligation_id
+            join staging.capture_normalized_observations o on o.observation_id = link.observation_id
+            join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+            where ob.run_id = %s and o.semantic_type = 'market-price'
+            """,
+            (run_id,),
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+def _fetches_by_semantic(fetched: list[tuple[str, str, str]], run_id: str) -> Counter[str]:
+    return Counter(semantic for run, _work_item, semantic in fetched if run == run_id)
+
+
+def test_a_forced_run_fetches_every_obligation_despite_fresh_observations(tick_database_url, monkeypatch) -> None:
+    """#874, the issue's own evidence: a same-day re-run reused the 03:38Z canary's
+    observations for twelve hours, so a new origin could not be proven by hand. A
+    forced run of the SAME tick (same executed_at, same version) is its own capture:
+    every obligation reaches its route exactly once, and the run says it was forced."""
+    fetched: list[tuple[str, str, str]] = []
+    _arm(monkeypatch, fetched=fetched)
+    _run_tick(tick_database_url, version="forced-seed", cutoff=_REUSE_CUTOFF)
+
+    # The control: fresh observations inside the window, not forced -> no vendor call.
+    control = _run_tick(tick_database_url, version="forced-same-tick", cutoff=_REUSE_CUTOFF)
+    control_fetches = _fetches_by_semantic(fetched, control.run_id)
+    assert not any(control_fetches[semantic] for semantic in _VENDOR_SEMANTICS), control_fetches
+    assert _status_row(tick_database_url, control.run_id)[3] == OBLIGATIONS - _RELEASE_OBLIGATIONS
+
+    fetch_rows_before = _fetch_row_count(tick_database_url)
+    forced = _run_tick(tick_database_url, version="forced-same-tick", cutoff=_REUSE_CUTOFF, force_fetch=True)
+
+    # Its own identity: the unforced run at this executed_at is settled history (#538),
+    # so a forced capture that shared it would resume or refuse instead of fetching.
+    assert forced.run_id != control.run_id
+    per_cell = Counter(work_item for run, work_item, _semantic in fetched if run == forced.run_id)
+    assert len(per_cell) == OBLIGATIONS and set(per_cell.values()) == {1}, "each obligation fetched exactly once"
+    assert _fetches_by_semantic(fetched, forced.run_id) == {
+        "market-price": 21,
+        "financial-fact": 21,
+        "listing-identity": 21,
+        "universe-membership": 21,
+    }
+    # Every terminal a fresh SUCCESS; nothing rode the reuse path.
+    assert _status_row(tick_database_url, forced.run_id) == (
+        OBLIGATIONS,
+        OBLIGATIONS,
+        OBLIGATIONS,
+        0,
+        0,
+        0,
+        0,
+        True,
+    )
+    assert _materialized(tick_database_url, forced.run_id) == (1, 20, 20)
+
+    # Recorded: the run plan and the quality report both say which kind of run this was.
+    assert _run_plan(tick_database_url, forced.run_id)["forced_fetch"] is True
+    assert _run_plan(tick_database_url, control.run_id)["forced_fetch"] is False
+    assert forced.forced_fetch is True and control.forced_fetch is False
+    assert forced.quality["forced_fetch"] is True
+    assert _report_payload(tick_database_url, forced.run_id)["forced_fetch"] is True
+    assert _report_payload(tick_database_url, control.run_id)["forced_fetch"] is False
+
+    # Identity rules unchanged: the vendor sent the same bytes, so they collapse onto the
+    # raw.fetches rows already on file instead of landing a second copy.
+    assert _fetch_row_count(tick_database_url) == fetch_rows_before
+
+
+def test_a_forced_fetch_of_changed_bytes_serves_the_new_vintage(tick_database_url, monkeypatch) -> None:
+    """The recovery half of #874: a bad capture (#622's overnight null close is the
+    precedent) could not be overwritten for twelve hours because a re-run reused it. A
+    forced re-run of that tick lands the vendor's corrected bytes as a new vintage and
+    its snapshot serves them."""
+    day = date(2026, 4, 16)  # a Thursday; nothing else in this module captures near it
+    cutoff = datetime(2026, 4, 16, 22, 15, tzinfo=UTC)
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
+    first = _run_tick(tick_database_url, version="corrected-bytes", cutoff=cutoff)
+    assert _served_closes(tick_database_url, first.run_id) == {"40"}
+
+    fetch_rows_before = _fetch_row_count(tick_database_url)
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("41.5")), price_cutoff=day)
+    forced = _run_tick(tick_database_url, version="corrected-bytes", cutoff=cutoff, force_fetch=True)
+
+    assert forced.run_id != first.run_id
+    assert _served_closes(tick_database_url, forced.run_id) == {"41.5"}
+    assert _materialized(tick_database_url, forced.run_id) == (1, 20, 20)
+    # One new raw landing per listing: 21 changed price bodies. The financial bytes did
+    # not change and collapse onto their existing rows.
+    assert _fetch_row_count(tick_database_url) == fetch_rows_before + 21
+    # The earlier run is history, untouched.
+    assert _served_closes(tick_database_url, first.run_id) == {"40"}
+
+
+def test_retrying_a_forced_launch_resumes_instead_of_fetching_again(tick_database_url, monkeypatch) -> None:
+    """The same forced launch retried (Dagster's run retry replays the same config) is
+    the same capture: a complete one resumes (#628) with zero route builds and zero
+    fetches, and the report collapses onto the row already on file."""
+    cutoff = CUTOFF + timedelta(days=6)
+    fetched: list[tuple[str, str, str]] = []
+    _arm(monkeypatch, fetched=fetched)
+    first = _run_tick(tick_database_url, version="forced-retry", cutoff=cutoff, force_fetch=True)
+    assert len([entry for entry in fetched if entry[0] == first.run_id]) == OBLIGATIONS
+
+    fetched.clear()
+    routes_built: list[str] = []
+    _arm(monkeypatch, spy=routes_built, fetched=fetched)
+    retried = _run_tick(tick_database_url, version="forced-retry", cutoff=cutoff, force_fetch=True)
+
+    assert retried.run_id == first.run_id
+    assert retried.quality_report_id == first.quality_report_id
+    assert retried.forced_fetch is True
+    assert routes_built == [] and fetched == [], "a retried forced launch must not fetch again"
+    # _report_payload asserts exactly one report row for the run.
+    assert _report_payload(tick_database_url, first.run_id)["forced_fetch"] is True
+    assert _materialized(tick_database_url, first.run_id) == (1, 20, 20)
+
+
+def test_retrying_a_degraded_forced_launch_reports_the_record(tick_database_url, monkeypatch) -> None:
+    """#538 holds for forced runs too: a degraded forced capture is settled history, so
+    its retry is refused with the reason on file before any vendor call. A NEW forced
+    launch (another executed_at) is how an operator fetches again."""
+    cutoff = CUTOFF + timedelta(days=9)
+    _arm(monkeypatch, sabotage=(0, ObligationReasonCode.FIELD_UNAVAILABLE))
+    with pytest.raises(CaptureNotPublishableError) as first:
+        _run_tick(tick_database_url, version="forced-degraded", cutoff=cutoff, force_fetch=True)
+
+    routes_built: list[str] = []
+    _arm(monkeypatch, spy=routes_built)
+    with pytest.raises(CaptureNotPublishableError) as replayed:
+        _run_tick(tick_database_url, version="forced-degraded", cutoff=cutoff, force_fetch=True)
+
+    assert replayed.value.run_id == first.value.run_id
+    assert replayed.value.quality_report_id == first.value.quality_report_id
+    assert routes_built == [], "a settled forced run must be refused before any vendor call"
+    shortfall_report = _report_payload(tick_database_url, first.value.run_id)
+    assert shortfall_report["forced_fetch"] is True
+    assert shortfall_report["capture_shortfall"]["success_count"] == OBLIGATIONS - 1
+
+    fresh = _run_tick(
+        tick_database_url, version="forced-degraded", cutoff=cutoff + timedelta(minutes=1), force_fetch=True
+    )
+    assert fresh.run_id != first.value.run_id
+    assert _status_row(tick_database_url, fresh.run_id)[2] == OBLIGATIONS
+
+
+def test_reuse_binds_the_whole_bound_set_or_nothing(tick_database_url, monkeypatch) -> None:
+    """#885 item 4: the reuse query's comment promised to fail closed over the WHOLE
+    bound set, but its trio and look-ahead predicates filtered row by row, so an
+    obligation whose bound set held one disqualified observation was reused with the
+    rest. Here a second origin's bar is knowable at 23:00Z — after the target's 22:40Z
+    cutoff, on the same session date, so the adapter's date-level guard admits it. The
+    anchor (the primary) qualifies; the set does not, so the price cells must fetch.
+    The financial cells, whose sets are clean, still reuse."""
+    day = date(2026, 4, 14)  # a Tuesday; nothing else in this module captures near it
+    late_origin = CorroboratingOrigin(
+        origin="late-origin",
+        parser_version="late-origin-parser:v1",
+        mapping_version="late-origin-map:v1",
+        value_key="close",
+        confidence=Decimal("0.80"),
+        fetch=lambda symbol, cutoff: MarketPriceQuote(
+            raw_bytes=f"late:{symbol}:{day.isoformat()}".encode(),
+            close=Decimal("40"),
+            as_of=day,
+            knowable_at=datetime(2026, 4, 14, 23, 0, tzinfo=UTC),
+        ),
+        raw_source=DataSource.TWELVE_DATA,
+    )
+    _arm(
+        monkeypatch,
+        quote=lambda: _quote(day),
+        price_cutoff=day,
+        corroborating_origins=(late_origin,),
+    )
+    # Completes at 22:33Z (cutoff - 57 min): inside the target's window, and newer than
+    # anything else in it, so it is the anchor.
+    _run_tick(tick_database_url, version="bound-set-source", cutoff=datetime(2026, 4, 14, 23, 30, tzinfo=UTC))
+
+    target_cutoff = datetime(2026, 4, 14, 22, 40, tzinfo=UTC)
+    probe = psycopg.connect(tick_database_url)
+    try:
+        plan = composition.plan_and_persist(probe, cutoff=target_cutoff, version="bound-set-target")
+        satisfied = composition._satisfy_from_recent_observations(probe, plan, cutoff=target_cutoff)
+        reused = Counter(
+            binding.obligation.capture_requirement_id.removesuffix(":v1")
+            for work_item_id, binding in plan.bindings.items()
+            if work_item_id in satisfied
+        )
+        assert reused["market-price"] == 0, "a bound set with a look-ahead member must not be reused in part"
+        assert reused["financial-fact"] == 21
+        # Nothing was bound either: a refused candidate leaves no partial evidence.
+        bound = probe.execute(
+            """
+            select count(*)
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations link on link.capture_obligation_id = ob.obligation_id
+            where ob.run_id = %s and ob.capture_requirement_id = 'market-price:v1'
+            """,
+            (plan.run_id,),
+        ).fetchone()[0]
+        assert bound == 0
+    finally:
+        probe.rollback()
+        probe.close()
+
+
+def test_reuse_reads_the_session_date_in_utc_whatever_the_session_time_zone(tick_database_url, monkeypatch) -> None:
+    """#885 item 2, through the database: psycopg hands a timestamptz back in the
+    connection's TimeZone. The price bar's knowable_at is 00:00Z, which is the previous
+    evening in New York, so `.date()` on it named the wrong session and #635 reuse
+    silently stopped for every price cell (a full vendor spend per tick) on any
+    connection not pinned to UTC."""
+    _arm(monkeypatch)
+    _run_tick(tick_database_url, version="session-zone-source", cutoff=_REUSE_CUTOFF)
+
+    probe = psycopg.connect(tick_database_url)
+    try:
+        probe.execute("set time zone 'America/New_York'")
+        plan = composition.plan_and_persist(probe, cutoff=_REUSE_CUTOFF, version="session-zone-target")
+        satisfied = composition._satisfy_from_recent_observations(probe, plan, cutoff=_REUSE_CUTOFF)
+        reused = Counter(
+            binding.obligation.capture_requirement_id.removesuffix(":v1")
+            for work_item_id, binding in plan.bindings.items()
+            if work_item_id in satisfied
+        )
+        assert reused["market-price"] == 21
+    finally:
+        probe.rollback()
+        probe.close()
+
+
+def test_a_forced_capture_version_is_distinct_and_stable() -> None:
+    """No database: the identity half of #874. The marker makes a forced launch its own
+    capture, and applying it twice changes nothing, so a retry names the same run."""
+    version = composition.live_version_for(_REUSE_CUTOFF)
+    forced = composition.forced_capture_version(version)
+    assert forced != version and forced.startswith(version)
+    assert composition.forced_capture_version(forced) == forced
+
+
+@pytest.mark.parametrize("zone", ["UTC", "America/New_York", "Asia/Singapore", "America/Los_Angeles"])
+def test_the_session_check_is_utc_in_any_zone(zone: str) -> None:
+    """No database: #885 item 2 at the unit level. The same instant, whatever zone it
+    arrives in, names the same settled session."""
+    knowable_at = datetime(2026, 3, 31, tzinfo=UTC).astimezone(ZoneInfo(zone))
+    assert composition._is_settled_session(knowable_at, date(2026, 3, 31))
+    assert not composition._is_settled_session(knowable_at, date(2026, 3, 30))
+
+
+def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, monkeypatch) -> None:
+    """#874's recovery story does not end at the forced run itself. A forced re-run of
+    the scheduled tick's own executed_at completes at the same recorded instant as the
+    run it corrects, so the reuse anchor order tied, and the next tick inside the window
+    (QQQ at 23:20, the canary at 23:47) picked either capture by observation id. At
+    that tie the forced capture is the newer look at the vendor, and it wins."""
+    day = date(2026, 4, 21)  # a Tuesday; nothing else in this module captures near it
+    cutoff = datetime(2026, 4, 21, 22, 15, tzinfo=UTC)
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
+    _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff)
+    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("39.25")), price_cutoff=day)
+    _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff, force_fetch=True)
+
+    follower_cutoff = cutoff + timedelta(minutes=5)
+    probe = psycopg.connect(tick_database_url)
+    try:
+        plan = composition.plan_and_persist(probe, cutoff=follower_cutoff, version="anchor-choice-follower")
+        satisfied = composition._satisfy_from_recent_observations(probe, plan, cutoff=follower_cutoff)
+        price_cells = [
+            work_item_id
+            for work_item_id, binding in plan.bindings.items()
+            if binding.obligation.capture_requirement_id == "market-price:v1"
+        ]
+        assert price_cells and all(work_item_id in satisfied for work_item_id in price_cells)
+        closes = probe.execute(
+            """
+            select distinct p.normalized_payload->>'close'
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations link on link.capture_obligation_id = ob.obligation_id
+            join staging.capture_observation_payloads p on p.observation_id = link.observation_id
+            where ob.run_id = %s and ob.capture_requirement_id = 'market-price:v1'
+            """,
+            (plan.run_id,),
+        ).fetchall()
+        assert {row[0] for row in closes} == {"39.25"}, "every price cell must reuse the forced capture"
     finally:
         probe.rollback()
         probe.close()

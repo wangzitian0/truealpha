@@ -4,7 +4,8 @@
  * data-engine sensor). Route handlers do NOT inherit the /admin layout
  * gate, so this handler re-derives and checks the principal itself; the
  * response echoes the request identity the admin page then shows linked to
- * the launched run.
+ * the launched run. `force_fetch: true` (#874) asks for a tick that skips the
+ * 12-hour reuse window and fetches every obligation again.
  */
 
 import { NextResponse } from "next/server";
@@ -21,6 +22,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       ? null
       : { principalId: principal.context.principalId, principalKind: principal.principalKind },
     typeof body?.executed_at === "string" ? body.executed_at : undefined,
+    body?.force_fetch,
   );
 
   switch (outcome.kind) {
@@ -30,6 +32,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           request_id: outcome.requestId,
           dedupe_key: outcome.dedupeKey,
           executed_at: outcome.executedAt,
+          force_fetch: outcome.forceFetch,
           run_key: `manual:${outcome.dedupeKey}`,
         },
         { status: 202 },

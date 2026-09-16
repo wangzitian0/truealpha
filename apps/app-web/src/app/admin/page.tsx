@@ -55,7 +55,9 @@ export default async function AdminOverviewPage() {
         </h1>
         <p className="mt-2 text-sm text-gray-400">
           Pipeline health at a glance. Schedule: daily 22:15 UTC (after the US close); the button
-          below launches the same job with an explicit timestamp.
+          below launches the same job with an explicit timestamp. A scheduled tick reuses
+          observations committed in the last 12 hours; tick &ldquo;Force a fresh vendor fetch&rdquo;
+          to fetch everything again (recorded as <code>forced_fetch</code>).
         </p>
       </div>
 

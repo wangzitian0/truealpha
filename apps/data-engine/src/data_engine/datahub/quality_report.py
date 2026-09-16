@@ -503,6 +503,15 @@ def build_report(
     )
     confidences = [cell.confidence for cell in cells.values() if cell.confidence is not None]
     mean_conf = (sum(confidences) / requested) if requested else Decimal(0)
+    # #874: an operator-forced run skipped the reuse window and fetched every cell. The
+    # run plan records it; the report repeats it so nobody reads a forced re-run as the
+    # scheduled tick's evidence. A run without a plan row was not forced.
+    plan = conn.execute(
+        "select coalesce((payload->>'forced_fetch')::boolean, false) "
+        "from raw.production_topt_run_plans where run_id = %s",
+        (run_id,),
+    ).fetchone()
+    forced_fetch = bool(plan[0]) if plan is not None else False
 
     def ratio(n: int) -> str:
         return str((Decimal(n) / Decimal(requested)).quantize(Decimal("0.0001"))) if requested else "0"
@@ -539,6 +548,7 @@ def build_report(
         "denominator_mean_confidence": str(Decimal(mean_conf).quantize(Decimal("0.0001"))),
         "factor_availability": _factor_availability(usable_by_subject),
         "complete": bool(status[7]),
+        "forced_fetch": forced_fetch,
     }
 
 

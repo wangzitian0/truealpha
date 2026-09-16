@@ -145,6 +145,102 @@ one conflict, one failed acquisition, and one unplanned cell produce
 `0.75 / 4 = 0.1875`. A presentation layer may display that as 18.75/100. The report
 exposes the service gap rather than averaging only successful rows.
 
+## Manual re-run with a forced fetch
+
+A datahub tick runs on its schedule and can also be launched by hand (#874). A
+scheduled tick never forces a fetch. It satisfies an obligation from observations that
+another run committed in the last twelve hours, when they have the same subject,
+semantic, parser vintage and identity coordinates (#635). That reuse is what keeps the
+night's TOPT, QQQ and canary ticks inside the vendor budget. As a side effect, a
+same-day re-run reuses the night's observations and never calls a vendor.
+
+A manual launch with `force_fetch: true` skips the reuse window for every obligation:
+
+- **Every obligation is fetched once.** Identity rules are unchanged. Bytes the vendor
+  already sent collapse onto the existing `raw.fetches` row and object. Changed bytes
+  land as a new vintage, and the forced run serves that vintage. The run goes through
+  the same freeze, the same report and the same a1 pointer gate as a scheduled tick.
+  Later ticks inside the window reuse the forced capture. If it ties on completion time
+  with the unforced run of the same `executed_at`, the forced capture is chosen.
+- **The run has its own identity.** Its capture version is the tick's version with a
+  `-forced` suffix (`live-20260916T2130-forced`). The unforced run of the same
+  `executed_at` is settled history: resumed when it completed, refused when it
+  degraded (#538). The suffix is how a forced launch fetches again at that same
+  timestamp instead of landing on that run.
+- **A retry is idempotent.** Retrying the same launch, with the same `executed_at` and
+  `force_fetch`, resolves to the same forced run. A complete run resumes without a
+  vendor call; a degraded one is refused with the reason already on file. To fetch
+  again, launch with a new `executed_at`.
+- **The forcing is recorded.** It appears in the run plan, in the quality report, in
+  the op's output metadata (`forced_fetch`) and as `(forced fetch)` in the tick's log
+  line. A forced re-run therefore cannot be mistaken for scheduled-tick evidence. Both
+  database records are JSONB `payload` columns:
+
+  ```sql
+  select plan.run_id, (plan.payload->>'forced_fetch')::boolean as forced_fetch
+  from raw.production_topt_run_plans plan
+  order by plan.created_at desc limit 5;
+
+  select report.run_id, (report.payload->>'forced_fetch')::boolean as forced_fetch
+  from mart.datahub_quality_report report
+  order by report.created_at desc limit 5;
+  ```
+- **Mind the vendor clock.** The fetch happens when the run executes, whatever
+  `executed_at` says. Between about 23:00 and 07:00 America/New_York, Yahoo's overnight
+  rebuild nulls the latest close (#622). Until about 16:30 the session's bar is still
+  moving.
+
+There are two ways to launch a forced run:
+
+1. **The admin page.** On `/admin`, tick "Force a fresh vendor fetch" and press
+   "Trigger a run now". This inserts a `staging.pipeline_trigger_requests` row with
+   `force_fetch = true`. `pipeline_trigger_sensor` launches `topt_live_pipeline` with
+   that config within about 30 seconds.
+2. **Dagster GraphQL.** Send `launchRun` to the webserver's `/graphql` endpoint:
+
+   ```graphql
+   mutation LaunchForcedTick($executionParams: ExecutionParams!) {
+     launchRun(executionParams: $executionParams) {
+       __typename
+       ... on LaunchRunSuccess { run { runId } }
+       ... on RunConfigValidationInvalid { errors { message } }
+       ... on PythonError { message }
+     }
+   }
+   ```
+
+   Use these variables. Set `executed_at` to the cutoff you want (ISO 8601 with an offset):
+
+   ```json
+   {
+     "executionParams": {
+       "selector": {
+         "repositoryLocationName": "data_engine.dagster_defs",
+         "repositoryName": "__repository__",
+         "jobName": "topt_live_pipeline"
+       },
+       "runConfigData": {
+         "ops": {
+           "run_topt_live_tick": {
+             "config": {
+               "executed_at": "2026-09-16T21:30:00+00:00",
+               "force_fetch": true
+             }
+           }
+         }
+       }
+     }
+   }
+   ```
+
+   `repositoryLocationName` is the code location's name as the webserver lists it; CI
+   starts the code server with `--location-name data_engine.dagster_defs`. To confirm it,
+   run `{ repositoriesOrError { ... on RepositoryConnection { nodes { name location { name } } } } }`.
+   `qqq_live_pipeline` (op `run_qqq_live_tick`) and `canary_live_pipeline` (op
+   `run_canary_live_tick`) accept the same config.
+   `apps/data-engine/tests/test_dagster_defs.py` validates the payload above against the
+   deployed job's config schema.
+
 ## Ownership Boundaries
 
 - #60 supplies source coverage, canonical-origin, knowability, and usage evidence.
