@@ -228,9 +228,13 @@ class CellGrade:
 def _close_origins() -> dict[str, tuple[str, str, str]]:
     """origin_id -> (origin_source, origin_id, value_key), the CURRENT coordinate of each
     market-price origin (a historical vintage of the same origin never overrides it)."""
+    # Only origins registered under the market-price semantic: the parser map also
+    # carries the financial-fact corroborator (moomoo statements), which asserts no close.
+    market = {origin.origin_id for origin in registration_for("market-price").origins}
     out: dict[str, tuple[str, str, str]] = {}
     for coordinate in SOURCE_BY_PARSER.values():
-        out.setdefault(coordinate[1], coordinate)
+        if coordinate[1] in market:
+            out.setdefault(coordinate[1], coordinate)
     return out
 
 

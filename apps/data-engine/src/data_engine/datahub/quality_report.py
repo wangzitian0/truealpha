@@ -487,11 +487,14 @@ def build_report(
     reconciliation = _reconcile_market_price_cells(conn, run_id)
     independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
     field_reconciliation = _field_reconciliation(reconciliation)
-
+    # The financial-fact agreement is its own KPI beside the price one: the headline
+    # `independent_reconciliation` keeps meaning market-price (close) agreement, which is
+    # what the pointer gate, the capture log and the admin page already read.
     financial_reconciliation = _reconcile_financial_fact_cells(conn, run_id)
-    independent = sum(
-        1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value
-    ) + sum(1 for cell in financial_reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
+    financial_independent = sum(
+        1 for cell in financial_reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value
+    )
+    financial_graded = len(financial_reconciliation)
     confidences = [cell.confidence for cell in cells.values() if cell.confidence is not None]
     mean_conf = (sum(confidences) / requested) if requested else Decimal(0)
 
@@ -502,10 +505,17 @@ def build_report(
         "reconciliation_policy_id": RECONCILIATION_POLICY.policy_id,
         "reconciliation_cells": reconciliation,
         "field_reconciliation": field_reconciliation,
-        # Financial-fact cells under their own policy, per subject with per-field detail;
-        # `independently_reconciled_count` counts a subject whose every compared field agreed.
+        # Financial-fact cells under their own policy, per subject with per-field detail.
+        # A subject is independently reconciled when every compared field agreed; the
+        # ratio is over the subjects that had a primary to compare against.
         "financial_fact_reconciliation_policy_id": FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id,
         "financial_fact_reconciliation_cells": financial_reconciliation,
+        "financial_fact_independently_reconciled_count": financial_independent,
+        "financial_fact_independent_reconciliation": (
+            str((Decimal(financial_independent) / Decimal(financial_graded)).quantize(Decimal("0.0001")))
+            if financial_graded
+            else "0"
+        ),
         "plausibility_cells": plausibility,
         "implausible_count": sum(1 for cell in plausibility.values() if cell["outcome"] == "implausible"),
         "run_id": run_id,

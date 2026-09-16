@@ -458,10 +458,13 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
     cells = report["reconciliation_cells"]
     graded = len(cells)
     assert graded == 21
+    # Every registered price origin the harness corroborates with asserts the whole bar
+    # (twelve-data v3 and moomoo K-line alongside the primary), so each field sees them all.
+    origins = len(quality_report.RECONCILIATION_POLICY.source_priority)
     for field in quality_report.PRICE_BAR_FIELDS:
         outcomes = {cell["fields"][field]["outcome"] for cell in cells.values()}
         assert outcomes == {"agreed"}, (field, outcomes)
-        assert {cell["fields"][field]["origin_groups"] for cell in cells.values()} == {2}, field
+        assert {cell["fields"][field]["origin_groups"] for cell in cells.values()} == {origins}, field
         assert report["field_reconciliation"][field] == {
             "agreed": graded,
             "cells": graded,
@@ -492,7 +495,7 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     assert report["subjects"] == 21
     close = report["families"]["close"]
     assert (close["high"], close["cells"], close["agreement_rate"]) == (21, 21, "1.0000")
-    assert close["origins"] == ["origin:twelve-data:v1", "origin:yahoo:v1"]
+    assert close["origins"] == ["origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"]
     assert report["accuracy"]["close"]["matches_quality_report"] is True
     revenue = report["families"]["revenue"]
     assert (revenue["low"], revenue["high"], revenue["medium"]) == (21, 0, 0)
@@ -505,7 +508,7 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     assert report["families"]["pre_provision_profit"]["missing"] == 20
     # TOPT is not a filing fund: neither plane family is graded, rather than graded empty.
     assert {"index_membership", "etf_weight"}.isdisjoint(report["families"])
-    assert set(report["sources_connected"]) == {"sec-company-facts", "test-fixture", "twelve-data", "yahoo"}
+    assert set(report["sources_connected"]) == {"moomoo", "sec-company-facts", "test-fixture", "twelve-data", "yahoo"}
     # Measured from the run's own rows (whether a semantic's stamp is constant is a fact
     # about the data, asserted on production, not here) and never read by the bands.
     stored = report["metadata"]["stored_confidence"]
@@ -519,7 +522,7 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     # The sample names TOPT issuers the harness captured, with a value from each origin.
     sample = report["sample"]["listing:xnys:jpm"]
     assert sample["in_universe"] and sample["close"]["verdict"] == "high"
-    assert set(sample["close"]["values"]) == {"origin:twelve-data:v1", "origin:yahoo:v1"}
+    assert set(sample["close"]["values"]) == {"origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"}
     assert report["accuracy"]["sec_oracle"]["reason"] == "no_sec_user_agent"
     report_id = confidence_report.persist(connection, report)
     assert report_id.startswith("datahub-confidence-report:")
@@ -530,7 +533,7 @@ def test_moomoo_origins_reach_the_report_as_their_own_assertions(connection) -> 
     deployed sink — their own request, vintage, raw object under moomoo's prefix and
     observation — and the report reconciles them: every price cell sees three origin
     groups, every financial-fact cell agrees per dated field under the financial policy,
-    and the agreed financial cells count toward independent reconciliation."""
+    and the agreed financial subjects are their own KPI beside the price one."""
     plan = _capture(connection, version="test-moomoo-origins", corroborate=True)
     report = quality_report.build_report(connection, plan.run_id)
 
@@ -549,7 +552,11 @@ def test_moomoo_origins_reach_the_report_as_their_own_assertions(connection) -> 
         assert all(
             graded["origin_groups"] == 2 and graded["period_end"] == "2025-12-31" for graded in cell["fields"].values()
         )
-    assert report["independently_reconciled_count"] == 42, "21 price cells + 21 financial-fact cells agreed"
+    # The headline KPI stays the close's (what the pointer gate and dashboards read);
+    # the financial-fact agreement is reported beside it, never folded in.
+    assert report["independently_reconciled_count"] == 21
+    assert report["financial_fact_independently_reconciled_count"] == 21
+    assert report["financial_fact_independent_reconciliation"] == "1.0000"
 
     landed = connection.execute(
         """

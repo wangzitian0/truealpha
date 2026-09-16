@@ -75,9 +75,13 @@ the close's, over the full requested denominator.
   priority `sec-company-facts:v1`, `moomoo-financials:v1`; relative tolerance 1%;
   reconciled per field (`revenue`, `gross_profit`, `net_income`, `total_assets`) at the
   PRIMARY's fiscal period end. The report carries `financial_fact_reconciliation_cells`
-  per subject with the per-field outcomes; a subject counts as independently reconciled
-  only when every compared field agreed, and any conflicting field abstains it. A second
-  origin that has not published the primary's period is absent for that field
+  per subject with the per-field outcomes, and its own KPI pair
+  `financial_fact_independently_reconciled_count` /
+  `financial_fact_independent_reconciliation` (agreed subjects over the subjects with a
+  primary); the headline `independent_reconciliation` stays the close's. A subject counts
+  as independently reconciled only when every compared field agreed, and any conflicting
+  field abstains it. A second origin that has not published the primary's period, or
+  reporting in another currency, is absent for that field
   (`insufficient_independent_origins`), never a conflict. See
   `docs/price-source-calibration.md` for the measured tolerance.
 
