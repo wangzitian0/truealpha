@@ -265,6 +265,53 @@ def get_owner_plate(ctx, code_list: list[str], *, caller: str = "probe_moomoo_ca
     return _call(ctx, "get_owner_plate", caller, lambda c: c.get_owner_plate(code_list))
 
 
+def get_history_kline(
+    ctx,
+    code: str,
+    *,
+    start: str,
+    end: str,
+    max_count: int = 30,
+    caller: str = "moomoo_origin",
+):
+    """Daily regular-session bars for `code` between `start` and `end` (inclusive,
+    'YYYY-MM-DD'), UNADJUSTED — the quantity the market-price primary asserts is the
+    session's raw close, and a forward-adjusted (`AuType.QFQ`, the SDK default) series
+    would silently disagree with it after every split or dividend.
+
+    `extended_time=False` keeps the bar to the regular session, so the close is the
+    16:00 ET close and not a post-market last trade (the #535 quantity). Returns
+    `(bars, page_req_key)`: the SDK answers (ret, DataFrame, page_req_key), so `_call`
+    hands back the two-tuple after `ret`.
+
+    Quota: moomoo's historical-candlestick quota counts DISTINCT stocks per rolling
+    30-day window, not calls (init.md Section 5); the governed universes (TOPT 20 +
+    QQQ ~100) fit a 2,000-stock window with an order of magnitude to spare. Every call
+    still goes through the gate and the ledger like any other moomoo request."""
+    return _call(
+        ctx,
+        "request_history_kline",
+        caller,
+        lambda c: c.request_history_kline(
+            code,
+            start=start,
+            end=end,
+            ktype=moomoo.KLType.K_DAY,
+            autype=moomoo.AuType.NONE,
+            fields=[moomoo.KL_FIELD.ALL],
+            max_count=max_count,
+            extended_time=False,
+        ),
+    )
+
+
+def get_history_kl_quota(ctx, *, caller: str = "moomoo_origin"):
+    """The historical-candlestick quota already spent this window: `(used, remaining,
+    detail_list)`. Read-only and cheap; the staging verification step reads it so the
+    first K-line tick can state its quota cost rather than assume it."""
+    return _call(ctx, "get_history_kl_quota", caller, lambda c: c.get_history_kl_quota(get_detail=False))
+
+
 # moomoo's Python SDK doesn't expose these as enum classes (unlike e.g.
 # moomoo.Market) — it takes the raw Qot_Common.proto enum ints directly.
 FS_INCOME, FS_BALANCE_SHEET, FS_CASH_FLOW, FS_MAIN_INDEX = 1, 2, 3, 4  # FinancialStatementsType

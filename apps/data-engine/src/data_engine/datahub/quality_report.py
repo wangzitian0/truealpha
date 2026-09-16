@@ -33,6 +33,8 @@ broken cell per failure mode must drive the corresponding metric below 1.0.
 from __future__ import annotations
 
 import hashlib
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -59,7 +61,12 @@ from data_engine.datahub.production_topt.materialization import (
     IdentityPayload,
     MarketPricePayload,
 )
-from data_engine.datahub.production_topt.source_registrations import RELEASE_SEMANTICS, SOURCE_BY_PARSER
+from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
+from data_engine.datahub.production_topt.source_registrations import (
+    RELEASE_SEMANTICS,
+    SOURCE_BY_PARSER,
+    registration_for,
+)
 
 # Declared fusion policy for the dual-origin market-price cells (init.md rule 12):
 # yahoo-chart is the pinned primary, twelve-data the independent second origin;
@@ -77,9 +84,15 @@ from data_engine.datahub.production_topt.source_registrations import RELEASE_SEM
 # clears the observed spread with margin while a real error (splits, 2x, fat
 # fingers) still lands orders of magnitude outside it; the plausibility oracle
 # and the #705 recompute oracle own that regime.
+#
+# v2 -> v3: a third origin, moomoo's daily K-line close (`moomoo_origin`), joins the
+# priority list last. The tolerance is unchanged; conflict behaviour is unchanged (any
+# disagreeing representative abstains the cell — three origins do not out-vote). A source
+# absent from the priority list is `unregistered` to the engine and silently excluded,
+# which is why the policy has to change for the origin to count at all.
 RECONCILIATION_POLICY = ReconciliationPolicy(
-    policy_version="market-price-fusion:v2",
-    source_priority=("yahoo-chart:v1", "twelve-data:v1"),
+    policy_version="market-price-fusion:v3",
+    source_priority=("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1"),
     absolute_tolerance=Decimal("0"),
     relative_tolerance=Decimal("0.003"),
     minimum_independent_origin_groups=2,
@@ -118,6 +131,24 @@ FIELD_RECONCILIATION_POLICIES: dict[str, ReconciliationPolicy] = {
     "volume": VOLUME_RECONCILIATION_POLICY,
 }
 _FIELD_UNITS: dict[str, str] = {"open": "USD", "high": "USD", "low": "USD", "close": "USD", "volume": "shares"}
+
+
+# Declared fusion policy for the dual-origin financial-fact cells: SEC company-facts is
+# the pinned primary, moomoo's vendor-normalized statements the independent second origin,
+# reconciled PER FIELD at the primary's fiscal period end. A vendor-normalized statement
+# and an XBRL fact differ by definition, not only by rounding: measured on the four
+# captured issuers (DDOG, DUOL, NICE, SHOP; FY2023-FY2025) revenue, gross profit, total
+# assets and EPS are byte-equal and net income differs by at most 0.70% (NICE: moomoo
+# reports ProfitLoss before minority interest, the primary NetIncomeLoss after it). 1%
+# clears that with margin while a wrong period, a currency, or a units error still lands
+# orders of magnitude outside; disagreement abstains and reports, as for prices.
+FINANCIAL_FACT_RECONCILIATION_POLICY = ReconciliationPolicy(
+    policy_version="financial-fact-fusion:v1",
+    source_priority=("sec-company-facts:v1", "moomoo-financials:v1"),
+    absolute_tolerance=Decimal("0"),
+    relative_tolerance=Decimal("0.01"),
+    minimum_independent_origin_groups=2,
+)
 # Which origin group each parser vintage's observations belong to.
 #
 # EVERY primary vintage is enumerated, not just the current one, and the enumeration comes
@@ -456,6 +487,18 @@ def build_report(
     reconciliation = _reconcile_market_price_cells(conn, run_id)
     independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
     field_reconciliation = _field_reconciliation(reconciliation)
+    # The financial-fact agreement is its own KPI beside the price one: the headline
+    # `independent_reconciliation` keeps meaning market-price (close) agreement, which is
+    # what the pointer gate, the capture log and the admin page already read.
+    financial_reconciliation = _reconcile_financial_fact_cells(conn, run_id)
+    financial_independent = sum(
+        1 for cell in financial_reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value
+    )
+    # Denominator: subjects that had a primary to compare against (a second-origin-only
+    # subject is `unavailable`, not a failed corroboration).
+    financial_graded = sum(
+        1 for cell in financial_reconciliation.values() if cell["outcome"] != ReconciliationOutcome.UNAVAILABLE.value
+    )
     confidences = [cell.confidence for cell in cells.values() if cell.confidence is not None]
     mean_conf = (sum(confidences) / requested) if requested else Decimal(0)
 
@@ -466,6 +509,17 @@ def build_report(
         "reconciliation_policy_id": RECONCILIATION_POLICY.policy_id,
         "reconciliation_cells": reconciliation,
         "field_reconciliation": field_reconciliation,
+        # Financial-fact cells under their own policy, per subject with per-field detail.
+        # A subject is independently reconciled when every compared field agreed; the
+        # ratio is over the subjects that had a primary to compare against.
+        "financial_fact_reconciliation_policy_id": FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id,
+        "financial_fact_reconciliation_cells": financial_reconciliation,
+        "financial_fact_independently_reconciled_count": financial_independent,
+        "financial_fact_independent_reconciliation": (
+            str((Decimal(financial_independent) / Decimal(financial_graded)).quantize(Decimal("0.0001")))
+            if financial_graded
+            else "0"
+        ),
         "plausibility_cells": plausibility,
         "implausible_count": sum(1 for cell in plausibility.values() if cell["outcome"] == "implausible"),
         "run_id": run_id,
@@ -664,6 +718,239 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
             cutoff=cutoff,
         )
     return outcomes
+
+
+# --- financial-fact fusion (second origin: moomoo statements) ------------------------------
+#
+# The primary's parser vintage is the shared primary identity (`PARSER_VERSION_HISTORY`),
+# which the registry maps to the market-price primary; within the financial-fact semantic
+# it is the owning registration's identity instead. Corroborating vintages resolve through
+# the registry like every other origin.
+_FINANCIAL_FACT_REGISTRATION = registration_for("financial-fact")
+_PRIMARY_FINANCIAL_SOURCE = f"{_FINANCIAL_FACT_REGISTRATION.source_id}:{_FINANCIAL_FACT_REGISTRATION.version}"
+_PRIMARY_FINANCIAL_ORIGIN_GROUP = (
+    f"origin:{_FINANCIAL_FACT_REGISTRATION.source_id}:{_FINANCIAL_FACT_REGISTRATION.version}"
+)
+_PRIMARY_FINANCIAL_VINTAGES = frozenset(PARSER_VERSION_HISTORY)
+# Per reconciled field: which primary-payload key carries the value and which carries
+# the fiscal period end it describes (a dotted path into `vintage` where the payload
+# has no dedicated column). A second origin's payload carries the same field names
+# inside `by_period_end[<period_end>]`, so alignment is by the primary's period.
+_FINANCIAL_FACT_FUSION_FIELDS: dict[str, tuple[str, str]] = {
+    "revenue": ("revenue", "revenue_period_end"),
+    "gross_profit": ("gross_profit", "operating_period_end"),
+    "net_income": ("net_income", "vintage.net_income.period_end"),
+    "total_assets": ("total_assets", "vintage.total_assets.period_end"),
+}
+# The unit of a primary payload that names no currency (vintages before the adapter wrote one).
+_FINANCIAL_FACT_UNIT = "USD"
+_ISO_CURRENCY = re.compile(r"[A-Z]{3}")
+
+
+def financial_fact_unit(payload: Mapping[str, Any]) -> str:
+    """The currency a financial-fact payload reports in: `sec_financial_adapter` and every
+    corroborating origin write `currency` per payload; a payload without one is USD."""
+    currency = payload.get("currency")
+    return currency if isinstance(currency, str) and _ISO_CURRENCY.fullmatch(currency) else _FINANCIAL_FACT_UNIT
+
+
+def _payload_path(payload: Mapping[str, Any], path: str) -> Any:
+    node: Any = payload
+    for key in path.split("."):
+        if not isinstance(node, Mapping):
+            return None
+        node = node.get(key)
+    return node
+
+
+def primary_financial_fields(payload: Mapping[str, Any]) -> dict[str, tuple[Decimal, date]]:
+    """field -> (value, period_end) for every fusion field the primary payload asserts
+    WITH a dated period. An undated value cannot be aligned and is not compared."""
+    out: dict[str, tuple[Decimal, date]] = {}
+    for field_name, (value_key, period_path) in _FINANCIAL_FACT_FUSION_FIELDS.items():
+        value = payload.get(value_key)
+        period = _payload_path(payload, period_path)
+        if value is None or not isinstance(period, str):
+            continue
+        try:
+            out[field_name] = (Decimal(str(value)), date.fromisoformat(period))
+        except (ValueError, ArithmeticError):
+            continue
+    return out
+
+
+def corroborating_financial_value(payload: Mapping[str, Any], field_name: str, period_end: date) -> Decimal | None:
+    """The second origin's value for `field_name` at exactly the primary's period end."""
+    periods = payload.get("by_period_end")
+    if not isinstance(periods, Mapping):
+        return None
+    values = periods.get(period_end.isoformat())
+    if not isinstance(values, Mapping) or values.get(field_name) is None:
+        return None
+    try:
+        return Decimal(str(values[field_name]))
+    except ArithmeticError:
+        return None
+
+
+@dataclass(frozen=True)
+class FinancialFactEntry:
+    """One financial-fact observation as the fusion sees it."""
+
+    source_id: str
+    origin_group: str
+    knowable_at: datetime
+    confidence: Decimal
+    payload_sha: str
+    observation_id: str
+    vintage_id: str
+    raw_object: str
+    payload: Mapping[str, Any]
+
+    @property
+    def is_primary(self) -> bool:
+        return self.source_id == _PRIMARY_FINANCIAL_SOURCE
+
+
+def classify_financial_fact_entry(
+    parser_version: str,
+    knowable_at: datetime,
+    confidence: Decimal,
+    payload_sha: str,
+    observation_id: str,
+    vintage_id: str,
+    raw_object: str,
+    payload: Mapping[str, Any],
+) -> FinancialFactEntry | None:
+    """Resolve an observation's origin from its parser vintage: the shared primary vintage
+    is the owning registration; anything else must be a registered corroborating origin."""
+    if parser_version in _PRIMARY_FINANCIAL_VINTAGES:
+        source_id, origin_group = _PRIMARY_FINANCIAL_SOURCE, _PRIMARY_FINANCIAL_ORIGIN_GROUP
+    elif parser_version in _SOURCE_BY_PARSER:
+        source_id, origin_group, _value_key = _SOURCE_BY_PARSER[parser_version]
+    else:
+        return None
+    return FinancialFactEntry(
+        source_id, origin_group, knowable_at, confidence, payload_sha, observation_id, vintage_id, raw_object, payload
+    )
+
+
+def reconcile_financial_fact_entries(
+    listing_id: str, entries: Sequence[FinancialFactEntry], *, cutoff: datetime
+) -> dict[str, Any]:
+    """Run the fusion engine per field over one subject's financial-fact observations.
+
+    Alignment is on the PRIMARY's fiscal period for each field: a second origin asserting
+    a different period has not corroborated the served number, so it is absent for that
+    field (honest `insufficient_independent_origins`), never a value conflict. The cell's
+    unit is the primary's reporting currency, and a second origin reporting in another
+    currency is absent the same way — a figure in another unit is not the same number.
+    The subject's outcome is AGREED only when every compared field agreed and at least
+    one was compared; any conflicting field abstains the subject.
+    """
+    primaries = [entry for entry in entries if entry.is_primary]
+    if not primaries:
+        return {"outcome": ReconciliationOutcome.UNAVAILABLE.value, "fields": {}, "origin_groups": 0}
+    primary = max(primaries, key=lambda entry: (entry.knowable_at, entry.observation_id))
+    unit = financial_fact_unit(primary.payload)
+    fields: dict[str, dict[str, Any]] = {}
+    outcomes: list[str] = []
+    # The subject's origin groups are the ones that took part in at least one field's
+    # comparison; an origin excluded from every field (another currency, no comparable
+    # period) has not corroborated anything and is not counted as if it had.
+    participating = {primary.origin_group}
+    for field_name, (value, period_end) in sorted(primary_financial_fields(primary.payload).items()):
+        cell = ReconciliationCell(
+            requirement_id=f"data-requirement:{canonical_sha256({'requirement': 'financial-fact:v1'})}",
+            subject=SubjectRef(kind=SubjectKind.LISTING, id=listing_id),
+            field_name=field_name,
+            field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'financial-fact-{field_name}:v1'})}",
+            unit=unit,
+            valid_from=period_end,
+            valid_to=max(period_end, cutoff.date()),
+        )
+        assertions = [_financial_assertion(cell, primary, value)]
+        for entry in entries:
+            if entry.is_primary or financial_fact_unit(entry.payload) != unit:
+                continue
+            other = corroborating_financial_value(entry.payload, field_name, period_end)
+            if other is not None:
+                assertions.append(_financial_assertion(cell, entry, other))
+                participating.add(entry.origin_group)
+        result = reconcile_source_assertions(
+            cell=cell, assertions=tuple(assertions), policy=FINANCIAL_FACT_RECONCILIATION_POLICY, cutoff=cutoff
+        )
+        fields[field_name] = {
+            "outcome": result.outcome.value,
+            "period_end": period_end.isoformat(),
+            "unit": unit,
+            "origin_groups": len(result.origin_group_ids),
+            "selected_source": next(
+                (a.source_id for a in assertions if a.assertion_id == result.selected_assertion_id), None
+            ),
+            "selected_value": None if result.selected_numeric_value is None else str(result.selected_numeric_value),
+            "conflicting": len(result.conflicting_assertion_ids),
+        }
+        outcomes.append(result.outcome.value)
+    if any(outcome == ReconciliationOutcome.CONFLICT_ABSTAINED.value for outcome in outcomes):
+        overall = ReconciliationOutcome.CONFLICT_ABSTAINED.value
+    elif outcomes and all(outcome == ReconciliationOutcome.AGREED.value for outcome in outcomes):
+        overall = ReconciliationOutcome.AGREED.value
+    elif outcomes:
+        overall = ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS.value
+    else:
+        overall = ReconciliationOutcome.UNAVAILABLE.value
+    return {"outcome": overall, "origin_groups": len(participating), "fields": fields}
+
+
+def _financial_assertion(cell: ReconciliationCell, entry: FinancialFactEntry, value: Decimal) -> SourceAssertion:
+    return SourceAssertion(
+        cell_id=cell.cell_id,
+        observation_id=entry.observation_id,
+        source_id=entry.source_id,
+        origin_group_id=entry.origin_group,
+        knowable_at=entry.knowable_at,
+        normalized_value_sha256=entry.payload_sha,
+        numeric_value=value,
+        confidence_assessment_id=f"confidence-assessment:{entry.payload_sha}",
+        confidence_score=entry.confidence,
+        lineage_node_ids=(entry.vintage_id, entry.raw_object),
+        lineage_complete=True,
+    )
+
+
+def _reconcile_financial_fact_cells(conn: psycopg.Connection[Any], run_id: str) -> dict[str, dict[str, Any]]:
+    """Every financial-fact cell's assertions through the fusion engine, per field."""
+    status = conn.execute("select cutoff from mart.topt_capture_status where run_id = %s", (run_id,)).fetchone()
+    if status is None:
+        return {}
+    cutoff = status[0]
+    rows = conn.execute(
+        """
+        select o.subject_id, o.parser_version, o.knowable_at, o.confidence,
+               o.normalized_payload_sha256, o.observation_id,
+               v.source_vintage_id, v.raw_object_id, p.normalized_payload
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        where ob.run_id = %s and o.semantic_type = 'financial-fact'
+        order by o.subject_id
+        """,
+        (run_id,),
+    ).fetchall()
+    by_listing: dict[str, list[FinancialFactEntry]] = {}
+    for subject_id, parser, knowable_at, confidence, payload_sha, obs_id, vintage_id, raw_object, payload in rows:
+        entry = classify_financial_fact_entry(
+            parser, knowable_at, Decimal(str(confidence)), payload_sha, obs_id, vintage_id, raw_object, payload
+        )
+        if entry is not None:
+            by_listing.setdefault(subject_id, []).append(entry)
+    return {
+        listing_id: reconcile_financial_fact_entries(listing_id, entries, cutoff=cutoff)
+        for listing_id, entries in sorted(by_listing.items())
+    }
 
 
 def persist(conn: psycopg.Connection[Any], report: dict[str, Any]) -> str:

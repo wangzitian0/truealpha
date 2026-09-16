@@ -42,7 +42,7 @@ of cells whose close did:
 
 | field | policy | relative tolerance | unit |
 |---|---|---|---|
-| open, high, low, close | `market-price-fusion:v2` | 0.3% (30 bp) | USD |
+| open, high, low, close | `market-price-fusion:v3` | 0.3% (30 bp) | USD |
 | volume | `market-volume-fusion:v1` | 2% (200 bp) | shares |
 
 Volume is not a price: it is each vendor's own aggregation of the consolidated tape and
@@ -65,6 +65,25 @@ carries every field's grade under `fields[<field>]` with its `policy_id`;
 `field_reconciliation[<field>]` summarises `agreed` / `cells` / `share` per field over
 the graded market-price cells. The headline `independent_reconciliation` ratio stays
 the close's, over the full requested denominator.
+
+### Policies in force
+
+- `market-price-fusion:v3` (`quality_report.RECONCILIATION_POLICY`): priority
+  `yahoo-chart:v1`, `twelve-data:v1`, `moomoo-kline:v1`; relative tolerance 0.3%;
+  assertions narrowed to the served bar's trading day first (#622).
+- `financial-fact-fusion:v1` (`quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY`):
+  priority `sec-company-facts:v1`, `moomoo-financials:v1`; relative tolerance 1%;
+  reconciled per field (`revenue`, `gross_profit`, `net_income`, `total_assets`) at the
+  PRIMARY's fiscal period end. The report carries `financial_fact_reconciliation_cells`
+  per subject with the per-field outcomes, and its own KPI pair
+  `financial_fact_independently_reconciled_count` /
+  `financial_fact_independent_reconciliation` (agreed subjects over the subjects with a
+  primary); the headline `independent_reconciliation` stays the close's. A subject counts
+  as independently reconciled only when every compared field agreed, and any conflicting
+  field abstains it. A second origin that has not published the primary's period, or
+  reporting in another currency, is absent for that field
+  (`insufficient_independent_origins`), never a conflict. See
+  `docs/price-source-calibration.md` for the measured tolerance.
 
 ## Fixed Denominator
 

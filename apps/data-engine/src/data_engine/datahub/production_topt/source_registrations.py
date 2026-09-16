@@ -182,6 +182,25 @@ TWELVE_DATA_PARSER_VERSION = TWELVE_DATA_PARSER_VERSION_HISTORY[-1]
 TWELVE_DATA_MAPPING_VERSION = "twelve-data-map:v3"
 TWELVE_DATA_VALUE_KEY = "close"
 
+# moomoo OpenD is the THIRD origin behind market-price (a daily regular-session close
+# from `request_history_kline`) and the SECOND origin behind financial-fact (annual
+# income-statement and balance-sheet figures from `get_financials_statements`). Both
+# identities live here, next to Twelve Data's, for the same reason: the quality report
+# recognises a vintage from the registry, never from the adapter that wrote it.
+MOOMOO_KLINE_ORIGIN = "moomoo-kline"
+MOOMOO_KLINE_PARSER_VERSION = "moomoo-kline-parser:v1"
+MOOMOO_KLINE_MAPPING_VERSION = "moomoo-kline-map:v1"
+MOOMOO_KLINE_VALUE_KEY = "close"
+MOOMOO_FINANCIALS_ORIGIN = "moomoo-financials"
+MOOMOO_FINANCIALS_PARSER_VERSION = "moomoo-financials-parser:v1"
+MOOMOO_FINANCIALS_MAPPING_VERSION = "moomoo-financials-map:v1"
+# The headline key the registry reads back; the financial-fact fusion reads every
+# corroborated field by name (`quality_report._FINANCIAL_FACT_FUSION_FIELDS`).
+MOOMOO_FINANCIALS_VALUE_KEY = "revenue"
+# moomoo documents 60 requests / 30 s per quote endpoint; `moomoo_ledger` paces 8 / 30 s
+# across every endpoint, and that pacing is what the origin actually experiences.
+_MOOMOO_CAPACITY = CapacityDeclaration(calls_per_window=8, window_seconds=30)
+
 REGISTRATIONS: tuple[SourceRegistration, ...] = (
     SourceRegistration(
         source_id="yahoo-chart",
@@ -217,10 +236,24 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 value_key="price",
                 parser_versions=("twelve-data-parser:v1",),
             ),
+            # Third origin: moomoo OpenD's daily regular-session close, session-bound like
+            # Twelve Data (the settled session at/before the price cutoff, never the
+            # in-progress bar). Enabled per environment by MOOMOO_KLINE_ORIGIN_ENABLED.
+            OriginRegistration(
+                origin_source=f"{MOOMOO_KLINE_ORIGIN}:v1",
+                origin_id=f"origin:{MOOMOO_KLINE_ORIGIN}:v1",
+                value_key=MOOMOO_KLINE_VALUE_KEY,
+                parser_versions=(MOOMOO_KLINE_PARSER_VERSION,),
+                capacity=_MOOMOO_CAPACITY,
+            ),
         ),
         corroboration_class="A",
         session_bound=True,
-        notes=("Yahoo has no published quota; the second origin's capacity is the binding one.",),
+        notes=(
+            "Yahoo has no published quota; the second origin's capacity is the binding one.",
+            "moomoo's historical-candlestick quota is 2,000 distinct stocks per rolling 30-day "
+            "window (not calls); the governed universes use ~120 of them.",
+        ),
     ),
     SourceRegistration(
         source_id="release-derived",
@@ -240,9 +273,29 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         # factor's own period_end staleness bound (#534).
         freshness_max_age={"financial-fact": timedelta(days=730)},
         route_builder="data_engine.datahub.production_topt.sec_financial_adapter:build_route",
+        origins=(
+            # Second origin: moomoo's vendor-normalized annual income statement and balance
+            # sheet, value-reconciled per field against the XBRL facts under
+            # `quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY`. Enabled per environment
+            # by MOOMOO_FINANCIALS_ORIGIN_ENABLED. The primary (company-facts) writes the
+            # shared primary vintage, so it is identified by the registration itself.
+            OriginRegistration(
+                origin_source=f"{MOOMOO_FINANCIALS_ORIGIN}:v1",
+                origin_id=f"origin:{MOOMOO_FINANCIALS_ORIGIN}:v1",
+                value_key=MOOMOO_FINANCIALS_VALUE_KEY,
+                parser_versions=(MOOMOO_FINANCIALS_PARSER_VERSION,),
+                capacity=_MOOMOO_CAPACITY,
+            ),
+        ),
+        # Stays B until a scheduled staging tick shows the moomoo origin reconciling; the
+        # plausibility oracle keeps grading every cell regardless of the second origin.
         corroboration_class="B",
         # SEC fair-access guidance: 10 requests per second per user agent.
         capacity=CapacityDeclaration(calls_per_window=10, window_seconds=1),
+        notes=(
+            "With MOOMOO_FINANCIALS_ORIGIN_ENABLED, revenue / net_income / gross_profit / "
+            "total_assets are value-reconciled against moomoo's statements (class A per field).",
+        ),
     ),
 )
 

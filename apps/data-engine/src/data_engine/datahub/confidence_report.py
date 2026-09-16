@@ -59,6 +59,7 @@ from truealpha_contracts.reconciliation import (
 )
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 
+from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 from data_engine.datahub.production_topt.source_registrations import (
     RELEASE_SEMANTICS,
     SOURCE_BY_PARSER,
@@ -228,19 +229,31 @@ class CellGrade:
 def _close_origins() -> dict[str, tuple[str, str, str]]:
     """origin_id -> (origin_source, origin_id, value_key), the CURRENT coordinate of each
     market-price origin (a historical vintage of the same origin never overrides it)."""
+    # Only origins registered under the market-price semantic: the parser map also
+    # carries the financial-fact corroborator (moomoo statements), which asserts no close.
+    market = {origin.origin_id for origin in registration_for("market-price").origins}
     out: dict[str, tuple[str, str, str]] = {}
     for coordinate in SOURCE_BY_PARSER.values():
-        out.setdefault(coordinate[1], coordinate)
+        if coordinate[1] in market:
+            out.setdefault(coordinate[1], coordinate)
     return out
 
 
 CLOSE_ORIGINS: Mapping[str, tuple[str, str, str]] = _close_origins()
 
 
+#: One vendor behind two origins: moomoo's K-line and its statements are the same source
+#: (independent of Yahoo/Twelve Data and of SEC respectively), so the lineage — and the
+#: `sources_connected` roll-up — names the vendor, not the endpoint.
+VENDOR_LINEAGE: Mapping[str, str] = {"origin:moomoo-kline:v1": "moomoo", "origin:moomoo-financials:v1": "moomoo"}
+
+
 def lineage_of(origin_id: str) -> str:
     """The canonical original source behind an origin id: `origin:<lineage>:<version>`."""
     if origin_id in MEMBERSHIP_LINEAGE:
         return MEMBERSHIP_LINEAGE[origin_id]
+    if origin_id in VENDOR_LINEAGE:
+        return VENDOR_LINEAGE[origin_id]
     parts = origin_id.split(":")
     return parts[1] if len(parts) >= 3 and parts[0] == "origin" else origin_id
 
@@ -734,11 +747,25 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
             )
         elif semantic_type == "financial-fact":
             subject.issuer_id = subject.issuer_id or payload.get("issuer_id")
+            # The primary's parser vintage is the shared primary identity (as the quality
+            # report classifies it); any other vintage is a registered corroborating origin
+            # (moomoo statements) and asserts under ITS origin, never as the primary's.
+            if parser_version in PARSER_VERSION_HISTORY:
+                primary, origin_source, origin_id = True, SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN
+            else:
+                coordinate = SOURCE_BY_PARSER.get(parser_version)
+                if coordinate is None:
+                    continue
+                primary, origin_source, origin_id = False, coordinate[0], coordinate[1]
             vintage = payload.get("vintage") or {}
             for name in FINANCIAL_FIELDS:
                 value = payload.get(name)
-                subject.financial[name] = _decimal(None if value is None else str(value))
+                if primary:
+                    # The served figures (and the factor inputs) are the primary's alone.
+                    subject.financial[name] = _decimal(None if value is None else str(value))
                 if name == "headcount":
+                    if not primary:
+                        continue
                     producer = str((vintage.get("headcount") or {}).get("source") or "unknown")
                     subject.add(
                         name,
@@ -755,9 +782,9 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
                 subject.add(
                     name,
                     OriginValue(
-                        origin_id=SEC_COMPANY_FACTS_ORIGIN,
-                        source_id=SEC_COMPANY_FACTS_SOURCE,
-                        lineage=lineage_of(SEC_COMPANY_FACTS_ORIGIN),
+                        origin_id=origin_id,
+                        source_id=origin_source,
+                        lineage=lineage_of(origin_id),
                         value=None if value is None else str(value),
                         knowable_at=knowable_at,
                         observation_id=observation_id,

@@ -41,6 +41,8 @@ from data_engine.datahub.production_topt.release_derived_adapter import (
     ReleaseDerivedRecord,
 )
 from data_engine.datahub.production_topt.sec_financial_adapter import (
+    FinancialFactAssertion,
+    FinancialFactCorroboratingOrigin,
     FinancialFactsBundle,
     SecFinancialFactAdapter,
     SecTarget,
@@ -132,6 +134,28 @@ def _bundle(branch: OperatingBranch, *, blank_numerator: bool = False) -> Financ
     )
 
 
+def _moomoo_statements(ticker: str) -> FinancialFactAssertion:
+    """What the moomoo statements origin asserts for the fixture issuers: the same annual
+    figures the SEC bundle carries, at the same period end, so the fusion agrees on every
+    dated field (the bank's gross profit follows its branch, as `_bundle` does)."""
+    values: dict[str, Decimal | None] = {
+        "revenue": Decimal("100000000"),
+        "net_income": None,
+        "gross_profit": Decimal("80000000") if ticker == _BANK_TICKER else Decimal("210000000"),
+        "total_assets": Decimal("200000000"),
+        "eps_basic": None,
+        "eps_diluted": None,
+    }
+    period_end = date(2025, 12, 31)
+    return FinancialFactAssertion(
+        raw_bytes=f'{{"income":{{"ticker":"{ticker}"}},"balance_sheet":{{}}}}'.encode(),
+        period_end=period_end,
+        values=values,
+        by_period_end={period_end: values},
+        knowable_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+
+
 def _routes(
     plan: PlannedRun,
     *,
@@ -169,6 +193,9 @@ def _routes(
                 issuer_id=issuer_id,
                 instrument_id=instrument_id,
                 listing_id=listing_id,
+                # The deployed `build_route` carries the ticker so a symbol-keyed second
+                # origin (moomoo) can be asked; a target without it is honestly single-origin.
+                ticker=ticker,
                 operating_branch=(
                     OperatingBranch.FINANCIAL
                     if ticker == _BANK_TICKER
@@ -205,15 +232,35 @@ def _routes(
         confidence=Decimal("0.85"),
         fetch=lambda symbol, cutoff: _quote("40"),
     )
+    # The moomoo K-line third origin and the moomoo statements second origin, over the
+    # same fake vendor answers, so a corroborated run persists three price assertions
+    # and two financial-fact assertions per cell through the deployed sink.
+    third_origin = CorroboratingOrigin(
+        origin="moomoo-kline",
+        parser_version="moomoo-kline-parser:v1",
+        mapping_version="moomoo-kline-map:v1",
+        value_key="close",
+        confidence=Decimal("0.80"),
+        fetch=lambda symbol, cutoff: _quote("40"),
+        raw_source=DataSource.MOOMOO,
+    )
+    financial_second_origin = FinancialFactCorroboratingOrigin(
+        origin="moomoo-financials",
+        parser_version="moomoo-financials-parser:v1",
+        mapping_version="moomoo-financials-map:v1",
+        confidence=Decimal("0.75"),
+        fetch=lambda ticker, cutoff: _moomoo_statements(ticker),
+    )
     price = MarketPriceAdapter(
         price_targets,
         lambda symbol, cutoff: _quote("40"),
-        corroborating_origins=(second_origin,) if corroborate else (),
+        corroborating_origins=(second_origin, third_origin) if corroborate else (),
     )
     financial = SecFinancialFactAdapter(
         sec_targets,
         lambda cik, cutoff, branch: _bundle(branch, blank_numerator=cik in blank_ciks),
         headcount_extractor=headcount_extractor,
+        corroborating_origins=(financial_second_origin,) if corroborate else (),
     )
     release = ReleaseDerivedAdapter(release_targets, cutoff=cutoff_date)
 
@@ -411,10 +458,13 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
     cells = report["reconciliation_cells"]
     graded = len(cells)
     assert graded == 21
+    # Every registered price origin the harness corroborates with asserts the whole bar
+    # (twelve-data v3 and moomoo K-line alongside the primary), so each field sees them all.
+    origins = len(quality_report.RECONCILIATION_POLICY.source_priority)
     for field in quality_report.PRICE_BAR_FIELDS:
         outcomes = {cell["fields"][field]["outcome"] for cell in cells.values()}
         assert outcomes == {"agreed"}, (field, outcomes)
-        assert {cell["fields"][field]["origin_groups"] for cell in cells.values()} == {2}, field
+        assert {cell["fields"][field]["origin_groups"] for cell in cells.values()} == {origins}, field
         assert report["field_reconciliation"][field] == {
             "agreed": graded,
             "cells": graded,
@@ -429,7 +479,9 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
 def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -> None:
     """The confidence report's loaders read the same persisted observations the quality
     report grades: with the second price origin wired, every close cell is HIGH; every
-    SEC-only fundamental is LOW; headcount, written by one fixture producer, is LOW; and
+    fundamental the second statements origin also asserts is MEDIUM (two lineages, no
+    agreement policy in this report yet — the quality report's financial fusion carries the
+    per-field agreement); headcount, written by one fixture producer, is LOW; and
     the stored confidence column is reported as measured and marked unused. Same real
     schema, same fake vendors — the SQL is what this proves."""
     from data_engine.datahub import confidence_report
@@ -445,11 +497,11 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     assert report["subjects"] == 21
     close = report["families"]["close"]
     assert (close["high"], close["cells"], close["agreement_rate"]) == (21, 21, "1.0000")
-    assert close["origins"] == ["origin:twelve-data:v1", "origin:yahoo:v1"]
+    assert close["origins"] == ["origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"]
     assert report["accuracy"]["close"]["matches_quality_report"] is True
     revenue = report["families"]["revenue"]
-    assert (revenue["low"], revenue["high"], revenue["medium"]) == (21, 0, 0)
-    assert revenue["origins"] == ["origin:sec-company-facts:v1"]
+    assert (revenue["low"], revenue["high"], revenue["medium"]) == (0, 0, 21)
+    assert revenue["origins"] == ["origin:moomoo-financials:v1", "origin:sec-company-facts:v1"]
     headcount = report["families"]["headcount"]
     assert headcount["low"] == 21 and headcount["origins"] == ["origin:headcount:test-fixture"]
     # The financial branch's numerator is the only one filled for a bank; the others are
@@ -458,7 +510,7 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     assert report["families"]["pre_provision_profit"]["missing"] == 20
     # TOPT is not a filing fund: neither plane family is graded, rather than graded empty.
     assert {"index_membership", "etf_weight"}.isdisjoint(report["families"])
-    assert set(report["sources_connected"]) == {"sec-company-facts", "test-fixture", "twelve-data", "yahoo"}
+    assert set(report["sources_connected"]) == {"moomoo", "sec-company-facts", "test-fixture", "twelve-data", "yahoo"}
     # Measured from the run's own rows (whether a semantic's stamp is constant is a fact
     # about the data, asserted on production, not here) and never read by the bands.
     stored = report["metadata"]["stored_confidence"]
@@ -472,10 +524,56 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     # The sample names TOPT issuers the harness captured, with a value from each origin.
     sample = report["sample"]["listing:xnys:jpm"]
     assert sample["in_universe"] and sample["close"]["verdict"] == "high"
-    assert set(sample["close"]["values"]) == {"origin:twelve-data:v1", "origin:yahoo:v1"}
+    assert set(sample["close"]["values"]) == {"origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"}
     assert report["accuracy"]["sec_oracle"]["reason"] == "no_sec_user_agent"
     report_id = confidence_report.persist(connection, report)
     assert report_id.startswith("datahub-confidence-report:")
+
+
+def test_moomoo_origins_reach_the_report_as_their_own_assertions(connection) -> None:
+    """The third price origin and the second financial-fact origin land through the
+    deployed sink — their own request, vintage, raw object under moomoo's prefix and
+    observation — and the report reconciles them: every price cell sees three origin
+    groups, every financial-fact cell agrees per dated field under the financial policy,
+    and the agreed financial subjects are their own KPI beside the price one."""
+    plan = _capture(connection, version="test-moomoo-origins", corroborate=True)
+    report = quality_report.build_report(connection, plan.run_id)
+
+    assert all(cell["origin_groups"] == 3 for cell in report["reconciliation_cells"].values())
+    assert (
+        report["financial_fact_reconciliation_policy_id"]
+        == quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id
+    )
+    financial = report["financial_fact_reconciliation_cells"]
+    assert len(financial) == 21
+    for listing_id, cell in financial.items():
+        assert cell["outcome"] == "agreed", (listing_id, cell)
+        # The fixture bundle dates revenue and the operating numerator; total_assets and
+        # net_income carry no vintage there, so exactly those two fields are compared.
+        assert set(cell["fields"]) == {"revenue", "gross_profit"}, (listing_id, cell)
+        assert all(
+            graded["origin_groups"] == 2 and graded["period_end"] == "2025-12-31" for graded in cell["fields"].values()
+        )
+    # The headline KPI stays the close's (what the pointer gate and dashboards read);
+    # the financial-fact agreement is reported beside it, never folded in.
+    assert report["independently_reconciled_count"] == 21
+    assert report["financial_fact_independently_reconciled_count"] == 21
+    assert report["financial_fact_independent_reconciliation"] == "1.0000"
+
+    landed = connection.execute(
+        """
+        select f.source, count(distinct o.observation_id)
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
+        join raw.fetches f on f.id = v.raw_fetch_id
+        where ob.run_id = %s and o.parser_version like 'moomoo-%%'
+        group by f.source
+        """,
+        (plan.run_id,),
+    ).fetchall()
+    assert dict(landed) == {"moomoo": 42}, "21 K-line + 21 statements observations, each under moomoo's prefix"
 
 
 def _cell_objects(connection, run_id: str) -> list[tuple[str, str]]:
@@ -1008,7 +1106,10 @@ def test_fusion_invariant_judges_the_selected_observation_not_the_contest(connec
     )
     assert run() == 0
     report = capsys.readouterr().out
-    assert "fusion-selects-by-priority-not-recency: 21 row(s) examined" in report, report
+    # Every corroborated cell is contested: 21 market-price (Yahoo + Twelve Data + moomoo
+    # K-line) and 21 financial-fact (SEC + moomoo statements). The invariant's population
+    # is every contested selection; its violation rule still judges market-price only.
+    assert "fusion-selects-by-priority-not-recency: 42 row(s) examined" in report, report
 
     # Flip ONE selected market-price observation to a parser family that is not the primary
     # (a third family, so the obligation stays contested and the selection is what changes).
