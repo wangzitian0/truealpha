@@ -46,3 +46,77 @@ def test_the_tally_counts_per_origin_and_stage_and_only_inside_its_block(caplog)
     assert tally.total == 3
     assert tally.summary() == "corroborations refused 3 (moomoo-kline persist 1, twelve-data fetch 2)"
     assert len([record for record in caplog.records if record.levelno == logging.WARNING]) == 5
+
+
+# -- rule 6 (#729): what the capacity gate refused inside the tick is counted too -------------
+
+
+def _budget_gate(spent: int):
+    from datetime import UTC, datetime
+
+    from data_engine.sources import gateway
+
+    now = datetime(2026, 9, 16, 22, 20, tzinfo=UTC)
+    return gateway.CapacityGate(
+        capacities={
+            "twelvedata": gateway.SourceCapacity("twelvedata", 60.0, 8, 800, environment_shares=(("production", 60),)),
+            "yahoo": gateway.SourceCapacity("yahoo", 1.0, 2, 10),
+        },
+        environment="production",
+        spent_since=lambda source, _since: spent if source == "twelvedata" else 0,
+        recent_calls=None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+        now=lambda: now,
+    )
+
+
+def test_every_gate_refusal_inside_the_tally_is_counted_per_seat_and_kind() -> None:
+    import pytest
+    from data_engine.sources import gateway
+
+    gate = _budget_gate(spent=480)
+    with corroboration_tally() as tally:
+        assert tally.refusals() == "capacity refused 0"
+        for _ in range(2):
+            with pytest.raises(gateway.BudgetExhausted):
+                gate.admit("twelvedata")
+        with pytest.raises(gateway.CapacityExceeded, match="no declared capacity"):
+            gate.admit("never-declared")
+        gate.admit("yahoo")  # admitted: nothing to count
+    with pytest.raises(gateway.BudgetExhausted):
+        gate.admit("twelvedata")  # after the block: not counted
+
+    assert tally.budget_exhausted == 2 and tally.capacity_refused == 3
+    assert tally.refusals() == "capacity refused 3 (never-declared capacity 1, twelvedata budget 2)"
+    assert tally.total == 0, "a refusal the adapter never reported as a lost corroboration is not one"
+
+
+def test_a_corroboration_lost_to_the_gate_is_recorded_at_its_own_stage(caplog) -> None:
+    import pytest
+    from data_engine.sources import gateway
+
+    gate = _budget_gate(spent=480)
+    with corroboration_tally() as tally, caplog.at_level(logging.WARNING):
+        with pytest.raises(gateway.BudgetExhausted) as refused:
+            gate.admit("twelvedata")
+        # The fetcher passes FETCH, as it does for any raise; the stage says what happened.
+        record_lost_corroboration("twelve-data", FETCH, "AAPL", refused.value)
+        record_lost_corroboration("twelve-data", FETCH, "MSFT", gateway.CapacityExceeded("twelvedata", "window"))
+    assert tally.summary() == "corroborations refused 2 (twelve-data budget 1, twelve-data capacity 1)"
+    assert tally.refusals() == "capacity refused 1 (twelvedata budget 1)"
+    lost = [r.getMessage() for r in caplog.records if "lost at budget" in r.getMessage()]
+    assert lost and "BudgetExhausted" in lost[0] and "daily budget 480 spent" in lost[0]
+
+
+def test_a_failing_refusal_listener_never_changes_the_refusal(caplog) -> None:
+    import pytest
+    from data_engine.sources import gateway
+
+    def broken(_error: gateway.CapacityExceeded) -> None:
+        raise RuntimeError("audit sink down")
+
+    with gateway.on_capacity_refusal(broken), caplog.at_level(logging.ERROR):
+        with pytest.raises(gateway.BudgetExhausted):
+            _budget_gate(spent=480).admit("twelvedata")
+    assert "capacity refusal listener failed" in caplog.text

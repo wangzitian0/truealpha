@@ -1836,3 +1836,11 @@ def test_when_every_origin_fails_the_cell_stays_unavailable_as_before(connection
         PostgresToptCoreRepository(connection).freeze_snapshot(
             run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
         )
+
+
+def test_every_reason_code_lands_in_the_attempt_ledger() -> None:
+    """A new code (#729's `deferred_capacity`) must map to an attempt outcome, or the
+    first non-terminal attempt carrying it would fail far from its cause."""
+    from data_engine.datahub.production_topt import persistence
+
+    assert set(persistence._ATTEMPT_OUTCOMES) == set(ObligationReasonCode)

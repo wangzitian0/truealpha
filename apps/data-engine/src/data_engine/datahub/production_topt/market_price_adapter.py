@@ -53,6 +53,7 @@ from data_engine.datahub.production_topt.executor import (
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER
+from data_engine.sources.gateway import BudgetExhausted
 
 if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
@@ -140,9 +141,10 @@ class SourceUnavailableError(Exception):
 
 
 # The primary failures a further origin may answer (#862): the primary had nothing to say
-# — unreachable, too slow, throttled, erroring, or no bar. A STOP (look-ahead, contract) is
-# a broken run and never failed over; "not yet knowable" is the primary asserting the datum
-# does not exist yet, which another origin must not contradict.
+# — unreachable, too slow, throttled, erroring, no bar, or its daily budget spent (#729: the
+# next origin is a different seat, admitted by its own budget). A STOP (look-ahead,
+# contract) is a broken run and never failed over; "not yet knowable" is the primary
+# asserting the datum does not exist yet, which another origin must not contradict.
 FAILOVER_REASONS: frozenset[ObligationReasonCode] = frozenset(
     {
         ObligationReasonCode.TRANSIENT_NETWORK,
@@ -150,6 +152,7 @@ FAILOVER_REASONS: frozenset[ObligationReasonCode] = frozenset(
         ObligationReasonCode.RATE_LIMITED,
         ObligationReasonCode.SERVER_ERROR,
         ObligationReasonCode.FIELD_UNAVAILABLE,
+        ObligationReasonCode.DEFERRED_CAPACITY,
     }
 )
 # The payload key the mart reads a served close from (`materialization.MarketPricePayload`).
@@ -204,6 +207,10 @@ class MarketPriceAdapter:
             return FetchFailure(ObligationReasonCode.CONTRACT_VIOLATION)
         try:
             quote = self._fetcher(target.symbol, target.cutoff)
+        except BudgetExhausted:
+            # The gate spent nothing: the seat's daily budget is gone for this environment.
+            # Named, never read as "no bar" (rule 6, #729); the gate's listener counted it.
+            return FetchFailure(ObligationReasonCode.DEFERRED_CAPACITY)
         except SourceUnavailableError:
             return FetchFailure(ObligationReasonCode.TRANSIENT_NETWORK)
         except TimeoutError:

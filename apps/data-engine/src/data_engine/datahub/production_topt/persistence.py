@@ -75,6 +75,7 @@ _ATTEMPT_OUTCOMES: Mapping[ObligationReasonCode, FetchAttemptOutcome] = {
     ObligationReasonCode.NOT_YET_KNOWABLE: FetchAttemptOutcome.UNAVAILABLE,
     ObligationReasonCode.FIELD_UNAVAILABLE: FetchAttemptOutcome.UNAVAILABLE,
     ObligationReasonCode.LOW_CONFIDENCE: FetchAttemptOutcome.UNAVAILABLE,
+    ObligationReasonCode.DEFERRED_CAPACITY: FetchAttemptOutcome.UNAVAILABLE,
 }
 _TERMINAL_OUTCOMES: Mapping[ObligationTerminalState, FetchAttemptOutcome] = {
     ObligationTerminalState.SUCCESS: FetchAttemptOutcome.SUCCESS,

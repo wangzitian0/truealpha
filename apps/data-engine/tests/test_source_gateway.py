@@ -18,7 +18,7 @@ import logging
 import re
 import urllib.error
 import urllib.request
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -163,11 +163,12 @@ def test_credential_query_keys_are_blanked_whatever_their_casing() -> None:
     assert gateway.redact_uri("https://x/q?symbol=AAPL&date=2026-09-04") == "https://x/q?symbol=AAPL&date=2026-09-04"
 
 
-def test_capacity_windows_follow_what_the_vendor_declares() -> None:
+def test_capacity_windows_follow_what_the_registry_declares() -> None:
     at = datetime(2026, 9, 4, 22, 15, 30, tzinfo=UTC)
     assert gateway.capacity_window_id("twelvedata", at) == "twelvedata:day:2026-09-04", "daily budget wins"
     assert gateway.capacity_window_id("openfigi", at) == f"openfigi:6s:{int(at.timestamp() // 6)}"
-    assert gateway.capacity_window_id("yahoo", at) is None, "the vendor publishes no limit"
+    # Yahoo publishes no limit; the ceiling is ours and is budgeted like any other (#729).
+    assert gateway.capacity_window_id("yahoo", at) == "yahoo:day:2026-09-04"
     assert gateway.capacity_window_id("never-heard-of", at) is None
 
 
@@ -485,13 +486,13 @@ def test_the_daily_count_resets_when_the_utc_day_rolls_over() -> None:
     assert [r[1] for r in ledger.rows] == ["a", "b", "d"]
 
 
-def test_an_undeclared_or_record_only_source_cannot_be_called_through_the_gateway() -> None:
+def test_an_undeclared_or_unbudgeted_source_cannot_be_called_through_the_gateway() -> None:
     gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
     with pytest.raises(gateway.CapacityExceeded, match="no declared capacity"):
         gw.call("yahoo", "quote", lambda: None)
     gw_default = gateway.SourceGateway(_Ledger(), caller="test")
-    with pytest.raises(gateway.CapacityExceeded, match="no declared capacity"):
-        gw_default.call("yahoo", "quote", lambda: None)  # declared, but record-only: no window/budget
+    with pytest.raises(gateway.CapacityExceeded, match="needs a rate window and a daily budget"):
+        gw_default.call("openfigi", "mapping", lambda: None)  # declared, but paced only: no daily budget
 
 
 def test_capacity_must_be_positive_and_paired() -> None:
@@ -500,3 +501,281 @@ def test_capacity_must_be_positive_and_paired() -> None:
     with pytest.raises(ValueError):
         gateway.SourceCapacity("sec", 1.0, None, 100)
     assert gateway.SourceCapacity("yahoo", None, None, None).enforceable is False
+
+
+# --- rule 6 enforced (#729 criterion 4): one declaration, queue on the rate, refuse on budget
+
+
+_NOW = datetime(2026, 9, 16, 22, 20, tzinfo=UTC)
+_EARLIER = datetime(2026, 9, 16, 20, 0, tzinfo=UTC)  # today, and long outside any rate window
+
+
+def _seat_rows(source: str, count: int, *, at: datetime = _EARLIER) -> list[gateway.CallRecord]:
+    return [gateway.CallRecord(source=source, endpoint="x", caller="earlier", called_at=at, ok=True)] * count
+
+
+def _gate(
+    ledger: gateway.MemoryLedger, capacity: gateway.SourceCapacity, *, environment: str = "production"
+) -> gateway.CapacityGate:
+    return gateway.CapacityGate(
+        capacities={capacity.source: capacity},
+        environment=environment,
+        spent_since=ledger.calls_since,
+        recent_calls=ledger.window,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+        now=lambda: _NOW,
+    )
+
+
+def test_the_gateways_capacities_are_the_registrys_and_nothing_else() -> None:
+    """One declaration (2026-09-16 design audit: the gateway's own table said SEC 8/s and
+    moomoo 60/30 s while the registry said 10/s and 8/30 s, and nothing read the registry)."""
+    from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES
+
+    assert set(gateway.CAPACITIES) == set(LEDGER_CAPACITIES)
+    for seat, declared in LEDGER_CAPACITIES.items():
+        view = gateway.CAPACITIES[seat]
+        assert (view.window_seconds, view.calls_per_window, view.daily_budget, view.environment_shares) == (
+            declared.window_seconds,
+            declared.calls_per_window,
+            declared.daily_budget,
+            declared.environment_shares,
+        ), seat
+    assert 'SourceCapacity("' not in (SRC / "sources" / "gateway.py").read_text(), "the gateway writes no number"
+    # The reconciled figures, against each vendor's published limit.
+    sec, moomoo, twelve = (gateway.CAPACITIES[seat] for seat in ("sec", "moomoo", "twelvedata"))
+    assert (sec.calls_per_window, sec.window_seconds) == (8, 1.0), "8 of SEC's 10 requests/second"
+    assert (moomoo.calls_per_window, moomoo.window_seconds) == (8, 30.0), "what moomoo_ledger paces"
+    assert (twelve.calls_per_window, twelve.window_seconds, twelve.daily_budget) == (8, 60.0, 800)
+
+
+def test_every_deployed_ledger_source_has_a_declared_seat() -> None:
+    from data_engine.sources import llm
+    from truealpha_contracts.models import DataSource
+
+    vendors = {source.value for source in DataSource} - {"release"}  # release-frozen config calls nobody
+    assert vendors | {llm.SOURCE, "search"} <= set(gateway.CAPACITIES)
+
+
+def test_a_shared_seat_spends_only_this_environments_share() -> None:
+    """One Twelve Data key, two environments, two ledgers (init.md §3.1). Each enforces its
+    declared share from the only ledger it can read, so together they stay inside 800/day
+    and 8/minute — the August freeze was the two of them spending one allowance blind."""
+    seat = gateway.CAPACITIES["twelvedata"]
+    production, staging = seat.in_environment("production"), seat.in_environment("staging")
+    assert production is not None and staging is not None
+    assert (production.daily_budget, production.calls_per_window) == (480, 4)
+    assert (staging.daily_budget, staging.calls_per_window) == (320, 3)
+    assert seat.in_environment("local_dev") is None, "an environment the split does not name has no share"
+
+    production_ledger, staging_ledger = gateway.MemoryLedger(), gateway.MemoryLedger()
+    production_ledger.extend(_seat_rows("twelvedata", 480))
+    staging_ledger.extend(_seat_rows("twelvedata", 319))
+    with pytest.raises(gateway.BudgetExhausted, match=r"daily budget 480 spent \(480 calls today\) in production"):
+        _gate(production_ledger, seat).admit("twelvedata")
+    _gate(staging_ledger, seat, environment="staging").admit("twelvedata")  # staging's 320th
+    with pytest.raises(gateway.BudgetExhausted, match="no share of the seat's shared daily budget .* local_dev"):
+        _gate(gateway.MemoryLedger(), seat, environment="local_dev").admit("twelvedata")
+
+
+def test_a_call_past_the_budget_is_refused_before_anything_is_sent(call_ledger, monkeypatch) -> None:
+    """Through the deployed Yahoo client: the refusal is raised where the request would
+    have been made, the client is never asked, no row is written, and the refusal is
+    announced to whoever audits the scope."""
+    from data_engine.sources import yahoo
+
+    call_ledger.extend(_seat_rows("yahoo", 2))
+    client = _Client()  # nothing queued: a request that got through would fail differently
+    monkeypatch.setattr(yahoo.httpx, "Client", lambda **kwargs: client)
+    refused: list[gateway.CapacityExceeded] = []
+    gate = _gate(call_ledger, gateway.SourceCapacity("yahoo", 1.0, 100, 2))
+    with gateway.on_capacity_refusal(refused.append), gateway.capacity_scope(gate):
+        with pytest.raises(gateway.BudgetExhausted, match=r"daily budget 2 spent \(2 calls today\)"):
+            yahoo.fetch_daily_bars("AAPL", end=date(2026, 9, 15))
+
+    assert client.calls == [], "the vendor was never asked"
+    assert len(call_ledger) == 2, "a refused call writes no row"
+    assert [(error.source, error.budget, error.spent) for error in refused] == [("yahoo", 2, 2)]
+
+
+def test_outside_a_capacity_scope_a_call_is_recorded_not_gated(call_ledger, monkeypatch) -> None:
+    from data_engine.sources import yahoo
+
+    call_ledger.extend(_seat_rows("yahoo", 5000, at=datetime.now(UTC)))
+    monkeypatch.setattr(yahoo.httpx, "Client", lambda **kwargs: _Client(_Response(b'{"chart": {"result": []}}')))
+    assert yahoo.fetch_daily_bars("AAPL", end=date(2026, 9, 15)) == []
+    assert len(call_ledger) == 5001
+
+
+def test_the_gate_counts_its_own_admissions_when_the_ledger_lags() -> None:
+    """A call in flight is not a row yet: the gate's own count is a floor under the ledger's."""
+    gate = gateway.CapacityGate(
+        capacities={"search": gateway.SourceCapacity("search", 60.0, 20, 1)},
+        environment="production",
+        spent_since=lambda _source, _since: 0,
+        recent_calls=None,
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+        now=lambda: _NOW,
+    )
+    gate.admit("search")
+    with pytest.raises(gateway.BudgetExhausted):
+        gate.admit("search")
+
+
+def test_the_rate_window_is_the_one_every_process_writes() -> None:
+    """A QQQ tick and a canary tick of one environment are two processes: the window is
+    read from the ledger both write, so one waits for the other's calls to age out."""
+    ledger = gateway.MemoryLedger()
+    for age in (0.5, 0.25):  # another process's two calls; the seat allows 2 per second
+        ledger.append(
+            gateway.CallRecord(
+                source="sec", endpoint="x", caller="other", called_at=_NOW - timedelta(seconds=age), ok=True
+            )
+        )
+    clock, now, slept = [0.0], [_NOW], []
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        clock[0] += seconds
+        now[0] += timedelta(seconds=seconds)
+
+    gate = gateway.CapacityGate(
+        capacities={"sec": gateway.SourceCapacity("sec", 1.0, 2, 100)},
+        environment="production",
+        spent_since=ledger.calls_since,
+        recent_calls=ledger.window,
+        clock=lambda: clock[0],
+        sleep=sleep,
+        now=lambda: now[0],
+    )
+    gate.admit("sec")
+    assert slept == [pytest.approx(0.51)], "waited for the older call to leave the window, no longer"
+
+
+def test_the_explicit_gateway_waits_for_other_processes_in_the_shared_window(call_ledger) -> None:
+    """Review on #900: the standards lane's `SourceGateway` paces against the ledger's
+    window too, so it cannot add its 8/s to a capture tick's 8/s on the same SEC seat."""
+    call_ledger.extend(
+        gateway.CallRecord(source="sec", endpoint="x", caller="tick", called_at=_NOW - timedelta(seconds=age), ok=True)
+        for age in (0.5, 0.25)
+    )
+    clock, now, slept = [0.0], [_NOW], []
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        clock[0] += seconds
+        now[0] += timedelta(seconds=seconds)
+
+    gw = gateway.SourceGateway(
+        _Ledger(),
+        caller="standards",
+        capacities={"sec": gateway.SourceCapacity("sec", 1.0, 2, 100)},
+        clock=lambda: clock[0],
+        sleep=sleep,
+        now=lambda: now[0],
+    )
+    assert gw.call("sec", "submissions", lambda: "ok") == "ok"
+    assert slept == [pytest.approx(0.51)]
+
+
+def test_a_window_that_never_drains_is_refused_rather_than_waited_on_forever() -> None:
+    clock = [0.0]
+    gate = gateway.CapacityGate(
+        capacities={"sec": gateway.SourceCapacity("sec", 1.0, 2, 100)},
+        environment="production",
+        spent_since=lambda _source, _since: 0,
+        recent_calls=lambda _source, _since: (5, _NOW),
+        clock=lambda: clock[0],
+        sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        now=lambda: _NOW,
+        max_wait_seconds=3.0,
+    )
+    with pytest.raises(gateway.CapacityExceeded, match="stayed full for 3 s") as refused:
+        gate.admit("sec")
+    assert not isinstance(refused.value, gateway.BudgetExhausted)
+
+
+def test_a_call_is_admitted_once_however_it_is_wrapped(call_ledger) -> None:
+    """`SourceGateway.call` admits through its own gate, and a nested block belongs to the
+    outer call: neither is admitted a second time by the scope's gate."""
+    from data_engine.sources import sec
+
+    admitted: list[str] = []
+
+    class Counting(gateway.CapacityGate):
+        def admit(self, source: str) -> None:
+            admitted.append(source)
+
+    body = json.dumps({"0": {"ticker": "AAPL", "cik_str": 320193}}).encode()
+    gw = _gateway(_Ledger(), gateway.SourceCapacity("sec", 1.0, 8, 100), [0.0], [])
+    with gateway.capacity_scope(Counting()):
+        gw.call("sec", "company_tickers", lambda: sec.ticker_cik_index(_Client(_Response(body))))
+        with gateway.record_call("yahoo", "chart", caller="outer") as call:
+            with gateway.record_call("yahoo", "chart", caller="inner"):
+                call.observe(status_code=200, body=b"{}")
+    assert admitted == ["yahoo"]
+
+
+def test_the_gates_ledger_reads_follow_the_writer(call_ledger, monkeypatch) -> None:
+    call_ledger.extend(_seat_rows("sec", 3))
+    # The unit is the request: a model call's token cost is not three thousand calls.
+    call_ledger.append(
+        gateway.CallRecord(
+            source="filing-extraction-model", endpoint="x", caller="x", called_at=_EARLIER, cost=Decimal(3000)
+        )
+    )
+    assert gateway.ledger_calls_since("filing-extraction-model", _EARLIER) == 1
+    since = _EARLIER - timedelta(seconds=1)
+    assert gateway.ledger_calls_since("sec", since) == 3
+    assert gateway.ledger_window("sec", since) == (3, _EARLIER)
+    monkeypatch.setattr(gateway.settings, "external_call_ledger", "off")
+    assert (gateway.ledger_calls_since("sec", since), gateway.ledger_window("sec", since)) == (0, (0, None))
+    monkeypatch.setattr(gateway.settings, "external_call_ledger", "postgres")
+    monkeypatch.setattr(gateway, "_writer", lambda record: None)  # a sink nothing can read back
+    assert (gateway.ledger_calls_since("sec", since), gateway.ledger_window("sec", since)) == (0, (0, None))
+
+
+@pytest.fixture
+def warehouse_seat(monkeypatch):
+    """The real `staging.api_call_ledger` behind the gateway's autocommit connection, under
+    a seat name no other test writes; its rows are deleted afterwards."""
+    import os
+    import uuid
+
+    import psycopg
+
+    try:
+        psycopg.connect(gateway.settings.database_url, connect_timeout=3).close()
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs the required integration coverage")
+    monkeypatch.setattr(gateway, "_writer", gateway.postgres_writer)
+    monkeypatch.setattr(gateway.settings, "external_call_ledger", "postgres")
+    seat = f"gate-test-{uuid.uuid4().hex[:12]}"
+    try:
+        yield seat
+    finally:
+        gateway._pg_execute("delete from staging.api_call_ledger where source = %s", (seat,))
+
+
+def test_the_gate_enforces_the_warehouse_ledger_every_process_shares(warehouse_seat) -> None:
+    seat = warehouse_seat
+    started = datetime.now(UTC)
+    capacity = gateway.SourceCapacity(seat, 60.0, 100, 2)
+    with gateway.capacity_scope(gateway.CapacityGate(capacities={seat: capacity}, environment="production")):
+        for _ in range(2):
+            with gateway.record_call(seat, "probe", caller="test") as call:
+                call.observe(status_code=200, body=b"{}")
+        with pytest.raises(gateway.BudgetExhausted, match="daily budget 2 spent"):
+            with gateway.record_call(seat, "probe", caller="test"):
+                raise AssertionError("a refused call never runs")
+
+    assert gateway.ledger_calls_since(seat, started - timedelta(seconds=1)) == 2, "the refusal wrote nothing"
+    count, oldest = gateway.ledger_window(seat, started - timedelta(seconds=1))
+    assert count == 2 and oldest is not None and oldest >= started - timedelta(seconds=1)
+    # A second process's gate has admitted nothing itself, and still finds the budget spent.
+    with pytest.raises(gateway.BudgetExhausted):
+        gateway.CapacityGate(capacities={seat: capacity}, environment="production").admit(seat)

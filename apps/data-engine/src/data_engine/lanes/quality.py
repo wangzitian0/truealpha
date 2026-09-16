@@ -192,8 +192,13 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
         run_id=context.run_id,
         tick=tick_from_config(config.executed_at),
     ) as outcome:
-        # Every SEC read is attributed to this Dagster run in the external call ledger (#729).
-        with gateway.run_scope(f"dagster:{context.run_id}"), psycopg.connect(settings.database_url) as connection:
+        # Every SEC read is attributed to this Dagster run in the external call ledger (#729)
+        # and admitted by the rule-6 gate first.
+        with (
+            gateway.run_scope(f"dagster:{context.run_id}"),
+            gateway.capacity_scope(),
+            psycopg.connect(settings.database_url) as connection,
+        ):
             report = compile_report(
                 connection,
                 universe=config.universe,

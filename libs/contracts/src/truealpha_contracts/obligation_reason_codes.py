@@ -9,7 +9,8 @@ disposition the executor acts on:
 - RETRY       — bounded transient failure (network/timeout, HTTP 429/5xx); after N attempts
                 the executor escalates to STOP or resolves `unavailable`.
 - TRACE_ONLY  — record and continue (not-yet-knowable/pending, field absent for this issuer,
-                low-confidence source).
+                low-confidence source, a call the source gateway deferred because the
+                source's declared capacity is spent — init.md rule 6, #729).
 
 The registry is source-neutral: generic capture/manifest/lineage code never branches on
 source or semantic type. A run succeeds when all obligations are terminally resolved with no
@@ -47,6 +48,11 @@ class ObligationReasonCode(StrEnum):
     NOT_YET_KNOWABLE = "not_yet_knowable"
     FIELD_UNAVAILABLE = "field_unavailable"
     LOW_CONFIDENCE = "low_confidence"
+    # The source gateway refused the call before it was made: the source's declared
+    # daily budget (this environment's share) is spent for the UTC day. Not "the field is
+    # absent" — the first run after the budget resets (the next UTC day's tick) asks again
+    # (#729 criterion 4). Retrying inside the run, or after a rate window, cannot help.
+    DEFERRED_CAPACITY = "deferred_capacity"
 
 
 _CANONICAL: dict[ObligationReasonCode, ObligationDisposition] = {
@@ -62,6 +68,7 @@ _CANONICAL: dict[ObligationReasonCode, ObligationDisposition] = {
     ObligationReasonCode.NOT_YET_KNOWABLE: ObligationDisposition.TRACE_ONLY,
     ObligationReasonCode.FIELD_UNAVAILABLE: ObligationDisposition.TRACE_ONLY,
     ObligationReasonCode.LOW_CONFIDENCE: ObligationDisposition.TRACE_ONLY,
+    ObligationReasonCode.DEFERRED_CAPACITY: ObligationDisposition.TRACE_ONLY,
 }
 
 
@@ -113,9 +120,10 @@ class ObligationReasonCodeRegistry(BaseModel):
 
     @classmethod
     def canonical(cls) -> ObligationReasonCodeRegistry:
-        """The frozen v1 registry."""
+        """The frozen registry. v2 (#729) adds `deferred_capacity`; a code is never
+        rebound, so every v1 binding holds unchanged."""
         entries = tuple(
             ReasonCodeEntry(code=code, disposition=disposition)
             for code, disposition in sorted(_CANONICAL.items(), key=lambda item: item[0].value)
         )
-        return cls(registry_version="v1", entries=entries)
+        return cls(registry_version="v2", entries=entries)

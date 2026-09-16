@@ -1320,3 +1320,40 @@ def test_a_second_origin_that_raises_is_absent_logged_and_counted(caplog) -> Non
     assert "moomoo-financials" in warning.getMessage() and "TimeoutError" in warning.getMessage()
     assert "AAPL" in warning.getMessage() and warning.exc_info is not None
     assert tally.summary() == "corroborations refused 1 (moomoo-financials fetch 1)"
+
+
+def test_an_exhausted_sec_budget_defers_the_cell_through_the_deployed_fetcher(call_ledger, monkeypatch) -> None:
+    """Rule 6 (#729): the company-facts request is refused before it is sent once this
+    environment's SEC budget is spent; the cell is `deferred_capacity`, never read as an
+    issuer that files nothing."""
+    from functools import partial
+
+    from data_engine.datahub.production_topt.sec_financial_adapter import sec_financial_fetcher
+    from data_engine.sources import gateway, sec
+
+    now = datetime.now(UTC)
+    call_ledger.extend([gateway.CallRecord(source="sec", endpoint="x", caller="x", called_at=now, ok=True)] * 2)
+    asked: list[str] = []
+
+    class _Client:
+        def __init__(self, **_kwargs: object) -> None: ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None: ...
+
+        def get(self, url: str, **_kwargs: object):
+            asked.append(url)
+            raise AssertionError("a refused request reached SEC")
+
+    monkeypatch.setattr(sec.settings, "sec_user_agent", "TrueAlpha test test@example.com")
+    monkeypatch.setattr(sec.httpx, "Client", _Client)
+    gate = gateway.CapacityGate(capacities={"sec": gateway.SourceCapacity("sec", 1.0, 8, 2)}, environment="production")
+    item = _work_item("8" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target(320193)}, partial(sec_financial_fetcher))
+    with gateway.capacity_scope(gate):
+        result = adapter.fetch(item)
+    assert isinstance(result, FetchFailure)
+    assert result.reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+    assert asked == [] and len(call_ledger) == 2

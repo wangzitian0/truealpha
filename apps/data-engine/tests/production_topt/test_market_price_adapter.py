@@ -606,6 +606,28 @@ def test_an_origin_the_fusion_policy_does_not_rank_never_serves() -> None:
     assert [c.origin for c in success.corroborations] == ["late-origin", "twelve-data"]
 
 
+def test_a_primary_out_of_budget_is_served_by_the_next_seat() -> None:
+    """#729 x #862: a Yahoo cell deferred for a spent budget is "the primary could not
+    serve"; Twelve Data is another seat with its own budget, and serves it. The attempt
+    keeps `deferred_capacity`, so the ledger still says why the primary did not."""
+    from data_engine.sources import gateway
+
+    def out_of_budget(symbol: str, cutoff: date) -> MarketPriceQuote:
+        raise gateway.BudgetExhausted("yahoo", environment="production", budget=2000, spent=2000)
+
+    item = _work_item("6" * 64)
+    twelve_fetch = _CountingFetch(_vendor_quote("td", _CUTOFF, "150.30"))
+    report, sink = _capture(item, _failover_adapter(item, out_of_budget, _twelve_data(twelve_fetch)))
+    [outcome] = report.outcomes
+    assert (outcome.terminal_state, outcome.reason_code, outcome.attempts, outcome.served_by_failover) == (
+        ObligationTerminalState.SUCCESS,
+        ObligationReasonCode.DEFERRED_CAPACITY,
+        1,
+        "twelve-data",
+    )
+    assert sink.calls[0]["attempt_reasons"] == (ObligationReasonCode.DEFERRED_CAPACITY,)
+
+
 def test_a_stop_reason_is_never_served_by_failover() -> None:
     """The adapter itself refuses to fail over a reason that is not "the primary had
     nothing": a contract violation or a look-ahead is a broken run, not a gap."""
@@ -657,3 +679,34 @@ def test_the_deployed_route_fails_over_through_the_executor(monkeypatch) -> None
     served = sink.calls[0]["success"]
     assert served.served_by_failover == "twelve-data"
     assert [c.origin for c in served.corroborations] == ["moomoo-kline"]
+
+
+def test_an_exhausted_budget_defers_the_cell_through_the_deployed_fetcher(call_ledger, monkeypatch) -> None:
+    """Rule 6 (#729): once this environment's Yahoo budget is spent, the deployed fetcher's
+    request is refused before it is sent, and the cell is `deferred_capacity` — not
+    `field_unavailable`, which would read as "Yahoo has no bar"."""
+    from data_engine.datahub.production_topt.market_price_adapter import yahoo_quote_fetcher
+    from data_engine.sources import gateway, yahoo
+
+    now = datetime.now(UTC)
+    call_ledger.extend([gateway.CallRecord(source="yahoo", endpoint="chart", caller="x", called_at=now, ok=True)] * 3)
+
+    class _NeverAsked:
+        def __init__(self, **_kwargs: object) -> None: ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None: ...
+
+        def get(self, *args, **kwargs):
+            raise AssertionError("a refused request reached Yahoo")
+
+    monkeypatch.setattr(yahoo.httpx, "Client", _NeverAsked)
+    gate = gateway.CapacityGate(capacities={"yahoo": gateway.SourceCapacity("yahoo", 1.0, 5, 3)}, environment="staging")
+    item = _work_item("9" * 64)
+    with gateway.capacity_scope(gate):
+        result = _adapter(item, yahoo_quote_fetcher).fetch(item)
+    assert isinstance(result, FetchFailure)
+    assert result.reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+    assert len(call_ledger) == 3

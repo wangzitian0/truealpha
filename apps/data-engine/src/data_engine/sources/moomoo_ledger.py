@@ -158,19 +158,26 @@ _recent_calls: deque[float] = deque()
 
 
 def throttle(*, now=time.monotonic, sleep=time.sleep) -> None:
-    """Block until one more call fits the per-30s window (MOOMOO_CALLS_PER_30S).
+    """Block until one more call fits the moomoo seat's window.
+
+    The window and its ceiling are the source registry's (`LEDGER_CAPACITIES["moomoo"]`,
+    rule 6: declared once); MOOMOO_CALLS_PER_30S may only LOWER the ceiling, never raise
+    it past the declaration.
 
     Process-local on purpose: sweeps are single-process, and moomoo's burst
     limits are per OpenD connection anyway — a cross-process ledger-based
     throttle would add DB churn without adding protection. Kept conservative
     and global-across-endpoints (moomoo's own limits are per endpoint group,
     so this under-uses the real allowance rather than risking it)."""
-    cap = settings.moomoo_calls_per_30s
+    seat = gateway.CAPACITIES["moomoo"]
+    assert seat.window_seconds is not None and seat.calls_per_window is not None, "the moomoo seat is paced"
+    window = seat.window_seconds
+    cap = min(settings.moomoo_calls_per_30s, seat.calls_per_window)
     while True:
         t = now()
-        while _recent_calls and t - _recent_calls[0] >= 30.0:
+        while _recent_calls and t - _recent_calls[0] >= window:
             _recent_calls.popleft()
         if len(_recent_calls) < cap:
             _recent_calls.append(t)
             return
-        sleep(30.0 - (t - _recent_calls[0]) + 0.05)
+        sleep(window - (t - _recent_calls[0]) + 0.05)
