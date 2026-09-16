@@ -21,18 +21,24 @@ each origin actually asserted; the stored `confidence` column on
 `staging.capture_normalized_observations` is a per-semantic constant and takes no part in
 them — the report says so in its metadata, from a measurement rather than a remark.
 
-`close` reuses the deployed market-price policy (`quality_report.RECONCILIATION_POLICY`),
-so the report's HIGH is exactly what the pointer gate calls corroborated. Index membership
-gets the policy it never had (`INDEX_MEMBERSHIP_POLICY`): the index operator's constituent
-list against the fund's own N-PORT holdings, membership matched exactly, weights compared
-at a stated tolerance whenever both routes carry one. Every fundamental has one origin
-today and grades `low` honestly; a second origin (moomoo, #771) raises them without a
-change here, because the loader reads origins from the observations rather than from a list.
+Every field of the session's bar is its own family (#865): open, high, low and close under
+the deployed market-price policy (`quality_report.RECONCILIATION_POLICY`), volume under its
+own (`VOLUME_RECONCILIATION_POLICY`), each read from the payload key the origin wrote it
+under — so a field's HIGH is exactly what the quality report's `field_reconciliation` calls
+agreed (#850), and the close's HIGH is what the pointer gate calls corroborated. An origin
+whose payload lacks a field (Twelve Data v2 carried the close alone) asserts nothing for
+that family: it is present with no value, never a conflict. Index membership gets the
+policy it never had (`INDEX_MEMBERSHIP_POLICY`): the index operator's constituent list
+against the fund's own N-PORT holdings, membership matched exactly, weights compared at a
+stated tolerance whenever both routes carry one. Every fundamental has one origin today
+and grades `low` honestly; a second origin (moomoo, #771) raises them without a change
+here, because the loader reads origins from the observations rather than from a list.
 
-The ACCURACY section is the half a self-consistent warehouse cannot supply: for `close`,
-the yahoo/twelve-data agreement the engine already computed; for revenue and gross profit,
-`quality.vendor_oracle`'s deliberately independent SEC re-derivation over a sample of
-issuers, fetched live at report time through the source gateway.
+The ACCURACY section is the half a self-consistent warehouse cannot supply: for every bar
+field, the agreement the engine already computed, cross-checked field by field against
+the persisted quality report; for revenue and gross profit, `quality.vendor_oracle`'s
+deliberately independent SEC re-derivation over a sample of issuers, fetched live at
+report time through the source gateway.
 """
 
 from __future__ import annotations
@@ -67,13 +73,17 @@ from data_engine.datahub.production_topt.source_registrations import (
     registration_for,
 )
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, UniverseSource
-from data_engine.datahub.quality_report import RECONCILIATION_POLICY
+from data_engine.datahub.quality_report import FIELD_RECONCILIATION_POLICIES, FIELD_UNITS, PRICE_BAR_FIELDS
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, GovernedHead, governed_head
 from data_engine.quality import vendor_oracle
 
 REPORT_VERSION = "datahub-confidence-report:v1"
 REPORT_ID_PREFIX = "datahub-confidence-report"
 
+MARKET_PRICE_SEMANTIC = "market-price"
+#: The served field of the bar. Every other bar field (`quality_report.PRICE_BAR_FIELDS`) is
+#: its own family under its own name, because one family cannot honestly be HIGH for the
+#: close and unknown for the volume (#865).
 CLOSE_FAMILY = "close"
 INDEX_MEMBERSHIP_FAMILY = "index_membership"
 #: The fund weight is its own family: membership can be corroborated by two routes today
@@ -231,7 +241,7 @@ def _close_origins() -> dict[str, tuple[str, str, str]]:
     market-price origin (a historical vintage of the same origin never overrides it)."""
     # Only origins registered under the market-price semantic: the parser map also
     # carries the financial-fact corroborator (moomoo statements), which asserts no close.
-    market = {origin.origin_id for origin in registration_for("market-price").origins}
+    market = {origin.origin_id for origin in registration_for(MARKET_PRICE_SEMANTIC).origins}
     out: dict[str, tuple[str, str, str]] = {}
     for coordinate in SOURCE_BY_PARSER.values():
         if coordinate[1] in market:
@@ -258,19 +268,30 @@ def lineage_of(origin_id: str) -> str:
     return parts[1] if len(parts) >= 3 and parts[0] == "origin" else origin_id
 
 
-def _market_price_family() -> FamilyPolicy:
-    registration = registration_for("market-price")
-    return FamilyPolicy(
-        family=CLOSE_FAMILY,
-        semantic_type="market-price",
-        value_keys=tuple(dict.fromkeys(origin.value_key for origin in registration.origins)),
-        reconciliation=RECONCILIATION_POLICY,
-        session_bound=registration.session_bound,
+def _market_price_families() -> tuple[FamilyPolicy, ...]:
+    """One family per field of the session's bar, in the bar's order. The close is read
+    under the registered origins' value keys (the v1 second origin wrote `price`); every
+    other field under its own name, which is how every bar-carrying vintage writes it
+    (`market_price_adapter.bar_payload`). Each field reuses the quality report's policy
+    and unit for that field, so a HIGH here is exactly what `field_reconciliation[<field>]`
+    calls agreed; all are session-bound like the close (#622)."""
+    registration = registration_for(MARKET_PRICE_SEMANTIC)
+    close_keys = tuple(dict.fromkeys(origin.value_key for origin in registration.origins))
+    return tuple(
+        FamilyPolicy(
+            family=name,
+            semantic_type=MARKET_PRICE_SEMANTIC,
+            value_keys=close_keys if name == CLOSE_FAMILY else (name,),
+            reconciliation=FIELD_RECONCILIATION_POLICIES[name],
+            session_bound=registration.session_bound,
+            unit=FIELD_UNITS[name],
+        )
+        for name in PRICE_BAR_FIELDS
     )
 
 
 FAMILIES: tuple[FamilyPolicy, ...] = (
-    _market_price_family(),
+    *_market_price_families(),
     *(
         FamilyPolicy(family=name, semantic_type="financial-fact", value_keys=(name,), reconciliation=None)
         for name in FINANCIAL_FIELDS
@@ -381,7 +402,10 @@ def _deltas(
     )
     scale = max(abs(value) for value in values.values())
     relative = (worst / scale).quantize(_DELTA_PLACES) if scale else Decimal(0)
-    return str(worst.normalize() if worst == worst.to_integral() else worst), str(relative)
+    # An integral distance is rendered as the integer (3.00 -> 3), never in the exponent
+    # form `normalize()` gives a volume-sized figure (13686700 -> 1.36867E+7).
+    integral = worst.to_integral_value()
+    return str(integral if worst == integral else worst), str(relative)
 
 
 def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[OriginValue], cutoff: datetime) -> CellGrade:
@@ -701,6 +725,40 @@ def _cik_of(issuer_id: str | None) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def bar_origins(
+    coordinate: tuple[str, str, str],
+    payload: Mapping[str, Any],
+    *,
+    knowable_at: datetime | None = None,
+    observation_id: str | None = None,
+) -> dict[str, OriginValue]:
+    """What one market-price observation asserts, per bar family.
+
+    `coordinate` is the origin's registry entry, (origin_source, origin_id, value_key): the
+    close is read under the declared key (the v1 second origin wrote `price`), every other
+    field under its own name, which is how every bar-carrying vintage writes it
+    (`market_price_adapter.bar_payload`). A payload without a field — Twelve Data v2
+    carried the close alone — asserts nothing for that family: the origin is present with
+    no value, never a conflict. A payload without a close asserts no bar at all, the way
+    the quality report reads it (`_reconcile_market_price_cells` skips the observation),
+    so the two reports grade the same assertions field by field.
+    """
+    origin_source, origin_id, value_key = coordinate
+    close = payload.get(value_key)
+    origins: dict[str, OriginValue] = {}
+    for family in PRICE_BAR_FIELDS:
+        value = close if family == CLOSE_FAMILY or close is None else payload.get(family)
+        origins[family] = OriginValue(
+            origin_id=origin_id,
+            source_id=origin_source,
+            lineage=lineage_of(origin_id),
+            value=None if value is None else str(value),
+            knowable_at=knowable_at,
+            observation_id=observation_id,
+        )
+    return origins
+
+
 def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime) -> dict[str, _Subject]:
     """Every subject the run requested, with what each origin asserted per family."""
     subjects: dict[str, _Subject] = {
@@ -721,30 +779,19 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
         """,
         (run_id,),
     ).fetchall()
-    close = family_policy(CLOSE_FAMILY)
     for subject_id, semantic_type, parser_version, knowable_at, observation_id, payload in rows:
         subject = subjects.setdefault(str(subject_id), _Subject())
         payload = payload or {}
         if semantic_type in RELEASE_SEMANTICS:
             subject.ticker = subject.ticker or payload.get("ticker")
             subject.issuer_id = subject.issuer_id or payload.get("issuer_id")
-        elif semantic_type == close.semantic_type:
+        elif semantic_type == MARKET_PRICE_SEMANTIC:
             coordinate = SOURCE_BY_PARSER.get(parser_version)
             if coordinate is None:
                 continue
-            origin_source, origin_id, value_key = coordinate
-            value = payload.get(value_key)
-            subject.add(
-                CLOSE_FAMILY,
-                OriginValue(
-                    origin_id=origin_id,
-                    source_id=origin_source,
-                    lineage=lineage_of(origin_id),
-                    value=None if value is None else str(value),
-                    knowable_at=knowable_at,
-                    observation_id=observation_id,
-                ),
-            )
+            asserted = bar_origins(coordinate, payload, knowable_at=knowable_at, observation_id=observation_id)
+            for family, origin in asserted.items():
+                subject.add(family, origin)
         elif semantic_type == "financial-fact":
             subject.issuer_id = subject.issuer_id or payload.get("issuer_id")
             # The primary's parser vintage is the shared primary identity (as the quality
@@ -934,20 +981,81 @@ def load_stored_confidence(connection: Connection[Any], run_id: str) -> list[tup
     return [(str(semantic), Decimal(str(confidence)), int(count)) for semantic, confidence, count in rows]
 
 
-def load_quality_report_close_outcomes(connection: Connection[Any], run_id: str) -> tuple[str | None, dict[str, str]]:
-    """The persisted quality report's per-listing close outcome for this run, so the report
-    can prove it grades the same day the pointer gate graded."""
+_COMPARED_OUTCOMES = frozenset({ReconciliationOutcome.AGREED.value, ReconciliationOutcome.CONFLICT_ABSTAINED.value})
+
+
+def quality_report_field_outcomes(payload: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    """field -> listing -> outcome, read from a persisted quality report payload: every bar
+    field's grade under `reconciliation_cells[*].fields` (#850). A report written before
+    the bar was fused per field carries the close's grade alone, under the cell's headline
+    keys, and grades no other field."""
+    outcomes: dict[str, dict[str, str]] = {name: {} for name in PRICE_BAR_FIELDS}
+    for listing, cell in (payload.get("reconciliation_cells") or {}).items():
+        fields = cell.get("fields")
+        graded = fields if isinstance(fields, Mapping) else {CLOSE_FAMILY: cell}
+        for name in PRICE_BAR_FIELDS:
+            outcome = (graded.get(name) or {}).get("outcome")
+            if outcome is not None:
+                outcomes[name][str(listing)] = str(outcome)
+    return outcomes
+
+
+def load_quality_report_field_outcomes(
+    connection: Connection[Any], run_id: str
+) -> tuple[str | None, dict[str, dict[str, str]]]:
+    """The persisted quality report for this run and its per-listing outcome per bar field,
+    so the report can prove it grades each field the same day, and the same way, the
+    pointer gate's report graded it."""
+    # Only the cells the cross-check reads, not the whole payload (Copilot on #872).
     row = connection.execute(
         """
-        select report_id, payload->'reconciliation_cells' from mart.datahub_quality_report
+        select report_id, jsonb_build_object('reconciliation_cells', payload->'reconciliation_cells')
+        from mart.datahub_quality_report
         where run_id = %s order by created_at desc limit 1
         """,
         (run_id,),
     ).fetchone()
     if row is None:
         return None, {}
-    cells = row[1] or {}
-    return str(row[0]), {str(listing): str(cell.get("outcome")) for listing, cell in cells.items()}
+    return str(row[0]), quality_report_field_outcomes(row[1] or {})
+
+
+def _disagrees(graded: str | None, persisted: str) -> bool:
+    # A cell this report never compared (one origin on the served day) disagrees with a
+    # persisted comparison: the quality report saw two origins this report did not.
+    if graded is None:
+        return persisted in _COMPARED_OUTCOMES
+    return graded != persisted
+
+
+def field_accuracy(
+    policy: FamilyPolicy,
+    summary: Mapping[str, Any],
+    cells: Mapping[str, CellGrade],
+    *,
+    quality_report_id: str | None,
+    persisted: Mapping[str, str],
+) -> dict[str, Any]:
+    """One family's accuracy entry: the agreement the engine computed, and the cross-check
+    of every cell's outcome against the persisted quality report's grade of the same
+    field. `matches_quality_report` is None when there is no persisted report or it graded
+    no cell of this field (a report from before the bar was fused per field)."""
+    mismatches = sorted(
+        listing
+        for listing, outcome in persisted.items()
+        if listing in cells and _disagrees(cells[listing].outcome, outcome)
+    )
+    return {
+        "origins": summary.get("origins", []),
+        "compared": summary.get("compared", 0),
+        "agreed": summary.get("high", 0),
+        "agreement_rate": summary.get("agreement_rate"),
+        "tolerance_policy": _policy_payload(policy.reconciliation),
+        "quality_report_id": quality_report_id,
+        "quality_report_cells": len(persisted),
+        "matches_quality_report": None if quality_report_id is None or not persisted else not mismatches,
+        "quality_report_mismatches": mismatches,
+    }
 
 
 # -- the report ---------------------------------------------------------------------------------
@@ -1017,13 +1125,7 @@ def build_report(
         entry["in_universe"] = subject_id in subjects
         sample[subject_id] = entry
 
-    close_cells = grades.get(CLOSE_FAMILY, {})
-    quality_report_id, persisted_outcomes = load_quality_report_close_outcomes(connection, head.run_id)
-    mismatches = sorted(
-        listing
-        for listing, outcome in persisted_outcomes.items()
-        if listing in close_cells and close_cells[listing].outcome not in (None, outcome)
-    )
+    quality_report_id, persisted_outcomes = load_quality_report_field_outcomes(connection, head.run_id)
     # The oracle's sample: the configured sample subjects first, then the universe in
     # order, each once, bounded by `oracle_issuers` — only issuers whose head carries a
     # revenue figure, because a mart gap is availability's finding, not accuracy's.
@@ -1039,24 +1141,24 @@ def build_report(
         )
         if len(oracle_issuers_selected) >= max(0, oracle_issuers):
             break
-    accuracy = {
-        "close": {
-            "origins": families.get(CLOSE_FAMILY, {}).get("origins", []),
-            "compared": families.get(CLOSE_FAMILY, {}).get("compared", 0),
-            "agreed": families.get(CLOSE_FAMILY, {}).get("high", 0),
-            "agreement_rate": families.get(CLOSE_FAMILY, {}).get("agreement_rate"),
-            "tolerance_policy": _policy_payload(RECONCILIATION_POLICY),
-            "quality_report_id": quality_report_id,
-            "matches_quality_report": None if quality_report_id is None else not mismatches,
-            "quality_report_mismatches": mismatches,
-        },
-        "sec_oracle": sec_oracle_section(
-            oracle_issuers_selected,
-            cutoff=cutoff.date(),
-            ticker_index=None if oracle is None else oracle.ticker_index,
-            facts_for=None if oracle is None else oracle.facts_for,
-        ),
+    # Every bar field is cross-checked against the quality report's grade of that field,
+    # so "how many metrics are HIGH" is answered by two reports that agree, not one.
+    accuracy: dict[str, Any] = {
+        name: field_accuracy(
+            family_policy(name),
+            families.get(name, {}),
+            grades.get(name, {}),
+            quality_report_id=quality_report_id,
+            persisted=persisted_outcomes.get(name, {}),
+        )
+        for name in PRICE_BAR_FIELDS
     }
+    accuracy["sec_oracle"] = sec_oracle_section(
+        oracle_issuers_selected,
+        cutoff=cutoff.date(),
+        ticker_index=None if oracle is None else oracle.ticker_index,
+        facts_for=None if oracle is None else oracle.facts_for,
+    )
     lineages = sorted(
         {
             origin.lineage

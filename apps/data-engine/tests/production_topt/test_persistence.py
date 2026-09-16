@@ -478,7 +478,8 @@ def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
 
 def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -> None:
     """The confidence report's loaders read the same persisted observations the quality
-    report grades: with the second price origin wired, every close cell is HIGH; every
+    report grades: with the second price origin wired, every bar field's cell is HIGH from
+    the same origins and matches the quality report's grade of that field (#865); every
     fundamental the second statements origin also asserts is MEDIUM (two lineages, no
     agreement policy in this report yet — the quality report's financial fusion carries the
     per-field agreement); headcount, written by one fixture producer, is LOW; and
@@ -499,6 +500,18 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     assert (close["high"], close["cells"], close["agreement_rate"]) == (21, 21, "1.0000")
     assert close["origins"] == ["origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"]
     assert report["accuracy"]["close"]["matches_quality_report"] is True
+    # Every field of the bar is its own family (#865): the harness's origins assert the whole
+    # bar, so each field grades HIGH from the same three origins and matches the quality
+    # report's per-field grade — five metrics at HIGH, not one; volume under its own policy.
+    for name in quality_report.PRICE_BAR_FIELDS:
+        family = report["families"][name]
+        assert (family["high"], family["cells"], family["agreement_rate"]) == (21, 21, "1.0000"), name
+        assert family["origins"] == close["origins"], name
+        assert family["tolerance"] == quality_report.FIELD_RECONCILIATION_POLICIES[name].policy_id, name
+        accuracy = report["accuracy"][name]
+        assert accuracy["matches_quality_report"] is True and accuracy["quality_report_mismatches"] == [], name
+        assert (accuracy["quality_report_cells"], accuracy["agreed"], accuracy["compared"]) == (21, 21, 21), name
+    assert report["families"]["volume"]["tolerance"] != close["tolerance"]
     revenue = report["families"]["revenue"]
     assert (revenue["low"], revenue["high"], revenue["medium"]) == (0, 0, 21)
     assert revenue["origins"] == ["origin:moomoo-financials:v1", "origin:sec-company-facts:v1"]
@@ -523,7 +536,7 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     }
     # The sample names TOPT issuers the harness captured, with a value from each origin.
     sample = report["sample"]["listing:xnys:jpm"]
-    assert sample["in_universe"] and sample["close"]["verdict"] == "high"
+    assert sample["in_universe"] and sample["close"]["verdict"] == "high" and sample["volume"]["verdict"] == "high"
     assert set(sample["close"]["values"]) == {"origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"}
     assert report["accuracy"]["sec_oracle"]["reason"] == "no_sec_user_agent"
     report_id = confidence_report.persist(connection, report)

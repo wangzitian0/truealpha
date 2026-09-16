@@ -130,7 +130,9 @@ FIELD_RECONCILIATION_POLICIES: dict[str, ReconciliationPolicy] = {
     "close": RECONCILIATION_POLICY,
     "volume": VOLUME_RECONCILIATION_POLICY,
 }
-_FIELD_UNITS: dict[str, str] = {"open": "USD", "high": "USD", "low": "USD", "close": "USD", "volume": "shares"}
+# The unit each field's cell is declared in — part of the content-addressed cell identity,
+# shared with the confidence report so both grade the same cell.
+FIELD_UNITS: dict[str, str] = {"open": "USD", "high": "USD", "low": "USD", "close": "USD", "volume": "shares"}
 
 
 # Declared fusion policy for the dual-origin financial-fact cells: SEC company-facts is
@@ -614,7 +616,7 @@ def reconcile_price_bar(
             subject=SubjectRef(kind=SubjectKind.LISTING, id=listing_id),
             field_name=field,
             field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'market-price-{field}:v1'})}",
-            unit=_FIELD_UNITS[field],
+            unit=FIELD_UNITS[field],
             valid_from=partition,
             valid_to=cutoff.date(),
         )

@@ -159,8 +159,15 @@ const confidenceRows = [
           origins: ["origin:sec-company-facts:v1"],
         },
       },
+      // Deliberately out of bar order: jsonb hands keys back in its own order, and the
+      // loader must impose the bar's.
       accuracy: {
-        close: { matches_quality_report: true },
+        volume: {
+          matches_quality_report: false,
+          quality_report_mismatches: ["listing:xnas:aapl"],
+        },
+        close: { matches_quality_report: true, quality_report_mismatches: [] },
+        open: { matches_quality_report: true, quality_report_mismatches: [] },
         sec_oracle: {
           issuers_compared: 5,
           per_field: {
@@ -233,6 +240,15 @@ const confidenceRows = [
       stats.confidence[0].close_matches_quality_report === true &&
       stats.confidence[0].stored_confidence_used_for_bands === false,
     "the accuracy oracle and the stored-confidence disclaimer pass through",
+  );
+  assert(
+    JSON.stringify(stats.confidence[0].quality_report_matches) ===
+      JSON.stringify([
+        { family: "open", matches: true, mismatches: 0 },
+        { family: "close", matches: true, mismatches: 0 },
+        { family: "volume", matches: false, mismatches: 1 },
+      ]),
+    "every family the report cross-checks against the quality report is surfaced per field in bar order (#865), the oracle never among them",
   );
   const q1 = stats.questionCoverage[0].questions.find(
     (q) => q.question === "q1",

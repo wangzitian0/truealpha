@@ -172,6 +172,36 @@ function questionCoverageRows(
   });
 }
 
+/** One family's cross-check against the persisted quality report (`accuracy.<family>`). */
+export interface ConfidenceQualityMatch {
+  family: string;
+  matches: boolean | null;
+  mismatches: number;
+}
+
+/** The bar's own order for the price families; every other cross-checked family follows
+ *  alphabetically. The payload is `jsonb`, which does not keep key order, so the order is
+ *  imposed here rather than read. */
+const QUALITY_MATCH_ORDER = ["open", "high", "low", "close", "volume"];
+
+function qualityMatchRank(family: string): number {
+  const index = QUALITY_MATCH_ORDER.indexOf(family);
+  return index === -1 ? QUALITY_MATCH_ORDER.length : index;
+}
+
+interface AccuracyEntryDb {
+  matches_quality_report?: boolean | null;
+  quality_report_mismatches?: string[];
+}
+
+interface SecOracleDb {
+  issuers_compared?: number;
+  per_field?: Record<
+    string,
+    { compared?: number; agreed?: number; agreement_rate?: string | null }
+  >;
+}
+
 /** The nightly confidence & accuracy report: one family row per metric family. */
 export interface ConfidenceFamilyRow {
   family: string;
@@ -202,6 +232,10 @@ export interface ConfidenceReportRow {
   sources_connected: string[];
   families: ConfidenceFamilyRow[];
   close_matches_quality_report: boolean | null;
+  /** Every family the report cross-checks against the persisted quality report: the bar
+   *  fields per field in bar order (#865), any other family after them alphabetically.
+   *  `matches` is null when the quality report graded nothing for the family. */
+  quality_report_matches: ConfidenceQualityMatch[];
   oracle_issuers_compared: number;
   oracle_fields: ConfidenceOracleField[];
   stored_confidence_used_for_bands: boolean;
@@ -231,14 +265,8 @@ interface ConfidenceReportDbRow {
       }
     >;
     accuracy?: {
-      close?: { matches_quality_report?: boolean | null };
-      sec_oracle?: {
-        issuers_compared?: number;
-        per_field?: Record<
-          string,
-          { compared?: number; agreed?: number; agreement_rate?: string | null }
-        >;
-      };
+      sec_oracle?: SecOracleDb;
+      [family: string]: AccuracyEntryDb | SecOracleDb | undefined;
     };
     metadata?: { stored_confidence?: { used_for_bands?: boolean } };
   };
@@ -256,7 +284,24 @@ function confidenceReportRows(
 ): ConfidenceReportRow[] {
   return rows.map((row) => {
     const payload = row.payload ?? {};
-    const oracle = payload.accuracy?.sec_oracle ?? {};
+    const accuracy = payload.accuracy ?? {};
+    const oracle: SecOracleDb = accuracy.sec_oracle ?? {};
+    const qualityMatches: ConfidenceQualityMatch[] = [];
+    for (const [family, entry] of Object.entries(accuracy)) {
+      if (family === "sec_oracle" || !entry || !("matches_quality_report" in entry))
+        continue;
+      qualityMatches.push({
+        family,
+        matches: entry.matches_quality_report ?? null,
+        mismatches: entry.quality_report_mismatches?.length ?? 0,
+      });
+    }
+    qualityMatches.sort(
+      (a, b) =>
+        qualityMatchRank(a.family) - qualityMatchRank(b.family) ||
+        a.family.localeCompare(b.family),
+    );
+    const close = accuracy.close;
     return {
       universe_id: row.universe_id,
       run_id: row.run_id,
@@ -279,7 +324,10 @@ function confidenceReportRows(
         }),
       ),
       close_matches_quality_report:
-        payload.accuracy?.close?.matches_quality_report ?? null,
+        close && "matches_quality_report" in close
+          ? (close.matches_quality_report ?? null)
+          : null,
+      quality_report_matches: qualityMatches,
       oracle_issuers_compared: oracle.issuers_compared ?? 0,
       oracle_fields: Object.entries(oracle.per_field ?? {}).map(
         ([field, entry]) => ({
