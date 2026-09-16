@@ -161,6 +161,15 @@ def _route(origin: str, value: str | None) -> OriginValue:
     return OriginValue(origin, source, lineage, value)
 
 
+def test_each_family_declares_its_own_unit_for_the_cell_identity() -> None:
+    """The unit is part of the content-addressed reconciliation cell: a close is dollars, a
+    fund weight is a percent of net assets, membership is presence — never USD for all."""
+    assert family_policy(CLOSE_FAMILY).unit == "USD"
+    assert family_policy(ETF_WEIGHT_FAMILY).unit == "percent_of_net_assets"
+    assert family_policy(INDEX_MEMBERSHIP_FAMILY).unit == "membership"
+    assert all(policy.unit for policy in cr.FAMILIES)
+
+
 def test_index_membership_listed_by_both_routes_is_high() -> None:
     """Membership is presence: the operator lists the name and the fund files it held."""
     grade = classify_cell(

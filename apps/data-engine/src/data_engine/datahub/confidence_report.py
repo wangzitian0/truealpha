@@ -189,6 +189,10 @@ class FamilyPolicy:
     comparison: str = "numeric"
     #: A session close is comparable only across assertions of the same trading day (#622).
     session_bound: bool = False
+    #: The unit the family's cell is declared in — part of the content-addressed cell
+    #: identity, so it must be the family's own (a fund weight is a percent of net assets,
+    #: never a dollar figure).
+    unit: str = "USD"
 
 
 @dataclass(frozen=True)
@@ -264,12 +268,15 @@ FAMILIES: tuple[FamilyPolicy, ...] = (
         value_keys=(MEMBER,),
         reconciliation=INDEX_MEMBERSHIP_POLICY,
         comparison="membership",
+        unit="membership",
     ),
     FamilyPolicy(
         family=ETF_WEIGHT_FAMILY,
         semantic_type=INDEX_MEMBERSHIP_SEMANTIC,
         value_keys=("weight",),
         reconciliation=INDEX_MEMBERSHIP_POLICY,
+        # N-PORT `pctVal`: the holding as a percent of the fund's net assets.
+        unit="percent_of_net_assets",
     ),
 )
 PLANE_FAMILIES: tuple[str, ...] = (INDEX_MEMBERSHIP_FAMILY, ETF_WEIGHT_FAMILY)
@@ -456,7 +463,7 @@ def _reconcile(
         subject=SubjectRef(kind=SubjectKind.LISTING, id=subject_id),
         field_name=policy.family,
         field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'{policy.semantic_type}-{policy.family}:v1'})}",
-        unit="USD" if policy.comparison == "numeric" else "membership",
+        unit=policy.unit,
         valid_from=cutoff.date(),
         valid_to=cutoff.date(),
     )
