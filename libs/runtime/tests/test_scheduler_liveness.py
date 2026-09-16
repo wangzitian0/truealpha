@@ -212,9 +212,24 @@ def _workflow_text(*crons: str, key: str = "on") -> str:
     return "\n".join(lines) + "\n"
 
 
-def _run(age: timedelta, *, conclusion: str | None = "success", event: str = "schedule", run_id: int = 0) -> dict:
+def _run(
+    age: timedelta,
+    *,
+    conclusion: str | None = "success",
+    status: str | None = None,
+    event: str = "schedule",
+    run_id: int = 0,
+) -> dict:
     created = (NOW - age).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {"id": run_id or int(age.total_seconds()), "event": event, "created_at": created, "conclusion": conclusion}
+    # The API pairs a null conclusion with a live status, a set one with `completed`.
+    status = status or ("completed" if conclusion is not None else "in_progress")
+    return {
+        "id": run_id or int(age.total_seconds()),
+        "event": event,
+        "created_at": created,
+        "status": status,
+        "conclusion": conclusion,
+    }
 
 
 class FakeGitHub:
@@ -374,7 +389,7 @@ def test_a_startup_failure_is_not_a_tick() -> None:
     )
     status, detail = _verdicts(gh)["broken.yml"]
     assert status == "STALE"
-    assert "(1 newer scheduled runs failed at startup)" in detail
+    assert "(1 newer scheduled runs failed at startup or are still queued)" in detail
 
 
 def test_only_startup_failures_is_stale_not_new() -> None:
@@ -382,7 +397,29 @@ def test_only_startup_failures_is_stale_not_new() -> None:
     gh.add("broken.yml", _workflow_text("0 7 * * *"), runs=[_run(HOUR, conclusion="startup_failure")], changed=HOUR)
     status, detail = _verdicts(gh)["broken.yml"]
     assert status == "STALE"
-    assert "failed at startup" in detail
+    assert "none of the 1 scheduled runs read started a job" in detail
+
+
+@pytest.mark.parametrize("status", ["queued", "waiting", "pending", "requested", None])
+def test_a_run_that_never_left_the_queue_is_not_a_tick(status: str | None) -> None:
+    """Review: a scheduler that keeps creating runs no runner picks up looks
+    alive by `created_at` alone, and the check it hosts never runs."""
+    gh = FakeGitHub()
+    stuck = _run(HOUR, conclusion=None, status="placeholder")
+    stuck["status"] = status
+    gh.add("stuck.yml", _workflow_text("47 * * * *"), runs=[stuck, _run(5 * HOUR)])
+    status_, detail = _verdicts(gh)["stuck.yml"]
+    assert status_ == "STALE", detail
+    assert "still queued" in detail
+
+
+def test_a_cancelled_or_failed_run_still_ran_a_job() -> None:
+    gh = FakeGitHub()
+    gh.add("failed.yml", _workflow_text("0 7 * * *"), runs=[_run(HOUR, conclusion="failure")])
+    gh.add("cancelled.yml", _workflow_text("0 7 * * *"), runs=[_run(HOUR, conclusion="cancelled")])
+    verdicts = _verdicts(gh)
+    assert verdicts["failed.yml"][0] == "OK"
+    assert verdicts["cancelled.yml"][0] == "OK"
 
 
 def test_a_startup_failure_verdict_does_not_depend_on_the_file_history() -> None:

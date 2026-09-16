@@ -18,9 +18,9 @@ A scheduled workflow is red when:
 
 - its state is not `active` (`disabled_inactivity`, `disabled_manually`, ...):
   DISABLED;
-- its newest scheduled run that got past startup is older than the bound: STALE.
-  A `startup_failure` run is not a tick — no job ran, so neither did the check
-  it hosts or that check's own escalation;
+- its newest scheduled run that started a job is older than the bound: STALE.
+  A `startup_failure` run, or one still `queued`/`waiting`, is not a tick — no
+  job ran, so neither did the check it hosts or that check's own escalation;
 - it has never run on schedule and its file last changed longer ago than the
   bound: NEVER (a file changed more recently is simply waiting for its first
   tick);
@@ -98,6 +98,9 @@ WORKFLOW_DIR = ".github/workflows/"
 MAX_CAP_HOURS = HORIZON_DAYS * 24
 ACTIVE = "active"
 STARTUP_FAILURE = "startup_failure"
+#: Run statuses in which a job has started. `queued`, `waiting`, `pending` and
+#: `requested` are a scheduler that fired with nothing running yet.
+STARTED = ("in_progress", "completed")
 
 OK = "OK"
 STALE = "STALE"
@@ -363,23 +366,28 @@ def _timestamp(value: object, what: str) -> datetime:
 
 @dataclass(frozen=True)
 class Ticks:
-    newest: datetime | None  # the newest scheduled run that got past startup
-    startup_failures: int  # scheduled runs newer than that which never started a job
+    newest: datetime | None  # the newest scheduled run that started a job
+    not_started: int  # scheduled runs newer than that which have not started one
 
 
 def _ticks(runs: Iterable[dict], path: str) -> Ticks:
     """The newest real tick among `runs`, taking the maximum rather than
     trusting the listing's order. `runs` may repeat a run (two witnesses)."""
     scheduled = {run.get("id", index): run for index, run in enumerate(runs) if run.get("event") == "schedule"}
+    # A run in STARTED with any conclusion but a startup failure ran a job
+    # (review: a run stuck `queued` has a null conclusion too, and must not
+    # pass for a tick).
     times = [
-        (_timestamp(run.get("created_at"), f"a run of {path}"), run.get("conclusion")) for run in scheduled.values()
+        (
+            _timestamp(run.get("created_at"), f"a run of {path}"),
+            run.get("status") in STARTED and run.get("conclusion") != STARTUP_FAILURE,
+        )
+        for run in scheduled.values()
     ]
-    started = [moment for moment, conclusion in times if conclusion != STARTUP_FAILURE]
+    started = [moment for moment, ran in times if ran]
     newest = max(started) if started else None
-    failed = sum(
-        1 for moment, conclusion in times if conclusion == STARTUP_FAILURE and (newest is None or moment > newest)
-    )
-    return Ticks(newest=newest, startup_failures=failed)
+    waiting = sum(1 for moment, ran in times if not ran and (newest is None or moment > newest))
+    return Ticks(newest=newest, not_started=waiting)
 
 
 def _file_text(repo: str, path: str, branch: str, gh: Gh) -> str:
@@ -514,17 +522,22 @@ def check_workflow(
     except ApiError as error:
         return Verdict(repo, path, UNVERIFIABLE, f"cannot verify: {error}, {budget}")
 
-    failures = f" ({ticks.startup_failures} newer scheduled runs failed at startup)" if ticks.startup_failures else ""
+    failures = (
+        f" ({ticks.not_started} newer scheduled runs failed at startup or are still queued)"
+        if ticks.not_started
+        else ""
+    )
     if ticks.newest is not None:
         age = now - ticks.newest
         status = STALE if age > bound else OK
         return Verdict(repo, path, status, f"last scheduled run {human(age)} ago{failures}, {budget}")
-    if ticks.startup_failures:
+    if ticks.not_started:
         return Verdict(
             repo,
             path,
             STALE,
-            f"every scheduled run read ({ticks.startup_failures}) failed at startup, none ran a job, {budget}",
+            f"none of the {ticks.not_started} scheduled runs read started a job "
+            f"(startup failure or still queued), {budget}",
         )
     # Only a workflow with no scheduled run at all needs its file's age, so only
     # it depends on the history read (review: a startup-failure verdict is
