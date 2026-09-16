@@ -55,6 +55,7 @@ FRESHNESS = "deploy-freshness.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
+NIGHTLY = "nightly-dagster-liveness.yml"
 WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
 
@@ -1002,6 +1003,137 @@ def test_the_liveness_window_is_one_churn_cycle_plus_margin() -> None:
     assert f"{window}s" in str(spec["name"]), "the step's name must say how long it observes"
 
 
+def test_dagster_liveness_filter_is_narrow_and_a_subset_of_python() -> None:
+    """#855 A4: dagster-code-server-liveness (truealpha#454's daemon self-termination
+    class) measured 151-160 s of every PR's and every main push's critical path for a
+    regression that reproduces only through the dagster composition root, its lanes,
+    the image it runs in, and its own job definition -- a surface ~95% of PR diffs
+    never touch. `dagster_liveness` is that narrow filter.
+
+    It must be a SUBSET of `python`'s own filter, not merely narrower: `python`'s own
+    `if` still gates the whole `uses: ./.github/workflows/ci-python.yml` call in
+    ci-required.yml, so a path that sets `dagster_liveness` true without also setting
+    `python` true would compute a filter output ci-python.yml — and the liveness job
+    inside it — never has a chance to read, silently skipping a run this filter says
+    should happen.
+    """
+    workflow = yaml.safe_load(source(REQUIRED))
+    filter_step = next(
+        (step for step in workflow["jobs"]["changes"]["steps"] if "filters" in (step.get("with") or {})),
+        None,
+    )
+    assert filter_step is not None, "ci-required's changes job no longer carries a paths-filter step"
+    filters = yaml.safe_load(filter_step["with"]["filters"])
+
+    assert "dagster_liveness" in filters, (
+        "the changes job no longer declares a dagster_liveness filter — #855 A4's gating has "
+        "nothing to read and ci-python.yml falls back to running liveness on every PR again"
+    )
+    liveness_paths = set(filters["dagster_liveness"])
+    expected = {
+        "apps/data-engine/src/data_engine/dagster_defs.py",
+        "apps/data-engine/src/data_engine/lanes/**",
+        "apps/data-engine/Dockerfile",
+        "docker-compose.yml",
+        ".github/workflows/ci-python.yml",
+    }
+    assert liveness_paths == expected, (
+        f"dagster_liveness filter paths are {liveness_paths}, expected {expected} — the job it "
+        f"gates only reproduces through the composition root, its lanes, the image, the compose "
+        f"surface, and this file itself"
+    )
+
+    def covered(path: str, patterns: set[str]) -> bool:
+        for pattern in patterns:
+            if pattern == path:
+                return True
+            if pattern.endswith("/**") and path.startswith(pattern[: -len("/**")] + "/"):
+                return True
+        return False
+
+    python_paths = set(filters["python"])
+    uncovered = {path for path in liveness_paths if not covered(path, python_paths)}
+    assert not uncovered, (
+        f"{uncovered} is in dagster_liveness but no python filter entry covers it — a PR that "
+        f"touches only that path sets dagster_liveness true while ci-python.yml is never invoked "
+        f"at all, so the liveness job silently never runs"
+    )
+
+    outputs = workflow["jobs"]["changes"]["outputs"]
+    assert outputs.get("dagster_liveness") == (
+        "${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.dagster_liveness }}"
+    ), "dagster_liveness must be wired the same way as every other changes output (merge_group forces true)"
+
+
+def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() -> None:
+    """#855 A4, the other half of the property above: what actually reads the filter.
+
+    ci-required.yml's `python` job computes the decision (not `github.event_name` read
+    inside the called workflow, whose value in a called workflow is the CALLER's and not
+    this repo's to assume) and passes it as a `workflow_call` input; ci-python.yml's
+    liveness job is gated on that input, or on `dagster_liveness_only`, which the nightly
+    caller sets — the standing check that PR-gating does not mean "only tested by
+    accident". The three heavier jobs skip on that same input so the nightly is
+    liveness-only, not a timer that re-runs the whole suite. Every gate here is an input
+    the caller names, never a read of the caller's event.
+    """
+    caller = job(REQUIRED, "python")
+    decision = str(caller["with"]["dagster_liveness_required"])
+    assert "github.event_name != 'pull_request'" in decision, (
+        f"the caller's decision is {decision!r} — it no longer runs liveness unconditionally "
+        f"off pull_request (main push, merge_group, workflow_dispatch)"
+    )
+    assert "needs.changes.outputs.dagster_liveness == 'true'" in decision, (
+        f"the caller's decision is {decision!r} — it no longer reads the narrow filter, so a "
+        f"PR that touches the dagster surface would never run the liveness job either"
+    )
+
+    for name in ("dagster_liveness_required", "dagster_liveness_only"):
+        liveness_input = triggers(PYTHON)["workflow_call"]["inputs"][name]
+        assert liveness_input["type"] == "boolean" and liveness_input["default"] is False, (
+            f"{name} must default closed — an unset input on a direct call must not silently change what runs"
+        )
+
+    # The nightly is a scheduled CALLER, and ci-python.yml stays `workflow_call`-only: a
+    # reusable workflow that also declares its own triggers and permissions gets NO run on a
+    # PR — #878's first push never started ci-required at all, with no error anywhere.
+    assert set(triggers(PYTHON)) == {"workflow_call"}, (
+        f"ci-python.yml declares {sorted(triggers(PYTHON))} — a reusable workflow with its own "
+        f"triggers silently gets no PR run (#878); the nightly belongs in {NIGHTLY}"
+    )
+    nightly = triggers(NIGHTLY)
+    assert nightly.get("schedule") and nightly["schedule"][0].get("cron"), (
+        f"{NIGHTLY} no longer has a schedule — #855 A4's nightly coverage for the PRs the "
+        f"narrow filter does not match is gone"
+    )
+    assert "workflow_dispatch" in nightly, f"{NIGHTLY} must be runnable by hand for a drill"
+    caller = job(NIGHTLY, "python")
+    assert caller["uses"] == "./.github/workflows/ci-python.yml"
+    assert caller["with"]["dagster_liveness_only"] is True, "the nightly must force the liveness job on, alone"
+    assert caller["permissions"].get("actions") == "write", "setup-uv's cache saves only with actions: write (#645)"
+
+    liveness = job(PYTHON, "dagster-code-server-liveness")
+    condition = str(liveness["if"])
+    assert "inputs.dagster_liveness_required" in condition, (
+        f"the liveness job's if is {condition!r} — it no longer reads the caller's decision, so "
+        f"it either always runs (back on the PR critical path) or never does"
+    )
+    assert "inputs.dagster_liveness_only" in condition, (
+        f"the liveness job's if is {condition!r} — the nightly's input no longer forces it on, so "
+        f"a nightly run would tick green while testing nothing"
+    )
+    assert "github.event_name" not in condition, (
+        f"the liveness job's if is {condition!r} — inside a reusable workflow that context is the "
+        f"caller's; the contract is the named inputs"
+    )
+
+    for lane in ("gates", "test-core", "test-data-engine"):
+        assert str(job(PYTHON, lane)["if"]) == "${{ !inputs.dagster_liveness_only }}", (
+            f"{lane} runs on the nightly too — the nightly is meant to be liveness-only, "
+            f"not a timer that re-runs the whole suite"
+        )
+
+
 def test_the_routing_probe_gets_a_base_not_an_endpoint() -> None:
     """A4 C1 (#673). The freshness matrix carries `url` (the health ENDPOINT,
     what walk_evidence and health_check want) and `base` (what
@@ -1036,24 +1168,47 @@ def test_the_routing_probe_gets_a_base_not_an_endpoint() -> None:
     )
 
 
-def test_a_tag_run_can_never_be_cancelled_by_a_later_merge() -> None:
-    """Post-merge batching (#673) turned `cancel-in-progress` on for every
-    event, so main pushes collapse instead of each burst queueing ~16 extra
-    jobs in front of every open PR.
+def test_main_pushes_never_collide_and_a_tag_run_can_never_be_cancelled() -> None:
+    """#708 measured 2 of 14 main merges colliding and turned `cancel-in-progress`
+    on for every event, so main pushes collapse instead of each burst queueing
+    ~16 extra jobs in front of every open PR. Re-measured 2026-09-16 (#860): 6 of
+    27 main-push runs were cancelled (22%, five times #708's rate), and one of
+    them — 57d25316 — was a run `cut_release` was WAITING ON: it died mid-flight
+    with "finished non-green: cancelled" and the release ceremony restarted from
+    scratch instead of resuming. Collapsing collisions is not the same as
+    preventing them, and #708 did not measure what happens when the collision
+    kills a run something else is blocked on.
 
-    That is only safe because the group key carries `github.ref`, which puts
-    each tag alone in its own group. Flatten the key — a constant, or
-    `github.workflow` — and the tag run becomes cancellable by the next merge:
-    no images published for that version, and a release that fails after the
-    tag has already been pushed, which is the one step the protocol calls a
-    lock. So the two settings are asserted together, as the single property
-    they actually form.
+    So a non-tag push now keys its group by `github.sha`: each main commit gets
+    its own group, nothing else can ever share it, and `cancel-in-progress`
+    never has a second run in the group to cancel it with — main can no longer
+    cancel a run something else is waiting on, by construction, the same way
+    finance_report's `ci.yml` already does for its push group.
+
+    A tag push is the one push that keeps the OLD `github.ref` key (moved from
+    the test this replaces, not deleted): a tag's SHA is always one main already
+    ran and published green — `cut_release` refuses to tag otherwise — so it
+    never needs isolating from main, only from another run on the SAME tag ref,
+    which the ref already gives it, and which the event suffix protects from a
+    workflow_dispatch on that same ref: without the event in the key, a manual
+    dispatch on the same tag ref shares the group and cancels the release run
+    mid-publish. Two dispatches on the same ref, or two tag pushes, still
+    cancel each other — that is still what you want.
     """
     concurrency = yaml.safe_load(source(REQUIRED))["concurrency"]
     group = str(concurrency["group"])
     assert concurrency["cancel-in-progress"] is True, (
-        "main pushes no longer collapse — every burst of merges runs a full duplicate suite "
-        "while open PRs wait behind it"
+        "PR runs no longer collapse to their newest push — every superseded PR run now queues "
+        "behind the one that replaced it"
+    )
+    assert "github.event_name == 'push'" in group and "github.ref_type != 'tag'" in group, (
+        f"the concurrency key is {group!r}: a non-tag push is no longer routed to its own "
+        f"SHA-keyed group, so two main commits can land in the same group again and "
+        f"cancel-in-progress can kill a run a release ceremony or an open PR is waiting on"
+    )
+    assert "github.sha" in group, (
+        f"the concurrency key is {group!r}: it no longer uses github.sha, so a non-tag push "
+        f"cannot get its own group and main pushes go back to colliding (measured 6/27, #860)"
     )
     assert "github.ref" in group, (
         f"the concurrency key is {group!r}: with cancel-in-progress on and no ref in the key, a "

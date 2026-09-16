@@ -1,7 +1,34 @@
 name: ci-python
 
+# #855 A4: `dagster-code-server-liveness` below is gated by `inputs.dagster_liveness_required`
+# (set by ci-required.yml's `python` job). nightly-dagster-liveness.yml calls this workflow
+# with `dagster_liveness_only: true` instead: the liveness job runs and the other three skip —
+# the nightly exists only to give the probe a run independent of any one PR's diff, not to
+# re-run the whole suite on a timer. Both are explicit inputs rather than a read of
+# `github.event_name`: inside a reusable workflow that context is the CALLER's, which is easy
+# to misread and shifts if a caller is added. This file stays `workflow_call`-only: GitHub
+# creates no run at all for a PR whose reusable workflow also declares its own triggers and
+# permissions (#878's first push got no ci-required run).
 on:
   workflow_call:
+    inputs:
+      dagster_liveness_required:
+        description: >-
+          Whether the caller wants dagster-code-server-liveness to run. ci-required.yml
+          passes true unconditionally off `pull_request` (a push to main, `merge_group`,
+          `workflow_dispatch`) and on a PR only when its narrow `dagster_liveness` path
+          filter matched. nightly-dagster-liveness.yml passes true on its `schedule`.
+        required: false
+        type: boolean
+        default: false
+      dagster_liveness_only:
+        description: >-
+          Run ONLY dagster-code-server-liveness (gates and both test lanes skip). Set by
+          nightly-dagster-liveness.yml; the liveness job treats it as `required` too.
+        required: false
+        type: boolean
+        default: false
+
 
 jobs:
   # A4 D3 (#673): one serial `check` job measured 259 s — lint, types, four tool
@@ -13,6 +40,9 @@ jobs:
   # indirection layer, and the duplication is two YAML blocks that ci-db's
   # tests already cross-check.
   gates:
+    # The nightly `schedule` trigger exists only to re-run dagster-code-server-liveness
+    # (#855 A4); it is not a standing nightly re-proof of the rest of the suite.
+    if: ${{ !inputs.dagster_liveness_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -38,6 +68,7 @@ jobs:
       - run: uv run python tools/env_manifest.py --check
 
   test-core:
+    if: ${{ !inputs.dagster_liveness_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Real Postgres + MinIO so the KG / raw-store / ledger integration tests run
@@ -118,6 +149,7 @@ jobs:
   # nobody runs — green, forever, which is the exact green-while-empty shape
   # (#527) this whole job exists to avoid.
   test-data-engine:
+    if: ${{ !inputs.dagster_liveness_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -206,7 +238,18 @@ jobs:
   # Postgres -- instead of only being verifiable by SSHing into staging after a deploy
   # (reproduced locally in the same shape before adding this: 0 heartbeat warnings over
   # 120s with --grpc-socket, vs. one every ~68-70s under plain `-m`).
+  #
+  # #855 A4: this job was 151-160s (now ~110s after #871's 75s window) of every PR's
+  # and every main push's critical path, for a regression class unrelated to ~95% of
+  # PR diffs. It is unconditional off `pull_request` -- a push to main, `merge_group`,
+  # `workflow_dispatch`, and this workflow's own nightly `schedule` -- and gated on a
+  # PR by ci-required.yml's narrow `dagster_liveness` path filter (the composition
+  # root, its lanes, the image, docker-compose.yml, this file). Owner-accepted trade-off
+  # (2026-09-16): a green `ci-required` on a PR the filter does not match no longer
+  # proves the #454 class stays fixed on THAT diff -- it proves everything ELSE, and the
+  # #454 class is still caught within a day, on main or the nightly run, for every PR.
   dagster-code-server-liveness:
+    if: inputs.dagster_liveness_only || inputs.dagster_liveness_required
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:

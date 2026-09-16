@@ -29,6 +29,8 @@ on:
   # names a file this list misses, so the filter cannot rot silently.
   pull_request:
     paths:
+      - ".github/workflows/ci-python.yml"
+      - ".github/workflows/ci-required.yml"
       - ".github/workflows/deploy-release.yml"
       - ".github/workflows/walk-release.yml"
       - "apps/app-web/src/app/login/page.tsx"

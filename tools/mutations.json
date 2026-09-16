@@ -287,6 +287,54 @@
         "tools/check_factor_contract.py"
       ],
       "cwd": "."
+    },
+    {
+      "id": "workflow-contract/main-push-gets-its-own-concurrency-group",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/ci-required.yml",
+      "find": "  group: ci-required-${{ (github.event_name == 'push' && github.ref_type != 'tag') && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}",
+      "replace": "  group: ci-required-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "workflow-contract/dagster-liveness-is-gated-on-a-pr",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/ci-python.yml",
+      "find": "  dagster-code-server-liveness:\n    if: inputs.dagster_liveness_only || inputs.dagster_liveness_required",
+      "replace": "  dagster-code-server-liveness:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "workflow-contract/dagster-liveness-filter-is-a-subset-of-python",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/ci-required.yml",
+      "find": "            dagster_liveness:",
+      "replace": "            unrelated_lane:",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

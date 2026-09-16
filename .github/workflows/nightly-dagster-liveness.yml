@@ -1,0 +1,29 @@
+name: nightly-dagster-liveness
+
+# #855 A4 / #860: `dagster-code-server-liveness` left every PR's critical path (151–160 s of
+# it) and runs on a PR only when the narrow `dagster_liveness` path filter matches. The
+# truealpha#454 daemon-self-termination class does not correlate with any single file
+# changing, so this caller gives the probe one run a day independent of any PR's diff —
+# 05:00 UTC, ahead of deploy-freshness's 07:00 check. It calls ci-python.yml with
+# `dagster_liveness_only: true`: the liveness job runs and the other three skip, so the
+# nightly is liveness-only by an explicit input, not by ci-python.yml reading the caller's event. A separate caller rather than a trigger on ci-python.yml itself:
+# a reusable workflow that also declares its own triggers and permissions gets NO run on a
+# PR (measured on #878's first push — ci-required never started).
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # setup-uv's cache SAVES only with actions: write (#645); the called workflow takes this grant.
+  actions: write
+
+jobs:
+  python:
+    uses: ./.github/workflows/ci-python.yml
+    with:
+      dagster_liveness_only: true
+    permissions:
+      contents: read
+      actions: write
