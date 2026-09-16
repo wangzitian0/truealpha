@@ -200,3 +200,44 @@ def test_force_fetch_is_immutable_once_requested(connection) -> None:
             "update staging.pipeline_trigger_requests set force_fetch = false where request_id = %s",
             (request_id,),
         )
+
+
+def test_sensor_consumes_requests_on_a_schema_the_874_migration_has_not_reached(connection, monkeypatch) -> None:
+    """Rolling deploy (Copilot on #892): migrations apply when llm-service boots, so a
+    data-engine image can start before `force_fetch` exists. The sensor must keep
+    consuming requests (as unforced ticks; no request can ask for more on that schema)
+    instead of failing every poll. The pre-#874 shape is rebuilt inside this test's
+    transaction and rolled back afterwards."""
+    connection.execute("drop trigger validate_trigger_update on staging.pipeline_trigger_requests")
+    connection.execute("alter table staging.pipeline_trigger_requests drop column force_fetch")
+    dedupe_key = "test-sensor-pre-874-schema"
+    request_id = _insert_request(connection, dedupe_key)
+    monkeypatch.setattr(psycopg, "connect", lambda *a, **k: _reuse_without_commit(connection))
+
+    requests = [r for r in pipeline_trigger_sensor(dg.build_sensor_context()) if r.run_key == f"manual:{dedupe_key}"]
+
+    assert len(requests) == 1
+    assert requests[0].run_config["ops"]["run_topt_live_tick"]["config"] == {
+        "executed_at": _EXECUTED_AT.isoformat(),
+        "force_fetch": False,
+    }
+    assert connection.execute(
+        "select launched_run_key from staging.pipeline_trigger_requests where request_id = %s", (request_id,)
+    ).fetchone() == (f"manual:{dedupe_key}",)
+
+
+class _reuse_without_commit(_reuse):
+    """`_reuse`, but the sensor's commit is swallowed so the schema edits above stay
+    inside the transaction the fixture rolls back."""
+
+    def __enter__(self):
+        connection = self._connection
+
+        class _Uncommitted:
+            def execute(self, *args, **kwargs):
+                return connection.execute(*args, **kwargs)
+
+            def commit(self) -> None:
+                return None
+
+        return _Uncommitted()

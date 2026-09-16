@@ -38,8 +38,14 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
     """
     with psycopg.connect(settings.database_url) as connection:
         pending = connection.execute(
-            "select request_id, executed_at, dedupe_key, job_name, force_fetch "
-            "from staging.pipeline_trigger_requests "
+            # `force_fetch` is read through `to_jsonb(request)` rather than by name:
+            # migrations apply when llm-service boots, so this image can start before
+            # the #874 column exists. On that schema no request can ask for a forced
+            # fetch, and the sensor keeps launching ordinary ticks instead of failing
+            # every poll (Copilot on #892).
+            "select request_id, executed_at, dedupe_key, job_name, "
+            "coalesce((to_jsonb(request)->>'force_fetch')::boolean, false) "
+            "from staging.pipeline_trigger_requests request "
             "where consumed_at is null order by request_id limit 5"
         ).fetchall()
         for request_id, executed_at, dedupe_key, job_name, force_fetch in pending:

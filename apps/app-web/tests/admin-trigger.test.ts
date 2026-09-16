@@ -41,17 +41,18 @@ const administrator = { principalId: "principal:owner", principalKind: "administ
   assert(calls.length === 0, "no insert may run before the deny decision");
 }
 
-// --- an ordinary request: force_fetch is written, and it is false ---
-{
+// --- an ordinary request: the pre-#874 statement, so it also works on a schema the
+// migration has not reached yet (migrations apply when llm-service boots) ---
+for (const unforced of [undefined, false]) {
   const calls: Call[] = [];
   __setTestTriggerRuntime(recordingRuntime(calls));
-  const outcome = await requestPipelineTrigger(administrator, "2026-09-16T21:30:00Z");
+  const outcome = await requestPipelineTrigger(administrator, "2026-09-16T21:30:00Z", unforced);
   assert(outcome.kind === "accepted", `expected accepted, got ${outcome.kind}`);
   assert(outcome.forceFetch === false, "an unasked request is not forced");
   assert(outcome.requestId === 42 && outcome.executedAt === "2026-09-16T21:30:00.000Z", "identity echoed");
   assert(calls.length === 1, "exactly one insert");
-  assert(/\bforce_fetch\b/.test(calls[0].sql), "the insert names force_fetch rather than relying on the default");
-  assert(calls[0].params.includes(false) && !calls[0].params.includes(true), "force_fetch is bound false");
+  assert(!/\bforce_fetch\b/.test(calls[0].sql), "an unforced insert leaves force_fetch to its false default");
+  assert(!calls[0].params.includes(true), "nothing forced is bound");
 }
 
 // --- a forced request: the flag reaches the row the sensor reads ---
@@ -60,7 +61,8 @@ const administrator = { principalId: "principal:owner", principalKind: "administ
   __setTestTriggerRuntime(recordingRuntime(calls));
   const outcome = await requestPipelineTrigger(administrator, undefined, true);
   assert(outcome.kind === "accepted" && outcome.forceFetch === true, "a forced request is accepted as forced");
-  assert(calls[0].params.includes(true), "force_fetch is bound true");
+  assert(/\bforce_fetch\b/.test(calls[0].sql), "a forced insert names force_fetch");
+  assert(calls[0].params.length === 4 && calls[0].params[3] === true, "force_fetch is bound true");
   assert(calls[0].sql.includes("staging.pipeline_trigger_requests"), "the Postgres-mediated trigger table");
 }
 

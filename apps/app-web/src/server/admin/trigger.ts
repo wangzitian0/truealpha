@@ -10,8 +10,10 @@
  * roles.sql exception (insert/select on this one staging table).
  *
  * #874: `force_fetch` asks the tick to skip the #635 reuse window and fetch
- * every obligation again, under a capture identity of its own. It is written
- * explicitly on every request (false unless asked) and must be a boolean.
+ * every obligation again, under a capture identity of its own. It must be a
+ * boolean. Only a forced request names the column. An ordinary request keeps
+ * the pre-#874 statement and takes the column's `false` default, so it still
+ * works while a deploy waits for the migration (applied when llm-service boots).
  */
 
 import { randomUUID } from "node:crypto";
@@ -62,11 +64,17 @@ export async function requestPipelineTrigger(
   const runtime: TriggerRuntime = runtimeOverride ?? withAppRuntime;
   try {
     const requestId = await runtime(async (client) => {
-      const inserted = await client.query(
-        "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) " +
-          "values ('topt_live_pipeline', $1, $2, $3, $4) returning request_id",
-        [executedAt.toISOString(), principal.principalId, dedupeKey, forceFetch],
-      );
+      const inserted = forceFetch
+        ? await client.query(
+            "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) " +
+              "values ('topt_live_pipeline', $1, $2, $3, $4) returning request_id",
+            [executedAt.toISOString(), principal.principalId, dedupeKey, true],
+          )
+        : await client.query(
+            "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) " +
+              "values ('topt_live_pipeline', $1, $2, $3) returning request_id",
+            [executedAt.toISOString(), principal.principalId, dedupeKey],
+          );
       return Number(inserted.rows[0].request_id);
     });
     return { kind: "accepted", requestId, dedupeKey, executedAt: executedAt.toISOString(), forceFetch };
