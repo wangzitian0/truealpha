@@ -100,9 +100,9 @@ def test_factor_module_identity() -> None:
         f"price_to_sales registers module={actual}, but init.md Section 7 documents module={expected}"
     )
 
-    # Every base factor lives in modules 1-6 except the one documented exception above;
-    # module 7 is the composite (init.md: "Modules 1-6 are base factors ... Module 7 is a
-    # composite factor").
+    # Every base factor lives in modules 1-6; module 7 is the composite (init.md: "Modules
+    # 1-6 are base factors ... Module 7 is a composite factor"); a feeder registers the
+    # module a composite reduces (#855 B3) — no name is excepted here any more.
     composite_modules = {spec.module for spec in FACTOR_REGISTRY.values() if spec.kind == "composite"}
     for name, spec in FACTOR_REGISTRY.items():
         if spec.kind == "composite":
