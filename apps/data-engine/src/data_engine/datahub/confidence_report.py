@@ -1006,9 +1006,11 @@ def load_quality_report_field_outcomes(
     """The persisted quality report for this run and its per-listing outcome per bar field,
     so the report can prove it grades each field the same day, and the same way, the
     pointer gate's report graded it."""
+    # Only the cells the cross-check reads, not the whole payload (Copilot on #872).
     row = connection.execute(
         """
-        select report_id, payload from mart.datahub_quality_report
+        select report_id, jsonb_build_object('reconciliation_cells', payload->'reconciliation_cells')
+        from mart.datahub_quality_report
         where run_id = %s order by created_at desc limit 1
         """,
         (run_id,),

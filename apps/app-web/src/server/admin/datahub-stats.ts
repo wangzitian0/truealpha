@@ -179,6 +179,16 @@ export interface ConfidenceQualityMatch {
   mismatches: number;
 }
 
+/** The bar's own order for the price families; every other cross-checked family follows
+ *  alphabetically. The payload is `jsonb`, which does not keep key order, so the order is
+ *  imposed here rather than read. */
+const QUALITY_MATCH_ORDER = ["open", "high", "low", "close", "volume"];
+
+function qualityMatchRank(family: string): number {
+  const index = QUALITY_MATCH_ORDER.indexOf(family);
+  return index === -1 ? QUALITY_MATCH_ORDER.length : index;
+}
+
 interface AccuracyEntryDb {
   matches_quality_report?: boolean | null;
   quality_report_mismatches?: string[];
@@ -222,9 +232,9 @@ export interface ConfidenceReportRow {
   sources_connected: string[];
   families: ConfidenceFamilyRow[];
   close_matches_quality_report: boolean | null;
-  /** Every family the report cross-checks against the persisted quality report, in the
-   *  payload's order: the bar fields per field (#865). `matches` is null when the quality
-   *  report graded nothing for the family. */
+  /** Every family the report cross-checks against the persisted quality report: the bar
+   *  fields per field in bar order (#865), any other family after them alphabetically.
+   *  `matches` is null when the quality report graded nothing for the family. */
   quality_report_matches: ConfidenceQualityMatch[];
   oracle_issuers_compared: number;
   oracle_fields: ConfidenceOracleField[];
@@ -286,6 +296,11 @@ function confidenceReportRows(
         mismatches: entry.quality_report_mismatches?.length ?? 0,
       });
     }
+    qualityMatches.sort(
+      (a, b) =>
+        qualityMatchRank(a.family) - qualityMatchRank(b.family) ||
+        a.family.localeCompare(b.family),
+    );
     const close = accuracy.close;
     return {
       universe_id: row.universe_id,
