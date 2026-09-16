@@ -37,7 +37,7 @@ report measures the distinct values per semantic in the run and records
 
 | family | semantic | origins today | policy |
 |---|---|---|---|
-| `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1` | `market-price-fusion:v2` (`quality_report.RECONCILIATION_POLICY`, 30 bp relative), served-day narrowing |
+| `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1`, `origin:moomoo-kline:v1` (when the flag is on) | `market-price-fusion:v3` (`quality_report.RECONCILIATION_POLICY`, 30 bp relative), served-day narrowing |
 | `revenue`, `gross_profit`, `pre_provision_profit`, `total_assets`, `shares_outstanding`, `net_income` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | none in this report yet — single origin grades `low`, two lineages `medium` (`no_agreement_policy`); the quality report's `financial-fact-fusion:v1` carries the per-field agreement |
 | `headcount` | financial-fact | `origin:headcount:<producer>` per producer in `staging.issuer_headcount_facts` | none — one lineage, `medium` at most |
 | `index_membership` | index-membership plane (QQQ) | `origin:nasdaq-index:v1` (`staging.etf_constituent_facts`), `origin:nport:v1` (`mart.fund_holdings_resolved`) | `index-membership-fusion:v1` (new), presence compared exactly |
