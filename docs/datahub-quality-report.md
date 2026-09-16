@@ -171,10 +171,20 @@ A manual launch with `force_fetch: true` skips the reuse window for every obliga
   `force_fetch`, resolves to the same forced run. A complete run resumes without a
   vendor call; a degraded one is refused with the reason already on file. To fetch
   again, launch with a new `executed_at`.
-- **The forcing is recorded.** It appears in `raw.production_topt_run_plans.payload.forced_fetch`,
-  in the quality report's `forced_fetch`, in the op's output metadata (`forced_fetch`)
-  and as `(forced fetch)` in the tick's log line. A forced re-run therefore cannot be
-  mistaken for scheduled-tick evidence.
+- **The forcing is recorded.** It appears in the run plan, in the quality report, in
+  the op's output metadata (`forced_fetch`) and as `(forced fetch)` in the tick's log
+  line. A forced re-run therefore cannot be mistaken for scheduled-tick evidence. Both
+  database records are JSONB `payload` columns:
+
+  ```sql
+  select plan.run_id, (plan.payload->>'forced_fetch')::boolean as forced_fetch
+  from raw.production_topt_run_plans plan
+  order by plan.created_at desc limit 5;
+
+  select report.run_id, (report.payload->>'forced_fetch')::boolean as forced_fetch
+  from mart.datahub_quality_report report
+  order by report.created_at desc limit 5;
+  ```
 - **Mind the vendor clock.** The fetch happens when the run executes, whatever
   `executed_at` says. Between about 23:00 and 07:00 America/New_York, Yahoo's overnight
   rebuild nulls the latest close (#622). Until about 16:30 the session's bar is still
