@@ -33,6 +33,20 @@ REPO = Path(__file__).resolve().parents[1]
 MANIFEST = REPO / "tools" / "factor_contract.json"
 FACTORS = REPO / "libs" / "factors" / "src" / "factors"
 MIGRATIONS = REPO / "db" / "migrations"
+QUESTIONS = REPO / "libs" / "contracts" / "src" / "truealpha_contracts" / "question_requirements.py"
+
+#: Registered factors that no question column names, each with the reason that is not a gap
+#: (I5, #855). Anything else registered and unnamed is a factor the coverage report can never
+#: count — it lands in `mart`, every gate stays green, and no head ever reports it.
+NOT_A_QUESTION_COLUMN = {
+    "price_to_sales": (
+        "feeds three_tier_valuation (module 7); `current_price_to_sales` is the strategy's input, "
+        "not a question's answer (#770)"
+    ),
+    "three_tier_valuation": "the module-7 composite; `tier` is the strategy's sorting, and q1 is answered by gppe (#770)",
+    "registered_semantic_probe": "a registry probe (#770): exercises the registration path and writes no mart column",
+    "registered_composite_probe": "a registry probe (#770): exercises the registration path and writes no mart column",
+}
 
 
 def _signature(fn: ast.FunctionDef) -> str:
@@ -86,6 +100,22 @@ def observed_factors() -> dict[str, dict[str, object]]:
                     if kw.arg in {"kind", "module"}:
                         spec[kw.arg] = ast.literal_eval(kw.value)
                 found[name] = spec
+    return found
+
+
+def observed_question_columns() -> list[dict[str, object]]:
+    """Every `FactorColumn(...)` in `QUESTION_REQUIREMENTS`, read from the source like the
+    factors are: the gate is stdlib-only and the registry's module cannot be imported here."""
+    fields = ("table", "column", "factor", "module")
+    found: list[dict[str, object]] = []
+    for node in ast.walk(ast.parse(QUESTIONS.read_text())):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "FactorColumn"):
+            continue
+        spec: dict[str, object] = dict(zip(fields, (ast.literal_eval(arg) for arg in node.args[: len(fields)])))
+        for kw in node.keywords:
+            if kw.arg in fields:
+                spec[kw.arg] = ast.literal_eval(kw.value)
+        found.append(spec)
     return found
 
 
@@ -174,6 +204,39 @@ def main() -> int:
             failures.append(
                 f"factor {name!r}: module 7 is the composite (three-tier valuation); a base factor cannot claim it"
             )
+
+    # --- I5: a factor the coverage report cannot count is invisible, not unavailable ---
+    # The six-question report (`question_coverage.py`) counts exactly the columns
+    # `QUESTION_REQUIREMENTS` names. A registered factor no column names lands in `mart`
+    # with every gate green and is never reported on any head — the GREEN-WHILE-EMPTY shape,
+    # by construction rather than by accident (#855 B1). Both directions: every factor is
+    # named or excused with its reason, and every named column is a real factor writing a
+    # column a migration creates, under the module the factor registers.
+    question_columns = observed_question_columns()
+    named = {str(column["factor"]) for column in question_columns}
+    for name in sorted(set(actual_factors) - named - set(NOT_A_QUESTION_COLUMN)):
+        failures.append(
+            f"factor {name!r} lands nowhere the coverage report counts: add a FactorColumn to "
+            "QUESTION_REQUIREMENTS, or name it in NOT_A_QUESTION_COLUMN with the issue that owns its absence"
+        )
+    for name in sorted(set(NOT_A_QUESTION_COLUMN) - set(actual_factors)):
+        failures.append(f"NOT_A_QUESTION_COLUMN excuses {name!r}, which is not a registered factor")
+    for name in sorted(set(NOT_A_QUESTION_COLUMN) & named):
+        failures.append(
+            f"factor {name!r} is named by a FactorColumn and excused in NOT_A_QUESTION_COLUMN; drop the excuse"
+        )
+    for column in question_columns:
+        table, col, factor, module = (column.get(field) for field in ("table", "column", "factor", "module"))
+        where = f"{table}.{col}"
+        if factor not in actual_factors:
+            failures.append(f"QUESTION_REQUIREMENTS names factor {factor!r} for {where}, which is not registered")
+        elif actual_factors[factor].get("module") != module:
+            failures.append(
+                f"QUESTION_REQUIREMENTS files {where} under module {module!r}; "
+                f"factor {factor!r} registers module {actual_factors[factor].get('module')!r}"
+            )
+        if col not in observed_columns(str(table)):
+            failures.append(f"QUESTION_REQUIREMENTS names {where} for {factor!r}, and no migration creates that column")
 
     # --- I3: adding a metric is a registry edit, never a migration and never a branch ---
     # Replayed in file order, like `observed_columns()` above: 0032's CREATE TABLE text
