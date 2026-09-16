@@ -99,6 +99,8 @@ def observed_factors() -> dict[str, dict[str, object]]:
                 for kw in decorator.keywords:
                     if kw.arg in {"kind", "module"}:
                         spec[kw.arg] = ast.literal_eval(kw.value)
+                    elif kw.arg == "inputs":
+                        spec["inputs"] = list(ast.literal_eval(kw.value))
                 found[name] = spec
     return found
 
@@ -172,7 +174,9 @@ def main() -> int:
                 f"{json.dumps(actual_factors[name], sort_keys=True)}"
             )
             continue
-        for field in ("function", "module_path", "signature", "kind", "module"):
+        # `inputs` is frozen like the signature: the metrics a factor declares are what a
+        # published number means, and a changed set must be a deliberate edit (#855 B2).
+        for field in ("function", "module_path", "signature", "kind", "module", "inputs"):
             want, got = expected_factors[name].get(field), actual_factors[name].get(field)
             if want != got:
                 failures.append(f"factor {name!r} {field}: frozen {want!r}, found {got!r}")
@@ -237,6 +241,18 @@ def main() -> int:
             )
         if col not in observed_columns(str(table)):
             failures.append(f"QUESTION_REQUIREMENTS names {where} for {factor!r}, and no migration creates that column")
+
+    # --- I6: the evaluator projects what the registry declares, never a key tuple of its own ---
+    # `strategy_evaluator.py` kept `_GPPE_KEYS`/`_PS_KEYS`/`_PEG_KEYS` — one literal per factor,
+    # which is why landing a factor was an edit to the composite (#855 B2). A base factor now
+    # declares its metrics at registration and the evaluator derives the keys; a literal tuple
+    # of input keys back in the evaluator is the regression this catches.
+    evaluator = FACTORS / "composite" / "strategy_evaluator.py"
+    if evaluator.exists() and re.search(r"^_[A-Z_]*KEYS\s*=\s*\(\s*[\"']", evaluator.read_text(), re.M):
+        failures.append(
+            "strategy_evaluator.py hard-codes a factor's input keys in a tuple — declare them on the factor "
+            "(`@factor(..., inputs=...)`) and let the evaluator derive them (#855 B2)"
+        )
 
     # --- I3: adding a metric is a registry edit, never a migration and never a branch ---
     # Replayed in file order, like `observed_columns()` above: 0032's CREATE TABLE text

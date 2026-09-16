@@ -52,14 +52,24 @@
       "kind": "base",
       "module": 1,
       "module_path": "libs/factors/src/factors/base/peg.py",
-      "signature": "(facts: Sequence[Fact], *, entity_id: str, growth_convention: GrowthConvention, as_of: datetime, cagr_years: int) -> FactorResult"
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, growth_convention: GrowthConvention, as_of: datetime, cagr_years: int) -> FactorResult",
+      "inputs": [
+        "price",
+        "shares_outstanding",
+        "net_income"
+      ]
     },
     "gross_profit_per_employee": {
       "function": "gross_profit_per_employee",
       "kind": "base",
       "module": 2,
       "module_path": "libs/factors/src/factors/base/gross_profit_per_employee.py",
-      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal) -> FactorResult"
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime, risk_free_rate: Decimal) -> FactorResult",
+      "inputs": [
+        "gross_profit",
+        "total_assets",
+        "employees_total"
+      ]
     },
     "etf_virtual_company": {
       "function": "consolidate_fund",
@@ -87,7 +97,12 @@
       "kind": "base",
       "module": 7,
       "module_path": "libs/factors/src/factors/base/price_to_sales.py",
-      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime) -> FactorResult"
+      "signature": "(facts: Sequence[Fact], *, entity_id: str, as_of: datetime) -> FactorResult",
+      "inputs": [
+        "price",
+        "shares_outstanding",
+        "revenue"
+      ]
     },
     "registered_composite_probe": {
       "function": "registered_composite_probe",
