@@ -137,12 +137,17 @@ jobs:
       # cadence) or missing verdict. `if: always()` for the same reason as the steps above.
       # --repo: the expected checks are read at the deployed release's tag (full history and
       # tags are fetched above), so a check main adds is not demanded of a lagging release.
+      # --deploy-type: a check a release has only just introduced here is pending, not missing,
+      # until its first declaring deploy is older than the bound (read from deploy-release runs).
       - name: Check ${{ matrix.environment }} nightly check verdicts
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           uv run --no-sync python tools/nightly_verdicts.py \
             "${{ matrix.url }}" \
             --environment "${{ matrix.environment }}" \
+            --deploy-type "${{ matrix.deploy_type }}" \
             --repo .
 
       - name: Check ${{ matrix.environment }} surface-walk evidence

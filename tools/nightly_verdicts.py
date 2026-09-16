@@ -12,7 +12,11 @@ which escalates a red run to an issue — fails when an expected check's newest 
   * red (`ok` false): the check ran and failed;
   * stale (older than twice the check's cadence): the schedule stopped ticking, or the job
     stopped reaching its verdict;
-  * missing: the environment has never recorded it.
+  * missing: the environment has never recorded it — unless the check is NEW here: the first
+    successful deploy to this environment of a release that declares it finished less than
+    twice its cadence ago, so its schedule has not had its chance yet (`--deploy-type`; the
+    grace is reported, and it is measured from that FIRST deploy, never from the latest one,
+    or a staging that releases several times a day would forgive a check that never ticks).
 
 Which checks are expected is declared once, in `tools/nightly_verdicts.json`, and
 `libs/runtime/tests/test_nightly_verdicts.py` holds that set equal to what the lanes record.
@@ -31,6 +35,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import subprocess
 import sys
@@ -40,6 +45,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from infra2_sdk.deploy_health import HttpGet, default_http_get
+
+GhApi = Callable[[str], str]
+GitRun = Callable[..., subprocess.CompletedProcess[str]]
+#: (check, deployed release) -> the check's first moment of being expected here, or None
+#: when that cannot be shown.
+FirstDeclared = Callable[[str, str], datetime | None]
+#: Successful deploy-release.yml runs, newest first: "Deploy <deploy_type> <tag>".
+DEPLOY_RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/deploy-release.yml/runs?status=success&per_page=100"
 
 EXPECTATIONS_PATH = Path(__file__).with_name("nightly_verdicts.json")
 #: The same file as a release's tree names it.
@@ -196,8 +209,97 @@ def expectations_for(release: str | None, reader: ReleaseReader) -> tuple[dict[s
     return parse_expectations(text), f"as {release} declares them"
 
 
-def judge(verdicts: Sequence[Verdict], expectations: dict[str, Expectation], now: datetime) -> list[str]:
-    """One sentence per expected check that is red, stale or missing."""
+def _gh_api(path: str) -> str:
+    result = subprocess.run(["gh", "api", path], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise VerdictCheckFailure(f"gh api {path} failed: {result.stderr.strip()[:120]}")
+    return result.stdout
+
+
+def _utc(value: object) -> datetime:
+    stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+
+
+def first_declared_at(
+    check: str,
+    *,
+    release: str,
+    deploy_type: str,
+    repo: str = ".",
+    run: GitRun = subprocess.run,
+    gh_api: GhApi = _gh_api,
+) -> datetime | None:
+    """When this environment first served a release that declares `check`.
+
+    The commit that first put the check's key into the expectations file (among the deployed
+    release's ancestors), the release tags that contain it, and the earliest successful
+    `Deploy <deploy_type> <tag>` among them. None — no grace — whenever any step cannot be
+    shown, including when the listed runs may not reach back far enough: the answer is only
+    trusted when the listing is complete or reaches past the introducing commit, since no
+    deploy of a tag containing a commit can precede that commit.
+    """
+    try:
+        log = run(
+            [
+                "git",
+                "-C",
+                repo,
+                "log",
+                "--reverse",
+                "--format=%H %cI",
+                "-S",
+                f'"{check}"',
+                release,
+                "--",
+                RELEASE_EXPECTATIONS_PATH,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        lines = log.stdout.split("\n") if log.returncode == 0 else []
+        first = lines[0].split() if lines and lines[0].strip() else []
+        if len(first) != 2:
+            return None
+        introduced, introduced_at = first[0], _utc(first[1])
+        tags = run(
+            ["git", "-C", repo, "tag", "--contains", introduced, "--list", "v*"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if tags.returncode != 0:
+            return None
+        titles = {f"Deploy {deploy_type} {tag}" for tag in tags.stdout.split()}
+        runs = json.loads(gh_api(DEPLOY_RUNS_PATH)).get("workflow_runs", [])
+        served = [
+            _utc(entry["updated_at"])
+            for entry in runs
+            if entry.get("display_title") in titles and entry.get("conclusion") == "success"
+        ]
+        if not served:
+            return None
+        complete = len(runs) < 100 or min(_utc(entry["created_at"]) for entry in runs) <= introduced_at
+        return min(served) if complete else None
+    # OSError: a missing or unrunnable git/gh binary is "cannot be shown" too, never a crash.
+    except (VerdictCheckFailure, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def judge(
+    verdicts: Sequence[Verdict],
+    expectations: dict[str, Expectation],
+    now: datetime,
+    *,
+    first_declared: Callable[[str], datetime | None] | None = None,
+    notes: list[str] | None = None,
+) -> list[str]:
+    """One sentence per expected check that is red, stale or missing.
+
+    A missing check that `first_declared` shows became expected here less than its bound ago
+    is pending, not missing: a sentence goes to `notes` instead.
+    """
     newest: dict[str, Verdict] = {}
     for entry in verdicts:
         if entry.check not in newest or entry.ran_at > newest[entry.check].ran_at:
@@ -206,6 +308,15 @@ def judge(verdicts: Sequence[Verdict], expectations: dict[str, Expectation], now
     for name, expectation in sorted(expectations.items()):
         verdict = newest.get(name)
         if verdict is None:
+            since = first_declared(name) if first_declared is not None else None
+            if since is not None and (now - since).total_seconds() / 3600.0 < expectation.max_age_hours:
+                if notes is not None:
+                    notes.append(
+                        f"{name}: no verdict yet — first expected here since {since.isoformat()} "
+                        f"({(now - since).total_seconds() / 3600.0:.1f} h ago, limit {expectation.max_age_hours:g} h); "
+                        f"its schedule has not had its chance"
+                    )
+                continue
             failures.append(
                 f"{name}: no verdict at all — job {expectation.job or '?'} has never recorded one in this "
                 f"environment; its schedule is not ticking, or the job never reaches its verdict"
@@ -238,6 +349,7 @@ def check_nightly_verdicts(
     http_get: HttpGet | None = None,
     reader: ReleaseReader | None = None,
     now: datetime | None = None,
+    first_declared: FirstDeclared | None = None,
 ) -> int:
     http_get = http_get or default_http_get()
     reader = reader or git_release_reader()
@@ -255,7 +367,12 @@ def check_nightly_verdicts(
         print(f"{name}: the data engine release {source}; nothing to bound yet")
         return 0
     reference = now or datetime.now(UTC)
-    failures = judge(report.verdicts, expectations, reference)
+    notes: list[str] = []
+    release = report.release
+    since = (lambda check: first_declared(check, release)) if first_declared and release else None
+    failures = judge(report.verdicts, expectations, reference, first_declared=since, notes=notes)
+    for note in notes:
+        print(f"{name}: pending: {note}")
     unexpected = sorted({entry.check for entry in report.verdicts} - set(expectations))
     if unexpected:
         # A check the deployed release no longer declares (retired, or recorded by an older
@@ -275,13 +392,27 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("url")
     parser.add_argument("--environment", default="")
     parser.add_argument("--repo", default=".", help="checkout holding the release tags")
+    # deploy-release.yml's run-name word ("staging", "prod"); omitted, a missing check is never pending.
+    parser.add_argument("--deploy-type", default="")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
+    first_declared: FirstDeclared | None = None
+    if arguments.deploy_type:
+        deploys = functools.cache(_gh_api)
+
+        def first_declared(check: str, release: str) -> datetime | None:
+            return first_declared_at(
+                check, release=release, deploy_type=arguments.deploy_type, repo=arguments.repo, gh_api=deploys
+            )
+
     return check_nightly_verdicts(
-        arguments.url, environment=arguments.environment, reader=git_release_reader(arguments.repo)
+        arguments.url,
+        environment=arguments.environment,
+        reader=git_release_reader(arguments.repo),
+        first_declared=first_declared,
     )
 
 

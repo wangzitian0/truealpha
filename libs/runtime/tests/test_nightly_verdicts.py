@@ -307,3 +307,199 @@ def test_every_watched_job_is_scheduled() -> None:
     scheduled = {schedule.job_name for schedule in defs.schedules or ()}
     for name, expectation in EXPECTED.items():
         assert expectation.job in scheduled, f"{name}: job {expectation.job} has no schedule in the deployed root"
+
+
+# --- a check that is new in this environment (#876 follow-up) ----------------
+
+
+def test_a_check_first_expected_recently_is_pending_not_missing(capsys: pytest.CaptureFixture[str]) -> None:
+    """v0.0.74 on staging, 10:20 UTC: nine checks were declared by the release just deployed
+    and none had had its first tick, so the check was red on all nine for a release that was
+    fine. A check whose first declaring deploy here is younger than its bound is pending."""
+    verdicts = [entry for entry in _all_green() if entry["check"] != "model_key_health"]
+    seen: list[tuple[str, str]] = []
+
+    def first_declared(check: str, release: str) -> datetime:
+        seen.append((check, release))
+        return NOW - timedelta(hours=1)
+
+    assert _run(verdicts, first_declared=first_declared) == 0
+    out = capsys.readouterr().out
+    assert "pending: model_key_health: no verdict yet" in out
+    assert seen == [("model_key_health", "v0.0.70")], (
+        "the grace is asked only for the missing check, at the served release"
+    )
+
+
+def test_a_check_expected_here_longer_than_its_bound_is_still_missing(capsys: pytest.CaptureFixture[str]) -> None:
+    verdicts = [entry for entry in _all_green() if entry["check"] != "model_key_health"]
+    assert _run(verdicts, first_declared=lambda _check, _release: NOW - timedelta(hours=49)) == 1
+    assert "model_key_health: no verdict at all" in capsys.readouterr().err
+
+
+def test_an_unknown_first_declaration_gives_no_grace(capsys: pytest.CaptureFixture[str]) -> None:
+    verdicts = [entry for entry in _all_green() if entry["check"] != "model_key_health"]
+    assert _run(verdicts, first_declared=lambda _check, _release: None) == 1
+    assert "model_key_health: no verdict at all" in capsys.readouterr().err
+
+
+def test_the_grace_never_excuses_a_red_or_stale_verdict() -> None:
+    """Pending is for a check with NO row; a check that ran and failed, or went quiet, is judged."""
+    recent = lambda _check, _release: NOW - timedelta(minutes=5)  # noqa: E731
+    red = [*_all_green()[:-1], _verdict(sorted(EXPECTED)[-1], 1, ok=False, summary="failed: x")]
+    stale = [*_all_green()[:-1], _verdict(sorted(EXPECTED)[-1], 60)]
+    assert _run(red, first_declared=recent) == 1
+    assert _run(stale, first_declared=recent) == 1
+
+
+def _git(log: str = "", *, log_code: int = 0, tags: str = "v0.0.74\nv0.0.75\n", tags_code: int = 0):
+    calls: list[list[str]] = []
+
+    def run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if "log" in args:
+            return subprocess.CompletedProcess(args, log_code, log, "")
+        return subprocess.CompletedProcess(args, tags_code, tags, "")
+
+    return run, calls
+
+
+def _deploys(*entries: tuple[str, str], filler: int = 0, filler_created: str = "2026-09-16T12:00:00Z"):
+    runs = [
+        {"display_title": title, "conclusion": "success", "created_at": at, "updated_at": at} for title, at in entries
+    ]
+    runs += [
+        {
+            "display_title": "Deploy staging v0.0.99",
+            "conclusion": "success",
+            "created_at": filler_created,
+            "updated_at": filler_created,
+        }
+    ] * filler
+
+    def gh_api(path: str) -> str:
+        assert "workflows/deploy-release.yml/runs" in path and "status=success" in path
+        return json.dumps({"workflow_runs": runs})
+
+    return gh_api
+
+
+INTRODUCED = "a" * 40 + " 2026-09-16T10:00:00+00:00\n" + "b" * 40 + " 2026-09-16T11:00:00+00:00\n"
+
+
+def test_first_declared_is_the_earliest_deploy_of_a_release_containing_the_introducing_commit() -> None:
+    run, calls = _git(INTRODUCED)
+    since = _module.first_declared_at(
+        "model_key_health",
+        release="v0.0.75",
+        deploy_type="staging",
+        run=run,
+        gh_api=_deploys(
+            ("Deploy staging v0.0.75", "2026-09-16T11:30:00Z"),
+            ("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"),
+            ("Deploy prod v0.0.74", "2026-09-16T10:05:00Z"),
+            ("Deploy staging v0.0.73", "2026-09-16T09:55:00Z"),
+        ),
+    )
+    assert since == datetime(2026, 9, 16, 10, 20, tzinfo=UTC), (
+        "prod's deploy and a tag without the commit must not count"
+    )
+    log = calls[0]
+    assert log[log.index("-S") + 1] == '"model_key_health"', "the pickaxe must match the quoted key, not a substring"
+    assert "v0.0.75" in log and log[-1] == "tools/nightly_verdicts.json"
+    assert calls[1][calls[1].index("--contains") + 1] == "a" * 40, "the FIRST introducing commit decides"
+
+
+def test_first_declared_is_unknown_when_the_listing_may_not_reach_back_far_enough() -> None:
+    """100 runs all newer than the introducing commit: an older declaring deploy may exist
+    beyond the page, so the earliest one seen cannot be trusted as the first."""
+    run, _ = _git(INTRODUCED)
+    since = _module.first_declared_at(
+        "model_key_health",
+        release="v0.0.75",
+        deploy_type="staging",
+        run=run,
+        gh_api=_deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"), filler=99),
+    )
+    assert since is None
+
+
+def test_a_full_listing_that_reaches_past_the_introducing_commit_is_trusted() -> None:
+    run, _ = _git(INTRODUCED)
+    since = _module.first_declared_at(
+        "model_key_health",
+        release="v0.0.75",
+        deploy_type="staging",
+        run=run,
+        gh_api=_deploys(
+            ("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"),
+            filler=99,
+            filler_created="2026-09-15T12:00:00Z",
+        ),
+    )
+    assert since == datetime(2026, 9, 16, 10, 20, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "run, gh_api",
+    [
+        pytest.param(_git("")[0], _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z")), id="never-introduced"),
+        pytest.param(
+            _git(INTRODUCED, log_code=128)[0],
+            _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z")),
+            id="git-log-fails",
+        ),
+        pytest.param(
+            _git(INTRODUCED, tags_code=1)[0],
+            _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z")),
+            id="git-tag-fails",
+        ),
+        pytest.param(
+            _git(INTRODUCED)[0], _deploys(("Deploy staging v0.0.73", "2026-09-16T09:55:00Z")), id="never-deployed"
+        ),
+        pytest.param(_git(INTRODUCED)[0], lambda _path: "not json", id="unreadable-listing"),
+    ],
+)
+def test_first_declared_is_unknown_whenever_a_step_cannot_be_shown(run: object, gh_api: object) -> None:
+    def failing(path: str) -> str:
+        raise _module.VerdictCheckFailure("rate limited")
+
+    for api in (gh_api, failing):
+        assert (
+            _module.first_declared_at("model_key_health", release="v0.0.75", deploy_type="staging", run=run, gh_api=api)
+            is None
+        )
+
+
+def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
+    """The bound is twice the declared cadence, so a declared cadence that drifts from the
+    Dagster cron makes the check either blind (too long) or noisy (too short). Measured from
+    the deployed root's own schedules with the scheduler-liveness cron reader."""
+    from data_engine.dagster_defs import defs
+
+    liveness = load_tool("scheduler_liveness")
+    crons: dict[str, list[object]] = {}
+    for schedule in defs.schedules or ():
+        assert schedule.execution_timezone in (None, "UTC"), f"{schedule.name} is not on UTC"
+        expressions = [schedule.cron_schedule] if isinstance(schedule.cron_schedule, str) else schedule.cron_schedule
+        crons.setdefault(schedule.job_name, []).extend(liveness.Cron.parse(e) for e in expressions)
+    for name, expectation in EXPECTED.items():
+        gap = liveness.largest_gap(crons[expectation.job], NOW)
+        assert gap == timedelta(hours=expectation.cadence_hours), (
+            f"{name}: declared cadence {expectation.cadence_hours} h, but job {expectation.job} fires every {gap}"
+        )
+
+
+def test_a_missing_binary_is_no_grace_not_a_crash() -> None:
+    """Review on #901: an exec failure (no `git`, no `gh`) must fall back like any other step."""
+
+    def no_git(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("git")
+
+    def no_gh(path: str) -> str:
+        raise FileNotFoundError("gh")
+
+    deploys = _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"))
+    kwargs = {"release": "v0.0.75", "deploy_type": "staging"}
+    assert _module.first_declared_at("model_key_health", run=no_git, gh_api=deploys, **kwargs) is None
+    assert _module.first_declared_at("model_key_health", run=_git(INTRODUCED)[0], gh_api=no_gh, **kwargs) is None

@@ -624,6 +624,38 @@
         "tests/sign-out-button.test.ts"
       ],
       "cwd": "apps/app-web"
+    },
+    {
+      "id": "nightly-verdicts/the-grace-runs-from-the-first-declaring-deploy",
+      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "file": "tools/nightly_verdicts.py",
+      "find": "        return min(served) if complete else None\n",
+      "replace": "        return max(served) if complete else None\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_nightly_verdicts.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "nightly-verdicts/a-short-listing-gives-no-grace",
+      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "file": "tools/nightly_verdicts.py",
+      "find": "        return min(served) if complete else None\n",
+      "replace": "        return min(served)\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_nightly_verdicts.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }
