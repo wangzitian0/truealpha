@@ -606,6 +606,28 @@ def test_an_origin_the_fusion_policy_does_not_rank_never_serves() -> None:
     assert [c.origin for c in success.corroborations] == ["late-origin", "twelve-data"]
 
 
+def test_a_primary_out_of_budget_is_served_by_the_next_seat() -> None:
+    """#729 x #862: a Yahoo cell deferred for a spent budget is "the primary could not
+    serve"; Twelve Data is another seat with its own budget, and serves it. The attempt
+    keeps `deferred_capacity`, so the ledger still says why the primary did not."""
+    from data_engine.sources import gateway
+
+    def out_of_budget(symbol: str, cutoff: date) -> MarketPriceQuote:
+        raise gateway.BudgetExhausted("yahoo", environment="production", budget=2000, spent=2000)
+
+    item = _work_item("6" * 64)
+    twelve_fetch = _CountingFetch(_vendor_quote("td", _CUTOFF, "150.30"))
+    report, sink = _capture(item, _failover_adapter(item, out_of_budget, _twelve_data(twelve_fetch)))
+    [outcome] = report.outcomes
+    assert (outcome.terminal_state, outcome.reason_code, outcome.attempts, outcome.served_by_failover) == (
+        ObligationTerminalState.SUCCESS,
+        ObligationReasonCode.DEFERRED_CAPACITY,
+        1,
+        "twelve-data",
+    )
+    assert sink.calls[0]["attempt_reasons"] == (ObligationReasonCode.DEFERRED_CAPACITY,)
+
+
 def test_a_stop_reason_is_never_served_by_failover() -> None:
     """The adapter itself refuses to fail over a reason that is not "the primary had
     nothing": a contract violation or a look-ahead is a broken run, not a gap."""

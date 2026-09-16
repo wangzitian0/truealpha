@@ -141,9 +141,10 @@ class SourceUnavailableError(Exception):
 
 
 # The primary failures a further origin may answer (#862): the primary had nothing to say
-# — unreachable, too slow, throttled, erroring, or no bar. A STOP (look-ahead, contract) is
-# a broken run and never failed over; "not yet knowable" is the primary asserting the datum
-# does not exist yet, which another origin must not contradict.
+# — unreachable, too slow, throttled, erroring, no bar, or its daily budget spent (#729: the
+# next origin is a different seat, admitted by its own budget). A STOP (look-ahead,
+# contract) is a broken run and never failed over; "not yet knowable" is the primary
+# asserting the datum does not exist yet, which another origin must not contradict.
 FAILOVER_REASONS: frozenset[ObligationReasonCode] = frozenset(
     {
         ObligationReasonCode.TRANSIENT_NETWORK,
@@ -151,6 +152,7 @@ FAILOVER_REASONS: frozenset[ObligationReasonCode] = frozenset(
         ObligationReasonCode.RATE_LIMITED,
         ObligationReasonCode.SERVER_ERROR,
         ObligationReasonCode.FIELD_UNAVAILABLE,
+        ObligationReasonCode.DEFERRED_CAPACITY,
     }
 )
 # The payload key the mart reads a served close from (`materialization.MarketPricePayload`).

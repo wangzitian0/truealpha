@@ -345,7 +345,10 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
         lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
 
     [summary] = [line for line in lines if line.startswith(f"topt live tick {TICK}: capture ")]
-    assert "; corroborations refused 2 (twelve-data fetch 2); capacity refused 0; served by failover 0; pointer sequence 11" in summary
+    assert (
+        "; corroborations refused 2 (twelve-data fetch 2); capacity refused 0; served by failover 0; pointer sequence 11"
+        in summary
+    )
     assert metadata["corroborations_refused"] == 2
     warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 2 and all("twelve-data" in w and "PermissionError" in w for w in warnings)
