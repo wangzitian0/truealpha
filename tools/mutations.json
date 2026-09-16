@@ -559,6 +559,71 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "sign-out-journey/the-click-waits-for-hydration",
+      "guard": "apps/app-web/tests/sign-out-journey.test.ts",
+      "file": "apps/app-web/e2e/sign-out-journey.mjs",
+      "find": "export const HYDRATED_CONTROL = '[data-sign-out][data-hydrated=\"true\"]';",
+      "replace": "export const HYDRATED_CONTROL = '[data-sign-out]';",
+      "command": [
+        "bun",
+        "run",
+        "tests/sign-out-journey.test.ts"
+      ],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "sign-out-journey/the-endpoint-is-judged-without-the-click",
+      "guard": "apps/app-web/tests/sign-out-journey.test.ts",
+      "file": "apps/app-web/e2e/sign-out-journey.mjs",
+      "find": "of HALVES) {",
+      "replace": "of HALVES.slice(0, 1)) {",
+      "command": [
+        "bun",
+        "run",
+        "tests/sign-out-journey.test.ts"
+      ],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "sign-out-journey/the-landing-is-judged-at-commit",
+      "guard": "apps/app-web/tests/sign-out-journey.test.ts",
+      "file": "apps/app-web/e2e/sign-out-journey.mjs",
+      "find": "timeout: timeouts.signOutMs, waitUntil: \"commit\" })",
+      "replace": "timeout: timeouts.signOutMs })",
+      "command": [
+        "bun",
+        "run",
+        "tests/sign-out-journey.test.ts"
+      ],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "sign-out-button/the-server-render-is-not-hydrated",
+      "guard": "apps/app-web/tests/sign-out-button.test.ts",
+      "file": "apps/app-web/src/components/sign-out-button.tsx",
+      "find": "const [hydrated, setHydrated] = useState(false);",
+      "replace": "const [hydrated, setHydrated] = useState(true);",
+      "command": [
+        "bun",
+        "run",
+        "tests/sign-out-button.test.ts"
+      ],
+      "cwd": "apps/app-web"
+    },
+    {
+      "id": "sign-out-button/the-mounted-control-says-hydrated",
+      "guard": "apps/app-web/tests/sign-out-button.test.ts",
+      "file": "apps/app-web/src/components/sign-out-button.tsx",
+      "find": "    setHydrated(true);",
+      "replace": "    setHydrated(false);",
+      "command": [
+        "bun",
+        "run",
+        "tests/sign-out-button.test.ts"
+      ],
+      "cwd": "apps/app-web"
     }
   ]
 }
