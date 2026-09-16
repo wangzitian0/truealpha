@@ -314,16 +314,19 @@ def _synthetic_observation_id(family: str, subject_id: str, origin: OriginValue)
 
 def _served_day(policy: FamilyPolicy, origins: Sequence[OriginValue]) -> tuple[list[OriginValue], list[OriginValue]]:
     """Narrow a session-bound family to the served bar's day (#622): the primary's newest
-    day when it asserted anything, else the newest day any origin asserted. Returns
+    day on which it asserted a value, else the newest day any origin asserted a value. A
+    dated row without a value (Yahoo's overnight null-close window) is not an assertion
+    and never moves the anchor away from the day the origins priced. Returns
     (kept, excluded)."""
     if not policy.session_bound or policy.reconciliation is None:
         return list(origins), []
     dated = [origin for origin in origins if origin.knowable_at is not None]
     if not dated:
         return list(origins), []
+    valued = [origin for origin in dated if origin.value is not None] or dated
     primary = policy.reconciliation.source_priority[0]
-    primary_days = [origin.knowable_at for origin in dated if origin.source_id == primary and origin.knowable_at]
-    anchor = max(primary_days) if primary_days else max(origin.knowable_at for origin in dated if origin.knowable_at)
+    primary_days = [origin.knowable_at for origin in valued if origin.source_id == primary and origin.knowable_at]
+    anchor = max(primary_days) if primary_days else max(origin.knowable_at for origin in valued if origin.knowable_at)
     kept = [origin for origin in origins if origin.knowable_at is None or origin.knowable_at.date() == anchor.date()]
     excluded = [origin for origin in origins if origin not in kept]
     return kept, excluded

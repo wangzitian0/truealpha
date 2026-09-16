@@ -138,6 +138,18 @@ def test_a_second_origin_from_another_day_does_not_count_for_the_served_day() ->
     assert grade.origins == ("origin:yahoo:v1",)
 
 
+def test_a_dated_primary_row_without_a_value_does_not_move_the_served_day() -> None:
+    """A primary row from Yahoo's overnight null-close window is dated but asserts nothing;
+    the served day is the day an origin actually priced, so the other origin's value is
+    graded rather than excluded behind an empty anchor."""
+    friday, monday = datetime(2026, 8, 14, tzinfo=UTC), datetime(2026, 8, 17, tzinfo=UTC)
+    grade = classify_cell(
+        family_policy(CLOSE_FAMILY), "listing:xnas:hon", (_yahoo(None, monday), _twelve("229.45", friday)), CUTOFF
+    )
+    assert grade.band is Band.LOW and grade.reason == "single_origin"
+    assert grade.origins == ("origin:twelve-data:v1",) and grade.excluded == ()
+
+
 # -- index membership: the policy this report adds ------------------------------------------
 
 
