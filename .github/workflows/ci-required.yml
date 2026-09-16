@@ -71,6 +71,7 @@ jobs:
       image_app_web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_app_web }}
       image_llm_service: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_llm_service }}
       image_data_engine: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_data_engine }}
+      dagster_liveness: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.dagster_liveness }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -111,6 +112,28 @@ jobs:
               - '.python-version'
               - '.github/workflows/ci-python.yml'
               - '.github/workflows/ci-required.yml'
+              # dagster_liveness below must stay a SUBSET of this list (pinned in
+              # test_ci_workflows.py): otherwise a docker-compose-only change can set
+              # dagster_liveness true while ci-python.yml — and the liveness job
+              # inside it — never runs at all, since `python` below gates the call.
+              - 'docker-compose.yml'
+            # #855 A4: dagster-code-server-liveness (truealpha#454's daemon
+            # self-termination class) sat on every PR's and every main push's
+            # critical path — 151-160s of it, most of the job's own wall time —
+            # for a regression that reproduces only through the dagster
+            # composition root, its lanes, the image it runs in, and its own
+            # job definition. Narrower than `python` on purpose: ~95% of PR
+            # diffs never touch any of this. docker-compose.yml matches
+            # whole-file (paths-filter has no section-level match) even though
+            # it defines no dedicated dagster service today — the closest
+            # available proxy for the day it does, and it is why the entry
+            # is also in `python` above.
+            dagster_liveness:
+              - 'apps/data-engine/src/data_engine/dagster_defs.py'
+              - 'apps/data-engine/src/data_engine/lanes/**'
+              - 'apps/data-engine/Dockerfile'
+              - 'docker-compose.yml'
+              - '.github/workflows/ci-python.yml'
             qlib:
               - 'libs/factors/qlib-runtime/**'
               - 'libs/factors/src/factors/batches/qlib_expression_contract_tiny/**'
@@ -209,6 +232,13 @@ jobs:
     if: github.ref_type != 'tag' && needs.changes.outputs.python == 'true'
     needs: changes
     uses: ./.github/workflows/ci-python.yml
+    with:
+      # #855 A4: dagster-code-server-liveness runs unconditionally off `pull_request`
+      # (a push to main, `merge_group`, `workflow_dispatch`) and is gated by the
+      # narrow `dagster_liveness` filter on a PR — computed here, not read from
+      # `github.event_name` inside the called workflow, so the caller's real event
+      # is what decides it regardless of how that context behaves once called.
+      dagster_liveness_required: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dagster_liveness == 'true' }}
     # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
     # and a called workflow cannot exceed the caller's grant. Without `actions:
     # write` the cache RESTORES and cannot SAVE: harmless while the key keeps

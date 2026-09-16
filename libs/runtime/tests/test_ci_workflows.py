@@ -926,6 +926,119 @@ def test_the_liveness_window_is_one_churn_cycle_plus_margin() -> None:
     assert f"{window}s" in str(spec["name"]), "the step's name must say how long it observes"
 
 
+def test_dagster_liveness_filter_is_narrow_and_a_subset_of_python() -> None:
+    """#855 A4: dagster-code-server-liveness (truealpha#454's daemon self-termination
+    class) measured 151-160 s of every PR's and every main push's critical path for a
+    regression that reproduces only through the dagster composition root, its lanes,
+    the image it runs in, and its own job definition -- a surface ~95% of PR diffs
+    never touch. `dagster_liveness` is that narrow filter.
+
+    It must be a SUBSET of `python`'s own filter, not merely narrower: `python`'s own
+    `if` still gates the whole `uses: ./.github/workflows/ci-python.yml` call in
+    ci-required.yml, so a path that sets `dagster_liveness` true without also setting
+    `python` true would compute a filter output ci-python.yml — and the liveness job
+    inside it — never has a chance to read, silently skipping a run this filter says
+    should happen.
+    """
+    workflow = yaml.safe_load(source(REQUIRED))
+    filter_step = next(
+        (step for step in workflow["jobs"]["changes"]["steps"] if "filters" in (step.get("with") or {})),
+        None,
+    )
+    assert filter_step is not None, "ci-required's changes job no longer carries a paths-filter step"
+    filters = yaml.safe_load(filter_step["with"]["filters"])
+
+    assert "dagster_liveness" in filters, (
+        "the changes job no longer declares a dagster_liveness filter — #855 A4's gating has "
+        "nothing to read and ci-python.yml falls back to running liveness on every PR again"
+    )
+    liveness_paths = set(filters["dagster_liveness"])
+    expected = {
+        "apps/data-engine/src/data_engine/dagster_defs.py",
+        "apps/data-engine/src/data_engine/lanes/**",
+        "apps/data-engine/Dockerfile",
+        "docker-compose.yml",
+        ".github/workflows/ci-python.yml",
+    }
+    assert liveness_paths == expected, (
+        f"dagster_liveness filter paths are {liveness_paths}, expected {expected} — the job it "
+        f"gates only reproduces through the composition root, its lanes, the image, the compose "
+        f"surface, and this file itself"
+    )
+
+    def covered(path: str, patterns: set[str]) -> bool:
+        for pattern in patterns:
+            if pattern == path:
+                return True
+            if pattern.endswith("/**") and path.startswith(pattern[: -len("/**")] + "/"):
+                return True
+        return False
+
+    python_paths = set(filters["python"])
+    uncovered = {path for path in liveness_paths if not covered(path, python_paths)}
+    assert not uncovered, (
+        f"{uncovered} is in dagster_liveness but no python filter entry covers it — a PR that "
+        f"touches only that path sets dagster_liveness true while ci-python.yml is never invoked "
+        f"at all, so the liveness job silently never runs"
+    )
+
+    outputs = workflow["jobs"]["changes"]["outputs"]
+    assert outputs.get("dagster_liveness") == (
+        "${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.dagster_liveness }}"
+    ), "dagster_liveness must be wired the same way as every other changes output (merge_group forces true)"
+
+
+def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() -> None:
+    """#855 A4, the other half of the property above: what actually reads the filter.
+
+    ci-required.yml's `python` job computes the decision (not `github.event_name` read
+    inside the called workflow, whose value in a called workflow is not this repo's to
+    assume) and passes it as a `workflow_call` input; ci-python.yml's liveness job is
+    gated on that input, except on this workflow's own nightly `schedule` trigger, which
+    always runs it — the standing check that PR-gating does not mean "only tested by
+    accident". The three heavier jobs skip on `schedule` so the nightly is liveness-only,
+    not a timer that re-runs the whole suite.
+    """
+    caller = job(REQUIRED, "python")
+    decision = str(caller["with"]["dagster_liveness_required"])
+    assert "github.event_name != 'pull_request'" in decision, (
+        f"the caller's decision is {decision!r} — it no longer runs liveness unconditionally "
+        f"off pull_request (main push, merge_group, workflow_dispatch)"
+    )
+    assert "needs.changes.outputs.dagster_liveness == 'true'" in decision, (
+        f"the caller's decision is {decision!r} — it no longer reads the narrow filter, so a "
+        f"PR that touches the dagster surface would never run the liveness job either"
+    )
+
+    liveness_input = triggers(PYTHON)["workflow_call"]["inputs"]["dagster_liveness_required"]
+    assert liveness_input["type"] == "boolean" and liveness_input["default"] is False, (
+        "dagster_liveness_required must default closed — an unset input on a direct call must not silently run the job"
+    )
+
+    nightly = triggers(PYTHON).get("schedule")
+    assert nightly and nightly[0].get("cron"), (
+        "ci-python.yml no longer has its own schedule trigger — #855 A4's nightly coverage for "
+        "the PRs the narrow filter does not match is gone"
+    )
+
+    liveness = job(PYTHON, "dagster-code-server-liveness")
+    condition = str(liveness["if"])
+    assert "inputs.dagster_liveness_required" in condition, (
+        f"the liveness job's if is {condition!r} — it no longer reads the caller's decision, so "
+        f"it either always runs (back on the PR critical path) or never does"
+    )
+    assert "github.event_name == 'schedule'" in condition, (
+        f"the liveness job's if is {condition!r} — the nightly trigger no longer forces it on, so "
+        f"a schedule run would tick green while testing nothing"
+    )
+
+    for lane in ("gates", "test-core", "test-data-engine"):
+        assert str(job(PYTHON, lane)["if"]) == "github.event_name != 'schedule'", (
+            f"{lane} runs on the nightly schedule too — the nightly is meant to be liveness-only, "
+            f"not a timer that re-runs the whole suite"
+        )
+
+
 def test_the_routing_probe_gets_a_base_not_an_endpoint() -> None:
     """A4 C1 (#673). The freshness matrix carries `url` (the health ENDPOINT,
     what walk_evidence and health_check want) and `base` (what
