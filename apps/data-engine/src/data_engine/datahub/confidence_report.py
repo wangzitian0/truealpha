@@ -242,10 +242,18 @@ def _close_origins() -> dict[str, tuple[str, str, str]]:
 CLOSE_ORIGINS: Mapping[str, tuple[str, str, str]] = _close_origins()
 
 
+#: One vendor behind two origins: moomoo's K-line and its statements are the same source
+#: (independent of Yahoo/Twelve Data and of SEC respectively), so the lineage — and the
+#: `sources_connected` roll-up — names the vendor, not the endpoint.
+VENDOR_LINEAGE: Mapping[str, str] = {"origin:moomoo-kline:v1": "moomoo", "origin:moomoo-financials:v1": "moomoo"}
+
+
 def lineage_of(origin_id: str) -> str:
     """The canonical original source behind an origin id: `origin:<lineage>:<version>`."""
     if origin_id in MEMBERSHIP_LINEAGE:
         return MEMBERSHIP_LINEAGE[origin_id]
+    if origin_id in VENDOR_LINEAGE:
+        return VENDOR_LINEAGE[origin_id]
     parts = origin_id.split(":")
     return parts[1] if len(parts) >= 3 and parts[0] == "origin" else origin_id
 

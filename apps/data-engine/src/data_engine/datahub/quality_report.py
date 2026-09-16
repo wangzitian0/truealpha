@@ -494,7 +494,11 @@ def build_report(
     financial_independent = sum(
         1 for cell in financial_reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value
     )
-    financial_graded = len(financial_reconciliation)
+    # Denominator: subjects that had a primary to compare against (a second-origin-only
+    # subject is `unavailable`, not a failed corroboration).
+    financial_graded = sum(
+        1 for cell in financial_reconciliation.values() if cell["outcome"] != ReconciliationOutcome.UNAVAILABLE.value
+    )
     confidences = [cell.confidence for cell in cells.values() if cell.confidence is not None]
     mean_conf = (sum(confidences) / requested) if requested else Decimal(0)
 

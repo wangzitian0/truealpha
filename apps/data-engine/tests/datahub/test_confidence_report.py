@@ -170,6 +170,14 @@ def test_each_family_declares_its_own_unit_for_the_cell_identity() -> None:
     assert all(policy.unit for policy in cr.FAMILIES)
 
 
+def test_both_moomoo_origins_share_one_vendor_lineage() -> None:
+    """K-line and statements come from one vendor: independent of Yahoo/Twelve Data and of
+    SEC, but one connected source, so the roll-up counts moomoo once."""
+    assert cr.lineage_of("origin:moomoo-kline:v1") == "moomoo"
+    assert cr.lineage_of("origin:moomoo-financials:v1") == "moomoo"
+    assert cr.lineage_of("origin:twelve-data:v1") == "twelve-data"
+
+
 def test_index_membership_listed_by_both_routes_is_high() -> None:
     """Membership is presence: the operator lists the name and the fund files it held."""
     grade = classify_cell(
