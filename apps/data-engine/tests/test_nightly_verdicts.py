@@ -24,6 +24,7 @@ from data_engine.config import settings
 from data_engine.lanes import quality, standards
 from data_engine.quality import model_key_health, nightly_verdicts
 from data_engine.sources import gateway, llm
+from truealpha_runtime.testing import skip_or_fail
 
 TICK = "2026-09-16T00:15:00+00:00"
 FAKE_KEY = "sk-test-not-a-real-key-0123456789"
@@ -286,6 +287,41 @@ def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, writt
     assert all(row["ok"] and row["ran_at"] == tick for row in written)
 
 
+def test_the_purity_summary_counts_rows_and_carries_no_value(monkeypatch, written) -> None:
+    """The line is public: counts of (issuer, theme) rows, never a purity value."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from data_engine.datahub import question_coverage
+    from data_engine.datahub.production_topt import theme_purity
+
+    run = "capture-run:" + "c" * 64
+    head = question_coverage.GovernedHead("universe:topt-us-2026-03-31", run, datetime(2026, 9, 16, 22, 45, tzinfo=UTC))
+    rows = tuple(
+        SimpleNamespace(entity_id=f"issuer:cik:{cik}", theme=theme, result=SimpleNamespace(value=value))
+        for cik, theme, value in (
+            (1, "ai", Decimal("0.8123")),
+            (1, "cloud", None),
+            (2, "ai", Decimal("0.4567")),
+        )
+    )
+
+    class _Conn(_Sink):
+        def commit(self) -> None:
+            return None
+
+    monkeypatch.setattr(psycopg, "connect", _Conn())
+    monkeypatch.setattr(question_coverage, "governed_head", lambda *_a, **_k: head)
+    monkeypatch.setattr(standards, "universe_issuers", lambda *_a, **_k: [])
+    monkeypatch.setattr(theme_purity, "materialize_theme_purity", lambda *_a, **_k: rows)
+    config = standards.StandardBackfillConfig(executed_at="2026-09-16T23:30:00+00:00", universe="topt")
+    standards.run_theme_purity(dg.build_op_context(), config, "{}")
+    ((row),) = written
+    assert (row["check"], row["ok"]) == ("theme_purity@topt", True)
+    assert row["summary"] == f"2/3 theme-purity rows published on {run[:24]}"
+    assert "0.8123" not in row["summary"] and "0.4567" not in row["summary"]
+
+
 def test_a_failing_purity_op_is_a_red_verdict_and_a_red_run(monkeypatch, written) -> None:
     from data_engine.datahub import question_coverage
 
@@ -457,11 +493,16 @@ def test_every_declared_verdict_name_fits_the_column() -> None:
 
 def _connection() -> psycopg.Connection:
     try:
-        return psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
+        connection = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             raise
         pytest.skip("no local Postgres")
+    (table,) = connection.execute("select to_regclass('mart.nightly_verdicts')").fetchone() or (None,)
+    if table is None:
+        connection.close()
+        skip_or_fail("mart.nightly_verdicts missing (make db-migrate)")
+    return connection
 
 
 def test_verdicts_append_and_are_never_rewritten() -> None:

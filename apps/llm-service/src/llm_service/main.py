@@ -172,12 +172,14 @@ def health() -> dict[str, Any]:
 
 
 #: The newest verdict per nightly check (`db/migrations/20260916T0848_factors_nightly_verdicts.sql`).
-#: Bounded: the table is append-only and the endpoint is polled.
+#: One row per distinct check name, walked on the (check_name, ran_at, recorded_at) index; the
+#: table is append-only, so the read never returns its history. Deliberately no LIMIT: a cap
+#: would drop checks past it in name order, and the tool reads a dropped check as missing.
+#: The name set is small and closed (the lanes' declared NIGHTLY_VERDICTS).
 NIGHTLY_VERDICTS_SQL = """
 select distinct on (check_name) check_name, ran_at, ok, summary
 from mart.nightly_verdicts
 order by check_name, ran_at desc, recorded_at desc
-limit 200
 """
 
 

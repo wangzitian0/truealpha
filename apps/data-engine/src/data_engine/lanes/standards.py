@@ -154,7 +154,8 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         connection.commit()
         published = sum(1 for row in rows if row.result.value is not None)
         # Counts only: the purity values themselves are research output, and this line is public.
-        outcome.summary = f"{published}/{len(rows)} issuers published on {head.run_id[:24]}"
+        # A row is one (issuer, theme) judgement, so the count is of rows, not issuers.
+        outcome.summary = f"{published}/{len(rows)} theme-purity rows published on {head.run_id[:24]}"
     context.log.info(summary_line(rows))
     context.add_output_metadata(
         {"universe": config.universe, "run_id": head.run_id, "rows": len(rows), "published": published}

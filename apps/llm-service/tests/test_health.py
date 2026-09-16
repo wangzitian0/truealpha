@@ -119,6 +119,8 @@ def test_health_reports_the_newest_verdict_per_nightly_check(monkeypatch) -> Non
     # The read is the newest row per check, never every row of an append-only table.
     (verdict_sql,) = [sql for sql in connection.asked if "mart.nightly_verdicts" in sql]
     assert "distinct on (check_name)" in verdict_sql and "ran_at desc" in verdict_sql
+    # A cap would silently drop checks past it, which the tool then reports as missing.
+    assert "limit" not in verdict_sql.lower()
     # Additive: every fact the endpoint reported before is still there.
     assert {"status", "git_sha", "data_engine_parser", "data_engine_git_sha", "governed_pointers"} <= set(payload)
 
