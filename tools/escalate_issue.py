@@ -97,7 +97,13 @@ def open_issues_titled(title: str, *, repo: str, gh: Gh) -> list[int]:
         raise ListingFailed(f"gh issue list returned {type(listed).__name__}, not a list")
     # Equality, never containment: the search already matched words, and the
     # superstring it also returns is a different breakage.
-    return sorted(int(issue["number"]) for issue in listed if isinstance(issue, dict) and issue.get("title") == title)
+    matches = [issue for issue in listed if isinstance(issue, dict) and issue.get("title") == title]
+    try:
+        return sorted(int(issue["number"]) for issue in matches)
+    except (KeyError, TypeError, ValueError) as error:
+        # A shape this cannot read is a failed listing, with that rule's
+        # outcome, not a crash that skips it (review).
+        raise ListingFailed(f"gh issue list returned an issue without a usable number: {error!r}") from error
 
 
 def _write(arguments: Sequence[str], *, gh: Gh) -> bool:

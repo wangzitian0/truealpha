@@ -119,8 +119,15 @@ def test_open_picks_the_oldest_exact_match_among_duplicates(body: str) -> None:
 
 @pytest.mark.parametrize(
     "gh",
-    [FakeGh(list_code=1), FakeGh(list_out="<html>502</html>"), FakeGh(list_out='{"message": "Bad credentials"}')],
-    ids=["gh-exits-non-zero", "not-json", "not-a-list"],
+    [
+        FakeGh(list_code=1),
+        FakeGh(list_out="<html>502</html>"),
+        FakeGh(list_out='{"message": "Bad credentials"}'),
+        FakeGh([{"title": TITLE}]),
+        FakeGh([{"title": TITLE, "number": "not-a-number"}]),
+        FakeGh([{"title": TITLE, "number": None}]),
+    ],
+    ids=["gh-exits-non-zero", "not-json", "not-a-list", "no-number", "non-int-number", "null-number"],
 )
 def test_a_failed_listing_never_falls_through_to_create(gh: FakeGh, body: str, capsys) -> None:  # noqa: ANN001
     """#680 review: a rate limit must not turn one breakage into duplicates. The
@@ -176,9 +183,11 @@ def test_resolve_closes_every_exact_duplicate(body: str) -> None:
     assert closed == ["687", "688"]
 
 
-def test_resolve_on_a_failed_listing_writes_nothing_and_stays_green(body: str, capsys) -> None:  # noqa: ANN001
+@pytest.mark.parametrize(
+    "gh", [FakeGh(list_code=1), FakeGh([{"title": TITLE, "number": "x"}])], ids=["gh-fails", "unreadable-entry"]
+)
+def test_resolve_on_a_failed_listing_writes_nothing_and_stays_green(gh: FakeGh, body: str, capsys) -> None:  # noqa: ANN001
     """A listing blip must not turn a green watchdog red; the next green run retries."""
-    gh = FakeGh(list_code=1)
     assert _module.resolve(TITLE, body, repo=REPO, gh=gh) == 0
     assert gh.writes() == []
     assert "::warning::issue listing failed" in capsys.readouterr().out
