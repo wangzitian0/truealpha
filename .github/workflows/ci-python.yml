@@ -1,10 +1,12 @@
 name: ci-python
 
 # #855 A4: `dagster-code-server-liveness` below is gated by `inputs.dagster_liveness_required`
-# (set by the caller, ci-required.yml's `python` job) everywhere except its own `schedule`
-# trigger, where it always runs. The other three jobs skip on `schedule` — that trigger exists
-# only to give the liveness job a nightly run independent of any one PR's diff, not to re-run
-# the whole suite on a timer.
+# (set by the caller: ci-required.yml's `python` job, or nightly-dagster-liveness.yml, which
+# calls this workflow on a `schedule` with the input true). The other three jobs skip when the
+# caller's event is `schedule` — the nightly exists only to give the liveness job a run
+# independent of any one PR's diff, not to re-run the whole suite on a timer. This file stays
+# `workflow_call`-only: GitHub creates no run at all for a PR whose reusable workflow also
+# declares its own triggers and permissions (#878's first push got no ci-required run).
 on:
   workflow_call:
     inputs:
@@ -13,28 +15,11 @@ on:
           Whether the caller wants dagster-code-server-liveness to run. ci-required.yml
           passes true unconditionally off `pull_request` (a push to main, `merge_group`,
           `workflow_dispatch`) and on a PR only when its narrow `dagster_liveness` path
-          filter matched. Ignored on this workflow's own `schedule` trigger, which always
-          runs the job regardless of this input's default.
+          filter matched. nightly-dagster-liveness.yml passes true on its `schedule`.
         required: false
         type: boolean
         default: false
-  schedule:
-    # 05:00 UTC daily, ahead of deploy-freshness's 07:00 check. Independent of any one
-    # PR's diff on purpose: truealpha#454's daemon-self-termination class does not
-    # correlate with any single file changing, so a PR the dagster_liveness filter does
-    # not match is still covered here within a day instead of never (#855 A4).
-    - cron: "0 5 * * *"
 
-# A `workflow_call`-only workflow has no permissions of its own — the caller's grant is
-# the effective one (test_anything_that_caches_can_actually_save's `only_reusable`). The
-# `schedule` trigger above ends that: on a direct nightly run there is no caller to grant
-# anything, so this file needs its own explicit grant for `setup-uv`'s `enable-cache` to
-# actually SAVE rather than only restore (same failure shape #645 found: every real step
-# green, the cache silently doing nothing). ci-required.yml's `python` job already grants
-# the same `actions: write` for the workflow_call path; this is that grant's other half.
-permissions:
-  contents: read
-  actions: write
 
 jobs:
   # A4 D3 (#673): one serial `check` job measured 259 s — lint, types, four tool
