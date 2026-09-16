@@ -130,6 +130,16 @@ class ModelNotConfigured(RuntimeError):
     """No provider seated (empty LLM_API_KEY): the caller keeps the cell deferred."""
 
 
+class ModelHTTPError(RuntimeError):
+    """The provider answered with an error status. A `RuntimeError`, as it always was, so
+    every existing caller is unchanged; the status is carried for a caller that must tell a
+    rejected credential (401/403) from an unavailable provider (#876 W2)."""
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 @dataclass(frozen=True)
 class Candidate:
     value: int
@@ -358,7 +368,7 @@ def invoke(
             ),
         )
     if status >= 400:
-        raise RuntimeError(f"{SOURCE}: HTTP {status}: {body[:200]!r}")
+        raise ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}")
     return invocation
 
 

@@ -15,6 +15,8 @@ def test_health():
     # head; with no database at all the read fails closed to "unknown". Both are honest
     # answers to "which pointers advanced"; a value that is neither is the bug.
     assert payload.pop("governed_pointers") in ([], "unknown")
+    # #876: same two honest answers for the nightly verdicts.
+    assert payload.pop("nightly_verdicts") in ([], "unknown")
     assert payload == {
         "status": "ok",
         "git_sha": "unknown",
@@ -35,6 +37,7 @@ def test_health_reports_the_deployed_git_sha(monkeypatch):
     resp = TestClient(app).get("/health")
     payload = resp.json()
     assert payload.pop("governed_pointers") in ([], "unknown")
+    assert payload.pop("nightly_verdicts") in ([], "unknown")
     assert payload == {
         "status": "ok",
         "git_sha": "abc1234",
@@ -42,6 +45,82 @@ def test_health_reports_the_deployed_git_sha(monkeypatch):
         "data_engine_git_sha": "unknown",
         "data_engine_image_digest": "unknown",
     }
+
+
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+
+class _VerdictsOnly:
+    """A connection whose only readable relation is mart.nightly_verdicts: every other read
+    fails the way a database that predates it does, and must not take this one down."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.asked = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def rollback(self):
+        return None
+
+    def execute(self, sql, *_args):
+        import psycopg
+
+        self.asked.append(sql)
+        if "mart.nightly_verdicts" in sql:
+            return _Rows(self.rows)
+        raise psycopg.errors.UndefinedTable("relation does not exist")
+
+
+def test_health_reports_the_newest_verdict_per_nightly_check(monkeypatch) -> None:
+    """#876: `tools/nightly_verdicts.py` pages from this field — the runner cannot reach the
+    database. Each entry carries the check, when it ran (a timestamp, so the checker measures
+    the age on its own clock), whether it was green, and its summary; the other facts' reads
+    failing must not cost it."""
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    ran = datetime(2026, 9, 16, 0, 15, tzinfo=UTC)
+    connection = _VerdictsOnly(
+        [
+            ("model_key_health", ran, False, "failed: auth-rejected: the provider answered HTTP 401"),
+            ("output_invariants", ran, True, "19 held, 0 deferred, 0 empty"),
+        ]
+    )
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: connection)
+    payload = TestClient(app).get("/health").json()
+    assert payload["nightly_verdicts"] == [
+        {
+            "check": "model_key_health",
+            "ran_at": "2026-09-16T00:15:00+00:00",
+            "ok": False,
+            "summary": "failed: auth-rejected: the provider answered HTTP 401",
+        },
+        {
+            "check": "output_invariants",
+            "ran_at": "2026-09-16T00:15:00+00:00",
+            "ok": True,
+            "summary": "19 held, 0 deferred, 0 empty",
+        },
+    ]
+    # The read is the newest row per check, never every row of an append-only table.
+    (verdict_sql,) = [sql for sql in connection.asked if "mart.nightly_verdicts" in sql]
+    assert "distinct on (check_name)" in verdict_sql and "ran_at desc" in verdict_sql
+    # Additive: every fact the endpoint reported before is still there.
+    assert {"status", "git_sha", "data_engine_parser", "data_engine_git_sha", "governed_pointers"} <= set(payload)
 
 
 def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:

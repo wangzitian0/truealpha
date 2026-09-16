@@ -143,7 +143,7 @@ def health() -> dict[str, Any]:
     # because this service already holds a mart-scoped connection, so the deploy lane can
     # read it over a surface it already calls, with no new secret and no database access
     # from the runner.
-    parser, git_sha, image_digest, pointers = _data_engine_facts()
+    parser, git_sha, image_digest, pointers, verdicts = _data_engine_facts()
     return {
         "status": "ok",
         # Through `settings`, not the process environment (#784): the manifest this service
@@ -162,12 +162,29 @@ def health() -> dict[str, Any]:
         # the age but nothing paged). `tools/datahub_freshness.py` reads this daily.
         # "unknown" when the read failed; an empty list when no pointer has ever advanced.
         "governed_pointers": pointers,
+        # #876: the newest verdict of each nightly in-environment check (the Dagster quality
+        # and head-report jobs, the model-provider key probe), green or red. The runner that
+        # pages cannot reach the database; `tools/nightly_verdicts.py` reads this daily and
+        # fails on a red, stale or missing verdict. "unknown" when the read failed; an empty
+        # list when no check has ever recorded one.
+        "nightly_verdicts": verdicts,
     }
 
 
-def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str]:
+#: The newest verdict per nightly check (`db/migrations/20260916T0848_factors_nightly_verdicts.sql`).
+#: Bounded: the table is append-only and the endpoint is polled.
+NIGHTLY_VERDICTS_SQL = """
+select distinct on (check_name) check_name, ran_at, ok, summary
+from mart.nightly_verdicts
+order by check_name, ran_at desc, recorded_at desc
+limit 200
+"""
+
+
+def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
     """(parser vintage behind the newest observation, git sha, image digest of the build
-    behind the newest run, governed pointers per universe), each "unknown" when unreadable.
+    behind the newest run, governed pointers per universe, newest nightly verdict per check),
+    each "unknown" when unreadable.
 
     One connection for both reads (review on #753: the endpoint is polled, and two
     connections per poll is churn for nothing). Each read is guarded on its own, so a
@@ -180,6 +197,7 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str]:
     """
     parser, git_sha, image_digest = "unknown", "unknown", "unknown"
     pointers: list[dict[str, Any]] | str = "unknown"
+    verdicts: list[dict[str, Any]] | str = "unknown"
     try:
         import psycopg
         from truealpha_runtime import runtime_settings
@@ -220,6 +238,13 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str]:
                 ]
             except psycopg.Error:
                 connection.rollback()
+            try:
+                verdicts = [
+                    {"check": str(check), "ran_at": ran_at.isoformat(), "ok": bool(ok), "summary": str(summary)}
+                    for check, ran_at, ok, summary in connection.execute(NIGHTLY_VERDICTS_SQL).fetchall()
+                ]
+            except psycopg.Error:
+                connection.rollback()
     except Exception:  # noqa: BLE001 - health must not fail on a read it only reports
         pass
-    return parser, git_sha, image_digest, pointers
+    return parser, git_sha, image_digest, pointers, verdicts

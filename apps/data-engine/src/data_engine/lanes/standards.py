@@ -1,6 +1,12 @@
 """The standard→wide-row loop's slow plane (#735 / #733): a weekly backfill of each
 registered standard's open cells over each universe, and the same run in probe mode as
-the data-source research instrument."""
+the data-source research instrument — and the daily head reports (module 6 and the coverage
+report for today's head, #855).
+
+Theme purity and the coverage report record their verdict per universe in
+`mart.nightly_verdicts` (#876 W1) from whichever job ran them; the daily job keeps both
+fresh, and deploy-freshness pages on a red, stale or missing one. `NIGHTLY_VERDICTS` below
+names what this lane records."""
 
 import json
 from datetime import datetime
@@ -14,6 +20,7 @@ from data_engine.config import settings
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
 from data_engine.datahub.standards.planner import universe_issuers
+from data_engine.quality.nightly_verdicts import check_name, tick_from_config, verdict
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # Sunday 09:07 UTC: after Saturday's universe refresh has published any membership
@@ -22,6 +29,15 @@ STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
 # because a closed cell is never re-fetched.
 STANDARD_BACKFILL_CRON = "7 9 * * 0"
 STANDARD_BACKFILL_UNIVERSES = ("universe-list:qqq", "topt")
+
+#: Verdict names (`mart.nightly_verdicts.check_name`) this lane records, per universe.
+THEME_PURITY_VERDICT = "theme_purity"
+QUESTION_COVERAGE_VERDICT = "question_coverage"
+NIGHTLY_VERDICTS: tuple[str, ...] = tuple(
+    check_name(check, universe)
+    for check in (THEME_PURITY_VERDICT, QUESTION_COVERAGE_VERDICT)
+    for universe in STANDARD_BACKFILL_UNIVERSES
+)
 
 
 class StandardBackfillConfig(dg.Config):
@@ -112,7 +128,15 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     # run's cutoff. Selecting at the schedule time instead would let a filing that landed
     # after the head was published change a row attributed to it.
     prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
-    with psycopg.connect(settings.database_url) as connection:
+    with (
+        verdict(
+            check_name(THEME_PURITY_VERDICT, config.universe),
+            registered=NIGHTLY_VERDICTS,
+            run_id=context.run_id,
+            tick=tick_from_config(config.executed_at),
+        ) as outcome,
+        psycopg.connect(settings.database_url) as connection,
+    ):
         # Resolved under the capture TIER the tick registers its pointer with
         # (`CaptureEnvironment.PRODUCTION`, which staging's real-vendor capture stamps too),
         # never under `APP_ENV`. Asking for `settings.app_env` found no head on staging on any
@@ -121,14 +145,17 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         head = governed_head(connection, universe_prefix=prefix, environment=CaptureEnvironment.PRODUCTION.value)
         if head is None:
             context.log.warning("no governed head for %s; no theme purity rows", config.universe)
+            outcome.summary = "no governed head; no rows"
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
         # The classifier is told which issuer it is judging (#849): the ticker, from the same
         # universe corpus the backfill labels its own asks with.
         tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
         rows = materialize_theme_purity(connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers)
         connection.commit()
+        published = sum(1 for row in rows if row.result.value is not None)
+        # Counts only: the purity values themselves are research output, and this line is public.
+        outcome.summary = f"{published}/{len(rows)} issuers published on {head.run_id[:24]}"
     context.log.info(summary_line(rows))
-    published = sum(1 for row in rows if row.result.value is not None)
     context.add_output_metadata(
         {"universe": config.universe, "run_id": head.run_id, "rows": len(rows), "published": published}
     )
@@ -146,13 +173,23 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
     # report after the week's facts have landed, and logging it keeps the pair legible.
     context.log.info("coverage follows theme purity: %s", purity_summary[:400])
     executed_at = datetime.fromisoformat(config.executed_at)
-    with psycopg.connect(settings.database_url) as connection:
+    with (
+        verdict(
+            check_name(QUESTION_COVERAGE_VERDICT, config.universe),
+            registered=NIGHTLY_VERDICTS,
+            run_id=context.run_id,
+            tick=tick_from_config(config.executed_at),
+        ) as outcome,
+        psycopg.connect(settings.database_url) as connection,
+    ):
         report = compile_report(connection, universe=config.universe, executed_at=executed_at)
         if report is None:
             context.log.warning("no governed head for %s; no coverage report", config.universe)
+            outcome.summary = "no governed head; no report"
             return json.dumps({"universe": config.universe, "report": None})
         report_id = persist(connection, report)
         connection.commit()
+        outcome.summary = f"report persisted for {report['universe_id']}"
     context.log.info("question coverage %s: %s", report_id, summary_line(report))
     context.add_output_metadata(
         {

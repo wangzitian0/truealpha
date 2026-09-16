@@ -130,6 +130,21 @@ jobs:
             --environment "${{ matrix.environment }}" \
             --max-age-hours "${{ matrix.pointer_max_age_hours }}"
 
+      # #876 W1/W2: the nightly in-environment checks (output invariants, report surface
+      # proof, confidence report, head reports, model-provider key probe) run inside the
+      # environment's Dagster daemon, which this runner cannot reach; /api/health publishes
+      # each one's newest verdict (tools/nightly_verdicts.py). Red on a failed, stale (2x
+      # cadence) or missing verdict. `if: always()` for the same reason as the steps above.
+      # --repo: the expected checks are read at the deployed release's tag (full history and
+      # tags are fetched above), so a check main adds is not demanded of a lagging release.
+      - name: Check ${{ matrix.environment }} nightly check verdicts
+        if: always()
+        run: |
+          uv run --no-sync python tools/nightly_verdicts.py \
+            "${{ matrix.url }}" \
+            --environment "${{ matrix.environment }}" \
+            --repo .
+
       - name: Check ${{ matrix.environment }} surface-walk evidence
         if: always()
         env:
