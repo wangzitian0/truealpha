@@ -157,11 +157,13 @@ def test_the_partition_dates_settled_close_is_accepted() -> None:
 
 def test_the_fetcher_asks_for_the_partition_dates_end_of_day(http) -> None:
     requested, bodies = http
-    bodies.append(_SETTLED_EOD)
+    bodies.extend([_SETTLED_EOD, _TIME_SERIES_WITH_SETTLED_ROW])
     quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
 
     assert quote is not None and quote.close == Decimal("338.19000")
-    assert len(requested) == 1, "a settled partition date needs exactly one request"
+    # v3: the settled close is asked of `/eod` FIRST; the bar's series request follows
+    # (v2 stopped after one request, and had nothing to attach).
+    assert len(requested) == 2, "a settled partition date is one /eod request plus the bar's"
     assert urllib.parse.urlsplit(requested[0]).path == "/eod", (
         "the second origin must ask for the end-of-day close, not a live price"
     )
@@ -324,3 +326,114 @@ def test_an_http_error_status_still_reaches_the_fallback(_no_real_sleep, monkeyp
     assert len(requested) == 2, "the fallback request must fire after an HTTP-error /eod"
     assert quote is not None and quote.as_of == date(2026, 7, 28)
     assert quote.close == Decimal("337.10000")
+
+
+# -- the settled bar travels with the close (parser v3) --------------------------------
+
+# The `time_series` window on the evening AFTER the partition date's session settled:
+# its 2026-07-29 row closes AT the `/eod` close, so nothing has moved it since the bell.
+_TIME_SERIES_WITH_SETTLED_ROW = json.dumps(
+    {
+        "meta": {"symbol": "AAPL", "interval": "1day", "exchange": "NASDAQ"},
+        "values": [
+            {
+                "datetime": "2026-07-29",
+                "open": "336.5",
+                "high": "341.0",
+                "low": "335.9",
+                "close": "338.19000",
+                "volume": "51234500",
+            },
+            {
+                "datetime": "2026-07-28",
+                "open": "334.1",
+                "high": "337.4",
+                "low": "333.8",
+                "close": "337.10000",
+                "volume": "40349300",
+            },
+        ],
+        "status": "ok",
+    }
+).encode()
+
+
+def test_a_settled_partition_date_attaches_the_bar_from_time_series(http) -> None:
+    """`/eod` asserts the settled close and carries nothing else; the bar comes from
+    `time_series`, attached only when that row closes at the `/eod` close — the
+    falsifier that says no post-close print has entered it. The landed bytes are then
+    the series body, because it is the response every asserted number came from."""
+    requested, bodies = http
+    bodies.extend([_SETTLED_EOD, _TIME_SERIES_WITH_SETTLED_ROW])
+    quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
+
+    assert quote is not None and quote.as_of == _PARTITION
+    assert quote.close == Decimal("338.19000")
+    assert (quote.open, quote.high, quote.low, quote.volume) == (
+        Decimal("336.5"),
+        Decimal("341.0"),
+        Decimal("335.9"),
+        Decimal("51234500"),
+    )
+    assert [urllib.parse.urlsplit(url).path for url in requested] == ["/eod", "/time_series"]
+    assert _query(requested[1])["end_date"] == str(_PARTITION)
+    assert quote.raw_bytes == _TIME_SERIES_WITH_SETTLED_ROW
+
+
+def test_a_bar_still_moving_after_the_close_corroborates_close_only(http) -> None:
+    """The #535 quantity check, per field: the partition date's `time_series` row is
+    the in-progress bar (extended hours included) whenever its close is not the
+    `/eod` close. Its open/high/low/volume are then not the session's settled bar and
+    must NOT corroborate — the cell keeps the settled close and nothing else."""
+    requested, bodies = http
+    bodies.extend([_SETTLED_EOD, _TIME_SERIES_WITH_IN_PROGRESS_ROW])
+    quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
+
+    assert quote is not None and quote.close == Decimal("338.19000")
+    assert (quote.open, quote.high, quote.low, quote.volume) == (None, None, None, None)
+    assert quote.raw_bytes == _SETTLED_EOD, "close-only corroboration lands the bytes that asserted the close"
+    assert len(requested) == 2
+
+
+def test_a_failed_bar_request_leaves_the_settled_close_intact(http) -> None:
+    """The bar is additive: when the series request answers with an error body the
+    cell is exactly what it was before this vintage — a settled, corroborated close."""
+    requested, bodies = http
+    bodies.extend([_SETTLED_EOD, _NO_END_OF_DAY])
+    quote = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION)
+
+    assert quote is not None and quote.close == Decimal("338.19000")
+    assert quote.open is None and quote.volume is None
+    assert quote.raw_bytes == _SETTLED_EOD
+
+
+def test_the_bar_request_takes_its_own_throttle_turn(_no_real_sleep, http) -> None:
+    requested, bodies = http
+    bodies.extend([_SETTLED_EOD, _TIME_SERIES_WITH_SETTLED_ROW])
+    fetcher = TwelveDataQuoteFetcher("test-key", throttle_seconds=1)
+    assert fetcher("AAPL", _PARTITION) is not None
+    assert len(requested) == 2
+    assert _no_real_sleep == [1, 1], "the bar request must wait its turn like any other"
+
+
+def test_the_fallback_settled_row_carries_its_bar() -> None:
+    """On a partition date with no end of day the settled row was already fetched from
+    `time_series`; its bar rides along at no extra credit."""
+    quote = parse_last_settled_close(_TIME_SERIES_WITH_SETTLED_ROW, partition=date(2026, 7, 30))
+    assert quote is not None and quote.as_of == _PARTITION
+    assert (quote.open, quote.high, quote.low, quote.close, quote.volume) == (
+        Decimal("336.5"),
+        Decimal("341.0"),
+        Decimal("335.9"),
+        Decimal("338.19000"),
+        Decimal("51234500"),
+    )
+
+
+def test_a_row_without_volume_asserts_no_volume() -> None:
+    """Twelve Data documents `volume` as optional on a series row; an absent figure is
+    an absent assertion, never zero."""
+    quote = parse_last_settled_close(_TIME_SERIES_WITH_IN_PROGRESS_ROW, partition=_PARTITION)
+    assert quote is not None and quote.as_of == date(2026, 7, 28)
+    assert (quote.open, quote.high, quote.low) == (Decimal("334.1"), Decimal("337.4"), Decimal("333.8"))
+    assert quote.volume is None

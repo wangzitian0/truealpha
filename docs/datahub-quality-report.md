@@ -31,6 +31,41 @@ does not recalculate or override the confidence policy owned by #207.
 Factor projection remains provenance-neutral; source and origin metadata stay in the
 runner/report boundary.
 
+### Every field of the price bar is its own cell
+
+A market-price observation asserts the session's whole bar — `open`, `high`, `low`,
+`close`, `volume` — from both origins (parser `production-topt-live-parser:v10`,
+`twelve-data-parser:v3`). The report reconciles each field as its own
+`ReconciliationCell` (its own `field_semantics_id`, unit and policy), so "several
+metrics at HIGH confidence" is a count of fields whose two origins agreed, not a count
+of cells whose close did:
+
+| field | policy | relative tolerance | unit |
+|---|---|---|---|
+| open, high, low, close | `market-price-fusion:v2` | 0.3% (30 bp) | USD |
+| volume | `market-volume-fusion:v1` | 2% (200 bp) | shares |
+
+Volume is not a price: it is each vendor's own aggregation of the consolidated tape and
+settles later than the prices (late prints, corrections). The settled 2026-08-14 AAPL
+bars on the cassette pair agree exactly on volume, so the 2% exists for the
+same-evening capture; a primary-listing-only count (roughly half the tape) still
+conflicts by an order of magnitude. Like the price tolerance, it moves from measured
+spread in a version, never from a guess.
+
+An origin contributes an assertion to a field only when its payload carries a value
+for it. A Twelve Data bar refused because a post-close print had moved it corroborates
+`close` alone, so its other four fields grade `insufficient_independent_origins` for
+that listing; a field no origin asserted (observations written before v10) grades
+`unavailable`. Two nulls never agree.
+
+In the persisted payload each `reconciliation_cells[listing]` keeps the close's grade
+under the headline keys (`outcome`, `origin_groups`, `selected_source`,
+`selected_value`, `conflicting` — what the pointer gate and the admin page read) and
+carries every field's grade under `fields[<field>]` with its `policy_id`;
+`field_reconciliation[<field>]` summarises `agreed` / `cells` / `share` per field over
+the graded market-price cells. The headline `independent_reconciliation` ratio stays
+the close's, over the full requested denominator.
+
 ## Fixed Denominator
 
 `VersionedDataHubQualityReport.cells` contains exactly one row per requested cell,

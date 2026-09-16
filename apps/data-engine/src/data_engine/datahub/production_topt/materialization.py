@@ -141,8 +141,17 @@ class MarketPricePayload(_FrozenModel):
     listing_id: str = Field(min_length=1)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     close: Decimal | None
+    # The rest of the session's bar (parser v10 / twelve-data v3), each reconciled as its
+    # own cell in the quality report so more than one price metric can be graded HIGH.
+    # Optional because observations written before v10 carry no bar keys at all and a
+    # point-in-time payload is never rewritten; a v10 payload always carries all four,
+    # null where the source asserted nothing. The mart still serves `close` alone.
+    open: Decimal | None = None
+    high: Decimal | None = None
+    low: Decimal | None = None
+    volume: Decimal | None = None
 
-    @field_validator("close", mode="before")
+    @field_validator("close", "open", "high", "low", "volume", mode="before")
     @classmethod
     def reject_binary_float(cls, value: Any) -> Any:
         return _reject_float(value)

@@ -20,7 +20,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from truealpha_contracts.common import canonical_sha256
@@ -40,6 +40,7 @@ from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION,
 
 if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
+    from data_engine.sources.yahoo import PriceBar
 
 
 @dataclass(frozen=True)
@@ -56,12 +57,39 @@ class MarketPriceTarget:
 
 @dataclass(frozen=True)
 class MarketPriceQuote:
-    """One Decimal-safe daily close plus the immutable raw bytes it was parsed from."""
+    """One Decimal-safe daily bar plus the immutable raw bytes it was parsed from.
+
+    `close` is the served value and is always present. The other four bar fields are
+    what the vendor asserted alongside it and are None when it asserted nothing — a
+    Twelve Data bar refused because a post-close print had moved it corroborates close
+    alone. Volume is a Decimal like the prices (an exact share count, never a binary
+    float) so one Decimal comparison rule serves every field in fusion.
+    """
 
     raw_bytes: bytes
     close: Decimal
     as_of: date
     knowable_at: datetime
+    open: Decimal | None = None
+    high: Decimal | None = None
+    low: Decimal | None = None
+    volume: Decimal | None = None
+
+
+# The bar fields both origins assert besides the close. They travel in the payload
+# under their own names; the close travels under the origin's declared value key. All
+# four are ALWAYS written, so a null under this vintage means "the source asserted
+# nothing" and not "nobody asked" — the v6/v7 distinction `parser_identity` records.
+BAR_FIELDS: tuple[str, ...] = ("open", "high", "low", "volume")
+
+
+def bar_payload(quote: MarketPriceQuote, *, close_key: str) -> dict[str, Any]:
+    """The five bar values as base-10 strings (null where absent), never binary floats."""
+    payload: dict[str, Any] = {close_key: str(quote.close)}
+    for field in BAR_FIELDS:
+        value = getattr(quote, field)
+        payload[field] = None if value is None else str(value)
+    return payload
 
 
 # (symbol, cutoff) -> the quote at/before cutoff, or None when the source has no datum.
@@ -122,7 +150,7 @@ class MarketPriceAdapter:
             "instrument_id": target.instrument_id,
             "listing_id": target.listing_id,
             "currency": target.currency,
-            "close": str(quote.close),
+            **bar_payload(quote, close_key="close"),
         }
         return FetchSuccess(
             raw=RawResponse(
@@ -154,7 +182,7 @@ class MarketPriceAdapter:
                 "issuer_id": target.issuer_id,
                 "instrument_id": target.instrument_id,
                 "listing_id": target.listing_id,
-                origin.value_key: str(quote.close),
+                **bar_payload(quote, close_key=origin.value_key),
                 "currency": target.currency,
                 "origin": origin.origin,
             }
@@ -246,6 +274,16 @@ def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
         body, bars = yahoo.fetch_daily_chart(vendor_symbol, end=cutoff)
     except httpx.HTTPError as error:  # transient network/timeout classified by the adapter
         raise SourceUnavailableError(str(error)) from error
+    return quote_from_chart(body, bars, cutoff=cutoff)
+
+
+def quote_from_chart(body: bytes, bars: Sequence[PriceBar], *, cutoff: date) -> MarketPriceQuote | None:
+    """The newest bar at/before `cutoff` as the quote the adapter asserts: the vendor's
+    verbatim bytes and the WHOLE recovered bar, not only its close.
+
+    Separated from the HTTP call so the cassette suite drives exactly this selection
+    over the bytes production captured (`tests/production_topt/test_real_vendor_bytes.py`).
+    """
     eligible = [bar for bar in bars if bar.date <= cutoff]
     if not eligible:
         return None
@@ -258,10 +296,16 @@ def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
         # ever be replayed against.
         raw_bytes=body,
         # `bar.close` is already the recovered Decimal; re-casting through str() here
-        # would be a no-op that invites someone to reintroduce a float upstream.
+        # would be a no-op that invites someone to reintroduce a float upstream. The
+        # same float32 recovery already ran on open/high/low at the parse boundary.
         close=bar.close,
         as_of=bar.date,
         knowable_at=knowable_at,
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+        # The chart sends volume as a JSON integer; Decimal(int) is exact.
+        volume=None if bar.volume is None else Decimal(bar.volume),
     )
 
 
