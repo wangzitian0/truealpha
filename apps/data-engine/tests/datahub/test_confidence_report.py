@@ -361,15 +361,17 @@ _MOOMOO_FACT = {
 }
 
 
-def _financial(coordinate: tuple[str, str], payload: dict, *, primary: bool | None = None) -> cr.FinancialObservation:
+def _financial(
+    coordinate: tuple[str, str], payload: dict, *, primary: bool | None = None, filed: datetime = FILED
+) -> cr.FinancialObservation:
     source, origin = coordinate
     return cr.FinancialObservation(
         primary=coordinate is _SEC if primary is None else primary,
         origin_source=source,
         origin_id=origin,
         payload=payload,
-        knowable_at=FILED,
-        observation_id="normalized-observation:" + hashlib.sha256(origin.encode()).hexdigest(),
+        knowable_at=filed,
+        observation_id="normalized-observation:" + hashlib.sha256(f"{origin}{filed}".encode()).hexdigest(),
     )
 
 
@@ -490,6 +492,29 @@ def test_an_undated_primary_figure_is_not_corroborated_and_an_absent_one_leaves_
     )
     assert absent["net_income"].band is Band.LOW and absent["net_income"].origins == ("origin:moomoo-financials:v1",)
     assert absent["net_income"].values["origin:moomoo-financials:v1"] == "9060000"
+
+
+def test_an_origin_asserts_from_its_newest_observation_whichever_order_the_rows_came_in() -> None:
+    """Two rows from one origin are one origin (Copilot on #875): the newest by knowable_at
+    is what it asserts — the quality report's selection of the primary, applied to every
+    origin — and reversing the rows changes nothing."""
+    earlier = datetime(2025, 2, 20, tzinfo=UTC)
+    restated = {**_MOOMOO_FACT, "by_period_end": {"2025-12-31": {"revenue": "103000000"}}}
+    rows = (
+        _financial(_SEC, {**_PRIMARY_FACT, "revenue": "90000000"}, filed=earlier),  # superseded
+        _financial(_SEC, _PRIMARY_FACT),
+        _financial(_MOOMOO, restated, filed=earlier),  # superseded
+        _financial(_MOOMOO, _MOOMOO_FACT),
+    )
+    forward, backward = _financial_grades(*rows), _financial_grades(*reversed(rows))
+    assert forward == backward
+    revenue = forward["revenue"]
+    assert revenue.band is Band.HIGH and revenue.origins == (
+        "origin:moomoo-financials:v1",
+        "origin:sec-company-facts:v1",
+    )
+    assert revenue.values == {"origin:moomoo-financials:v1": "100000000", "origin:sec-company-facts:v1": "100000000"}
+    assert revenue.independent_origins == 2 and revenue.delta == "0"
 
 
 def test_two_readers_of_one_lineage_stay_medium_under_the_financial_policy() -> None:

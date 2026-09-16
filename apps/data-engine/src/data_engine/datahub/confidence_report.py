@@ -860,9 +860,27 @@ def _newest_period_value(payload: Mapping[str, Any], name: str) -> tuple[str | N
     return None, None
 
 
+def _recency(observation: FinancialObservation) -> tuple[datetime, str]:
+    return observation.knowable_at or datetime.min.replace(tzinfo=UTC), observation.observation_id or ""
+
+
+def _newest_per_origin(observations: Sequence[FinancialObservation]) -> list[FinancialObservation]:
+    """One observation per origin — the newest by knowable_at, then observation id: the
+    quality report's selection of the primary, applied to every origin. An origin then
+    asserts once, whichever order its rows arrived in, and never counts as two."""
+    newest: dict[str, FinancialObservation] = {}
+    for observation in observations:
+        current = newest.get(observation.origin_id)
+        if current is None or _recency(observation) > _recency(current):
+            newest[observation.origin_id] = observation
+    return [newest[origin_id] for origin_id in sorted(newest)]
+
+
 def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str, list[OriginValue]]:
     """What each financial-fact origin asserts per family, aligned the way the quality
-    report's fusion aligns them (#866, `reconcile_financial_fact_entries`).
+    report's fusion aligns them (#866, `reconcile_financial_fact_entries`). Each origin
+    asserts from its newest observation alone (`_newest_per_origin`), so the grade cannot
+    depend on the order the rows were read in.
 
     The primary asserts its own figure, dated with its own fiscal period end where the
     payload dates it (`primary_financial_fields`). For a fused field, a corroborating
@@ -879,16 +897,13 @@ def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str,
     Headcount asserts under its producer (the plane's other producers are added by
     `_add_headcount_producers`); fields no policy fuses are read by name from every origin.
     """
-    primaries = [observation for observation in observations if observation.primary]
-    primary = (
-        max(primaries, key=lambda o: (o.knowable_at or datetime.min.replace(tzinfo=UTC), o.observation_id or ""))
-        if primaries
-        else None
-    )
+    selected = _newest_per_origin(observations)
+    primaries = [observation for observation in selected if observation.primary]
+    primary = max(primaries, key=_recency) if primaries else None
     anchors = primary_financial_fields(primary.payload) if primary is not None else {}
     unit = financial_fact_unit(primary.payload) if primary is not None else None
     origins: dict[str, list[OriginValue]] = {}
-    for observation in observations:
+    for observation in selected:
         payload = observation.payload
         for name in FINANCIAL_FIELDS:
             if name == "headcount":
