@@ -103,7 +103,10 @@ class CapacityDeclaration:
     - ``calls_per_window`` / ``window_seconds``: the pace the gateway queues calls to.
     - ``daily_budget``: calls per UTC day, checked against the environment's own
       ``staging.api_call_ledger`` before the call. None where neither the vendor nor we
-      declare one: the seat is then paced, not budgeted.
+      declare one: the seat is then paced, not budgeted. The unit is the request (a
+      ledger row), not the row's ``cost``: a model call records its tokens as cost, and
+      every vendor seat declared here charges one credit per request. A seat budgeted in
+      another unit (tokens per day) needs its own dimension, not this one.
     - ``concurrency``: declared, not enforced — every lane calls its vendors sequentially.
     - ``environment_shares``: ``(environment, percent)`` pairs for an allowance that ONE
       credential serves in several environments. Each environment gets its percentage of

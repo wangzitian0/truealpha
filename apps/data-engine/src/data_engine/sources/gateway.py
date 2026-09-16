@@ -436,6 +436,7 @@ def _refuse(error: CapacityExceeded) -> NoReturn:
     raise error
 
 
+# Budgets and windows count requests (rows), never `cost`: see `CapacityDeclaration.daily_budget`.
 _SPENT_SQL = "select count(*) from staging.api_call_ledger where source = %s and called_at >= %s"
 _WINDOW_SQL = "select count(*), min(called_at) from staging.api_call_ledger where source = %s and called_at > %s"
 

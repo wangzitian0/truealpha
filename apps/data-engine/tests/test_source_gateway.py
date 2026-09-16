@@ -720,6 +720,13 @@ def test_a_call_is_admitted_once_however_it_is_wrapped(call_ledger) -> None:
 
 def test_the_gates_ledger_reads_follow_the_writer(call_ledger, monkeypatch) -> None:
     call_ledger.extend(_seat_rows("sec", 3))
+    # The unit is the request: a model call's token cost is not three thousand calls.
+    call_ledger.append(
+        gateway.CallRecord(
+            source="filing-extraction-model", endpoint="x", caller="x", called_at=_EARLIER, cost=Decimal(3000)
+        )
+    )
+    assert gateway.ledger_calls_since("filing-extraction-model", _EARLIER) == 1
     since = _EARLIER - timedelta(seconds=1)
     assert gateway.ledger_calls_since("sec", since) == 3
     assert gateway.ledger_window("sec", since) == (3, _EARLIER)
