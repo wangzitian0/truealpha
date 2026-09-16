@@ -737,6 +737,82 @@ def test_a_tag_run_attests_instead_of_re_running() -> None:
     )
 
 
+def test_a_tag_re_tags_what_main_published_instead_of_rebuilding_it() -> None:
+    """#860: the tag run measured 2.2 min, and every second of it re-produced images the
+    SHA already had -- three cache-hit builds and three ~1 min publishes that minted a
+    second digest of the same bytes and, in passing, moved main's own `sha-<short>` pointer
+    onto it (v0.0.63: all three `sha-7de7813` tags equal the `v0.0.63` digests, none equal
+    what main had pushed). `tag_verified` already asserts that main published this SHA, so
+    the release re-tags main's digests and builds only what main did not publish (#731
+    skips an image the merge left untouched). What makes that safe:
+
+    - only a tag reuses; a main push and the manual force ARE the publisher, and the PR-time
+      `images_check` never sees the input, so a PR still proves its image builds;
+    - `plan` decides per image through tools/verified_sha_images.py, whose own tests pin
+      that 404 is the one answer that means "build" and everything else is red;
+    - `retag` publishes nothing but a pointer: `imagetools create` at the digest `plan`
+      resolved, then an inspect that fails the job if the tag names anything else;
+    - `retag` and `publish` derive their tags from one identical metadata-action spec, so a
+      tag scheme change cannot leave the two paths naming different things; and the spec
+      still carries `type=sha,format=short`, the spelling the tool asks the registry for.
+    """
+    release = job(REQUIRED, "images_release")
+    assert str(release["with"]["reuse_verified_sha"]) == "${{ github.ref_type == 'tag' }}", (
+        "images_release must reuse on a tag and only on a tag — main and the manual force are the publisher"
+    )
+    assert "reuse_verified_sha" not in (job(REQUIRED, "images_check").get("with") or {}), (
+        "a PR must still prove its image BUILDS; reuse would let a broken Dockerfile merge green"
+    )
+    reuse = triggers(IMAGES)["workflow_call"]["inputs"]["reuse_verified_sha"]
+    assert reuse["type"] == "boolean" and reuse["default"] is False and reuse["required"] is False
+
+    select = step(IMAGES, "Select available images")
+    assert "python3 tools/verified_sha_images.py" in str(select["run"]), (
+        "plan no longer asks the registry what main published — every tag rebuilds again"
+    )
+    assert select["env"]["REUSE_VERIFIED_SHA"] == "${{ inputs.reuse_verified_sha }}"
+    assert select["env"]["SHA"] == "${{ github.sha }}", "the SHA asked about must be the one the tag points at"
+    assert 'if [[ "$REUSE_VERIFIED_SHA" == "true" ]]' in str(select["run"]), "the split must be gated on the input"
+    assert "set -euo pipefail" in str(select["run"]), "a failed split must fail the plan, not feed jq an empty string"
+    plan = job(IMAGES, "plan")
+    for output in ("matrix", "has_images", "retag_matrix", "has_retag"):
+        assert output in plan["outputs"], f"plan no longer exposes {output}"
+
+    retag = job(IMAGES, "retag")
+    assert retag["needs"] == "plan", "retag depends on the plan and on nothing that builds"
+    assert "inputs.publish" in str(retag["if"]) and "has_retag == 'true'" in str(retag["if"]), (
+        "a publish: false call (images_check) must never push a tag"
+    )
+    assert "fromJSON(needs.plan.outputs.retag_matrix)" in str(retag["strategy"]["matrix"])
+    pointer = step(IMAGES, "Re-tag ${{ matrix.image }} at the digest main published")
+    assert pointer["env"]["SOURCE"].endswith("@${{ matrix.digest }}"), (
+        "the re-tag must name the digest plan resolved, not a tag that could have moved since"
+    )
+    run = str(pointer["run"])
+    assert "docker buildx imagetools create" in run
+    assert "imagetools inspect" in run and '[ "$resolved" != "$DIGEST" ]' in run and "exit 1" in run, (
+        "the re-tag no longer verifies that the tag resolves to the verified digest"
+    )
+    assert "docker/build-push-action" not in "\n".join(spec_text(spec) for spec in retag["steps"]), (
+        "retag builds — the job exists precisely so a tag never does"
+    )
+
+    def metadata(job_id: str) -> dict:
+        specs = [spec for spec in job(IMAGES, job_id)["steps"] if "docker/metadata-action" in str(spec.get("uses", ""))]
+        assert len(specs) == 1, f"{job_id} has {len(specs)} metadata-action steps"
+        return specs[0]["with"]
+
+    assert metadata("retag")["tags"] == metadata("publish")["tags"], (
+        "retag and publish derive their tags from different specs — the two paths can name different things"
+    )
+    assert metadata("retag")["images"] == metadata("publish")["images"]
+    assert "type=sha,format=short" in metadata("publish")["tags"], (
+        "publish no longer tags sha-<short> — the reference tools/verified_sha_images.py asks the registry for"
+    )
+    # A build never runs for a re-tagged image: the build matrix is what the split left.
+    assert str(job(IMAGES, "build")["strategy"]["matrix"]) == "${{ fromJSON(needs.plan.outputs.matrix) }}"
+
+
 def test_release_script_reviews_the_pr_that_produced_the_release_sha() -> None:
     """v0.0.34's first prod dispatch: deploy-release's prod gate pins the
     reviewed PR's merge_commit_sha to the release SHA, but cut_release passed

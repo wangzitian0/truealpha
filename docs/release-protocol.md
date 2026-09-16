@@ -59,7 +59,7 @@ Measured on the v0.0.22 and v0.0.23 releases, not estimated:
 
 | Step | Time | Compressible? |
 |---|---|---|
-| `ci-required` on the tag | ~5–6 min | Duplicates the run that was already green on main for the same SHA. The biggest remaining win, and a change to the evidence contract — not taken here. |
+| `ci-required` on the tag | ~5–6 min, then 2.2 min, now ~1 min | Used to duplicate the run that was already green on main for the same SHA. A4 D2 (#673) replaced the suite with an attestation that an identical-SHA green main run exists; #860 replaced the rebuild-and-republish with a re-tag of the digests main already published at that SHA (`release-images` `retag`), building only an image main did not publish there. The evidence contract is untouched either time. |
 | Dispatch to infra2 | ~350 s | This is infra2 performing the deploy. Not ours to compress. |
 | Surface walk | ~116 s | ~21 s of it was re-downloading Chromium every run; now cached. The rest is the walk itself, 12 routes across two identities. |
 | Everything else | 2–4 s each | Nothing to take. |
