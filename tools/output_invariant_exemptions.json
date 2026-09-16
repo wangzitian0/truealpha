@@ -4,8 +4,8 @@
     {
       "invariant": "gppe-not-negative",
       "issue": "#528",
-      "expires": "2026-09-16",
-      "reason": "JPM publishes -528,985.79 because a uniform total_assets capital charge is applied to financial issuers; vision.md requires a separate financial branch and it is not built"
+      "expires": "2026-09-23",
+      "reason": "JPM publishes a negative GPPE (-514,726.13 on both governed heads, 2026-09-16) because a uniform total_assets capital charge is applied to financial issuers. The owner decided on 2026-09-04 (#528) to replace the single number with an operating + financial decomposition for every issuer, and on 2026-09-07 that the per-component sign policy replaces this exemption; that implementation has not started. Extended once, by 7 days (was 2026-09-16), because the same exemption also covers the in-tick plausibility gate: without it every TOPT tick from 2026-09-17 22:15Z is refused and the governed head freezes. Not to be extended again without an owner decision on #528."
     }
   ]
 }
