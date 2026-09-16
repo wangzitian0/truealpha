@@ -29,6 +29,7 @@ from decimal import Decimal
 from typing import Any
 
 from factors.base.theme_purity import ThemePurity, ThemeSegment, theme_purity
+from factors.shared.extraction import RULE_NO_DESCRIPTION
 from psycopg import Connection
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 from truealpha_contracts.standards import STANDARDS, confidence_for
@@ -186,7 +187,7 @@ _SINGLE_SEGMENT_MARKER = "single_segment_statement="
 _SINGLE_SEGMENT_RULES = "rule:single-segment:"
 #: A one-part row that carries no description is refused before any model call (#855 B6).
 NO_DESCRIPTION = "no_description"
-NO_DESCRIPTION_EXTRACTOR = "rule:no-description:v1"
+NO_DESCRIPTION_EXTRACTOR = RULE_NO_DESCRIPTION
 
 
 def _descriptions_for(parts: list[tuple[str, Decimal]], evidence_ref: str) -> tuple[str, ...]:
