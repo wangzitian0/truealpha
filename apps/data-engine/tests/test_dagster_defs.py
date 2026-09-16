@@ -17,7 +17,8 @@ from __future__ import annotations
 import inspect
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import dagster as dg
@@ -344,7 +345,7 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
         lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
 
     [summary] = [line for line in lines if line.startswith(f"topt live tick {TICK}: capture ")]
-    assert "; corroborations refused 2 (twelve-data fetch 2); served by failover 0; pointer sequence 11" in summary
+    assert "; corroborations refused 2 (twelve-data fetch 2); capacity refused 0; served by failover 0; pointer sequence 11" in summary
     assert metadata["corroborations_refused"] == 2
     warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 2 and all("twelve-data" in w and "PermissionError" in w for w in warnings)
@@ -360,9 +361,10 @@ def test_a_tick_that_lost_nothing_says_so(monkeypatch) -> None:
     lines, metadata = _logged_tick(monkeypatch, run_canary_live_tick, registration)
     assert lines[-1] == (
         f"canary tick {TICK}: capture capture-run:{'a' * 64} (available 84/84); "
-        "corroborations refused 0; served by failover 0; pointer sequence 3"
+        "corroborations refused 0; capacity refused 0; served by failover 0; pointer sequence 3"
     )
     assert metadata["corroborations_refused"] == 0
+    assert (metadata["capacity_refused"], metadata["budget_exhausted"]) == (0, 0)
     assert metadata["served_by_failover"] == 0
 
 
@@ -385,8 +387,131 @@ def test_a_tick_names_the_cells_served_by_failover(monkeypatch) -> None:
     )
     lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
     [summary] = [line for line in lines if line.startswith(f"topt live tick {TICK}: capture ")]
-    assert "; corroborations refused 0; served by failover 2; pointer sequence 4" in summary
+    assert "; corroborations refused 0; capacity refused 0; served by failover 2; pointer sequence 4" in summary
     assert metadata["served_by_failover"] == 2
+
+
+def _spent_today(call_ledger, source: str, count: int) -> None:
+    from data_engine.sources import gateway
+
+    at = datetime.now(UTC) - timedelta(minutes=5)  # today, outside every rate window
+    if at.date() != datetime.now(UTC).date():
+        at = datetime.now(UTC)
+    call_ledger.extend(
+        [gateway.CallRecord(source=source, endpoint="x", caller="earlier", called_at=at, ok=True)] * count
+    )
+
+
+def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_ledger) -> None:
+    """Rule 6 through the deployed entry point (#729): the tick binds the capacity gate, so
+    with production's 480-credit share of the shared Twelve Data key spent, the REAL
+    Twelve Data fetcher is refused before it reaches the vendor — the cell stays
+    single-origin with the loss at the `budget` stage — and a spent Yahoo budget defers
+    the primary cell. The tick summary and op metadata name both. Red against a tick
+    that only records: the fake vendor below fails any request that gets through."""
+    from datetime import date
+
+    from data_engine.config import settings
+    from data_engine.datahub.production_topt import twelve_data_origin
+    from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
+    from data_engine.datahub.production_topt.market_price_adapter import (
+        MarketPriceAdapter,
+        MarketPriceQuote,
+        MarketPriceTarget,
+        yahoo_quote_fetcher,
+    )
+    from data_engine.sources import yahoo
+    from truealpha_contracts.datahub import CaptureWorkItem
+    from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
+
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "twelve_data_api_key", "k")
+    monkeypatch.setattr(twelve_data_origin.time, "sleep", lambda _seconds: None)
+    registration = PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=12, unmet=())
+    _fake_tick(monkeypatch, registration)
+
+    def no_request(*args, **kwargs):
+        raise AssertionError("a refused request reached the vendor")
+
+    class NoRequestClient:
+        def __init__(self, **_kwargs: object) -> None: ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None: ...
+
+        get = staticmethod(no_request)
+
+    monkeypatch.setattr(twelve_data_origin.urllib.request, "urlopen", no_request)
+    monkeypatch.setattr(yahoo.httpx, "Client", NoRequestClient)
+    _spent_today(call_ledger, "twelvedata", 480)
+    origin = twelve_data_origin.twelve_data_origin()
+    assert origin is not None
+    items = [
+        CaptureWorkItem(
+            campaign_id="capture-campaign:" + "1" * 64,
+            source_request_id="source-request:" + digit * 64,
+            schedule_policy_id="schedule-policy:" + "2" * 64,
+        )
+        for digit in ("3", "4")
+    ]
+    target = MarketPriceTarget("AAPL", date(2026, 7, 30), "issuer:x", "security:y", "listing:aapl")
+    quote = MarketPriceQuote(b"bar", Decimal("150.25"), date(2026, 7, 30), datetime(2026, 7, 30, tzinfo=UTC))
+    corroborated = MarketPriceAdapter(
+        {items[0].work_item_id: target}, lambda s, c: quote, corroborating_origins=(origin,)
+    )
+    deployed_primary = MarketPriceAdapter({items[1].work_item_id: target}, yahoo_quote_fetcher)
+    outcomes: list = []
+
+    def capture_under_the_gate(*args, **kwargs) -> ToptPipelineResult:
+        outcomes.append(corroborated.fetch(items[0]))
+        _spent_today(call_ledger, "yahoo", 2000)
+        outcomes.append(deployed_primary.fetch(items[1]))
+        return ToptPipelineResult(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            core_result_count=20,
+            quality_report_id="datahub-quality-report:" + "c" * 64,
+            quality=dict(_QUALITY),
+        )
+
+    monkeypatch.setattr(capture, "run_topt_pipeline", capture_under_the_gate)
+    lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
+
+    single_origin, deferred = outcomes
+    assert isinstance(single_origin, FetchSuccess) and single_origin.corroborations == ()
+    assert isinstance(deferred, FetchFailure) and deferred.reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+    [summary] = [line for line in lines if line.startswith(f"topt live tick {TICK}: capture ")]
+    assert (
+        "; corroborations refused 1 (twelve-data budget 1); capacity refused 2 (twelvedata budget 1, yahoo budget 1);"
+        in summary
+    )
+    assert (metadata["budget_exhausted"], metadata["capacity_refused"]) == (2, 2)
+
+
+def test_a_failed_tick_still_says_what_the_gate_refused(monkeypatch, call_ledger) -> None:
+    """A capture refused for its shortfall (#538) raises before the summary line; the run
+    log must still name the budget that caused it."""
+    import pytest
+    from data_engine.config import settings
+    from data_engine.sources import gateway
+
+    monkeypatch.setattr(settings, "app_env", "staging")
+    _fake_tick(monkeypatch, PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=1, unmet=()))
+    _spent_today(call_ledger, "sec", 5000)
+
+    def refused_capture(*args, **kwargs):
+        with gateway.record_call("sec", "companyfacts", caller="test"):
+            raise AssertionError("a refused request ran")
+
+    monkeypatch.setattr(capture, "run_topt_pipeline", refused_capture)
+    context = dg.build_op_context()
+    lines: list[str] = []
+    monkeypatch.setattr(context.log, "warning", lambda message, *args, **kwargs: lines.append(message))
+    with pytest.raises(gateway.BudgetExhausted):
+        run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
+    assert lines == [f"topt live tick {TICK} failed; corroborations refused 0; capacity refused 1 (sec budget 1)"]
 
 
 def test_the_two_environments_never_tick_at_the_same_instant() -> None:

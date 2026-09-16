@@ -56,6 +56,7 @@ from data_engine.datahub.production_topt.executor import (
     RawResponse,
 )
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
+from data_engine.sources.gateway import BudgetExhausted
 
 if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
@@ -920,6 +921,10 @@ class SecFinancialFactAdapter:
                 fallback = self._fetcher(target.predecessor_cik, target.cutoff, target.operating_branch)
                 if fallback is not None and _asserts_income(fallback):
                     bundle = fallback
+        except BudgetExhausted:
+            # SEC's daily call budget is spent for this environment: deferred, named, not
+            # "the issuer files nothing" (rule 6, #729). The gate's listener counted it.
+            return FetchFailure(ObligationReasonCode.DEFERRED_CAPACITY)
         except SourceUnavailableError:
             return FetchFailure(ObligationReasonCode.TRANSIENT_NETWORK)
         except TimeoutError:

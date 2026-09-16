@@ -25,10 +25,28 @@ Why the writer is autocommit and never raises
 The row must survive the caller's transaction: a tick that rolls back still made its
 vendor calls (the #628 rollbacks re-fetched 408 obligations *because* nothing recorded
 the first attempt). And a ledger outage must not turn a successful vendor answer into a
-failed capture — the write failure is logged with the full row instead. Enforcement of
-declared capacity (refuse or defer *before* the call, #729 criterion 4) is not this
-module's job yet; ``CAPACITIES`` is the interim declaration until #72's per-source
-registration object carries it.
+failed capture — the write failure is logged with the full row instead.
+
+Declared capacity is enforced before the call (#729 criterion 4)
+----------------------------------------------------------------
+Every seat's capacity is declared once, in the source registry
+(`source_registrations.LEDGER_CAPACITIES`); ``CAPACITIES`` here is derived from it. A
+`CapacityGate` enforces it BEFORE the request: it queues the call until the seat's rate
+window has room and refuses it — `BudgetExhausted`, nothing sent, nothing recorded — when
+the environment's daily budget is spent. Both checks read the environment's own ledger,
+so every process of an environment shares them; the process's own admissions are counted
+too, so a ledger that lags a call cannot let the next one through.
+
+Two ways in, one gate:
+
+- a Dagster op binds `capacity_scope()` around its work, and every `record_call` inside
+  (so every `http_get`, `http_post` and `urlopen`) is admitted by that gate first — the
+  capture ticks, the universe refresh and the confidence report do;
+- `SourceGateway.call` admits through its own gate (the standards lane).
+
+Outside both — a reconnaissance script, a unit test — a call is recorded, not gated.
+A refusal is announced to the `on_capacity_refusal` listeners before it raises, which is
+how a tick counts what its gate refused without any adapter having to report it.
 """
 
 from __future__ import annotations
@@ -44,12 +62,19 @@ import urllib.request
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, date, datetime
+from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as clock_time
 from decimal import Decimal
-from typing import Any, TypeVar
+from types import MappingProxyType
+from typing import Any, NoReturn, TypeVar
 
 from data_engine.config import settings
+from data_engine.datahub.production_topt.source_registrations import (
+    LEDGER_CAPACITIES,
+    CapacityDeclaration,
+    environment_share,
+)
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -60,22 +85,22 @@ _ERROR_LIMIT = 500
 _REDACTED_KEY_MARKERS = ("apikey", "api_key", "api-key", "token", "secret", "password", "auth", "key")
 
 
-# --- declared capacity (interim seat until #72's registration object) ------------------
+# --- declared capacity: derived from the source registry, never written here ---------
 
 
 @dataclass(frozen=True)
 class SourceCapacity:
-    """What the vendor documents, and what the gateway enforces for a source that is
-    called through `SourceGateway.call` (#740: SEC, the model and search seats).
+    """The gateway's view of one ledger seat's declared capacity.
 
-    ``None`` means the vendor publishes no such limit — legal for a record-only source
-    (yahoo, the index operator); a source that is *called through the gateway* must
-    declare every dimension, or `SourceGateway.capacity` refuses it.
+    Derived: `CAPACITIES` is computed from `source_registrations.LEDGER_CAPACITIES`, the
+    one place a number is written (the 2026-09-16 design audit found this module's own
+    table disagreeing with the registry's). Tests build their own to drive a gate with a
+    synthetic limit.
 
-    Sources: Twelve Data pricing page (Basic: 8 credits/min, 800/day); SEC developer
-    FAQ (10 requests/s — 8 declared, leaving headroom for the daily tick on the same
-    host and User-Agent); OpenFIGI API docs (keyed: 25 requests / 6 s, 100 jobs each);
-    moomoo API docs (60 requests / 30 s per quote endpoint; `moomoo_ledger` paces 8 / 30 s).
+    ``None`` in a dimension means nothing is declared for it: a gate does not pace an
+    unwindowed seat and does not budget an unbudgeted one. `SourceGateway.call` requires
+    both (`enforceable`). ``environment_shares`` splits a shared allowance per environment
+    (see `CapacityDeclaration`); `in_environment` resolves it.
     """
 
     source: str
@@ -83,6 +108,7 @@ class SourceCapacity:
     calls_per_window: int | None
     daily_budget: int | None = None
     note: str = ""
+    environment_shares: tuple[tuple[str, int], ...] = ()
 
     def __post_init__(self) -> None:
         if (self.window_seconds is None) != (self.calls_per_window is None):
@@ -92,25 +118,48 @@ class SourceCapacity:
             if value is not None and value <= 0:
                 raise ValueError(f"capacity for {self.source!r} must be positive in every dimension")
 
+    @classmethod
+    def declared(cls, source: str, declaration: CapacityDeclaration) -> SourceCapacity:
+        return cls(
+            source,
+            float(declaration.window_seconds),
+            declaration.calls_per_window,
+            declaration.daily_budget,
+            declaration.documented,
+            declaration.environment_shares,
+        )
+
     @property
     def enforceable(self) -> bool:
         """Whether `SourceGateway.call` can throttle and budget this source."""
         return self.window_seconds is not None and self.daily_budget is not None
 
+    @property
+    def shared(self) -> bool:
+        return bool(self.environment_shares)
 
-CAPACITIES: Mapping[str, SourceCapacity] = {
-    "sec": SourceCapacity("sec", 1.0, 8, 5000, "SEC fair-access guidance; 8 of 10/s declared"),
-    "nport": SourceCapacity("nport", 1.0, 8, 5000, "SEC fair-access guidance (same hosts as sec)"),
-    "twelvedata": SourceCapacity("twelvedata", 60.0, 8, 800, "Basic plan; ONE key is shared by staging and production"),
-    "openfigi": SourceCapacity("openfigi", 6.0, 25, None, "keyed tier; 100 jobs per request"),
-    "moomoo": SourceCapacity("moomoo", 30.0, 60, None, "per quote endpoint; moomoo_ledger paces 8 / 30 s"),
-    "yahoo": SourceCapacity("yahoo", None, None, None, "undocumented; paced by the per-symbol loop"),
-    "nasdaq-index": SourceCapacity("nasdaq-index", None, None, None, "undocumented; weekly refresh"),
-    # The model and search seats are provider-agnostic placeholders sized for a QQQ
-    # backfill; a provider's real limits replace them in the PR that provisions it (#70, #732).
-    "filing-extraction-model": SourceCapacity("filing-extraction-model", 60.0, 30, 2000, "placeholder seat (#70)"),
-    "search": SourceCapacity("search", 60.0, 20, 500, "placeholder seat (#732)"),
-}
+    def in_environment(self, environment: str) -> SourceCapacity | None:
+        """What ``environment`` may spend: the whole seat when it is not shared, the
+        environment's share when it is, and None when a shared seat grants it none."""
+        if not self.environment_shares:
+            return self
+        if dict(self.environment_shares).get(environment) is None:
+            return None
+        return replace(
+            self,
+            calls_per_window=None
+            if self.calls_per_window is None
+            else environment_share(self.calls_per_window, self.environment_shares, environment),
+            daily_budget=None
+            if self.daily_budget is None
+            else environment_share(self.daily_budget, self.environment_shares, environment),
+            environment_shares=(),
+        )
+
+
+CAPACITIES: Mapping[str, SourceCapacity] = MappingProxyType(
+    {seat: SourceCapacity.declared(seat, declaration) for seat, declaration in LEDGER_CAPACITIES.items()}
+)
 
 
 def capacity_window_id(source: str, at: datetime) -> str | None:
@@ -291,10 +340,20 @@ def postgres_writer(record: CallRecord) -> None:
 
 class MemoryLedger(list[CallRecord]):
     """A writer that keeps the rows in memory — the test double (a local probe with no
-    warehouse sets `EXTERNAL_CALL_LEDGER=off` instead; `emit` then records nothing)."""
+    warehouse sets `EXTERNAL_CALL_LEDGER=off` instead; `emit` then records nothing).
+
+    It answers the gate's two reads over its own rows, so a gated test is budgeted and
+    paced by exactly the calls it recorded."""
 
     def __call__(self, record: CallRecord) -> None:
         self.append(record)
+
+    def calls_since(self, source: str, since: datetime) -> int:
+        return sum(1 for row in self if row.source == source and row.called_at >= since)
+
+    def window(self, source: str, since: datetime) -> tuple[int, datetime | None]:
+        times = [row.called_at for row in self if row.source == source and row.called_at > since]
+        return len(times), min(times, default=None)
 
 
 _writer: Callable[[CallRecord], None] = postgres_writer
@@ -316,6 +375,220 @@ def emit(record: CallRecord, writer: Callable[[CallRecord], None] | None = None)
         (writer or _writer)(record)
     except Exception:  # noqa: BLE001 - the vendor result must not depend on the ledger
         log.exception("external call ledger write failed; unrecorded call: %s", json.dumps(record.as_row()))
+
+
+# --- the rule-6 gate (#729 criterion 4): queue on the rate, refuse on the budget ------
+
+
+class CapacityExceeded(RuntimeError):
+    """The rule-6 gate refused a call before it was made: nothing was sent and nothing
+    is recorded in the ledger."""
+
+    def __init__(self, source: str, reason: str) -> None:
+        super().__init__(f"{source}: {reason}")
+        self.source = source
+        self.reason = reason
+
+
+class BudgetExhausted(CapacityExceeded):
+    """The seat's daily budget — this environment's share of it — is spent for the UTC day.
+
+    Named so it is never read as "the vendor had nothing" (the August freeze: an exhausted
+    shared key looked like a quiet vendor until the governed head stopped advancing). A
+    primary adapter classifies the cell `deferred_capacity`, a corroborating origin is lost
+    at the `budget` stage, and the tick's corroboration audit counts every refusal.
+    ``budget`` is None when the seat is shared and this environment has no share at all.
+    """
+
+    def __init__(self, source: str, *, environment: str, budget: int | None, spent: int) -> None:
+        if budget is None:
+            reason = f"no share of the seat's shared daily budget is declared for {environment}"
+        else:
+            reason = f"daily budget {budget} spent ({spent} calls today) in {environment}"
+        super().__init__(source, reason)
+        self.environment = environment
+        self.budget = budget
+        self.spent = spent
+
+
+_refusal_listeners: contextvars.ContextVar[tuple[Callable[[CapacityExceeded], None], ...]] = contextvars.ContextVar(
+    "capacity_refusal_listeners", default=()
+)
+
+
+@contextmanager
+def on_capacity_refusal(listener: Callable[[CapacityExceeded], None]) -> Iterator[None]:
+    """Hand every refusal a gate makes inside the block to ``listener`` (the tick's audit)."""
+    token = _refusal_listeners.set((*_refusal_listeners.get(), listener))
+    try:
+        yield
+    finally:
+        _refusal_listeners.reset(token)
+
+
+def _refuse(error: CapacityExceeded) -> NoReturn:
+    log.warning("rule-6 gate refused a %s call before it was made: %s", error.source, error.reason)
+    for listener in _refusal_listeners.get():
+        try:
+            listener(error)
+        except Exception:  # noqa: BLE001 - an audit hook never changes the refusal
+            log.exception("capacity refusal listener failed for %s", error.source)
+    raise error
+
+
+_SPENT_SQL = "select count(*) from staging.api_call_ledger where source = %s and called_at >= %s"
+_WINDOW_SQL = "select count(*), min(called_at) from staging.api_call_ledger where source = %s and called_at > %s"
+
+
+def ledger_calls_since(source: str, since: datetime) -> int:
+    """Calls this environment's ledger holds for ``source`` at or after ``since``.
+
+    Read from wherever `emit` writes: the warehouse (autocommit, so another process's
+    committed calls are visible), a `MemoryLedger` in tests, and nothing when the ledger is
+    off — the gate then has only its own admissions to count."""
+    if settings.external_call_ledger == "off":
+        return 0
+    if _writer is postgres_writer:
+        row = _pg_execute(_SPENT_SQL, (source, since)).fetchone()
+        return int(row[0]) if row else 0
+    reader = getattr(_writer, "calls_since", None)
+    return int(reader(source, since)) if reader is not None else 0
+
+
+def ledger_window(source: str, since: datetime) -> tuple[int, datetime | None]:
+    """How many calls the ledger holds for ``source`` after ``since``, and the oldest."""
+    if settings.external_call_ledger == "off":
+        return 0, None
+    if _writer is postgres_writer:
+        row = _pg_execute(_WINDOW_SQL, (source, since)).fetchone()
+        return (int(row[0]), row[1]) if row else (0, None)
+    reader = getattr(_writer, "window", None)
+    return reader(source, since) if reader is not None else (0, None)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+# A ledger-read wait lands exactly on the oldest call's expiry; this keeps the loop from
+# re-reading a window whose oldest row is still (by float rounding) inside it.
+_EXPIRY_MARGIN_SECONDS = 0.01
+
+
+@dataclass
+class CapacityGate:
+    """Admit a call only when it fits the seat's declared capacity (rule 6).
+
+    `admit` queues the call until the rate window has room and refuses it when the
+    environment's daily budget is spent. Both counts are read from the environment's
+    ledger on every admission — every process of an environment writes there, so a QQQ
+    tick and a canary tick running together share one window and one budget — and the
+    gate's own admissions are a floor under the budget count (a call in flight is not a row
+    yet). The window is also paced locally on the monotonic clock, which is all a gate
+    without a window reader (`SourceGateway`) has.
+
+    A ledger that cannot be read refuses the call by raising the database error (fail
+    closed): the tick's own transaction is on the same database. Known limit: two
+    processes that read a window before either records its call can both be admitted; the
+    overshoot is bounded by the environment's concurrent ticks (two at most today, and
+    the canary reuses almost every observation).
+    """
+
+    capacities: Mapping[str, SourceCapacity] = field(default_factory=lambda: CAPACITIES)
+    #: None resolves the deployed environment (APP_ENV) when a shared seat needs it.
+    environment: str | None = None
+    spent_since: Callable[[str, datetime], int] = ledger_calls_since
+    recent_calls: Callable[[str, datetime], tuple[int, datetime | None]] | None = ledger_window
+    clock: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
+    now: Callable[[], datetime] = _utcnow
+    #: A call that cannot get a slot in this long is refused rather than queued forever.
+    max_wait_seconds: float = 900.0
+    _windows: dict[str, deque[float]] = field(default_factory=dict, repr=False)
+    _admitted: dict[str, tuple[date, int]] = field(default_factory=dict, repr=False)
+
+    def admit(self, source: str) -> None:
+        """Return once a call to ``source`` fits; raise `CapacityExceeded` (nothing sent)
+        when it cannot."""
+        declared = self.capacities.get(source)
+        if declared is None:
+            _refuse(CapacityExceeded(source, "no declared capacity — register the source before calling it"))
+        capacity = declared.in_environment(self._environment()) if declared.shared else declared
+        if capacity is None:
+            _refuse(BudgetExhausted(source, environment=self._environment(), budget=None, spent=0))
+        if capacity.daily_budget is not None:
+            self._check_daily_budget(source, capacity.daily_budget)
+        if capacity.window_seconds is not None and capacity.calls_per_window is not None:
+            waited = self._queue(source, capacity.window_seconds, capacity.calls_per_window)
+            if waited and capacity.daily_budget is not None:
+                # Another process may have spent the last of the budget while this call queued.
+                self._check_daily_budget(source, capacity.daily_budget)
+        today = self.now().astimezone(UTC).date()
+        self._admitted[source] = (today, self._admitted_today(source, today) + 1)
+
+    def _environment(self) -> str:
+        if self.environment is not None:
+            return self.environment
+        try:
+            return settings.environment_tier.value
+        except ValueError:
+            # An unknown APP_ENV is named in the refusal and granted no share.
+            return settings.app_env
+
+    def _admitted_today(self, source: str, today: date) -> int:
+        day, admitted = self._admitted.get(source, (today, 0))
+        return admitted if day == today else 0
+
+    def _check_daily_budget(self, source: str, budget: int) -> None:
+        today = self.now().astimezone(UTC).date()
+        recorded = self.spent_since(source, datetime.combine(today, clock_time.min, tzinfo=UTC))
+        spent = max(recorded, self._admitted_today(source, today))
+        if spent >= budget:
+            _refuse(BudgetExhausted(source, environment=self._environment(), budget=budget, spent=spent))
+
+    def _queue(self, source: str, window: float, calls: int) -> float:
+        """Wait until the window has room; returns how long it waited."""
+        local = self._windows.setdefault(source, deque())
+        waited = 0.0
+        while True:
+            tick = self.clock()
+            while local and tick - local[0] >= window:
+                local.popleft()
+            wait = window - (tick - local[0]) if len(local) >= calls else 0.0
+            if self.recent_calls is not None:
+                at = self.now()
+                recorded, oldest = self.recent_calls(source, at - timedelta(seconds=window))
+                if recorded >= calls and oldest is not None:
+                    wait = max(wait, window - (at - oldest).total_seconds() + _EXPIRY_MARGIN_SECONDS)
+            if wait <= 0:
+                break
+            if waited + wait > self.max_wait_seconds:
+                _refuse(
+                    CapacityExceeded(
+                        source,
+                        f"rate window ({calls} per {window:g} s) stayed full for {self.max_wait_seconds:g} s",
+                    )
+                )
+            self.sleep(wait)
+            waited += wait
+        local.append(self.clock())
+        return waited
+
+
+_bound_gate: contextvars.ContextVar[CapacityGate | None] = contextvars.ContextVar("capacity_gate", default=None)
+
+
+@contextmanager
+def capacity_scope(gate: CapacityGate | None = None) -> Iterator[CapacityGate]:
+    """Admit every call recorded inside the block through ``gate`` (a fresh one by
+    default) before it is made. The Dagster ops that reach vendors bind this next to
+    `run_scope`."""
+    bound = gate if gate is not None else CapacityGate()
+    token = _bound_gate.set(bound)
+    try:
+        yield bound
+    finally:
+        _bound_gate.reset(token)
 
 
 # --- the one path ---------------------------------------------------------------------
@@ -341,15 +614,21 @@ def record_call(
     request_uri: str | None = None,
     cost: Decimal | int = 1,
     writer: Callable[[CallRecord], None] | None = None,
+    admit: bool = True,
 ) -> Iterator[CallRecord]:
     """Wrap exactly one outbound request. The block reports the answer through
     ``record.observe(...)``; an exception inside the block is recorded as a failed
     call and re-raised unchanged.
 
+    Inside a `capacity_scope`, the bound gate admits the call BEFORE the block runs: a
+    refusal raises `CapacityExceeded` here, the request is never made and no row is
+    written. ``admit=False`` is for a caller that has already admitted the call through
+    its own gate (`SourceGateway.call`).
+
     Nested use is one row, not two: when an outer ``record_call`` (a `SourceGateway.call`
     around an adapter that itself goes through `http_get`) is active, the inner block
     receives the OUTER record and enriches it — status, digest, the URI actually asked —
-    instead of emitting a second row for the same request.
+    instead of emitting a second row for the same request (and is not admitted twice).
     """
     outer = _active.get()
     if outer is not None:
@@ -357,6 +636,9 @@ def record_call(
             outer.request_uri = redact_uri(request_uri)
         yield outer
         return
+    gate = _bound_gate.get()
+    if admit and gate is not None:
+        gate.admit(source)
     started = time.monotonic()
     called_at = datetime.now(UTC)
     record = CallRecord(
@@ -502,28 +784,22 @@ def urlopen(
         return status, body
 
 
-# --- the enforcing gateway (#740): throttle, budget, refuse — and one row per call -------
-
-
-class CapacityExceeded(RuntimeError):
-    def __init__(self, source: str, reason: str) -> None:
-        super().__init__(f"{source}: {reason}")
-        self.source = source
-        self.reason = reason
+# --- the explicit gateway (#740): one gate, rows on the caller's connection ------------
 
 
 @dataclass
 class SourceGateway:
     """One path to a vendor or model for callers that must be throttled and budgeted
-    (#740: the standards lane's SEC filings, the model and search seats).
+    explicitly (#740: the standards lane's SEC filings, the model and search seats).
 
-    `call` checks the declared daily budget against the ledger, paces the rate window,
-    runs the callable, and records the attempt. Recording goes through `record_call`, so
-    the row has the same shape as every adapter's — and when the callable itself goes
-    through `http_get`/`urlopen`, the two collapse into ONE row carrying the status,
-    the digest and the URI. Rows are written on the caller's connection (the standards
-    tests count them on their fake connection); a refused call is `CapacityExceeded`
-    and writes nothing.
+    `call` admits through the gateway's own `CapacityGate` — the declared daily budget
+    against the ledger, the rate window paced — runs the callable, and records the
+    attempt. Recording goes through `record_call`, so the row has the same shape as every
+    adapter's — and when the callable itself goes through `http_get`/`urlopen`, the two
+    collapse into ONE row carrying the status, the digest and the URI. Rows are written on
+    the caller's connection (the standards tests count them on their fake connection); a
+    refused call is `CapacityExceeded` and writes nothing. A seat must declare both a
+    window and a daily budget to be called here.
     """
 
     connection: Any
@@ -531,25 +807,33 @@ class SourceGateway:
     capacities: Mapping[str, SourceCapacity] = field(default_factory=lambda: CAPACITIES)
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
-    now: Callable[[], datetime] = lambda: datetime.now(UTC)
-    _windows: dict[str, deque[float]] = field(default_factory=dict)
-    # (utc day, calls) per source: a gateway that lives across midnight re-reads the
-    # ledger for the new day instead of carrying yesterday's count into it.
-    _spent_today: dict[str, tuple[date, int]] = field(default_factory=dict)
+    now: Callable[[], datetime] = _utcnow
+    environment: str | None = None
+    _gate: CapacityGate = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # The window is paced locally only: this gateway's rows sit in the caller's open
+        # transaction, which is where its own budget read finds them.
+        self._gate = CapacityGate(
+            capacities=self.capacities,
+            environment=self.environment,
+            spent_since=self._recorded_since,
+            recent_calls=None,
+            clock=self.clock,
+            sleep=self.sleep,
+            now=self.now,
+        )
 
     def capacity(self, source: str) -> SourceCapacity:
         capacity = self.capacities.get(source)
         if capacity is None or not capacity.enforceable:
-            raise CapacityExceeded(source, "no declared capacity — register the source before calling it")
+            _refuse(CapacityExceeded(source, "no declared capacity — register the source before calling it"))
         return capacity
 
     def call(self, source: str, endpoint: str, fn: Callable[[], T]) -> T:
-        capacity = self.capacity(source)
-        self._check_daily_budget(source, capacity)
-        self._throttle(source, capacity)
-        day, spent = self._spent_today.get(source, (self.now().date(), 0))
-        self._spent_today[source] = (day, spent + 1)
-        with record_call(source, endpoint, caller=self.caller, writer=self._write) as record:
+        self.capacity(source)
+        self._gate.admit(source)
+        with record_call(source, endpoint, caller=self.caller, writer=self._write, admit=False) as record:
             result = fn()
             if isinstance(result, bytes | str):
                 # A helper that returns the body itself (`_get_bytes` in the standards
@@ -565,33 +849,6 @@ class SourceGateway:
     def _write(self, record: CallRecord) -> None:
         self.connection.execute(_INSERT_SQL, _insert_params(record))
 
-    def _check_daily_budget(self, source: str, capacity: SourceCapacity) -> None:
-        now = self.now()
-        today = now.date()
-        cached = self._spent_today.get(source)
-        if cached is None or cached[0] != today:
-            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            row = self.connection.execute(
-                "select count(*) from staging.api_call_ledger where source = %s and called_at >= %s",
-                (source, day_start),
-            ).fetchone()
-            cached = (today, int(row[0]) if row else 0)
-            self._spent_today[source] = cached
-        assert capacity.daily_budget is not None  # enforceable, checked by `capacity()`
-        if cached[1] >= capacity.daily_budget:
-            raise CapacityExceeded(source, f"daily budget {capacity.daily_budget} spent ({cached[1]} calls today)")
-
-    def _throttle(self, source: str, capacity: SourceCapacity) -> None:
-        assert capacity.window_seconds is not None and capacity.calls_per_window is not None
-        window = self._windows.setdefault(source, deque())
-        now = self.clock()
-        while window and now - window[0] >= capacity.window_seconds:
-            window.popleft()
-        if len(window) >= capacity.calls_per_window:
-            wait = capacity.window_seconds - (now - window[0])
-            if wait > 0:
-                self.sleep(wait)
-            now = self.clock()
-            while window and now - window[0] >= capacity.window_seconds:
-                window.popleft()
-        window.append(now)
+    def _recorded_since(self, source: str, since: datetime) -> int:
+        row = self.connection.execute(_SPENT_SQL, (source, since)).fetchone()
+        return int(row[0]) if row else 0

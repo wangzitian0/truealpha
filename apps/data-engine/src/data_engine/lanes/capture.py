@@ -13,6 +13,8 @@ wall clock: distinct ticks -> distinct content-addressed runs; a retried tick
 reproduces the same identities (idempotent retry).
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -24,7 +26,7 @@ import psycopg
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
 from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
-from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
+from data_engine.datahub.production_topt.corroboration_audit import CorroborationTally, corroboration_tally
 from data_engine.datahub.production_topt.fund_consolidation import (
     materialize_fund_consolidation,
 )
@@ -232,6 +234,18 @@ TICKS: tuple[UniverseTick, ...] = (
 )
 
 
+@contextmanager
+def _summary_on_failure(context: dg.OpExecutionContext, label: str, tally: CorroborationTally) -> Iterator[None]:
+    """A tick that fails — a capture refused for its shortfall (#538) included — still
+    logs what the origins lost and the gate refused before it: an exhausted budget is
+    the likeliest cause of a primary shortfall, and the run log is where one looks."""
+    try:
+        yield
+    except Exception:
+        context.log.warning(f"{label} failed; {tally.summary()}; {tally.refusals()}")
+        raise
+
+
 def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: UniverseTick) -> str:
     """The one tick body every universe runs: capture → freeze → materialize → report →
     governed pointer, plus the strategy replay where the declaration asks for it."""
@@ -240,12 +254,17 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     # Lazy, run-time connection (DATABASE_URL). One transaction for the whole tick:
     # a mid-run failure leaves no partial run; the daemon's retry re-runs the tick
     # against the same content-addressed identities. Every vendor call inside is
-    # attributed to this Dagster run in the external call ledger (#729), and every
-    # corroboration the capture loses — refused by its origin or not persisted — is
-    # counted for the summary below (#885).
+    # attributed to this Dagster run in the external call ledger (#729) and admitted by
+    # the rule-6 gate first: paced to its seat's declared window, refused once this
+    # environment's share of the seat's daily budget is spent. Every corroboration the
+    # capture loses — refused by its origin, by the gate, or not persisted — and every
+    # call the gate refused is counted for the summary below (#885), which a failed tick
+    # still logs.
     with (
         gateway.run_scope(f"dagster:{context.run_id}"),
         corroboration_tally() as corroborations,
+        _summary_on_failure(context, f"{tick.log_label} {config.executed_at}", corroborations),
+        gateway.capacity_scope(),
         psycopg.connect(settings.database_url) as connection,
     ):
         pipeline = run_topt_pipeline(
@@ -340,7 +359,9 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     # #885: a second origin that raised, refused its quantity or could not be persisted
     # leaves its cell single-origin without failing the tick; the count (per origin and
     # stage) is what tells a revoked key or a dead OpenD from "the vendor had nothing".
-    summary += f"; {corroborations.summary()}"
+    # #729: so does every call the rule-6 gate refused, per seat — an exhausted budget is
+    # `capacity refused N (twelvedata budget N)`, never a quiet run of empty cells.
+    summary += f"; {corroborations.summary()}; {corroborations.refusals()}"
     # #862: cells the primary price source could not serve and a further registered origin
     # did. Zero is said, not omitted: a nonzero count is the primary's outage, visible here.
     served_by_failover = int(pipeline.quality.get("served_by_failover_count", 0))
@@ -362,6 +383,8 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         **strategy,
         **fund_consolidation,
         "corroborations_refused": corroborations.total,
+        "capacity_refused": corroborations.capacity_refused,
+        "budget_exhausted": corroborations.budget_exhausted,
         "served_by_failover": served_by_failover,
         "pointer_advanced": registration.accepted,
         "pointer_sequence": registration.sequence,

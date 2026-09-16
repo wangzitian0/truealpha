@@ -64,3 +64,26 @@ def test_throttle_paces_a_full_window(monkeypatch):
     ledger.throttle(now=fake_now, sleep=fake_sleep)
     assert len(sleeps) == 1  # window slid past the first two: no further wait
     ledger._recent_calls.clear()
+
+
+def test_throttle_reads_its_ceiling_from_the_registry_and_the_setting_only_lowers_it(monkeypatch):
+    """Rule 6: the moomoo seat is declared once (`LEDGER_CAPACITIES`); MOOMOO_CALLS_PER_30S
+    may pace more gently but never past the declaration."""
+    from data_engine.sources import gateway
+
+    seat = gateway.CAPACITIES["moomoo"]
+    assert (seat.calls_per_window, seat.window_seconds) == (8, 30.0)
+    assert ledger.settings.moomoo_calls_per_30s == seat.calls_per_window, "the shipped default is the declaration"
+    monkeypatch.setattr(ledger.settings, "moomoo_calls_per_30s", 50)
+    ledger._recent_calls.clear()
+    clock = {"t": 0.0}
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        clock["t"] += seconds
+
+    for _ in range(9):
+        ledger.throttle(now=lambda: clock["t"], sleep=fake_sleep)
+    assert len(sleeps) == 1, "the ninth call waits: 50 in the env cannot raise the declared 8"
+    ledger._recent_calls.clear()

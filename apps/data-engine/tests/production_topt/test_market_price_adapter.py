@@ -657,3 +657,34 @@ def test_the_deployed_route_fails_over_through_the_executor(monkeypatch) -> None
     served = sink.calls[0]["success"]
     assert served.served_by_failover == "twelve-data"
     assert [c.origin for c in served.corroborations] == ["moomoo-kline"]
+
+
+def test_an_exhausted_budget_defers_the_cell_through_the_deployed_fetcher(call_ledger, monkeypatch) -> None:
+    """Rule 6 (#729): once this environment's Yahoo budget is spent, the deployed fetcher's
+    request is refused before it is sent, and the cell is `deferred_capacity` — not
+    `field_unavailable`, which would read as "Yahoo has no bar"."""
+    from data_engine.datahub.production_topt.market_price_adapter import yahoo_quote_fetcher
+    from data_engine.sources import gateway, yahoo
+
+    now = datetime.now(UTC)
+    call_ledger.extend([gateway.CallRecord(source="yahoo", endpoint="chart", caller="x", called_at=now, ok=True)] * 3)
+
+    class _NeverAsked:
+        def __init__(self, **_kwargs: object) -> None: ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None: ...
+
+        def get(self, *args, **kwargs):
+            raise AssertionError("a refused request reached Yahoo")
+
+    monkeypatch.setattr(yahoo.httpx, "Client", _NeverAsked)
+    gate = gateway.CapacityGate(capacities={"yahoo": gateway.SourceCapacity("yahoo", 1.0, 5, 3)}, environment="staging")
+    item = _work_item("9" * 64)
+    with gateway.capacity_scope(gate):
+        result = _adapter(item, yahoo_quote_fetcher).fetch(item)
+    assert isinstance(result, FetchFailure)
+    assert result.reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+    assert len(call_ledger) == 3

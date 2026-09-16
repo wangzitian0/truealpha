@@ -157,5 +157,70 @@ def test_entry_id_covers_capacity_and_ledger_seat() -> None:
     from data_engine.datahub.production_topt.source_registrations import CapacityDeclaration
 
     base = REGISTRATIONS[-1]
-    assert replace(base, capacity=CapacityDeclaration(1, 1)).entry_id != base.entry_id
-    assert replace(base, ledger_seat="probe").entry_id != base.entry_id
+    assert replace(base, ledger_seat=None, capacity=CapacityDeclaration(1, 1)).entry_id != base.entry_id
+    assert replace(base, ledger_seat="nport", capacity=None).entry_id != base.entry_id
+    split = CapacityDeclaration(8, 60, 800, environment_shares=(("production", 50),))
+    assert (
+        replace(base, ledger_seat=None, capacity=split).entry_id
+        != replace(base, ledger_seat=None, capacity=CapacityDeclaration(8, 60, 800)).entry_id
+    ), "the per-environment split is part of what the source declared"
+
+
+# -- rule 6: capacity is declared once, per ledger seat, and every vendor names its seat -------
+
+
+def test_every_vendor_registration_and_origin_names_a_declared_seat() -> None:
+    """#729 criterion 1: a registered source without a capacity fails here. Only the
+    release-frozen configuration calls no vendor."""
+    for registration in REGISTRATIONS:
+        if registration.corroboration_class != "release":
+            assert registration.ledger_seat in registry.LEDGER_CAPACITIES, registration.source_id
+            assert registration.capacity is registry.LEDGER_CAPACITIES[registration.ledger_seat]
+        for origin in registration.origins:
+            assert origin.ledger_seat in registry.LEDGER_CAPACITIES, origin.origin_source
+            assert origin.capacity is registry.LEDGER_CAPACITIES[origin.ledger_seat]
+    seats = {
+        origin.ledger_seat: origin.origin_source for registration in REGISTRATIONS for origin in registration.origins
+    }
+    assert {"yahoo", "twelvedata", "moomoo"} <= set(seats)
+    assert registration_for("financial-fact").ledger_seat == "sec"
+
+
+def test_a_seat_and_a_capacity_that_disagree_are_refused() -> None:
+    import pytest
+    from data_engine.datahub.production_topt.source_registrations import CapacityDeclaration
+
+    with pytest.raises(ValueError, match="contradicts the 'sec' seat"):
+        OriginRegistration("probe:v1", "origin:probe", "close", ("p:v1",), CapacityDeclaration(10, 1), "sec")
+    with pytest.raises(ValueError, match="no capacity declaration"):
+        OriginRegistration("probe:v1", "origin:probe", "close", ("p:v1",), ledger_seat="never-declared")
+    origin = OriginRegistration("probe:v1", "origin:probe", "close", ("p:v1",), ledger_seat="sec")
+    assert origin.capacity is registry.LEDGER_CAPACITIES["sec"]
+
+
+def test_an_environment_split_must_fit_inside_the_vendors_allowance() -> None:
+    import pytest
+    from data_engine.datahub.production_topt.source_registrations import CapacityDeclaration
+
+    with pytest.raises(ValueError, match="sum past"):
+        CapacityDeclaration(8, 60, 800, environment_shares=(("production", 60), ("staging", 50)))
+    with pytest.raises(ValueError, match="not a capture environment"):
+        CapacityDeclaration(8, 60, 800, environment_shares=(("prod", 60),))
+    with pytest.raises(ValueError, match="floors to zero"):
+        CapacityDeclaration(8, 60, 800, environment_shares=(("production", 90), ("staging", 10)))
+    with pytest.raises(ValueError, match="appears twice"):
+        CapacityDeclaration(8, 60, 800, environment_shares=(("staging", 10), ("staging", 20)))
+    with pytest.raises(ValueError, match="positive"):
+        CapacityDeclaration(8, 60, 0)
+
+    twelve = registry.LEDGER_CAPACITIES["twelvedata"]
+    assert dict(twelve.environment_shares) == {"production": 60, "staging": 40}
+    for field_value in (twelve.calls_per_window, twelve.daily_budget):
+        assert field_value is not None
+        shares = [
+            registry.environment_share(field_value, twelve.environment_shares, env) for env in ("production", "staging")
+        ]
+        assert all(share is not None and share > 0 for share in shares)
+        assert sum(share for share in shares if share is not None) <= field_value
+    assert registry.environment_share(800, twelve.environment_shares, "local_dev") is None
+    assert registry.environment_share(800, (), "local_dev") == 800, "an unsplit seat is whole everywhere"
