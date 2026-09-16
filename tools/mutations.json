@@ -85,7 +85,7 @@
     {
       "id": "workflow-contract/unconfigured-walk-is-skipped",
       "guard": "libs/runtime/tests/test_ci_workflows.py",
-      "file": ".github/workflows/deploy-release.yml",
+      "file": ".github/workflows/walk-release.yml",
       "find": "      - name: Walk the deployed surface\n        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}\n",
       "replace": "      - name: Walk the deployed surface\n",
       "command": [

@@ -1,10 +1,15 @@
-"""Tests for tools/walk_evidence.py — #560 (W4).
+"""Tests for tools/walk_evidence.py — #560 (W4), moved to walk-release.yml by #855/#860.
 
 The release run answers "is it deployed". This answers "did anyone confirm a
 person can use it". They are separate because making the release run fail on a
 missing walk blocked every prod release — prod requires this repo's own
 successful "Deploy staging <tag>" run — including the release that would have
 carried the fix.
+
+#855/#860: the walk itself moved out of deploy-release.yml's own run into its
+own deferred workflow, walk-release.yml, whose run-name echoes the upstream
+title as "Walk Deploy <deploy_type> <release>". This file's fixtures build
+walk-release.yml runs, not deploy-release.yml ones.
 """
 
 from __future__ import annotations
@@ -27,23 +32,37 @@ def _api(runs: list[dict], steps: list[dict] | None = None):
         seen.append(path)
         if "/jobs" in path:
             return json.dumps({"jobs": [{"steps": steps or []}]})
-        assert "workflows/deploy-release.yml/runs" in path, (
-            "must query the release workflow's own runs, not every run in the repository"
+        assert "workflows/walk-release.yml/runs" in path, (
+            "must query the walk workflow's own runs, not every run in the repository"
         )
         return json.dumps({"workflow_runs": runs})
 
     return gh_api
 
 
-def _run(rid: int, title: str, created: str = "2026-08-14T09:00:00Z") -> dict:
-    return {"id": rid, "display_title": title, "event": "workflow_dispatch", "created_at": created}
+def _run(rid: int, title: str, created: str = "2026-08-14T09:00:00Z", event: str = "workflow_run") -> dict:
+    return {"id": rid, "display_title": title, "event": event, "created_at": created}
 
 
 _WALK_OK = [{"name": "Walk the deployed surface", "conclusion": "success"}]
 
 
 def test_a_walked_release_passes(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = check_walk_evidence("prod", "v0.0.20", gh_api=_api([_run(1, "Deploy prod v0.0.20")], _WALK_OK))
+    exit_code = check_walk_evidence(
+        "prod", "v0.0.20", gh_api=_api([_run(1, "Walk Deploy prod v0.0.20")], _WALK_OK)
+    )
+    assert exit_code == 0
+    assert "walked its surface" in capsys.readouterr().out
+
+
+def test_a_manually_rerun_walk_still_counts(capsys: pytest.CaptureFixture[str]) -> None:
+    """#811's flake recovery: `gh workflow run walk-release.yml -f ...` dispatches a
+    manual re-run, which is real evidence exactly like the automatic one."""
+    exit_code = check_walk_evidence(
+        "staging",
+        "v0.0.20",
+        gh_api=_api([_run(2, "Walk Deploy staging v0.0.20", event="workflow_dispatch")], _WALK_OK),
+    )
     assert exit_code == 0
     assert "walked its surface" in capsys.readouterr().out
 
@@ -53,7 +72,7 @@ def test_no_release_run_at_all_fails(capsys: pytest.CaptureFixture[str]) -> None
     exit_code = check_walk_evidence("prod", "v0.0.19", gh_api=_api([]))
     assert exit_code == 1
     stderr = capsys.readouterr().err
-    assert "no 'Deploy prod v0.0.19' run in the last 100 deploy-release runs" in stderr
+    assert "no 'Walk Deploy prod v0.0.19' run in the last 100 walk-release runs" in stderr
     assert "older than the window" in stderr, "the window case must not be omitted (review)"
 
 
@@ -62,20 +81,20 @@ def test_a_release_predating_the_walk_step_fails(capsys: pytest.CaptureFixture[s
     exit_code = check_walk_evidence(
         "prod",
         "v0.0.19",
-        gh_api=_api([_run(7, "Deploy prod v0.0.19")], [{"name": "Confirm", "conclusion": "success"}]),
+        gh_api=_api([_run(7, "Walk Deploy prod v0.0.19")], [{"name": "Confirm", "conclusion": "success"}]),
     )
     assert exit_code == 1
     assert "never verified" in capsys.readouterr().err
 
 
 def test_an_unverified_walk_fails_and_says_so(capsys: pytest.CaptureFixture[str]) -> None:
-    """The unconfigured-credentials path exits 0 in the release run by design;
+    """The unconfigured-credentials path exits 0 in the walk run by design;
     this is the signal that keeps it visible."""
     exit_code = check_walk_evidence(
         "prod",
         "v0.0.20",
         gh_api=_api(
-            [_run(9, "Deploy prod v0.0.20")],
+            [_run(9, "Walk Deploy prod v0.0.20")],
             [{"name": "Walk the deployed surface", "conclusion": "failure"}],
         ),
     )
@@ -92,8 +111,8 @@ def test_the_newest_matching_run_is_the_one_that_counts() -> None:
         "v0.0.20",
         gh_api=_api(
             [
-                _run(1, "Deploy staging v0.0.20", "2026-08-01T00:00:00Z"),
-                _run(2, "Deploy staging v0.0.20", "2026-08-14T00:00:00Z"),
+                _run(1, "Walk Deploy staging v0.0.20", "2026-08-01T00:00:00Z"),
+                _run(2, "Walk Deploy staging v0.0.20", "2026-08-14T00:00:00Z"),
             ],
             _WALK_OK,
         ),
@@ -114,7 +133,7 @@ def test_a_skipped_walk_is_not_evidence(capsys: pytest.CaptureFixture[str]) -> N
         "v0.0.20",
         environment="staging",
         gh_api=_api(
-            [_run(11, "Deploy staging v0.0.20")],
+            [_run(11, "Walk Deploy staging v0.0.20")],
             [{"name": "Walk the deployed surface", "conclusion": "skipped"}],
         ),
     )

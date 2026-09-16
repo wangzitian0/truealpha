@@ -30,6 +30,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/deploy-release.yml"
+      - ".github/workflows/walk-release.yml"
       - "apps/app-web/src/app/login/page.tsx"
       - "apps/llm-service/src/llm_service/main.py"
       - "apps/app-web/src/app/research/coverage/page.tsx"

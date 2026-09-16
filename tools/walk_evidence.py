@@ -12,6 +12,12 @@ requires this repository's own successful "Deploy staging <tag>" run — includi
 the release that would have carried the fix. Blocking the lane on a setup
 deficiency produces exactly the invisible-work outcome #560 exists to prevent.
 
+#855/#860: the walk moved out of `deploy-release.yml`'s own run into its own
+deferred workflow, `walk-release.yml` (triggered by `deploy-release.yml`'s
+`workflow_run` completion, or by hand as the flake recovery). This file now
+reads THAT workflow's runs — same evidence question, same standing-check
+shape, different run to look inside.
+
 Usage:
   python tools/walk_evidence.py --deploy-type prod --environment production --release v0.0.20
 
@@ -32,11 +38,12 @@ from infra2_sdk.deploy_health import HttpGet, default_http_get
 from truealpha_runtime.deployed_release import ReleaseIdentityError, read_deployed_release
 
 WALK_STEP_NAME = "Walk the deployed surface"
-# Query the release workflow's OWN runs, not every run in the repository: on a
-# busy repo the release run falls off a 100-item all-workflows page within days,
-# and "no such run exists" would then be false rather than merely unhelpful.
-RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/deploy-release.yml/runs?per_page=100"
-WINDOW = "the last 100 deploy-release runs"
+# Query the walk workflow's OWN runs, not every run in the repository: on a
+# busy repo a given release's run falls off a 100-item all-workflows page
+# within days, and "no such run exists" would then be false rather than merely
+# unhelpful.
+RUNS_PATH = "/repos/wangzitian0/truealpha/actions/workflows/walk-release.yml/runs?per_page=100"
+WINDOW = "the last 100 walk-release runs"
 GhApi = Callable[[str], str]
 
 
@@ -52,30 +59,36 @@ def _gh_api(path: str) -> str:
 
 
 def find_walk(deploy_type: str, release: str, *, environment: str = "", gh_api: GhApi = _gh_api) -> dict[str, object]:
-    """The walk step of this repo's own `Deploy <deploy_type> <release>` run.
+    """The walk step of this repo's own `walk-release.yml` run for `<deploy_type> <release>`.
 
     `deploy_type` and `environment` are NOT interchangeable and were conflated
-    in the first version of this file: deploy-release.yml's run-name is built
-    from `inputs.deploy_type` ("prod", "staging"), while the freshness matrix
-    names environments for humans ("production"). Looking for
-    "Deploy production <tag>" would have made this red forever, for a reason
-    unrelated to what it guards — the exact defect class it exists to catch, and
-    invisible to a manual check that happens to pass the right word (review).
+    in the first version of this file: deploy-release.yml's run-name (which
+    walk-release.yml's own run-name echoes, #855/#860) is built from
+    `inputs.deploy_type` ("prod", "staging"), while the freshness matrix names
+    environments for humans ("production"). Looking for "Deploy production
+    <tag>" would have made this red forever, for a reason unrelated to what it
+    guards — the exact defect class it exists to catch, and invisible to a
+    manual check that happens to pass the right word (review).
+
+    A walk run reaches this title either automatically (`workflow_run`, fired
+    by deploy-release.yml's own completion) or by a manual re-run
+    (`workflow_dispatch`, the #811 flake recovery) — both are real evidence,
+    so neither `event` value is excluded.
     """
     environment = environment or deploy_type
-    title = f"Deploy {deploy_type} {release}"
+    title = f"Walk Deploy {deploy_type} {release}"
     runs = json.loads(gh_api(RUNS_PATH))
     matching = [
         run
         for run in runs.get("workflow_runs", [])
-        if run.get("display_title") == title and run.get("event") == "workflow_dispatch"
+        if run.get("display_title") == title and run.get("event") in ("workflow_run", "workflow_dispatch")
     ]
     if not matching:
         raise MissingWalkEvidence(
             f"no {title!r} run in {WINDOW}, so nothing recent has walked the surface "
             f"{environment} is serving. Either that release is older than the window, or it "
             f"predates the post-release walk, or {environment} is serving something this "
-            f"repository did not release — open the deploy-release run list to tell which"
+            f"repository did not release — open the walk-release run list to tell which"
         )
     newest = max(matching, key=lambda run: str(run.get("created_at", "")))
     jobs = json.loads(gh_api(f"/repos/wangzitian0/truealpha/actions/runs/{newest['id']}/jobs"))

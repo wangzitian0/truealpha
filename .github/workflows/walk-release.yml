@@ -1,0 +1,200 @@
+name: Walk release
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Walk Deploy {0} {1}', inputs.deploy_type, inputs.version_ref)
+      || format('Walk {0}', github.event.workflow_run.display_title) }}
+
+# #855/#860: the Playwright walk used to run INSIDE deploy-release.yml's
+# `request` job, after the release was already live and healthy (its health /
+# data-engine confirmation had already passed). A walk flake (#811, ~1 in 5
+# until #853) failed that WHOLE run — the parts that had already succeeded
+# included — and the only recovery was re-dispatching the entire 5-6 min
+# infra2 deploy for a defect that had nothing to do with the deploy.
+#
+# The walk now lives here, triggered by deploy-release.yml's own completion
+# and gated on `conclusion == 'success'`: a failed or cancelled deploy has
+# nothing live to point a browser at, so it never gets walked. A flake here
+# now costs a one-line re-run, never a deploy re-dispatch — see the
+# `workflow_dispatch` inputs below, which is exactly the recovery
+# `tools/cut_release.sh` prints when its own post-staging walk check goes red:
+#
+#   gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=$TAG
+#
+# `deploy-release.yml`'s own green now means "deployed and healthy" — it no
+# longer means "and the walk that ran alongside it also passed"
+# (docs/release-protocol.md). Whether the surface was ever walked stays the
+# STANDING question `tools/walk_evidence.py` answers daily in
+# deploy-freshness.yml; it now reads THIS workflow's runs (keyed by
+# deploy_type + release) instead of deploy-release.yml's.
+#
+# Credentials still decide whether the walk RUNS, never whether it lies:
+# unconfigured `E2E_WALK_*` secrets produce a SKIPPED walk step, never a
+# `success` for a walk that never opened a page (#560).
+
+on:
+  workflow_run:
+    workflows: ["Deploy release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      deploy_type:
+        description: Which release this re-walks.
+        required: true
+        type: choice
+        options: [staging, prod]
+      version_ref:
+        description: Stable vX.Y.Z release tag that is already deployed.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    # Only a release that actually went live gets walked: a failed or
+    # cancelled deploy-release run has nothing deployed to walk. A manual
+    # re-run always proceeds — it exists precisely to re-check a release that
+    # already deployed.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      applicable: ${{ steps.resolve.outputs.applicable }}
+      deploy_type: ${{ steps.resolve.outputs.deploy_type }}
+      version_ref: ${{ steps.resolve.outputs.version_ref }}
+    steps:
+      - name: Resolve deploy_type and version_ref
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_DEPLOY_TYPE: ${{ inputs.deploy_type }}
+          DISPATCH_VERSION_REF: ${{ inputs.version_ref }}
+          UPSTREAM_TITLE: ${{ github.event.workflow_run.display_title }}
+          UPSTREAM_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            DEPLOY_TYPE="$DISPATCH_DEPLOY_TYPE"
+            VERSION_REF="$DISPATCH_VERSION_REF"
+          elif [[ "$UPSTREAM_TITLE" =~ ^Deploy\ (staging|prod)\ (v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            DEPLOY_TYPE="${BASH_REMATCH[1]}"
+            VERSION_REF="${BASH_REMATCH[2]}"
+          else
+            # deploy-freshness.yml's own matrix only ever judges staging and
+            # production (never `preview/tag`), so a title this cannot parse
+            # is not a release this walk covers. Skip cleanly rather than
+            # failing a run whose correct behaviour is to do nothing.
+            echo "applicable=false" >>"$GITHUB_OUTPUT"
+            echo "not a staging/prod release title: '${UPSTREAM_TITLE:-<none>}' (run ${UPSTREAM_ID:-n/a}) — skipping"
+            exit 0
+          fi
+          if ! [[ "$VERSION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version_ref '$VERSION_REF' is not a stable vX.Y.Z tag"
+            exit 1
+          fi
+          echo "applicable=true" >>"$GITHUB_OUTPUT"
+          echo "deploy_type=$DEPLOY_TYPE" >>"$GITHUB_OUTPUT"
+          echo "version_ref=$VERSION_REF" >>"$GITHUB_OUTPUT"
+
+  walk:
+    needs: resolve
+    if: ${{ needs.resolve.outputs.applicable == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write   # save the Playwright cache; read-only cannot populate it
+      contents: read
+    concurrency:
+      group: truealpha-walk-${{ needs.resolve.outputs.deploy_type }}-${{ needs.resolve.outputs.version_ref }}
+      cancel-in-progress: false
+    env:
+      DEPLOY_TYPE: ${{ needs.resolve.outputs.deploy_type }}
+    steps:
+      # The walked code must BE the released code, not whatever main has
+      # moved to by the time this workflow is triggered — the tag is what
+      # deploy-release.yml actually built and deployed.
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.version_ref }}
+          fetch-depth: 1
+      - uses: oven-sh/setup-bun@v2
+
+      # #560 (W4): unconfigured credentials do NOT fail this run — the release
+      # is still deployed and healthy, proven by deploy-release.yml's own
+      # gates. Whether the surface was ever walked is a STANDING question,
+      # answered daily by tools/walk_evidence.py in deploy-freshness.yml,
+      # which stays red until a deployed release has a successful walk.
+      # Credentials decide whether the walk RUNS. It must not run-and-pretend:
+      # an unconfigured walk that exits 0 gives the step a `success`
+      # conclusion, and tools/walk_evidence.py reads exactly that — so the
+      # standing check built to keep this visible would be satisfied by the
+      # case it exists to catch. `secrets` is not reliably available in a
+      # step-level `if`, so it is reduced to an output here.
+      - name: Are the surface-walk credentials configured
+        id: walk_credentials
+        env:
+          TA_EMAIL: ${{ secrets.E2E_WALK_EMAIL }}
+          TA_MEMBER_EMAIL: ${{ secrets.E2E_WALK_MEMBER_EMAIL }}
+          TA_PASSWORD: ${{ secrets.E2E_WALK_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${TA_EMAIL}" ] && [ -n "${TA_PASSWORD}" ] && [ -n "${TA_MEMBER_EMAIL}" ]; then
+            echo "ready=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >>"$GITHUB_OUTPUT"
+            echo "::error::post-release surface verification is UNCONFIGURED — this release is \
+          deployed but unverified. Add repository secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and \
+          E2E_WALK_MEMBER_EMAIL. deploy-freshness reports this daily until a deployed release \
+          has a successful walk (#560)."
+            {
+              echo "### Surface walk: UNVERIFIED"
+              echo
+              echo "Credentials are not configured, so nothing confirmed a person can use this"
+              echo "release. The walk step below is SKIPPED, which \`tools/walk_evidence.py\`"
+              echo "reads as missing evidence — deliberately, so an absent walk cannot pass for"
+              echo "a successful one."
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Skipped when unconfigured — conclusion "skipped", never "success". A
+      # real walk failure DOES fail this run: the deadlock this design avoids
+      # came from the unconfigured case, not from a broken surface, and a
+      # release whose surface is broken should not read as verified.
+      # Keyed on the Playwright version in the lockfile, so a version bump
+      # misses the cache and re-downloads rather than running the wrong
+      # browser. `actions/cache` needs `actions: write` to SAVE — without the
+      # job-level grant above the cache restores and never populates, which is
+      # worse than not caching at all (review, carried over from #560).
+      - name: Cache the Playwright browser
+        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/app-web/bun.lock') }}
+      - name: Walk the deployed surface
+        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}
+        env:
+          TA_BASE_URL: ${{ env.DEPLOY_TYPE == 'prod' && 'https://truealpha.club' || 'https://truealpha-staging.truealpha.club' }}
+          TA_EMAIL: ${{ secrets.E2E_WALK_EMAIL }}
+          TA_MEMBER_EMAIL: ${{ secrets.E2E_WALK_MEMBER_EMAIL }}
+          TA_PASSWORD: ${{ secrets.E2E_WALK_PASSWORD }}
+        working-directory: apps/app-web
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+
+          # #698: the first navigation raced the container swap. The health
+          # gate in deploy-release.yml polls llm-service, a DIFFERENT
+          # container from app-web, so nothing there warms the pages this
+          # walk opens. The warm-up lives in a script because a shell function
+          # inlined here can only be checked by slicing YAML text, and it
+          # verifies nothing and cannot fail; the walk below is the gate.
+          # $GITHUB_WORKSPACE, not a bare relative path: this step sets
+          # working-directory: apps/app-web, so a bare `tools/…` would resolve
+          # to apps/app-web/tools/ and die with exit 127 (#717).
+          "$GITHUB_WORKSPACE/tools/warm_surface.sh" "$TA_BASE_URL" / /research/rankings
+
+          node e2e/walk-tree.mjs

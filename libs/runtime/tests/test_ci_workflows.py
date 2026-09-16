@@ -50,6 +50,7 @@ triggers = _contract.triggers
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 RELEASE = "deploy-release.yml"
+WALK = "walk-release.yml"
 FRESHNESS = "deploy-freshness.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
@@ -208,10 +209,48 @@ def test_the_health_gate_passes_the_kind_the_runtime_reports() -> None:
     assert "source_sha" not in gate, "the gate must not pass a commit sha while the runtime reports a tag (#526)"
 
 
+def test_the_release_no_longer_runs_the_surface_walk_itself() -> None:
+    """#855/#860: the walk moved to its own deferred workflow so a walk flake
+    (#811) costs a walk re-run, not a re-dispatch of the whole 5-6 min infra2
+    deploy. deploy-release.yml's own green must no longer depend on it."""
+    workflow = source(RELEASE)
+    for name in ("Are the surface-walk credentials configured", "Cache the Playwright browser", "Walk the deployed surface"):
+        with pytest.raises(WorkflowContractError, match="has no step named"):
+            step(RELEASE, name)
+    assert "walk-release.yml" in workflow, "the release run must point at where the walk actually lives now"
+
+
+def test_the_release_leaves_an_honest_but_non_blocking_walk_signal_for_prod() -> None:
+    """#855/#860: `staging_run_url` used to prove BOTH "staging deployed" and
+    "staging was walked", because the walk ran inside that same run. Now that
+    the walk is a separate, asynchronously-triggered workflow, the prod gate's
+    hard requirement (a green "Deploy staging <tag>" run) can no longer prove
+    the second half — and must not be turned into a hard requirement either,
+    or a direct `workflow_dispatch` to prod deadlocks exactly the way #560
+    describes the moment the walk workflow has not fired yet.
+
+    Asserted as one exact, verbatim block rather than a fragile split-and-scan
+    (the reason `tests/workflow_contract.py` exists at all, #583): if a later
+    edit turns this into a hard failure, the literal text below no longer
+    matches and this test breaks loudly, naming exactly what moved.
+    """
+    dispatch = step_text(RELEASE, "Dispatch the validated request to infra2")
+    assert (
+        "if uv run --no-sync python tools/walk_evidence.py \\\n"
+        '      --deploy-type staging --release "$version_ref" >walk_note.log 2>&1; then\n'
+        "    cat walk_note.log\n"
+        "  else\n"
+        '    echo "::warning::promoting ${version_ref} to prod without confirmed staging '
+        'walk evidence: $(tail -n1 walk_note.log)"\n'
+        '    cat walk_note.log >>"$GITHUB_STEP_SUMMARY"\n'
+        "  fi"
+    ) in dispatch, "the staging-walk check for a prod promotion must be an ::warning::, never an ::error:: exit"
+
+
 def test_the_surface_walk_examines_every_credential_it_uses() -> None:
     """#560: the member pass needs TA_MEMBER_EMAIL; a probe that checks two of
     three secrets lets the walk start and fail later, less clearly."""
-    probe = step_text(RELEASE, "Are the surface-walk credentials configured")
+    probe = step_text(WALK, "Are the surface-walk credentials configured")
     for variable in ("TA_EMAIL", "TA_PASSWORD", "TA_MEMBER_EMAIL"):
         assert f'"${{{variable}}}"' in probe, f"{variable} must be examined before the walk runs"
 
@@ -219,7 +258,7 @@ def test_the_surface_walk_examines_every_credential_it_uses() -> None:
 def test_an_unconfigured_walk_is_skipped_rather_than_exiting_zero() -> None:
     """#560: a step that exits 0 without walking reports `success`, which
     tools/walk_evidence.py reads as evidence of a walk that never ran."""
-    walk = step(RELEASE, "Walk the deployed surface")
+    walk = step(WALK, "Walk the deployed surface")
     assert walk["if"] == "${{ steps.walk_credentials.outputs.ready == 'true' }}", (
         "an unconfigured walk must be SKIPPED, never a step that exits 0 and reports success"
     )
@@ -229,10 +268,45 @@ def test_an_unconfigured_walk_is_skipped_rather_than_exiting_zero() -> None:
 def test_the_release_lane_is_not_deadlocked_by_a_missing_secret() -> None:
     """#560: failing the run on unconfigured credentials blocked every prod
     release, since prod requires a successful staging run."""
-    probe = str(step(RELEASE, "Are the surface-walk credentials configured")["run"])
+    probe = str(step(WALK, "Are the surface-walk credentials configured")["run"])
     assert "ready=false" in probe, "an unconfigured walk must be reported"
     assert "exit 1" not in probe, "and must not fail the release lane"
     assert "UNVERIFIED" in probe, "but must be unmistakable in the run summary"
+
+
+def test_the_walk_only_runs_after_a_successful_deploy_or_by_hand() -> None:
+    """#855/#860: a failed or cancelled deploy-release run has nothing live to
+    walk. The workflow_run trigger fires on EVERY conclusion (success, failure,
+    cancelled...), so the job itself must gate on success; workflow_dispatch is
+    the deliberate manual exception (the #811 flake recovery)."""
+    trigger = triggers(WALK)
+    assert trigger["workflow_run"]["workflows"] == ["Deploy release"]
+    assert trigger["workflow_run"]["types"] == ["completed"]
+    dispatch_inputs = trigger["workflow_dispatch"]["inputs"]
+    assert dispatch_inputs["deploy_type"]["options"] == ["staging", "prod"]
+    assert "version_ref" in dispatch_inputs
+
+    resolve = job(WALK, "resolve")
+    condition = str(resolve["if"])
+    assert "github.event_name == 'workflow_dispatch'" in condition
+    assert "github.event.workflow_run.conclusion == 'success'" in condition
+
+    walk_job = job(WALK, "walk")
+    assert walk_job["needs"] == "resolve"
+    assert "needs.resolve.outputs.applicable == 'true'" in str(walk_job["if"]), (
+        "a run that could not resolve a staging/prod deploy_type+version_ref must not attempt to walk anything"
+    )
+
+
+def test_the_walk_checks_out_the_released_tag_not_whatever_main_has_become() -> None:
+    """The tag is what deploy-release.yml actually built and deployed; main can
+    advance in the minutes this workflow waits to be triggered."""
+    checkout = next(
+        spec
+        for spec in job(WALK, "walk")["steps"]
+        if str(spec.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"]["ref"] == "refs/tags/${{ needs.resolve.outputs.version_ref }}"
 
 
 def test_the_sender_and_the_contract_agree_on_whose_staging_run_counts() -> None:
@@ -1008,7 +1082,7 @@ def test_the_walk_warms_the_pages_it_is_about_to_open() -> None:
     unrelated to the property — the #583 shape, one function below the docstring
     that describes it.
     """
-    walk = str(step(RELEASE, "Walk the deployed surface")["run"])
+    walk = str(step(WALK, "Walk the deployed surface")["run"])
     assert "tools/warm_surface.sh" in walk, (
         "the walk no longer warms the app-web surface before opening it — the first navigation "
         "races the container swap again (#698)"
@@ -1020,7 +1094,7 @@ def test_the_walk_warms_the_pages_it_is_about_to_open() -> None:
     # and `Deploy staging v0.0.38` died with exit 127. The guard above asserted
     # the call was present and said nothing about whether it could run —
     # another lane found it in production and spent a PR on it (#717).
-    spec = step(RELEASE, "Walk the deployed surface")
+    spec = step(WALK, "Walk the deployed surface")
     workdir = str(spec.get("working-directory", ""))
     for line in str(spec["run"]).splitlines():
         if "warm_surface.sh" not in line or line.strip().startswith("#"):

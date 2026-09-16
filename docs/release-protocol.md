@@ -28,6 +28,31 @@ subsequent promotion diff from a baseline that no longer exists. When a tag
 turns out to be short of what you wanted — v0.0.21 stopped seven commits before
 main — cut the next number, say so in its message, and leave the old one alone.
 
+## The lock is checked twice, but only one check is the lock
+
+v0.0.63/66/67 collided with another lane THREE times on 2026-09-16 (#860):
+`tools/cut_release.sh` checked `git ls-remote --tags origin` first, then spent
+minutes verifying named PRs and waiting for main's `ci-required` to go green,
+then tagged — long enough for another release to claim the same number in
+between, so the whole ceremony died on a race the first check could not see
+coming.
+
+The fix is not a bigger or earlier check; a check can never close the window
+between itself and the push that follows it. `cut_release.sh` re-verifies
+`git ls-remote --tags origin` immediately before the push that actually claims
+the number, and rolls forward to the next free `vX.Y.(Z+1)` — re-verifying
+that one too — on either signal: the immediate re-check finding the number
+taken, or the push itself failing with `already exists`. The push failure is
+authoritative; the re-check is only there to skip a doomed `git tag` when the
+collision is already obvious. Bounded at 5 attempts, each logged, so a runaway
+parallel-release storm fails loudly instead of retrying forever.
+
+The step-1 check from the section above stays exactly as it was: a fast, cheap
+fail for a number that is obviously already taken, before minutes of PR
+verification are spent on a release that cannot land under this name anyway.
+Neither check is ever allowed to become the actual lock — the push is, and
+that never changes.
+
 ## An abandoned tag costs nothing
 
 v0.0.21 was tagged and never deployed. That is untidy and it is not a leak: a
@@ -52,6 +77,68 @@ retry of a deploy whose outcome is unknown.
 There is no lock held across the rest of the flow. If a release is abandoned
 after the tag is pushed — CI red, an evidence gate refuses, the agent stops —
 nothing is left held. The next release picks the next number and proceeds.
+
+## Cadence: one release per merge window, not one per PR
+
+Default cadence is batched (#855 A3, #860). `tools/cut_release.sh --prs` is
+optional: omitted, the PR list is derived from every squash-merge subject
+between the newest reachable release tag and main HEAD, printed for review,
+and recorded in the tag's own annotation (the infra2 `DeployRequest` wire
+contract has no field for a PR list, and changing a contract shared with other
+repositories is out of scope for a release-cadence change — the tag message
+and this ceremony's own log are the record instead). Explicit `--prs` keeps
+working exactly as before, so a break-glass single-PR release stays possible
+whenever one specific change needs to ship alone.
+
+The reason is the pipeline's own fixed cost, not the change size: v0.0.56
+through v0.0.60 on 2026-09-15 were five tags for five separate PRs, each
+paying tag `ci-required` plus the full staging deploy alone — the same ~10 min
+whether the tag describes one commit or ten. Batching a merge window's PRs
+into one release pays that cost once. The last-merged PR in the batch must
+still be the one whose merge commit is main HEAD (unchanged, see
+`test_release_script_reviews_the_pr_that_produced_the_release_sha`) — that is
+what `deploy-release.yml`'s prod gate reviews, and it is always the newest PR
+in the derived range by construction.
+
+## Staging verification is two facts, not one
+
+Before #855/#860, a release's Playwright walk ran INSIDE `deploy-release.yml`'s
+own run, right after the health/data-engine confirmation — so "the staging
+deploy run is green" already meant "and it was walked". A walk flake (#811,
+about 1 in 5 runs until #853) failed that whole run for a reason unrelated to
+the deploy, and the only recovery was re-dispatching the entire ~5-6 min infra2
+deploy.
+
+The walk now lives in its own workflow, `walk-release.yml`, triggered by
+`deploy-release.yml`'s own `workflow_run` completion (`conclusion == success`)
+so a failed or cancelled deploy is never walked, plus `workflow_dispatch` for a
+manual re-run. This changes what `deploy-release.yml`'s own green means: it
+now asserts "deployed and healthy", and no longer "and the walk that happened
+to run alongside it also passed".
+
+Because of that, "staging is verified" is now two separate facts:
+`tools/cut_release.sh` waits for the staging deploy run to go green (as
+before), then separately polls `walk-release.yml` for a green walk run
+matching that exact tag, before it will print the `--prod` command. A red or
+missing walk prints the one-line recovery instead of re-dispatching the
+deploy:
+
+```
+gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=$TAG
+```
+
+`tools/walk_evidence.py` (the standing daily check in `deploy-freshness.yml`,
+#560) reads `walk-release.yml`'s runs the same way it used to read
+`deploy-release.yml`'s — the evidence question is unchanged, only which run
+answers it moved. `deploy-release.yml`'s own prod evidence gate (a green
+"Deploy staging `<tag>`" run) still proves the deploy; it additionally prints
+an `::warning::`, never a hard failure, when that tag's walk evidence is not
+yet confirmed — hard-blocking there would reopen the exact #560 deadlock this
+design exists to avoid, since the walk can legitimately still be in flight
+seconds after a staging deploy finishes. `tools/cut_release.sh`'s own two-fact
+wait is what actually stands between a release and `--prod` for the normal
+ceremony; the workflow-level warning is a second, best-effort signal for a
+direct dispatch that bypasses it.
 
 ## What actually costs time
 

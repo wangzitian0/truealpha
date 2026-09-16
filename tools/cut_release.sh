@@ -16,11 +16,29 @@
 #     release already underway IF it points at local main's HEAD (never
 #     otherwise — the tag push stays the lock); `--redeploy` re-runs just the
 #     deploy leg once the tag and its CI are already green.
+#   - v0.0.63/66/67 (2026-09-16, #860) collided with another lane THREE times
+#     in one day: step 1's ls-remote check is a fast fail, not the lock, and
+#     minutes can pass between it and the actual `git push` (PR verification,
+#     the main-HEAD CI wait) — long enough for another release to land in
+#     between. The push itself re-checks immediately before claiming the
+#     number and rolls forward to the next free vX.Y.(Z+1) on a genuine race,
+#     instead of failing the whole ceremony after all that verification work
+#     (see `push_tag_with_last_instant_lock` below). Step 1 stays: it is still
+#     the fast, cheap fail for a number that is obviously already taken.
 #
 # Usage:
-#   tools/cut_release.sh vX.Y.Z --prs "663,665" --message "one-line summary" \
-#     [--prod] [--dry-run] [--resume] [--redeploy]
+#   tools/cut_release.sh vX.Y.Z --message "one-line summary" \
+#     [--prs "663,665"] [--prod] [--dry-run] [--resume] [--redeploy]
 #
+# --prs is now OPTIONAL (#855 A3, #860): omitted, the PR list is DERIVED from
+#   every squash-merge between the newest reachable vX.Y.Z tag and main HEAD
+#   (`git log <tag>..main --format=%s`, trailing `(#N)`), printed for review,
+#   and recorded in the tag's own annotation. This is the cadence change: one
+#   release per batch of merged PRs, not one release per PR — v0.0.56-v0.0.60
+#   on 2026-09-15 were five tags for five PRs, each paying the full ~10 min
+#   tag-CI + deploy pipeline alone. Passing --prs explicitly still works
+#   exactly as before (a break-glass single-PR release stays possible) and is
+#   REQUIRED when no prior release tag exists to derive a range from.
 # --dry-run performs every read-only assertion and prints the plan.
 # --resume: $TAG already exists on origin (script was killed, laptop slept, the
 #   post-deploy walk flaked after the tag was pushed) — verify the tag is at
@@ -30,14 +48,16 @@
 # --redeploy: the tag and its ci-required are already known green (#811 — only
 #   the deploy run's gate flaked); skip tagging and the tag-CI wait entirely
 #   and go straight to dispatching the staging deploy.
-# Without --prod it stops after a verified staging deploy; rerun with --prod to
-# promote (the staging run URL is printed for it).
+# Without --prod it stops after staging is verified TWO ways — the deploy run
+# green AND a green surface walk for this tag (#855/#860: the walk is now a
+# separate, deferred workflow, so "the deploy succeeded" no longer implies "and
+# it was walked") — then prints the --prod command. A walk failure prints the
+# one-line re-run instead of re-dispatching the whole deploy:
+#   gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=$TAG
 #
 # Promotion policy (#819) — deploy-freshness.yml and tools/deploy_freshness.py
 # bound the same policy, so the three files must agree:
-#   - every tag soaks staging: the staging deploy below is unconditional, and
-#     because step 3 requires a named PR's merge commit to BE main HEAD, that
-#     is one tag per merged PR;
+#   - every tag soaks staging: the staging deploy below is unconditional;
 #   - prod moves only with --prod: the owner promotes deliberately, so prod
 #     lags staging by design and several tags can soak before one is promoted;
 #   - the daily freshness check bounds that lag at staging 3 days and
@@ -49,7 +69,7 @@ REPO="wangzitian0/truealpha"
 STAGING_URL="https://truealpha-staging.truealpha.club"
 PROD_URL="https://truealpha.club"
 
-TAG="${1:?usage: cut_release.sh vX.Y.Z --prs \"N,N\" --message \"...\" [--prod] [--dry-run] [--resume] [--redeploy]}"
+TAG="${1:?usage: cut_release.sh vX.Y.Z --message \"...\" [--prs \"N,N\"] [--prod] [--dry-run] [--resume] [--redeploy]}"
 shift
 # deploy-release.yml requires a stable vX.Y.Z tag; a malformed one would be
 # pushed (the lock!) and then rejected downstream, wasting the number (review).
@@ -66,11 +86,118 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[ -n "$PRS" ] || { echo "--prs is required: the PRs this tag ships" >&2; exit 2; }
+# --prs is no longer required here (#855 A3): an empty value means "derive it
+# from every merge since the last release tag", done below once main is
+# current. It is still validated non-empty before use either way.
 [ -n "$MESSAGE" ] || { echo "--message is required" >&2; exit 2; }
 
 fail() { echo "cut_release: $*" >&2; exit 1; }
 note() { echo "  $*"; }
+
+# vX.Y.Z -> vX.Y.(Z+1). Only ever called on a value that already matched the
+# vX.Y.Z regex (the CLI arg above, or a candidate this function itself just
+# produced), so no further validation here.
+next_patch() {
+  local t="${1#v}" major minor patch
+  IFS='.' read -r major minor patch <<<"$t"
+  echo "v${major}.${minor}.$((patch + 1))"
+}
+
+# The newest vX.Y.Z tag reachable from $1 — the base a derived --prs range
+# counts forward from. Reads the REMOTE tag list (`git ls-remote --tags`,
+# already this script's pattern for the lock check) rather than a local
+# `git fetch --tags`: a single diverged local tag ref (stale from an old test,
+# a prior epoch, another lane's abandoned attempt) makes a blanket tag fetch
+# fail outright with "would clobber existing tag" and takes the WHOLE
+# derivation down with it — measured against this very checkout. The commit
+# objects themselves do not need a tag ref to be present locally; they are
+# already there as ancestors of main's own history, which is exactly what the
+# ancestry check below relies on.
+# Compared numerically (python3, already used elsewhere in this script for
+# JSON), not lexically: `sort` would put v0.0.9 after v0.0.10 the moment the
+# patch number needs two digits. Walks newest-first and returns the first tag
+# whose commit is actually an ancestor of $1, so a same-named tag pointing
+# somewhere else (a corrupted or reused ref) is skipped rather than trusted.
+newest_release_tag() {
+  local target="$1" name sha
+  while read -r name sha; do
+    [ -n "$name" ] || continue
+    if git cat-file -e "${sha}^{commit}" 2>/dev/null && git merge-base --is-ancestor "$sha" "$target" 2>/dev/null; then
+      echo "$name"
+      return 0
+    fi
+  done < <(git ls-remote --tags origin | python3 -c '
+import re, sys
+pattern = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+commits = {}
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    sha, ref = line.split(None, 1)
+    peeled = ref.endswith("^{}")
+    name = (ref[:-3] if peeled else ref).rsplit("/", 1)[-1]
+    if not pattern.match(name):
+        continue
+    # The peeled ^{} row is the COMMIT an annotated tag points at; the
+    # unpeeled row is the tag OBJECT itself. Every tag this script creates is
+    # annotated, so prefer the peeled commit sha when both rows are seen.
+    if peeled or name not in commits:
+        commits[name] = sha
+def key(n: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in n[1:].split("."))
+for name in sorted(commits, key=key, reverse=True):
+    print(name, commits[name])
+')
+  echo ""
+}
+
+# #860: step 1's ls-remote check is a fast fail for an OBVIOUSLY taken number,
+# not the lock — minutes elapse between it and this function (PR verification,
+# the main-HEAD CI wait), long enough for another lane's release to land in
+# that window (three collisions in one day: v0.0.63/66/67). Re-verify
+# immediately before the push that actually claims the number and, on a
+# genuine race, roll TAG forward to the next free vX.Y.(Z+1) instead of
+# failing the whole ceremony after all that verification work.
+#
+# The push itself — never the pre-check — is what must never be weakened
+# (docs/release-protocol.md: "the tag push is the lock"). A push that fails
+# with "already exists" means another lane's push landed between our
+# ls-remote check and our own push; that failure, not the ls-remote read, is
+# what triggers the roll-forward.
+#
+# Reads/writes the global $TAG so every later step (the tag-CI wait, the
+# deploy dispatch, the printed --prod command) uses whichever number this
+# release actually claimed.
+push_tag_with_last_instant_lock() {
+  local attempt push_err
+  push_err="$(mktemp)"
+  for attempt in $(seq 1 5); do
+    if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+      note "last-instant check: $TAG was claimed by another release — rolling to the next number (attempt $attempt/5)"
+      TAG=$(next_patch "$TAG")
+      continue
+    fi
+    git tag -a "$TAG" "$LOCAL_MAIN" -m "$TAG_MESSAGE"
+    if git push origin "$TAG" 2>"$push_err"; then
+      rm -f "$push_err"
+      note "$TAG pushed — the lock is claimed"
+      return 0
+    fi
+    if grep -q "already exists" "$push_err"; then
+      cat "$push_err" >&2
+      git tag -d "$TAG" >/dev/null 2>&1 || true
+      note "push raced another release for $TAG — rolling to the next number (attempt $attempt/5)"
+      TAG=$(next_patch "$TAG")
+      continue
+    fi
+    cat "$push_err" >&2
+    rm -f "$push_err"
+    fail "git push origin $TAG failed for a reason other than a tag collision"
+  done
+  rm -f "$push_err"
+  fail "could not claim a free tag after 5 attempts starting from the requested number — check for a runaway parallel release"
+}
 
 echo "== preconditions for $TAG =="
 
@@ -98,6 +225,11 @@ fi
 #    the wrong tree under the right name. A stale checkout fast-forwards itself
 #    (v0.0.35 and v0.0.38 both died on "pull first" while a parallel lane merged
 #    mid-ceremony); only true divergence still fails.
+# Deliberately NOT `--tags`: a single locally diverged tag ref (stale from an
+# old attempt, another lane's abandoned release) makes a blanket tag fetch
+# fail outright with "would clobber existing tag" and takes this whole step
+# down with it — measured against this very checkout. Nothing below needs a
+# local tag REF; `newest_release_tag` reads the remote list directly.
 git fetch origin -q
 # Always, not only when stale (review on #721): the ceremony's git state must be
 # main's regardless of whether a fast-forward turns out to be needed.
@@ -123,6 +255,35 @@ if [ "$TAG_EXISTS" = "1" ]; then
   [ "$TAG_COMMIT" = "$LOCAL_MAIN" ] \
     || fail "$TAG already exists on origin at ${TAG_COMMIT:0:8}, not at main HEAD ${LOCAL_MAIN:0:8} — that is another release's tag, not this one resumed; release identity is immutable, pick the next number"
   note "$TAG on origin already points at main HEAD ${LOCAL_MAIN:0:8} — this is the same release"
+fi
+
+# 2c. Batching by default (#855 A3, #860): an omitted --prs is derived from
+#     every squash-merge subject between the newest reachable release tag and
+#     main HEAD. This is the cadence change — one release per batch of merged
+#     PRs, never one per PR — v0.0.56-v0.0.60 on 2026-09-15 were five tags for
+#     five PRs, each paying the full tag-CI + deploy pipeline alone.
+#     `--prs` explicit still works exactly as it always has (a break-glass
+#     single-PR release stays possible) and skips all of this.
+if [ -z "$PRS" ]; then
+  BASE_TAG=$(newest_release_tag "$LOCAL_MAIN")
+  [ -n "$BASE_TAG" ] \
+    || fail "no prior vX.Y.Z release tag is reachable from main to derive --prs from — pass --prs explicitly for a first release"
+  echo "== deriving --prs: every merge on main since $BASE_TAG =="
+  SUBJECTS=$(git log "${BASE_TAG}..${LOCAL_MAIN}" --format=%s --reverse)
+  [ -n "$SUBJECTS" ] || fail "no commits between $BASE_TAG and main HEAD ${LOCAL_MAIN:0:8} — nothing to release"
+  DERIVED_PRS=()
+  while IFS= read -r SUBJECT; do
+    if [[ "$SUBJECT" =~ \(#([0-9]+)\)$ ]]; then
+      DERIVED_PRS+=("${BASH_REMATCH[1]}")
+      note "#${BASH_REMATCH[1]}: $SUBJECT"
+    else
+      fail "commit '$SUBJECT' since $BASE_TAG has no trailing (#N) — not a squash-merge this script can attribute to a PR; pass --prs explicitly to describe this release"
+    fi
+  done <<<"$SUBJECTS"
+  PRS=$(IFS=,; echo "${DERIVED_PRS[*]}")
+  note "derived --prs $PRS (${#DERIVED_PRS[@]} PR(s) since $BASE_TAG)"
+else
+  note "using explicit --prs $PRS"
 fi
 
 # 3. Every named PR: MERGED, zero unresolved threads, merge commit on main.
@@ -159,6 +320,16 @@ done
 [ -n "$REVIEWED_PR" ] || fail "no named PR has its merge commit at main HEAD ${LOCAL_MAIN:0:8} — include the last-merged PR (the prod gate requires reviewed merge_commit_sha == release SHA)"
 note "reviewed change for prod: #$REVIEWED_PR (merge == HEAD)"
 
+# The full PR list is release evidence, and there is nowhere else to put it:
+# the infra2 DeployRequest wire contract (tools/app_deploy_request.py) has no
+# field for it, and changing that contract is out of scope here — it is
+# infra2's shared shape, used by more than this repository. So it lives in the
+# one place this ceremony fully controls: the tag's own annotation, plus this
+# run's own log (already printed per-PR above).
+TAG_MESSAGE="$MESSAGE
+
+PRs: $PRS"
+
 # 4. main HEAD's ci-required is green — the tag inherits this SHA. A freshly
 #    merged HEAD has CI still running; wait bounded instead of failing on the
 #    spot (v0.0.35's first attempt died here five minutes after its merge).
@@ -182,7 +353,7 @@ if [ "$DRY" = "1" ]; then
   elif [ "$RESUME" = "1" ] && [ "$TAG_EXISTS" = "1" ]; then
     echo "== dry run: would resume $TAG from the tag ci-required wait, deploy staging$([ "$PROD" = "1" ] && echo ', then prod') =="
   else
-    echo "== dry run: would tag ${LOCAL_MAIN:0:8} as $TAG, deploy staging$([ "$PROD" = "1" ] && echo ', then prod') =="
+    echo "== dry run: would tag ${LOCAL_MAIN:0:8} as $TAG (PRs: $PRS), deploy staging$([ "$PROD" = "1" ] && echo ', then prod') =="
   fi
   exit 0
 fi
@@ -205,9 +376,7 @@ else
     echo "== resume: $TAG already pushed — continuing from the tag ci-required wait (#811) =="
   else
     echo "== tagging =="
-    git tag -a "$TAG" "$LOCAL_MAIN" -m "$MESSAGE"
-    git push origin "$TAG"
-    note "$TAG pushed — the lock is claimed"
+    push_tag_with_last_instant_lock
   fi
 
   echo "== waiting for tag ci-required =="
@@ -274,10 +443,52 @@ probe() { # $1=base url — the deployed identity must BE the tag (rule 6: servi
   note "$1 serves $TAG"
 }
 
+# #855/#860: the surface walk is no longer part of the deploy run itself — it
+# is a separate workflow (walk-release.yml) that deploy-release.yml's own
+# completion triggers. "Staging verified" therefore now needs TWO facts, not
+# one: the deploy run green (probe() above) AND a green walk run for this
+# exact tag. Polls walk-release.yml's OWN runs, matched the same way
+# tools/walk_evidence.py matches them (by its "Walk Deploy <type> <tag>"
+# run-name) — a walk flake here prints the one-line re-run instead of this
+# script re-dispatching the whole deploy again (#811's actual cost).
+wait_for_walk() { # $1=staging|prod
+  local TYPE="$1"
+  local TITLE="Walk Deploy $TYPE $TAG"
+  local RUN=""
+  # workflow_run has to be delivered and queued after the deploy run finishes;
+  # give it the same slack deploy()'s own dispatch-registration wait uses.
+  for _ in $(seq 1 18); do
+    RUN=$(gh run list --repo "$REPO" --workflow walk-release.yml --limit 20 \
+      --json databaseId,displayTitle,createdAt \
+      -q "[.[]|select(.displayTitle==\"$TITLE\")] | sort_by(.createdAt) | last | .databaseId // empty")
+    [ -n "$RUN" ] && break
+    sleep 10
+  done
+  [ -n "$RUN" ] || fail "no '$TITLE' run appeared within 3 minutes of the $TYPE deploy — check walk-release.yml's workflow_run trigger, or re-run by hand: gh workflow run walk-release.yml -f deploy_type=$TYPE -f version_ref=$TAG"
+  for _ in $(seq 1 60); do
+    local S
+    S=$(gh run view "$RUN" --repo "$REPO" --json status,conclusion -q '"\(.status) \(.conclusion)"')
+    case "$S" in
+      completed\ success) note "walk run $RUN green for $TITLE"; return 0 ;;
+      completed*)
+        echo "cut_release: surface walk for $TITLE (run $RUN) is not green: $S" >&2
+        echo "cut_release: re-run just the walk, not the deploy:" >&2
+        echo "  gh workflow run walk-release.yml -f deploy_type=$TYPE -f version_ref=$TAG" >&2
+        exit 1
+        ;;
+    esac
+    sleep 10
+  done
+  fail "walk run $RUN for $TITLE did not complete within 10 minutes"
+}
+
 echo "== staging =="
 STAGING_RUN=$(deploy staging | tail -1)
 probe "$STAGING_URL"
-note "staging run $STAGING_RUN (walk evidence inside)"
+note "staging run $STAGING_RUN green (fact 1 of 2)"
+echo "== staging surface walk =="
+wait_for_walk staging
+note "staging verified: deploy green AND surface walk green for $TAG (fact 2 of 2)"
 
 if [ "$PROD" = "1" ]; then
   echo "== prod =="
@@ -287,7 +498,7 @@ if [ "$PROD" = "1" ]; then
   probe "$PROD_URL"
   note "prod run $PROD_RUN"
 else
-  echo "staging verified; promote with:"
+  echo "staging verified (deploy green AND surface walk green); promote with:"
   echo "  tools/cut_release.sh $TAG --prs \"$PRS\" --message \"...\" --prod  # staging_run=$STAGING_RUN"
 fi
 echo "== done =="
