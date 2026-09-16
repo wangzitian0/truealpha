@@ -234,7 +234,9 @@ deploy() { # $1=staging|prod, extra -f args after
   # run-name (`Deploy $TYPE $TAG`, see deploy-release.yml) and creation time —
   # bounded at 60s, failing loudly rather than guessing.
   local DISPATCHED_AT
-  DISPATCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # 90 s of slack against clock skew between this machine and GitHub: a run created
+  # "before" a fast local clock must still be found.
+  DISPATCHED_AT=$(python3 -c 'import datetime as d;print((d.datetime.now(d.UTC)-d.timedelta(seconds=90)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
   gh workflow run deploy-release.yml --repo "$REPO" \
     -f deploy_type="$TYPE" -f version_ref="$TAG" -f source_run_id="$TAG_RUN_ID" "$@" >/dev/null
   local TITLE="Deploy $TYPE $TAG"
