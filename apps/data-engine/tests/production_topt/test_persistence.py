@@ -555,6 +555,16 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     assert report["accuracy"]["sec_oracle"]["reason"] == "no_sec_user_agent"
     report_id = confidence_report.persist(connection, report)
     assert report_id.startswith("datahub-confidence-report:")
+    # #885: the next night's compile over the same head grades the same content — the same
+    # row, not one more per night.
+    recompiled = confidence_report.build_report(
+        connection, universe="topt", head=head, executed_at=CUTOFF + timedelta(days=1), environment="test"
+    )
+    assert recompiled["generated_at"] != report["generated_at"]
+    assert confidence_report.persist(connection, recompiled) == report_id
+    assert connection.execute(
+        "select count(*) from mart.datahub_confidence_report where run_id = %s", (plan.run_id,)
+    ).fetchone() == (1,)
 
 
 def test_moomoo_origins_reach_the_report_as_their_own_assertions(connection) -> None:

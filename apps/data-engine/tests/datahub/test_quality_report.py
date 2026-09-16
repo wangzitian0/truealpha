@@ -353,6 +353,56 @@ def test_served_day_pairing_without_primary_uses_newest_day() -> None:
     assert _served_day_assertions([stale_td, fresh_td]) == [fresh_td]
 
 
+def test_served_day_pairing_compares_utc_days_whatever_zone_the_session_renders() -> None:
+    """#885: psycopg renders a `timestamptz` in the session's TimeZone, which nothing pins
+    to UTC. New York renders two instants of one UTC session on two local days; Tokyo
+    renders two UTC sessions on one local day. The pairing follows the UTC day."""
+    from datetime import UTC, date, datetime
+    from zoneinfo import ZoneInfo
+
+    from data_engine.datahub.quality_report import _served_day_assertions, utc_day
+
+    def rendered(entry, zone: ZoneInfo, *, hour: int = 0):
+        return (entry[0], entry[1].replace(hour=hour).astimezone(zone), *entry[2:])
+
+    new_york, tokyo = ZoneInfo("America/New_York"), ZoneInfo("Asia/Tokyo")
+    yahoo = rendered(_price_entry("yahoo-chart:v1", "2026-08-17", "1183.16"), new_york)
+    td = rendered(_price_entry("twelve-data:v1", "2026-08-17", "1184.91"), new_york, hour=5)
+    assert yahoo[1].date() != td[1].date(), "a bare .date() splits one session in two"
+    assert _served_day_assertions([yahoo, td]) == [yahoo, td]
+
+    yahoo = rendered(_price_entry("yahoo-chart:v1", "2026-08-17", "1183.16"), tokyo)
+    td = rendered(_price_entry("twelve-data:v1", "2026-08-16", "1170.00"), tokyo, hour=20)
+    assert yahoo[1].date() == td[1].date(), "a bare .date() merges two sessions into one"
+    assert _served_day_assertions([yahoo, td]) == [yahoo]
+
+    assert utc_day(datetime(2026, 8, 16, 20, tzinfo=new_york)) == date(2026, 8, 17)
+    assert utc_day(datetime(2026, 8, 17, 8, tzinfo=tokyo)) == date(2026, 8, 16)
+    assert utc_day(datetime(2026, 8, 17, tzinfo=UTC)) == date(2026, 8, 17)
+
+
+def test_a_cutoff_rendered_west_of_utc_keeps_its_utc_day() -> None:
+    """A 03:00Z cutoff rendered in New York is the previous local evening: a bare `.date()`
+    put the cell's `valid_to` before its partition and the cell could not be built."""
+    from datetime import UTC, date, datetime
+    from zoneinfo import ZoneInfo
+
+    from data_engine.datahub.quality_report import reconcile_price_bar
+
+    cutoff = datetime(2026, 8, 14, 3, tzinfo=UTC).astimezone(ZoneInfo("America/New_York"))
+    assert cutoff.date() < date(2026, 8, 14)
+    cell = reconcile_price_bar(
+        "listing:xnas:aapl",
+        [
+            _bar_entry("yahoo-chart:v1", "2026-08-14", close="305.93"),
+            _bar_entry("twelve-data:v1", "2026-08-14", close="305.92999"),
+        ],
+        partition=date(2026, 8, 14),
+        cutoff=cutoff,
+    )
+    assert cell["outcome"] == "agreed" and cell["origin_groups"] == 2
+
+
 def test_cross_day_pair_reconciles_insufficient_not_conflict() -> None:
     """End-to-end through the real fusion engine: the narrowed single-origin cell
     grades INSUFFICIENT_INDEPENDENT_ORIGINS, never CONFLICT_ABSTAINED."""

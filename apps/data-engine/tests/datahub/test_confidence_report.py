@@ -20,6 +20,7 @@ import hashlib
 import os
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import dagster as dg
 import psycopg
@@ -163,6 +164,90 @@ def test_a_dated_primary_row_without_a_value_does_not_move_the_served_day() -> N
     )
     assert grade.band is Band.LOW and grade.reason == "single_origin"
     assert grade.origins == ("origin:twelve-data:v1",) and grade.excluded == ()
+
+
+def test_served_days_are_utc_days_whatever_zone_the_session_renders() -> None:
+    """#885: psycopg renders a `timestamptz` in the session's TimeZone. New York renders
+    two instants of one UTC session hours apart on two local days; Tokyo renders two UTC
+    days on one local day. The served day is the UTC day either way."""
+    new_york, tokyo = ZoneInfo("America/New_York"), ZoneInfo("Asia/Tokyo")
+    close = family_policy(CLOSE_FAMILY)
+    yahoo_at = datetime(2026, 9, 14, 0, tzinfo=UTC).astimezone(new_york)
+    twelve_at = datetime(2026, 9, 14, 5, tzinfo=UTC).astimezone(new_york)
+    assert yahoo_at.date() != twelve_at.date(), "a bare .date() splits one session in two"
+    grade = classify_cell(
+        close, "listing:xnas:aapl", (_yahoo("333.08", yahoo_at), _twelve("333.07", twelve_at)), CUTOFF
+    )
+    assert grade.band is Band.HIGH and grade.excluded == ()
+
+    yahoo_at = datetime(2026, 9, 14, 0, tzinfo=UTC).astimezone(tokyo)
+    twelve_at = datetime(2026, 9, 13, 20, tzinfo=UTC).astimezone(tokyo)
+    assert yahoo_at.date() == twelve_at.date(), "a bare .date() merges two sessions into one"
+    grade = classify_cell(
+        close, "listing:xnas:aapl", (_yahoo("333.08", yahoo_at), _twelve("329.00", twelve_at)), CUTOFF
+    )
+    assert grade.band is Band.LOW and grade.reason == "second_origin_other_day"
+    assert grade.excluded == ("origin:twelve-data:v1",)
+
+
+# -- one origin asserts once (#885) ------------------------------------------------------------
+
+
+def _yahoo_row(value: str, observation: str, at: datetime = DAY) -> OriginValue:
+    return OriginValue(
+        origin_id="origin:yahoo:v1",
+        source_id="yahoo-chart:v1",
+        lineage="yahoo",
+        value=value,
+        knowable_at=at,
+        observation_id=f"normalized-observation:{observation * 64}",
+    )
+
+
+def test_two_observations_of_one_origin_are_one_origin() -> None:
+    """A retried capture and a reused binding put two Yahoo rows on one cell. They are one
+    origin: LOW `single_origin`, never MEDIUM `same_lineage` with itself — and the value the
+    origin asserts is its newest row's, whichever order the rows came in."""
+    close = family_policy(CLOSE_FAMILY)
+    rows = (_yahoo_row("333.08", "a"), _yahoo_row("333.10", "b"))
+    forward = classify_cell(close, "listing:xnas:aapl", rows, CUTOFF)
+    backward = classify_cell(close, "listing:xnas:aapl", tuple(reversed(rows)), CUTOFF)
+    assert forward == backward
+    assert forward.band is Band.LOW and forward.reason == "single_origin"
+    assert forward.origins == ("origin:yahoo:v1",) and forward.independent_origins == 1
+    assert forward.values == {"origin:yahoo:v1": "333.10"}
+
+
+def test_one_origins_row_from_another_day_is_not_a_second_origin() -> None:
+    """Yahoo's reused Friday row beside its fresh Monday row: the served day is Monday and
+    the only origin on it is Yahoo — `single_origin`, not `second_origin_other_day`."""
+    friday, monday = datetime(2026, 8, 14, tzinfo=UTC), datetime(2026, 8, 17, tzinfo=UTC)
+    grade = classify_cell(
+        family_policy(CLOSE_FAMILY),
+        "listing:xnas:hon",
+        (_yahoo_row("233.96", "a", friday), _yahoo_row("229.40", "b", monday)),
+        CUTOFF,
+    )
+    assert grade.band is Band.LOW and grade.reason == "single_origin" and grade.excluded == ()
+    assert grade.values == {"origin:yahoo:v1": "229.40"}
+
+
+def test_a_duplicated_origin_still_reconciles_against_a_real_second_origin() -> None:
+    """Dedupe keeps the second origin: Yahoo twice plus Twelve Data is two origins, graded
+    by the engine on Yahoo's newest row — the representative the quality report compares."""
+    bars = [
+        cr.bar_origins(
+            ("yahoo-chart:v1", "origin:yahoo:v1", "close"),
+            {"close": close},
+            knowable_at=DAY,
+            observation_id=f"normalized-observation:{digit * 64}",
+        )[CLOSE_FAMILY]
+        for close, digit in (("300.00", "a"), ("333.08", "b"))
+    ]
+    grade = classify_cell(family_policy(CLOSE_FAMILY), "listing:xnas:aapl", (*bars, _twelve("333.079987")), CUTOFF)
+    assert grade.band is Band.HIGH and grade.independent_origins == 2
+    assert grade.origins == ("origin:twelve-data:v1", "origin:yahoo:v1")
+    assert grade.values["origin:yahoo:v1"] == "333.08"
 
 
 # -- every field of the bar is its own family (#865) -------------------------------------------
@@ -739,6 +824,22 @@ def test_the_report_is_content_addressed_like_the_quality_report() -> None:
     assert content_address({**payload, "b": 2})[1] != digest
 
 
+def test_the_compile_time_is_not_part_of_the_content_address() -> None:
+    """#885: `generated_at` is when the report was compiled, not what it graded. Hashing it
+    made every nightly compile over an unchanged head a new row; without it the two compiles
+    are one identity, and any graded change is still a new one."""
+    assert cr.COMPILE_STAMPS == ("generated_at",)
+    first = {
+        "run_id": "capture-run:" + "0" * 64,
+        "families": {"close": {"high": 21}},
+        "generated_at": "2026-09-15T00:45:00+00:00",
+    }
+    again = {**first, "generated_at": "2026-09-16T00:45:00+00:00"}
+    assert content_address(again) == content_address(first)
+    assert content_address({k: v for k, v in first.items() if k != "generated_at"}) == content_address(first)
+    assert content_address({**again, "families": {"close": {"high": 20}}}) != content_address(first)
+
+
 # -- metadata: the stored confidence column is a constant and is not used ---------------------
 
 
@@ -871,6 +972,38 @@ def test_the_report_persists_append_only_and_reads_back() -> None:
         assert row == ("universe:topt-us-2026-03-31", "capture-run:" + "0" * 64, "21")
         with pytest.raises(psycopg.errors.RaiseException):
             connection.execute("delete from mart.datahub_confidence_report where report_id = %s", (report_id,))
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def test_a_recompile_over_identical_content_is_the_same_row() -> None:
+    """#885: two nightly compiles over one unchanged head persist ONE row — `on conflict do
+    nothing` collapses the second — and the row keeps the first compile's `generated_at`."""
+    connection = _connection()
+    try:
+        run_id = "capture-run:" + "1" * 64
+        report = {
+            "universe": "topt",
+            "universe_id": "universe:topt-us-2026-03-31",
+            "run_id": run_id,
+            "cutoff": CUTOFF.isoformat(),
+            "generated_at": "2026-09-15T00:45:00+00:00",
+            "families": {"close": {"high": 21}},
+        }
+        report_id = persist(connection, report)
+        assert persist(connection, {**report, "generated_at": "2026-09-16T00:45:00+00:00"}) == report_id
+        rows = connection.execute(
+            "select report_id, payload->>'generated_at' from mart.datahub_confidence_report where run_id = %s",
+            (run_id,),
+        ).fetchall()
+        assert rows == [(report_id, "2026-09-15T00:45:00+00:00")]
+        changed = persist(connection, {**report, "families": {"close": {"high": 20}}})
+        assert changed != report_id
+        count = connection.execute(
+            "select count(*) from mart.datahub_confidence_report where run_id = %s", (run_id,)
+        ).fetchone()
+        assert count == (2,)
     finally:
         connection.rollback()
         connection.close()
