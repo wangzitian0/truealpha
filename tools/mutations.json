@@ -163,6 +163,70 @@
       "cwd": "."
     },
     {
+      "id": "workflow-contract/freshness-alert-closes-only-on-a-scheduled-run-of-main",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/deploy-freshness.yml",
+      "find": "        if: success() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !github.event.inputs.max_age_days))\n",
+      "replace": "        if: success()\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "workflow-contract/a-looser-freshness-override-cannot-close-the-alert",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/deploy-freshness.yml",
+      "find": "(github.event_name == 'workflow_dispatch' && !github.event.inputs.max_age_days)",
+      "replace": "github.event_name == 'workflow_dispatch'",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "workflow-contract/main-health-reports-only-push-runs",
+      "guard": "libs/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/main-health.yml",
+      "find": "    if: github.event.workflow_run.event == 'push'\n",
+      "replace": "    if: github.event.workflow_run.head_branch == 'main'\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_ci_workflows.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "escalate-issue/a-superstring-title-is-not-the-same-issue",
+      "guard": "libs/runtime/tests/test_escalate_issue.py",
+      "file": "tools/escalate_issue.py",
+      "find": "issue.get(\"title\") == title",
+      "replace": "title in str(issue.get(\"title\"))",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_escalate_issue.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
       "id": "factor-contract/a-parameter-gaining-a-default-is-caught",
       "guard": "tools/check_factor_contract.py",
       "file": "libs/factors/src/factors/base/peg.py",

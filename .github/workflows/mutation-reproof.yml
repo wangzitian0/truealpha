@@ -33,6 +33,8 @@ on:
       - ".github/workflows/ci-required.yml"
       - ".github/workflows/deploy-release.yml"
       - ".github/workflows/walk-release.yml"
+      - ".github/workflows/deploy-freshness.yml"
+      - ".github/workflows/main-health.yml"
       - "apps/app-web/src/app/login/page.tsx"
       - "apps/llm-service/src/llm_service/main.py"
       - "apps/app-web/src/app/research/coverage/page.tsx"
@@ -51,9 +53,11 @@ on:
       - "libs/factors/src/factors/base/peg.py"
       - "libs/factors/src/factors/composite/strategy_evaluator.py"
       - "libs/runtime/tests/test_ci_workflows.py"
+      - "libs/runtime/tests/test_escalate_issue.py"
       - "libs/runtime/tests/test_migration_chain.py"
       - "libs/runtime/tests/test_output_invariants.py"
       - "tools/check_factor_contract.py"
+      - "tools/escalate_issue.py"
       - "tools/factor_contract.json"
       - "tools/mutation_reproof.py"
       - "tools/mutations.json"
@@ -65,6 +69,11 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # One definition for `escalate` and `resolve`: the issue a red run opens is
+  # the issue the next green run closes.
+  ESCALATION_TITLE: "mutation-reproof is red: a declared guard is inert"
 
 jobs:
   reproof:
@@ -111,21 +120,29 @@ jobs:
   # failure is already on the PR, and dispatch is how this gets red-proven.
   # Reports, never rescues: it fires only after reproof failed, so the run's
   # conclusion stays failure (acceptance 3).
+  # The job checks out only tools/ (the escalation tool) and holds
+  # `contents: read` for that; tools/escalate_issue.py owns the open-or-comment
+  # rule, including "a failed LIST never falls through to create" (review).
   escalate:
     needs: reproof
     if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      contents: read
       issues: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+          persist-credentials: false
       - name: File or update the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FAILED: ${{ needs.reproof.outputs.failed }}
         run: |
-          TITLE="mutation-reproof is red: a declared guard is inert"
+          set -euo pipefail
           {
             echo "Scheduled/dispatched run failed: $RUN_URL"
             echo
@@ -134,17 +151,40 @@ jobs:
             echo "${FAILED:-see run log}"
             echo '~~~'
             echo
-            echo "Filed automatically (#680). One open issue per breakage: reruns comment here instead of filing again."
+            echo "Filed automatically (#680). One open issue per breakage: reruns comment here instead of filing again; the next green scheduled run closes it (#876)."
           } > body.md
-          # A failed LIST must not fall through to create: that is how a rate
-          # limit turns one breakage into a duplicate issue (review). The run is
-          # already red; skipping loses nothing but this comment.
-          if ! EXISTING=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number'); then
-            echo "::warning::issue listing failed; skipping escalation — the run is already red"
-            exit 0
-          fi
-          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-            gh issue comment -R "${{ github.repository }}" "$EXISTING" --body-file body.md
-          else
-            gh issue create -R "${{ github.repository }}" --title "$TITLE" --body-file body.md
-          fi
+          python3 tools/escalate_issue.py open --title "$ESCALATION_TITLE" --body-file body.md
+
+  # #876 (W3): a green full run closes the issue a red one opened, so an open
+  # alert keeps meaning "a guard is inert NOW". Positive allow-list, never
+  # `!= 'pull_request'`: a PR run re-proves only what that PR touched on a
+  # branch, and must never touch issues. A dispatch has no inputs, so on main
+  # it runs exactly the schedule's full manifest and may close too (that is
+  # how the close is drilled); on any other ref it is that branch's manifest
+  # and may not. Its own job for the same reason as `escalate`: the write
+  # grant never reaches the steps a PR runs.
+  resolve:
+    needs: reproof
+    if: success() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+          persist-credentials: false
+      - name: Resolve the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Resolved: every declared guard caught its mutation in $RUN_URL"
+            echo
+            echo "Closed automatically (#876). A later inert guard files a new issue."
+          } > body.md
+          python3 tools/escalate_issue.py resolve --title "$ESCALATION_TITLE" --body-file body.md

@@ -52,6 +52,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 RELEASE = "deploy-release.yml"
 WALK = "walk-release.yml"
 FRESHNESS = "deploy-freshness.yml"
+REPROOF = "mutation-reproof.yml"
+MAIN_HEALTH = "main-health.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
@@ -395,6 +397,251 @@ def test_the_release_identity_is_read_by_the_tool_not_by_shell() -> None:
     text = step_text(FRESHNESS, "Check ${{ matrix.environment }} surface-walk evidence")
     assert "--url" in text, "the tool reads the identity, with the validation the shell had none of"
     assert "jq -r '.git_sha'" not in text
+
+
+# --- escalation lifecycle: open on red, resolve on green (#876) ---------------
+
+ESCALATE_TOOL = "tools/escalate_issue.py"
+
+
+class _Context:
+    """Attribute access over a dict with GitHub's null propagation: a missing
+    property is null (falsy), never an error — `github.event.inputs.x` on a
+    schedule event is null, and a condition must be judged on exactly that."""
+
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def __getattr__(self, name: str) -> object:
+        value = self._value.get(name) if isinstance(self._value, dict) else None
+        return _Context(value) if value is None or isinstance(value, dict) else value
+
+    def __bool__(self) -> bool:
+        return bool(self._value)
+
+
+def _decides(condition: object, github: dict, *, succeeded: bool = True) -> bool:
+    """Evaluate a job/step `if:` the way the runner would, for the operators these
+    watchdog conditions use: `&&`, `||`, `!`, `==`, `!=`, string literals and the
+    status functions. Anything else is refused rather than guessed at.
+
+    Asserting substrings of a condition proves the text; evaluating it proves the
+    decision — a PR run, a branch dispatch or a loosened override must come out
+    False however the expression is spelled. A missing `if:` is `true`, which is
+    what the runner does with it.
+    """
+    expression = str(condition).strip() if condition is not None else "true"
+    if expression.startswith("${{") and expression.endswith("}}"):
+        expression = expression[3:-2].strip()
+    functions = set(re.findall(r"([A-Za-z_]+)\(", expression))
+    assert functions <= {"success", "failure", "always", "cancelled"}, f"unsupported functions {functions}"
+    assert not re.search(r"!\s*\(", expression), "negating a group is not supported by this evaluator"
+    # `!x` binds tighter than `==` in GitHub's grammar and looser in Python's;
+    # parenthesising the operand keeps GitHub's meaning.
+    python = re.sub(r"!(?!=)\s*([A-Za-z_][\w.]*)", r"(not \1)", expression)
+    python = python.replace("&&", " and ").replace("||", " or ")
+    namespace = {
+        "github": _Context(github),
+        "success": lambda: succeeded,
+        "failure": lambda: not succeeded,
+        "always": lambda: True,
+        "cancelled": lambda: False,
+        "true": True,
+        "false": False,
+        "null": None,
+    }
+    return bool(eval(python, {"__builtins__": {}}, namespace))  # repo-controlled workflow text
+
+
+def _tool_calls(run: object, action: str) -> list[str]:
+    return [
+        line.strip()
+        for line in str(run).splitlines()
+        if f"{ESCALATE_TOOL} {action} " in line and not line.strip().startswith("#")
+    ]
+
+
+def _assert_calls_the_tool(spec: dict, action: str, where: str) -> None:
+    """One invocation of the shared tool with the shared title, no second
+    implementation beside it, and no `${{ }}` text spliced into the shell."""
+    run = str(spec.get("run", ""))
+    calls = _tool_calls(run, action)
+    assert len(calls) == 1, f"{where}: expected one `{ESCALATE_TOOL} {action}` call, found {calls}"
+    assert '--title "$ESCALATION_TITLE"' in calls[0] and "--body-file" in calls[0], (
+        f"{where}: the {action} call does not use the shared title — the issue a red run opens would not be "
+        f"the issue a green run closes"
+    )
+    assert "gh issue" not in run, f"{where}: an inline `gh issue` beside the tool is a second lifecycle implementation"
+    assert "${{" not in run, f"{where}: an expression is interpolated into the shell; pass it through env"
+
+
+def test_the_freshness_alert_opens_on_red_and_closes_on_a_scheduled_green() -> None:
+    """#876 W3: #818 stayed open two days after staging was fresh again, because
+    the escalation commented and never closed. Both halves go through the tool,
+    under one per-environment title (#687/#688: the legs run in parallel).
+
+    The resolve guard is the load-bearing part: a dispatch with `max_age_days`
+    set is a red-proof or an experiment, and a looser override would be green
+    while the scheduled bound is still red — closing a live alert. So is a
+    dispatch on a branch, whose matrix may carry other bounds.
+    """
+    title = str(job(FRESHNESS, "freshness")["env"]["ESCALATION_TITLE"])
+    assert title == "deploy-freshness is red: ${{ matrix.environment }} failed its standing checks", (
+        f"the freshness title changed to {title!r}: an open issue under the old title is never closed, and a "
+        f"title without the environment lets the parallel legs share one issue (#687/#688)"
+    )
+    escalate = step(FRESHNESS, "Escalate a scheduled failure to an issue")
+    resolve = step(FRESHNESS, "Resolve the issue once the checks are green")
+    _assert_calls_the_tool(escalate, "open", "freshness escalate")
+    _assert_calls_the_tool(resolve, "resolve", "freshness resolve")
+    assert "pull_request" not in triggers(FRESHNESS), "the workflow-level issues grant assumes no PR-triggered code"
+
+    main = "refs/heads/main"
+    closes = [
+        ({"event_name": "schedule", "ref": main}, "the scheduled run"),
+        (
+            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"max_age_days": ""}}},
+            "a dispatch at the matrix bounds",
+        ),
+        (
+            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {}}},
+            "a dispatch with the input omitted",
+        ),
+    ]
+    for github, what in closes:
+        assert _decides(resolve["if"], github), f"{what} is green at the scheduled bounds and must close the alert"
+        assert not _decides(resolve["if"], github, succeeded=False), f"a red {what} closed the alert"
+        assert _decides(escalate["if"], github, succeeded=False), f"a red {what} no longer escalates"
+        assert not _decides(escalate["if"], github), f"a green {what} escalates"
+    never = [
+        (
+            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"max_age_days": "30"}}},
+            "a looser override",
+        ),
+        (
+            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"max_age_days": "0"}}},
+            "a red-proof override",
+        ),
+        (
+            {"event_name": "workflow_dispatch", "ref": "refs/heads/feature", "event": {"inputs": {}}},
+            "a branch dispatch",
+        ),
+        ({"event_name": "schedule", "ref": "refs/heads/feature"}, "a run off main"),
+        ({"event_name": "pull_request", "ref": "refs/pull/1/merge"}, "a pull_request run"),
+        ({"event_name": "push", "ref": main}, "a push run"),
+    ]
+    for github, what in never:
+        assert not _decides(resolve["if"], github), (
+            f"{what} can close the freshness alert while the scheduled bound may still be red"
+        )
+
+
+def test_the_reproof_alert_closes_only_on_a_full_run_of_main() -> None:
+    """#876 W3, mutation-reproof's half. The workflow also runs on pull_request,
+    where it re-proves only what the PR touched on a branch: that run must never
+    touch issues, and the `issues: write` grant must never reach its steps."""
+    workflow = yaml.safe_load(source(REPROOF))
+    assert workflow["env"]["ESCALATION_TITLE"] == "mutation-reproof is red: a declared guard is inert"
+    assert workflow["permissions"] == {"contents": "read"}, "the workflow-level grant reaches the PR-triggered steps"
+    assert "permissions" not in job(REPROOF, "reproof"), "the PR-triggered reproof job must not hold its own grant"
+
+    escalate, resolve = job(REPROOF, "escalate"), job(REPROOF, "resolve")
+    for spec, action in ((escalate, "open"), (resolve, "resolve")):
+        assert spec["needs"] == "reproof"
+        assert spec["permissions"] == {"contents": "read", "issues": "write"}, (
+            f"the {action} job's grant is {spec['permissions']}"
+        )
+        writers = [item for item in spec["steps"] if ESCALATE_TOOL in str(item.get("run", ""))]
+        assert len(writers) == 1, f"the {action} job has {len(writers)} steps calling the tool"
+        _assert_calls_the_tool(writers[0], action, f"reproof {action}")
+
+    main = "refs/heads/main"
+    for github in ({"event_name": "schedule", "ref": main}, {"event_name": "workflow_dispatch", "ref": main}):
+        assert _decides(resolve["if"], github), f"a green {github['event_name']} run on main no longer closes"
+        assert not _decides(resolve["if"], github, succeeded=False)
+        assert _decides(escalate["if"], github, succeeded=False)
+    for github in (
+        {"event_name": "pull_request", "ref": "refs/pull/1/merge"},
+        # The event guard must hold on its own, not lean on the ref guard.
+        {"event_name": "pull_request", "ref": main},
+        {"event_name": "workflow_dispatch", "ref": "refs/heads/feature"},
+    ):
+        assert not _decides(resolve["if"], github), f"{github} can close the reproof alert"
+        if github["event_name"] == "pull_request":
+            assert not _decides(escalate["if"], github, succeeded=False), "a red PR run files an issue"
+
+
+def test_a_red_main_push_files_an_issue_and_a_green_one_closes_it() -> None:
+    """#876 W12: a red ci-required on main alerted nobody until the next release
+    attempt (2026-09-16: #868 on top of #869, fixed by #873).
+
+    workflow_run runs with a write token, so the shape is a security property as
+    much as a behavioural one: only a completed ci-required run on main, only a
+    push event (a fork PR from its own `main` matches the branch filter too),
+    nothing from the triggering run spliced into a shell, and no grant beyond
+    reading, reading runs, and writing issues.
+    """
+    on = triggers(MAIN_HEALTH)
+    assert set(on) == {"workflow_run"}, f"main-health triggers on {sorted(on)}; it reports on ci-required only"
+    required_name = yaml.safe_load(source(REQUIRED))["name"]
+    assert on["workflow_run"] == {"workflows": [required_name], "types": ["completed"], "branches": ["main"]}, (
+        f"main-health listens to {on['workflow_run']}, not to completed {required_name!r} runs on main"
+    )
+
+    workflow = yaml.safe_load(source(MAIN_HEALTH))
+    assert workflow["permissions"] == {"contents": "read", "actions": "read", "issues": "write"}
+    assert workflow["env"]["ESCALATION_TITLE"] == "main is red: ci-required failed on push"
+    assert workflow["concurrency"]["cancel-in-progress"] is False, "an open and a close must not cancel each other"
+    jobs = workflow["jobs"]
+    assert list(jobs) == ["report"], f"main-health has jobs {sorted(jobs)}"
+    report = jobs["report"]
+    assert "permissions" not in report, "a job-level grant would replace the pinned workflow grant"
+
+    # Every case carries head_branch "main": that is what the trigger's branch
+    # filter already guaranteed, so the job guard must decide on the EVENT.
+    for event in ("pull_request", "workflow_dispatch", "merge_group", "schedule"):
+        github = {"event": {"workflow_run": {"event": event, "head_branch": "main"}}}
+        assert not _decides(report.get("if"), github), (
+            f"a {event} run of ci-required on a branch named main files or closes the red-main issue"
+        )
+    assert _decides(report.get("if"), {"event": {"workflow_run": {"event": "push", "head_branch": "main"}}})
+
+    checkout = [item for item in report["steps"] if "actions/checkout" in str(item.get("uses", ""))]
+    assert len(checkout) == 1 and "ref" not in (checkout[0].get("with") or {}), (
+        "the privileged job must run the default branch's tool, never the triggering commit's"
+    )
+    assert checkout[0]["with"].get("persist-credentials") is False
+
+    for item in report["steps"]:
+        assert "${{" not in str(item.get("run", "")), (
+            f"step {item.get('name')!r} interpolates an expression into its shell — commit text is attacker-shaped; "
+            f"pass it through env"
+        )
+    event_env = {key: value for key, value in report["env"].items() if "github.event" in str(value)}
+    assert {"HEAD_SHA", "COMMIT_MESSAGE", "RUN_URL"} <= set(event_env), (
+        f"the body must name the head SHA, the commit and the run, through env; env carries {sorted(event_env)}"
+    )
+
+    open_step = step(MAIN_HEALTH, "File the red-main issue")
+    resolve_step = step(MAIN_HEALTH, "Resolve the red-main issue")
+    _assert_calls_the_tool(open_step, "open", "main-health open")
+    _assert_calls_the_tool(resolve_step, "resolve", "main-health resolve")
+    for conclusion in ("failure", "success", "cancelled", "skipped", "timed_out", "neutral"):
+        github = {"event": {"workflow_run": {"event": "push", "head_branch": "main", "conclusion": conclusion}}}
+        assert _decides(open_step["if"], github) is (conclusion == "failure"), f"open on {conclusion}"
+        assert _decides(resolve_step["if"], github) is (conclusion == "success"), f"resolve on {conclusion}"
+
+
+def test_the_condition_evaluator_keeps_githubs_precedence() -> None:
+    """The evaluator above is what the three lifecycle tests trust, so its one
+    translation hazard is pinned: `!x == 'y'` is `(!x) == 'y'` in GitHub."""
+    assert _decides("!github.x == 'y'", {"x": ""}) is False
+    assert _decides("!github.x", {}) is True
+    assert _decides("github.a != 'b'", {"a": "c"}) is True
+    assert _decides("${{ success() && github.a == 'b' }}", {"a": "b"}) is True
+    assert _decides(None, {}) is True
+    with pytest.raises(AssertionError, match="unsupported"):
+        _decides("contains(github.a, 'b')", {})
 
 
 # --- issue-close-guard -------------------------------------------------------

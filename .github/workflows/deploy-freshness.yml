@@ -57,6 +57,10 @@ jobs:
   freshness:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # One definition for the escalate and resolve steps at the end: the
+      # issue a red leg opens is the issue its next green run closes.
+      ESCALATION_TITLE: "deploy-freshness is red: ${{ matrix.environment }} failed its standing checks"
     strategy:
       fail-fast: false
       matrix:
@@ -137,36 +141,51 @@ jobs:
 
       # #680: same escalation as mutation-reproof, same reasons — the 08-24
       # reproof failure sat 4 days because a red scheduled run pages nobody, and
-      # this workflow has the identical failure surface. Matrix legs share one
-      # issue through the title search. Reports, never rescues: the run's
-      # conclusion is already failure when this fires (acceptance 3).
+      # this workflow has the identical failure surface. Reports, never rescues:
+      # the run's conclusion is already failure when this fires (acceptance 3).
+      # tools/escalate_issue.py owns the open-or-comment rule (exact-title
+      # match; a failed LIST never falls through to create). The title is
+      # PER ENVIRONMENT (job env above): the legs run in parallel, and an
+      # env-agnostic title let staging comment on production's issue, or both
+      # legs file one each on first breakage — the red-proof produced #687 and
+      # #688 from one forced failure. No pull_request trigger here, so the
+      # workflow-level issues grant stays acceptable.
       - name: Escalate a scheduled failure to an issue
         if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         env:
           GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ matrix.environment }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TITLE="deploy-freshness is red: ${{ matrix.environment }} failed its standing checks"
+          set -euo pipefail
           {
-            echo "Scheduled/dispatched run failed for ${{ matrix.environment }}: $RUN_URL"
+            echo "Scheduled/dispatched run failed for $ENVIRONMENT: $RUN_URL"
             echo
-            echo "Filed automatically (#680). One open issue per breakage: reruns comment here instead of filing again."
+            echo "Filed automatically (#680). One open issue per breakage: reruns comment here instead of filing again; the next green scheduled run closes it (#876)."
           } > body.md
-          # Search by the FULL per-environment title: the two matrix legs run in
-          # parallel, and an env-agnostic search let the staging leg comment on
-          # production's issue — or both legs create one each on first breakage
-          # (exactly what the red-proof produced: #687 and #688 from one forced
-          # failure). Per-environment issues are per-breakage, which is what
-          # #680 asks for; the search just has to agree.
-          # A failed LIST must not fall through to create — a rate limit would
-          # turn one breakage into duplicates (review). No pull_request trigger
-          # here, so the workflow-level issues grant stays acceptable.
-          if ! EXISTING=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number'); then
-            echo "::warning::issue listing failed; skipping escalation — the run is already red"
-            exit 0
-          fi
-          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-            gh issue comment -R "${{ github.repository }}" "$EXISTING" --body-file body.md
-          else
-            gh issue create -R "${{ github.repository }}" --title "$TITLE" --body-file body.md
-          fi
+          python3 tools/escalate_issue.py open --title "$ESCALATION_TITLE" --body-file body.md
+
+      # #876 (W3): the other half. #818 stayed open two days after staging was
+      # fresh again, so an open alert had stopped meaning "broken now". A green
+      # leg closes its own environment's issue; nothing open is a no-op.
+      # Only a run that measured with the SCHEDULED bounds may close: a
+      # dispatch with `max_age_days` set is a red-proof or an experiment, and
+      # a looser override (say 30) would be green while the real 3-day bound is
+      # still red — closing a live alert. A dispatch with the input empty runs
+      # exactly the schedule's checks, so it may close (that is the drill's
+      # second half). main only: a dispatch on a branch runs that branch's
+      # matrix, whose bounds are not the ones the alert was raised under.
+      - name: Resolve the issue once the checks are green
+        if: success() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !github.event.inputs.max_age_days))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ matrix.environment }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Resolved: every standing check for $ENVIRONMENT passed at the scheduled bounds in $RUN_URL"
+            echo
+            echo "Closed automatically (#876). A later failure files a new issue."
+          } > body.md
+          python3 tools/escalate_issue.py resolve --title "$ESCALATION_TITLE" --body-file body.md
