@@ -844,6 +844,10 @@ def reconcile_financial_fact_entries(
     unit = financial_fact_unit(primary.payload)
     fields: dict[str, dict[str, Any]] = {}
     outcomes: list[str] = []
+    # The subject's origin groups are the ones that took part in at least one field's
+    # comparison; an origin excluded from every field (another currency, no comparable
+    # period) has not corroborated anything and is not counted as if it had.
+    participating = {primary.origin_group}
     for field_name, (value, period_end) in sorted(primary_financial_fields(primary.payload).items()):
         cell = ReconciliationCell(
             requirement_id=f"data-requirement:{canonical_sha256({'requirement': 'financial-fact:v1'})}",
@@ -861,6 +865,7 @@ def reconcile_financial_fact_entries(
             other = corroborating_financial_value(entry.payload, field_name, period_end)
             if other is not None:
                 assertions.append(_financial_assertion(cell, entry, other))
+                participating.add(entry.origin_group)
         result = reconcile_source_assertions(
             cell=cell, assertions=tuple(assertions), policy=FINANCIAL_FACT_RECONCILIATION_POLICY, cutoff=cutoff
         )
@@ -884,11 +889,7 @@ def reconcile_financial_fact_entries(
         overall = ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS.value
     else:
         overall = ReconciliationOutcome.UNAVAILABLE.value
-    return {
-        "outcome": overall,
-        "origin_groups": len({entry.origin_group for entry in entries}),
-        "fields": fields,
-    }
+    return {"outcome": overall, "origin_groups": len(participating), "fields": fields}
 
 
 def _financial_assertion(cell: ReconciliationCell, entry: FinancialFactEntry, value: Decimal) -> SourceAssertion:

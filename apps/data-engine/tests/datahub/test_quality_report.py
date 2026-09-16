@@ -793,6 +793,7 @@ def test_a_second_origin_at_another_period_is_insufficient_never_a_conflict() ->
     )
     assert cell["outcome"] == "insufficient_independent_origins"
     assert all(g["outcome"] == "insufficient_independent_origins" for g in cell["fields"].values())
+    assert cell["origin_groups"] == 1, "an origin that compared nothing is not counted as a corroborator"
 
 
 def test_one_conflicting_field_abstains_the_subject() -> None:
@@ -861,7 +862,7 @@ def test_the_cell_unit_is_the_primarys_currency_and_another_currency_never_corro
         [_financial_entry("sec", eur_primary), _financial_entry("moomoo", hkd_second)],
         cutoff=cutoff,
     )
-    assert mismatched["outcome"] == "insufficient_independent_origins"
+    assert mismatched["outcome"] == "insufficient_independent_origins" and mismatched["origin_groups"] == 1
     assert all(f["origin_groups"] == 1 and f["unit"] == "EUR" for f in mismatched["fields"].values())
     legacy = reconcile_financial_fact_entries(
         "listing:xnas:t",
