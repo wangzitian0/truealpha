@@ -385,6 +385,24 @@ def test_only_startup_failures_is_stale_not_new() -> None:
     assert "failed at startup" in detail
 
 
+def test_a_startup_failure_verdict_does_not_depend_on_the_file_history() -> None:
+    """Review: the verdict is already decided by the runs, so a failing history
+    read must neither be made nor turn it UNVERIFIABLE."""
+    gh = FakeGitHub()
+    gh.add("broken.yml", _workflow_text("0 7 * * *"), runs=[_run(HOUR, conclusion="startup_failure")])
+    gh.fail[f"/repos/{REPO}/commits"] = (1, "gh: Server Error (HTTP 502)")
+    assert _status(gh, "broken.yml") == "STALE"
+    assert not any(url.startswith(f"/repos/{REPO}/commits") for url in gh.calls)
+
+
+def test_a_ticking_workflow_never_reads_the_file_history() -> None:
+    gh = FakeGitHub()
+    gh.add("daily.yml", _workflow_text("0 7 * * *"), runs=[_run(HOUR)])
+    gh.add("late.yml", _workflow_text("0 7 * * *"), runs=[_run(9 * DAY)])
+    _verdicts(gh)
+    assert not any(url.startswith(f"/repos/{REPO}/commits") for url in gh.calls)
+
+
 def test_a_run_in_progress_is_a_tick() -> None:
     gh = FakeGitHub()
     gh.add("daily.yml", _workflow_text("0 7 * * *"), runs=[_run(timedelta(minutes=3), conclusion=None)])

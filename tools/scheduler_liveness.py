@@ -282,7 +282,8 @@ def largest_gap(crons: Sequence[Cron], now: datetime, window: timedelta = WINDOW
         fires.add(min(after))
     ordered = sorted(fires)
     if len(ordered) < 2:
-        raise CronError(f"{[cron.expression for cron in crons]} fire fewer than twice in {HORIZON_DAYS} days")
+        listed = ", ".join(repr(cron.expression) for cron in crons)
+        raise CronError(f"the schedule {listed} fires fewer than twice in {HORIZON_DAYS} days")
     return max(later - earlier for earlier, later in zip(ordered, ordered[1:]))
 
 
@@ -510,7 +511,6 @@ def check_workflow(
             # The second witness: the unfiltered listing (see the module docstring).
             everything, _ = _page(f"/repos/{repo}/actions/workflows/{workflow_id}/runs", "workflow_runs", gh)
             ticks = _ticks([*runs, *everything], path)
-        changed = _last_changed(repo, path, branch, gh) if ticks.newest is None else None
     except ApiError as error:
         return Verdict(repo, path, UNVERIFIABLE, f"cannot verify: {error}, {budget}")
 
@@ -526,8 +526,13 @@ def check_workflow(
             STALE,
             f"every scheduled run read ({ticks.startup_failures}) failed at startup, none ran a job, {budget}",
         )
-    assert changed is not None
-    since = now - changed
+    # Only a workflow with no scheduled run at all needs its file's age, so only
+    # it depends on the history read (review: a startup-failure verdict is
+    # already decided and must not turn UNVERIFIABLE on an unrelated read).
+    try:
+        since = now - _last_changed(repo, path, branch, gh)
+    except ApiError as error:
+        return Verdict(repo, path, UNVERIFIABLE, f"cannot verify: {error}, {budget}")
     if since > bound:
         return Verdict(repo, path, NEVER, f"never ran on schedule, file last changed {human(since)} ago, {budget}")
     return Verdict(repo, path, OK, f"no scheduled run yet, file last changed {human(since)} ago, {budget}")
