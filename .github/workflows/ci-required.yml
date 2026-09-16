@@ -39,7 +39,7 @@ permissions:
 # HEAD itself is green, so the evidence D2's tag_verified needs is always the
 # run that survived.
 concurrency:
-  group: ci-required-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  group: ci-required-${{ (github.event_name == 'push' && github.ref_type != 'tag') && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
