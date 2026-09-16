@@ -26,10 +26,14 @@
  * it from `checkRoute`. Add an identity-dependent property (#371's nav
  * membership, #540's sign-out journey) by adding a pass in the driver at the
  * bottom. Append — do not restructure; three issues share this file.
+ * The sign-out journey is the one exception. Since #811 it lives in
+ * `sign-out-journey.mjs`, because this file launches a browser when it is
+ * imported and `tests/sign-out-journey.test.ts` needs to import the journey.
  */
 
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
+import { walkSignOutJourney } from "./sign-out-journey.mjs";
 
 const BASE = process.env.TA_BASE_URL;
 const EMAIL = process.env.TA_EMAIL;
@@ -271,66 +275,6 @@ async function walkRoutes(browser, { role, email, password }) {
   return failures;
 }
 
-/** #540: the session's other end, walked. The logout endpoint has worked since
- * #368 and nothing called it, because #368's acceptance covered only the login
- * half of the lifecycle — a criterion that never named the state transition it
- * was missing. This asserts the whole transition: control present, click it,
- * the cookie is gone, and the next protected request bounces to /login. */
-async function walkSignOutJourney(browser, { email, password }) {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const login = await context.request.post(`${BASE}/api/auth/login`, { data: { email, password } });
-  if (login.status() !== 200) {
-    console.error(`login failed for the sign-out journey: ${login.status()}`);
-    await context.close();
-    process.exit(2);
-  }
-  const page = await context.newPage();
-  const problems = [];
-
-  await gotoStable(page, `${BASE}/research`);
-  const control = page.locator("[data-sign-out]");
-  if ((await control.count()) === 0) {
-    problems.push("no sign-out control on an authenticated page");
-  } else {
-    // #811: `click()` auto-waits for actionability, not for React to have attached the
-    // handler (`SignOutButton` is a client component; its `onClick` exists only after
-    // hydration). A click that lands before that does nothing, the 15 s wait times out, and
-    // BOTH assertions below fire — a security claim that is false, on ~1 in 5 staging
-    // deploys (v0.0.53 run 34482191082, v0.0.60 run 34951072929). So: click, give it a
-    // bounded wait, and click once more if the URL has not moved. A real sign-out
-    // regression still fails the second miss; only the race is gone.
-    const signedOut = () => new URL(page.url()).pathname.startsWith("/login");
-    for (let attempt = 0; attempt < 2 && !signedOut(); attempt += 1) {
-      try {
-        await control.first().click({ timeout: 5000 });
-      } catch (error) {
-        // The one click failure that is not a defect: the first click DID sign out, and the
-        // navigation detached the control between the wait and this click. Anything else
-        // (not visible, not enabled, a closed context) is a real finding and surfaces.
-        if (!signedOut()) throw error;
-      }
-      await page.waitForURL(/\/login/, { timeout: attempt === 0 ? 8000 : 15000 }).catch(() => {});
-    }
-
-    const cookies = await context.cookies();
-    if (cookies.some((c) => c.name === "truealpha_session" && c.value !== "")) {
-      problems.push("the session cookie survived sign-out");
-    }
-    await gotoStable(page, `${BASE}/research`);
-    if (!new URL(page.url()).pathname.startsWith("/login")) {
-      problems.push(`a protected route still rendered after sign-out (${new URL(page.url()).pathname})`);
-    }
-  }
-
-  await context.close();
-  if (problems.length > 0) {
-    console.log(`FAIL [sign-out] — ${problems.join("; ")}`);
-    return 1;
-  }
-  console.log("ok   [sign-out] control present, cookie cleared, protected route bounces to /login");
-  return 0;
-}
-
 const browser = await chromium.launch();
 // Two passes. The administrator pass asserts (c) across the whole frozen tree —
 // it is the only identity that can see operator chrome at all. The member pass
@@ -340,7 +284,9 @@ let failures = await walkRoutes(browser, { role: "administrator", email: EMAIL, 
 if (MEMBER_EMAIL) {
   failures += await walkRoutes(browser, { role: "member", email: MEMBER_EMAIL, password: PASSWORD });
 }
-failures += await walkSignOutJourney(browser, { email: EMAIL, password: PASSWORD });
+// #540/#811: the sign-out journey lives in its own module so a test can drive it
+// against a fake browser. It logs in once more, for its own session.
+failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
 await browser.close();
 
 if (failures > 0) {
