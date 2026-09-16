@@ -54,6 +54,7 @@ FRESHNESS = "deploy-freshness.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
+NIGHTLY = "nightly-dagster-liveness.yml"
 WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
 
@@ -1014,11 +1015,23 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
         "dagster_liveness_required must default closed — an unset input on a direct call must not silently run the job"
     )
 
-    nightly = triggers(PYTHON).get("schedule")
-    assert nightly and nightly[0].get("cron"), (
-        "ci-python.yml no longer has its own schedule trigger — #855 A4's nightly coverage for "
-        "the PRs the narrow filter does not match is gone"
+    # The nightly is a scheduled CALLER, and ci-python.yml stays `workflow_call`-only: a
+    # reusable workflow that also declares its own triggers and permissions gets NO run on a
+    # PR — #878's first push never started ci-required at all, with no error anywhere.
+    assert set(triggers(PYTHON)) == {"workflow_call"}, (
+        f"ci-python.yml declares {sorted(triggers(PYTHON))} — a reusable workflow with its own "
+        f"triggers silently gets no PR run (#878); the nightly belongs in {NIGHTLY}"
     )
+    nightly = triggers(NIGHTLY)
+    assert nightly.get("schedule") and nightly["schedule"][0].get("cron"), (
+        f"{NIGHTLY} no longer has a schedule — #855 A4's nightly coverage for the PRs the "
+        f"narrow filter does not match is gone"
+    )
+    assert "workflow_dispatch" in nightly, f"{NIGHTLY} must be runnable by hand for a drill"
+    caller = job(NIGHTLY, "python")
+    assert caller["uses"] == "./.github/workflows/ci-python.yml"
+    assert caller["with"]["dagster_liveness_required"] is True, "the nightly must force the liveness job on"
+    assert caller["permissions"].get("actions") == "write", "setup-uv's cache saves only with actions: write (#645)"
 
     liveness = job(PYTHON, "dagster-code-server-liveness")
     condition = str(liveness["if"])
