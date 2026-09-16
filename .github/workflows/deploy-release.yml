@@ -38,8 +38,10 @@ concurrency:
 
 jobs:
   request:
+    # #855/#860: this job no longer caches anything — the Playwright cache
+    # moved with the walk step to walk-release.yml — so it no longer needs
+    # `actions: write`. The workflow-level grant stays `actions: read` only.
     permissions:
-      actions: write   # save the Playwright cache; read-only cannot populate it
       contents: read
       pull-requests: read
     runs-on: ubuntu-latest
@@ -209,6 +211,26 @@ jobs:
                 echo "::error::staging receipt must be this repo's successful 'Deploy staging ${version_ref}' run"
                 exit 1
               }
+            # #855/#860: `staging_run_url` above proves the staging DEPLOY
+            # succeeded; since the walk moved to its own deferred workflow
+            # (walk-release.yml, triggered by THIS run's own completion) it is
+            # no longer part of that run and this no longer proves the surface
+            # was WALKED. This is informational, not a gate: the walk can
+            # legitimately still be in flight seconds after a staging deploy
+            # finishes (workflow_run has to fire first), and hard-blocking here
+            # would reopen the #560 deadlock this whole design exists to avoid.
+            # `tools/cut_release.sh` is what actually stands between a release
+            # and `--prod` when the ceremony is used — it requires BOTH the
+            # staging deploy and its walk to be green before it will even print
+            # the `--prod` command. This is a second, best-effort signal for a
+            # direct dispatch that bypasses the ceremony.
+            if uv run --no-sync python tools/walk_evidence.py \
+                --deploy-type staging --release "$version_ref" >walk_note.log 2>&1; then
+              cat walk_note.log
+            else
+              echo "::warning::promoting ${version_ref} to prod without confirmed staging walk evidence: $(tail -n1 walk_note.log)"
+              cat walk_note.log >>"$GITHUB_STEP_SUMMARY"
+            fi
           fi
 
           # infra2#508: watermark/ambiguity-guard/log-content-verification dispatch
@@ -233,9 +255,6 @@ jobs:
       # which is what the runtime actually reports; tools/health_check.py now
       # fails immediately and says so if the two sides ever disagree in kind
       # again, instead of exhausting a 24-attempt budget on an impossible match.
-      # The surface walk below runs for BOTH environments, so bun is not gated
-      # on deploy_type the way the prod-only health confirmation is.
-      - uses: oven-sh/setup-bun@v2
       - name: Confirm the staging release carries its data engine
         if: ${{ inputs.deploy_type == 'staging' && steps.request.outputs.json != '' }}
         env:
@@ -292,104 +311,23 @@ jobs:
             36 \
             --expect-data-engine-tag "$EXPECTED_RELEASE"
 
-      # #560 (W4): the health gate proves the release is LIVE; this proves it is
-      # USABLE. Every web property #494/#371/#495/#540 guard is asserted in
-      # ci-web against a build, and was true nowhere a person is — both
-      # environments served a release from two weeks earlier while the
-      # properties were green on main. A release is not verified until the same
-      # suite has walked the deployed surface, which is also the closure
-      # condition rule 6 already implies for those four issues.
+      # #855/#860: the surface walk used to run HERE, inside this job, after
+      # the release was already live and healthy — so a walk flake (#811, ~1
+      # in 5 until #853) failed this entire run, including the health/data-
+      # engine confirmation that had already succeeded, and the only recovery
+      # was re-dispatching the whole 5-6 min infra2 deploy for a defect that
+      # had nothing to do with the deploy.
       #
-      # Unconfigured credentials do NOT fail the release, and that is a
-      # correction to how this shipped. A prod release requires this repo's own
-      # successful "Deploy staging <tag>" run, so a hard failure here blocked
-      # EVERY prod release — including the one that would carry the fix — which
-      # is precisely the "finished work stays invisible" outcome #560 exists to
-      # prevent. Blocking the lane on a setup deficiency punishes the wrong
-      # thing.
+      # The walk now lives in its own workflow, `walk-release.yml`, triggered
+      # by THIS workflow's own `workflow_run` completion (gated on
+      # `conclusion == 'success'`, so a failed or cancelled deploy never gets
+      # walked). This run's own green now means "deployed and healthy" — it no
+      # longer means "and the walk that happened to run alongside it also
+      # passed" (docs/release-protocol.md). Whether the surface was ever
+      # walked stays the STANDING question `tools/walk_evidence.py` answers
+      # daily in deploy-freshness.yml, unchanged in spirit from #560: it now
+      # reads walk-release.yml's runs instead of this one's.
       #
-      # The two questions are separated instead. This run answers "is it
-      # deployed". Whether the surface was ever walked is a STANDING question,
-      # answered daily by tools/walk_evidence.py in deploy-freshness.yml, which
-      # is red until the deployed release has a successful walk. Same pressure,
-      # no deadlock, and neither signal has to mean two things.
-      # Credentials decide whether the walk RUNS. It must not run-and-pretend:
-      # an unconfigured walk that exits 0 gives the step a `success` conclusion,
-      # and tools/walk_evidence.py reads exactly that — so the standing check
-      # built to keep this visible was satisfied by the case it exists to catch.
-      # Caught by verifying a real staging release rather than the workflow file.
-      #
-      # `secrets` is not reliably available in a step-level `if`, so it is
-      # reduced to an output here.
-      - name: Are the surface-walk credentials configured
-        id: walk_credentials
-        env:
-          TA_EMAIL: ${{ secrets.E2E_WALK_EMAIL }}
-          TA_MEMBER_EMAIL: ${{ secrets.E2E_WALK_MEMBER_EMAIL }}
-          TA_PASSWORD: ${{ secrets.E2E_WALK_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -n "${TA_EMAIL}" ] && [ -n "${TA_PASSWORD}" ] && [ -n "${TA_MEMBER_EMAIL}" ]; then
-            echo "ready=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >>"$GITHUB_OUTPUT"
-            echo "::error::post-release surface verification is UNCONFIGURED — this release is \
-          deployed but unverified. Add repository secrets E2E_WALK_EMAIL, E2E_WALK_PASSWORD and \
-          E2E_WALK_MEMBER_EMAIL. deploy-freshness reports this daily until a deployed release \
-          has a successful walk (#560)."
-            {
-              echo "### Surface walk: UNVERIFIED"
-              echo
-              echo "Credentials are not configured, so nothing confirmed a person can use this"
-              echo "release. The walk step below is SKIPPED, which \`tools/walk_evidence.py\`"
-              echo "reads as missing evidence — deliberately, so an absent walk cannot pass for"
-              echo "a successful one."
-            } >>"$GITHUB_STEP_SUMMARY"
-          fi
-
-      # Skipped when unconfigured — conclusion "skipped", never "success". A real
-      # walk failure DOES fail the release: the deadlock this design avoids came
-      # from the unconfigured case, not from a broken surface, and a release whose
-      # surface is broken should not become prod evidence.
-      # The walk step measured 116s of a ~480s release, and nearly all of it was
-      # `playwright install` pulling a 110MB Chromium on every single run. The
-      # whole workflow had no cache of any kind. Keyed on the Playwright version
-      # in the lockfile, so a version bump misses the cache and re-downloads
-      # rather than running the wrong browser.
-      # actions/cache needs `actions: write` to SAVE. The workflow-level grant is
-      # `actions: read`, so without the job-level grant below the cache restores
-      # and never populates — the optimisation would report as working and do
-      # nothing, which is worse than not adding it (review).
-      - name: Cache the Playwright browser
-        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('apps/app-web/bun.lock') }}
-      - name: Walk the deployed surface
-        if: ${{ steps.walk_credentials.outputs.ready == 'true' }}
-        env:
-          TA_BASE_URL: ${{ inputs.deploy_type == 'prod' && 'https://truealpha.club' || 'https://truealpha-staging.truealpha.club' }}
-          TA_EMAIL: ${{ secrets.E2E_WALK_EMAIL }}
-          TA_MEMBER_EMAIL: ${{ secrets.E2E_WALK_MEMBER_EMAIL }}
-          TA_PASSWORD: ${{ secrets.E2E_WALK_PASSWORD }}
-        working-directory: apps/app-web
-        run: |
-          set -euo pipefail
-          bun install --frozen-lockfile
-          bunx playwright install --with-deps chromium
-
-          # #698: the first navigation raced the container swap. The health
-          # gate above polls llm-service, a DIFFERENT container from app-web,
-          # so nothing was warming the pages the walk opens. The warm-up lives
-          # in a script because a shell function inlined here can only be
-          # checked by slicing YAML text — and the first attempt at that
-          # sliced the wrong region and passed anyway (review). It verifies
-          # nothing and cannot fail; the walk below is the gate.
-          # $GITHUB_WORKSPACE, not a bare relative path: this step sets
-          # working-directory: apps/app-web (the walk needs it), so `tools/…` resolved to
-          # apps/app-web/tools/ and every deploy died with exit 127 "No such file or
-          # directory" — for a script that was present at the repo root the whole time.
-          "$GITHUB_WORKSPACE/tools/warm_surface.sh" "$TA_BASE_URL" / /research/rankings
-
-          node e2e/walk-tree.mjs
+      # A walk flake now costs a walk re-run
+      # (`gh workflow run walk-release.yml -f deploy_type=... -f version_ref=...`),
+      # never a deploy re-dispatch.
