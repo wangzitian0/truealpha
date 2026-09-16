@@ -809,16 +809,20 @@ class SourceGateway:
     sleep: Callable[[float], None] = time.sleep
     now: Callable[[], datetime] = _utcnow
     environment: str | None = None
+    #: The shared rate-window read. Other processes' calls are committed rows the
+    #: autocommit ledger connection sees; this gateway's own sit uncommitted in the caller's
+    #: transaction and are paced by the gate's local window instead.
+    recent_calls: Callable[[str, datetime], tuple[int, datetime | None]] | None = ledger_window
     _gate: CapacityGate = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # The window is paced locally only: this gateway's rows sit in the caller's open
-        # transaction, which is where its own budget read finds them.
+        # The budget is read on the caller's connection, where this gateway's own
+        # uncommitted rows are visible alongside every committed one.
         self._gate = CapacityGate(
             capacities=self.capacities,
             environment=self.environment,
             spent_since=self._recorded_since,
-            recent_calls=None,
+            recent_calls=self.recent_calls,
             clock=self.clock,
             sleep=self.sleep,
             now=self.now,

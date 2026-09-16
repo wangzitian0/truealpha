@@ -654,6 +654,32 @@ def test_the_rate_window_is_the_one_every_process_writes() -> None:
     assert slept == [pytest.approx(0.51)], "waited for the older call to leave the window, no longer"
 
 
+def test_the_explicit_gateway_waits_for_other_processes_in_the_shared_window(call_ledger) -> None:
+    """Review on #900: the standards lane's `SourceGateway` paces against the ledger's
+    window too, so it cannot add its 8/s to a capture tick's 8/s on the same SEC seat."""
+    call_ledger.extend(
+        gateway.CallRecord(source="sec", endpoint="x", caller="tick", called_at=_NOW - timedelta(seconds=age), ok=True)
+        for age in (0.5, 0.25)
+    )
+    clock, now, slept = [0.0], [_NOW], []
+
+    def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        clock[0] += seconds
+        now[0] += timedelta(seconds=seconds)
+
+    gw = gateway.SourceGateway(
+        _Ledger(),
+        caller="standards",
+        capacities={"sec": gateway.SourceCapacity("sec", 1.0, 2, 100)},
+        clock=lambda: clock[0],
+        sleep=sleep,
+        now=lambda: now[0],
+    )
+    assert gw.call("sec", "submissions", lambda: "ok") == "ok"
+    assert slept == [pytest.approx(0.51)]
+
+
 def test_a_window_that_never_drains_is_refused_rather_than_waited_on_forever() -> None:
     clock = [0.0]
     gate = gateway.CapacityGate(
