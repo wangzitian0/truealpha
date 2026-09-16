@@ -48,9 +48,7 @@ _WALK_OK = [{"name": "Walk the deployed surface", "conclusion": "success"}]
 
 
 def test_a_walked_release_passes(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = check_walk_evidence(
-        "prod", "v0.0.20", gh_api=_api([_run(1, "Walk Deploy prod v0.0.20")], _WALK_OK)
-    )
+    exit_code = check_walk_evidence("prod", "v0.0.20", gh_api=_api([_run(1, "Walk Deploy prod v0.0.20")], _WALK_OK))
     assert exit_code == 0
     assert "walked its surface" in capsys.readouterr().out
 

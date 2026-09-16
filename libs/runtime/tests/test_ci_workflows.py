@@ -214,7 +214,11 @@ def test_the_release_no_longer_runs_the_surface_walk_itself() -> None:
     (#811) costs a walk re-run, not a re-dispatch of the whole 5-6 min infra2
     deploy. deploy-release.yml's own green must no longer depend on it."""
     workflow = source(RELEASE)
-    for name in ("Are the surface-walk credentials configured", "Cache the Playwright browser", "Walk the deployed surface"):
+    for name in (
+        "Are the surface-walk credentials configured",
+        "Cache the Playwright browser",
+        "Walk the deployed surface",
+    ):
         with pytest.raises(WorkflowContractError, match="has no step named"):
             step(RELEASE, name)
     assert "walk-release.yml" in workflow, "the release run must point at where the walk actually lives now"
@@ -302,9 +306,7 @@ def test_the_walk_checks_out_the_released_tag_not_whatever_main_has_become() -> 
     """The tag is what deploy-release.yml actually built and deployed; main can
     advance in the minutes this workflow waits to be triggered."""
     checkout = next(
-        spec
-        for spec in job(WALK, "walk")["steps"]
-        if str(spec.get("uses", "")).startswith("actions/checkout")
+        spec for spec in job(WALK, "walk")["steps"] if str(spec.get("uses", "")).startswith("actions/checkout")
     )
     assert checkout["with"]["ref"] == "refs/tags/${{ needs.resolve.outputs.version_ref }}"
 
