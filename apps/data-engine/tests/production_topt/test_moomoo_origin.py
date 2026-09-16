@@ -179,6 +179,28 @@ def test_the_settled_close_at_the_partition_is_accepted() -> None:
     assert quote.raw_bytes == raw, "the landed bytes are what was parsed"
 
 
+def test_the_settled_bar_carries_open_high_low_and_volume() -> None:
+    """The K-line bar is the regular session's (unadjusted, no extended hours), so every
+    field of it is an independent assertion for the fused bar, not only the close."""
+    quote = parse_settled_close(canonical_bytes(_SETTLED_WINDOW), partition=_PARTITION)
+    assert quote is not None
+    assert (quote.open, quote.high, quote.low, quote.volume) == (
+        Decimal("336.69"),
+        Decimal("340.19"),
+        Decimal("335.69"),
+        Decimal("41000000"),
+    )
+    assert all(isinstance(v, Decimal) for v in (quote.open, quote.high, quote.low, quote.volume))
+
+
+def test_a_bar_missing_a_field_asserts_nothing_for_it() -> None:
+    bar = {k: v for k, v in _bar("2026-07-29", 338.19).items() if k not in ("volume", "open")}
+    quote = parse_settled_close(canonical_bytes([bar]), partition=_PARTITION)
+    assert quote is not None and quote.close == Decimal("338.19")
+    assert quote.open is None and quote.volume is None
+    assert quote.high == Decimal("340.19")
+
+
 def test_a_bar_after_the_partition_is_refused() -> None:
     """The in-progress bar (#535): the cutoff is the last SETTLED session, so any later
     bar is the running one — or look-ahead on a replay. Neither may corroborate."""
