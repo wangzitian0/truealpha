@@ -27,19 +27,35 @@ permissions:
   contents: read
   pull-requests: read
 
-# The group key carries the ref AND the event, so a tag PUSH is alone in its own
-# group — which is what keeps `cancel-in-progress: true` safe here. The event is
-# load-bearing, not decoration: without it a manual workflow_dispatch on the
-# same tag ref shares the group and cancels the release run mid-publish
-# (review). Two dispatches still cancel each other, which is what you want. Main pushes DO now collapse: measured over the last 14
-# merges, 2 landed inside the ~6 min a main run takes, and each of those bursts
-# put ~16 extra jobs in the queue that every open PR was waiting behind. The
-# superseded run's verdict is not lost, only re-attributed: the newer run
-# covers the older SHA's code too, and cut_release refuses to tag until main
-# HEAD itself is green, so the evidence D2's tag_verified needs is always the
-# run that survived.
+# #708 measured 2 of the last 14 main merges colliding inside the ~6 min a main
+# run takes, and turned `cancel-in-progress` on for every event so the newer
+# run collapses the older one instead of ~16 extra jobs queueing in front of
+# every open PR. Re-measured 2026-09-16 (#860): 6 of 27 main-push runs were
+# cancelled — d7fafd59, e1cda5fb, a35bc1a3, 2ea74035, fbf5eb48, 57d25316 — 22%,
+# five times #708's rate. One of the six, 57d2531, was a run `cut_release` was
+# WAITING ON: it died with "finished non-green: cancelled" and the release
+# ceremony restarted from scratch instead of resuming. #708's "re-attributed,
+# not lost" reasoning holds for the CODE — the newer run does cover the older
+# SHA — but not for a caller blocked on that exact run's own conclusion, which
+# is precisely what a release ceremony, and every open PR queued behind main,
+# does. finance_report's `ci.yml` keys its push group by `github.sha` for
+# exactly this reason: every commit gets its own group, so main pushes never
+# share one and never cancel each other, by construction — no
+# `cancel-in-progress` heuristic required. The key below does the same for a
+# non-tag push.
+#
+# A tag push still keys on `github.ref` (unchanged from #708): its SHA is
+# always one main already ran and published green — `cut_release` refuses to
+# tag otherwise — so a tag run never needs isolating from main, only from
+# another run on the SAME tag ref, which the ref already gives it. The event
+# stays in the key for the reason #708 added it, unchanged: without it, a
+# manual workflow_dispatch on the same ref as a tag push shares the group and
+# cancels the release run mid-publish. Two workflow_dispatch runs on the same
+# ref, or two tag pushes, still cancel each other — that is still what you
+# want. `pull_request` is untouched: PR runs still collapse to their newest
+# push under `cancel-in-progress: true`.
 concurrency:
-  group: ci-required-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  group: ci-required-${{ (github.event_name == 'push' && github.ref_type != 'tag') && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:

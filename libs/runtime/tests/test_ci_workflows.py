@@ -960,24 +960,47 @@ def test_the_routing_probe_gets_a_base_not_an_endpoint() -> None:
     )
 
 
-def test_a_tag_run_can_never_be_cancelled_by_a_later_merge() -> None:
-    """Post-merge batching (#673) turned `cancel-in-progress` on for every
-    event, so main pushes collapse instead of each burst queueing ~16 extra
-    jobs in front of every open PR.
+def test_main_pushes_never_collide_and_a_tag_run_can_never_be_cancelled() -> None:
+    """#708 measured 2 of 14 main merges colliding and turned `cancel-in-progress`
+    on for every event, so main pushes collapse instead of each burst queueing
+    ~16 extra jobs in front of every open PR. Re-measured 2026-09-16 (#860): 6 of
+    27 main-push runs were cancelled (22%, five times #708's rate), and one of
+    them — 57d2531 — was a run `cut_release` was WAITING ON: it died mid-flight
+    with "finished non-green: cancelled" and the release ceremony restarted from
+    scratch instead of resuming. Collapsing collisions is not the same as
+    preventing them, and #708 did not measure what happens when the collision
+    kills a run something else is blocked on.
 
-    That is only safe because the group key carries `github.ref`, which puts
-    each tag alone in its own group. Flatten the key — a constant, or
-    `github.workflow` — and the tag run becomes cancellable by the next merge:
-    no images published for that version, and a release that fails after the
-    tag has already been pushed, which is the one step the protocol calls a
-    lock. So the two settings are asserted together, as the single property
-    they actually form.
+    So a non-tag push now keys its group by `github.sha`: each main commit gets
+    its own group, nothing else can ever share it, and `cancel-in-progress`
+    never has a second run in the group to cancel it with — main can no longer
+    cancel a run something else is waiting on, by construction, the same way
+    finance_report's `ci.yml` already does for its push group.
+
+    A tag push is the one push that keeps the OLD `github.ref` key (moved from
+    the test this replaces, not deleted): a tag's SHA is always one main already
+    ran and published green — `cut_release` refuses to tag otherwise — so it
+    never needs isolating from main, only from another run on the SAME tag ref,
+    which the ref already gives it, and which the event suffix protects from a
+    workflow_dispatch on that same ref: without the event in the key, a manual
+    dispatch on the same tag ref shares the group and cancels the release run
+    mid-publish. Two dispatches on the same ref, or two tag pushes, still
+    cancel each other — that is still what you want.
     """
     concurrency = yaml.safe_load(source(REQUIRED))["concurrency"]
     group = str(concurrency["group"])
     assert concurrency["cancel-in-progress"] is True, (
-        "main pushes no longer collapse — every burst of merges runs a full duplicate suite "
-        "while open PRs wait behind it"
+        "PR runs no longer collapse to their newest push — every superseded PR run now queues "
+        "behind the one that replaced it"
+    )
+    assert "github.event_name == 'push'" in group and "github.ref_type != 'tag'" in group, (
+        f"the concurrency key is {group!r}: a non-tag push is no longer routed to its own "
+        f"SHA-keyed group, so two main commits can land in the same group again and "
+        f"cancel-in-progress can kill a run a release ceremony or an open PR is waiting on"
+    )
+    assert "github.sha" in group, (
+        f"the concurrency key is {group!r}: it no longer uses github.sha, so a non-tag push "
+        f"cannot get its own group and main pushes go back to colliding (measured 6/27, #860)"
     )
     assert "github.ref" in group, (
         f"the concurrency key is {group!r}: with cancel-in-progress on and no ref in the key, a "
