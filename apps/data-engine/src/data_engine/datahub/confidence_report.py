@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from psycopg import Connection
 from psycopg.types.json import Jsonb
@@ -87,6 +87,7 @@ from data_engine.datahub.quality_report import (
     corroborating_financial_value,
     financial_fact_unit,
     primary_financial_fields,
+    utc_day,
 )
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, GovernedHead, governed_head
 from data_engine.quality import vendor_oracle
@@ -402,7 +403,10 @@ def _served_day(policy: FamilyPolicy, origins: Sequence[OriginValue]) -> tuple[l
     primary = policy.reconciliation.source_priority[0]
     primary_days = [origin.knowable_at for origin in valued if origin.source_id == primary and origin.knowable_at]
     anchor = max(primary_days) if primary_days else max(origin.knowable_at for origin in valued if origin.knowable_at)
-    kept = [origin for origin in origins if origin.knowable_at is None or origin.knowable_at.date() == anchor.date()]
+    # The instants' UTC days, never the session zone's (#885, `utc_day`).
+    kept = [
+        origin for origin in origins if origin.knowable_at is None or utc_day(origin.knowable_at) == utc_day(anchor)
+    ]
     excluded = [origin for origin in origins if origin not in kept]
     return kept, excluded
 
@@ -466,13 +470,25 @@ def _deltas(
 
 
 def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[OriginValue], cutoff: datetime) -> CellGrade:
-    """Grade one cell from what its origins asserted. Pure: no clock, no database."""
+    """Grade one cell from what its origins asserted. Pure: no clock, no database.
+
+    An origin asserts once (#885 item 9): two rows of one origin — a retried capture and
+    a reused binding — are one origin, never `same_lineage` with itself. Of the rows the
+    served day and period kept, each origin asserts from its newest valued one
+    (`_newest_per_origin`), the representative the fusion engine itself would pick, so
+    the grade still matches the quality report's cell by cell. An origin that asserted
+    on the served day is not also "another day's" second origin.
+    """
     kept, other_day = _served_day(policy, origins)
     kept, other_period = _served_period(policy, kept)
-    valued = [origin for origin in kept if origin.value is not None]
-    values = {origin.origin_id: origin.value for origin in origins}
-    other_day_ids = tuple(sorted(origin.origin_id for origin in other_day if origin.value is not None))
-    other_period_ids = tuple(sorted(origin.origin_id for origin in other_period if origin.value is not None))
+    valued = _newest_per_origin([origin for origin in kept if origin.value is not None])
+    asserting = {origin.origin_id for origin in valued}
+    values = {origin.origin_id: origin.value for origin in _newest_per_origin(origins)}
+    values.update({origin.origin_id: origin.value for origin in valued})
+    other_day_ids = tuple(sorted({origin.origin_id for origin in other_day if origin.value is not None} - asserting))
+    other_period_ids = tuple(
+        sorted({origin.origin_id for origin in other_period if origin.value is not None} - asserting)
+    )
     excluded_ids = tuple(sorted(other_day_ids + other_period_ids))
     tolerance = policy.reconciliation.policy_id if policy.reconciliation else None
 
@@ -567,8 +583,8 @@ def _reconcile(
         field_name=policy.family,
         field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'{policy.semantic_type}-{policy.family}:v1'})}",
         unit=policy.unit,
-        valid_from=cutoff.date(),
-        valid_to=cutoff.date(),
+        valid_from=utc_day(cutoff),
+        valid_to=utc_day(cutoff),
     )
     assertions = []
     for origin in origins:
@@ -638,9 +654,22 @@ def _policy_payload(policy: ReconciliationPolicy | None) -> dict[str, Any] | Non
     }
 
 
+#: Stamps of the compile, not of what it graded. They travel in the payload and stay out of
+#: the content address, so a re-compile over identical content is the SAME row (#885).
+COMPILE_STAMPS: tuple[str, ...] = ("generated_at",)
+
+
 def content_address(payload: Mapping[str, Any]) -> tuple[str, str]:
-    """(report_id, content_sha256) over the canonical payload, the quality report's way."""
-    digest = canonical_sha256(dict(payload))
+    """(report_id, content_sha256) over the canonical payload without its compile stamps.
+
+    The quality report's way, with one deliberate difference: this payload carries the
+    time it was compiled (`generated_at`), and hashing that made every nightly compile a
+    new row that `on conflict do nothing` could never collapse — the table grew one row
+    per night per universe over an unchanged head. The identity is the graded content
+    (the migration's promise: a replay over the same head is the same row, a changed
+    grade a new one); the stored `generated_at` is the compile that first produced it.
+    """
+    digest = canonical_sha256({key: value for key, value in payload.items() if key not in COMPILE_STAMPS})
     return f"{REPORT_ID_PREFIX}:{digest}", digest
 
 
@@ -860,15 +889,29 @@ def _newest_period_value(payload: Mapping[str, Any], name: str) -> tuple[str | N
     return None, None
 
 
-def _recency(observation: FinancialObservation) -> tuple[datetime, str]:
+class _Observed(Protocol):
+    """What `_newest_per_origin` reads: a financial observation or a graded origin value."""
+
+    @property
+    def origin_id(self) -> str: ...
+
+    @property
+    def knowable_at(self) -> datetime | None: ...
+
+    @property
+    def observation_id(self) -> str | None: ...
+
+
+def _recency(observation: _Observed) -> tuple[datetime, str]:
     return observation.knowable_at or datetime.min.replace(tzinfo=UTC), observation.observation_id or ""
 
 
-def _newest_per_origin(observations: Sequence[FinancialObservation]) -> list[FinancialObservation]:
+def _newest_per_origin[ObservedT: _Observed](observations: Sequence[ObservedT]) -> list[ObservedT]:
     """One observation per origin — the newest by knowable_at, then observation id: the
     quality report's selection of the primary, applied to every origin. An origin then
-    asserts once, whichever order its rows arrived in, and never counts as two."""
-    newest: dict[str, FinancialObservation] = {}
+    asserts once, whichever order its rows arrived in, and never counts as two. Serves
+    the financial loader (#875) and every family's grade (#885)."""
+    newest: dict[str, ObservedT] = {}
     for observation in observations:
         current = newest.get(observation.origin_id)
         if current is None or _recency(observation) > _recency(current):
@@ -1340,7 +1383,7 @@ def build_report(
     }
     accuracy["sec_oracle"] = sec_oracle_section(
         oracle_issuers_selected,
-        cutoff=cutoff.date(),
+        cutoff=utc_day(cutoff),
         ticker_index=None if oracle is None else oracle.ticker_index,
         facts_for=None if oracle is None else oracle.facts_for,
     )

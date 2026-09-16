@@ -13,6 +13,14 @@ appends one content-addressed row to `mart.datahub_confidence_report`. The Dagst
 and can be launched by name with an explicit `executed_at`. `/admin/datahub` renders the
 newest report per universe.
 
+**Identity is the graded content, not the compile (#885).** `report_id` is the sha256 of
+the canonical payload *without* `generated_at` (`confidence_report.COMPILE_STAMPS`). A
+nightly compile over an unchanged head that grades exactly what the last one graded
+resolves to the existing row (`on conflict do nothing`), so the table grows by one row
+per changed report, not one per night; the stored `generated_at` names the compile that
+first produced that content. Anything that changes a grade, a sample value or the SEC
+oracle's answer is a new row.
+
 ## Bands
 
 | band | rule |
@@ -21,6 +29,13 @@ newest report per universe.
 | `medium` | at least two origins asserted a value, but: no agreement policy exists for the family (`no_agreement_policy`), or they disagree beyond tolerance (`not_agreed_within_tolerance`), or they share one lineage (`same_lineage`) |
 | `low` | exactly one origin asserted a value (`single_origin`; `second_origin_other_day` when a session-bound second origin published a different day, #622; `second_origin_other_period` when a period-bound second origin never published the primary's fiscal period, #866) |
 | `missing` | no origin asserted a value |
+
+**An origin asserts once.** Two rows of one origin in a run (a retried capture and a
+reused binding, #635) are one origin: of the rows on the served day (or period), the
+origin asserts from its newest by `knowable_at`, then observation id — the representative
+the fusion engine picks — so it grades `low` `single_origin`, never `medium`
+`same_lineage` with itself (#885). Session days are the instants' UTC days, whatever time
+zone the database session renders `timestamptz` in.
 
 **Independence is lineage, not origin id.** A mirror, a reseller, or a second parser of the
 same document never corroborates its original (docs/datahub-quality-report.md, step 3). The
@@ -114,7 +129,7 @@ constituent refresh knowable by then, and the newest N-PORT vintage filed by the
 ## Report shape
 
 ```
-report_version, universe, universe_id, run_id, cutoff, generated_at, environment
+report_version, universe, universe_id, run_id, cutoff, generated_at (not hashed), environment
 bands, independence_rule, subjects, sources_connected
 families.<family>: cells, high, medium, low, missing, share, compared, agreement_rate,
                    tolerance, tolerance_policy, origins, reasons [, routes]

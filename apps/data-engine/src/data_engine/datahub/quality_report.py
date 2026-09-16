@@ -36,7 +36,7 @@ import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -542,6 +542,20 @@ def build_report(
     }
 
 
+def utc_day(stamp: datetime) -> date:
+    """The UTC calendar day of an aware timestamp (#885).
+
+    psycopg renders a `timestamptz` in the connection's session `TimeZone`, and nothing
+    pins that to UTC. A price's `knowable_at` is the session date at 00:00Z, so a bare
+    `.date()` under any zone west of UTC answers the day BEFORE — disagreeing with every
+    date computed in UTC (a partition, a settled session), so a cutoff can land before
+    its partition; and instants of one UTC day hours apart can render on two local days,
+    or two UTC days on one. The day is the instant's UTC date, whatever zone the driver
+    rendered it in.
+    """
+    return stamp.astimezone(UTC).date()
+
+
 # The policy's first priority IS the primary; deriving it here means a re-prioritized
 # policy re-anchors served-day narrowing automatically (Copilot on #625).
 _PRIMARY_PRICE_SOURCE = RECONCILIATION_POLICY.source_priority[0]
@@ -569,7 +583,7 @@ def _served_day_assertions(
     """
     primary_days = [knowable_at for source_id, knowable_at, *_ in entries if source_id == _PRIMARY_PRICE_SOURCE]
     anchor = max(primary_days, default=None) or max(knowable_at for _, knowable_at, *_ in entries)
-    return [entry for entry in entries if entry[1].date() == anchor.date()]
+    return [entry for entry in entries if utc_day(entry[1]) == utc_day(anchor)]
 
 
 def _field_reconciliation(cells: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -618,7 +632,7 @@ def reconcile_price_bar(
             field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'market-price-{field}:v1'})}",
             unit=FIELD_UNITS[field],
             valid_from=partition,
-            valid_to=cutoff.date(),
+            valid_to=utc_day(cutoff),
         )
         assertions = tuple(
             SourceAssertion(
@@ -716,7 +730,7 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
         outcomes[listing_id] = reconcile_price_bar(
             listing_id,
             _served_day_assertions(entries),
-            partition=partition or cutoff.date(),
+            partition=partition or utc_day(cutoff),
             cutoff=cutoff,
         )
     return outcomes
@@ -870,7 +884,7 @@ def reconcile_financial_fact_entries(
             field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'financial-fact-{field_name}:v1'})}",
             unit=unit,
             valid_from=period_end,
-            valid_to=max(period_end, cutoff.date()),
+            valid_to=max(period_end, utc_day(cutoff)),
         )
         assertions = [_financial_assertion(cell, primary, value)]
         for entry in entries:
