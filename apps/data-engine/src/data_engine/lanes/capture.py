@@ -24,6 +24,7 @@ import psycopg
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
 from data_engine.datahub.production_topt.composition import live_version_for, run_topt_pipeline
+from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
 from data_engine.datahub.production_topt.fund_consolidation import (
     materialize_fund_consolidation,
 )
@@ -231,8 +232,14 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     # Lazy, run-time connection (DATABASE_URL). One transaction for the whole tick:
     # a mid-run failure leaves no partial run; the daemon's retry re-runs the tick
     # against the same content-addressed identities. Every vendor call inside is
-    # attributed to this Dagster run in the external call ledger (#729).
-    with gateway.run_scope(f"dagster:{context.run_id}"), psycopg.connect(settings.database_url) as connection:
+    # attributed to this Dagster run in the external call ledger (#729), and every
+    # corroboration the capture loses — refused by its origin or not persisted — is
+    # counted for the summary below (#885).
+    with (
+        gateway.run_scope(f"dagster:{context.run_id}"),
+        corroboration_tally() as corroborations,
+        psycopg.connect(settings.database_url) as connection,
+    ):
         pipeline = run_topt_pipeline(
             connection,
             cutoff=cutoff,
@@ -313,6 +320,10 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         )
     else:
         summary += ")"
+    # #885: a second origin that raised, refused its quantity or could not be persisted
+    # leaves its cell single-origin without failing the tick; the count (per origin and
+    # stage) is what tells a revoked key or a dead OpenD from "the vendor had nothing".
+    summary += f"; {corroborations.summary()}"
     if registration.accepted:
         context.log.info(f"{summary}; pointer sequence {registration.sequence}")
     else:
@@ -328,6 +339,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         "independent_reconciliation": pipeline.quality["independent_reconciliation"],
         **strategy,
         **fund_consolidation,
+        "corroborations_refused": corroborations.total,
         "pointer_advanced": registration.accepted,
         "pointer_sequence": registration.sequence,
         "unmet_service_objectives": registration.summary,

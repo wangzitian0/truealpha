@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -30,6 +31,7 @@ import pandas as pd
 import pytest
 from data_engine.datahub.production_topt import moomoo_origin as origin_module
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
+from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
 from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.market_price_adapter import (
     CorroboratingOrigin,
@@ -209,12 +211,19 @@ def test_the_fetcher_asks_for_a_bounded_window_ending_on_the_cutoff() -> None:
     )
 
 
-def test_a_failing_client_leaves_the_cell_absent_and_is_not_retried_into_a_number() -> None:
+def test_a_failing_client_leaves_the_cell_absent_and_is_not_retried_into_a_number(caplog) -> None:
     client = _CassetteClient(error=RuntimeError("OpenD not reachable"))
     fetcher = MoomooKlineFetcher(client)
-    assert fetcher("AAPL", _PARTITION) is None
-    assert fetcher("AAPL", _PARTITION) is None
+    with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
+        assert fetcher("AAPL", _PARTITION) is None
+        assert fetcher("AAPL", _PARTITION) is None
     assert len(client.calls) == 1, "a cached outcome must not re-hit OpenD"
+    # Absent, but not silent (#885): one warning naming the origin and the exception
+    # type, one count — the cached second answer is not a second loss.
+    [warning] = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert "moomoo-kline" in warning.getMessage() and "RuntimeError" in warning.getMessage()
+    assert warning.exc_info is not None
+    assert tally.summary() == "corroborations refused 1 (moomoo-kline fetch 1)"
 
 
 def test_the_market_price_adapter_attaches_the_third_origin_under_moomoos_own_source() -> None:
@@ -485,10 +494,15 @@ def test_a_second_origin_without_the_primarys_period_is_absent_not_conflicting()
     assert fields["total_assets"]["period_end"] > "2025-12-31", "the primary's newest instant is a 10-Q's"
 
 
-def test_a_failing_second_origin_leaves_the_financial_cell_single_origin() -> None:
-    result, _ = _capture_with_second_origin("DUOL", client=_CassetteClient(error=RuntimeError("OpenD down")))
+def test_a_failing_second_origin_leaves_the_financial_cell_single_origin(caplog) -> None:
+    with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
+        result, _ = _capture_with_second_origin("DUOL", client=_CassetteClient(error=ConnectionError("OpenD down")))
     assert result.corroborations == ()
     assert result.record is not None and result.record.payload["revenue"] == "1037589000", "the primary is untouched"
+    [warning] = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert "moomoo-financials" in warning.getMessage() and "ConnectionError" in warning.getMessage()
+    assert "DUOL" in warning.getMessage()
+    assert tally.summary() == "corroborations refused 1 (moomoo-financials fetch 1)"
 
 
 def test_a_target_without_a_ticker_asks_no_symbol_keyed_origin() -> None:

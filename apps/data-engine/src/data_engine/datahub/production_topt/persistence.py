@@ -44,6 +44,7 @@ from truealpha_contracts.ports import RawObjectStore
 
 from data_engine import raw_store
 from data_engine.datahub.control_plane import AttemptLedger
+from data_engine.datahub.production_topt.corroboration_audit import PERSIST, record_lost_corroboration
 from data_engine.datahub.production_topt.executor import Corroboration, FetchSuccess, RawResponse
 from data_engine.datahub.production_topt.source_registrations import registration_for
 from data_engine.datahub.repository import PostgresCaptureControlRepository
@@ -211,7 +212,7 @@ class PostgresCaptureControlSink:
         if success is not None and success.record is not None:
             self._persist_observation(binding, success, source_vintage_id=vintage_id)
             for corroboration in success.corroborations:
-                self._persist_corroboration(binding, corroboration)
+                self._persist_corroboration_or_record_loss(binding, corroboration)
 
         reasons = tuple(sorted({reason.value for reason in attempt_reasons if reason is not None}))
         self._repository.put_obligation_result(
@@ -339,6 +340,24 @@ class PostgresCaptureControlSink:
             source_vintage_id=source_vintage_id,
             knowable_at=success.transaction_time,
         )
+
+    def _persist_corroboration_or_record_loss(self, binding: ObligationBinding, corroboration: Corroboration) -> None:
+        """Persist one corroboration without letting it fail the primary capture (#885).
+
+        The adapters promise that a second origin never fails the primary; this is the
+        half of that promise that lives here. An object-store blip under the second
+        origin's bytes, or a row it cannot write, used to raise out of `record_outcome`
+        and take the whole tick with it. Each corroboration now runs inside its own
+        savepoint: a failure rolls back exactly that corroboration's request, vintage and
+        observation — never the primary's rows written before it on the same
+        transaction — is logged with its type and counted, and the cell stays
+        single-origin. The obligation's result depends on the primary vintage alone.
+        """
+        try:
+            with self._connection.transaction():
+                self._persist_corroboration(binding, corroboration)
+        except Exception as error:  # noqa: BLE001 - a second origin never fails the primary capture
+            record_lost_corroboration(corroboration.origin, PERSIST, binding.obligation.subject.id, error)
 
     def _persist_corroboration(self, binding: ObligationBinding, corroboration: Corroboration) -> None:
         """Persist a second origin as its own request/vintage/observation for the same cell.

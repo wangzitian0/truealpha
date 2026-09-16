@@ -57,6 +57,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from data_engine.config import settings
+from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
 from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin, MarketPriceQuote
 from data_engine.datahub.production_topt.source_registrations import (
     TWELVE_DATA_MAPPING_VERSION,
@@ -276,12 +277,15 @@ class TwelveDataQuoteFetcher:
             return self._cache[key]
         try:
             quote = self._fetch(symbol, cutoff)
-        except Exception:  # noqa: BLE001 - a second origin that errors is simply absent
+        except Exception as error:  # noqa: BLE001 - a second origin that errors is simply absent
             # Absorbed here rather than raised, so the throttle below still runs: a
             # rate-limited request that skipped its wait would fire the next symbol
             # immediately and rate-limit the rest of the tick with it. A
             # `NotASessionCloseError` lands here too — a refused quantity leaves the cell
             # honestly single-origin instead of corroborating it with the wrong number.
+            # Absent, but not silent (#885): a revoked key and a refused quantity are
+            # logged with their type and counted in the tick's summary.
+            record_lost_corroboration(ORIGIN, FETCH, symbol, error)
             quote = None
         self._cache[key] = quote
         if self._throttle_seconds:

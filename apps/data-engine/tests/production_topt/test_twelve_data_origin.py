@@ -19,12 +19,14 @@ Two guarantees live here.
 from __future__ import annotations
 
 import json
+import logging
 import urllib.parse
 from datetime import date
 from decimal import Decimal
 
 import pytest
 from data_engine.datahub.production_topt import twelve_data_origin as origin_module
+from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
 from data_engine.datahub.production_topt.market_price_adapter import MarketPriceQuote
 from data_engine.datahub.production_topt.twelve_data_origin import (
     NotASessionCloseError,
@@ -197,17 +199,26 @@ def test_a_close_from_after_the_partition_is_rejected() -> None:
         parse_session_close(ahead, partition=_PARTITION)
 
 
-def test_a_refused_quantity_leaves_the_cell_single_origin(http) -> None:
+def test_a_refused_quantity_leaves_the_cell_single_origin(http, caplog) -> None:
     """A rejected payload must make the origin ABSENT, never a corroborating number.
 
     This is the #535 outcome the report has to be able to reach: honest
     `insufficient_independent_origins` rather than `conflict_abstained` built from a
-    quantity that was never comparable.
+    quantity that was never comparable. Absent is not silent (#885): the refusal is a
+    warning naming the origin and `NotASessionCloseError`, and one count in the tick's
+    tally — a whole tick of refusals no longer reads like "the vendor had nothing".
     """
     requested, bodies = http
     bodies.extend([_LIVE_PRICE])
-    assert TwelveDataQuoteFetcher("test-key", throttle_seconds=0)("AAPL", _PARTITION) is None
+    fetcher = TwelveDataQuoteFetcher("test-key", throttle_seconds=0)
+    with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
+        assert fetcher("AAPL", _PARTITION) is None
+        assert fetcher("AAPL", _PARTITION) is None  # the cached refusal is not a second loss
     assert len(requested) == 1, "a refused quantity must not be retried into a corroboration"
+    [warning] = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert "twelve-data" in warning.getMessage() and "NotASessionCloseError" in warning.getMessage()
+    assert "AAPL" in warning.getMessage() and warning.exc_info is not None
+    assert tally.summary() == "corroborations refused 1 (twelve-data fetch 1)"
 
 
 # -- the partition date with no end of day of its own ----------------------------------
