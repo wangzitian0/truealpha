@@ -42,6 +42,7 @@ on:
       - "apps/data-engine/src/data_engine/datahub/strategy_bridge.py"
       - "db/migrations/0043_strategy_input_fiscal_period.sql"
       - "libs/contracts/src/truealpha_contracts/fiscal_period.py"
+      - "libs/contracts/src/truealpha_contracts/question_requirements.py"
       - "libs/contracts/tests/test_fiscal_period.py"
       - "libs/runtime/tests/test_health_check.py"
       - "libs/factors/src/factors/base/peg.py"
