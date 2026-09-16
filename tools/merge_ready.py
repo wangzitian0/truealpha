@@ -19,6 +19,13 @@ adding a policy. The discriminator is a review whose `commit_id` IS the
 current head: a review of an earlier push says nothing about what is being
 merged now.
 
+A review is somebody ELSE reading the code. On 2026-09-16 #850 merged 2 min
+after its push: the author had replied to a Copilot thread from the account
+`gh` runs as, and GitHub records a thread reply as a body-less COMMENTED
+"review" stamped on the CURRENT head — which read here as "a review covers the
+head" and skipped the settle window. The PR author's own review events, and
+any body-less COMMENTED review (a thread reply, never a reading), are ignored.
+
 Deliberately stricter than rule 4's budget (High = 0, Medium <= 2, Low <= 4):
 any unresolved thread blocks. Copilot does not emit severity labels, so a
 budget evaluated over unlabelled findings would be a budget over guesses, and
@@ -69,13 +76,26 @@ def head_age_minutes(number: int, head: str) -> float:
     return 0.0
 
 
+def is_external_review(review: object, author: str) -> bool:
+    """A review that counts: not the PR author's own event, and not a body-less
+    COMMENTED record (a thread reply from any account, never a reading of the diff).
+    An APPROVED or CHANGES_REQUESTED decision counts with or without a body."""
+    if not isinstance(review, dict):
+        return False
+    who = str((review.get("user") or {}).get("login", ""))
+    if author and who == author:
+        return False
+    return not (str(review.get("state")) == "COMMENTED" and not str(review.get("body") or "").strip())
+
+
 def blockers(number: int) -> list[str]:
-    view = gh_json(["pr", "view", str(number), "--repo", REPO, "--json", "headRefOid,mergeStateStatus,state"])
+    view = gh_json(["pr", "view", str(number), "--repo", REPO, "--json", "author,headRefOid,mergeStateStatus,state"])
     assert isinstance(view, dict)
     if view["state"] != "OPEN":
         return [f"#{number} is {view['state']}, not OPEN"]
 
     head = str(view["headRefOid"])
+    pr_author = str((view.get("author") or {}).get("login", ""))
     problems: list[str] = []
 
     if view["mergeStateStatus"] != "CLEAN":
@@ -84,8 +104,9 @@ def blockers(number: int) -> list[str]:
             f"failing, or the branch is behind)"
         )
 
-    reviews = gh_json(["api", f"repos/{REPO}/pulls/{number}/reviews"])
-    assert isinstance(reviews, list)
+    listed = gh_json(["api", f"repos/{REPO}/pulls/{number}/reviews"])
+    assert isinstance(listed, list)
+    reviews = [r for r in listed if is_external_review(r, pr_author)]
     for_head = [r for r in reviews if isinstance(r, dict) and r.get("commit_id") == head]
     if not for_head:
         # A review of the head is the strong form, but it cannot be REQUIRED:
