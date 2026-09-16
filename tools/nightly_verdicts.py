@@ -282,7 +282,8 @@ def first_declared_at(
             return None
         complete = len(runs) < 100 or min(_utc(entry["created_at"]) for entry in runs) <= introduced_at
         return min(served) if complete else None
-    except (VerdictCheckFailure, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    # OSError: a missing or unrunnable git/gh binary is "cannot be shown" too, never a crash.
+    except (VerdictCheckFailure, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
 

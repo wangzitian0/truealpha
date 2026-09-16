@@ -488,3 +488,18 @@ def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
         assert gap == timedelta(hours=expectation.cadence_hours), (
             f"{name}: declared cadence {expectation.cadence_hours} h, but job {expectation.job} fires every {gap}"
         )
+
+
+def test_a_missing_binary_is_no_grace_not_a_crash() -> None:
+    """Review on #901: an exec failure (no `git`, no `gh`) must fall back like any other step."""
+
+    def no_git(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("git")
+
+    def no_gh(path: str) -> str:
+        raise FileNotFoundError("gh")
+
+    deploys = _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"))
+    kwargs = {"release": "v0.0.75", "deploy_type": "staging"}
+    assert _module.first_declared_at("model_key_health", run=no_git, gh_api=deploys, **kwargs) is None
+    assert _module.first_declared_at("model_key_health", run=_git(INTRODUCED)[0], gh_api=no_gh, **kwargs) is None
