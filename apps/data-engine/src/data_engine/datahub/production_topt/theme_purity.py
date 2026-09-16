@@ -23,7 +23,7 @@ retroactively on a replay, the same trap `fund_consolidation` records for N-PORT
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -92,6 +92,9 @@ class IssuerPartition:
     #: computed from it (init.md rule 3: composite confidence cannot exceed the minimum
     #: consumed confidence).
     extraction_confidence: Decimal
+    #: The rule that landed the set — which says whether the one part of a one-part partition
+    #: is a segment with a judgeable name or the whole issuer behind an unjudgeable label.
+    extractor: str = ""
 
     @property
     def issuer_id(self) -> str:
@@ -110,13 +113,15 @@ def load_partitions(
     ).fetchall()
     grouped: dict[int, list[Any]] = {}
     meta: dict[int, tuple] = {}
-    for cik, partition_id, period_end, total, residual, name, revenue, _extractor, confidence, evidence in rows:
+    for cik, partition_id, period_end, total, residual, name, revenue, extractor, confidence, evidence in rows:
         key = int(cik)
-        meta.setdefault(key, (str(partition_id), period_end, total, residual, confidence, str(evidence)))
+        meta.setdefault(
+            key, (str(partition_id), period_end, total, residual, confidence, str(evidence), str(extractor))
+        )
         grouped.setdefault(key, []).append((str(name), Decimal(str(revenue))))
     partitions = []
     for cik, parts in grouped.items():
-        partition_id, period_end, total, residual, confidence, evidence = meta[cik]
+        partition_id, period_end, total, residual, confidence, evidence, extractor = meta[cik]
         partitions.append(
             IssuerPartition(
                 cik=cik,
@@ -128,6 +133,7 @@ def load_partitions(
                 descriptions=_descriptions_for(parts, evidence),
                 accession=_accession_of(evidence),
                 extraction_confidence=Decimal(str(confidence)),
+                extractor=extractor,
             )
         )
     return tuple(partitions)
@@ -176,6 +182,11 @@ def governed_members(connection: Connection[Any], *, run_id: str) -> dict[int, s
 
 #: How the single-segment adapter writes the filing's own sentence onto the row.
 _SINGLE_SEGMENT_MARKER = "single_segment_statement="
+#: The rule family whose one part is the whole issuer under an unjudgeable label.
+_SINGLE_SEGMENT_RULES = "rule:single-segment:"
+#: A one-part row that carries no description is refused before any model call (#855 B6).
+NO_DESCRIPTION = "no_description"
+NO_DESCRIPTION_EXTRACTOR = "rule:no-description:v1"
 
 
 def _descriptions_for(parts: list[tuple[str, Decimal]], evidence_ref: str) -> tuple[str, ...]:
@@ -193,6 +204,18 @@ def _descriptions_for(parts: list[tuple[str, Decimal]], evidence_ref: str) -> tu
         if statement:
             return (statement,)
     return tuple(name for name, _ in parts)
+
+
+def undescribed(partition: IssuerPartition) -> bool:
+    """A single-segment row with nothing to show a classifier: its one description is the
+    label `Single reportable segment` itself, because the adapter found no declaring sentence
+    and no business opening (#849). A one-part partition from a real segment table keeps its
+    segment's own name and is judged as before."""
+    return (
+        partition.extractor.startswith(_SINGLE_SEGMENT_RULES)
+        and len(partition.parts) == 1
+        and partition.descriptions == (partition.parts[0][0],)
+    )
 
 
 def _accession_of(evidence_ref: str) -> str:
@@ -259,6 +282,25 @@ def compute_for_theme(
     request — an issuer in two universes (AVGO is in both) must replay one judgement of one
     filing rather than be asked once per spelling of its identity.
     """
+    if undescribed(partition):
+        # Fail fast on the left (#855 B6): a one-part partition whose row carries no
+        # description — no declaring sentence, no business opening — gives a classifier
+        # nothing to judge and a vacuum to fill (#849: NVIDIA, for Netflix). Refused here,
+        # named, before any model call: the row is unclassified with `no_description` first
+        # among its reasons, which the coverage report counts, instead of a guess recorded at
+        # the model's confidence.
+        refused = theme_purity(
+            [ThemeSegment(segment_name=name, revenue=revenue, in_theme=None) for name, revenue in partition.parts],
+            entity_id=subject_id or partition.issuer_id,
+            theme=definition.theme,
+            as_of=cutoff,
+            consolidated_revenue=partition.consolidated_revenue,
+            partition_residual=partition.partition_residual,
+            confidence=partition.extraction_confidence,
+            minimum_classified_share=definition.minimum_classified_share,
+        )
+        flagged = refused.result.model_copy(update={"flags": [NO_DESCRIPTION, *refused.result.flags]})
+        return replace(refused, result=flagged), NO_DESCRIPTION_EXTRACTOR
     classification = llm.classify_segments(
         connection,
         cik=partition.cik,
