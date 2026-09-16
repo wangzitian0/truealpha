@@ -745,6 +745,40 @@ def test_a_failing_shard_lane_fails_instead_of_running_the_whole_suite() -> None
     )
 
 
+def test_the_liveness_window_is_one_churn_cycle_plus_margin() -> None:
+    """#860: the liveness job (#454) slept a fixed 120 s and was the pole of every
+    PR's and every main push's critical path at 2.5 min. The regression it guards
+    against announced itself every ~68-70 s, and the job's own step name called
+    120 s "over one cycle" -- so the window was one cycle with 50 s of unsized
+    margin, not two cycles. It is now the documented cadence plus a few seconds.
+
+    Pinned from the cadence the job documents, not from a literal: a window at or
+    below the cadence's far end can miss the one event it waits for, and a window
+    that creeps back past a modest margin puts the 45 s back on every run. Whoever
+    re-measures the cycle longer must raise the comment, and this test then makes
+    them raise the sleep with it.
+    """
+    lane = job(PYTHON, "dagster-code-server-liveness")
+    observe = [spec for spec in lane["steps"] if "No heartbeat received" in str(spec.get("run", ""))]
+    assert len(observe) == 1, f"expected exactly one churn-assertion step in the liveness job, found {len(observe)}"
+    spec = observe[0]
+    sleeps = re.findall(r"^\s*sleep (\d+)\s*$", str(spec["run"]), flags=re.MULTILINE)
+    assert len(sleeps) == 1, f"the observation is one fixed sleep, found {sleeps}"
+    window = int(sleeps[0])
+
+    cadences = re.findall(r"every ~(\d+)-(\d+)s", source(PYTHON))
+    assert cadences, "ci-python.yml no longer documents the ~68-70s churn cadence the window is sized from"
+    far_end = max(int(high) for _, high in cadences)
+    assert window > far_end, (
+        f"a {window} s window cannot be sure to contain a churn event that arrives every ~{far_end} s"
+    )
+    assert window <= far_end + 10, (
+        f"the {window} s window is more than 10 s past the ~{far_end} s cadence — the margin is creeping "
+        f"back toward the second cycle that cost 45 s on every run's critical path (#860)"
+    )
+    assert f"{window}s" in str(spec["name"]), "the step's name must say how long it observes"
+
+
 def test_the_routing_probe_gets_a_base_not_an_endpoint() -> None:
     """A4 C1 (#673). The freshness matrix carries `url` (the health ENDPOINT,
     what walk_evidence and health_check want) and `base` (what
