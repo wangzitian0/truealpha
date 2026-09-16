@@ -195,7 +195,7 @@ MOOMOO_FINANCIALS_ORIGIN = "moomoo-financials"
 MOOMOO_FINANCIALS_PARSER_VERSION = "moomoo-financials-parser:v1"
 MOOMOO_FINANCIALS_MAPPING_VERSION = "moomoo-financials-map:v1"
 # The headline key the registry reads back; the financial-fact fusion reads every
-# corroborated field by name (`quality_report._FINANCIAL_FACT_FUSION_FIELDS`).
+# corroborated field by name (`quality_report.FINANCIAL_FACT_FUSION_FIELDS`).
 MOOMOO_FINANCIALS_VALUE_KEY = "revenue"
 # moomoo documents 60 requests / 30 s per quote endpoint; `moomoo_ledger` paces 8 / 30 s
 # across every endpoint, and that pacing is what the origin actually experiences.

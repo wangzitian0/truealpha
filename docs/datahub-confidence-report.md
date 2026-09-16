@@ -19,7 +19,7 @@ newest report per universe.
 |---|---|
 | `high` | at least two **independent** origins asserted a value and the family's declared, content-addressed reconciliation policy graded them `agreed` (`reconcile_source_assertions`, #343) |
 | `medium` | at least two origins asserted a value, but: no agreement policy exists for the family (`no_agreement_policy`), or they disagree beyond tolerance (`not_agreed_within_tolerance`), or they share one lineage (`same_lineage`) |
-| `low` | exactly one origin asserted a value (`single_origin`; `second_origin_other_day` when a session-bound second origin published a different day, #622) |
+| `low` | exactly one origin asserted a value (`single_origin`; `second_origin_other_day` when a session-bound second origin published a different day, #622; `second_origin_other_period` when a period-bound second origin never published the primary's fiscal period, #866) |
 | `missing` | no origin asserted a value |
 
 **Independence is lineage, not origin id.** A mirror, a reseller, or a second parser of the
@@ -39,7 +39,8 @@ report measures the distinct values per semantic in the run and records
 |---|---|---|---|
 | `open`, `high`, `low`, `close` | market-price | `origin:yahoo:v1`, `origin:twelve-data:v1`, `origin:moomoo-kline:v1` (when the flag is on) | `market-price-fusion:v3` (`quality_report.RECONCILIATION_POLICY`, 30 bp relative), unit USD, served-day narrowing; one family per bar field (#865) |
 | `volume` | market-price | the same origins | `market-volume-fusion:v1` (`quality_report.VOLUME_RECONCILIATION_POLICY`, 2 % relative), unit shares, served-day narrowing |
-| `revenue`, `gross_profit`, `pre_provision_profit`, `total_assets`, `shares_outstanding`, `net_income` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | none in this report yet — single origin grades `low`, two lineages `medium` (`no_agreement_policy`); the quality report's `financial-fact-fusion:v1` carries the per-field agreement |
+| `revenue`, `gross_profit`, `net_income`, `total_assets` | financial-fact | `origin:sec-company-facts:v1`, `origin:moomoo-financials:v1` (when the flag is on) | `financial-fact-fusion:v1` (`quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY`, 1 % relative), aligned on the primary's fiscal period end in the primary's currency (#866) |
+| `pre_provision_profit`, `shares_outstanding` | financial-fact | `origin:sec-company-facts:v1` | none — single origin grades `low`, two lineages `medium` (`no_agreement_policy`) |
 | `headcount` | financial-fact | `origin:headcount:<producer>` per producer in `staging.issuer_headcount_facts` | none — one lineage, `medium` at most |
 | `index_membership` | index-membership plane (QQQ) | `origin:nasdaq-index:v1` (`staging.etf_constituent_facts`), `origin:nport:v1` (`mart.fund_holdings_resolved`) | `index-membership-fusion:v1` (new), presence compared exactly |
 | `etf_weight` | index-membership plane (QQQ) | `origin:nport:v1` today; `origin:nasdaq-index:v1` once the operator route carries a weight | `index-membership-fusion:v1`, weights compared at the stated tolerance |
@@ -63,6 +64,32 @@ cell this report never compared while the quality report graded it `agreed` or
 `conflict_abstained` is a mismatch. A quality report persisted before the bar was fused
 per field is compared on the close alone; the other fields say `null` rather than a
 vacuous match.
+
+### Financial-fact policy (#866)
+
+The four fundamentals the quality report fuses (#854) reconcile here under the same
+`FINANCIAL_FACT_RECONCILIATION_POLICY`, aligned the same way (`confidence_report.financial_origins`
+mirrors `quality_report.reconcile_financial_fact_entries`):
+
+- The primary (SEC company-facts) asserts its figure at its own fiscal period end
+  (`primary_financial_fields`). A second origin asserts, for each field, its figure **at the
+  primary's period end** (`by_period_end[<period>][<field>]`, `corroborating_financial_value`)
+  in the primary's reporting currency (`financial_fact_unit`).
+- Agreed within 1 % → `high` (`independent_origins_agree`); beyond → `medium`
+  (`not_agreed_within_tolerance`); the second origin never published the primary's period →
+  `low` (`second_origin_other_period`: its newest figure is recorded and excluded, never
+  compared — the financial analogue of #622); a second origin in another currency is present
+  with no comparable value → `low` (`single_origin`); a primary figure without a dated period
+  cannot be aligned and is not corroborated (the quality report compares it no more).
+- Two readers of one lineage stay `medium` (`same_lineage`) under the policy: a mirror of
+  the SEC facts never corroborates them.
+- `headcount` keeps its plane rule (10-K extraction and manual review are one lineage,
+  `medium` at most); `pre_provision_profit` and `shares_outstanding` have no second origin
+  and no policy.
+
+`accuracy.<field>.matches_quality_report` cross-checks each fused field against
+`financial_fact_reconciliation_cells[*].fields[<field>].outcome` in the persisted quality
+report for the run.
 
 ### Index membership policy (new)
 
@@ -94,9 +121,10 @@ families.<family>: cells, high, medium, low, missing, share, compared, agreement
 cells.<family>.<subject>: band, reason, origins, independent_origins, outcome, delta,
                           relative_delta, comparison, excluded
 sample.<subject>.<family>: values{origin: value}, delta, relative_delta, verdict, reason
-accuracy.<bar field>: origins, compared, agreed, agreement_rate, tolerance_policy,
-                      quality_report_id, quality_report_cells, matches_quality_report,
-                      quality_report_mismatches   (open, high, low, close, volume)
+accuracy.<field>: origins, compared, agreed, agreement_rate, tolerance_policy,
+                  quality_report_id, quality_report_cells, matches_quality_report,
+                  quality_report_mismatches
+                  (open, high, low, close, volume; revenue, gross_profit, net_income, total_assets)
 accuracy.sec_oracle: fields, issuers_requested, issuers_compared, rows[], per_field, skipped
 metadata.stored_confidence: used_for_bands=false, values_by_semantic, constant_per_semantic
 ```
@@ -111,7 +139,8 @@ config overrides it.
 
 ## Accuracy
 
-- **bar fields** (`open`, `high`, `low`, `close`, `volume`): the origin agreement the engine
+- **bar fields** (`open`, `high`, `low`, `close`, `volume`) and **fused fundamentals**
+  (`revenue`, `gross_profit`, `net_income`, `total_assets`): the origin agreement the engine
   computed per field, with the field's policy and the per-field cross-check against the
   persisted quality report.
 - **fundamentals**: `quality.vendor_oracle`'s deliberately independent SEC re-derivation
@@ -131,11 +160,15 @@ config overrides it.
   vintage; the one constituent-only name and the one unresolved N-PORT line grade `low`).
 - `medium`: `headcount` where both 10-K producers wrote (one lineage; 20 TOPT issuers on
   the production plane).
-- `low`: every other fundamental — one origin (SEC company-facts) — and `etf_weight`
-  (N-PORT only; the operator route carries no weight).
+- `low`: every fundamental where only SEC company-facts asserted (the statements origin
+  is enabled per environment; where it is on, `revenue`/`gross_profit`/`net_income`/
+  `total_assets` grade `high` where moomoo published the primary's period and agreed,
+  `medium` where it disagreed, `low` `second_origin_other_period` where it has not
+  published that period) and `etf_weight` (N-PORT only; the operator route carries no
+  weight).
 - `missing`: cells no origin filled (e.g. `pre_provision_profit` outside the financial
   branch, headcount for issuers the plane has not covered).
 
-What raises fundamentals to `high`: a second, independent origin for them (moomoo's
-fundamental endpoints, #771) plus a declared reconciliation policy per family — the loader
-reads origins from the observations, so a new origin needs no change here beyond its policy.
+What raises the remaining fundamentals to `high`: a second, independent origin for them plus
+a declared reconciliation policy per family — the loader reads origins from the
+observations, so a new origin needs no change here beyond its policy and its alignment.

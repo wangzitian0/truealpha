@@ -30,15 +30,20 @@ whose payload lacks a field (Twelve Data v2 carried the close alone) asserts not
 that family: it is present with no value, never a conflict. Index membership gets the
 policy it never had (`INDEX_MEMBERSHIP_POLICY`): the index operator's constituent list
 against the fund's own N-PORT holdings, membership matched exactly, weights compared at a
-stated tolerance whenever both routes carry one. Every fundamental has one origin today
-and grades `low` honestly; a second origin (moomoo, #771) raises them without a change
-here, because the loader reads origins from the observations rather than from a list.
+stated tolerance whenever both routes carry one. The fundamentals the quality report fuses
+(revenue, gross profit, net income, total assets; #854) reconcile here under the same
+`FINANCIAL_FACT_RECONCILIATION_POLICY` (#866): the primary's figure at its fiscal period
+end against a second origin's figure at that same period, in the primary's currency —
+agreed is HIGH, beyond tolerance MEDIUM, a second origin that never published the
+primary's period LOW (`second_origin_other_period`, the financial analogue of #622).
+Headcount, pre-provision profit and shares outstanding have no policy and grade `medium`
+at most with two origins.
 
 The ACCURACY section is the half a self-consistent warehouse cannot supply: for every bar
-field, the agreement the engine already computed, cross-checked field by field against
-the persisted quality report; for revenue and gross profit, `quality.vendor_oracle`'s
-deliberately independent SEC re-derivation over a sample of issuers, fetched live at
-report time through the source gateway.
+field and every fused fundamental, the agreement the engine already computed,
+cross-checked field by field against the persisted quality report; for revenue and gross
+profit, `quality.vendor_oracle`'s deliberately independent SEC re-derivation over a
+sample of issuers, fetched live at report time through the source gateway.
 """
 
 from __future__ import annotations
@@ -73,7 +78,16 @@ from data_engine.datahub.production_topt.source_registrations import (
     registration_for,
 )
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, UniverseSource
-from data_engine.datahub.quality_report import FIELD_RECONCILIATION_POLICIES, FIELD_UNITS, PRICE_BAR_FIELDS
+from data_engine.datahub.quality_report import (
+    FIELD_RECONCILIATION_POLICIES,
+    FIELD_UNITS,
+    FINANCIAL_FACT_FUSION_FIELDS,
+    FINANCIAL_FACT_RECONCILIATION_POLICY,
+    PRICE_BAR_FIELDS,
+    corroborating_financial_value,
+    financial_fact_unit,
+    primary_financial_fields,
+)
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, GovernedHead, governed_head
 from data_engine.quality import vendor_oracle
 
@@ -107,6 +121,10 @@ FINANCIAL_FIELDS: tuple[str, ...] = (
     "net_income",
     "headcount",
 )
+#: The families whose cells are cross-checked against the persisted quality report's grade
+#: of the same field: every bar field (`reconciliation_cells[*].fields`, #850) and every
+#: fused fundamental (`financial_fact_reconciliation_cells[*].fields`, #854).
+CROSS_CHECKED_FAMILIES: tuple[str, ...] = (*PRICE_BAR_FIELDS, *FINANCIAL_FACT_FUSION_FIELDS)
 
 SEC_COMPANY_FACTS_ORIGIN = "origin:sec-company-facts:v1"
 SEC_COMPANY_FACTS_SOURCE = "sec-company-facts:v1"
@@ -183,6 +201,9 @@ class OriginValue:
     value: str | None
     knowable_at: datetime | None = None
     observation_id: str | None = None
+    #: The fiscal period end the value describes, for a period-bound family: the primary's
+    #: own, or the period a corroborating figure was read at (#866).
+    period_end: date | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +221,10 @@ class FamilyPolicy:
     comparison: str = "numeric"
     #: A session close is comparable only across assertions of the same trading day (#622).
     session_bound: bool = False
+    #: A financial fact is comparable only across assertions of the same fiscal period end:
+    #: the second origin's figure is read at the primary's period (#866), and one it
+    #: published for other periods only is excluded, never a conflict.
+    period_bound: bool = False
     #: The unit the family's cell is declared in — part of the content-addressed cell
     #: identity, so it must be the family's own (a fund weight is a percent of net assets,
     #: never a dollar figure).
@@ -292,8 +317,17 @@ def _market_price_families() -> tuple[FamilyPolicy, ...]:
 
 FAMILIES: tuple[FamilyPolicy, ...] = (
     *_market_price_families(),
+    # The fields the quality report fuses reconcile under its policy, aligned on the primary's
+    # fiscal period (#866); the others (headcount, pre-provision profit, shares outstanding)
+    # have no policy and stay MEDIUM at most with two origins.
     *(
-        FamilyPolicy(family=name, semantic_type="financial-fact", value_keys=(name,), reconciliation=None)
+        FamilyPolicy(
+            family=name,
+            semantic_type="financial-fact",
+            value_keys=(name,),
+            reconciliation=FINANCIAL_FACT_RECONCILIATION_POLICY if name in FINANCIAL_FACT_FUSION_FIELDS else None,
+            period_bound=name in FINANCIAL_FACT_FUSION_FIELDS,
+        )
         for name in FINANCIAL_FIELDS
     ),
     FamilyPolicy(
@@ -373,6 +407,29 @@ def _served_day(policy: FamilyPolicy, origins: Sequence[OriginValue]) -> tuple[l
     return kept, excluded
 
 
+def _served_period(policy: FamilyPolicy, origins: Sequence[OriginValue]) -> tuple[list[OriginValue], list[OriginValue]]:
+    """Narrow a period-bound family to the primary's fiscal period (#866): the second
+    origin's figure is comparable only at the period end the primary's figure describes.
+    An origin that published the field for other periods only has not corroborated the
+    served figure — it is excluded, never a conflict (the quality report's alignment,
+    `reconcile_financial_fact_entries`). Anchor: the primary's newest asserted period,
+    else the newest period any origin asserted; an undated assertion is never excluded.
+    Returns (kept, excluded)."""
+    if not policy.period_bound or policy.reconciliation is None:
+        return list(origins), []
+    dated = [origin for origin in origins if origin.period_end is not None and origin.value is not None]
+    if not dated:
+        return list(origins), []
+    primary = policy.reconciliation.source_priority[0]
+    primary_periods = [origin.period_end for origin in dated if origin.source_id == primary and origin.period_end]
+    anchor = (
+        max(primary_periods) if primary_periods else max(origin.period_end for origin in dated if origin.period_end)
+    )
+    kept = [origin for origin in origins if origin.period_end is None or origin.period_end == anchor]
+    excluded = [origin for origin in origins if origin not in kept]
+    return kept, excluded
+
+
 def _numeric_for_comparison(
     policy: FamilyPolicy, origins: Sequence[OriginValue]
 ) -> tuple[str, dict[str, Decimal | None]]:
@@ -410,10 +467,13 @@ def _deltas(
 
 def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[OriginValue], cutoff: datetime) -> CellGrade:
     """Grade one cell from what its origins asserted. Pure: no clock, no database."""
-    kept, excluded = _served_day(policy, origins)
+    kept, other_day = _served_day(policy, origins)
+    kept, other_period = _served_period(policy, kept)
     valued = [origin for origin in kept if origin.value is not None]
     values = {origin.origin_id: origin.value for origin in origins}
-    excluded_ids = tuple(sorted(origin.origin_id for origin in excluded if origin.value is not None))
+    other_day_ids = tuple(sorted(origin.origin_id for origin in other_day if origin.value is not None))
+    other_period_ids = tuple(sorted(origin.origin_id for origin in other_period if origin.value is not None))
+    excluded_ids = tuple(sorted(other_day_ids + other_period_ids))
     tolerance = policy.reconciliation.policy_id if policy.reconciliation else None
 
     def grade(
@@ -448,7 +508,13 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
     asserted = tuple(sorted(origin.origin_id for origin in valued))
     independent = len({origin.lineage for origin in valued})
     if len(valued) == 1:
-        return grade(Band.LOW, "second_origin_other_day" if excluded_ids else "single_origin", asserted, 1)
+        if other_day_ids:
+            reason = "second_origin_other_day"
+        elif other_period_ids:
+            reason = "second_origin_other_period"
+        else:
+            reason = "single_origin"
+        return grade(Band.LOW, reason, asserted, 1)
     comparison, numeric = _numeric_for_comparison(policy, valued)
     delta, relative = _deltas(policy, numeric, valued)
     if independent < 2:
@@ -759,6 +825,116 @@ def bar_origins(
     return origins
 
 
+@dataclass(frozen=True)
+class FinancialObservation:
+    """One financial-fact observation of a subject, as the loader read it: the shared
+    primary vintage (`primary`) or a registered corroborating origin's."""
+
+    primary: bool
+    origin_source: str
+    origin_id: str
+    payload: Mapping[str, Any]
+    knowable_at: datetime | None = None
+    observation_id: str | None = None
+
+
+def _text(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _newest_period_value(payload: Mapping[str, Any], name: str) -> tuple[str | None, date | None]:
+    """A corroborating origin's newest figure for `name` across `by_period_end`, with the
+    period it describes — what the origin asserts when it never published the primary's
+    period, so the classifier can exclude it as another period rather than compare it."""
+    periods = payload.get("by_period_end")
+    if not isinstance(periods, Mapping):
+        return None, None
+    for period in sorted(periods, reverse=True):
+        values = periods.get(period)
+        if not isinstance(values, Mapping) or values.get(name) is None:
+            continue
+        try:
+            return str(values[name]), date.fromisoformat(str(period))
+        except ValueError:
+            continue
+    return None, None
+
+
+def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str, list[OriginValue]]:
+    """What each financial-fact origin asserts per family, aligned the way the quality
+    report's fusion aligns them (#866, `reconcile_financial_fact_entries`).
+
+    The primary asserts its own figure, dated with its own fiscal period end where the
+    payload dates it (`primary_financial_fields`). For a fused field, a corroborating
+    origin asserts its figure AT THE PRIMARY'S period end (`corroborating_financial_value`)
+    in the primary's reporting currency (`financial_fact_unit`): an origin reporting in
+    another currency is present with no comparable value; one that published the field
+    for other periods only asserts its newest such figure, dated with that period, which
+    the classifier excludes (`second_origin_other_period`) rather than compares; a primary
+    figure without a dated period cannot be aligned, so nothing corroborates it and the
+    cell is single-origin — the quality report compares it no more. A field the primary
+    does not assert, or a subject without a primary, has no period to align on: every
+    origin asserts its headline figure and the cell is single-origin at most.
+
+    Headcount asserts under its producer (the plane's other producers are added by
+    `_add_headcount_producers`); fields no policy fuses are read by name from every origin.
+    """
+    primaries = [observation for observation in observations if observation.primary]
+    primary = (
+        max(primaries, key=lambda o: (o.knowable_at or datetime.min.replace(tzinfo=UTC), o.observation_id or ""))
+        if primaries
+        else None
+    )
+    anchors = primary_financial_fields(primary.payload) if primary is not None else {}
+    unit = financial_fact_unit(primary.payload) if primary is not None else None
+    origins: dict[str, list[OriginValue]] = {}
+    for observation in observations:
+        payload = observation.payload
+        for name in FINANCIAL_FIELDS:
+            if name == "headcount":
+                if not observation.primary:
+                    continue
+                vintage = payload.get("vintage") or {}
+                producer = str((vintage.get("headcount") or {}).get("source") or "unknown")
+                origins.setdefault(name, []).append(
+                    OriginValue(
+                        origin_id=f"origin:headcount:{producer}",
+                        source_id=producer,
+                        lineage=HEADCOUNT_LINEAGE.get(producer, producer),
+                        value=_text(payload.get(name)),
+                        knowable_at=observation.knowable_at,
+                        observation_id=observation.observation_id,
+                    )
+                )
+                continue
+            value, period = _text(payload.get(name)), None
+            if name in FINANCIAL_FACT_FUSION_FIELDS and observation.primary:
+                period = anchors[name][1] if name in anchors else None
+            elif name in FINANCIAL_FACT_FUSION_FIELDS and primary is not None:
+                if financial_fact_unit(payload) != unit:
+                    value = None
+                elif name in anchors:
+                    aligned = corroborating_financial_value(payload, name, anchors[name][1])
+                    if aligned is not None:
+                        value, period = str(aligned), anchors[name][1]
+                    else:
+                        value, period = _newest_period_value(payload, name)
+                elif primary.payload.get(name) is not None:
+                    value = None
+            origins.setdefault(name, []).append(
+                OriginValue(
+                    origin_id=observation.origin_id,
+                    source_id=observation.origin_source,
+                    lineage=lineage_of(observation.origin_id),
+                    value=value,
+                    knowable_at=observation.knowable_at,
+                    observation_id=observation.observation_id,
+                    period_end=period,
+                )
+            )
+    return origins
+
+
 def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime) -> dict[str, _Subject]:
     """Every subject the run requested, with what each origin asserted per family."""
     subjects: dict[str, _Subject] = {
@@ -779,6 +955,7 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
         """,
         (run_id,),
     ).fetchall()
+    financial: dict[str, list[FinancialObservation]] = {}
     for subject_id, semantic_type, parser_version, knowable_at, observation_id, payload in rows:
         subject = subjects.setdefault(str(subject_id), _Subject())
         payload = payload or {}
@@ -804,39 +981,19 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
                 if coordinate is None:
                     continue
                 primary, origin_source, origin_id = False, coordinate[0], coordinate[1]
-            vintage = payload.get("vintage") or {}
-            for name in FINANCIAL_FIELDS:
-                value = payload.get(name)
-                if primary:
-                    # The served figures (and the factor inputs) are the primary's alone.
-                    subject.financial[name] = _decimal(None if value is None else str(value))
-                if name == "headcount":
-                    if not primary:
-                        continue
-                    producer = str((vintage.get("headcount") or {}).get("source") or "unknown")
-                    subject.add(
-                        name,
-                        OriginValue(
-                            origin_id=f"origin:headcount:{producer}",
-                            source_id=producer,
-                            lineage=HEADCOUNT_LINEAGE.get(producer, producer),
-                            value=None if value is None else str(value),
-                            knowable_at=knowable_at,
-                            observation_id=observation_id,
-                        ),
-                    )
-                    continue
-                subject.add(
-                    name,
-                    OriginValue(
-                        origin_id=origin_id,
-                        source_id=origin_source,
-                        lineage=lineage_of(origin_id),
-                        value=None if value is None else str(value),
-                        knowable_at=knowable_at,
-                        observation_id=observation_id,
-                    ),
-                )
+            if primary:
+                # The served figures (and the factor inputs) are the primary's alone.
+                for name in FINANCIAL_FIELDS:
+                    subject.financial[name] = _decimal(_text(payload.get(name)))
+            # Aligned once the subject's observations are all read: a corroborating origin
+            # asserts at the primary's period, whichever row came first.
+            financial.setdefault(str(subject_id), []).append(
+                FinancialObservation(primary, origin_source, origin_id, payload, knowable_at, observation_id)
+            )
+    for subject_id, observations in financial.items():
+        for family, family_origins in financial_origins(observations).items():
+            for origin_value in family_origins:
+                subjects[subject_id].add(family, origin_value)
     _add_headcount_producers(connection, subjects, cutoff)
     return subjects
 
@@ -985,16 +1142,24 @@ _COMPARED_OUTCOMES = frozenset({ReconciliationOutcome.AGREED.value, Reconciliati
 
 
 def quality_report_field_outcomes(payload: Mapping[str, Any]) -> dict[str, dict[str, str]]:
-    """field -> listing -> outcome, read from a persisted quality report payload: every bar
-    field's grade under `reconciliation_cells[*].fields` (#850). A report written before
-    the bar was fused per field carries the close's grade alone, under the cell's headline
-    keys, and grades no other field."""
-    outcomes: dict[str, dict[str, str]] = {name: {} for name in PRICE_BAR_FIELDS}
+    """family -> listing -> outcome, read from a persisted quality report payload: every bar
+    field's grade under `reconciliation_cells[*].fields` (#850) and every fused
+    fundamental's under `financial_fact_reconciliation_cells[*].fields` (#854; a field the
+    primary left undated is not graded there and is not compared here). A report written
+    before the bar was fused per field carries the close's grade alone, under the cell's
+    headline keys, and grades no other field."""
+    outcomes: dict[str, dict[str, str]] = {name: {} for name in CROSS_CHECKED_FAMILIES}
     for listing, cell in (payload.get("reconciliation_cells") or {}).items():
         fields = cell.get("fields")
         graded = fields if isinstance(fields, Mapping) else {CLOSE_FAMILY: cell}
         for name in PRICE_BAR_FIELDS:
             outcome = (graded.get(name) or {}).get("outcome")
+            if outcome is not None:
+                outcomes[name][str(listing)] = str(outcome)
+    for listing, cell in (payload.get("financial_fact_reconciliation_cells") or {}).items():
+        fields = cell.get("fields") or {}
+        for name in FINANCIAL_FACT_FUSION_FIELDS:
+            outcome = (fields.get(name) or {}).get("outcome")
             if outcome is not None:
                 outcomes[name][str(listing)] = str(outcome)
     return outcomes
@@ -1003,13 +1168,17 @@ def quality_report_field_outcomes(payload: Mapping[str, Any]) -> dict[str, dict[
 def load_quality_report_field_outcomes(
     connection: Connection[Any], run_id: str
 ) -> tuple[str | None, dict[str, dict[str, str]]]:
-    """The persisted quality report for this run and its per-listing outcome per bar field,
-    so the report can prove it grades each field the same day, and the same way, the
-    pointer gate's report graded it."""
+    """The persisted quality report for this run and its per-listing outcome per bar field
+    and fused fundamental, so the report can prove it grades each field the same day, at
+    the same period, and the same way the pointer gate's report graded it."""
     # Only the cells the cross-check reads, not the whole payload (Copilot on #872).
     row = connection.execute(
         """
-        select report_id, jsonb_build_object('reconciliation_cells', payload->'reconciliation_cells')
+        select report_id,
+               jsonb_build_object(
+                   'reconciliation_cells', payload->'reconciliation_cells',
+                   'financial_fact_reconciliation_cells', payload->'financial_fact_reconciliation_cells'
+               )
         from mart.datahub_quality_report
         where run_id = %s order by created_at desc limit 1
         """,
@@ -1141,8 +1310,9 @@ def build_report(
         )
         if len(oracle_issuers_selected) >= max(0, oracle_issuers):
             break
-    # Every bar field is cross-checked against the quality report's grade of that field,
-    # so "how many metrics are HIGH" is answered by two reports that agree, not one.
+    # Every bar field and fused fundamental is cross-checked against the quality report's
+    # grade of that field, so "how many metrics are HIGH" is answered by two reports that
+    # agree, not one.
     accuracy: dict[str, Any] = {
         name: field_accuracy(
             family_policy(name),
@@ -1151,7 +1321,7 @@ def build_report(
             quality_report_id=quality_report_id,
             persisted=persisted_outcomes.get(name, {}),
         )
-        for name in PRICE_BAR_FIELDS
+        for name in CROSS_CHECKED_FAMILIES
     }
     accuracy["sec_oracle"] = sec_oracle_section(
         oracle_issuers_selected,
