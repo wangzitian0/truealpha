@@ -488,7 +488,6 @@ def build_report(
     independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
     field_reconciliation = _field_reconciliation(reconciliation)
 
-
     financial_reconciliation = _reconcile_financial_fact_cells(conn, run_id)
     independent = sum(
         1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value
@@ -503,8 +502,6 @@ def build_report(
         "reconciliation_policy_id": RECONCILIATION_POLICY.policy_id,
         "reconciliation_cells": reconciliation,
         "field_reconciliation": field_reconciliation,
-
-
         # Financial-fact cells under their own policy, per subject with per-field detail;
         # `independently_reconciled_count` counts a subject whose every compared field agreed.
         "financial_fact_reconciliation_policy_id": FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id,
