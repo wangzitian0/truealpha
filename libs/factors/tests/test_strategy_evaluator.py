@@ -333,3 +333,14 @@ def test_the_peg_reason_keeps_parameterised_refusals_and_drops_only_window_metad
         "non_positive_growth",
     )
     assert peg_reason_codes(result(Decimal("0.5"), ["cagr_years:3"])) == ()
+
+
+def test_the_evaluator_projects_the_keys_the_registry_declares() -> None:
+    """#855 B2: the three key tuples this module kept per factor are gone; what is projected
+    for a factor is its registered `inputs`, spelled in the strategy's input-key vocabulary
+    through the one alias map. The same keys as before, from one declaration."""
+    from factors.composite.strategy_evaluator import _input_keys
+
+    assert _input_keys("gross_profit_per_employee") == ("gross_profit", "total_assets", "headcount")
+    assert _input_keys("price_to_sales") == ("last_close", "shares_outstanding", "revenue")
+    assert _input_keys("peg") == ("last_close", "shares_outstanding", "net_income")

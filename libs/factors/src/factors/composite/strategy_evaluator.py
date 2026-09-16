@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 
-from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
+from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, input_key_for_metric
 from truealpha_contracts.strategy import (
     DecimalQuantization,
     ExclusionReason,
@@ -37,18 +37,21 @@ from factors.base.gross_profit_per_employee import gross_profit_per_employee
 from factors.base.peg import peg
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation
+from factors.registry import FACTOR_REGISTRY
 from factors.types import Fact, FactorResult, GrowthConvention
 
-# Input-key vocabulary of the golden corpus / DataHub factor inputs, mapped to the
-# canonical metric registry names the base factors consume.
-_GPPE_KEYS = ("gross_profit", "total_assets", "headcount")
-_PS_KEYS = ("last_close", "shares_outstanding", "revenue")
-# Module 1 (#284). `earnings_cagr_3y` is a rate derived upstream from the annual net-income
-# series, not a raw fact, for the reason recorded in `base/peg.py`: a per-share series is
-# incomparable across a stock split and nothing adjusts for one. The multiple uses
-# net income rather than diluted EPS because it is present for 20 of 20 issuers against
-# 18, and it puts both halves of PEG on one earnings basis.
-_PEG_KEYS = ("last_close", "shares_outstanding", "net_income")
+
+def _input_keys(factor_name: str) -> tuple[str, ...]:
+    """The strategy input keys a registered factor's declared metrics are spelled as here.
+
+    The factor declares METRICS (`@factor(..., inputs=...)`, #855 B2); the golden corpus and
+    the DataHub inputs spell two of them differently (`headcount`, `last_close`), and
+    `input_key_for_metric` is the one inverse of that alias map. This module used to keep a
+    key tuple per factor — the list that made every new factor an edit here.
+    """
+    return tuple(input_key_for_metric(metric) for metric in FACTOR_REGISTRY[factor_name].inputs)
+
+
 # Owner decision 2026-08-17 (#284): three years, recency-weighted. The factor takes it
 # as a required argument so no default can quietly become the convention.
 _PEG_CAGR_YEARS = 3
@@ -207,12 +210,14 @@ def _evaluate_issuer(
         )
 
     gppe_result = gross_profit_per_employee(
-        _facts_for(issuer, _GPPE_KEYS, as_of=as_of),
+        _facts_for(issuer, _input_keys("gross_profit_per_employee"), as_of=as_of),
         entity_id=issuer.issuer_id,
         as_of=as_of,
         risk_free_rate=risk_free_rate,
     )
-    ps_result = price_to_sales(_facts_for(issuer, _PS_KEYS, as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of)
+    ps_result = price_to_sales(
+        _facts_for(issuer, _input_keys("price_to_sales"), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
+    )
     if gppe_result.value is None or ps_result.value is None:
         return _excluded(issuer.issuer_id, ExclusionReason.STALE_REQUIRED_INPUT, confidence=consumed_confidence), None
 
@@ -220,7 +225,7 @@ def _evaluate_issuer(
     # the owner decides how it enters selection, or landing the factor would silently move
     # the portfolio. So a missing or degenerate PEG leaves the decision otherwise untouched.
     peg_result = peg(
-        _facts_for(issuer, _PEG_KEYS, as_of=as_of),
+        _facts_for(issuer, _input_keys("peg"), as_of=as_of),
         entity_id=issuer.issuer_id,
         growth_convention=GrowthConvention.HISTORICAL_CAGR,
         as_of=as_of,

@@ -275,6 +275,18 @@
         "tools/check_factor_contract.py"
       ],
       "cwd": "."
+    },
+    {
+      "id": "factor-contract/the-evaluator-derives-its-input-keys-from-the-registry",
+      "guard": "tools/check_factor_contract.py",
+      "file": "libs/factors/src/factors/composite/strategy_evaluator.py",
+      "find": "def _input_keys(factor_name: str) -> tuple[str, ...]:",
+      "replace": "_PEG_KEYS = (\"last_close\", \"shares_outstanding\", \"net_income\")\n\n\ndef _input_keys(factor_name: str) -> tuple[str, ...]:",
+      "command": [
+        "python3",
+        "tools/check_factor_contract.py"
+      ],
+      "cwd": "."
     }
   ]
 }

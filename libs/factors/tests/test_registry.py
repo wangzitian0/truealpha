@@ -13,6 +13,7 @@ import factors.composite.registered_composite_probe  # noqa: F401
 import factors.composite.three_tier_valuation  # noqa: F401
 import pytest
 from factors import FACTOR_REGISTRY, Fact, FactorResult, UnitFamily
+from factors.registry import factor
 from pydantic import ValidationError
 
 
@@ -92,3 +93,15 @@ def test_mismatched_unit_family_is_rejected():
             confidence=0.9,
             as_of=datetime.now(UTC),
         )
+
+
+def test_a_factor_declares_its_inputs_as_registered_metrics_or_fails_at_import() -> None:
+    """#855 B2: the evaluator derives what to project from the registry, so the declaration
+    has to be true at import — a metric the registry does not know is a traceback here, not
+    an issuer silently `missing` its input on every run."""
+    assert FACTOR_REGISTRY["peg"].inputs == ("price", "shares_outstanding", "net_income")
+    assert FACTOR_REGISTRY["gross_profit_per_employee"].inputs == ("gross_profit", "total_assets", "employees_total")
+    assert FACTOR_REGISTRY["three_tier_valuation"].inputs == (), "a composite consumes results, not metrics"
+    with pytest.raises(ValueError, match="not registered metrics: \\['no_such_metric'\\]"):
+        factor("probe_with_a_typo", kind="base", module=1, inputs=("no_such_metric",))
+    assert "probe_with_a_typo" not in FACTOR_REGISTRY, "a refused registration leaves nothing behind"

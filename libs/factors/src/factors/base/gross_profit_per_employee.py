@@ -112,7 +112,7 @@ def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     return matches[0] if matches else None
 
 
-@factor("gross_profit_per_employee", kind="base", module=2)
+@factor("gross_profit_per_employee", kind="base", module=2, inputs=("gross_profit", "total_assets", "employees_total"))
 def gross_profit_per_employee(
     facts: Sequence[Fact],
     *,

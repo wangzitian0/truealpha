@@ -250,7 +250,9 @@ def _recency_weighted_growth(
     return rate, base_end, latest_end_used
 
 
-@factor("peg", kind="base", module=1)
+# `net_income` rather than diluted EPS: present for 20 of 20 issuers against 18, and it puts
+# both halves of PEG on one earnings basis (#284). The rate is derived from the series upstream.
+@factor("peg", kind="base", module=1, inputs=("price", "shares_outstanding", "net_income"))
 def peg(
     facts: Sequence[Fact],
     *,

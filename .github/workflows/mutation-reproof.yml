@@ -46,6 +46,7 @@ on:
       - "libs/contracts/tests/test_fiscal_period.py"
       - "libs/runtime/tests/test_health_check.py"
       - "libs/factors/src/factors/base/peg.py"
+      - "libs/factors/src/factors/composite/strategy_evaluator.py"
       - "libs/runtime/tests/test_ci_workflows.py"
       - "libs/runtime/tests/test_migration_chain.py"
       - "libs/runtime/tests/test_output_invariants.py"
