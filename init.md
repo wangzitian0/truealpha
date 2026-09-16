@@ -308,9 +308,11 @@ homeless — it is UNEXERCISED, and the difference matters:
   persisted in its manifest before any factor runs.
 - **What is missing is a second source, not a plane.** Every financial metric resolves
   from SEC alone today; Twelve Data is a second ORIGIN used for price reconciliation (a
-  disagreement measure), not a fusion candidate. So `source_priority` has never had to
-  choose. Registering a second source for an existing metric is what activates it, and by
-  rule 22 that must change only source-owned code and registrations.
+  disagreement measure). For prices `source_priority` chooses only when the primary is
+  absent: since #862 a cell Yahoo cannot serve is served by the next origin in the policy's
+  order, declared as a failover and graded on its own corroboration. Registering a second
+  source for an existing metric is what activates it, and by rule 22 that must change only
+  source-owned code and registrations.
 
 ```sql
 -- Selection at snapshot freeze: highest-priority source first, then restatement recency.
