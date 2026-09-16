@@ -178,6 +178,10 @@ push_tag_with_last_instant_lock() {
       TAG=$(next_patch "$TAG")
       continue
     fi
+    # A stale local refs/tags/$TAG — from an aborted earlier attempt, or a fetch that
+    # brought another lane's tag — would make `git tag -a` fail before the push that decides
+    # anything; the remote is the only authority here, so the local ref is recreated (review).
+    git tag -d "$TAG" >/dev/null 2>&1 || true
     git tag -a "$TAG" "$LOCAL_MAIN" -m "$TAG_MESSAGE"
     if git push origin "$TAG" 2>"$push_err"; then
       rm -f "$push_err"
@@ -193,6 +197,8 @@ push_tag_with_last_instant_lock() {
     fi
     cat "$push_err" >&2
     rm -f "$push_err"
+    # Nothing was claimed: leave no local tag behind to trip the next attempt.
+    git tag -d "$TAG" >/dev/null 2>&1 || true
     fail "git push origin $TAG failed for a reason other than a tag collision"
   done
   rm -f "$push_err"
