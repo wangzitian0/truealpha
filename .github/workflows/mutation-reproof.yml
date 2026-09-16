@@ -45,6 +45,9 @@ on:
       - "apps/app-web/tests/route-tree-freeze.test.ts"
       - "apps/app-web/tests/source-contracts.test.ts"
       - "apps/data-engine/src/data_engine/datahub/strategy_bridge.py"
+      - "apps/data-engine/src/data_engine/lanes/quality.py"
+      - "apps/data-engine/src/data_engine/quality/nightly_verdicts.py"
+      - "apps/data-engine/tests/test_nightly_verdicts.py"
       - "db/migrations/0043_strategy_input_fiscal_period.sql"
       - "libs/contracts/src/truealpha_contracts/fiscal_period.py"
       - "libs/contracts/src/truealpha_contracts/question_requirements.py"
@@ -55,6 +58,7 @@ on:
       - "libs/runtime/tests/test_ci_workflows.py"
       - "libs/runtime/tests/test_escalate_issue.py"
       - "libs/runtime/tests/test_migration_chain.py"
+      - "libs/runtime/tests/test_nightly_verdicts.py"
       - "libs/runtime/tests/test_output_invariants.py"
       - "libs/runtime/tests/test_walk_evidence.py"
       - "tools/check_factor_contract.py"
@@ -63,6 +67,7 @@ on:
       - "tools/mutation_reproof.py"
       - "tools/mutations.json"
       - "tools/walk_evidence.py"
+      - "tools/nightly_verdicts.py"
       - "tools/output_invariants.py"
 
 concurrency:

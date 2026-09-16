@@ -1,0 +1,14 @@
+{
+  "_comment": "#876 W1/W2: the nightly in-environment checks tools/nightly_verdicts.py bounds, and how often each ticks. The names are exactly what the data engine's lanes can record in mart.nightly_verdicts (their NIGHTLY_VERDICTS): libs/runtime/tests/test_nightly_verdicts.py holds the two sets equal, so a check cannot be recorded and go unwatched. A verdict is stale past twice its cadence. The tool reads THIS file as the deployed release's own copy (git show <release>:tools/nightly_verdicts.json), so a check added on main is not demanded of a release that does not run it yet.",
+  "checks": {
+    "datahub_confidence_report@topt": {"cadence_hours": 24, "job": "datahub_confidence_report"},
+    "datahub_confidence_report@universe-list:qqq": {"cadence_hours": 24, "job": "datahub_confidence_report"},
+    "model_key_health": {"cadence_hours": 24, "job": "model_key_health"},
+    "output_invariants": {"cadence_hours": 24, "job": "output_invariants_check"},
+    "question_coverage@topt": {"cadence_hours": 24, "job": "head_reports_pipeline"},
+    "question_coverage@universe-list:qqq": {"cadence_hours": 24, "job": "head_reports_pipeline"},
+    "report_surface_proof": {"cadence_hours": 24, "job": "output_invariants_check"},
+    "theme_purity@topt": {"cadence_hours": 24, "job": "head_reports_pipeline"},
+    "theme_purity@universe-list:qqq": {"cadence_hours": 24, "job": "head_reports_pipeline"}
+  }
+}

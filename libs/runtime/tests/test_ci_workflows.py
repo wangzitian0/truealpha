@@ -377,6 +377,27 @@ def test_the_governed_pointer_bound_is_the_tools_and_runs_on_both_legs() -> None
     assert step.get("if") == "always()"
 
 
+def test_the_nightly_verdicts_are_bounded_on_both_legs_after_the_pointer() -> None:
+    """#876: the Dagster nightly checks page through this step, so it must run on every leg,
+    even after an earlier step failed, read the leg's own health endpoint, and resolve the
+    expected checks in the checkout that holds the release tags; and the escalation that
+    files the issue must still come after it."""
+    steps = [s.get("name") for s in job(FRESHNESS, "freshness")["steps"]]
+    name = "Check ${{ matrix.environment }} nightly check verdicts"
+    pointer = "Check ${{ matrix.environment }} governed pointer freshness"
+    escalate = "Escalate a scheduled failure to an issue"
+    assert steps.index(pointer) < steps.index(name) < steps.index(escalate)
+    text = step_text(FRESHNESS, name)
+    assert "tools/nightly_verdicts.py" in text and "matrix.url" in text and "--repo ." in text
+    assert "--environment" in text
+    step = next(s for s in job(FRESHNESS, "freshness")["steps"] if s.get("name") == name)
+    assert step.get("if") == "always()", "a stale release must not hide a red nightly check"
+    checkout = next(
+        s for s in job(FRESHNESS, "freshness")["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"]["fetch-depth"] == 0, "the expected checks are read at the deployed tag"
+
+
 def test_the_evidence_check_passes_a_deploy_type_the_release_can_produce() -> None:
     """#560: the release run-name is built from `deploy_type` ("prod") while the
     matrix names environments for humans ("production"). Passing the latter looks

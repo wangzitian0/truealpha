@@ -415,6 +415,86 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "nightly-verdicts/a-stale-verdict-is-red",
+      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "file": "tools/nightly_verdicts.py",
+      "find": "        if age > expectation.max_age_hours:\n",
+      "replace": "        if False:\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_nightly_verdicts.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "nightly-verdicts/a-red-verdict-is-red",
+      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "file": "tools/nightly_verdicts.py",
+      "find": "        if not verdict.ok:\n",
+      "replace": "        if False:\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_nightly_verdicts.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "nightly-verdicts/a-missing-verdict-is-red",
+      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "file": "tools/nightly_verdicts.py",
+      "find": "        if verdict is None:\n",
+      "replace": "        if verdict is None:\n            continue\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_nightly_verdicts.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "nightly-verdicts/a-recorded-check-cannot-go-unwatched",
+      "guard": "libs/runtime/tests/test_nightly_verdicts.py",
+      "file": "apps/data-engine/src/data_engine/lanes/quality.py",
+      "find": "    MODEL_KEY_HEALTH_VERDICT,\n)\n",
+      "replace": "    MODEL_KEY_HEALTH_VERDICT,\n    \"unwatched_check\",\n)\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_nightly_verdicts.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "nightly-verdicts/a-failing-check-writes-a-red-row",
+      "guard": "apps/data-engine/tests/test_nightly_verdicts.py",
+      "file": "apps/data-engine/src/data_engine/quality/nightly_verdicts.py",
+      "find": "ok=False, summary=f\"failed: {summary}\"",
+      "replace": "ok=True, summary=f\"failed: {summary}\"",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "apps/data-engine/tests/test_nightly_verdicts.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

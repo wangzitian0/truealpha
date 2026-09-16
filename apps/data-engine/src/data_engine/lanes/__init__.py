@@ -8,6 +8,11 @@ what the lanes declare (no frozen job set anywhere).
 
 Registering a lane is one line here. A module under this package that is not listed
 is a defect the same test turns red on, so a lane cannot exist half-wired.
+
+A lane that records nightly verdicts (#876) also declares their names in a module-level
+`NIGHTLY_VERDICTS`; `nightly_verdict_names()` is the union, and
+`libs/runtime/tests/test_nightly_verdicts.py` holds it equal to the set
+`tools/nightly_verdicts.py` watches.
 """
 
 from __future__ import annotations
@@ -33,3 +38,11 @@ LANE_MODULES: tuple[str, ...] = (
 def lane_definitions() -> dict[str, dg.Definitions]:
     """Import every registered lane and return its `defs`, keyed by module name."""
     return {name: import_module(name).defs for name in LANE_MODULES}
+
+
+def nightly_verdict_names() -> frozenset[str]:
+    """Every verdict name a registered lane can record in `mart.nightly_verdicts`."""
+    names: set[str] = set()
+    for name in LANE_MODULES:
+        names.update(getattr(import_module(name), "NIGHTLY_VERDICTS", ()))
+    return frozenset(names)
