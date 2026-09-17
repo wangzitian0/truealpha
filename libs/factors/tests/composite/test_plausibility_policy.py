@@ -1,12 +1,17 @@
 """#544 acceptance 1: each invariant fails against a synthetic run reproducing the real
-defect it targets. Four named cases, each the production shape that shipped green."""
+defect it targets. Four named cases, each the production shape that shipped green.
+
+v2 (#528): the sign rule judges the metric-forest node's declared policy instead of v1's
+"a financial branch cannot be negative", which contradicted the definition it judged."""
 
 from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
 from factors.composite import plausibility_policy as policy
-from factors.composite.plausibility_policy import Row, Thresholds, evaluate
+from factors.composite.plausibility_policy import Row, Thresholds, evaluate, sign_signals
+from factors.forest import IssuerClass, SignPolicy, published_node
 
 D = Decimal
 
@@ -62,17 +67,50 @@ def test_ma_price_to_sales_collapsing_on_a_flat_price_is_caught() -> None:
     assert evaluate(silent, PREVIOUS) == []
 
 
-def test_a_negative_bank_metric_is_caught() -> None:
-    """#528: JPM at -510,498 with +$86.8B of pre-provision profit."""
+def test_a_negative_bank_metric_is_a_declared_signal_not_a_violation() -> None:
+    """#528: JPM at -514,726 is what GPPE v0.2.0 (#59) defines as a valid low signal. v1
+    refused it under an expiring exemption; v2 accepts it and names it."""
+    jpm = row("listing:xnys:jpm", "-514726", "5.23", branch="financial", close="300")
+    assert evaluate([jpm], PREVIOUS) == []
+    (signal,) = sign_signals([jpm])
+    assert signal.rule == policy.RULE_NODE_SIGN_POLICY and signal.listing_id == "listing:xnys:jpm"
+    assert "sign-is-signal" in signal.detail and "-514,726.00" in signal.detail
+    # the same holds for every class the node declares, and an unavailable row is not judged
+    assert sign_signals([row("listing:xnas:tsla", "-1", "14", close="300")])
+    assert sign_signals([row("listing:xnys:jpm", "-1", "5", branch="financial", availability="unavailable")]) == []
+    # a non-negative value says nothing
+    assert sign_signals(PREVIOUS) == []
+
+
+@pytest.fixture
+def strict_financial(monkeypatch: pytest.MonkeyPatch) -> None:
+    node = published_node(policy.JUDGED_TABLE, policy.JUDGED_COLUMN)
+    strict = node.model_copy(
+        update={"sign_policy": {**node.sign_policy, IssuerClass.FINANCIAL: SignPolicy.MUST_BE_NON_NEGATIVE}}
+    )
+    monkeypatch.setattr(policy, "published_node", lambda table, column: strict)
+
+
+def test_a_sign_the_node_forbids_is_caught(strict_financial: None) -> None:
+    """The rule is only as strict as the definition: where a node forbids a negative value,
+    the v1 shape is caught exactly as before."""
     current = [row("listing:xnys:jpm", "-514726", "5.23", branch="financial", close="300")]
     (violation,) = evaluate(current, PREVIOUS)
-    assert violation.rule == policy.RULE_SIGN_PER_BRANCH and violation.listing_id == "listing:xnys:jpm"
-    # a negative NON-financial metric is a different question (a loss-making issuer) and
-    # not this rule's; an unavailable row is not judged at all
+    assert violation.rule == policy.RULE_NODE_SIGN_POLICY and violation.listing_id == "listing:xnys:jpm"
+    assert "must-be-non-negative" in violation.detail
+    assert sign_signals(current) == []
+    # the non-financial class still declares a signal, and an unavailable row is not judged
     assert evaluate([row("listing:xnas:tsla", "-1", "14", close="300")], PREVIOUS) == []
     assert (
         evaluate([row("listing:xnys:jpm", "-1", "5", branch="financial", availability="unavailable")], PREVIOUS) == []
     )
+
+
+def test_a_value_for_a_class_the_node_does_not_declare_is_caught() -> None:
+    """No policy vouches for a branch the forest does not know, whatever the sign."""
+    current = [row("listing:xnys:new", "10", "5", branch="sovereign_fund", close="300")]
+    (violation,) = evaluate(current, PREVIOUS)
+    assert violation.rule == policy.RULE_NODE_SIGN_POLICY and "no policy for this issuer class" in violation.detail
 
 
 def test_an_empty_eligible_set_is_caught() -> None:
@@ -89,12 +127,14 @@ def test_the_first_accepted_run_has_no_previous_to_regress_against() -> None:
     assert evaluate(current, []) == []
 
 
-def test_the_thresholds_are_v1_and_named() -> None:
-    assert policy.POLICY_VERSION == "v1"
+def test_the_policy_is_v2_with_v1_thresholds_and_named_rules() -> None:
+    assert policy.POLICY_VERSION == "v2"
     assert Thresholds() == Thresholds(D("1.5"), D("2"), D("1.4"))
     assert set(policy.RULES) == {
         "universe-max-regression",
         "unexplained-valuation-move",
-        "sign-per-branch",
+        "node-sign-policy",
         "empty-eligible-set",
     }
+    # the gate judges the published column the forest ties to GPPE v0.2.0
+    assert published_node(policy.JUDGED_TABLE, policy.JUDGED_COLUMN).key == "gppe"

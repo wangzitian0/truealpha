@@ -60,6 +60,8 @@ on:
       - "libs/runtime/tests/test_health_check.py"
       - "libs/factors/src/factors/base/peg.py"
       - "libs/factors/src/factors/composite/strategy_evaluator.py"
+      - "libs/factors/src/factors/forest/registry.py"
+      - "libs/factors/tests/forest/test_gppe_tree.py"
       - "libs/runtime/tests/test_ci_workflows.py"
       - "libs/runtime/tests/test_escalate_issue.py"
       - "libs/runtime/tests/test_migration_chain.py"

@@ -672,6 +672,38 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "forest/gppe-tree-reproduces-v020",
+      "guard": "libs/factors/tests/forest/test_gppe_tree.py",
+      "file": "libs/factors/src/factors/forest/registry.py",
+      "find": "                IssuerClass.FINANCIAL: (PRE_PROVISION_PROFIT.key,),\n",
+      "replace": "                IssuerClass.FINANCIAL: (TOTAL_ASSETS.key,),\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/factors/tests/forest/test_gppe_tree.py",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
+      "id": "invariants/a-declared-signal-is-printed",
+      "guard": "libs/runtime/tests/test_output_invariants.py",
+      "file": "tools/output_invariants.py",
+      "find": "        signalled = by_policy[SignPolicy.SIGN_IS_SIGNAL]\n",
+      "replace": "        signalled: set[IssuerClass] = set()\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_output_invariants.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

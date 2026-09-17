@@ -1,6 +1,7 @@
 """#544 acceptance 2 and 5, against a real materialized run: the gate reads this run's
-published rows and the previous accepted head, refuses a run policy v1 rejects, defers
-what the nightly suite's exemption file defers, and judges the empty eligible set here."""
+published rows and the previous accepted head, refuses a run the policy rejects, defers
+what the nightly suite's exemption file defers, and judges the empty eligible set here.
+#528: the sign rule reads the metric forest, and a declared low signal is shown, not refused."""
 
 from __future__ import annotations
 
@@ -15,7 +16,9 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, plausibility_gate
-from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_SIGN_PER_BRANCH, RULE_UNIVERSE_MAX
+from factors.composite import plausibility_policy
+from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY, RULE_UNIVERSE_MAX
+from factors.forest import IssuerClass, SignPolicy, published_node
 from factors.production_topt import GppeV0Definition
 from truealpha_contracts.common import canonical_sha256
 
@@ -80,7 +83,7 @@ def _exemptions(tmp_path: Path, expires: str) -> Path:
             {
                 "exemptions": [
                     {
-                        "invariant": "gppe-not-negative",
+                        "invariant": "node-sign-policy",
                         "issue": "#528",
                         "expires": expires,
                         "reason": "test",
@@ -160,24 +163,57 @@ def test_xoms_shape_is_refused_against_the_previous_accepted_run(connection, tmp
     ).refused
 
 
-def test_a_negative_bank_metric_is_deferred_only_while_the_exemption_lives(connection, tmp_path) -> None:
-    run_id, snapshot = _materialized_run(connection)
-    _point_head_at(connection, run_id, snapshot)
+def _jpm_negative(connection, run_id: str) -> None:
     _bypass_append_only(connection)
     connection.execute(
         "update mart.topt_core_results set operating_efficiency = -514726, availability = 'available' "
         "where run_id = %s and listing_id = 'listing:xnys:jpm'",
         (run_id,),
     )
+
+
+def test_a_negative_bank_metric_is_a_declared_signal_shown_on_the_tick(connection, tmp_path) -> None:
+    """#528: GPPE v0.2.0 declares a negative value a valid low signal for every class (#59), so
+    JPM's -514,726 is neither refused nor deferred: it is carried as a signal and printed by
+    name, with no exemption in force at all."""
+    run_id, snapshot = _materialized_run(connection)
+    _point_head_at(connection, run_id, snapshot)
+    _jpm_negative(connection, run_id)
+    verdict = plausibility_gate.judge_run(
+        connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2000-01-01"), today=date(2026, 9, 24)
+    )
+    assert not verdict.refused and verdict.deferred == ()
+    assert [(s.rule, s.listing_id) for s in verdict.signals] == [(RULE_NODE_SIGN_POLICY, "listing:xnys:jpm")]
+    (line,) = [line for line in verdict.lines() if line.startswith("  SIGNAL")]
+    assert "listing:xnys:jpm" in line and "-514,726.00" in line and "sign-is-signal" in line
+
+
+def test_a_sign_the_node_forbids_is_refused_unless_an_unexpired_exemption_defers_it(
+    connection, tmp_path, monkeypatch
+) -> None:
+    """The rule has teeth: had the definition declared the financial component
+    `must-be-non-negative`, the same row is refused — deferred only while an exemption lives."""
+    node = published_node(plausibility_policy.JUDGED_TABLE, plausibility_policy.JUDGED_COLUMN)
+    strict = node.model_copy(
+        update={"sign_policy": {**node.sign_policy, IssuerClass.FINANCIAL: SignPolicy.MUST_BE_NON_NEGATIVE}}
+    )
+    monkeypatch.setattr(plausibility_policy, "published_node", lambda table, column: strict)
+    run_id, snapshot = _materialized_run(connection)
+    _point_head_at(connection, run_id, snapshot)
+    _jpm_negative(connection, run_id)
     live = plausibility_gate.judge_run(
         connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2026-09-16"), today=date(2026, 9, 8)
     )
-    assert not live.refused and [v.rule for v, _ in live.deferred] == [RULE_SIGN_PER_BRANCH]
+    assert not live.refused and [v.rule for v, _ in live.deferred] == [RULE_NODE_SIGN_POLICY]
     assert "exempt until 2026-09-16 under #528" in live.deferred[0][1]
+    assert live.signals == ()
     expired = plausibility_gate.judge_run(
         connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2026-09-16"), today=date(2026, 9, 17)
     )
-    assert expired.refused and [v.rule for v in expired.violations] == [RULE_SIGN_PER_BRANCH]
+    assert expired.refused and [(v.rule, v.listing_id) for v in expired.violations] == [
+        (RULE_NODE_SIGN_POLICY, "listing:xnys:jpm")
+    ]
+    assert "must-be-non-negative" in expired.violations[0].detail
 
 
 def test_an_empty_eligible_set_is_judged_here_not_on_a_second_issue(connection, tmp_path) -> None:
