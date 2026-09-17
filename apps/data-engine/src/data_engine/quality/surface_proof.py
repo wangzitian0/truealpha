@@ -5,7 +5,10 @@ The deploy's Playwright walk proves each route renders; nothing proved that the 
 it belong to the run the governed pointer names. Each App reader picks its run with its own
 SQL, copied here verbatim so the proof asks exactly what the page asks, and the proof is
 that every answer is the head: a page serving an older run than its neighbours contradicts
-the App's own head with every gate green. The coverage report is held to more than its run:
+the App's own head with every gate green. "The head" is the one the reader itself would pick
+once every universe's reports are current: the theme reader is universe-blind, so its head is
+the newest governed head among the universes the theme lane covers, not TOPT's (#910). The
+coverage report is held to more than its run:
 it is recomputed from the same tables, and a stored report that no longer matches what the
 tables say is stale even when its run id is right.
 
@@ -55,12 +58,25 @@ QQQ = "universe-list:qqq"
 _STRATEGY_HEAD_SQL = "select target_run_id, strategy_run_id from mart.governed_strategy_run"
 #: `apps/app-web/src/server/mart/theme-purity.ts` `LATEST_RUN_SQL`: the newest run in the
 #: table, deliberately not the pointer — which is exactly why it has to be checked against it.
+#: No universe filter: every universe's head gets purity rows, and the page names a run and a
+#: cutoff, never a universe, so it serves whichever head cut off last (`themes_verdict`).
 _THEMES_HEAD_SQL = """
 select run_id, max(cutoff) as cutoff
 from mart.issuer_theme_purity
 group by run_id
 order by max(cutoff) desc
 limit 1
+"""
+#: Whether a run has purity rows, i.e. whether the theme reader could select it.
+_THEME_ROWS_SQL = "select exists (select 1 from mart.issuer_theme_purity where run_id = %s)"
+#: Whether any run a universe's pointer ever named has purity rows: whether the theme lane
+#: covers that universe in this environment.
+_THEME_UNIVERSE_SQL = """
+select exists (
+    select 1 from mart.current_pointer p
+    join mart.issuer_theme_purity t on t.run_id = p.target_run_id
+    where p.environment = %s and p.factor_id = %s and p.universe_id like %s
+)
 """
 #: `apps/app-web/src/server/mart/fund-valuation.ts` `QQQ_POINTER_HEAD_SQL`.
 _HOLDINGS_HEAD_SQL = """
@@ -91,6 +107,8 @@ where environment = %s and factor_id = %s and universe_id = %s and target_run_id
 """
 #: A universe this environment never ticks: nothing to serve and nothing served.
 _NOT_RUN_HERE = "not-run-in-this-environment"
+_THEMES_SURFACE = "/research/themes"
+_THEMES_READER = "theme-purity.ts LATEST_RUN_SQL"
 
 
 @dataclass(frozen=True)
@@ -194,8 +212,8 @@ def prove(
         # probe's red verdict (#876 W2), not this surface's.
         verdicts.append(
             SurfaceVerdict(
-                surface="/research/themes",
-                reader="theme-purity.ts LATEST_RUN_SQL",
+                surface=_THEMES_SURFACE,
+                reader=_THEMES_READER,
                 expected_run=_NOT_RUN_HERE,
                 served_run=_NOT_RUN_HERE,
                 detail="no model provider seated in this environment; the theme lane is off",
@@ -203,16 +221,7 @@ def prove(
             )
         )
     else:
-        verdicts.append(
-            SurfaceVerdict(
-                surface="/research/themes",
-                reader="theme-purity.ts LATEST_RUN_SQL",
-                expected_run=_run(topt),
-                served_run=str(row[0]) if row else None,
-                detail="" if row else _no_theme_rows(connection, topt),
-                universe=TOPT,
-            )
-        )
+        verdicts.append(themes_verdict(connection, heads, str(row[0]) if row else None))
 
     row = connection.execute(_HOLDINGS_HEAD_SQL).fetchone()
     served = str(row[0]) if row else None
@@ -295,6 +304,78 @@ def _settle(verdict: SurfaceVerdict, pending: Mapping[str, str]) -> SurfaceVerdi
 
 def _run(head: GovernedHead | None) -> str | None:
     return head.run_id if head else None
+
+
+def _exists(connection: Connection[Any], sql: str, params: tuple[Any, ...]) -> bool:
+    row = connection.execute(sql, params).fetchone()
+    return bool(row and row[0])
+
+
+def themes_verdict(
+    connection: Connection[Any], heads: Mapping[str, GovernedHead | None], served: str | None
+) -> SurfaceVerdict:
+    """/research/themes against the head its own reader picks once every universe's reports
+    are current.
+
+    `LATEST_RUN_SQL` has no universe filter: it serves the run with the newest cutoff in the
+    table, and the head reports write purity rows for every universe's head. So the head it
+    must serve is the newest-cutoff head among the universes the theme lane covers here (any
+    run their pointer ever named has rows). In production that is the QQQ head, whose tick
+    cuts off after TOPT's every day; expecting TOPT's head failed every nightly proof there
+    (#910). Equal cutoffs leave the reader's order undefined, so either tied head is its head.
+
+    The verdict names that head's universe, so its settling state decides IN-PROGRESS. When
+    the newest head has no rows yet while an older run is served, the page changes when that
+    universe's head reports land, whichever universe's run is served meanwhile; a quiet one in
+    that state is a MISMATCH, because partitions only accumulate and a covered universe's new
+    head should have rows again. A universe the lane has never covered cannot be selected, so
+    its newer head is not expected. When no run any pointer named has rows, every head is a
+    candidate and the newest is named, with what the plane under it holds.
+    """
+    environment = CaptureEnvironment.PRODUCTION.value
+    present = {universe: head for universe, head in heads.items() if head is not None}
+    covered = {
+        universe: head
+        for universe, head in present.items()
+        if _exists(connection, _THEME_UNIVERSE_SQL, (environment, GOVERNING_FACTOR, UNIVERSE_PREFIXES[universe] + "%"))
+    }
+    candidates = covered or present
+    if not candidates:
+        return SurfaceVerdict(
+            surface=_THEMES_SURFACE,
+            reader=_THEMES_READER,
+            expected_run=None,
+            served_run=served,
+            detail="" if served else _no_theme_rows(connection, None),
+            universe=TOPT,
+        )
+    newest = max(head.cutoff for head in candidates.values())
+    tied = sorted(universe for universe, head in candidates.items() if head.cutoff == newest)
+    universe = next((name for name in tied if candidates[name].run_id == served), tied[0])
+    head = candidates[universe]
+    if served is None:
+        detail = _no_theme_rows(connection, head)
+    elif served == head.run_id:
+        detail = f"the {universe} head, the newest of a universe with theme rows"
+    else:
+        notes: list[str] = []
+        if not covered:
+            notes.append("no run a governed pointer named has theme rows")
+        elif not _exists(connection, _THEME_ROWS_SQL, (head.run_id,)):
+            notes.append(f"the {universe} head, the newest of a universe with theme rows, has none")
+        owner = next((name for name, other in present.items() if other.run_id == served), None)
+        notes.append(
+            f"the served run is the {owner} head" if owner else "the served run is no universe's governed head"
+        )
+        detail = "; ".join(notes)
+    return SurfaceVerdict(
+        surface=_THEMES_SURFACE,
+        reader=_THEMES_READER,
+        expected_run=head.run_id,
+        served_run=served,
+        detail=detail,
+        universe=universe,
+    )
 
 
 def _no_theme_rows(connection: Connection[Any], head: GovernedHead | None) -> str:
