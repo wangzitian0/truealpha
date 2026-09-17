@@ -476,9 +476,16 @@ comment on view staging.entity_backfill_plan is
 -- gets `same_as` and `superseded_by` edges to it.
 -- Nothing is updated. Values the registry refuses are held back; a component that cannot be
 -- written (its aliases already name another kind, or a guard refuses a row) is rolled back
--- on its own and reported. This runs on every boot and must never crash-loop a service on
--- data it did not expect; what it held back is in the returned summary, which the boot log
--- prints.
+-- on its own and reported. A run never fails on data it did not expect; what it held back
+-- is in the returned summary.
+--
+-- Cost. Every read in the loops is an index lookup on the rows it is about. v0.0.80's
+-- version filtered the whole store through staging.entity_survivor() and the *_valid_to()
+-- helpers once per component and per relation claim: about 150,000 SQL-function
+-- executions for 772 aliases, 0.1-0.3 ms each on staging, 34 s in all. Here the survivor of
+-- every entity is computed once into a temporary map that the loop keeps current as it
+-- mints and merges, and a claim's effective end is an inline scalar subquery on the
+-- retractions index. The answers are the helpers' answers as known now ('infinity').
 create or replace function staging.entity_backfill()
 returns jsonb
 language plpgsql
@@ -508,6 +515,7 @@ begin
     end if;
     create temporary table entity_backfill_claims on commit drop as
         select * from staging.entity_backfill_plan;
+    create index on pg_temp.entity_backfill_claims (claim, kind, component);
 
     -- The registry, not the plan, knows which values are well formed and which schemes
     -- never change hands (those hold for all time once assigned).
@@ -524,6 +532,7 @@ begin
      where claim.claim = 'alias'
        and claim.status = 'planned'
        and scheme.scheme = claim.scheme;
+    analyze pg_temp.entity_backfill_claims;
 
     if to_regclass('pg_temp.entity_backfill_components') is not null then
         drop table pg_temp.entity_backfill_components;
@@ -534,6 +543,35 @@ begin
         entity_id uuid not null,
         primary key (kind, component)
     ) on commit drop;
+
+    -- Every entity and the entity it survives as now: staging.entity_survivor(x, 'infinity')
+    -- for all x in one pass, kept current below as entities are minted and merged.
+    if to_regclass('pg_temp.entity_backfill_survivors') is not null then
+        drop table pg_temp.entity_backfill_survivors;
+    end if;
+    create temporary table entity_backfill_survivors on commit drop as
+    with recursive edge as (
+        select distinct on (relation.from_entity_id) relation.from_entity_id, relation.to_entity_id
+        from staging.entity_relations relation
+        where relation.relation_type = 'superseded_by'
+          and not exists (
+              select 1 from staging.entity_retractions retraction
+              where retraction.relation_id = relation.relation_id)
+        order by relation.from_entity_id, relation.transaction_time desc, relation.relation_id desc
+    ), walk(entity_id, current_id, depth) as (
+        select entity.entity_id, entity.entity_id, 0 from staging.entities entity
+        union all
+        select walk.entity_id, edge.to_entity_id, walk.depth + 1
+        from walk
+        join edge on edge.from_entity_id = walk.current_id
+        where walk.depth < 32
+    )
+    select distinct on (entity_id) entity_id, current_id as survivor_id
+    from walk
+    order by entity_id, depth desc;
+    alter table pg_temp.entity_backfill_survivors add primary key (entity_id);
+    create index on pg_temp.entity_backfill_survivors (survivor_id);
+    analyze pg_temp.entity_backfill_survivors;
 
     for v_component in
         select kind, component
@@ -548,19 +586,24 @@ begin
 
             -- Entities that already hold one of this component's unique aliases over an
             -- overlapping validity, as the entities they survive as.
-            select array_agg(distinct staging.entity_survivor(alias.entity_id, 'infinity'))
+            select array_agg(distinct holder.survivor_id)
               into v_existing
             from pg_temp.entity_backfill_claims claim
             join staging.entity_alias_schemes scheme
               on scheme.scheme = claim.scheme and scheme.is_unique
             join staging.entity_aliases alias
               on alias.scheme = claim.scheme and alias.value = claim.value
+            join pg_temp.entity_backfill_survivors holder
+              on holder.entity_id = alias.entity_id
+            cross join lateral (
+                select coalesce(least(alias.valid_to, (
+                           select min(retraction.valid_to) from staging.entity_retractions retraction
+                           where retraction.alias_id = alias.alias_id)), 'infinity'::date) as effective_to
+            ) held
             where claim.claim = 'alias' and claim.status = 'planned'
               and claim.kind = v_component.kind and claim.component = v_component.component
-              and alias.valid_from
-                  < coalesce(staging.entity_alias_valid_to(alias.alias_id, 'infinity'), 'infinity'::date)
-              and claim.valid_from
-                  < coalesce(staging.entity_alias_valid_to(alias.alias_id, 'infinity'), 'infinity'::date);
+              and alias.valid_from < held.effective_to
+              and claim.valid_from < held.effective_to;
 
             if exists (
                 select 1 from staging.entities entity
@@ -584,6 +627,8 @@ begin
 
             if v_existing is null then
                 v_survivor := staging.entity_mint(v_component.kind, v_birth_scheme, v_birth_value, v_version);
+                insert into pg_temp.entity_backfill_survivors (entity_id, survivor_id)
+                values (v_survivor, v_survivor);
             else
                 -- The survivor follows the same rule: the entity born from the component's
                 -- birth alias, else the one whose birth alias became knowable first. A store
@@ -626,6 +671,9 @@ begin
                                v_merge_known, 'entity-backfill', v_component.component, 'merge', 1.0,
                                v_merge_evidence, v_version
                         from (values ('same_as'), ('superseded_by')) as edge (relation_type);
+                        update pg_temp.entity_backfill_survivors
+                           set survivor_id = v_survivor
+                         where survivor_id = v_loser;
                     end loop;
                 end if;
             end if;
@@ -638,12 +686,17 @@ begin
                          claim.transaction_time, claim.scheme, claim.value, claim.method, claim.source
             loop
                 if exists (
-                    select 1 from staging.entity_aliases alias
+                    select 1
+                    from staging.entity_aliases alias
+                    join pg_temp.entity_backfill_survivors holder
+                      on holder.entity_id = alias.entity_id and holder.survivor_id = v_survivor
                     where alias.scheme = v_claim.scheme and alias.value = v_claim.value
                       and alias.method = v_claim.method and alias.source = v_claim.source
                       and alias.valid_from <= v_claim.valid_from
-                      and staging.entity_alias_valid_to(alias.alias_id, 'infinity') is null
-                      and staging.entity_survivor(alias.entity_id, 'infinity') = v_survivor
+                      and alias.valid_to is null
+                      and not exists (
+                          select 1 from staging.entity_retractions retraction
+                          where retraction.alias_id = alias.alias_id)
                 ) then
                     continue;
                 end if;
@@ -663,6 +716,7 @@ begin
                 'component', v_component.component, 'kind', v_component.kind, 'error', sqlerrm);
         end;
     end loop;
+    analyze pg_temp.entity_backfill_survivors;
 
     for v_claim in
         select * from pg_temp.entity_backfill_claims claim
@@ -686,14 +740,19 @@ begin
         -- before then is history, and one withdrawn outright never held.
         if exists (
             select 1
-            from staging.entity_relations relation
+            from pg_temp.entity_backfill_survivors target
+            join staging.entity_relations relation
+              on relation.to_entity_id = target.entity_id
+             and relation.relation_type = v_claim.relation_type
+            join pg_temp.entity_backfill_survivors origin
+              on origin.entity_id = relation.from_entity_id
             cross join lateral (
-                select coalesce(staging.entity_relation_valid_to(relation.relation_id, 'infinity'),
-                                'infinity'::date) as effective_to
+                select coalesce(least(relation.valid_to, (
+                           select min(retraction.valid_to) from staging.entity_retractions retraction
+                           where retraction.relation_id = relation.relation_id)), 'infinity'::date) as effective_to
             ) held
-            where relation.relation_type = v_claim.relation_type
-              and staging.entity_survivor(relation.to_entity_id, 'infinity') = v_to
-              and staging.entity_survivor(relation.from_entity_id, 'infinity') <> v_from
+            where target.survivor_id = v_to
+              and origin.survivor_id <> v_from
               and relation.valid_from < held.effective_to
               and v_claim.valid_from < held.effective_to
         ) then
@@ -704,13 +763,20 @@ begin
             continue;
         end if;
         if exists (
-            select 1 from staging.entity_relations relation
-            where relation.relation_type = v_claim.relation_type
-              and staging.entity_survivor(relation.from_entity_id, 'infinity') = v_from
-              and staging.entity_survivor(relation.to_entity_id, 'infinity') = v_to
+            select 1
+            from pg_temp.entity_backfill_survivors target
+            join staging.entity_relations relation
+              on relation.to_entity_id = target.entity_id
+             and relation.relation_type = v_claim.relation_type
+            join pg_temp.entity_backfill_survivors origin
+              on origin.entity_id = relation.from_entity_id and origin.survivor_id = v_from
+            where target.survivor_id = v_to
               and relation.method = v_claim.method and relation.source = v_claim.source
               and relation.valid_from <= v_claim.valid_from
-              and staging.entity_relation_valid_to(relation.relation_id, 'infinity') is null
+              and relation.valid_to is null
+              and not exists (
+                  select 1 from staging.entity_retractions retraction
+                  where retraction.relation_id = relation.relation_id)
         ) then
             continue;
         end if;
@@ -761,7 +827,6 @@ comment on function staging.entity_backfill() is
     '#877 PR-2: apply staging.entity_backfill_plan. Idempotent; returns what it wrote, held back and failed. '
     'Run by the Dagster job entity_identity_backfill, never by a boot migration.';
 
--- Every boot: new legacy ids keep getting an entity until captures carry UUIDs (PR-3).
 
 -- ---------------------------------------------------------------------------------------
 -- When is a backfill due? (the sensor's reads)
