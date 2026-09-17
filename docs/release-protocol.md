@@ -100,6 +100,16 @@ still be the one whose merge commit is main HEAD (unchanged, see
 what `deploy-release.yml`'s prod gate reviews, and it is always the newest PR
 in the derived range by construction.
 
+A resumed ceremony (`--resume` / `--redeploy`, #811) derives the same batch as
+the attempt it resumes (#913). Its tag is already on origin at main HEAD, so
+the derived range starts at the release before that tag, not at the tag
+itself. Counting from the tag itself gave an empty range, and the v0.0.80 and
+v0.0.83 retries on 2026-09-17 both failed with "nothing to release". Only a
+tag that is already verified to sit at main HEAD is skipped this way. A new
+number cut at an already-released HEAD still has nothing to release.
+`libs/runtime/tests/test_cut_release.py` runs the script end to end against a
+throwaway origin to check this.
+
 ## Staging verification is two facts, not one
 
 Before #855/#860, a release's Playwright walk ran INSIDE `deploy-release.yml`'s

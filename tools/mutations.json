@@ -704,6 +704,22 @@
         "-q"
       ],
       "cwd": "."
+    },
+    {
+      "id": "cut-release/a-resume-counts-from-the-release-before-its-tag",
+      "guard": "libs/runtime/tests/test_cut_release.py",
+      "file": "tools/cut_release.sh",
+      "find": "[ \"$TAG_EXISTS\" = \"1\" ] && RESUMED_TAG=\"$TAG\"",
+      "replace": "[ \"$TAG_EXISTS\" = \"1\" ] && RESUMED_TAG=\"\"",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "libs/runtime/tests/test_cut_release.py",
+        "-q"
+      ],
+      "cwd": "."
     }
   ]
 }

@@ -38,7 +38,9 @@
 #   on 2026-09-15 were five tags for five PRs, each paying the full ~10 min
 #   tag-CI + deploy pipeline alone. Passing --prs explicitly still works
 #   exactly as before (a break-glass single-PR release stays possible) and is
-#   REQUIRED when no prior release tag exists to derive a range from.
+#   REQUIRED when no prior release tag exists to derive a range from. With
+#   --resume/--redeploy the range starts at the release BEFORE $TAG, since
+#   $TAG itself already sits at main HEAD (#913).
 # --dry-run performs every read-only assertion and prints the plan.
 # --resume: $TAG already exists on origin (script was killed, laptop slept, the
 #   post-deploy walk flaked after the tag was pushed) — verify the tag is at
@@ -118,10 +120,13 @@ next_patch() {
 # patch number needs two digits. Walks newest-first and returns the first tag
 # whose commit is actually an ancestor of $1, so a same-named tag pointing
 # somewhere else (a corrupted or reused ref) is skipped rather than trusted.
+# An optional $2 names one tag to pass over: the tag being resumed (#913 —
+# see step 2c).
 newest_release_tag() {
-  local target="$1" name sha
+  local target="$1" exclude="${2:-}" name sha
   while read -r name sha; do
     [ -n "$name" ] || continue
+    [ "$name" != "$exclude" ] || continue
     if git cat-file -e "${sha}^{commit}" 2>/dev/null && git merge-base --is-ancestor "$sha" "$target" 2>/dev/null; then
       echo "$name"
       return 0
@@ -270,8 +275,19 @@ fi
 #     five PRs, each paying the full tag-CI + deploy pipeline alone.
 #     `--prs` explicit still works exactly as it always has (a break-glass
 #     single-PR release stays possible) and skips all of this.
+#     #913: on --resume/--redeploy, $TAG is already on origin and step 2b has
+#     just proved it points at main HEAD — so $TAG itself IS the newest
+#     reachable release tag, and counting from it gave an empty range ("nothing
+#     to release") on every resume: the v0.0.80 and v0.0.83 retries on
+#     2026-09-17 both died that way. Count from the release before it instead,
+#     which is the base the first attempt derived its list from. Only a
+#     verified TAG_EXISTS passes over it: a fresh release keeps counting from
+#     the newest tag, so a main HEAD that is already released still fails here
+#     as nothing to release.
 if [ -z "$PRS" ]; then
-  BASE_TAG=$(newest_release_tag "$LOCAL_MAIN")
+  RESUMED_TAG=""
+  [ "$TAG_EXISTS" = "1" ] && RESUMED_TAG="$TAG"
+  BASE_TAG=$(newest_release_tag "$LOCAL_MAIN" "$RESUMED_TAG")
   [ -n "$BASE_TAG" ] \
     || fail "no prior vX.Y.Z release tag is reachable from main to derive --prs from — pass --prs explicitly for a first release"
   echo "== deriving --prs: every merge on main since $BASE_TAG =="
