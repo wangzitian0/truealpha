@@ -134,20 +134,26 @@ from (values
 ) as seed (kind, parent_kind, is_abstract, description)
 on conflict (kind) do nothing;
 
--- Is `p_kind` the kind `p_ancestor` or a descendant of it?
+-- Is `p_kind` the kind `p_ancestor` or a descendant of it? plpgsql rather than a recursive
+-- SQL function: every alias and relation insert asks, and plpgsql keeps its plan for the
+-- session where a SQL function is planned again for each calling statement.
 create or replace function staging.entity_kind_is_a(p_kind text, p_ancestor text)
 returns boolean
-language sql stable
+language plpgsql stable
 as $$
-    with recursive lineage(kind, depth) as (
-        select p_kind, 0
-        union all
-        select parent.parent_kind, lineage.depth + 1
-        from lineage
-        join staging.entity_kinds parent on parent.kind = lineage.kind
-        where parent.parent_kind is not null and lineage.depth < 16
-    )
-    select exists (select 1 from lineage where kind = p_ancestor);
+declare
+    v_kind text := p_kind;
+    v_depth integer := 0;
+begin
+    while v_kind is not null and v_depth <= 16 loop
+        if v_kind = p_ancestor then
+            return true;
+        end if;
+        select parent_kind into v_kind from staging.entity_kinds where kind = v_kind;
+        v_depth := v_depth + 1;
+    end loop;
+    return false;
+end;
 $$;
 
 -- ---------------------------------------------------------------------------------------

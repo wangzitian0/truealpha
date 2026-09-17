@@ -32,6 +32,8 @@ LANE_MODULES: tuple[str, ...] = (
     "data_engine.lanes.quality",
     # the standard→wide-row loop's slow plane (#735 / #733): weekly backfill + probe
     "data_engine.lanes.standards",
+    # datahub: the entity identity backfill (#877), sensor-launched, never at boot
+    "data_engine.lanes.entity_identity",
 )
 
 
