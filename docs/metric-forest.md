@@ -135,7 +135,7 @@ the owner's decision.
 
 ## 3. The initial forest
 
-The forest below is the target, not the first PR. Solid boxes are registered in step B;
+The forest below is the target, not the first PR. Solid boxes are what step B (#909, proposed) registers;
 dashed boxes are the trees of steps E and G (§11).
 
 ```mermaid
@@ -146,7 +146,7 @@ flowchart TB
   VC[[value_creation]]:::concept
   CS[[cost_structure]]:::concept
 
-  subgraph T1["tree gppe @ production-topt-v0.2.0 (registered)"]
+  subgraph T1["tree gppe @ production-topt-v0.2.0 (step B, #909)"]
     GPPE[gppe] -->|ratio| CAGP[capital_adjusted_gross_profit]
     GPPE -->|ratio| EMP[(employees_total)]
     CAGP -->|difference| OGP[operating_gross_profit]
@@ -198,7 +198,7 @@ flowchart TB
 
 | tree | realizes | root = … | sign policy of the root | step |
 |---|---|---|---|---|
-| `gppe @ production-topt-v0.2.0` | labor_efficiency | (operating gross profit − total_assets × rf) / employees | `sign-is-signal`, every class (#59's reading) | **B (implemented)** |
+| `gppe @ production-topt-v0.2.0` | labor_efficiency | (operating gross profit − total_assets × rf) / employees | `sign-is-signal`, every class (#59's reading) | **B** (proposed in #909) |
 | `labor_efficiency.operating_financial @ v1` | labor_efficiency, value_creation | operating real profit / employees and financial real profit / employees. `real_profit` = sum of the two. | both `sign-is-signal`: "some managers beat Treasuries, some do not" (#59 item 5) | E |
 | `value_creation.mva @ v1` | value_creation | market value − invested capital | `sign-is-signal` (value destroyed is a signal) | G |
 | `labor_efficiency.labor_cost @ v1` | labor_efficiency | gross profit / (salaries + SBC) (#59 item 2) | `sign-is-signal` | G |
