@@ -59,10 +59,22 @@ begin
 end;
 $$;
 
-create index if not exists idx_contract_objects_usage_audit_run
-    on staging.contract_objects ((payload ->> 'strategy_run_id'), recorded_at desc)
-    where contract_kind = 'strategy_usage_audit';
+do $$
+begin
+    if to_regclass('staging.idx_contract_objects_usage_audit_run') is null then
+        create index if not exists idx_contract_objects_usage_audit_run
+            on staging.contract_objects ((payload ->> 'strategy_run_id'), recorded_at desc)
+            where contract_kind = 'strategy_usage_audit';
+    end if;
+end
+$$;
 
-create index if not exists idx_contract_objects_quality_review_run
-    on staging.contract_objects ((payload ->> 'strategy_run_id'), recorded_at desc)
-    where contract_kind = 'strategy_data_quality_review';
+do $$
+begin
+    if to_regclass('staging.idx_contract_objects_quality_review_run') is null then
+        create index if not exists idx_contract_objects_quality_review_run
+            on staging.contract_objects ((payload ->> 'strategy_run_id'), recorded_at desc)
+            where contract_kind = 'strategy_data_quality_review';
+    end if;
+end
+$$;
