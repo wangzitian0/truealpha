@@ -5,6 +5,7 @@
     "datahub_confidence_report@universe-list:qqq": {"cadence_hours": 24, "job": "datahub_confidence_report"},
     "model_key_health": {"cadence_hours": 24, "job": "model_key_health"},
     "output_invariants": {"cadence_hours": 24, "job": "output_invariants_check"},
+    "release_fetch_proof": {"cadence_hours": 24, "job": "release_fetch_proof"},
     "question_coverage@topt": {"cadence_hours": 24, "job": "head_reports_pipeline"},
     "question_coverage@universe-list:qqq": {"cadence_hours": 24, "job": "head_reports_pipeline"},
     "report_surface_proof": {"cadence_hours": 24, "job": "output_invariants_check"},

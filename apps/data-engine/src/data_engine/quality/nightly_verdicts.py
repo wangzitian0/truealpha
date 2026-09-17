@@ -8,7 +8,8 @@ and `tools/nightly_verdicts.py` (deploy-freshness, daily) goes red on a verdict 
 stale, or missing.
 
 `verdict()` wraps a check's body. On a normal exit it records `ok = true` with the summary
-the body set; on ANY exception — the check's own `dg.Failure` or a crash — it records
+the body set, or `ok = null` when the body marked the verdict pending (a check that cannot
+judge yet, `release_fetch_proof` before its first proving run); on ANY exception — the check's own `dg.Failure` or a crash — it records
 `ok = false` and re-raises the original, so the Dagster run stays red exactly as before.
 
 What a verdict is named: the check, plus the universe for per-universe checks
@@ -98,9 +99,10 @@ def bounded(summary: str) -> str:
     return line if len(line) <= SUMMARY_LIMIT else line[: SUMMARY_LIMIT - 1] + "…"
 
 
-def record(name: str, *, ran_at: datetime, ok: bool, summary: str, run_id: str) -> None:
+def record(name: str, *, ran_at: datetime, ok: bool | None, summary: str, run_id: str) -> None:
     """Append one verdict on its own autocommit connection: the row must survive whatever
-    the check's own transaction does, exactly like the call ledger's (`sources.gateway`)."""
+    the check's own transaction does, exactly like the call ledger's (`sources.gateway`).
+    `ok` is null for a pending verdict (`20260917T1212_datahub_nightly_verdict_pending.sql`)."""
     if not is_valid_name(name):
         raise ValueError(f"not a verdict name: {name!r}")
     with psycopg.connect(settings.database_url, autocommit=True) as connection:
@@ -110,9 +112,11 @@ def record(name: str, *, ran_at: datetime, ok: bool, summary: str, run_id: str) 
 @dataclass
 class Outcome:
     """What the check body reports: the summary of its verdict (green, or the red it is
-    about to raise). Left empty, a green run says `ok` and a crash names its exception."""
+    about to raise). Left empty, a green run says `ok` and a crash names its exception.
+    `pending` records the normal exit as `ok = null`: the check ran and cannot judge yet."""
 
     summary: str = ""
+    pending: bool = False
 
 
 @contextmanager
@@ -136,4 +140,10 @@ def verdict(name: str, *, registered: Collection[str], run_id: str, tick: dateti
         raise
     # A green check whose verdict cannot be written raises: the watchdog would otherwise
     # read the previous night's row, and the run is where that loss becomes visible.
-    record(name, ran_at=tick or datetime.now(UTC), ok=True, summary=outcome.summary or "ok", run_id=run_id)
+    record(
+        name,
+        ran_at=tick or datetime.now(UTC),
+        ok=None if outcome.pending else True,
+        summary=outcome.summary or ("pending" if outcome.pending else "ok"),
+        run_id=run_id,
+    )

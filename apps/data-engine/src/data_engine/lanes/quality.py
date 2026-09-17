@@ -19,6 +19,11 @@ The third is the model-provider key probe (#876 W2): one minimal ask a day throu
 source gateway, so a revoked key is a red verdict by 07:00 instead of a human reading the
 ledger (#832).
 
+The fourth is the release fetch proof (`quality.release_fetch_proof`): whether the first
+scheduled or forced tick of the current deployment fetched from every registered origin
+itself. Production's boot canary reuses the night's observations, so nothing else shows that
+a promoted release's fetch path works.
+
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
 scheduled deploy-freshness workflow pages on a red, stale or missing one. The names a run
@@ -67,6 +72,8 @@ CONFIDENCE_REPORT_JOB_NAME = "datahub_confidence_report"
 # 00:45 UTC: after the invariants (00:15) have had their say on the same heads, and the
 # SEC oracle's handful of company-facts reads land in a quiet window for the shared
 # 10 req/s seat. Manual runs launch the same job by name with an explicit `executed_at`.
+# The report waits for a settled universe first, like the surface proof: a slow QQQ tick
+# can still commit after 00:20, and the pointer sensor then rewrites that head's reports.
 CONFIDENCE_REPORT_CRON = "45 0 * * *"
 CONFIDENCE_REPORT_UNIVERSES = ("universe-list:qqq", "topt")
 
@@ -75,16 +82,24 @@ MODEL_KEY_HEALTH_JOB_NAME = "model_key_health"
 # the verdict, so a daemon that is merely slow still lands inside the day's check.
 MODEL_KEY_HEALTH_CRON = "0 6 * * *"
 
+RELEASE_FETCH_PROOF_JOB_NAME = "release_fetch_proof"
+# 06:15 UTC: after every scheduled tick of the night (22:15 through the 23:47 canary) has
+# finished, and before deploy-freshness (07:00) reads the verdict. The verdict is pending
+# until the deployment's first scheduled or forced tick has finished.
+RELEASE_FETCH_PROOF_CRON = "15 6 * * *"
+
 #: Verdict names (`mart.nightly_verdicts.check_name`) this lane records.
 OUTPUT_INVARIANTS_VERDICT = "output_invariants"
 REPORT_SURFACE_VERDICT = "report_surface_proof"
 CONFIDENCE_REPORT_VERDICT = "datahub_confidence_report"
 MODEL_KEY_HEALTH_VERDICT = "model_key_health"
+RELEASE_FETCH_PROOF_VERDICT = "release_fetch_proof"
 NIGHTLY_VERDICTS: tuple[str, ...] = (
     OUTPUT_INVARIANTS_VERDICT,
     REPORT_SURFACE_VERDICT,
     *(check_name(CONFIDENCE_REPORT_VERDICT, universe) for universe in CONFIDENCE_REPORT_UNIVERSES),
     MODEL_KEY_HEALTH_VERDICT,
+    RELEASE_FETCH_PROOF_VERDICT,
 )
 
 #: The suite as the image carries it (Dockerfile), or the repository copy for local runs.
@@ -201,7 +216,8 @@ _sleep = time.sleep
 
 
 def _await_settled(context: dg.OpExecutionContext) -> None:
-    """Poll until no universe is settling, or until `SURFACE_SETTLE_TIMEOUT` has passed."""
+    """Poll until no universe is settling, or until `SURFACE_SETTLE_TIMEOUT` has passed.
+    The surface proof and the confidence report both judge heads through it."""
     deadline = time.monotonic() + SURFACE_SETTLE_TIMEOUT.total_seconds()
     while True:
         with psycopg.connect(settings.database_url) as connection:
@@ -310,6 +326,10 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
         run_id=context.run_id,
         tick=tick_from_config(config.executed_at),
     ) as outcome:
+        # A head still moving (a tick committing, its reports being rewritten) is waited
+        # out before the report reads it (2026-09-17: QQQ may commit around 00:20 and its
+        # head reports follow a minute later).
+        _await_settled(context)
         # Every SEC read is attributed to this Dagster run in the external call ledger (#729)
         # and admitted by the rule-6 gate first.
         with (
@@ -413,7 +433,51 @@ def model_key_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRe
     return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
 
 
+@dg.op
+def run_release_fetch_proof(context: dg.OpExecutionContext) -> str:
+    """Whether the current deployment's first scheduled or forced tick fetched from every
+    registered origin itself (`quality.release_fetch_proof`). Pending records `ok = null`
+    and leaves the run green; red fails the run."""
+    from data_engine.quality import release_fetch_proof
+
+    with verdict(
+        RELEASE_FETCH_PROOF_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
+    ) as outcome:
+        with psycopg.connect(settings.database_url) as connection:
+            proof = release_fetch_proof.evaluate(
+                connection, context.instance, digest=settings.data_engine_image_digest or ""
+            )
+        context.log.info(f"release fetch proof: {proof.state}: {proof.summary}")
+        context.add_output_metadata({"state": proof.state})
+        outcome.summary = proof.summary
+        outcome.pending = proof.ok is None
+        if proof.ok is False:
+            raise dg.Failure(f"release fetch proof: {proof.summary}")
+    return json.dumps({"state": proof.state, "summary": proof.summary})
+
+
+@dg.job(name=RELEASE_FETCH_PROOF_JOB_NAME)
+def release_fetch_proof_job() -> None:
+    run_release_fetch_proof()
+
+
+@dg.schedule(
+    job=release_fetch_proof_job,
+    cron_schedule=RELEASE_FETCH_PROOF_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def release_fetch_proof_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    tick = context.scheduled_execution_time.isoformat()
+    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+
 defs = dg.Definitions(
-    jobs=[output_invariants_job, datahub_confidence_report_job, model_key_health_job],
-    schedules=[output_invariants_schedule, datahub_confidence_report_schedule, model_key_health_schedule],
+    jobs=[output_invariants_job, datahub_confidence_report_job, model_key_health_job, release_fetch_proof_job],
+    schedules=[
+        output_invariants_schedule,
+        datahub_confidence_report_schedule,
+        model_key_health_schedule,
+        release_fetch_proof_schedule,
+    ],
 )
