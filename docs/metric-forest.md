@@ -2,7 +2,7 @@
 
 Design for #528, following the owner decision of 2026-09-17. Status: proposed. Step B (the
 registry and GPPE v0.2.0 as its first tree) is implemented in `libs/factors/src/factors/forest/`
-by the step-B pull request (§11).
+by #909 (§11).
 `init.md` stays the authority. This document describes how rule 17 and §7 module 2 are
 implemented without a hardcoded formula.
 
@@ -415,7 +415,7 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 | step | scope | acceptance (standing) |
 |---|---|---|
 | **A** | This document | review |
-| **B** | Implemented. `factors.forest` types and evaluator; GPPE v0.2.0 registered, and `compute_topt_gppe` evaluates it; `node-sign-policy` in the suite and in plausibility policy v2; the `gppe-not-negative` exemption removed; 2 mutation entries | golden result ids and frozen tree identity (`test_gppe_tree.py`); DB red-proofs (`test_node_sign_invariant.py`); `mutations.json` |
+| **B** | #909. `factors.forest` types and evaluator; GPPE v0.2.0 registered, and `compute_topt_gppe` evaluates it; `node-sign-policy` in the suite and in plausibility policy v2; the `gppe-not-negative` exemption removed; 2 mutation entries | golden result ids and frozen tree identity (`test_gppe_tree.py`); DB red-proofs (`test_node_sign_invariant.py`); `mutations.json` |
 | C | Inputs of the decomposition: `financial_assets` and `financial_returns` (with basis) as `METRICS` entries and `MetricStandard`s. The SEC adapter captures them with vintage and basis. Confidence families. No factor change. | a planner and adapter test on fixtures, and a coverage row per standard (#733) |
 | D | `mart.metric_node_values` (one migration) and its writer from `evaluate()` for every registered tree; the three status dimensions per cell; the pivot reader and `FOREST.columns()`; `PUBLISHED_COLUMNS` generated; input keys and coverage from the forest | a synthetic node adds no migration (`check_factor_contract.py`); the pivot equals the fixed columns on the governed head |
 | E | Tree `labor_efficiency.operating_financial @ v1`: the operating and financial components for every issuer, with class bindings reviewed under #71 and a new `gppe-definition` id carrying the tree sha; golden decisions re-baselined once | #528 criteria (1)–(4): four issuer classes; both components on the row; a pre-change cutoff replays byte-identically under v0.2.0; per-component sign policy red-proven |
