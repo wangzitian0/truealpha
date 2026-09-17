@@ -173,7 +173,7 @@ SIGN_POLICY_TABLE = "mart.topt_gppe_results"
 
 
 def _classes(values: set[IssuerClass]) -> str:
-    return ", ".join(f"'{value.value}'" for value in sorted(values))
+    return ", ".join(f"'{value}'" for value in sorted(member.value for member in values))
 
 
 def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | None]:
@@ -192,19 +192,29 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
     violations: list[str] = []
     signals: list[str] = []
 
-    def select(column: str, node_key: str, predicate: str, why: str) -> str:
+    def select(column: str, node_key: str, predicate: str, why: str, *, published: bool = True) -> str:
+        """One arm of the union. `published` scopes it to rows where `column` carries a value;
+        an arm whose predicate is itself about NULLs passes False."""
         node = FOREST.node(node_key)
+        scope = f" and {column} is not null" if published else ""
         return (
             f"select listing_id, operating_branch, '{column}' as published_column, "
-            f"'{node.key}:{node.node_id}' as node, {column}::text as value, '{why}' as policy "
-            f"from {table} where run_id = ({GOVERNED_HEAD}) and {column} is not null and ({predicate})"
+            f"'{node.key}:{node.node_id}' as node, coalesce({column}::text, 'null') as value, '{why}' as policy "
+            f"from {table} where run_id = ({GOVERNED_HEAD}){scope} and ({predicate})"
         )
 
     for column, node_key in sorted(columns.items()):
         first = judged[node_key]
         if column != first:
+            # A NULL on one side and a value on the other is a disagreement too.
             violations.append(
-                select(column, node_key, f"{column} is distinct from {first}", f"same node as {first}, other value")
+                select(
+                    column,
+                    node_key,
+                    f"{column} is distinct from {first}",
+                    f"same node as {first}, other value",
+                    published=False,
+                )
             )
             continue
         node = FOREST.node(node_key)
@@ -254,8 +264,10 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
                     select(
                         output_column,
                         decomposition.output,
-                        f"operating_branch in ({_classes(classes)}) "
-                        f"and sign({output_column}) <> sign({numerator_column})",
+                        # A published output whose numerator is absent is as wrong as a flipped
+                        # sign: `sign(NULL) <> …` is NULL, so the absence is named explicitly.
+                        f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null "
+                        f"or sign({output_column}) <> sign({numerator_column}))",
                         f"sign of {numerator_column} over non-negative {denominator}",
                     )
                 )

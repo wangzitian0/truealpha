@@ -56,7 +56,7 @@ def _check(conn, invariant) -> int:
     )
 
 
-def _set_jpm(conn, run_id: str, *, gppe: str, efficiency: str, adjusted: str) -> None:
+def _set_jpm(conn, run_id: str, *, gppe: str, efficiency: str | None, adjusted: str | None) -> None:
     _bypass_append_only(conn)
     conn.execute(
         """
@@ -66,6 +66,13 @@ def _set_jpm(conn, run_id: str, *, gppe: str, efficiency: str, adjusted: str) ->
         """,
         (gppe, efficiency, adjusted, run_id),
     )
+
+
+def _allow_grandfathered_shape(conn) -> None:
+    """`topt_gppe_results_uniform_values_check` (0030) is NOT VALID: it refuses a NULL beside a
+    value on new writes but grandfathers older rows, so the suite must still name that shape.
+    Dropped inside this test's transaction only (rolled back by the fixture)."""
+    conn.execute("alter table mart.topt_gppe_results drop constraint topt_gppe_results_uniform_values_check")
 
 
 @pytest.fixture
@@ -95,12 +102,23 @@ def test_a_sign_a_ratio_cannot_produce_is_red(connection, head, capsys) -> None:
     assert _check(connection, _invariant()) == 1
     err = capsys.readouterr().err
     assert "listing:xnys:jpm" in err and "sign of capital_adjusted_gross_profit" in err
+    # a published ratio whose numerator is absent is named too: sign(NULL) would compare as NULL
+    _allow_grandfathered_shape(connection)
+    _set_jpm(connection, head, gppe="-514726.13", efficiency="-514726.13", adjusted=None)
+    assert _check(connection, _invariant()) == 1
+    assert "sign of capital_adjusted_gross_profit" in capsys.readouterr().err
 
 
 def test_two_columns_carrying_one_node_must_agree(connection, head, capsys) -> None:  # noqa: F811
     _set_jpm(connection, head, gppe="-514726.13", efficiency="514726.13", adjusted="-163940000000")
     assert _check(connection, _invariant()) == 1
     assert "same node as gppe" in capsys.readouterr().err
+    # a NULL beside a value is a disagreement, not a pass
+    _allow_grandfathered_shape(connection)
+    _set_jpm(connection, head, gppe="-514726.13", efficiency=None, adjusted="-163940000000")
+    assert _check(connection, _invariant()) == 1
+    err = capsys.readouterr().err
+    assert "same node as gppe" in err and "operating_efficiency" in err and " null " in err
 
 
 def test_a_negative_value_the_node_forbids_is_red(connection, head, capsys, monkeypatch) -> None:  # noqa: F811
