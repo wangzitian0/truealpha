@@ -72,6 +72,10 @@ for knob in "$lock_attempts" "$lock_backoff_seconds" "$lock_budget_seconds"; do
             ;;
     esac
 done
+if [ "$lock_attempts" -lt 1 ]; then
+    echo "apply_migrations.sh: TRUEALPHA_MIGRATION_LOCK_ATTEMPTS must be at least 1 (1 = no retry)" >&2
+    exit 1
+fi
 
 # libpq reads PGOPTIONS for every connection psql opens, so the timeouts bind the
 # migration session itself — including statements inside DO blocks and functions. A

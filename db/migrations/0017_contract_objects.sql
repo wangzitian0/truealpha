@@ -123,6 +123,9 @@ $$;
 
 -- The literal is `pg_get_triggerdef` of the statement below, so a replay that finds the
 -- trigger exactly as declared touches nothing; an edited definition still converges.
+-- Postgres prints the events in its own fixed order (INSERT, DELETE, UPDATE, TRUNCATE),
+-- whatever order the statement lists them in. A literal that drifts from the statement
+-- makes every replay take the lock, which test_migration_boot_locks.py fails on.
 do $$
 begin
     if not exists (

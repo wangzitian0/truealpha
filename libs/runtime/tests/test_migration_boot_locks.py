@@ -309,3 +309,6 @@ def test_non_numeric_knobs_are_refused(empty_database: str, tmp_path: Path) -> N
     completed, _ = run_runner(empty_database, db_dir, TRUEALPHA_MIGRATION_LOCK_ATTEMPTS="three")
     assert completed.returncode != 0
     assert "whole numbers" in completed.stderr
+    completed, _ = run_runner(empty_database, db_dir, TRUEALPHA_MIGRATION_LOCK_ATTEMPTS="0")
+    assert completed.returncode != 0
+    assert "at least 1" in completed.stderr
