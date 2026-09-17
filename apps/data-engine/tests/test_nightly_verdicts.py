@@ -188,6 +188,8 @@ def _surfaces(monkeypatch, *, mismatched: bool) -> None:
         ),
     )
     monkeypatch.setattr(surface_proof, "prove", lambda *_a, **_k: verdicts)
+    # Every universe settled: the wait and the snapshot's own check find nothing in flight.
+    monkeypatch.setattr(quality, "settling", lambda *_a, **_k: {})
     monkeypatch.setattr(psycopg, "connect", _Sink())
 
 
@@ -265,6 +267,170 @@ def test_a_crashing_confidence_report_is_a_red_verdict(monkeypatch, written) -> 
     assert [(row["check"], row["ok"]) for row in written] == [("datahub_confidence_report@topt", False)]
 
 
+# --- the surface proof judges a settled head (2026-09-17) --------------------------------
+
+
+class _Snapshot(_Sink):
+    """The proof's connection: records how it was configured before anything was read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.isolation_level = None
+        self.read_only = None
+
+
+def _proof_run(monkeypatch, written, *, pending: list[dict[str, str]], verdicts=None) -> tuple[list, list]:
+    """Drive the proof op with `settling` answering from `pending` in turn (the last answer
+    repeats); returns what `prove` was handed and every sleep the wait asked for."""
+    from data_engine.quality import surface_proof
+
+    run = "capture-run:" + "a" * 64
+    answers = list(pending)
+    proved: list = []
+    slept: list = []
+
+    def settling(connection, instance, *, now):
+        assert isinstance(instance, dg.DagsterInstance), "the wait reads the run list of the proof's own instance"
+        return dict(answers.pop(0) if len(answers) > 1 else answers[0])
+
+    def prove(connection, *, executed_at, settling):
+        proved.append({"connection": connection, "settling": dict(settling)})
+        return verdicts or (
+            surface_proof.SurfaceVerdict("rankings", "strategy-run-repository.ts", run, run, universe="topt"),
+            surface_proof.SurfaceVerdict("themes", "theme-purity.ts", run, run, universe="topt"),
+        )
+
+    monkeypatch.setattr(quality, "settling", settling)
+    monkeypatch.setattr(surface_proof, "prove", prove)
+    monkeypatch.setattr(quality, "_sleep", slept.append)
+    snapshot = _Snapshot()
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: snapshot)
+    quality.run_report_surface_proof(dg.build_op_context(run_tags={nightly_verdicts.TICK_TAG: TICK}))
+    return proved, slept
+
+
+def test_the_proof_waits_while_a_tick_is_running_then_judges_the_settled_head(monkeypatch, written) -> None:
+    """00:15 on 2026-09-17: the QQQ tick was still running. The proof now waits for it instead
+    of racing its commit, and judges inside one repeatable-read snapshot."""
+    tick = {"universe-list:qqq": "qqq_live_pipeline run 1a2b3c4d is started"}
+    proved, slept = _proof_run(monkeypatch, written, pending=[tick, tick, {}])
+    assert slept == [quality.SURFACE_SETTLE_POLL_SECONDS] * 2
+    ((call),) = proved
+    assert call["settling"] == {}, "judged once nothing was in flight"
+    assert call["connection"].isolation_level == psycopg.IsolationLevel.REPEATABLE_READ
+    assert call["connection"].read_only is True
+    assert [(row["check"], row["ok"], row["summary"]) for row in written] == [
+        ("report_surface_proof", True, "2/2 surfaces serve the governed head")
+    ]
+
+
+def test_a_universe_still_settling_when_the_wait_runs_out_is_named_in_progress_not_failed(monkeypatch, written) -> None:
+    from datetime import timedelta
+
+    from data_engine.quality import surface_proof
+
+    monkeypatch.setattr(quality, "SURFACE_SETTLE_TIMEOUT", timedelta(0))
+    run = "capture-run:" + "a" * 64
+    why = "qqq_live_pipeline run 1a2b3c4d is started"
+    verdicts = (
+        surface_proof.SurfaceVerdict("rankings", "strategy-run-repository.ts", run, run, universe="topt"),
+        surface_proof.SurfaceVerdict(
+            "coverage [qqq]",
+            "datahub-stats.ts",
+            run,
+            "capture-run:" + "b" * 64,
+            universe="universe-list:qqq",
+            in_progress=why,
+        ),
+    )
+    proved, slept = _proof_run(monkeypatch, written, pending=[{"universe-list:qqq": why}], verdicts=verdicts)
+    assert slept == [], "the wait is bounded"
+    assert proved[0]["settling"] == {"universe-list:qqq": why}, "the snapshot is told what has not settled"
+    assert [(row["check"], row["ok"], row["summary"]) for row in written] == [
+        ("report_surface_proof", True, "1/2 surfaces serve the governed head; in progress: coverage [qqq]")
+    ]
+
+
+def test_a_mismatch_beside_an_in_progress_surface_still_fails_the_run(monkeypatch, written) -> None:
+    from datetime import timedelta
+
+    from data_engine.quality import surface_proof
+
+    monkeypatch.setattr(quality, "SURFACE_SETTLE_TIMEOUT", timedelta(0))
+    run = "capture-run:" + "a" * 64
+    verdicts = (
+        surface_proof.SurfaceVerdict("themes", "theme-purity.ts", run, None, universe="topt"),
+        surface_proof.SurfaceVerdict(
+            "coverage [qqq]", "datahub-stats.ts", run, None, universe="universe-list:qqq", in_progress="settling"
+        ),
+    )
+    with pytest.raises(dg.Failure, match="MISMATCH themes"):
+        _proof_run(monkeypatch, written, pending=[{"universe-list:qqq": "settling"}], verdicts=verdicts)
+    ((row),) = written
+    assert row["ok"] is False
+    assert row["summary"] == (
+        "failed: 0/2 surfaces serve the governed head; in progress: coverage [qqq]; mismatched: themes"
+    )
+
+
+def _add_run(instance: dg.DagsterInstance, job_name: str, status: dg.DagsterRunStatus, run_config=None) -> str:
+    import uuid
+
+    run_id = str(uuid.uuid4())
+    instance.add_run(dg.DagsterRun(job_name=job_name, run_id=run_id, status=status, run_config=run_config or {}))
+    return run_id
+
+
+def test_the_runs_that_hold_a_universe_are_its_ticks_and_its_report_writers() -> None:
+    from data_engine.lanes.capture import CANARY_JOB_NAME, QQQ_LIVE_JOB_NAME, TOPT_LIVE_JOB_NAME
+
+    instance = dg.DagsterInstance.ephemeral()
+    assert quality.runs_in_flight(instance) == {}
+
+    qqq_tick = _add_run(instance, QQQ_LIVE_JOB_NAME, dg.DagsterRunStatus.STARTED)
+    _add_run(instance, TOPT_LIVE_JOB_NAME, dg.DagsterRunStatus.SUCCESS)
+    _add_run(instance, CANARY_JOB_NAME, dg.DagsterRunStatus.STARTED)  # no report surface follows the canary
+    assert quality.runs_in_flight(instance) == {
+        "universe-list:qqq": f"{QQQ_LIVE_JOB_NAME} run {qqq_tick[:8]} is started"
+    }
+
+    # A head-reports run a sensor has created but not yet submitted is committed to running;
+    # its universe comes from its config, so one an operator launched without tags is waited on
+    # too. (QUEUED counts the same way; a queued run cannot be built here without a code origin.)
+    reports = _add_run(
+        instance,
+        standards.HEAD_REPORTS_JOB_NAME,
+        dg.DagsterRunStatus.NOT_STARTED,
+        {"ops": {"run_theme_purity": {"config": {"universe": "topt", "executed_at": TICK}}}},
+    )
+    assert quality.runs_in_flight(instance)["topt"] == (
+        f"{standards.HEAD_REPORTS_JOB_NAME} run {reports[:8]} is not started"
+    )
+    assert dg.DagsterRunStatus.QUEUED in quality.UNFINISHED_RUN_STATUSES
+
+    # An unfinished run from half a day ago is a dead worker, not a reason to wait.
+    assert quality.runs_in_flight(instance, now=datetime.now(UTC) + quality.IN_FLIGHT_MAX_AGE) == {}
+
+    # A backfill configured with no universe runs over the config's default one.
+    instance = dg.DagsterInstance.ephemeral()
+    _add_run(
+        instance,
+        standards.STANDARD_BACKFILL_JOB_NAME,
+        dg.DagsterRunStatus.STARTING,
+        {"ops": {"run_standard_backfill": {"config": {"executed_at": TICK}}}},
+    )
+    assert list(quality.runs_in_flight(instance)) == ["universe-list:qqq"]
+
+
+def test_every_universe_the_proof_judges_has_a_tick_it_waits_for() -> None:
+    """A universe whose tick the wait cannot see would be judged mid-commit again."""
+    from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
+    from data_engine.lanes.capture import TICKS
+
+    watched = {tick.universe_head_kind or "topt" for tick in TICKS}
+    assert set(UNIVERSE_PREFIXES) <= watched
+
+
 # --- the standards lane's daily head reports -------------------------------------------
 
 
@@ -339,13 +505,13 @@ def test_a_failing_purity_op_is_a_red_verdict_and_a_red_run(monkeypatch, written
 
     monkeypatch.setattr(psycopg, "connect", _Sink())
     monkeypatch.setattr(question_coverage, "governed_head", crash)
-    tick = datetime(2026, 9, 16, 23, 30, tzinfo=UTC)
-    request = next(
-        iter(
-            standards.head_reports_schedule.evaluate_tick(
-                dg.build_schedule_context(scheduled_execution_time=tick)
-            ).run_requests
-        )
+    # The run the pointer sensor launches: it recomputes, so the purity op is the first to ask
+    # for the head (the fallback's start op would ask first, and fail before purity ran).
+    request = standards.head_reports_request(
+        standards.STANDARD_BACKFILL_UNIVERSES[0],
+        "2026-09-16T23:30:00+00:00",
+        run_key="head:test",
+        only_if_stale=False,
     )
     result = standards.head_reports_pipeline_job.execute_in_process(run_config=request.run_config, raise_on_error=False)
     assert not result.success
