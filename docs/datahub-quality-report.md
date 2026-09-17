@@ -224,7 +224,16 @@ A manual launch with `force_fetch: true` skips the reuse window for every obliga
   rebuild nulls the latest close (#622). Until about 16:30 the session's bar is still
   moving.
 
-There are two ways to launch a forced run:
+**The staging boot canary forces a fetch without being asked** (owner decision
+2026-09-17). `boot_canary_sensor` launches one `canary_live_pipeline` run for each
+deployment, meaning each new image digest or configuration hash, rollbacks included
+(#885). On staging that run has `force_fetch: true`, so a newly enabled source is proven
+by fresh vendor bytes on every staging deploy. Each such run costs 12 Twelve Data
+credits (6 canary listings × 2) from staging's 320/day share (#900). Production, and
+any environment name other than `staging`, gets the unforced canary and waits for the
+next cycle.
+
+There are two ways to launch a forced run by hand:
 
 1. **The admin page.** On `/admin`, tick "Force a fresh vendor fetch" and press
    "Trigger a run now". This inserts a `staging.pipeline_trigger_requests` row with

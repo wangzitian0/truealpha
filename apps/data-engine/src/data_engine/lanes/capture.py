@@ -81,11 +81,13 @@ class ToptLiveTickConfig(dg.Config):
     """`executed_at` is injected by the schedule from its tick time (ISO 8601),
     never read from the wall clock inside the run.
 
-    `force_fetch` is an operator's choice and never a schedule's (#874): the run
-    fetches every obligation instead of reusing observations committed in the last
-    twelve hours (#635), under a capture identity of its own. Launch it through the
-    admin page or Dagster GraphQL (docs/datahub-quality-report.md); the run plan,
-    the quality report and this op's output metadata record `forced_fetch`.
+    `force_fetch` is set by an operator (#874) or by staging's boot canary
+    (`triggers.boot_canary_forces_fetch`, owner decision 2026-09-17). A schedule
+    never sets it. The run fetches every obligation instead of reusing observations
+    committed in the last twelve hours (#635), under a capture identity of its own.
+    Launch it through the admin page or Dagster GraphQL
+    (docs/datahub-quality-report.md). The run plan, the quality report and this op's
+    output metadata record `forced_fetch`.
     """
 
     executed_at: str

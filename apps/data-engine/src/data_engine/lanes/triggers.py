@@ -2,11 +2,12 @@
 
 Two requesters: the DB-mediated manual trigger (#495; a `staging.pipeline_trigger_requests`
 row from the admin page or an operator) and, since 2026-09-07, a promoted build itself
-(#712; `boot_canary_sensor` asks for one canary tick per image digest so the release gate
+(#712; `boot_canary_sensor` asks for one canary tick per deployment so the release gate
 can read the build identity that run stamps). Split from `data_engine.dagster_defs` in
 #731.
 """
 
+import json
 from datetime import UTC, datetime
 
 import dagster as dg
@@ -74,26 +75,91 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
         connection.commit()
 
 
+def boot_canary_forces_fetch(app_env: str) -> bool:
+    """Owner decision 2026-09-17: staging's boot canary skips the #635 reuse window.
+
+    A newly enabled source is then proven by real vendor bytes on every staging deploy,
+    instead of by observations an earlier build committed in the last twelve hours.
+    Production keeps the unforced canary and waits for the next cycle.
+
+    Normalised like `capture._production_only` and `capture.live_topt_cron`. The
+    comparison is exact: production, its `prod` alias, and any name this repository
+    does not know get the unforced canary. An environment nobody declared does not
+    spend vendor credits on its own.
+    """
+    return app_env.strip().lower() == "staging"
+
+
+def _boot_deployment() -> str:
+    """The deployment this process belongs to: image digest plus configuration hash.
+
+    `TRUEALPHA_CONFIGURATION_SHA256` is infra2's hash over the data-engine compose
+    artifacts and public env, which includes the per-environment source flags
+    (`MOOMOO_*_ORIGIN_ENABLED`). Enabling a source by flag redeploys the same digest
+    under a new configuration, and that deploy is the one that has to prove the source.
+    """
+    return f"{settings.data_engine_image_digest.strip()}|{settings.configuration_sha256.strip()}"
+
+
+def _boot_cursor(cursor: str | None) -> tuple[str, int]:
+    """(deployment, ordinal) from the sensor cursor.
+
+    A cursor from before #885 is the bare digest. It reads as ordinal 0, and its
+    deployment string can never equal a `digest|configuration` one, so the first
+    deploy of this code launches.
+    """
+    if not cursor:
+        return "", 0
+    try:
+        state = json.loads(cursor)
+        return str(state["deployment"]), int(state["ordinal"])
+    except (ValueError, TypeError, KeyError):
+        return cursor, 0
+
+
 @dg.sensor(
     jobs=[job for job in (capture_defs.jobs or []) if job.name == CANARY_JOB_NAME],
     minimum_interval_seconds=30,
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def boot_canary_sensor(context: dg.SensorEvaluationContext):
-    """#712: a promoted build proves itself with one canary tick, unasked.
+    """#712: a deployed build proves itself with one canary tick, unasked.
 
     The run plan stamps the build that produced it (`mart.data_engine_identity`),
     llm-service `/health` reports that build, and the release gate compares it with
     the tag's registry digest. Until this sensor the run came from an operator
     (`trigger_canary.sh`) or from the next scheduled tick hours later, so the gate could
-    only report. Now: the first evaluation on a build (the compose injects
-    `TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST`) launches the canary with `run_key =
-    boot:<digest>`. Dagster dedupes run keys per sensor across ticks and restarts, and
-    the cursor remembers the digest, so three containers and any restart produce one
-    run per build. Local and CI carry no digest and skip.
+    only report. Now the first evaluation of a deployment launches the canary. The
+    compose injects `TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST`; local and CI have no digest
+    and skip.
 
-    Read through `settings` since #784: `TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST` is now declared
-    in the data-engine environment manifest, and a value the manifest declares is resolved
+    One run per deployment (#885 item 8). A deployment is the image digest plus the
+    configuration hash (`_boot_deployment`). The cursor records the last deployment
+    and its ordinal. When the deployment changes, the ordinal goes up by one and the
+    run key is `boot:<digest>:deploy-<ordinal>`. Before #885 the key was
+    `boot:<digest>`. Dagster dedupes a sensor's run keys against every run it ever
+    launched. A rollback to an earlier digest therefore never ran its canary, and the
+    prod health gate waited for an identity that no run stamped before the next
+    scheduled tick.
+
+    - The ordinal comes from the persisted cursor, so the key is deterministic. If the
+      daemon dies after launching and before storing the cursor, the next evaluation
+      yields the same key and Dagster dedupes it.
+    - Containers restarting inside one deployment, and the three containers of one
+      deployment, still produce one run.
+    - The git sha does not identify a deployment: a rollback redeploys the same tag
+      and the same digest. Container start time is not used either: `restart: always`
+      would turn every crash into another canary, a forced one on staging.
+    - Clearing the cursor in the Dagster UI restarts the ordinal at 1. If this digest
+      was the first deployment after #885, that key already exists and Dagster
+      dedupes it; the next deployment launches normally.
+
+    On staging the canary forces a fresh vendor fetch (`boot_canary_forces_fetch`).
+    That is 12 Twelve Data credits (6 canary listings x 2) out of staging's
+    320/day share (#900).
+
+    Read through `settings` since #784: the identity values are declared in the
+    data-engine environment manifest, and a value the manifest declares is resolved
     by the settings model that declares it -- not fetched from the process environment
     beside it, where nothing reconciles it and boot validation cannot require it.
     """
@@ -101,17 +167,27 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
     if not digest.startswith("sha256:"):
         yield dg.SkipReason("no data-engine image digest in the environment (local/CI)")
         return
-    if context.cursor == digest:
-        yield dg.SkipReason(f"boot canary already requested for {digest[:19]}…")
+    deployment = _boot_deployment()
+    last_deployment, last_ordinal = _boot_cursor(context.cursor)
+    if last_deployment == deployment:
+        yield dg.SkipReason(f"boot canary already requested for {digest[:19]}… (deploy {last_ordinal})")
         return
+    ordinal = last_ordinal + 1
     tick = TICK_BY_JOB[CANARY_JOB_NAME]
     executed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
-    context.update_cursor(digest)
+    force_fetch = boot_canary_forces_fetch(settings.app_env)
+    context.update_cursor(json.dumps({"deployment": deployment, "ordinal": ordinal}, sort_keys=True))
     yield dg.RunRequest(
-        run_key=f"boot:{digest}",
+        run_key=f"boot:{digest}:deploy-{ordinal}",
         job_name=tick.job_name,
-        run_config=dg.RunConfig(ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at)}),
-        tags={"truealpha/boot_canary": digest, "truealpha/build": settings.git_commit_sha or "unknown"},
+        run_config=dg.RunConfig(
+            ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at, force_fetch=force_fetch)}
+        ),
+        tags={
+            "truealpha/boot_canary": digest,
+            "truealpha/build": settings.git_commit_sha or "unknown",
+            "truealpha/configuration": settings.configuration_sha256 or "unknown",
+        },
     )
 
 
