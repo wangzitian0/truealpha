@@ -52,7 +52,9 @@ implemented without a hardcoded formula.
     total_assets, shares_outstanding, net_income and headcount.
   - Factor outputs have no band.
 - **There are no UUIDs and no embedding store.**
-  - Ids are content addresses (`kind:sha256`) or semantic keys (`issuer:cik:…`).
+  - Ids are content addresses (`kind:sha256`) or semantic keys, and the semantic keys are not
+    yet one scheme. For example, TOPT keys issuers `issuer:lei:…` / `security:cusip:…`, while QQQ
+    and canary key them `issuer:cik:…` / `security:figi:…`. That split is #877's subject.
   - `staging.kg_entities`, `kg_identifiers` and `kg_edges` exist.
   - No pgvector table exists.
 
@@ -265,8 +267,12 @@ In #909, `compute_topt_gppe` evaluates the tree. Three tests, added by #909 in
 3. The tree's identity is frozen under `production-topt-v0.2.0`, and the tree's version is
    bound to `GppeV0Definition.factor_version`.
 
-#909 also adds a `tools/mutations.json` entry, `forest/gppe-tree-reproduces-v020`. It re-proves
-check 2 weekly by binding a bank's numerator to `total_assets`.
+#909 also adds two `tools/mutations.json` entries:
+
+- `forest/gppe-tree-reproduces-v020` re-proves check 2 weekly by binding a bank's numerator to
+  `total_assets`.
+- `invariants/a-declared-signal-is-printed` re-proves weekly that the suite still prints the
+  `sign-is-signal` rows (§6).
 
 Out of scope for step B: `factors.base.gross_profit_per_employee` evaluates in the ambient
 decimal context (precision 28), not 34. Moving it onto the tree is a numeric change for the
@@ -419,7 +425,7 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 | step | scope | acceptance (standing) |
 |---|---|---|
 | **A** | This document | review |
-| **B** | Proposed in #909: `factors.forest` types and evaluator; GPPE v0.2.0 registered, and `compute_topt_gppe` switched to evaluate it; `node-sign-policy` in the suite and in plausibility policy v2; the `gppe-not-negative` exemption removed; 2 mutation entries | golden result ids and frozen tree identity (`test_gppe_tree.py`); DB red-proofs (`test_node_sign_invariant.py`); `mutations.json` |
+| **B** | Proposed in #909: `factors.forest` types and evaluator; GPPE v0.2.0 registered, and `compute_topt_gppe` switched to evaluate it; `node-sign-policy` in the suite and in plausibility policy v2; the `gppe-not-negative` exemption removed; 2 mutation entries (`forest/gppe-tree-reproduces-v020`, `invariants/a-declared-signal-is-printed`) | golden result ids and frozen tree identity (`test_gppe_tree.py`); DB red-proofs (`test_node_sign_invariant.py`); `mutations.json` |
 | C | Inputs of the decomposition: `financial_assets` and `financial_returns` (with basis) as `METRICS` entries and `MetricStandard`s. The SEC adapter captures them with vintage and basis. Confidence families. No factor change. | a planner and adapter test on fixtures, and a coverage row per standard (#733) |
 | D | `mart.metric_node_values` (one migration) and its writer from `evaluate()` for every registered tree; the three status dimensions per cell; the pivot reader and `FOREST.columns()`; `PUBLISHED_COLUMNS` generated; input keys and coverage from the forest | a synthetic node adds no migration (`check_factor_contract.py`); the pivot equals the fixed columns on the governed head |
 | E | Tree `labor_efficiency.operating_financial @ v1`: the operating and financial components for every issuer, with class bindings reviewed under #71 and a new `gppe-definition` id carrying the tree sha; golden decisions re-baselined once | #528 criteria (1)–(4): four issuer classes; both components on the row; a pre-change cutoff replays byte-identically under v0.2.0; per-component sign policy red-proven |
