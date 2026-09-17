@@ -313,7 +313,7 @@ means. The suite also asserts two things the tree implies:
   must be equal (`is distinct from`, so a NULL on one side fails too).
 
 Under v0.2.0 the nodes declare #59's reading: `gppe` and `capital_adjusted_gross_profit` are
-`sign-is-signal` for every class. JPM's −514,726 is therefore neither refused nor exempted:
+`sign-is-signal` for every class. JPM's value (−514,726.13 on both governed heads, measured 2026-09-16; earlier ticks published −510,498 and −528,986) is therefore neither refused nor exempted:
 it is printed by name on every tick and every nightly run. #909 therefore removes the #528
 entry from `tools/output_invariant_exemptions.json`, which today still defers
 `gppe-not-negative` until 2026-09-23.
