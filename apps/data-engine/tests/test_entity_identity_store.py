@@ -1,4 +1,5 @@
-"""#877 PR-2: the entity identity store (migration 20260917T0412) and its backfill (20260917T0430).
+"""#877 PR-2: the entity identity store (migration 20260917T0412) and its backfill (20260917T0604,
+run by the Dagster job `entity_identity_backfill`, never at boot).
 
 The backfill's inputs are what the deployed pipeline stores: normalized observation
 payloads (seeded here through the same capture repository the executor writes with, once
@@ -21,6 +22,7 @@ import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
@@ -34,7 +36,7 @@ from production_topt.test_materialization import CUTOFF, _seed_complete_producti
 
 MIGRATIONS = Path(__file__).parents[3] / "db" / "migrations"
 STORE_MIGRATION = MIGRATIONS / "20260917T0412_datahub_entity_identity_store.sql"
-BACKFILL_MIGRATION = MIGRATIONS / "20260917T0430_datahub_entity_backfill.sql"
+BACKFILL_MIGRATION = MIGRATIONS / "20260917T0604_datahub_entity_backfill_job.sql"
 
 # The id rule, restated independently of the SQL: UUIDv5 of `scheme:value` under the kind's
 # namespace, which is UUIDv5 of `kind:<kind>` under the root.
@@ -645,3 +647,143 @@ def test_the_same_evidence_mints_the_same_ids_in_any_database(fresh_databases) -
     late = _identity_snapshot(late_url, learn_the_link_late=True)
     assert late["resolved"] == first["resolved"]
     assert first["entities"] < late["entities"]
+
+
+# -- the backfill is a Dagster job, never a boot step ----------------------------------
+
+
+def _top_level_statements(sql_text: str) -> list[str]:
+    """Statements of a migration file, split on `;` outside comments, quotes and $$ bodies."""
+    text = re.sub(r"--[^\n]*", "", sql_text)
+    statements, current, index = [], [], 0
+    while index < len(text):
+        if text.startswith("$$", index):
+            end = text.index("$$", index + 2) + 2
+            current.append(text[index:end])
+            index = end
+        elif text[index] == "'":
+            end = index + 1
+            while True:
+                end = text.index("'", end) + 1
+                if not text.startswith("'", end):
+                    break
+                end += 1
+            current.append(text[index:end])
+            index = end
+        elif text[index] == ";":
+            statements.append("".join(current).strip())
+            current, index = [], index + 1
+        else:
+            current.append(text[index])
+            index += 1
+    statements.append("".join(current).strip())
+    return [statement for statement in statements if statement]
+
+
+def test_no_boot_migration_reads_or_writes_data_for_the_entity_store() -> None:
+    """Every migration re-applies on every llm-service boot; the backfill held staging's boot
+    for 34 s and failed a rollout. The entity migrations may only define things and seed
+    their own registries, and no migration may call the backfill."""
+    assert _top_level_statements((MIGRATIONS / "20260917T0430_datahub_entity_backfill.sql").read_text()) == []
+    registries = ("staging.entity_kinds", "staging.entity_alias_schemes", "staging.entity_relation_types")
+    for path in (STORE_MIGRATION, BACKFILL_MIGRATION):
+        for statement in _top_level_statements(path.read_text()):
+            head = statement.lower().split(None, 3)
+            if head[0] == "insert":
+                assert head[2] in registries, f"{path.name}: {statement[:80]}"
+            else:
+                assert head[0] in {"create", "comment", "drop"}, f"{path.name} runs {statement[:80]!r} at boot"
+    for path in MIGRATIONS.glob("*.sql"):
+        for statement in _top_level_statements(path.read_text()):
+            assert "entity_backfill(" not in statement.lower() or statement.lower().startswith(("create", "comment")), (
+                f"{path.name} runs the entity backfill at boot"
+            )
+
+
+def _seeded_database(conninfo: str) -> None:
+    with psycopg.connect(conninfo) as connection:
+        _seed_both_universes(connection)
+        _seed_nport_crosswalk(connection, AAPL, GOOG, GOOGL)
+
+
+def test_the_job_fills_the_store_once_and_reports_what_it_did(fresh_databases, monkeypatch) -> None:
+    from data_engine.lanes import entity_identity
+
+    conninfo = fresh_databases[0]
+    _seeded_database(conninfo)
+    monkeypatch.setattr(settings, "database_url", conninfo)
+
+    first = entity_identity.entity_identity_backfill_job.execute_in_process()
+    assert first.success
+    summary = first.output_for_node("entity_identity_backfill_op")
+    assert summary["failed"] == [] and summary["minted"] and summary["duration_seconds"] >= 0
+    materialized = [
+        event.event_specific_data.metadata
+        for event in first.all_node_events
+        if event.event_type_value == "STEP_OUTPUT" and event.event_specific_data is not None
+    ]
+    assert materialized and materialized[0]["entities_minted"].value == sum(summary["minted"].values())
+
+    second = entity_identity_backfill_job_output(entity_identity)
+    assert second["minted"] == {} and second["aliases"] == {} and second["relations"] == {}
+
+    with psycopg.connect(conninfo) as connection:
+        apple = _resolve(connection, "lei", AAPL["lei"])
+    assert apple == expected_entity_id("issuer", "legacy-id", f"issuer:cik:{AAPL['cik']}")
+
+
+def entity_identity_backfill_job_output(entity_identity) -> dict:
+    result = entity_identity.entity_identity_backfill_job.execute_in_process()
+    assert result.success
+    return result.output_for_node("entity_identity_backfill_op")
+
+
+def test_the_sensor_launches_once_for_new_evidence_and_is_otherwise_quiet(fresh_databases, monkeypatch) -> None:
+    from data_engine.lanes import entity_identity
+
+    conninfo = fresh_databases[0]
+    monkeypatch.setattr(settings, "database_url", conninfo)
+    sensor = entity_identity.entity_identity_backfill_sensor
+
+    def evaluate(cursor: str | None):
+        context = dg.build_sensor_context(cursor=cursor)
+        result = sensor(context)
+        return result, context.cursor
+
+    # An empty database: nothing is in use, nothing to do.
+    result, cursor = evaluate(None)
+    assert isinstance(result, dg.SkipReason)
+
+    _seeded_database(conninfo)
+    result, cursor = evaluate(cursor)
+    assert isinstance(result, dg.RunRequest) and result.job_name == entity_identity.ENTITY_BACKFILL_JOB_NAME
+    assert cursor is not None
+
+    entity_identity_backfill_job_output(entity_identity)
+    # Nothing arrived since the launch: one watermark read, no launch.
+    result, same_cursor = evaluate(cursor)
+    assert isinstance(result, dg.SkipReason) and same_cursor == cursor
+
+    with psycopg.connect(conninfo) as connection:
+        # A fresh deployment (no cursor) over a filled store still looks once at the
+        # crosswalk evidence, and is quiet once that evidence is behind its cursor.
+        assert connection.execute("select staging.entity_backfill_due(null)").fetchone() == ("new-crosswalk-evidence",)
+        assert connection.execute("select staging.entity_backfill_due(%s)", (NOW,)).fetchone() == (None,)
+        # A published universe with an id nobody has seen is due at once.
+        fields = ["issuer_id", "instrument_id", "listing_id", "ticker"]
+        instruments = [["issuer:cik:0000877877", "security:figi:bbg000877877", "listing:xnas:zzzz", "ZZZZ"]]
+        payload = {"instrument_tuple_fields": fields, "instruments": instruments, "report_date": "2026-06-30"}
+        digest = canonical_sha256(payload)
+        connection.execute(
+            "insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload) "
+            "values (%s, 'universe-list:entity-test', %s, %s)",
+            (f"universe-list:{digest}", digest, psycopg.types.json.Jsonb(payload)),
+        )
+        connection.commit()
+    result, _ = evaluate(cursor)
+    assert isinstance(result, dg.RunRequest)
+    assert entity_identity_backfill_job_output(entity_identity)["minted"] == {
+        "issuer": 1,
+        "instrument": 1,
+        "listing": 1,
+    }

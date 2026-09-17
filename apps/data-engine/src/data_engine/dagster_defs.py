@@ -8,8 +8,8 @@ loads THIS module in both roles:
 
 Since #731 the module owns no job of its own: `defs` is the merge of every lane
 registered in `data_engine.lanes.LANE_MODULES` (capture ticks + schedules, the weekly
-universe refresh, the manual-trigger sensor). A lane adds or retires a job in its own
-module; nothing here lists a job by name, and `test_dagster_defs.py` asserts the root
+universe refresh, the manual-trigger sensor, the entity identity backfill). A lane adds
+or retires a job in its own module; nothing here lists a job by name, and `test_dagster_defs.py` asserts the root
 is exactly the union of what the lanes declare. The names re-exported below keep the
 operator commands and tests that address `data_engine.dagster_defs` working, and they
 are also what makes each lane statically reachable for `tools/reachability_ratchet.py`
@@ -37,6 +37,7 @@ from data_engine.lanes.capture import (
     run_topt_live_tick,
     topt_live_schedule,
 )
+from data_engine.lanes.entity_identity import ENTITY_BACKFILL_JOB_NAME, entity_identity_backfill_sensor
 from data_engine.lanes.standards import STANDARD_BACKFILL_JOB_NAME
 from data_engine.lanes.triggers import pipeline_trigger_sensor
 from data_engine.lanes.universe_refresh import UNIVERSE_REFRESH_JOB_NAME
@@ -44,6 +45,7 @@ from data_engine.lanes.universe_refresh import UNIVERSE_REFRESH_JOB_NAME
 __all__ = [
     "CANARY_JOB_NAME",
     "CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME",
+    "ENTITY_BACKFILL_JOB_NAME",
     "LANE_MODULES",
     "QQQ_LIVE_JOB_NAME",
     "STANDARD_BACKFILL_JOB_NAME",
@@ -52,6 +54,7 @@ __all__ = [
     "UNIVERSE_REFRESH_JOB_NAME",
     "ToptLiveTickConfig",
     "defs",
+    "entity_identity_backfill_sensor",
     "fixture_canary_definitions",
     "live_topt_cron",
     "pipeline_trigger_sensor",

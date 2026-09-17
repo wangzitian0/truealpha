@@ -1,8 +1,9 @@
 # Entity identity: opaque UUIDs, typed aliases
 
 Status: owner decision 2026-09-17 (#877). PR-2 of #877 adds the store
-(`db/migrations/20260917T0412_datahub_entity_identity_store.sql`) and fills it
-(`20260917T0430_datahub_entity_backfill.sql`). Nothing reads it yet.
+(`db/migrations/20260917T0412_datahub_entity_identity_store.sql`) and the Dagster job
+`entity_identity_backfill` fills it (definitions in
+`20260917T0604_datahub_entity_backfill_job.sql`). Nothing reads it yet.
 
 This document replaces decision D1 of the
 [#877 design note](https://github.com/wangzitian0/truealpha/issues/877#issuecomment-5695658561),
@@ -313,14 +314,29 @@ UUIDs without touching them.
 
 ## 7. The backfill
 
-The backfill has its own migration, `20260917T0430_datahub_entity_backfill.sql`, separate
-from the store it fills.
+The backfill is defined in its own migration,
+`20260917T0604_datahub_entity_backfill_job.sql`, and run by a Dagster job, never by a boot.
 
 - `staging.entity_backfill_plan` is the whole plan as **one SELECT over tables that existed
   before either migration**, so it can run read-only against an environment before the
   deploy. A test pins that property.
-- `staging.entity_backfill()` applies the plan, and the migration calls it on every boot.
-  Until captures write UUIDs, each new legacy id gets an entity at the next boot.
+- `staging.entity_backfill()` applies the plan. The Dagster job `entity_identity_backfill`
+  (`data_engine.lanes.entity_identity`) calls it and records the counts and the duration in
+  its run log and output metadata.
+  - `entity_identity_backfill_sensor` launches the job when `staging.entity_backfill_due()`
+    names a reason: the store is empty, an observed or published id has no entity, or
+    N-PORT or knowledge-graph rows arrived since the sensor's cursor. The cursor is
+    `staging.entity_evidence_watermark()`, so a quiet database costs one `max()` read per
+    evaluation (every 10 minutes).
+  - An operator launches the job through Dagster GraphQL `launchRun`; the lane's docstring
+    has the mutation. The function's advisory lock keeps two runs from interleaving.
+  - Until captures write UUIDs, each new legacy id gets an entity at the next launch.
+
+**Why not at boot.** v0.0.80 ran the backfill inside this migration on every llm-service
+boot. On staging it held the boot for 34 s (2026-09-17 05:35), past the container
+healthcheck, and the rollout failed. The migration `20260917T0430_datahub_entity_backfill.sql`
+keeps its name (it ran on staging) and is now empty. A test holds every entity migration to
+definitions and registry seeds, and fails on any migration that calls the backfill.
 
 **What counts as a use of an id:**
 
@@ -364,8 +380,8 @@ instead of giving the listing to either instrument. When the proof arrives later
 merges the two instruments and writes the edge.
 
 **What stops a component.** A component the registry refuses, or whose aliases already name
-another kind, is rolled back on its own and reported in the returned summary. The boot never
-crash-loops.
+another kind, is rolled back on its own and reported in the returned summary. A run never
+fails on data it did not expect; its summary says what it held back.
 
 ### Dry run, 2026-09-17
 
@@ -484,8 +500,9 @@ holding type.
 
 ## 10. Plan
 
-1. **PR-2 (this change).** The store, the registries, the resolver, the export views, the
-   backfill run on every boot, and tests. No reader or capture changes.
+1. **PR-2 (#912, and the follow-up that moves the backfill into a job).** The store, the
+   registries, the resolver, the export views, the backfill as a sensor-launched Dagster job,
+   and tests. No reader or capture changes.
 2. **PR-3: captures write UUIDs.**
    - `resolve_coordinates` replaces the corpus trio in `plan_and_persist` for every universe.
      It mints on a miss and fails on an ambiguous alias.
@@ -530,4 +547,6 @@ holding type.
 | The plan SELECT references no object either migration creates, so it can be dry-run before deploy | same file |
 | The same evidence in two fresh databases mints identical entities and relations; every id equals Python's `uuid5` of its birth alias; a database that learned the crosswalk one run later resolves every legacy id to the same UUIDs | same file (builds and drops its own databases) |
 | Entity and relation ids that are not derived from their claim are refused | same file |
-| The migration re-applies over its own rows (the backfill runs on each pass) | `ci-db.yml` (three passes) |
+| The migrations re-apply over their own rows | `ci-db.yml` (three passes) |
+| No boot migration reads or writes data for the store, and none calls the backfill | `test_entity_identity_store.py` |
+| The job fills the store once, reports its counts and duration, and a second run writes nothing; the sensor launches for an empty store or new evidence and is quiet otherwise | same file |
