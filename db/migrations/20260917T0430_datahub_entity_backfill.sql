@@ -674,14 +674,22 @@ begin
                and component = v_claim.component and to_component = v_claim.to_component;
             continue;
         end if;
-        -- One issuer per instrument and one instrument per listing, across the whole store.
+        -- One issuer per instrument and one instrument per listing, across the whole store:
+        -- another endpoint blocks the claim only while its edge is still in force on or after
+        -- the claim's first valid day (the claims here are open-ended). An edge retracted
+        -- before then is history, and one withdrawn outright never held.
         if exists (
-            select 1 from staging.entity_relations relation
+            select 1
+            from staging.entity_relations relation
+            cross join lateral (
+                select coalesce(staging.entity_relation_valid_to(relation.relation_id, 'infinity'),
+                                'infinity'::date) as effective_to
+            ) held
             where relation.relation_type = v_claim.relation_type
               and staging.entity_survivor(relation.to_entity_id, 'infinity') = v_to
               and staging.entity_survivor(relation.from_entity_id, 'infinity') <> v_from
-              and coalesce(staging.entity_relation_valid_to(relation.relation_id, 'infinity'), 'infinity'::date)
-                  > relation.valid_from
+              and relation.valid_from < held.effective_to
+              and v_claim.valid_from < held.effective_to
         ) then
             update pg_temp.entity_backfill_claims
                set status = 'skipped:store-holds-another-endpoint'

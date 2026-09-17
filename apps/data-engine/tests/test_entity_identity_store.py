@@ -398,6 +398,56 @@ def _alias(connection, entity_id, scheme: str, value: str, *, valid_from: str, a
     )
 
 
+def _line(connection, instrument, listing, *, retracted_on: str | None = None) -> None:
+    """A `listed_as` edge asserted in 2020, optionally ended by a retraction."""
+    known = datetime(2020, 1, 1, tzinfo=UTC)
+    derived = connection.execute(
+        "select staging.entity_relation_uuid('listed_as', %s, %s, '2020-01-01', %s, 'test', 'asserted')",
+        (instrument, listing, known),
+    ).fetchone()
+    assert derived is not None
+    connection.execute(
+        """
+        insert into staging.entity_relations
+            (relation_id, relation_type, from_entity_id, to_entity_id, valid_from,
+             transaction_time, source, raw_ref, method, confidence, mapping_version)
+        values (%s, 'listed_as', %s, %s, '2020-01-01', %s, 'test', 'test', 'asserted', 1, 'test')
+        """,
+        (derived[0], instrument, listing, known),
+    )
+    if retracted_on is not None:
+        connection.execute(
+            "insert into staging.entity_retractions (relation_id, valid_to, reason, transaction_time, source, raw_ref) "
+            "values (%s, %s, 'line delisted', %s, 'test', 'test')",
+            (derived[0], retracted_on, datetime(2021, 1, 1, tzinfo=UTC)),
+        )
+
+
+def test_a_retracted_listing_line_does_not_block_a_later_one(connection) -> None:
+    """One instrument per listing at a time: an earlier instrument whose line ended before
+    the new evidence starts is history and does not block the new `listed_as` edge; a line
+    still open does."""
+    delisted = _mint(connection, "listing", AAPL["listing"])
+    _line(
+        connection,
+        _mint(connection, "instrument", "security:test:aapl-predecessor"),
+        delisted,
+        retracted_on="2021-01-01",
+    )
+    occupied = _mint(connection, "listing", "listing:xnas:msft")
+    _line(connection, _mint(connection, "instrument", "security:test:msft-squatter"), occupied)
+
+    _seed_complete_production_run(connection)
+    written = _backfill(connection)
+    assert written["failed"] == [], written
+    assert written["held_back"].get("skipped:store-holds-another-endpoint") == 1, written
+
+    assert _resolve(connection, "legacy-id", AAPL["listing"]) == delisted
+    assert _edge(connection, "listed_as", _resolve(connection, "cusip", AAPL["cusip"]), delisted)
+    assert _resolve(connection, "legacy-id", "listing:xnas:msft") == occupied
+    assert not _edge(connection, "listed_as", _resolve(connection, "cusip", "594918104"), occupied)
+
+
 def test_a_reused_symbol_resolves_by_valid_date_and_by_what_was_known(connection) -> None:
     tag = uuid.uuid4().hex[:6].upper()
     symbol = f"XTST:E{tag}"

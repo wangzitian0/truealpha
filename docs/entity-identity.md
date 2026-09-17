@@ -525,6 +525,7 @@ holding type.
 | A second backfill writes nothing | same file |
 | A later proof merges by adding edges, and every existing alias row is unchanged; the survivor is the id a store that knew the link from the start mints; "as known before", the ids still resolve apart | same file |
 | A reassigned symbol resolves by valid date and by what was known; overlapping claimants are refused | same file |
+| A listing's retracted earlier line does not block the backfill's new `listed_as` edge; a line still open does | same file |
 | Every store table refuses UPDATE and DELETE; schemes, kinds and relation domains are enforced; an entity without a birth alias cannot commit | same file |
 | The plan SELECT references no object either migration creates, so it can be dry-run before deploy | same file |
 | The same evidence in two fresh databases mints identical entities and relations; every id equals Python's `uuid5` of its birth alias; a database that learned the crosswalk one run later resolves every legacy id to the same UUIDs | same file (builds and drops its own databases) |
