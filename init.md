@@ -281,6 +281,17 @@ open case: `mart.entity_display_resolution` currently resolves both
 TOPT universes mint issuer identities from different sources. Harmless while they run as
 separate pipelines; a prerequisite before they are one universe.
 
+**Entity identity (owner decision 2026-09-17, #877).** No identifier scheme is canonical. An
+issuer, instrument, listing or fund is named by an opaque UUID, derived (UUIDv5) from the alias
+it was first minted for under its kind's namespace; CIK, LEI, CUSIP, ISIN, FIGI, ticker@MIC,
+moomoo codes and the legacy `issuer:…`/`security:…`/`listing:…` strings are typed aliases with a
+validity interval, a knowable-at time, provenance and confidence. Merges and splits add edges
+and rewrite nothing, and every read resolves an alias at an explicit valid date and
+knowable-at time. The store is `staging.entities` / `entity_aliases` / `entity_relations`
+(migration `20260917T0412`, filled by `20260917T0430`); the ontology, rules, backfill and
+switch-over plan are `docs/entity-identity.md`. Until captures carry UUIDs (#877 PR-3) the
+legacy strings above remain the payload ids, each resolvable through its `legacy-id` alias.
+
 **Source fusion (staging → snapshot → mart).** Staging is evidence, the durable
 snapshot is the selected fact set, and mart is its materialized projection. Multiple
 sources may assert the same `(subject_kind, subject_id, metric, fiscal_period)` and
@@ -401,6 +412,8 @@ create index idx_kg_edges_asof
 ```
 
 Mart's flattened 2D tables (e.g. a company-to-ticker lookup, or a supply-chain adjacency table for a given company) are SQL views/materializations over `kg_entities` + `kg_edges`, not separately maintained.
+
+The knowledge graph above predates the entity identity store (#877, `docs/entity-identity.md`). Its rows are evidence the store's backfill reads (the N-PORT/OpenFIGI ISIN crosswalk); its `company:*` nodes become aliases and its writers move to the store in #877 PR-5.
 
 Role permissions (`roles.sql`):
 
