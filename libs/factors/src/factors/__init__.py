@@ -4,6 +4,7 @@ Layout (init.md Section 4):
 - base/      factors that consume staging (incl. KG) data directly
 - composite/ factors that consume other factors' mart outputs; confidence = min() of inputs
 - shared/    entity resolution (KG read/write) + LLM structured-extraction primitive
+- forest/    the metric forest: registered metric nodes, typed decompositions, trees (#528)
 
 Hard constraints (init.md Section 1):
 - Factors never know data provenance, only confidence: every input is a

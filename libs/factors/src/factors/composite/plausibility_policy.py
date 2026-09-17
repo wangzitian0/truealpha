@@ -1,4 +1,4 @@
-"""Plausibility policy v1 (#544): is a published factor physically possible?
+"""Plausibility policy (#544, v2 since #528): is a published factor physically possible?
 
 Four defects reached production in 2026-07 with every gate green — XOM's operating metric
 above NVIDIA's (a revenue proxy), MA's price-to-sales down 7x on a flat price (a share
@@ -10,10 +10,19 @@ the tick's own transaction, and fails the run instead of materialising a row nob
 believe on sight.
 
 The thresholds are a versioned policy (owner decision 2026-09-07, recorded on #544), not
-constants: a change is v2 with its own row on the issue, never an edit here. Rule ids are
-stable so exemptions (`tools/output_invariant_exemptions.json`, issue + expiry) can name
-them; `sign-per-branch` shares the nightly suite's `gppe-not-negative` exemption because it
-is the same defect judged at a different time.
+constants: a change is a new version with its own row on the issue, never a silent edit. Rule
+ids are stable so exemptions (`tools/output_invariant_exemptions.json`, issue + expiry) can
+name them; `node-sign-policy` shares the nightly suite's invariant of the same id because it
+is the same question judged at a different time.
+
+v2 (#528): v1's `sign-per-branch` asserted that a financial or insurance issuer's operating
+metric cannot be negative, while the definition it judged (GPPE v0.2.0, frozen by #59) says a
+negative value is a valid low signal for every issuer. The two could not both hold, and v1
+held only under an expiring exemption. v2 judges each published value against the sign
+policy its metric-forest node declares (`factors.forest`): a value a node forbids is refused,
+a value published for a class the node does not declare is refused, and a negative value the
+node declares `sign-is-signal` passes and is reported by name on every tick (`sign_signals`).
+The other three rules and every threshold are unchanged.
 
 Pure functions over plain rows, so the same policy can judge a synthetic run in a test,
 a live tick in the data engine, and a historical replay in the backtest (#758 H4).
@@ -24,23 +33,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-POLICY_VERSION = "v1"
+from factors.forest import SignFinding, judge_sign, published_node
+
+POLICY_VERSION = "v2"
 
 RULE_UNIVERSE_MAX = "universe-max-regression"
 RULE_VALUATION_MOVE = "unexplained-valuation-move"
-RULE_SIGN_PER_BRANCH = "sign-per-branch"
+RULE_NODE_SIGN_POLICY = "node-sign-policy"
 RULE_EMPTY_ELIGIBLE = "empty-eligible-set"
-RULES = (RULE_UNIVERSE_MAX, RULE_VALUATION_MOVE, RULE_SIGN_PER_BRANCH, RULE_EMPTY_ELIGIBLE)
+RULES = (RULE_UNIVERSE_MAX, RULE_VALUATION_MOVE, RULE_NODE_SIGN_POLICY, RULE_EMPTY_ELIGIBLE)
 
-#: Branches whose operating metric is a profit measure and therefore cannot be negative
-#: for a going concern the universe would hold (rule 17: the financial component is a
-#: return on net assets, computed, never a proxy).
-PROFIT_BRANCHES = frozenset({"financial", "insurance"})
+#: The published table the gate reads (`plausibility_gate._ROWS_SQL`); `Row.operating_efficiency`
+#: is its `operating_efficiency` column, and the forest says which node that column carries.
+JUDGED_TABLE = "mart.topt_core_results"
+JUDGED_COLUMN = "operating_efficiency"
 
 
 @dataclass(frozen=True)
 class Thresholds:
-    """v1. Recorded on #544; bump `POLICY_VERSION` with any change."""
+    """Unchanged since v1. Recorded on #544; bump `POLICY_VERSION` with any change."""
 
     universe_max_factor: Decimal = Decimal("1.5")
     valuation_move_ratio: Decimal = Decimal("2")
@@ -137,19 +148,40 @@ def unexplained_valuation_move(
     return violations
 
 
-def sign_per_branch(current: list[Row]) -> list[Violation]:
-    """A financial or insurance issuer's operating metric is a profit per employee and
-    cannot be negative (#528: JPM at -510,498 with +$86.8B of pre-provision profit)."""
-    return [
-        Violation(
-            RULE_SIGN_PER_BRANCH,
-            row.listing_id,
-            f"{row.operating_branch} operating metric {row.operating_efficiency:,.0f} is negative",
-        )
+def _sign_findings(current: list[Row]) -> list[SignFinding]:
+    node = published_node(JUDGED_TABLE, JUDGED_COLUMN)
+    findings = (
+        judge_sign(node, issuer_class=row.operating_branch, value=row.operating_efficiency, subject=row.listing_id)
         for row in _available(current)
-        if row.operating_branch in PROFIT_BRANCHES
-        and row.operating_efficiency is not None
-        and row.operating_efficiency < 0
+    )
+    return [finding for finding in findings if finding is not None]
+
+
+def _describe(finding: SignFinding, branch: str) -> str:
+    policy = finding.policy.value if finding.policy is not None else "no policy for this issuer class"
+    return f"{branch} {finding.node_key} {finding.value:,.2f} ({policy}, node {finding.node_id})"
+
+
+def node_sign_policy(current: list[Row]) -> list[Violation]:
+    """A published operating metric must respect the sign policy of the forest node it
+    carries: negative where the node is `must-be-non-negative`, or any value for an issuer
+    class the node does not declare, is refused (#528)."""
+    branches = {row.listing_id: row.operating_branch for row in current}
+    return [
+        Violation(RULE_NODE_SIGN_POLICY, finding.subject, _describe(finding, branches[finding.subject]))
+        for finding in _sign_findings(current)
+        if finding.violation
+    ]
+
+
+def sign_signals(current: list[Row]) -> list[Violation]:
+    """Negative values the node declares `sign-is-signal`: not violations, and never silent.
+    The gate prints each one so a published negative number is always visible by name."""
+    branches = {row.listing_id: row.operating_branch for row in current}
+    return [
+        Violation(RULE_NODE_SIGN_POLICY, finding.subject, _describe(finding, branches[finding.subject]))
+        for finding in _sign_findings(current)
+        if finding.signal
     ]
 
 
@@ -182,10 +214,10 @@ def evaluate(
     l2_complete: int | None = None,
     thresholds: Thresholds = THRESHOLDS,
 ) -> list[Violation]:
-    """Every violation of policy v1 for a run, judged against the previous accepted run."""
+    """Every violation of the policy for a run, judged against the previous accepted run."""
     return [
         *universe_max_regression(current, previous, thresholds),
         *unexplained_valuation_move(current, previous, thresholds),
-        *sign_per_branch(current),
+        *node_sign_policy(current),
         *empty_eligible_set(outcomes, l2_complete),
     ]

@@ -4,7 +4,9 @@
 GPPE is one uniform capital-adjusted formula for every issuer —
 `(numerator - total_assets*risk_free_rate)/headcount`, where the numerator is the
 parser's industry-branch profit (pre-provision profit for financial issuers, gross
-profit otherwise) — identical to `factors.base.gross_profit_per_employee`. The
+profit otherwise) — identical to `factors.base.gross_profit_per_employee`. Since #528 the
+formula is not written here: `compute_topt_gppe` evaluates the registered tree
+`factors.forest.GPPE_V0_TREE`, which reproduces the former kernel byte for byte. The
 v0.1.0 financial short-circuit (`pre_provision_profit/headcount` with no capital
 charge, then `FINANCIAL_VALUATION_NOT_COMPARABLE`) is retired; financial issuers now
 flow through the same tier / P-S valuation path as every other issuer.
@@ -27,6 +29,8 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.research import ValuationTier
+
+from factors.forest import FOREST, GPPE_V0_TREE, AliasKind, IssuerClass, evaluate, required_inputs
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -612,19 +616,27 @@ def compute_topt_gppe(
 
     if not invocation_id.startswith("topt-gppe-invocation:"):
         raise ValueError("invocation_id must be a content-addressed TOPT GPPE invocation")
-    inputs = {
-        ToptCoreReasonCode.MISSING_HEADCOUNT: snapshot.headcount,
-        ToptCoreReasonCode.MISSING_TOTAL_ASSETS: snapshot.total_assets,
-    }
-    if snapshot.operating_branch is OperatingBranch.FINANCIAL:
-        inputs[ToptCoreReasonCode.MISSING_PRE_PROVISION_PROFIT] = snapshot.pre_provision_profit
-    else:
-        inputs[ToptCoreReasonCode.MISSING_GROSS_PROFIT] = snapshot.gross_profit
-    reasons = tuple(
-        reason
-        for reason, metric in inputs.items()
-        if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None
-    )
+    # The formula is the registered tree (#528, docs/metric-forest.md): which inputs a class
+    # needs, which numerator it uses and how the capital charge is bound are declared there,
+    # not branched on here. A captured input names the snapshot field that carries it (a
+    # missing one is `missing_<field>`); a parameter names the definition field.
+    issuer_class = IssuerClass(snapshot.operating_branch.value)
+    inputs: dict[str, Decimal | None] = {}
+    reasons_list: list[ToptCoreReasonCode] = []
+    for node in required_inputs(FOREST, GPPE_V0_TREE, issuer_class):
+        parameter = node.alias(AliasKind.DEFINITION_PARAMETER)
+        if parameter is not None:
+            inputs[node.key] = getattr(gppe_definition, parameter)
+            continue
+        field = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+        if field is None:
+            raise AssertionError(f"GPPE tree input {node.key} names no snapshot field")
+        metric: ToptMetricInput | None = getattr(snapshot, field)
+        if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None:
+            reasons_list.append(ToptCoreReasonCode(f"missing_{field}"))
+            continue
+        inputs[node.key] = metric.value
+    reasons = tuple(reasons_list)
     freshness = _snapshot_freshness(snapshot)
     if freshness is MetricFreshness.STALE:
         reasons = (*reasons, ToptCoreReasonCode.STALE_INPUT)
@@ -654,22 +666,15 @@ def compute_topt_gppe(
         )
 
     confidence = min(cell.confidence for cell in snapshot.cell_inputs)
-    assert snapshot.total_assets is not None and snapshot.total_assets.value is not None
-    # Uniform capital-adjusted formula for every issuer (#394 convergence onto the
-    # base large_model_value_v0 definition): the numerator is the parser's
-    # industry-branch profit -- pre-provision profit for financials, gross profit
-    # otherwise -- and the same total_assets * risk_free_rate capital charge is
-    # subtracted for both. No financial short-circuit; financials flow through the
-    # same tier/P-S path.
-    if snapshot.operating_branch is OperatingBranch.FINANCIAL:
-        assert snapshot.pre_provision_profit is not None and snapshot.pre_provision_profit.value is not None
-        numerator = snapshot.pre_provision_profit.value
-    else:
-        assert snapshot.gross_profit is not None and snapshot.gross_profit.value is not None
-        numerator = snapshot.gross_profit.value
-    with localcontext(_DECIMAL_CONTEXT):
-        capital_adjusted = numerator - (snapshot.total_assets.value * gppe_definition.risk_free_rate)
-        gppe = capital_adjusted / snapshot.headcount.value
+    # One tree for every class (#394's uniform charge, now the tree's per-class binding): a
+    # bank's numerator is its pre-provision profit, everyone else's is gross profit, and the
+    # same total_assets * risk_free_rate charge is subtracted for all. Financials flow through
+    # the same tier/P-S path. The tree's decimal context is the one this kernel always used.
+    evaluation = evaluate(FOREST, GPPE_V0_TREE, issuer_class=issuer_class, inputs=inputs)
+    capital_adjusted = evaluation.values["capital_adjusted_gross_profit"]
+    gppe = evaluation.values["gppe"]
+    # Every input was checked present and headcount positive above, so nothing is undefined.
+    assert capital_adjusted is not None and gppe is not None and not evaluation.undefined
     return ToptGppeResult(
         invocation_id=invocation_id,
         snapshot_id=snapshot.snapshot_id,

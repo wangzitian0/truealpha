@@ -63,20 +63,52 @@ class _Connection:
         return None
 
 
-def _db(violations: list[tuple], population: int):
-    answers = {"V": violations, "P": [(population,)]}
+def _db(violations: list[tuple], population: int, signals: list[tuple] | None = None):
+    answers = {"V": violations, "P": [(population,)], "S": signals or []}
     return lambda _url: _Connection(answers)
 
 
-def _run(violations, population, exemptions=None, **kwargs):
+def _run(violations, population, exemptions=None, *, invariant=ONE, signals=None, **kwargs):
     return check(
         "postgresql://unused",
         today=TODAY,
         exemptions=exemptions or {},
-        invariants=(ONE,),
-        connect=_db(violations, population),
+        invariants=(invariant,),
+        connect=_db(violations, population, signals),
         **kwargs,
     )
+
+
+SIGNALLING = Invariant(id="signs", claim="a sign means what the node says", violations="V", population="P", signals="S")
+
+
+def test_a_declared_signal_holds_and_is_printed_by_name(capsys: pytest.CaptureFixture[str]) -> None:
+    """#528: a negative value the node declares `sign-is-signal` is not a failure, and it is
+    never a silent pass either — every one is printed, whatever else the invariant says."""
+    jpm = ("listing:xnys:jpm", "financial", "gppe", "-514726.13", "sign-is-signal")
+    assert _run([], 20, invariant=SIGNALLING, signals=[jpm]) == 0
+    out = capsys.readouterr().out
+    assert "  SIGNAL   signs: listing:xnys:jpm financial gppe -514726.13 sign-is-signal" in out
+    assert "20 row(s) examined" in out
+    # printed on a failing run too, beside the violation
+    assert _run([("listing:x",)], 20, invariant=SIGNALLING, signals=[jpm]) == 1
+    assert "SIGNAL" in capsys.readouterr().out
+
+
+def test_the_sign_invariant_is_generated_from_the_forest() -> None:
+    """The suite does not restate what a negative number means: its sign invariant is built
+    from `factors.forest`, so the definition and the check cannot disagree again (#528: the
+    old `gppe-not-negative` said the opposite of the definition it judged)."""
+    ids = {invariant.id for invariant in _module.INVARIANTS}
+    assert "node-sign-policy" in ids and "gppe-not-negative" not in ids
+    (sign,) = [invariant for invariant in _module.INVARIANTS if invariant.id == "node-sign-policy"]
+    from factors.forest import FOREST, PUBLISHED_COLUMNS
+
+    for column, node_key in PUBLISHED_COLUMNS[_module.SIGN_POLICY_TABLE].items():
+        assert f"'{column}' as published_column" in sign.violations
+        assert str(FOREST.node(node_key).node_id) in sign.violations
+    assert sign.signals is not None and "'sign-is-signal' as policy" in sign.signals
+    assert _module.GOVERNED_HEAD in sign.violations and _module.GOVERNED_HEAD in sign.signals
 
 
 def test_a_holding_invariant_passes_and_reports_what_it_examined(
@@ -209,6 +241,13 @@ def test_the_strategy_run_matches_the_consumer_that_serves_it() -> None:
         f"the App orders runs by {served!r} and the invariants by {judged!r}, so the invariants "
         f"judge a run nobody serves"
     )
+
+
+def test_no_exemption_defers_the_sign_policy() -> None:
+    """#528: the per-node sign policy replaced the `gppe-not-negative` exemption; nothing
+    defers it, so a value a node forbids fails the day it is published."""
+    assert "node-sign-policy" not in _module.load_exemptions()
+    assert all(exemption.issue != "#528" for exemption in _module.load_exemptions().values())
 
 
 def test_every_shipped_exemption_names_an_issue_and_a_future_date() -> None:

@@ -2,10 +2,16 @@
 
 #581. Every gate in this repository compares the system against something the
 same process authored — schemas, contracts, twin canons, route freezes. None
-asks whether a value can be true. Production is publishing
-`listing:xnys:jpm` GPPE = -528,985.79 today; a gross profit per employee cannot
-be negative for a profitable bank, #528 has carried that exact number in its
-title since 2026-07-30, and nothing is red about it.
+asks whether a value can be true. Production was publishing
+`listing:xnys:jpm` GPPE = -528,985.79, #528 carried that exact number in its
+title from 2026-07-30, and nothing was red about it.
+
+What a negative published number MEANS is not this file's to decide: the
+metric forest (`factors.forest`, #528) declares a sign policy per node and per
+issuer class, and `node-sign-policy` asserts exactly that (init.md rule 17). A
+value the node forbids fails; a negative value the node declares
+`sign-is-signal` passes and is printed by name (`SIGNAL`) on every run, so a
+declared low signal is never a silent pass.
 
 These need no vendor call and no external oracle: pure SQL over materialized
 `mart`. That is the point — an invariant that depends on the network becomes a
@@ -49,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from factors.forest import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
 
 EXEMPTIONS_PATH = Path(__file__).with_name("output_invariant_exemptions.json")
 
@@ -157,25 +164,133 @@ class Invariant:
     violations: str
     #: How many rows the invariant looked at, so a vacuous pass is visible.
     population: str
+    #: Rows that hold but must be seen: printed as `SIGNAL`, never a failure.
+    signals: str | None = None
+
+
+#: The published table whose columns the sign policies judge, scoped to the governed head.
+SIGN_POLICY_TABLE = "mart.topt_gppe_results"
+
+
+def _classes(values: set[IssuerClass]) -> str:
+    return ", ".join(f"'{value}'" for value in sorted(member.value for member in values))
+
+
+def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | None]:
+    """(violations, signals) for the published columns of `table`, generated from the forest.
+
+    Violations: a value for an issuer class the column's node declares no policy for; a
+    negative value where the node is `must-be-non-negative` for the row's class; two columns
+    carrying one node with different values; and a sign a registered ratio cannot produce
+    (output and numerator both published, denominator non-negative by policy, so the two
+    signs agree). Signals: a negative value where the node declares `sign-is-signal`."""
+    columns = PUBLISHED_COLUMNS[table]
+    #: node key -> the column judged for it; any further column carrying the node must equal it.
+    judged: dict[str, str] = {}
+    for column, node_key in sorted(columns.items()):
+        judged.setdefault(node_key, column)
+    violations: list[str] = []
+    signals: list[str] = []
+
+    def select(column: str, node_key: str, predicate: str, why: str, *, published: bool = True) -> str:
+        """One arm of the union. `published` scopes it to rows where `column` carries a value;
+        an arm whose predicate is itself about NULLs passes False."""
+        node = FOREST.node(node_key)
+        scope = f" and {column} is not null" if published else ""
+        return (
+            f"select listing_id, operating_branch, '{column}' as published_column, "
+            f"'{node.key}:{node.node_id}' as node, coalesce({column}::text, 'null') as value, '{why}' as policy "
+            f"from {table} where run_id = ({GOVERNED_HEAD}){scope} and ({predicate})"
+        )
+
+    for column, node_key in sorted(columns.items()):
+        first = judged[node_key]
+        if column != first:
+            # A NULL on one side and a value on the other is a disagreement too.
+            violations.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} is distinct from {first}",
+                    f"same node as {first}, other value",
+                    published=False,
+                )
+            )
+            continue
+        node = FOREST.node(node_key)
+        by_policy = {
+            policy: {c for c, declared in node.sign_policy.items() if declared is policy} for policy in SignPolicy
+        }
+        violations.append(
+            select(
+                column,
+                node_key,
+                f"operating_branch not in ({_classes(set(node.sign_policy))})",
+                "no policy for this class",
+            )
+        )
+        forbidden = by_policy[SignPolicy.MUST_BE_NON_NEGATIVE]
+        if forbidden:
+            violations.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} < 0 and operating_branch in ({_classes(forbidden)})",
+                    SignPolicy.MUST_BE_NON_NEGATIVE.value,
+                )
+            )
+        signalled = by_policy[SignPolicy.SIGN_IS_SIGNAL]
+        if signalled:
+            signals.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} < 0 and operating_branch in ({_classes(signalled)})",
+                    SignPolicy.SIGN_IS_SIGNAL.value,
+                )
+            )
+    for tree in FOREST.trees:
+        for decomposition in tree.decompositions:
+            if decomposition.formula_id != "ratio" or decomposition.output not in judged:
+                continue
+            by_pair: dict[tuple[str, str], set[IssuerClass]] = {}
+            for issuer_class, (numerator, denominator) in decomposition.operands.items():
+                policy = FOREST.node(denominator).sign_policy.get(issuer_class)
+                if numerator in judged and policy is SignPolicy.MUST_BE_NON_NEGATIVE:
+                    by_pair.setdefault((numerator, denominator), set()).add(issuer_class)
+            for (numerator, denominator), classes in sorted(by_pair.items()):
+                output_column, numerator_column = judged[decomposition.output], judged[numerator]
+                violations.append(
+                    select(
+                        output_column,
+                        decomposition.output,
+                        # A published output whose numerator is absent is as wrong as a flipped
+                        # sign: `sign(NULL) <> …` is NULL, so the absence is named explicitly.
+                        f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null "
+                        f"or sign({output_column}) <> sign({numerator_column}))",
+                        f"sign of {numerator_column} over non-negative {denominator}",
+                    )
+                )
+    return "\n union all\n".join(violations), ("\n union all\n".join(signals) if signals else None)
+
+
+_SIGN_VIOLATIONS, _SIGN_SIGNALS = _sign_policy_queries()
 
 
 INVARIANTS: tuple[Invariant, ...] = (
     Invariant(
-        id="gppe-not-negative",
+        id="node-sign-policy",
         claim=(
-            "gross profit per employee cannot be negative — a company with positive gross "
-            "profit and at least one employee has a positive ratio (#528)"
+            "a published value respects the sign policy its metric-forest node declares for the "
+            "issuer's class — the definition says what a negative number means, and this asserts "
+            "exactly that (init.md rule 17, #528)"
         ),
-        violations=f"""
-            select listing_id, gppe::text, operating_branch
-            from mart.topt_gppe_results
-            where run_id = ({GOVERNED_HEAD})
-              and gppe < 0
-        """,
+        violations=_SIGN_VIOLATIONS,
         population=f"""
-            select count(*) from mart.topt_gppe_results
+            select count(*) from {SIGN_POLICY_TABLE}
             where run_id = ({GOVERNED_HEAD})
         """,
+        signals=_SIGN_SIGNALS,
     ),
     Invariant(
         id="available-means-a-value",
@@ -399,6 +514,7 @@ def _render(invariant: Invariant) -> Invariant:
         .replace("{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER)
         .replace("__MARKET_PRICE_PARSER_RANKS__", ranks),
         population=invariant.population,
+        signals=invariant.signals,
     )
 
 
@@ -452,6 +568,10 @@ def check(
             population = _rows(connection, invariant.population)[0][0]
             violations = _rows(connection, invariant.violations)
             exemption = exemptions.get(invariant.id)
+            if invariant.signals is not None:
+                # Printed whatever the verdict: a declared low signal is accepted, never unseen.
+                for row in _rows(connection, invariant.signals):
+                    print(f"  SIGNAL   {invariant.id}: " + " ".join(str(field) for field in row))
 
             if violations and exemption and exemption.expires >= today:
                 print(

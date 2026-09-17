@@ -1,15 +1,18 @@
 """The plausibility gate on a tick (#544): judge this run's published rows against
-policy v1 and the previous accepted run, in the tick's own transaction, before the
-pointer advances.
+the plausibility policy (v2 since #528) and the previous accepted run, in the tick's own
+transaction, before the pointer advances.
 
 `lanes/capture.py` calls `judge_run` after materialization (and after the strategy
 replay when the tick runs one). A violation that is not exempted fails the Dagster run;
 the transaction rolls back with it, so nothing of the refused run is materialised and
 `mart.current_pointer` stays on the previous accepted run — the behaviour the pointer
 design already implies. Exemptions come from the same file the nightly suite reads
-(`tools/output_invariant_exemptions.json`, issue + expiry): `sign-per-branch` is judged
-under the suite's `gppe-not-negative` entry because it is the same defect judged
-earlier. An expired exemption is no exemption.
+(`tools/output_invariant_exemptions.json`, issue + expiry): `node-sign-policy` is judged
+under the suite's entry of the same id because it is the same question judged earlier. An
+expired exemption is no exemption.
+
+A negative value whose forest node declares `sign-is-signal` is not a violation, and it is
+not silent either: `Verdict.signals` carries it and `lines()` prints it on every tick (#528).
 """
 
 from __future__ import annotations
@@ -23,10 +26,11 @@ from typing import Any
 
 from factors.composite.plausibility_policy import (
     POLICY_VERSION,
-    RULE_SIGN_PER_BRANCH,
+    RULE_NODE_SIGN_POLICY,
     Row,
     Violation,
     evaluate,
+    sign_signals,
 )
 
 from data_engine.datahub.a1_evidence import POINTER_FACTOR_ID
@@ -35,7 +39,7 @@ from data_engine.datahub.a1_evidence import POINTER_FACTOR_ID
 _EXEMPTIONS_IMAGE = Path("/app/tools/output_invariant_exemptions.json")
 _EXEMPTIONS_REPO = Path(__file__).resolve().parents[6] / "tools" / "output_invariant_exemptions.json"
 #: Gate rule -> nightly invariant whose exemption also defers the gate.
-_SHARED_EXEMPTION = {RULE_SIGN_PER_BRANCH: "gppe-not-negative"}
+_SHARED_EXEMPTION = {RULE_NODE_SIGN_POLICY: "node-sign-policy"}
 
 # `last_close` is the price the run's own core result was computed from: the market-price
 # observation among the result's `input_observation_ids` for the result's own listing (a
@@ -93,6 +97,8 @@ class Verdict:
     previous_run_id: str | None
     violations: tuple[Violation, ...]
     deferred: tuple[tuple[Violation, str], ...]
+    #: Negative values their node declares `sign-is-signal`: accepted, and printed by name.
+    signals: tuple[Violation, ...] = ()
 
     @property
     def refused(self) -> bool:
@@ -100,6 +106,8 @@ class Verdict:
 
     def lines(self) -> list[str]:
         out = [f"plausibility policy {self.policy_version}: previous accepted run {self.previous_run_id or '(none)'}"]
+        for signal in self.signals:
+            out.append(f"  SIGNAL   {signal.rule} {signal.listing_id or ''}: {signal.detail} — a declared low signal")
         for violation, note in self.deferred:
             out.append(f"  DEFERRED {violation.rule} {violation.listing_id or ''}: {violation.detail} — {note}")
         for violation in self.violations:
@@ -153,8 +161,8 @@ def judge_run(
     exemptions_path: Path | None = None,
     today: date | None = None,
 ) -> Verdict:
-    """Policy v1 over this run's published rows against the previous accepted run of the
-    same universe. Never advances or refuses anything itself: the caller turns
+    """The plausibility policy over this run's published rows against the previous accepted
+    run of the same universe. Never advances or refuses anything itself: the caller turns
     `Verdict.refused` into the Dagster failure that rolls the tick back."""
     current = _rows(connection, run_id)
     universe = connection.execute(_RUN_UNIVERSE_SQL, (run_id,)).fetchone()
@@ -183,4 +191,4 @@ def judge_run(
             deferred.append((violation, note))
         else:
             violations.append(violation)
-    return Verdict(POLICY_VERSION, previous_run_id, tuple(violations), tuple(deferred))
+    return Verdict(POLICY_VERSION, previous_run_id, tuple(violations), tuple(deferred), tuple(sign_signals(current)))

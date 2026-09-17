@@ -1,11 +1,4 @@
 {
   "_comment": "#581. An exemption defers an invariant; it never disables one. Each carries the issue that will resolve it and a date after which the check fails anyway, because invariant suites die by accumulating permanent waivers. An exemption for an invariant that is no longer violated also fails: a standing waiver for a fixed defect hides the next occurrence.",
-  "exemptions": [
-    {
-      "invariant": "gppe-not-negative",
-      "issue": "#528",
-      "expires": "2026-09-23",
-      "reason": "JPM publishes a negative GPPE (-514,726.13 on both governed heads, 2026-09-16) because a uniform total_assets capital charge is applied to financial issuers. The owner decided on 2026-09-04 (#528) to replace the single number with an operating + financial decomposition for every issuer, and on 2026-09-07 that the per-component sign policy replaces this exemption; that implementation has not started. Extended once, by 7 days (was 2026-09-16), because the same exemption also covers the in-tick plausibility gate: without it every TOPT tick from 2026-09-17 22:15Z is refused and the governed head freezes. Not to be extended again without an owner decision on #528."
-    }
-  ]
+  "exemptions": []
 }
