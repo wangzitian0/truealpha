@@ -18,16 +18,34 @@ create table if not exists mart.datahub_confidence_report (
         check (split_part(report_id, ':', 2) = content_sha256)
 );
 
-create index if not exists ix_datahub_confidence_report_universe
-    on mart.datahub_confidence_report (universe_id, created_at desc);
+do $$
+begin
+    if to_regclass('mart.ix_datahub_confidence_report_universe') is null then
+        create index if not exists ix_datahub_confidence_report_universe
+            on mart.datahub_confidence_report (universe_id, created_at desc);
+    end if;
+end
+$$;
 
 comment on table mart.datahub_confidence_report is
     'Per governed head: every (metric family, subject) cell banded high (>=2 independent origins reconciled agreed) / medium (>=2 origins present: no policy, disagreement, or one lineage) / low (one origin) / missing, with per-family aggregates, a sampled cross-origin view and the accuracy oracle. The stored observation confidence column is a constant and is not read by the bands (payload.metadata.stored_confidence).';
 
-drop trigger if exists reject_mutation on mart.datahub_confidence_report;
-create trigger reject_mutation
-before update or delete on mart.datahub_confidence_report
-for each row execute function mart.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.datahub_confidence_report'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.datahub_confidence_report FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on mart.datahub_confidence_report;
+        create trigger reject_mutation
+        before update or delete on mart.datahub_confidence_report
+        for each row execute function mart.reject_mutation();
+    end if;
+end
+$$;
 
 -- Read roles: mart_readonly (the blanket grant in roles.sql covers only tables that existed
 -- when the role was created) and app_ops_reader (the /admin/datahub dashboard's ops reader).

@@ -17,8 +17,19 @@
 -- headcount. Those are point-in-time observations at the cutoff and always were; giving
 -- them a synthetic period would be the same lie as a synthetic `knowable_at`.
 
-alter table staging.strategy_backtest_inputs
-    add column if not exists fiscal_period text;
+-- Boot-lock guard (2026-09-17): `add column if not exists` takes ACCESS EXCLUSIVE even when
+-- the column is already there, so the replay on every boot only alters a table that lacks it.
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.strategy_backtest_inputs'::regclass and attname = 'fiscal_period' and not attisdropped
+    ) then
+        alter table staging.strategy_backtest_inputs
+            add column if not exists fiscal_period text;
+    end if;
+end
+$$;
 
 comment on column staging.strategy_backtest_inputs.fiscal_period is
     'The fiscal period this value describes, as the staging period tag '
@@ -34,13 +45,36 @@ comment on column staging.strategy_backtest_inputs.fiscal_period is
 -- Postgres truncated the implicit name to 63 characters, so it is spelled out rather than
 -- reconstructed from the column list -- getting it wrong leaves the old constraint in
 -- place, which silently rejects the second period of every series.
-alter table staging.strategy_backtest_inputs
-    drop constraint if exists strategy_backtest_inputs_issuer_id_cutoff_at_input_key_reco_key;
+-- Boot-lock guard (2026-09-17): `drop constraint if exists` takes ACCESS EXCLUSIVE even when
+-- the constraint is already gone.
+do $$
+begin
+    if exists (
+        select 1 from pg_constraint
+        where conrelid = 'staging.strategy_backtest_inputs'::regclass and conname = 'strategy_backtest_inputs_issuer_id_cutoff_at_input_key_reco_key'
+    ) then
+        alter table staging.strategy_backtest_inputs
+            drop constraint if exists strategy_backtest_inputs_issuer_id_cutoff_at_input_key_reco_key;
+    end if;
+end
+$$;
 
-create unique index if not exists strategy_backtest_inputs_identity
-    on staging.strategy_backtest_inputs
-    (issuer_id, cutoff_at, input_key, coalesce(fiscal_period, ''), recorded_at);
+do $$
+begin
+    if to_regclass('staging.strategy_backtest_inputs_identity') is null then
+        create unique index if not exists strategy_backtest_inputs_identity
+            on staging.strategy_backtest_inputs
+            (issuer_id, cutoff_at, input_key, coalesce(fiscal_period, ''), recorded_at);
+    end if;
+end
+$$;
 
 -- The as-of read path selects the newest vintage per (issuer, key, period).
-create index if not exists idx_strategy_backtest_inputs_period
-    on staging.strategy_backtest_inputs (cutoff_at, issuer_id, input_key, fiscal_period, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_strategy_backtest_inputs_period') is null then
+        create index if not exists idx_strategy_backtest_inputs_period
+            on staging.strategy_backtest_inputs (cutoff_at, issuer_id, input_key, fiscal_period, recorded_at desc);
+    end if;
+end
+$$;

@@ -18,12 +18,18 @@ begin
 end;
 $$;
 
-create unique index if not exists uq_fund_holding_line_vintage
-    on staging.fund_holding_facts (
-        fund_id,
-        holding_name,
-        report_period,
-        transaction_time,
-        coalesce(isin, ''),
-        coalesce(cusip, '')
-    );
+do $$
+begin
+    if to_regclass('staging.uq_fund_holding_line_vintage') is null then
+        create unique index if not exists uq_fund_holding_line_vintage
+            on staging.fund_holding_facts (
+                fund_id,
+                holding_name,
+                report_period,
+                transaction_time,
+                coalesce(isin, ''),
+                coalesce(cusip, '')
+            );
+    end if;
+end
+$$;

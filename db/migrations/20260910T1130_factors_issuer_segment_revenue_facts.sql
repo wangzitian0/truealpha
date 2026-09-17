@@ -84,8 +84,14 @@ begin
 end;
 $$;
 
-create index if not exists ix_issuer_segment_revenue_facts_pit
-    on staging.issuer_segment_revenue_facts (cik, knowable_at desc);
+do $$
+begin
+    if to_regclass('staging.ix_issuer_segment_revenue_facts_pit') is null then
+        create index if not exists ix_issuer_segment_revenue_facts_pit
+            on staging.issuer_segment_revenue_facts (cik, knowable_at desc);
+    end if;
+end
+$$;
 
 comment on table staging.issuer_segment_revenue_facts is
     '#772: append-only PIT segment revenue. Rows are admissible only as the partition they were accepted in — partition_total and partition_residual carry that set''s accounting identity so a consumer can refuse a set it did not compute.';
@@ -95,10 +101,22 @@ comment on column staging.issuer_segment_revenue_facts.partition_residual is
     'consolidated total minus the sum of the parts. The honest size of the doubt on any share computed from these rows.';
 
 -- Reject mutation: this plane is append-only like every other PIT fact table.
-drop trigger if exists reject_mutation on staging.issuer_segment_revenue_facts;
-create trigger reject_mutation
-before update or delete on staging.issuer_segment_revenue_facts
-for each row execute function raw.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.issuer_segment_revenue_facts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_segment_revenue_facts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.issuer_segment_revenue_facts;
+        create trigger reject_mutation
+        before update or delete on staging.issuer_segment_revenue_facts
+        for each row execute function raw.reject_mutation();
+    end if;
+end
+$$;
 
 -- No grant to mart_readonly. db/roles.sql is explicit: that role "has no raw/staging
 -- access", and it holds no USAGE on schema staging, so the grant I first wrote here was

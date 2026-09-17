@@ -19,8 +19,14 @@ create table if not exists app.principal_credentials (
 );
 
 -- Case-insensitive uniqueness: "a@b.com" and "A@B.com" are the same login.
-create unique index if not exists idx_principal_credentials_email_lower
-    on app.principal_credentials (lower(email));
+do $$
+begin
+    if to_regclass('app.idx_principal_credentials_email_lower') is null then
+        create unique index if not exists idx_principal_credentials_email_lower
+            on app.principal_credentials (lower(email));
+    end if;
+end
+$$;
 
 create or replace function app.touch_principal_credentials_updated_at()
 returns trigger language plpgsql as $$
@@ -30,10 +36,22 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_principal_credentials_touch on app.principal_credentials;
-create trigger trg_principal_credentials_touch
-before update on app.principal_credentials
-for each row execute function app.touch_principal_credentials_updated_at();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.principal_credentials'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_principal_credentials_touch BEFORE UPDATE ON app.principal_credentials FOR EACH ROW EXECUTE FUNCTION app.touch_principal_credentials_updated_at()'
+    ) then
+        drop trigger if exists trg_principal_credentials_touch on app.principal_credentials;
+        create trigger trg_principal_credentials_touch
+        before update on app.principal_credentials
+        for each row execute function app.touch_principal_credentials_updated_at();
+    end if;
+end
+$$;
 
 -- Grants to app_runtime live in db/roles.sql (that role is created there,
 -- not here — this file runs before it in the migration order), not in this

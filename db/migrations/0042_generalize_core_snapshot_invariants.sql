@@ -8,18 +8,37 @@
 -- counts must agree with each other and with the run's OWN obligation count,
 -- exactly mirroring the Python-side generalization in materialization.py.
 
-alter table staging.topt_core_snapshots
-    drop constraint if exists topt_core_snapshots_issuer_count_check,
-    drop constraint if exists topt_core_snapshots_instrument_count_check,
-    drop constraint if exists topt_core_snapshots_observation_count_check;
+-- Boot-lock guard (2026-09-17): the rebuild takes ACCESS EXCLUSIVE and re-validates every row,
+-- so it runs only while the three constraints are not already exactly these (on a fresh
+-- database they still carry 0026's literals). The literals are pg_get_constraintdef of the
+-- constraints added below; no later migration touches them.
+do $$
+begin
+    if (
+        select count(*)
+        from pg_constraint
+        where conrelid = 'staging.topt_core_snapshots'::regclass
+          and (conname, pg_get_constraintdef(oid)) in (
+              ('topt_core_snapshots_issuer_count_check', 'CHECK (((issuer_count >= 1) AND (issuer_count <= instrument_count)))'),
+              ('topt_core_snapshots_instrument_count_check', 'CHECK ((instrument_count >= 1))'),
+              ('topt_core_snapshots_observation_count_check', 'CHECK ((observation_count = (4 * instrument_count)))')
+          )
+    ) <> 3 then
+        alter table staging.topt_core_snapshots
+            drop constraint if exists topt_core_snapshots_issuer_count_check,
+            drop constraint if exists topt_core_snapshots_instrument_count_check,
+            drop constraint if exists topt_core_snapshots_observation_count_check;
 
-alter table staging.topt_core_snapshots
-    add constraint topt_core_snapshots_issuer_count_check
-        check (issuer_count between 1 and instrument_count),
-    add constraint topt_core_snapshots_instrument_count_check
-        check (instrument_count >= 1),
-    add constraint topt_core_snapshots_observation_count_check
-        check (observation_count = 4 * instrument_count);
+        alter table staging.topt_core_snapshots
+            add constraint topt_core_snapshots_issuer_count_check
+                check (issuer_count between 1 and instrument_count),
+            add constraint topt_core_snapshots_instrument_count_check
+                check (instrument_count >= 1),
+            add constraint topt_core_snapshots_observation_count_check
+                check (observation_count = 4 * instrument_count);
+    end if;
+end
+$$;
 
 create or replace function staging.validate_topt_core_snapshot()
 returns trigger language plpgsql as $$

@@ -19,49 +19,97 @@
 -- aborts the whole migration pass, crash-looping the container. Also drops
 -- *_uniform_values_check up front so the ADD CONSTRAINT below (no native IF NOT
 -- EXISTS in Postgres) is itself safe to repeat.
-alter table mart.topt_gppe_results
-    drop constraint if exists topt_gppe_results_operating_metric_check,
-    drop constraint if exists topt_gppe_results_check1,
-    drop constraint if exists topt_gppe_results_uniform_values_check;
+do $$
+begin
+    if (
+        exists (
+            select 1 from pg_constraint
+            where conrelid = 'mart.topt_gppe_results'::regclass
+              and conname = 'topt_gppe_results_check1'
+        )
+        or not exists (
+            select 1 from pg_constraint
+            where conrelid = 'mart.topt_gppe_results'::regclass
+              and conname = 'topt_gppe_results_operating_metric_check'
+              and pg_get_constraintdef(oid) = 'CHECK ((operating_metric = ''capital_adjusted_gppe''::text)) NOT VALID'
+        )
+        or not exists (
+            select 1 from pg_constraint
+            where conrelid = 'mart.topt_gppe_results'::regclass
+              and conname = 'topt_gppe_results_uniform_values_check'
+              and pg_get_constraintdef(oid) = 'CHECK ((((availability = ''available''::text) AND (cardinality(reason_codes) = 0) AND (operating_efficiency IS NOT NULL) AND (operating_metric = ''capital_adjusted_gppe''::text) AND (capital_adjusted_gross_profit IS NOT NULL) AND (gppe IS NOT NULL)) OR ((availability = ''unavailable''::text) AND (cardinality(reason_codes) > 0) AND (operating_efficiency IS NULL) AND (capital_adjusted_gross_profit IS NULL) AND (gppe IS NULL)))) NOT VALID'
+        )
+    ) then
+        alter table mart.topt_gppe_results
+            drop constraint if exists topt_gppe_results_operating_metric_check,
+            drop constraint if exists topt_gppe_results_check1,
+            drop constraint if exists topt_gppe_results_uniform_values_check;
 
--- NOT VALID: enforce the uniform v0.2.0 shape on all NEW writes while grandfathering
--- any existing v0.1.0 rows (financial rows carrying the retired
--- pre_provision_profit_per_employee metric) as a prior append-only vintage. The mart
--- is append-only, so no UPDATE re-checks the old rows.
-alter table mart.topt_gppe_results
-    add constraint topt_gppe_results_operating_metric_check
-        check (operating_metric = 'capital_adjusted_gppe') not valid,
-    add constraint topt_gppe_results_uniform_values_check
-        check (
-            (availability = 'available' and cardinality(reason_codes) = 0
-                and operating_efficiency is not null
-                and operating_metric = 'capital_adjusted_gppe'
-                and capital_adjusted_gross_profit is not null and gppe is not null)
-            or
-            (availability = 'unavailable' and cardinality(reason_codes) > 0
-                and operating_efficiency is null and capital_adjusted_gross_profit is null
-                and gppe is null)
-        ) not valid;
+        -- NOT VALID: enforce the uniform v0.2.0 shape on all NEW writes while grandfathering
+        -- any existing v0.1.0 rows (financial rows carrying the retired
+        -- pre_provision_profit_per_employee metric) as a prior append-only vintage. The mart
+        -- is append-only, so no UPDATE re-checks the old rows.
+        alter table mart.topt_gppe_results
+            add constraint topt_gppe_results_operating_metric_check
+                check (operating_metric = 'capital_adjusted_gppe') not valid,
+            add constraint topt_gppe_results_uniform_values_check
+                check (
+                    (availability = 'available' and cardinality(reason_codes) = 0
+                        and operating_efficiency is not null
+                        and operating_metric = 'capital_adjusted_gppe'
+                        and capital_adjusted_gross_profit is not null and gppe is not null)
+                    or
+                    (availability = 'unavailable' and cardinality(reason_codes) > 0
+                        and operating_efficiency is null and capital_adjusted_gross_profit is null
+                        and gppe is null)
+                ) not valid;
+    end if;
+end
+$$;
 
-alter table mart.topt_core_results
-    drop constraint if exists topt_core_results_operating_metric_check,
-    drop constraint if exists topt_core_results_check1,
-    drop constraint if exists topt_core_results_uniform_values_check;
+do $$
+begin
+    if (
+        exists (
+            select 1 from pg_constraint
+            where conrelid = 'mart.topt_core_results'::regclass
+              and conname = 'topt_core_results_check1'
+        )
+        or not exists (
+            select 1 from pg_constraint
+            where conrelid = 'mart.topt_core_results'::regclass
+              and conname = 'topt_core_results_operating_metric_check'
+              and pg_get_constraintdef(oid) = 'CHECK ((operating_metric = ''capital_adjusted_gppe''::text)) NOT VALID'
+        )
+        or not exists (
+            select 1 from pg_constraint
+            where conrelid = 'mart.topt_core_results'::regclass
+              and conname = 'topt_core_results_uniform_values_check'
+              and pg_get_constraintdef(oid) = 'CHECK ((((availability = ''available''::text) AND (operating_metric = ''capital_adjusted_gppe''::text) AND (operating_efficiency IS NOT NULL) AND (capital_adjusted_gross_profit IS NOT NULL) AND (gppe IS NOT NULL) AND (tier IS NOT NULL) AND (target_ps_lower IS NOT NULL) AND (target_ps_upper IS NOT NULL) AND (target_ps_midpoint IS NOT NULL) AND (current_ps IS NOT NULL) AND (valuation_gap IS NOT NULL) AND (cardinality(reason_codes) = 0)) OR ((availability = ''unavailable''::text) AND (capital_adjusted_gross_profit IS NULL) AND (gppe IS NULL) AND (tier IS NULL) AND (target_ps_lower IS NULL) AND (target_ps_upper IS NULL) AND (target_ps_midpoint IS NULL) AND (current_ps IS NULL) AND (valuation_gap IS NULL) AND (operating_efficiency IS NULL) AND (cardinality(reason_codes) > 0)))) NOT VALID'
+        )
+    ) then
+        alter table mart.topt_core_results
+            drop constraint if exists topt_core_results_operating_metric_check,
+            drop constraint if exists topt_core_results_check1,
+            drop constraint if exists topt_core_results_uniform_values_check;
 
-alter table mart.topt_core_results
-    add constraint topt_core_results_operating_metric_check
-        check (operating_metric = 'capital_adjusted_gppe') not valid,
-    add constraint topt_core_results_uniform_values_check
-        check (
-            (availability = 'available'
-                and operating_metric = 'capital_adjusted_gppe' and operating_efficiency is not null
-                and capital_adjusted_gross_profit is not null and gppe is not null
-                and tier is not null and target_ps_lower is not null and target_ps_upper is not null
-                and target_ps_midpoint is not null and current_ps is not null
-                and valuation_gap is not null and cardinality(reason_codes) = 0)
-            or
-            (availability = 'unavailable' and capital_adjusted_gross_profit is null and gppe is null
-                and tier is null and target_ps_lower is null and target_ps_upper is null
-                and target_ps_midpoint is null and current_ps is null and valuation_gap is null
-                and operating_efficiency is null and cardinality(reason_codes) > 0)
-        ) not valid;
+        alter table mart.topt_core_results
+            add constraint topt_core_results_operating_metric_check
+                check (operating_metric = 'capital_adjusted_gppe') not valid,
+            add constraint topt_core_results_uniform_values_check
+                check (
+                    (availability = 'available'
+                        and operating_metric = 'capital_adjusted_gppe' and operating_efficiency is not null
+                        and capital_adjusted_gross_profit is not null and gppe is not null
+                        and tier is not null and target_ps_lower is not null and target_ps_upper is not null
+                        and target_ps_midpoint is not null and current_ps is not null
+                        and valuation_gap is not null and cardinality(reason_codes) = 0)
+                    or
+                    (availability = 'unavailable' and capital_adjusted_gross_profit is null and gppe is null
+                        and tier is null and target_ps_lower is null and target_ps_upper is null
+                        and target_ps_midpoint is null and current_ps is null and valuation_gap is null
+                        and operating_efficiency is null and cardinality(reason_codes) > 0)
+                ) not valid;
+    end if;
+end
+$$;

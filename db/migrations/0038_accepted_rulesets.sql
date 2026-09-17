@@ -25,15 +25,44 @@ create table if not exists staging.accepted_rulesets (
 comment on table staging.accepted_rulesets is
     '#496: append-only governed pointer for published rulesets (e.g. concept-mapping). The head is max(sequence) per kind; never read "the latest contract object" directly.';
 
-drop trigger if exists reject_mutation on staging.accepted_rulesets;
-create trigger reject_mutation
-before update or delete on staging.accepted_rulesets
-for each row execute function raw.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.accepted_rulesets'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.accepted_rulesets FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.accepted_rulesets;
+        create trigger reject_mutation
+        before update or delete on staging.accepted_rulesets
+        for each row execute function raw.reject_mutation();
+    end if;
+end
+$$;
 
-create or replace view staging.accepted_ruleset_head as
+-- Boot-lock guard: `create or replace view` takes ACCESS EXCLUSIVE on the view, which
+-- queues behind every open reader. Replace it only when the definition differs; the
+-- comparison normalizes both sides through pg_get_viewdef, so no literal can drift.
+do $$
+declare
+    wanted constant text := $view$
 select distinct on (kind) kind, contract_id, sequence, note, advanced_at
 from staging.accepted_rulesets
-order by kind, sequence desc;
+order by kind, sequence desc
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    -- to_regclass, not ::regclass: a cast of a missing name fails when the expression is planned.
+    if pg_get_viewdef(to_regclass('staging.accepted_ruleset_head'))
+       is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view staging.accepted_ruleset_head as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 comment on view staging.accepted_ruleset_head is
     'The in-force ruleset per kind. Resolving through this view, not through contract_objects directly, is what keeps the read governed.';

@@ -46,12 +46,18 @@ create table if not exists staging.headcount_extraction_invocations (
     constraint headcount_invocation_json_check check (jsonb_typeof(invocation) = 'object')
 );
 
-create index if not exists idx_headcount_invocation_document
-    on staging.headcount_extraction_invocations (
-        source_document_record_id,
-        started_at,
-        extraction_invocation_id
-    );
+do $$
+begin
+    if to_regclass('staging.idx_headcount_invocation_document') is null then
+        create index if not exists idx_headcount_invocation_document
+            on staging.headcount_extraction_invocations (
+                source_document_record_id,
+                started_at,
+                extraction_invocation_id
+            );
+    end if;
+end
+$$;
 
 create table if not exists staging.headcount_facts (
     normalized_record_id      text primary key
@@ -107,13 +113,19 @@ create table if not exists staging.headcount_facts (
     )
 );
 
-create index if not exists idx_headcount_facts_pit
-    on staging.headcount_facts (
-        issuer_id,
-        valid_period_end,
-        transaction_time desc,
-        recorded_at desc
-    );
+do $$
+begin
+    if to_regclass('staging.idx_headcount_facts_pit') is null then
+        create index if not exists idx_headcount_facts_pit
+            on staging.headcount_facts (
+                issuer_id,
+                valid_period_end,
+                transaction_time desc,
+                recorded_at desc
+            );
+    end if;
+end
+$$;
 
 create or replace function staging.validate_headcount_invocation()
 returns trigger language plpgsql as $$
@@ -215,26 +227,74 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_headcount_invocations_validate
-    on staging.headcount_extraction_invocations;
-create trigger trg_headcount_invocations_validate
-before insert on staging.headcount_extraction_invocations
-for each row execute function staging.validate_headcount_invocation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.headcount_extraction_invocations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_headcount_invocations_validate BEFORE INSERT ON staging.headcount_extraction_invocations FOR EACH ROW EXECUTE FUNCTION staging.validate_headcount_invocation()'
+    ) then
+        drop trigger if exists trg_headcount_invocations_validate
+            on staging.headcount_extraction_invocations;
+        create trigger trg_headcount_invocations_validate
+        before insert on staging.headcount_extraction_invocations
+        for each row execute function staging.validate_headcount_invocation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_headcount_facts_validate
-    on staging.headcount_facts;
-create trigger trg_headcount_facts_validate
-before insert on staging.headcount_facts
-for each row execute function staging.validate_headcount_projection();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.headcount_facts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_headcount_facts_validate BEFORE INSERT ON staging.headcount_facts FOR EACH ROW EXECUTE FUNCTION staging.validate_headcount_projection()'
+    ) then
+        drop trigger if exists trg_headcount_facts_validate
+            on staging.headcount_facts;
+        create trigger trg_headcount_facts_validate
+        before insert on staging.headcount_facts
+        for each row execute function staging.validate_headcount_projection();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_headcount_invocations_append_only
-    on staging.headcount_extraction_invocations;
-create trigger trg_headcount_invocations_append_only
-before update or delete on staging.headcount_extraction_invocations
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.headcount_extraction_invocations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_headcount_invocations_append_only BEFORE DELETE OR UPDATE ON staging.headcount_extraction_invocations FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_headcount_invocations_append_only
+            on staging.headcount_extraction_invocations;
+        create trigger trg_headcount_invocations_append_only
+        before update or delete on staging.headcount_extraction_invocations
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_headcount_facts_append_only
-    on staging.headcount_facts;
-create trigger trg_headcount_facts_append_only
-before update or delete on staging.headcount_facts
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.headcount_facts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_headcount_facts_append_only BEFORE DELETE OR UPDATE ON staging.headcount_facts FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_headcount_facts_append_only
+            on staging.headcount_facts;
+        create trigger trg_headcount_facts_append_only
+        before update or delete on staging.headcount_facts
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;

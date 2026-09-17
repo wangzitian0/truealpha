@@ -42,10 +42,28 @@ create table if not exists staging.issuer_headcount_facts (
 comment on table staging.issuer_headcount_facts is
     '#70: append-only PIT employee headcount. Many low-frequency producers write; the daily capture only reads by knowable_at <= cutoff. Corrections supersede by insert, never by update.';
 
-create index if not exists idx_issuer_headcount_pit
-    on staging.issuer_headcount_facts (cik, knowable_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_issuer_headcount_pit') is null then
+        create index if not exists idx_issuer_headcount_pit
+            on staging.issuer_headcount_facts (cik, knowable_at desc);
+    end if;
+end
+$$;
 
-drop trigger if exists reject_mutation on staging.issuer_headcount_facts;
-create trigger reject_mutation
-before update or delete on staging.issuer_headcount_facts
-for each row execute function raw.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.issuer_headcount_facts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_headcount_facts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.issuer_headcount_facts;
+        create trigger reject_mutation
+        before update or delete on staging.issuer_headcount_facts
+        for each row execute function raw.reject_mutation();
+    end if;
+end
+$$;

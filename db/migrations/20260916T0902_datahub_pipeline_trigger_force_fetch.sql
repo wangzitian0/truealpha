@@ -9,8 +9,19 @@
 -- names the column keeps inserting ordinary requests, and the sensor from before this
 -- migration never reads it.
 
-alter table staging.pipeline_trigger_requests
-    add column if not exists force_fetch boolean not null default false;
+-- Boot-lock guard (2026-09-17): `add column if not exists` takes ACCESS EXCLUSIVE even when
+-- the column is already there, so the replay on every boot only alters a table that lacks it.
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.pipeline_trigger_requests'::regclass and attname = 'force_fetch' and not attisdropped
+    ) then
+        alter table staging.pipeline_trigger_requests
+            add column if not exists force_fetch boolean not null default false;
+    end if;
+end
+$$;
 
 comment on column staging.pipeline_trigger_requests.force_fetch is
     '#874: launch the tick with force_fetch — skip the #635 reuse window and fetch every obligation.';

@@ -132,6 +132,33 @@ def test_a_replay_does_not_wait_for_a_backfill_writing_contract_objects(migrated
     assert elapsed < 60, f"replay took {elapsed:.1f}s"
 
 
+def test_a_replay_does_not_wait_for_any_writer_or_reader(migrated_database: str) -> None:
+    """Every table written and every view read by an open transaction: the replay is a read."""
+    with psycopg.connect(migrated_database) as holder:
+        relations = holder.execute(
+            """
+            select format('%%I.%%I', n.nspname, c.relname), c.relkind
+              from pg_class as c
+              join pg_namespace as n on n.oid = c.relnamespace
+             where n.nspname = any(%s) and c.relkind in ('r', 'p', 'v', 'm')
+             order by 1
+            """,
+            (list(APPLICATION_SCHEMAS),),
+        ).fetchall()
+        tables = [name for name, kind in relations if kind in ("r", "p")]
+        views = [name for name, kind in relations if kind in ("v", "m")]
+        assert len(tables) > 50 and len(views) > 10, (len(tables), len(views))
+        _insert_contract_object(holder)
+        holder.execute(sql.SQL("lock table {} in row exclusive mode").format(sql.SQL(", ").join(map(sql.SQL, tables))))
+        for view in views:
+            holder.execute(sql.SQL("select 1 from {} limit 0").format(sql.SQL(view)))
+        completed, elapsed = run_runner(migrated_database, **STRICT)
+        holder.rollback()
+    assert completed.returncode == 0, _output(completed)[-4000:]
+    assert "LOCK TIMEOUT" not in _output(completed)
+    assert elapsed < 60, f"replay took {elapsed:.1f}s"
+
+
 # --- the runner's own bounds, over a two-file chain ---------------------------------------
 
 
@@ -176,7 +203,7 @@ def test_a_lock_timeout_is_retried_with_backoff_and_then_fails_loudly(empty_data
     assert output.count("LOCK TIMEOUT") == 3, output
     assert "0002_needs_lock.sql at line 1, attempt 3/3" in output
     # ... and it says which transaction held which lock.
-    assert "RowExclusiveLock | public.boot_lock_probe" in output, output
+    assert "public.boot_lock_probe(RowExclusive)" in output, output
     assert "FAILED" in output and "0002_needs_lock.sql" in output
     assert "0003_never_reached.sql" not in output
     with psycopg.connect(empty_database) as check:

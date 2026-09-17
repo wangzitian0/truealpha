@@ -565,8 +565,11 @@ def test_the_backfill_plan_reads_only_tables_that_predate_it() -> None:
     two migrations create."""
     backfill = BACKFILL_MIGRATION.read_text()
     both = STORE_MIGRATION.read_text() + backfill
-    start = backfill.index("create or replace view staging.entity_backfill_plan as")
-    body = backfill[start : backfill.index(";\n\ncomment on view staging.entity_backfill_plan", start)]
+    # The view body is the `$view$` literal its boot-lock guard compares and applies (#915).
+    replace = backfill.index("create or replace view staging.entity_backfill_plan as ")
+    opening = backfill.rindex("$view$", 0, backfill.rindex("$view$", 0, replace))
+    body = backfill[opening + len("$view$") : backfill.index("$view$", opening + len("$view$"))]
+    assert "from relation_state" in body and "$view$" not in body
     created = set(re.findall(r"create (?:or replace )?(?:table if not exists|view|function) (staging\.\w+)", both))
     assert {"staging.entity_backfill_plan", "staging.entities", "staging.entity_mint"} <= created
     referenced = set(re.findall(r"staging\.\w+", body)) - {"staging.entity_backfill_plan"}
@@ -652,6 +655,14 @@ def test_the_same_evidence_mints_the_same_ids_in_any_database(fresh_databases) -
 # -- the backfill is a Dagster job, never a boot step ----------------------------------
 
 
+#: A statement that touches rows, as it would appear inside a DO block. Trigger definitions
+#: say "BEFORE DELETE OR UPDATE ON ...", which none of these match.
+_DATA_STATEMENT = re.compile(
+    r"\binsert\s+into\b|\bupdate\s+[\w.]+\s+set\b|\bdelete\s+from\b|\bmerge\s+into\b|\btruncate\b|entity_backfill\(",
+    re.IGNORECASE,
+)
+
+
 def _top_level_statements(sql_text: str) -> list[str]:
     """Statements of a migration file, split on `;` outside comments, quotes and $$ bodies."""
     text = re.sub(r"--[^\n]*", "", sql_text)
@@ -691,6 +702,10 @@ def test_no_boot_migration_reads_or_writes_data_for_the_entity_store() -> None:
             head = statement.lower().split(None, 3)
             if head[0] == "insert":
                 assert head[2] in registries, f"{path.name}: {statement[:80]}"
+            elif head[0] == "do":
+                # #915: a DO block may only guard a definition (create it when the catalog
+                # says it is missing or different) -- it never reads or writes rows.
+                assert not _DATA_STATEMENT.search(statement), f"{path.name} runs {statement[:120]!r} at boot"
             else:
                 assert head[0] in {"create", "comment", "drop"}, f"{path.name} runs {statement[:80]!r} at boot"
     for path in MIGRATIONS.glob("*.sql"):

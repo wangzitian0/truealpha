@@ -17,7 +17,9 @@
 -- `lineage ? 'vintage'` finds it present and reads null as "this filing is unknown" rather
 -- than "this projection is broken". Nothing stored changes; the view is replaced in place and
 -- every historical run's lineage gains its vintage on the next read.
-create or replace view mart.topt_core_meta_info as
+do $$
+declare
+    wanted constant text := $view$
 select
     result.result_id,
     result.invocation_id,
@@ -83,4 +85,18 @@ join lateral (
     join raw.capture_source_requests request
       on request.source_request_id = vintage.source_request_id
      and request.source_request_id = work.source_request_id
-) lineage on true;
+) lineage on true
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.topt_core_meta_info') is null
+       or pg_get_viewdef(to_regclass('mart.topt_core_meta_info'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.topt_core_meta_info as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;

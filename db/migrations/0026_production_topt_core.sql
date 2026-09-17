@@ -21,15 +21,39 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_plan on raw.production_topt_run_plans;
-create trigger validate_plan
-before insert on raw.production_topt_run_plans
-for each row execute function raw.validate_production_topt_run_plan();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.production_topt_run_plans'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_plan BEFORE INSERT ON raw.production_topt_run_plans FOR EACH ROW EXECUTE FUNCTION raw.validate_production_topt_run_plan()'
+    ) then
+        drop trigger if exists validate_plan on raw.production_topt_run_plans;
+        create trigger validate_plan
+        before insert on raw.production_topt_run_plans
+        for each row execute function raw.validate_production_topt_run_plan();
+    end if;
+end
+$$;
 
-drop trigger if exists reject_mutation on raw.production_topt_run_plans;
-create trigger reject_mutation
-before update or delete on raw.production_topt_run_plans
-for each row execute function raw.reject_capture_control_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.production_topt_run_plans'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON raw.production_topt_run_plans FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on raw.production_topt_run_plans;
+        create trigger reject_mutation
+        before update or delete on raw.production_topt_run_plans
+        for each row execute function raw.reject_capture_control_mutation();
+    end if;
+end
+$$;
 
 create table if not exists staging.capture_observation_payloads (
     observation_id                 text primary key
@@ -54,10 +78,22 @@ select capture_obligation_id, observation_id, recorded_at
 from staging.capture_normalized_observations
 on conflict do nothing;
 
-drop trigger if exists reject_mutation on staging.capture_observation_obligations;
-create trigger reject_mutation
-before update or delete on staging.capture_observation_obligations
-for each row execute function raw.reject_capture_control_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.capture_observation_obligations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_observation_obligations FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.capture_observation_obligations;
+        create trigger reject_mutation
+        before update or delete on staging.capture_observation_obligations
+        for each row execute function raw.reject_capture_control_mutation();
+    end if;
+end
+$$;
 
 create or replace function staging.validate_capture_observation_payload()
 returns trigger language plpgsql as $$
@@ -77,15 +113,39 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_payload on staging.capture_observation_payloads;
-create trigger validate_payload
-before insert on staging.capture_observation_payloads
-for each row execute function staging.validate_capture_observation_payload();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.capture_observation_payloads'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_payload BEFORE INSERT ON staging.capture_observation_payloads FOR EACH ROW EXECUTE FUNCTION staging.validate_capture_observation_payload()'
+    ) then
+        drop trigger if exists validate_payload on staging.capture_observation_payloads;
+        create trigger validate_payload
+        before insert on staging.capture_observation_payloads
+        for each row execute function staging.validate_capture_observation_payload();
+    end if;
+end
+$$;
 
-drop trigger if exists reject_mutation on staging.capture_observation_payloads;
-create trigger reject_mutation
-before update or delete on staging.capture_observation_payloads
-for each row execute function raw.reject_capture_control_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.capture_observation_payloads'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_observation_payloads FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.capture_observation_payloads;
+        create trigger reject_mutation
+        before update or delete on staging.capture_observation_payloads
+        for each row execute function raw.reject_capture_control_mutation();
+    end if;
+end
+$$;
 
 create table if not exists staging.topt_core_snapshots (
     snapshot_id                     text primary key
@@ -161,10 +221,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_snapshot on staging.topt_core_snapshots;
-create trigger validate_snapshot
-before insert on staging.topt_core_snapshots
-for each row execute function staging.validate_topt_core_snapshot();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.topt_core_snapshots'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_snapshot BEFORE INSERT ON staging.topt_core_snapshots FOR EACH ROW EXECUTE FUNCTION staging.validate_topt_core_snapshot()'
+    ) then
+        drop trigger if exists validate_snapshot on staging.topt_core_snapshots;
+        create trigger validate_snapshot
+        before insert on staging.topt_core_snapshots
+        for each row execute function staging.validate_topt_core_snapshot();
+    end if;
+end
+$$;
 
 create or replace function staging.validate_topt_core_snapshot_member()
 returns trigger language plpgsql as $$
@@ -190,10 +262,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_member on staging.topt_core_snapshot_members;
-create trigger validate_member
-before insert on staging.topt_core_snapshot_members
-for each row execute function staging.validate_topt_core_snapshot_member();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.topt_core_snapshot_members'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_member BEFORE INSERT ON staging.topt_core_snapshot_members FOR EACH ROW EXECUTE FUNCTION staging.validate_topt_core_snapshot_member()'
+    ) then
+        drop trigger if exists validate_member on staging.topt_core_snapshot_members;
+        create trigger validate_member
+        before insert on staging.topt_core_snapshot_members
+        for each row execute function staging.validate_topt_core_snapshot_member();
+    end if;
+end
+$$;
 
 do $$
 declare
@@ -203,12 +287,26 @@ begin
         'staging.topt_core_snapshots'::regclass,
         'staging.topt_core_snapshot_members'::regclass
     ] loop
-        execute format('drop trigger if exists reject_mutation on %s', target);
-        execute format(
-            'create trigger reject_mutation before update or delete on %s '
-            'for each row execute function raw.reject_capture_control_mutation()',
-            target
-        );
+        -- Boot-lock guard: drop + create takes SHARE ROW EXCLUSIVE on the table; skip it
+        -- when the trigger is already exactly this one (the literal is its pg_get_triggerdef).
+        if not exists (
+            select 1
+            from pg_trigger
+            where tgrelid = target
+              and not tgisinternal
+              and pg_get_triggerdef(oid) = format(
+                  'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON %s '
+                  'FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation()',
+                  target
+              )
+        ) then
+            execute format('drop trigger if exists reject_mutation on %s', target);
+            execute format(
+                'create trigger reject_mutation before update or delete on %s '
+                'for each row execute function raw.reject_capture_control_mutation()',
+                target
+            );
+        end if;
     end loop;
 end $$;
 
@@ -334,9 +432,21 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_gppe_result on mart.topt_gppe_results;
-create trigger validate_gppe_result before insert on mart.topt_gppe_results
-for each row execute function mart.validate_topt_gppe_result();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.topt_gppe_results'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_gppe_result BEFORE INSERT ON mart.topt_gppe_results FOR EACH ROW EXECUTE FUNCTION mart.validate_topt_gppe_result()'
+    ) then
+        drop trigger if exists validate_gppe_result on mart.topt_gppe_results;
+        create trigger validate_gppe_result before insert on mart.topt_gppe_results
+        for each row execute function mart.validate_topt_gppe_result();
+    end if;
+end
+$$;
 
 create table if not exists mart.topt_core_invocations (
     invocation_id                   text primary key
@@ -527,10 +637,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_result on mart.topt_core_results;
-create trigger validate_result
-before insert on mart.topt_core_results
-for each row execute function mart.validate_topt_core_result();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.topt_core_results'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_result BEFORE INSERT ON mart.topt_core_results FOR EACH ROW EXECUTE FUNCTION mart.validate_topt_core_result()'
+    ) then
+        drop trigger if exists validate_result on mart.topt_core_results;
+        create trigger validate_result
+        before insert on mart.topt_core_results
+        for each row execute function mart.validate_topt_core_result();
+    end if;
+end
+$$;
 
 do $$
 declare
@@ -542,16 +664,35 @@ begin
         'mart.topt_core_invocations'::regclass,
         'mart.topt_core_results'::regclass
     ] loop
-        execute format('drop trigger if exists reject_mutation on %s', target);
-        execute format(
-            'create trigger reject_mutation before update or delete on %s '
-            'for each row execute function raw.reject_capture_control_mutation()',
-            target
-        );
+        -- Boot-lock guard: drop + create takes SHARE ROW EXCLUSIVE on the table; skip it
+        -- when the trigger is already exactly this one (the literal is its pg_get_triggerdef).
+        if not exists (
+            select 1
+            from pg_trigger
+            where tgrelid = target
+              and not tgisinternal
+              and pg_get_triggerdef(oid) = format(
+                  'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON %s '
+                  'FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation()',
+                  target
+              )
+        ) then
+            execute format('drop trigger if exists reject_mutation on %s', target);
+            execute format(
+                'create trigger reject_mutation before update or delete on %s '
+                'for each row execute function raw.reject_capture_control_mutation()',
+                target
+            );
+        end if;
     end loop;
 end $$;
 
-create or replace view mart.topt_core_result_read as
+-- Boot-lock guard: `create or replace view` takes ACCESS EXCLUSIVE on the view, which
+-- queues behind every open reader. Replace it only when the definition differs; the
+-- comparison normalizes both sides through pg_get_viewdef, so no literal can drift.
+do $$
+declare
+    wanted constant text := $view$
 select
     result.result_id,
     result.invocation_id,
@@ -587,143 +728,174 @@ select
     result.tier_definition_id,
     result.tier_definition_sha256,
     result.created_at
-from mart.topt_core_results result;
-
-create or replace view mart.topt_core_meta_info as
-select
-    result.result_id,
-    result.invocation_id,
-    result.snapshot_id,
-    result.run_id,
-    result.release_manifest_id,
-    result.universe_id,
-    result.universe_version,
-    result.universe_sha256,
-    result.cutoff,
-    result.issuer_id,
-    result.instrument_id,
-    result.listing_id,
-    result.input_observation_ids,
-    result.gppe_invocation_id,
-    result.gppe_result_id,
-    result.gppe_definition_id,
-    result.gppe_definition_sha256,
-    result.tier_definition_id,
-    result.tier_definition_sha256,
-    result.confidence,
-    result.freshness,
-    result.created_at,
-    lineage.items as lineage
 from mart.topt_core_results result
-join lateral (
-    select jsonb_agg(
-        jsonb_build_object(
-            'observation_id', observation.observation_id,
-            'semantic_type', observation.semantic_type,
-            'semantic_version', observation.semantic_version,
-            'source_vintage_id', observation.source_vintage_id,
-            'source_request_id', vintage.source_request_id,
-            'source_registry_entry_id', request.source_registry_entry_id,
-            'source_policy_id', request.source_policy_id,
-            'parser_version', observation.parser_version,
-            'mapping_version', observation.mapping_version,
-            'normalized_payload_sha256', observation.normalized_payload_sha256,
-            'confidence', observation.confidence,
-            'freshness', case
-                when result.cutoff - observation.knowable_at <= policy.freshness_max_age then 'fresh'
-                else 'stale'
-            end,
-            'knowable_at', observation.knowable_at,
-            'recorded_at', observation.recorded_at
-        ) order by observation.observation_id
-    ) as items
-    from unnest(result.input_observation_ids) selected(observation_id)
-    join staging.capture_normalized_observations observation using (observation_id)
-    join staging.capture_observation_obligations usage using (observation_id)
-    join raw.capture_obligations obligation
-      on obligation.obligation_id = usage.capture_obligation_id
-     and obligation.run_id = result.run_id
-    join raw.capture_obligation_work_bindings binding
-      on binding.obligation_id = obligation.obligation_id
-    join raw.capture_work_items work using (work_item_id)
-    join raw.capture_schedule_policies policy using (schedule_policy_id)
-    join raw.capture_source_vintages vintage using (source_vintage_id)
-    join raw.capture_source_requests request
-      on request.source_request_id = vintage.source_request_id
-     and request.source_request_id = work.source_request_id
-) lineage on true;
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    -- to_regclass, not ::regclass: a cast of a missing name fails when the expression is planned.
+    if pg_get_viewdef(to_regclass('mart.topt_core_result_read'))
+       is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.topt_core_result_read as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
-create or replace view mart.topt_capture_meta_info as
-select
-    obligation.run_id,
-    obligation.obligation_id,
-    result.logical_obligation_id,
-    obligation.subject_kind,
-    obligation.subject_id,
-    obligation.capture_requirement_id,
-    obligation.partition_key,
-    binding.work_item_id,
-    work.source_request_id,
-    request.source_registry_entry_id,
-    request.source_policy_id,
-    request.request_fingerprint_version,
-    result.terminal_state,
-    result.reason_codes,
-    result.completed_at,
-    coalesce(attempts.attempt_count, 0)::integer as attempt_count,
-    final_attempt_result.status_code as final_status_code,
-    observation.observation_id,
-    observation.semantic_version,
-    observation.parser_version,
-    observation.mapping_version,
-    observation.confidence,
-    case
-        when observation.observation_id is null then null
-        when campaign.cutoff - observation.knowable_at <= policy.freshness_max_age then 'fresh'
-        else 'stale'
-    end as freshness_state,
-    observation.knowable_at,
-    observation.recorded_at
-from raw.capture_obligations obligation
-join raw.capture_campaigns campaign using (campaign_id)
-left join raw.capture_obligation_work_bindings binding
-    on binding.obligation_id = obligation.obligation_id
-left join raw.capture_work_items work using (work_item_id)
-left join raw.capture_schedule_policies policy using (schedule_policy_id)
-left join raw.capture_source_requests request using (source_request_id)
-left join raw.capture_obligation_results result
-    on result.capture_obligation_id = obligation.obligation_id
-left join raw.capture_attempt_results final_attempt_result
-    on final_attempt_result.attempt_id = result.final_attempt_id
-left join lateral (
-    select count(*) as attempt_count
-    from raw.capture_attempts attempt
-    where attempt.work_item_id = work.work_item_id
-) attempts on true
-left join lateral (
-    select selected.*
-    from (
-        select candidate.*, count(*) over () as selection_count
-        from staging.capture_observation_obligations usage
-        join staging.capture_normalized_observations candidate using (observation_id)
-        join raw.capture_source_vintages vintage
-          on vintage.source_vintage_id = candidate.source_vintage_id
-         and vintage.source_request_id = work.source_request_id
-        where usage.capture_obligation_id = obligation.obligation_id
-          and candidate.source_vintage_id = coalesce(
-              final_attempt_result.source_vintage_id,
-              final_attempt_result.reused_source_vintage_id
-          )
-          and candidate.subject_kind = obligation.subject_kind
-          and candidate.subject_id = obligation.subject_id
-          and candidate.semantic_type = regexp_replace(obligation.capture_requirement_id, ':v1$', '')
-          and obligation.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-          and (candidate.valid_from at time zone 'UTC')::date <= obligation.partition_key::date
-          and (
-              candidate.valid_to is null
-              or (candidate.valid_to at time zone 'UTC')::date >= obligation.partition_key::date
-          )
-          and candidate.knowable_at <= campaign.cutoff
-    ) selected
-    where selected.selection_count = 1
-) observation on true;
+-- Boot-lock guard: 0039_semantic_freshness_windows.sql, 20260908T1014_factors_core_meta_info_vintage.sql and
+-- 20260910T0930_factors_vintage_reaches_mart.sql redefine this view with the same columns, and the last
+-- definition owns it. Replacing it here on every boot would take ACCESS EXCLUSIVE twice
+-- (this definition, then the later one) for nothing, so this file only creates it.
+do $$
+begin
+    if to_regclass('mart.topt_core_meta_info') is null then
+        create or replace view mart.topt_core_meta_info as
+        select
+            result.result_id,
+            result.invocation_id,
+            result.snapshot_id,
+            result.run_id,
+            result.release_manifest_id,
+            result.universe_id,
+            result.universe_version,
+            result.universe_sha256,
+            result.cutoff,
+            result.issuer_id,
+            result.instrument_id,
+            result.listing_id,
+            result.input_observation_ids,
+            result.gppe_invocation_id,
+            result.gppe_result_id,
+            result.gppe_definition_id,
+            result.gppe_definition_sha256,
+            result.tier_definition_id,
+            result.tier_definition_sha256,
+            result.confidence,
+            result.freshness,
+            result.created_at,
+            lineage.items as lineage
+        from mart.topt_core_results result
+        join lateral (
+            select jsonb_agg(
+                jsonb_build_object(
+                    'observation_id', observation.observation_id,
+                    'semantic_type', observation.semantic_type,
+                    'semantic_version', observation.semantic_version,
+                    'source_vintage_id', observation.source_vintage_id,
+                    'source_request_id', vintage.source_request_id,
+                    'source_registry_entry_id', request.source_registry_entry_id,
+                    'source_policy_id', request.source_policy_id,
+                    'parser_version', observation.parser_version,
+                    'mapping_version', observation.mapping_version,
+                    'normalized_payload_sha256', observation.normalized_payload_sha256,
+                    'confidence', observation.confidence,
+                    'freshness', case
+                        when result.cutoff - observation.knowable_at <= policy.freshness_max_age then 'fresh'
+                        else 'stale'
+                    end,
+                    'knowable_at', observation.knowable_at,
+                    'recorded_at', observation.recorded_at
+                ) order by observation.observation_id
+            ) as items
+            from unnest(result.input_observation_ids) selected(observation_id)
+            join staging.capture_normalized_observations observation using (observation_id)
+            join staging.capture_observation_obligations usage using (observation_id)
+            join raw.capture_obligations obligation
+              on obligation.obligation_id = usage.capture_obligation_id
+             and obligation.run_id = result.run_id
+            join raw.capture_obligation_work_bindings binding
+              on binding.obligation_id = obligation.obligation_id
+            join raw.capture_work_items work using (work_item_id)
+            join raw.capture_schedule_policies policy using (schedule_policy_id)
+            join raw.capture_source_vintages vintage using (source_vintage_id)
+            join raw.capture_source_requests request
+              on request.source_request_id = vintage.source_request_id
+             and request.source_request_id = work.source_request_id
+        ) lineage on true;
+    end if;
+end
+$$;
+
+-- Boot-lock guard: 0039_semantic_freshness_windows.sql redefine this view with the same columns, and the last
+-- definition owns it. Replacing it here on every boot would take ACCESS EXCLUSIVE twice
+-- (this definition, then the later one) for nothing, so this file only creates it.
+do $$
+begin
+    if to_regclass('mart.topt_capture_meta_info') is null then
+        create or replace view mart.topt_capture_meta_info as
+        select
+            obligation.run_id,
+            obligation.obligation_id,
+            result.logical_obligation_id,
+            obligation.subject_kind,
+            obligation.subject_id,
+            obligation.capture_requirement_id,
+            obligation.partition_key,
+            binding.work_item_id,
+            work.source_request_id,
+            request.source_registry_entry_id,
+            request.source_policy_id,
+            request.request_fingerprint_version,
+            result.terminal_state,
+            result.reason_codes,
+            result.completed_at,
+            coalesce(attempts.attempt_count, 0)::integer as attempt_count,
+            final_attempt_result.status_code as final_status_code,
+            observation.observation_id,
+            observation.semantic_version,
+            observation.parser_version,
+            observation.mapping_version,
+            observation.confidence,
+            case
+                when observation.observation_id is null then null
+                when campaign.cutoff - observation.knowable_at <= policy.freshness_max_age then 'fresh'
+                else 'stale'
+            end as freshness_state,
+            observation.knowable_at,
+            observation.recorded_at
+        from raw.capture_obligations obligation
+        join raw.capture_campaigns campaign using (campaign_id)
+        left join raw.capture_obligation_work_bindings binding
+            on binding.obligation_id = obligation.obligation_id
+        left join raw.capture_work_items work using (work_item_id)
+        left join raw.capture_schedule_policies policy using (schedule_policy_id)
+        left join raw.capture_source_requests request using (source_request_id)
+        left join raw.capture_obligation_results result
+            on result.capture_obligation_id = obligation.obligation_id
+        left join raw.capture_attempt_results final_attempt_result
+            on final_attempt_result.attempt_id = result.final_attempt_id
+        left join lateral (
+            select count(*) as attempt_count
+            from raw.capture_attempts attempt
+            where attempt.work_item_id = work.work_item_id
+        ) attempts on true
+        left join lateral (
+            select selected.*
+            from (
+                select candidate.*, count(*) over () as selection_count
+                from staging.capture_observation_obligations usage
+                join staging.capture_normalized_observations candidate using (observation_id)
+                join raw.capture_source_vintages vintage
+                  on vintage.source_vintage_id = candidate.source_vintage_id
+                 and vintage.source_request_id = work.source_request_id
+                where usage.capture_obligation_id = obligation.obligation_id
+                  and candidate.source_vintage_id = coalesce(
+                      final_attempt_result.source_vintage_id,
+                      final_attempt_result.reused_source_vintage_id
+                  )
+                  and candidate.subject_kind = obligation.subject_kind
+                  and candidate.subject_id = obligation.subject_id
+                  and candidate.semantic_type = regexp_replace(obligation.capture_requirement_id, ':v1$', '')
+                  and obligation.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                  and (candidate.valid_from at time zone 'UTC')::date <= obligation.partition_key::date
+                  and (
+                      candidate.valid_to is null
+                      or (candidate.valid_to at time zone 'UTC')::date >= obligation.partition_key::date
+                  )
+                  and candidate.knowable_at <= campaign.cutoff
+            ) selected
+            where selected.selection_count = 1
+        ) observation on true;
+    end if;
+end
+$$;

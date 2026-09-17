@@ -9,8 +9,19 @@
 -- Not part of the decision's identity: `content_sha256` is computed from the asserted values,
 -- and this column annotates them the way the #747 status dimensions do. Folding it into the
 -- hash would make every run already persisted raise an identity conflict on replay.
-alter table mart.strategy_decisions
-    add column if not exists peg_reason_codes text[] not null default '{}'::text[];
+-- Boot-lock guard (2026-09-17): `add column if not exists` takes ACCESS EXCLUSIVE even when
+-- the column is already there, so the replay on every boot only alters a table that lacks it.
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.strategy_decisions'::regclass and attname = 'peg_reason_codes' and not attisdropped
+    ) then
+        alter table mart.strategy_decisions
+            add column if not exists peg_reason_codes text[] not null default '{}'::text[];
+    end if;
+end
+$$;
 
 comment on column mart.strategy_decisions.peg_reason_codes is
     '#837: the PEG factor''s refusal flags when peg is null for an evaluated issuer; empty when peg is present or the issuer was excluded (see exclusion_reason). Not part of content_sha256.';

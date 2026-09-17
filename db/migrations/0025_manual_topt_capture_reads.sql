@@ -26,18 +26,45 @@ create table if not exists raw.capture_source_requests (
     created_at                     timestamptz not null default now()
 );
 
-alter table raw.capture_work_items
-    drop constraint if exists capture_work_items_source_request_id_fkey;
-alter table raw.capture_work_items
-    add constraint capture_work_items_source_request_id_fkey
-    foreign key (source_request_id) references raw.capture_source_requests(source_request_id)
-    not valid;
-alter table raw.capture_runs
-    drop constraint if exists capture_runs_schedule_policy_id_fkey;
-alter table raw.capture_runs
-    add constraint capture_runs_schedule_policy_id_fkey
-    foreign key (schedule_policy_id) references raw.capture_schedule_policies(schedule_policy_id)
-    not valid;
+-- Boot-lock guards: dropping and re-adding a foreign key takes SHARE ROW EXCLUSIVE on both
+-- tables. Each rebuild runs only when the constraint is not already exactly this one (the
+-- literal is its pg_get_constraintdef).
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conrelid = 'raw.capture_work_items'::regclass
+          and conname = 'capture_work_items_source_request_id_fkey'
+          and pg_get_constraintdef(oid) = 'FOREIGN KEY (source_request_id) REFERENCES raw.capture_source_requests(source_request_id) NOT VALID'
+    ) then
+        alter table raw.capture_work_items
+            drop constraint if exists capture_work_items_source_request_id_fkey;
+        alter table raw.capture_work_items
+            add constraint capture_work_items_source_request_id_fkey
+            foreign key (source_request_id) references raw.capture_source_requests(source_request_id)
+            not valid;
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conrelid = 'raw.capture_runs'::regclass
+          and conname = 'capture_runs_schedule_policy_id_fkey'
+          and pg_get_constraintdef(oid) = 'FOREIGN KEY (schedule_policy_id) REFERENCES raw.capture_schedule_policies(schedule_policy_id) NOT VALID'
+    ) then
+        alter table raw.capture_runs
+            drop constraint if exists capture_runs_schedule_policy_id_fkey;
+        alter table raw.capture_runs
+            add constraint capture_runs_schedule_policy_id_fkey
+            foreign key (schedule_policy_id) references raw.capture_schedule_policies(schedule_policy_id)
+            not valid;
+    end if;
+end
+$$;
 
 create table if not exists raw.capture_source_vintages (
     source_vintage_id              text primary key check (source_vintage_id ~ '^source-vintage:[0-9a-f]{64}$'),
@@ -51,7 +78,22 @@ create table if not exists raw.capture_source_vintages (
     created_at                     timestamptz not null default now()
 );
 
-alter table raw.capture_source_vintages alter column raw_fetch_id set not null;
+-- Boot-lock guard: `set not null` is ACCESS EXCLUSIVE (and scans the table) even when the
+-- column is already not null.
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_attribute
+        where attrelid = 'raw.capture_source_vintages'::regclass
+          and attname = 'raw_fetch_id'
+          and not attisdropped
+          and attnotnull
+    ) then
+        alter table raw.capture_source_vintages alter column raw_fetch_id set not null;
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_source_vintage_lineage()
 returns trigger language plpgsql as $$
@@ -66,23 +108,62 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_raw_lineage on raw.capture_source_vintages;
-create trigger validate_raw_lineage
-before insert on raw.capture_source_vintages
-for each row execute function raw.validate_capture_source_vintage_lineage();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_source_vintages'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_raw_lineage BEFORE INSERT ON raw.capture_source_vintages FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_source_vintage_lineage()'
+    ) then
+        drop trigger if exists validate_raw_lineage on raw.capture_source_vintages;
+        create trigger validate_raw_lineage
+        before insert on raw.capture_source_vintages
+        for each row execute function raw.validate_capture_source_vintage_lineage();
+    end if;
+end
+$$;
 
-alter table raw.capture_attempt_results
-    drop constraint if exists capture_attempt_results_source_vintage_id_fkey;
-alter table raw.capture_attempt_results
-    add constraint capture_attempt_results_source_vintage_id_fkey
-    foreign key (source_vintage_id) references raw.capture_source_vintages(source_vintage_id)
-    not valid;
-alter table raw.capture_attempt_results
-    drop constraint if exists capture_attempt_results_reused_source_vintage_id_fkey;
-alter table raw.capture_attempt_results
-    add constraint capture_attempt_results_reused_source_vintage_id_fkey
-    foreign key (reused_source_vintage_id) references raw.capture_source_vintages(source_vintage_id)
-    not valid;
+-- Boot-lock guards: dropping and re-adding a foreign key takes SHARE ROW EXCLUSIVE on both
+-- tables. Each rebuild runs only when the constraint is not already exactly this one (the
+-- literal is its pg_get_constraintdef).
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conrelid = 'raw.capture_attempt_results'::regclass
+          and conname = 'capture_attempt_results_source_vintage_id_fkey'
+          and pg_get_constraintdef(oid) = 'FOREIGN KEY (source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id) NOT VALID'
+    ) then
+        alter table raw.capture_attempt_results
+            drop constraint if exists capture_attempt_results_source_vintage_id_fkey;
+        alter table raw.capture_attempt_results
+            add constraint capture_attempt_results_source_vintage_id_fkey
+            foreign key (source_vintage_id) references raw.capture_source_vintages(source_vintage_id)
+            not valid;
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conrelid = 'raw.capture_attempt_results'::regclass
+          and conname = 'capture_attempt_results_reused_source_vintage_id_fkey'
+          and pg_get_constraintdef(oid) = 'FOREIGN KEY (reused_source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id) NOT VALID'
+    ) then
+        alter table raw.capture_attempt_results
+            drop constraint if exists capture_attempt_results_reused_source_vintage_id_fkey;
+        alter table raw.capture_attempt_results
+            add constraint capture_attempt_results_reused_source_vintage_id_fkey
+            foreign key (reused_source_vintage_id) references raw.capture_source_vintages(source_vintage_id)
+            not valid;
+    end if;
+end
+$$;
 
 create table if not exists staging.capture_normalized_observations (
     observation_id                 text primary key check (observation_id ~ '^normalized-observation:[0-9a-f]{64}$'),
@@ -133,21 +214,52 @@ begin
         'capture_source_vintages',
         'capture_obligation_results'
     ] loop
-        execute format('drop trigger if exists reject_mutation on raw.%I', table_name);
-        execute format(
-            'create trigger reject_mutation before update or delete on raw.%I '
-            'for each row execute function raw.reject_capture_control_mutation()',
-            table_name
-        );
+        -- Boot-lock guard: drop + create takes SHARE ROW EXCLUSIVE on the table; skip it
+        -- when the trigger is already exactly this one (the literal is its pg_get_triggerdef).
+        if not exists (
+            select 1
+            from pg_trigger
+            where tgrelid = format('raw.%I', table_name)::regclass
+              and not tgisinternal
+              and pg_get_triggerdef(oid) = format(
+                  'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON raw.%I '
+                  'FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation()',
+                  table_name
+              )
+        ) then
+            execute format('drop trigger if exists reject_mutation on raw.%I', table_name);
+            execute format(
+                'create trigger reject_mutation before update or delete on raw.%I '
+                'for each row execute function raw.reject_capture_control_mutation()',
+                table_name
+            );
+        end if;
     end loop;
 end $$;
 
-drop trigger if exists reject_mutation on staging.capture_normalized_observations;
-create trigger reject_mutation
-before update or delete on staging.capture_normalized_observations
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.capture_normalized_observations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_normalized_observations FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.capture_normalized_observations;
+        create trigger reject_mutation
+        before update or delete on staging.capture_normalized_observations
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;
 
-create or replace view mart.topt_capture_status as
+-- Boot-lock guard: `create or replace view` takes ACCESS EXCLUSIVE on the view, which
+-- queues behind every open reader. Replace it only when the definition differs; the
+-- comparison normalizes both sides through pg_get_viewdef, so no literal can drift.
+do $$
+declare
+    wanted constant text := $view$
 select
     run.run_id,
     run.campaign_id,
@@ -172,53 +284,74 @@ left join raw.capture_obligation_results result
     on result.capture_obligation_id = obligation.obligation_id
 group by
     run.run_id, run.campaign_id, campaign.environment, campaign.cutoff,
-    list_version.universe_id, list_version.universe_version, list_version.universe_sha256;
+    list_version.universe_id, list_version.universe_version, list_version.universe_sha256
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    -- to_regclass, not ::regclass: a cast of a missing name fails when the expression is planned.
+    if pg_get_viewdef(to_regclass('mart.topt_capture_status'))
+       is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.topt_capture_status as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
-create or replace view mart.topt_capture_meta_info as
-select
-    obligation.run_id,
-    obligation.obligation_id,
-    result.logical_obligation_id,
-    obligation.subject_kind,
-    obligation.subject_id,
-    obligation.capture_requirement_id,
-    obligation.partition_key,
-    binding.work_item_id,
-    work.source_request_id,
-    request.source_registry_entry_id,
-    request.source_policy_id,
-    request.request_fingerprint_version,
-    result.terminal_state,
-    result.reason_codes,
-    result.completed_at,
-    coalesce(attempts.attempt_count, 0)::integer as attempt_count,
-    final_attempt_result.status_code as final_status_code,
-    observation.observation_id,
-    observation.semantic_version,
-    observation.parser_version,
-    observation.mapping_version,
-    observation.confidence,
-    observation.freshness_state,
-    observation.knowable_at,
-    observation.recorded_at
-from raw.capture_obligations obligation
-left join raw.capture_obligation_work_bindings binding
-    on binding.obligation_id = obligation.obligation_id
-left join raw.capture_work_items work using (work_item_id)
-left join raw.capture_source_requests request using (source_request_id)
-left join raw.capture_obligation_results result
-    on result.capture_obligation_id = obligation.obligation_id
-left join raw.capture_attempt_results final_attempt_result
-    on final_attempt_result.attempt_id = result.final_attempt_id
-left join lateral (
-    select count(*) as attempt_count
-    from raw.capture_attempts attempt
-    where attempt.work_item_id = work.work_item_id
-) attempts on true
-left join lateral (
-    select candidate.*
-    from staging.capture_normalized_observations candidate
-    where candidate.capture_obligation_id = obligation.obligation_id
-    order by candidate.recorded_at desc, candidate.observation_id desc
-    limit 1
-) observation on true;
+-- Boot-lock guard: 0026_production_topt_core.sql and 0039_semantic_freshness_windows.sql redefine this view with the same columns, and the last
+-- definition owns it. Replacing it here on every boot would take ACCESS EXCLUSIVE twice
+-- (this definition, then the later one) for nothing, so this file only creates it.
+do $$
+begin
+    if to_regclass('mart.topt_capture_meta_info') is null then
+        create or replace view mart.topt_capture_meta_info as
+        select
+            obligation.run_id,
+            obligation.obligation_id,
+            result.logical_obligation_id,
+            obligation.subject_kind,
+            obligation.subject_id,
+            obligation.capture_requirement_id,
+            obligation.partition_key,
+            binding.work_item_id,
+            work.source_request_id,
+            request.source_registry_entry_id,
+            request.source_policy_id,
+            request.request_fingerprint_version,
+            result.terminal_state,
+            result.reason_codes,
+            result.completed_at,
+            coalesce(attempts.attempt_count, 0)::integer as attempt_count,
+            final_attempt_result.status_code as final_status_code,
+            observation.observation_id,
+            observation.semantic_version,
+            observation.parser_version,
+            observation.mapping_version,
+            observation.confidence,
+            observation.freshness_state,
+            observation.knowable_at,
+            observation.recorded_at
+        from raw.capture_obligations obligation
+        left join raw.capture_obligation_work_bindings binding
+            on binding.obligation_id = obligation.obligation_id
+        left join raw.capture_work_items work using (work_item_id)
+        left join raw.capture_source_requests request using (source_request_id)
+        left join raw.capture_obligation_results result
+            on result.capture_obligation_id = obligation.obligation_id
+        left join raw.capture_attempt_results final_attempt_result
+            on final_attempt_result.attempt_id = result.final_attempt_id
+        left join lateral (
+            select count(*) as attempt_count
+            from raw.capture_attempts attempt
+            where attempt.work_item_id = work.work_item_id
+        ) attempts on true
+        left join lateral (
+            select candidate.*
+            from staging.capture_normalized_observations candidate
+            where candidate.capture_obligation_id = obligation.obligation_id
+            order by candidate.recorded_at desc, candidate.observation_id desc
+            limit 1
+        ) observation on true;
+    end if;
+end
+$$;

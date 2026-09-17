@@ -6,9 +6,19 @@
 -- exact strategy-snapshot identity; existing fixture/preview runs and the current
 -- writer leave it null. Backward-compatible -- no existing row or writer breaks.
 
-alter table mart.strategy_runs
-    add column if not exists snapshot_id text
-        check (snapshot_id is null or snapshot_id ~ '^strategy-snapshot:[0-9a-f]{64}$');
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.strategy_runs'::regclass
+          and attname = 'snapshot_id' and not attisdropped
+    ) then
+        alter table mart.strategy_runs
+            add column if not exists snapshot_id text
+                check (snapshot_id is null or snapshot_id ~ '^strategy-snapshot:[0-9a-f]{64}$');
+    end if;
+end
+$$;
 
 comment on column mart.strategy_runs.snapshot_id is
     'Exact PIT strategy-snapshot the run was computed from (#395); null for fixture/preview runs.';

@@ -5,33 +5,116 @@
 --   source_evidence_status     verified | degraded | rejected      (InputEvidenceStatus)
 --   factor_validation_status   accepted | rejected | not_evaluated (FactorValidationStatus)
 -- Nullable: rows written before this migration carry no dimension rather than a guess.
-alter table mart.topt_core_results
-    add column if not exists availability_status text
-        check (availability_status in ('available', 'unavailable', 'stale', 'excluded', 'low_confidence', 'error'));
-alter table mart.topt_core_results
-    add column if not exists source_evidence_status text
-        check (source_evidence_status in ('verified', 'degraded', 'rejected'));
-alter table mart.topt_core_results
-    add column if not exists factor_validation_status text
-        check (factor_validation_status in ('accepted', 'rejected', 'not_evaluated'));
-alter table mart.topt_gppe_results
-    add column if not exists availability_status text
-        check (availability_status in ('available', 'unavailable', 'stale', 'excluded', 'low_confidence', 'error'));
-alter table mart.topt_gppe_results
-    add column if not exists source_evidence_status text
-        check (source_evidence_status in ('verified', 'degraded', 'rejected'));
-alter table mart.topt_gppe_results
-    add column if not exists factor_validation_status text
-        check (factor_validation_status in ('accepted', 'rejected', 'not_evaluated'));
-alter table mart.strategy_decisions
-    add column if not exists availability_status text
-        check (availability_status in ('available', 'unavailable', 'stale', 'excluded', 'low_confidence', 'error'));
-alter table mart.strategy_decisions
-    add column if not exists source_evidence_status text
-        check (source_evidence_status in ('verified', 'degraded', 'rejected'));
-alter table mart.strategy_decisions
-    add column if not exists factor_validation_status text
-        check (factor_validation_status in ('accepted', 'rejected', 'not_evaluated'));
+-- Boot-lock guard (2026-09-17): `add column if not exists` takes ACCESS EXCLUSIVE even when
+-- the column is already there, so the replay on every boot only alters a table that lacks it.
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.topt_core_results'::regclass and attname = 'availability_status' and not attisdropped
+    ) then
+        alter table mart.topt_core_results
+            add column if not exists availability_status text
+                check (availability_status in ('available', 'unavailable', 'stale', 'excluded', 'low_confidence', 'error'));
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.topt_core_results'::regclass and attname = 'source_evidence_status' and not attisdropped
+    ) then
+        alter table mart.topt_core_results
+            add column if not exists source_evidence_status text
+                check (source_evidence_status in ('verified', 'degraded', 'rejected'));
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.topt_core_results'::regclass and attname = 'factor_validation_status' and not attisdropped
+    ) then
+        alter table mart.topt_core_results
+            add column if not exists factor_validation_status text
+                check (factor_validation_status in ('accepted', 'rejected', 'not_evaluated'));
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.topt_gppe_results'::regclass and attname = 'availability_status' and not attisdropped
+    ) then
+        alter table mart.topt_gppe_results
+            add column if not exists availability_status text
+                check (availability_status in ('available', 'unavailable', 'stale', 'excluded', 'low_confidence', 'error'));
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.topt_gppe_results'::regclass and attname = 'source_evidence_status' and not attisdropped
+    ) then
+        alter table mart.topt_gppe_results
+            add column if not exists source_evidence_status text
+                check (source_evidence_status in ('verified', 'degraded', 'rejected'));
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.topt_gppe_results'::regclass and attname = 'factor_validation_status' and not attisdropped
+    ) then
+        alter table mart.topt_gppe_results
+            add column if not exists factor_validation_status text
+                check (factor_validation_status in ('accepted', 'rejected', 'not_evaluated'));
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.strategy_decisions'::regclass and attname = 'availability_status' and not attisdropped
+    ) then
+        alter table mart.strategy_decisions
+            add column if not exists availability_status text
+                check (availability_status in ('available', 'unavailable', 'stale', 'excluded', 'low_confidence', 'error'));
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.strategy_decisions'::regclass and attname = 'source_evidence_status' and not attisdropped
+    ) then
+        alter table mart.strategy_decisions
+            add column if not exists source_evidence_status text
+                check (source_evidence_status in ('verified', 'degraded', 'rejected'));
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.strategy_decisions'::regclass and attname = 'factor_validation_status' and not attisdropped
+    ) then
+        alter table mart.strategy_decisions
+            add column if not exists factor_validation_status text
+                check (factor_validation_status in ('accepted', 'rejected', 'not_evaluated'));
+    end if;
+end
+$$;
 comment on column mart.topt_core_results.availability_status is '#747 / init.md §8: availability of this factor row (contracts AvailabilityStatus); reason_codes carry why.';
 comment on column mart.topt_core_results.source_evidence_status is '#747: verified = every consumed observation dereferences to a raw fetch and every asserted input names its evidence; degraded = an asserted input has no evidence on the row (e.g. a seed headcount); rejected = a pointer does not resolve.';
 comment on column mart.topt_core_results.factor_validation_status is '#747 / #65: the factor definitions'' independent holdout verdict from factors.validation_records; not_evaluated until a sealed record exists.';

@@ -51,8 +51,14 @@ create table if not exists mart.fund_virtual_company (
     check (valued_lines <= lines)
 );
 
-create index if not exists ix_fund_virtual_company_fund
-    on mart.fund_virtual_company (fund_id, cutoff desc);
+do $$
+begin
+    if to_regclass('mart.ix_fund_virtual_company_fund') is null then
+        create index if not exists ix_fund_virtual_company_fund
+            on mart.fund_virtual_company (fund_id, cutoff desc);
+    end if;
+end
+$$;
 
 comment on table mart.fund_virtual_company is
     '#36/#727 (init.md §7 module 5): one fund-level virtual-company row per governed run — the fund''s filed N-PORT weights consolidating that run''s core factor outputs, with the coverage mass the aggregate describes and the three §8 status dimensions.';
@@ -71,7 +77,9 @@ comment on column mart.fund_virtual_company.valued_weight_pct is
 -- at a historical cutoff needs the same resolution over the vintage IT chose (#36: "never
 -- applies a later filing retroactively"). Both readers now build on one definition of
 -- "which listing is this line", instead of the second copying the first's SQL.
-create or replace view mart.fund_holdings_resolved as
+do $$
+declare
+    wanted constant text := $view$
 with resolved as (
     select holdings.*,
            (
@@ -116,14 +124,30 @@ left join lateral (
       and resolved.issuer_entity like 'issuer:cik:%'
     order by identifier.transaction_time desc, identifier.confidence desc, identifier.id desc
     limit 1
-) issuer_ticker on true;
+) issuer_ticker on true
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.fund_holdings_resolved') is null
+       or pg_get_viewdef(to_regclass('mart.fund_holdings_resolved'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.fund_holdings_resolved as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 comment on view mart.fund_holdings_resolved is
     '#727: every fund-holding vintage with its per-ISIN listing resolution (#706). mart.fund_holdings_valuation is this view pinned to the newest vintage per fund; a PIT producer selects its own vintage here instead.';
 
 -- Redefined on top of the shared resolution: same columns, same newest-per-fund
 -- semantics, one copy of the resolution rule.
-create or replace view mart.fund_holdings_valuation as
+do $$
+declare
+    wanted constant text := $view$
 with newest as (
     select distinct on (fund_id) fund_id, report_period, transaction_time
     from mart.fund_holdings
@@ -131,7 +155,21 @@ with newest as (
 )
 select resolved.*
 from mart.fund_holdings_resolved resolved
-join newest using (fund_id, report_period, transaction_time);
+join newest using (fund_id, report_period, transaction_time)
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.fund_holdings_valuation') is null
+       or pg_get_viewdef(to_regclass('mart.fund_holdings_valuation'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.fund_holdings_valuation as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 -- The filed and resolved masses of each holdings vintage. These are properties of the
 -- FILING and the identity graph, not of any valuation run: a fund that filed 99.5% of net
@@ -140,7 +178,9 @@ join newest using (fund_id, report_period, transaction_time);
 -- report the filed mass instead of rendering 0.00% — a zero that would assert the fund
 -- filed nothing (the repository's "a constant never stands in for a measurement" rule,
 -- in its absent-row form).
-create or replace view mart.fund_holdings_coverage as
+do $$
+declare
+    wanted constant text := $view$
 select fund_id,
        report_period,
        transaction_time,
@@ -149,7 +189,21 @@ select fund_id,
        coalesce(sum(percent_of_net_assets), 0) as total_weight_pct,
        coalesce(sum(percent_of_net_assets) filter (where listing_id is not null), 0) as resolved_weight_pct
 from mart.fund_holdings_resolved
-group by fund_id, report_period, transaction_time;
+group by fund_id, report_period, transaction_time
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.fund_holdings_coverage') is null
+       or pg_get_viewdef(to_regclass('mart.fund_holdings_coverage'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.fund_holdings_coverage as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 comment on view mart.fund_holdings_coverage is
     '#727: per holdings vintage, the filed and listing-resolved mass. Run-independent by design — the valued mass and the weighted aggregate are the module-5 factor''s, in mart.fund_virtual_company.';

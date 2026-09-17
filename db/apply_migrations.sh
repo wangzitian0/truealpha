@@ -87,15 +87,17 @@ trap 'rm -f "$attempt_log"' EXIT INT TERM
 run_started="$(date +%s)"
 lock_waited=0
 
-# Who held the locks: every other transaction holding a relation lock in an application
-# schema, oldest first. Read-only, and bounded by the same timeouts.
+# Who held the locks: every other transaction holding a lock on a table or view in an
+# application schema, oldest first, one line each with the relations and modes it holds.
+# Read-only, and bounded by the same timeouts.
 report_lock_holders() {
     psql --no-password "$migrations_url" -X -q -A -F ' | ' -P footer=off \
         -c "select a.pid, coalesce(nullif(a.application_name, ''), '-') as application,
                    a.usename, a.state,
                    date_trunc('second', now() - a.xact_start) as transaction_age,
-                   l.mode, format('%I.%I', n.nspname, c.relname) as relation,
-                   left(regexp_replace(a.query, '\\s+', ' ', 'g'), 160) as query
+                   left(regexp_replace(a.query, '\\s+', ' ', 'g'), 120) as last_query,
+                   string_agg(format('%I.%I(%s)', n.nspname, c.relname, replace(l.mode, 'Lock', '')),
+                              ', ' order by n.nspname, c.relname) as holds
               from pg_locks as l
               join pg_stat_activity as a on a.pid = l.pid
               join pg_class as c on c.oid = l.relation
@@ -103,10 +105,12 @@ report_lock_holders() {
              where l.granted
                and l.locktype = 'relation'
                and l.pid <> pg_backend_pid()
+               and c.relkind in ('r', 'p', 'v', 'm')
                and n.nspname not in ('pg_catalog', 'information_schema')
-               and n.nspname not like 'pg_toast%'
-             order by a.xact_start nulls last, a.pid, relation
-             limit 40" >&2 || echo "apply_migrations.sh: (could not list lock holders)" >&2
+               and n.nspname not like 'pg_t%'
+             group by a.pid, a.application_name, a.usename, a.state, a.xact_start, a.query
+             order by a.xact_start nulls last, a.pid
+             limit 20" >&2 || echo "apply_migrations.sh: (could not list lock holders)" >&2
 }
 
 apply_file() {
@@ -148,7 +152,7 @@ apply_file() {
             echo "apply_migrations.sh: the statement ends at line $line (the psql CONTEXT above names it inside a DO block):" >&2
             sed -n "${first},${line}p" "$migration" | sed 's/^/    | /' >&2
         fi
-        echo "apply_migrations.sh: transactions holding relation locks (pid | application | user | state | age | mode | relation | query):" >&2
+        echo "apply_migrations.sh: transactions holding table/view locks (pid | application | user | state | age | last query | holds):" >&2
         report_lock_holders
         backoff=$((attempt * lock_backoff_seconds))
         if [ "$attempt" -ge "$lock_attempts" ] || [ $((lock_waited + backoff)) -gt "$lock_budget_seconds" ]; then

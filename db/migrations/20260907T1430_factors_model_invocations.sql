@@ -38,9 +38,27 @@ create table if not exists staging.model_invocations (
 );
 comment on table staging.model_invocations is
     '#70/#735: append-only record of every filing-extraction model call — identity (provider, model, prompt/schema/request/response digests), cost and decision. Replay reads it; nothing updates it.';
-create index if not exists ix_model_invocations_subject
-    on staging.model_invocations (subject_cik, accession, prompt_sha256, model, id desc);
-drop trigger if exists reject_mutation on staging.model_invocations;
-create trigger reject_mutation
-before update or delete on staging.model_invocations
-for each row execute function raw.reject_mutation();
+do $$
+begin
+    if to_regclass('staging.ix_model_invocations_subject') is null then
+        create index if not exists ix_model_invocations_subject
+            on staging.model_invocations (subject_cik, accession, prompt_sha256, model, id desc);
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.model_invocations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.model_invocations FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.model_invocations;
+        create trigger reject_mutation
+        before update or delete on staging.model_invocations
+        for each row execute function raw.reject_mutation();
+    end if;
+end
+$$;

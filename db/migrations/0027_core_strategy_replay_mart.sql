@@ -49,8 +49,20 @@ create table if not exists mart.strategy_decisions (
     unique (strategy_run_id, issuer_id, cutoff_at)
 );
 
-create index if not exists idx_strategy_decisions_run on mart.strategy_decisions(strategy_run_id);
-create index if not exists idx_strategy_decisions_issuer_cutoff on mart.strategy_decisions(issuer_id, cutoff_at);
+do $$
+begin
+    if to_regclass('mart.idx_strategy_decisions_run') is null then
+        create index if not exists idx_strategy_decisions_run on mart.strategy_decisions(strategy_run_id);
+    end if;
+end
+$$;
+do $$
+begin
+    if to_regclass('mart.idx_strategy_decisions_issuer_cutoff') is null then
+        create index if not exists idx_strategy_decisions_issuer_cutoff on mart.strategy_decisions(issuer_id, cutoff_at);
+    end if;
+end
+$$;
 
 create or replace function mart.reject_mutation()
 returns trigger language plpgsql as $$
@@ -59,10 +71,34 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_strategy_runs_append_only on mart.strategy_runs;
-create trigger trg_strategy_runs_append_only before update or delete on mart.strategy_runs
-for each row execute function mart.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.strategy_runs'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_strategy_runs_append_only BEFORE DELETE OR UPDATE ON mart.strategy_runs FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation()'
+    ) then
+        drop trigger if exists trg_strategy_runs_append_only on mart.strategy_runs;
+        create trigger trg_strategy_runs_append_only before update or delete on mart.strategy_runs
+        for each row execute function mart.reject_mutation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_strategy_decisions_append_only on mart.strategy_decisions;
-create trigger trg_strategy_decisions_append_only before update or delete on mart.strategy_decisions
-for each row execute function mart.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.strategy_decisions'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_strategy_decisions_append_only BEFORE DELETE OR UPDATE ON mart.strategy_decisions FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation()'
+    ) then
+        drop trigger if exists trg_strategy_decisions_append_only on mart.strategy_decisions;
+        create trigger trg_strategy_decisions_append_only before update or delete on mart.strategy_decisions
+        for each row execute function mart.reject_mutation();
+    end if;
+end
+$$;

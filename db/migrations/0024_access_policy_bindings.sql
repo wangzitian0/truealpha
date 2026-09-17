@@ -8,8 +8,20 @@ create table if not exists app.publication_policy_sets (
     recorded_at               timestamptz not null default now()
 );
 
-alter table app.publication_policy_sets
-    add column if not exists administrator_actions text[] not null default array[]::text[];
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_attribute
+        where attrelid = 'app.publication_policy_sets'::regclass
+          and attname = 'administrator_actions'
+          and not attisdropped
+    ) then
+        alter table app.publication_policy_sets
+            add column if not exists administrator_actions text[] not null default array[]::text[];
+    end if;
+end
+$$;
 
 do $$
 begin
@@ -71,11 +83,23 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_publication_policy_entitlements_validate_insert
-on app.publication_policy_entitlements;
-create trigger trg_publication_policy_entitlements_validate_insert
-before insert on app.publication_policy_entitlements
-for each row execute function app.validate_publication_policy_entitlement_insert();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.publication_policy_entitlements'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_publication_policy_entitlements_validate_insert BEFORE INSERT ON app.publication_policy_entitlements FOR EACH ROW EXECUTE FUNCTION app.validate_publication_policy_entitlement_insert()'
+    ) then
+        drop trigger if exists trg_publication_policy_entitlements_validate_insert
+        on app.publication_policy_entitlements;
+        create trigger trg_publication_policy_entitlements_validate_insert
+        before insert on app.publication_policy_entitlements
+        for each row execute function app.validate_publication_policy_entitlement_insert();
+    end if;
+end
+$$;
 
 create or replace function app.validate_publication_policy_set_seal()
 returns trigger
@@ -116,15 +140,43 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_publication_policy_set_seals_validate
-on app.publication_policy_set_seals;
-create trigger trg_publication_policy_set_seals_validate
-before insert on app.publication_policy_set_seals
-for each row execute function app.validate_publication_policy_set_seal();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.publication_policy_set_seals'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_publication_policy_set_seals_validate BEFORE INSERT ON app.publication_policy_set_seals FOR EACH ROW EXECUTE FUNCTION app.validate_publication_policy_set_seal()'
+    ) then
+        drop trigger if exists trg_publication_policy_set_seals_validate
+        on app.publication_policy_set_seals;
+        create trigger trg_publication_policy_set_seals_validate
+        before insert on app.publication_policy_set_seals
+        for each row execute function app.validate_publication_policy_set_seal();
+    end if;
+end
+$$;
 
-alter table app.authorization_decisions
-    add column if not exists resource_type text,
-    add column if not exists publication_class_id text;
+do $$
+begin
+    if exists (
+        select 1
+        from unnest(array['resource_type', 'publication_class_id']) as wanted(column_name)
+        where not exists (
+            select 1
+            from pg_attribute
+            where attrelid = 'app.authorization_decisions'::regclass
+              and attname = wanted.column_name
+              and not attisdropped
+        )
+    ) then
+        alter table app.authorization_decisions
+            add column if not exists resource_type text,
+            add column if not exists publication_class_id text;
+    end if;
+end
+$$;
 
 create table if not exists app.authorization_decision_grants (
     decision_id text not null references app.authorization_decisions,
@@ -174,10 +226,22 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_authorization_decisions_validate_policy_set on app.authorization_decisions;
-create trigger trg_authorization_decisions_validate_policy_set
-before insert on app.authorization_decisions
-for each row execute function app.validate_authorization_decision_policy_set();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.authorization_decisions'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_authorization_decisions_validate_policy_set BEFORE INSERT ON app.authorization_decisions FOR EACH ROW EXECUTE FUNCTION app.validate_authorization_decision_policy_set()'
+    ) then
+        drop trigger if exists trg_authorization_decisions_validate_policy_set on app.authorization_decisions;
+        create trigger trg_authorization_decisions_validate_policy_set
+        before insert on app.authorization_decisions
+        for each row execute function app.validate_authorization_decision_policy_set();
+    end if;
+end
+$$;
 
 create or replace function app.validate_authorization_decision_grant()
 returns trigger
@@ -240,10 +304,22 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_authorization_decision_grants_validate on app.authorization_decision_grants;
-create trigger trg_authorization_decision_grants_validate
-before insert on app.authorization_decision_grants
-for each row execute function app.validate_authorization_decision_grant();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.authorization_decision_grants'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_authorization_decision_grants_validate BEFORE INSERT ON app.authorization_decision_grants FOR EACH ROW EXECUTE FUNCTION app.validate_authorization_decision_grant()'
+    ) then
+        drop trigger if exists trg_authorization_decision_grants_validate on app.authorization_decision_grants;
+        create trigger trg_authorization_decision_grants_validate
+        before insert on app.authorization_decision_grants
+        for each row execute function app.validate_authorization_decision_grant();
+    end if;
+end
+$$;
 
 create or replace function app.validate_authorization_decision_required_grants()
 returns trigger
@@ -274,12 +350,23 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_authorization_decisions_require_grants
-on app.authorization_decisions;
-create constraint trigger trg_authorization_decisions_require_grants
-after insert on app.authorization_decisions
-deferrable initially deferred
-for each row execute function app.validate_authorization_decision_required_grants();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.authorization_decisions'::regclass
+          and pg_get_triggerdef(oid) = 'CREATE CONSTRAINT TRIGGER trg_authorization_decisions_require_grants AFTER INSERT ON app.authorization_decisions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.validate_authorization_decision_required_grants()'
+    ) then
+        drop trigger if exists trg_authorization_decisions_require_grants
+        on app.authorization_decisions;
+        create constraint trigger trg_authorization_decisions_require_grants
+        after insert on app.authorization_decisions
+        deferrable initially deferred
+        for each row execute function app.validate_authorization_decision_required_grants();
+    end if;
+end
+$$;
 
 create or replace function app.validate_access_audit_decision_tenant()
 returns trigger
@@ -341,9 +428,9 @@ begin
 end;
 $$;
 
-create or replace view app.access_audit_metadata
-with (security_barrier = true)
-as
+do $$
+declare
+    wanted constant text := $view$
 select
     event.audit_event_id,
     event.decision_id,
@@ -389,7 +476,23 @@ group by
     decision.decision_id,
     policy_set.publication_policy_set_id,
     policy_set.content_sha256,
-    policy_set.release_manifest_id;
+    policy_set.release_manifest_id
+$view$;
+begin
+    -- Boot-lock guard: `create or replace view` is ACCESS EXCLUSIVE on the view and
+    -- queues every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('app.access_audit_metadata') is null
+       or pg_get_viewdef(to_regclass('app.access_audit_metadata'))
+          is distinct from pg_get_viewdef('pg_temp.boot_guard_candidate'::regclass)
+       or (select reloptions from pg_class where oid = to_regclass('app.access_audit_metadata'))
+          is distinct from '{security_barrier=true}'::text[]
+    then
+        execute 'create or replace view app.access_audit_metadata with (security_barrier = true) as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 do $$
 declare
@@ -402,12 +505,27 @@ begin
         'authorization_decision_grants'
     ]
     loop
-        execute format('drop trigger if exists %I on app.%I', 'trg_' || table_name || '_append_only', table_name);
-        execute format(
-            'create trigger %I before update or delete on app.%I for each row execute function app.reject_mutation()',
-            'trg_' || table_name || '_append_only',
-            table_name
-        );
+        -- Boot-lock guard: drop + create is SHARE ROW EXCLUSIVE; skip it when the trigger
+        -- already matches the canonical (`pg_get_triggerdef`) form of this statement.
+        if not exists (
+            select 1
+            from pg_trigger
+            where tgrelid = format('app.%I', table_name)::regclass
+              and not tgisinternal
+              and pg_get_triggerdef(oid) = format(
+                  'CREATE TRIGGER %I BEFORE DELETE OR UPDATE ON app.%I '
+                  'FOR EACH ROW EXECUTE FUNCTION app.reject_mutation()',
+                  'trg_' || table_name || '_append_only',
+                  table_name
+              )
+        ) then
+            execute format('drop trigger if exists %I on app.%I', 'trg_' || table_name || '_append_only', table_name);
+            execute format(
+                'create trigger %I before update or delete on app.%I for each row execute function app.reject_mutation()',
+                'trg_' || table_name || '_append_only',
+                table_name
+            );
+        end if;
     end loop;
 end;
 $$;

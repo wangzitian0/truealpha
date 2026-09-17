@@ -15,5 +15,16 @@
 -- SQL without a lookup table this migration would then have to keep in lockstep with the
 -- Python registry, recreating the exact problem this drops.
 
-alter table staging.strategy_backtest_inputs
-    drop constraint if exists strategy_backtest_inputs_input_key_check;
+-- Boot-lock guard (2026-09-17): `drop constraint if exists` takes ACCESS EXCLUSIVE even when
+-- the constraint is already gone, so the replay only drops it while it exists.
+do $$
+begin
+    if exists (
+        select 1 from pg_constraint
+        where conrelid = 'staging.strategy_backtest_inputs'::regclass and conname = 'strategy_backtest_inputs_input_key_check'
+    ) then
+        alter table staging.strategy_backtest_inputs
+            drop constraint if exists strategy_backtest_inputs_input_key_check;
+    end if;
+end
+$$;

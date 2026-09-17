@@ -12,8 +12,14 @@ create table if not exists mart.question_coverage_report (
     payload               jsonb not null check (jsonb_typeof(payload) = 'object'),
     created_at            timestamptz not null default clock_timestamp()
 );
-create index if not exists ix_question_coverage_report_universe
-    on mart.question_coverage_report (universe_id, created_at desc);
+do $$
+begin
+    if to_regclass('mart.ix_question_coverage_report_universe') is null then
+        create index if not exists ix_question_coverage_report_universe
+            on mart.question_coverage_report (universe_id, created_at desc);
+    end if;
+end
+$$;
 comment on table mart.question_coverage_report is
     '#748: weekly per-universe coverage of the six init.md questions, compiled from QUESTION_REQUIREMENTS (expected) left-joined with the wide row''s §8 status dimensions (observed); requirements_sha256 pins the expectation the counts were made under.';
 

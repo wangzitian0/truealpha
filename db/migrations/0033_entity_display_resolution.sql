@@ -14,7 +14,12 @@
 -- `mart_readonly` reads it without any staging grant — the staging boundary
 -- for consumers stays intact.
 
-create or replace view mart.entity_display_resolution as
+-- Boot-lock guard: `create or replace view` takes ACCESS EXCLUSIVE on the view, which
+-- queues behind every open reader. Replace it only when the definition differs; the
+-- comparison normalizes both sides through pg_get_viewdef, so no literal can drift.
+do $$
+declare
+    wanted constant text := $view$
 select distinct on (m.issuer_id)
     m.issuer_id,
     m.listing_id,
@@ -22,7 +27,19 @@ select distinct on (m.issuer_id)
     e.display_name
 from staging.topt_core_snapshot_members m
 left join staging.kg_entities e on e.id = m.issuer_id
-order by m.issuer_id, m.created_at desc;
+order by m.issuer_id, m.created_at desc
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    -- to_regclass, not ::regclass: a cast of a missing name fails when the expression is planned.
+    if pg_get_viewdef(to_regclass('mart.entity_display_resolution'))
+       is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.entity_display_resolution as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 comment on view mart.entity_display_resolution is
     '#495: issuer -> ticker/display_name for consumer rendering. Latest snapshot member per issuer; display_name nullable until the KG carries names.';

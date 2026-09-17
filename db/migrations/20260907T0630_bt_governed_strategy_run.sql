@@ -15,27 +15,38 @@
 -- already exposes that run's campaign cutoff in mart.
 -- A view, executed with the owner's privileges, so mart_readonly can resolve it without
 -- reading raw directly (db/roles.sql grants select on mart relations).
-create or replace view mart.governed_strategy_run as
-with head as (
-    select environment, universe_id, universe_version, factor_id, target_run_id, sequence, advanced_at
-    from mart.current_pointer_head
-    where environment = 'production'
-      and factor_id = 'gross_profit_per_employee'
-      and universe_id like 'universe:topt-%'
-    order by advanced_at desc
-    limit 1
-)
-select head.environment,
-       head.universe_id,
-       head.universe_version,
-       head.factor_id,
-       head.target_run_id,
-       head.sequence,
-       head.advanced_at,
-       status.cutoff,
-       run.strategy_run_id,
-       run.strategy_key,
-       run.executed_at
-from head
-join mart.topt_capture_status status on status.run_id = head.target_run_id
-join mart.strategy_runs run on run.executed_at = status.cutoff;
+do $$
+begin
+    -- Superseded: 20260916T1015_datahub_strategy_run_capture_scope.sql redefines mart.governed_strategy_run
+    -- later in the chain and owns its definition. Replacing it here would put this
+    -- older definition back (ACCESS EXCLUSIVE on the view) on every replay, only for
+    -- that file to replace it again, so this definition creates the view only on a
+    -- database that has none.
+    if to_regclass('mart.governed_strategy_run') is null then
+        create or replace view mart.governed_strategy_run as
+        with head as (
+            select environment, universe_id, universe_version, factor_id, target_run_id, sequence, advanced_at
+            from mart.current_pointer_head
+            where environment = 'production'
+              and factor_id = 'gross_profit_per_employee'
+              and universe_id like 'universe:topt-%'
+            order by advanced_at desc
+            limit 1
+        )
+        select head.environment,
+               head.universe_id,
+               head.universe_version,
+               head.factor_id,
+               head.target_run_id,
+               head.sequence,
+               head.advanced_at,
+               status.cutoff,
+               run.strategy_run_id,
+               run.strategy_key,
+               run.executed_at
+        from head
+        join mart.topt_capture_status status on status.run_id = head.target_run_id
+        join mart.strategy_runs run on run.executed_at = status.cutoff;
+    end if;
+end
+$$;
