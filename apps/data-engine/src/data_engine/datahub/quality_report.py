@@ -13,6 +13,12 @@ assertions are reconciled under a declared tolerance/priority policy, the
 per-cell outcome is persisted in the report payload, and only AGREED cells
 count as independently reconciled — a raw origin count never does.
 
+Since 2026-09-17 every policy grades by the owner's rule (`grade_consensus`, 0.1%): each
+reconciled field carries its `band` — HIGH when three independent origins agree (median
+served, confidence 1.00), MEDIUM when two do (their mean served), LOW otherwise (the
+priority origin's value served, the disagreement recorded). AGREED means HIGH or MEDIUM:
+at least two independent origins agree, which is what the pointer gate counts.
+
 Every field of the price bar is its own reconciliation cell (`reconcile_price_bar`):
 open, high, low and close under the price policy, volume under its own. A cell's
 headline outcome stays the close's (the served value, what the a1 pointer gate and
@@ -52,9 +58,14 @@ from pydantic import ValidationError
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import RawObjectRef
 from truealpha_contracts.reconciliation import (
+    CONSENSUS_RELATIVE_TOLERANCE,
+    HIGH_CONSENSUS_CONFIDENCE,
+    ConflictBehavior,
+    ConsensusBand,
     ReconciliationCell,
     ReconciliationOutcome,
     ReconciliationPolicy,
+    ReconciliationResult,
     SourceAssertion,
     reconcile_source_assertions,
 )
@@ -74,12 +85,21 @@ from data_engine.datahub.production_topt.source_registrations import (
     registration_for,
 )
 
-# Declared fusion policy for the dual-origin market-price cells (init.md rule 12):
-# yahoo-chart is the pinned primary, twelve-data the independent second origin;
-# disagreement beyond tolerance abstains and reports rather than letting either
-# source win silently.
+
+# Declared fusion policy for the market-price cells (init.md rule 12).
 #
-# v1 -> v2 (#719): tolerance 0.1% -> 0.3%. The 0.1% calibration dated from the
+# v3 -> v4 (owner decision 2026-09-17): every family is graded by the owner's rule
+# (`truealpha_contracts.reconciliation.grade_consensus`), at the owner's tolerance of 0.1%:
+# three agreeing independent origins are HIGH and serve their median, two are MEDIUM and
+# serve their mean, anything else is LOW and serves the highest-priority origin. The
+# owner's words, verbatim (2026-09-17 session): "三个源且误差小于千分之一，取中间的数，并且标记为置信度
+# 100% high，可以忽略偶发的第四个源。如果有两个源一致标记为 middle。其他情况是 low。" This
+# supersedes the 30bp tolerance below and the abstain-on-any-disagreement behaviour; the
+# priority order is kept, and now only breaks ties and serves LOW cells. The superseded
+# policies stay declared (`SUPERSEDED_RECONCILIATION_POLICIES`) so a historical report's
+# policy id still resolves.
+#
+# History, v1 -> v2 (#719): tolerance 0.1% -> 0.3%. The 0.1% calibration dated from the
 # era when cross-run reuse fed BOTH origins the same bound observation, so
 # "agreement" was byte-identity and the tolerance was never exercised. #691
 # (identity-coordinate reuse) made TOPT capture genuinely twice, and the honest
@@ -96,14 +116,26 @@ from data_engine.datahub.production_topt.source_registrations import (
 # disagreeing representative abstains the cell — three origins do not out-vote). A source
 # absent from the priority list is `unregistered` to the engine and silently excluded,
 # which is why the policy has to change for the origin to count at all.
-RECONCILIATION_POLICY = ReconciliationPolicy(
-    policy_version="market-price-fusion:v3",
-    source_priority=("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1"),
-    absolute_tolerance=Decimal("0"),
-    relative_tolerance=Decimal("0.003"),
-    minimum_independent_origin_groups=2,
-)
+def _consensus_policy(policy_version: str, source_priority: tuple[str, ...]) -> ReconciliationPolicy:
+    """A family policy under the owner's rule: 0.1% relative, no absolute slack."""
+    return ReconciliationPolicy(
+        policy_version=policy_version,
+        source_priority=source_priority,
+        absolute_tolerance=Decimal("0"),
+        relative_tolerance=CONSENSUS_RELATIVE_TOLERANCE,
+        minimum_independent_origin_groups=2,
+        conflict_behavior=ConflictBehavior.MEDIAN_CONSENSUS,
+    )
+
+
+_PRICE_SOURCE_PRIORITY = ("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1")
+RECONCILIATION_POLICY = _consensus_policy("market-price-fusion:v4", _PRICE_SOURCE_PRIORITY)
 # Volume is not a price. It is each vendor's own aggregation of the consolidated tape,
+# and since 2026-09-17 it is graded like every other family (0.1%, the owner's rule); the
+# reasoning below is the superseded v1's 2% and is kept as history. The staging soak had
+# measured the same-evening spread well above 0.1%, so most volume cells now grade MEDIUM
+# or LOW until the vendors settle — by the owner's decision, not a calibration.
+#
 # and it settles later than the prices do (late prints, corrections), so it gets its
 # own policy rather than the 30bp one. The number is measured where it can be: the
 # settled 2026-08-14 AAPL bars on the cassette pair agree EXACTLY on volume
@@ -116,13 +148,7 @@ RECONCILIATION_POLICY = ReconciliationPolicy(
 # spread and this number moves from that measurement, in a version (#719's lesson).
 # A volume conflict never touches the close's grade, so miscalibration here cannot
 # freeze the governed pointer the way #719's did.
-VOLUME_RECONCILIATION_POLICY = ReconciliationPolicy(
-    policy_version="market-volume-fusion:v1",
-    source_priority=RECONCILIATION_POLICY.source_priority,
-    absolute_tolerance=Decimal("0"),
-    relative_tolerance=Decimal("0.02"),
-    minimum_independent_origin_groups=2,
-)
+VOLUME_RECONCILIATION_POLICY = _consensus_policy("market-volume-fusion:v2", _PRICE_SOURCE_PRIORITY)
 # The served value: its grade is the cell's headline outcome.
 _HEADLINE_FIELD = "close"
 # Every field of the session's bar, each reconciled as its own cell under its own
@@ -141,7 +167,10 @@ FIELD_RECONCILIATION_POLICIES: dict[str, ReconciliationPolicy] = {
 FIELD_UNITS: dict[str, str] = {"open": "USD", "high": "USD", "low": "USD", "close": "USD", "volume": "shares"}
 
 
-# Declared fusion policy for the dual-origin financial-fact cells: SEC company-facts is
+# Declared fusion policy for the financial-fact cells, under the owner's rule since
+# 2026-09-17 (v2, 0.1%): with two origins (SEC, moomoo) an agreeing pair is MEDIUM and a
+# disagreeing one LOW — HIGH needs a third independent origin. The v1 reasoning below
+# (1%, abstain on disagreement) is history. SEC company-facts is
 # the pinned primary, moomoo's vendor-normalized statements the independent second origin,
 # reconciled PER FIELD at the primary's fiscal period end. A vendor-normalized statement
 # and an XBRL fact differ by definition, not only by rounding: measured on the four
@@ -150,12 +179,34 @@ FIELD_UNITS: dict[str, str] = {"open": "USD", "high": "USD", "low": "USD", "clos
 # reports ProfitLoss before minority interest, the primary NetIncomeLoss after it). 1%
 # clears that with margin while a wrong period, a currency, or a units error still lands
 # orders of magnitude outside; disagreement abstains and reports, as for prices.
-FINANCIAL_FACT_RECONCILIATION_POLICY = ReconciliationPolicy(
-    policy_version="financial-fact-fusion:v1",
-    source_priority=("sec-company-facts:v1", "moomoo-financials:v1"),
-    absolute_tolerance=Decimal("0"),
-    relative_tolerance=Decimal("0.01"),
-    minimum_independent_origin_groups=2,
+FINANCIAL_FACT_RECONCILIATION_POLICY = _consensus_policy(
+    "financial-fact-fusion:v2", ("sec-company-facts:v1", "moomoo-financials:v1")
+)
+#: The policies the owner's rule replaced, exactly as they were declared, so the policy id a
+#: historical report carries still resolves (`reconciliation_policy_by_id`). Never graded
+#: against again.
+SUPERSEDED_RECONCILIATION_POLICIES: tuple[ReconciliationPolicy, ...] = (
+    ReconciliationPolicy(
+        policy_version="market-price-fusion:v3",
+        source_priority=_PRICE_SOURCE_PRIORITY,
+        absolute_tolerance=Decimal("0"),
+        relative_tolerance=Decimal("0.003"),
+        minimum_independent_origin_groups=2,
+    ),
+    ReconciliationPolicy(
+        policy_version="market-volume-fusion:v1",
+        source_priority=_PRICE_SOURCE_PRIORITY,
+        absolute_tolerance=Decimal("0"),
+        relative_tolerance=Decimal("0.02"),
+        minimum_independent_origin_groups=2,
+    ),
+    ReconciliationPolicy(
+        policy_version="financial-fact-fusion:v1",
+        source_priority=("sec-company-facts:v1", "moomoo-financials:v1"),
+        absolute_tolerance=Decimal("0"),
+        relative_tolerance=Decimal("0.01"),
+        minimum_independent_origin_groups=2,
+    ),
 )
 # Which origin group each parser vintage's observations belong to.
 #
@@ -439,6 +490,7 @@ def build_report(
 
     pointers = _PointerDereferencer(object_store)
     cells: dict[str, _Cell] = {}
+    market_price_cells: dict[str, str] = {}
     plausibility: dict[str, dict[str, Any]] = {}
     usable_by_subject: dict[str, dict[str, bool]] = {}
     for (
@@ -456,6 +508,8 @@ def build_report(
         content_type,
     ) in rows:
         cell = cells.setdefault(obligation_id, _Cell())
+        if semantic_type == "market-price":
+            market_price_cells[obligation_id] = str(obligation_subject)
         subject_semantics = usable_by_subject.setdefault(str(obligation_subject), {})
         subject_semantics.setdefault(semantic_type, False)
         if observation_id is None:
@@ -493,6 +547,12 @@ def build_report(
     lineage_complete = sum(1 for cell in cells.values() if cell.lineage_complete)
     fresh = sum(1 for cell in cells.values() if cell.fresh)
     reconciliation = _reconcile_market_price_cells(conn, run_id)
+    # The served close's numeric confidence is the reconciled one: 1.00 when HIGH (the
+    # owner's "置信度 100%"); a MEDIUM or LOW close keeps the graded observation confidence.
+    for obligation_id, listing_id in market_price_cells.items():
+        close = reconciliation.get(listing_id, {})
+        if close.get("band") == ConsensusBand.HIGH.value and cells[obligation_id].confidence is not None:
+            cells[obligation_id].confidence = HIGH_CONSENSUS_CONFIDENCE
     independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
     served_by_failover = sum(1 for cell in reconciliation.values() if SERVED_BY_FAILOVER in cell)
     field_reconciliation = _field_reconciliation(reconciliation)
@@ -673,18 +733,34 @@ def reconcile_price_bar(
             if extra["values"].get(field) is not None
         )
         result = reconcile_source_assertions(cell=cell, assertions=assertions, policy=policy, cutoff=cutoff)
-        fields[field] = {
-            "outcome": result.outcome.value,
-            "origin_groups": len(result.origin_group_ids),
-            "selected_source": next(
-                (a.source_id for a in assertions if a.assertion_id == result.selected_assertion_id), None
-            ),
-            "selected_value": None if result.selected_numeric_value is None else str(result.selected_numeric_value),
-            "conflicting": len(result.conflicting_assertion_ids),
-            "policy_id": policy.policy_id,
-        }
+        fields[field] = {**graded_cell(result, assertions), "policy_id": policy.policy_id}
     headline = {key: value for key, value in fields[_HEADLINE_FIELD].items() if key != "policy_id"}
     return {**headline, "fields": fields}
+
+
+def graded_cell(result: ReconciliationResult, assertions: Sequence[SourceAssertion]) -> dict[str, Any]:
+    """One reconciled field as the report persists it.
+
+    `outcome` keeps the vocabulary the pointer gate reads (`agreed` = at least two
+    independent origins agree, the owner's HIGH or MEDIUM); `band` is the owner's band;
+    `selected_value` is the served value (the agreeing set's median for HIGH and MEDIUM,
+    the priority origin's own value for LOW) and `selected_source` the origin it is
+    attributed to (the highest-priority member of the served set); `confidence` is 1.00 for
+    HIGH, else that origin's graded confidence. `outliers` names the origins outside the
+    served set: the ignored extra source of a HIGH cell, the disagreeing ones otherwise.
+    """
+    source_by_id = {item.assertion_id: item.source_id for item in assertions}
+    return {
+        "outcome": result.outcome.value,
+        "band": None if result.band is None else result.band.value,
+        "origin_groups": len(result.origin_group_ids),
+        "agreeing_origin_groups": len(result.agreeing_assertion_ids),
+        "selected_source": source_by_id.get(result.selected_assertion_id or ""),
+        "selected_value": None if result.selected_numeric_value is None else str(result.selected_numeric_value),
+        "confidence": None if result.selected_confidence_score is None else str(result.selected_confidence_score),
+        "conflicting": len(result.conflicting_assertion_ids),
+        "outliers": sorted(source_by_id[item] for item in result.conflicting_assertion_ids),
+    }
 
 
 def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) -> dict[str, dict[str, Any]]:
@@ -891,7 +967,8 @@ def reconcile_financial_fact_entries(
     unit is the primary's reporting currency, and a second origin reporting in another
     currency is absent the same way — a figure in another unit is not the same number.
     The subject's outcome is AGREED only when every compared field agreed and at least
-    one was compared; any conflicting field abstains the subject.
+    one was compared; a subject with any field whose origins no pair of which agree is
+    `conflict_priority_served` (that field serves the primary's figure at LOW).
     """
     primaries = [entry for entry in entries if entry.is_primary]
     if not primaries:
@@ -925,20 +1002,10 @@ def reconcile_financial_fact_entries(
         result = reconcile_source_assertions(
             cell=cell, assertions=tuple(assertions), policy=FINANCIAL_FACT_RECONCILIATION_POLICY, cutoff=cutoff
         )
-        fields[field_name] = {
-            "outcome": result.outcome.value,
-            "period_end": period_end.isoformat(),
-            "unit": unit,
-            "origin_groups": len(result.origin_group_ids),
-            "selected_source": next(
-                (a.source_id for a in assertions if a.assertion_id == result.selected_assertion_id), None
-            ),
-            "selected_value": None if result.selected_numeric_value is None else str(result.selected_numeric_value),
-            "conflicting": len(result.conflicting_assertion_ids),
-        }
+        fields[field_name] = {**graded_cell(result, assertions), "period_end": period_end.isoformat(), "unit": unit}
         outcomes.append(result.outcome.value)
-    if any(outcome == ReconciliationOutcome.CONFLICT_ABSTAINED.value for outcome in outcomes):
-        overall = ReconciliationOutcome.CONFLICT_ABSTAINED.value
+    if any(outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value for outcome in outcomes):
+        overall = ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value
     elif outcomes and all(outcome == ReconciliationOutcome.AGREED.value for outcome in outcomes):
         overall = ReconciliationOutcome.AGREED.value
     elif outcomes:

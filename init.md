@@ -306,6 +306,14 @@ requested domain-selection policy version. The financial selection shape is:
 3. Within the winning source, the latest `transaction_time` (restatement) wins; `id` breaks same-instant ties.
 4. `confidence` rides along as data for the factor — it never arbitrates between sources (static per-source confidence must not silently decide truth).
 
+**Consensus confidence and multi-source fusion rule (Owner verbatim decision 2026-09-17, replacing prior heuristics wholesale):**
+"三个源且误差小于千分之一，取中间的数，并且标记为置信度 100% high，可以忽略偶发的第四个源。如果有两个源一致标记为 middle。其他情况是 low。"
+- Agreement condition: `|v − median| ≤ 0.1% × |median|` (exact equality when median is 0).
+- **HIGH:** At least 3 independent origin groups agree within 0.1%. Served value is their median; confidence is 1.00 (100%). Any extra disagreeing source is ignored as an outlier and recorded.
+- **MEDIUM:** Exactly 2 independent origin groups agree within 0.1%. Served value is their median (mean of the two).
+- **LOW:** All other cases (single source, or no two sources agree). Served value is the priority source.
+- Tolerance is 0.1% for every family (prices, volumes, and financial facts). The pointer gate treats HIGH and MEDIUM as corroborated.
+
 **Where fusion is exercised (revised 2026-08-20).** The rule above outlived the table it
 was written against, so it is restated on the planes that carry data. Fusion is not
 homeless — it is UNEXERCISED, and the difference matters:

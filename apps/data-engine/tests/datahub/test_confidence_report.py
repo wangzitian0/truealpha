@@ -74,27 +74,51 @@ def _twelve(value: str | None, at: datetime = DAY) -> OriginValue:
     )
 
 
+def _moomoo(value: str | None, at: datetime = DAY) -> OriginValue:
+    return OriginValue(
+        origin_id="origin:moomoo-kline:v1",
+        source_id="moomoo-kline:v1",
+        lineage="moomoo",
+        value=value,
+        knowable_at=at,
+    )
+
+
 # -- the four bands, each driven by its own synthetic cell ----------------------------------
 
 
-def test_two_independent_origins_agreeing_within_tolerance_are_high() -> None:
-    # AAPL on the 2026-09-14 QQQ head: 333.08 (yahoo) vs 333.079987 (twelve-data).
+def test_three_independent_origins_agreeing_within_tolerance_are_high() -> None:
+    # 3 origins agreeing within 0.1% tolerance are HIGH under the owner's 09-17 rule.
+    grade = classify_cell(
+        family_policy(CLOSE_FAMILY),
+        "listing:xnas:aapl",
+        (_yahoo("333.08"), _twelve("333.079987"), _moomoo("333.08")),
+        CUTOFF,
+    )
+    assert grade.band is Band.HIGH
+    assert grade.outcome == ReconciliationOutcome.AGREED.value
+    assert grade.independent_origins == 3
+    assert grade.tolerance == RECONCILIATION_POLICY.policy_id
+
+
+def test_two_independent_origins_agreeing_within_tolerance_are_medium() -> None:
+    # AAPL on the 2026-09-14 QQQ head: 333.08 (yahoo) vs 333.079987 (twelve-data) -> MEDIUM under 09-17 rule.
     grade = classify_cell(
         family_policy(CLOSE_FAMILY), "listing:xnas:aapl", (_yahoo("333.08"), _twelve("333.079987")), CUTOFF
     )
-    assert grade.band is Band.HIGH
+    assert grade.band is Band.MEDIUM
     assert grade.outcome == ReconciliationOutcome.AGREED.value
     assert grade.independent_origins == 2
     assert grade.tolerance == RECONCILIATION_POLICY.policy_id
     assert grade.delta == "0.000013" and Decimal(grade.relative_delta) < Decimal("0.000001")
 
 
-def test_two_independent_origins_disagreeing_beyond_tolerance_are_medium() -> None:
-    # 1% apart: outside the deployed 30bp policy — present, not agreed.
+def test_two_independent_origins_disagreeing_beyond_tolerance_are_low() -> None:
+    # 1% apart: outside the 0.1% policy — cross-origin conflict served at LOW under 09-17 rule.
     grade = classify_cell(family_policy(CLOSE_FAMILY), "listing:xnas:bad", (_yahoo("300"), _twelve("303")), CUTOFF)
-    assert grade.band is Band.MEDIUM
-    assert grade.reason == "not_agreed_within_tolerance"
-    assert grade.outcome == ReconciliationOutcome.CONFLICT_ABSTAINED.value
+    assert grade.band is Band.LOW
+    assert grade.reason == "cross_origin_conflict"
+    assert grade.outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value
     assert grade.delta == "3" and grade.relative_delta == "0.009901"
 
 
@@ -178,7 +202,7 @@ def test_served_days_are_utc_days_whatever_zone_the_session_renders() -> None:
     grade = classify_cell(
         close, "listing:xnas:aapl", (_yahoo("333.08", yahoo_at), _twelve("333.07", twelve_at)), CUTOFF
     )
-    assert grade.band is Band.HIGH and grade.excluded == ()
+    assert grade.band is Band.MEDIUM and grade.excluded == ()
 
     yahoo_at = datetime(2026, 9, 14, 0, tzinfo=UTC).astimezone(tokyo)
     twelve_at = datetime(2026, 9, 13, 20, tzinfo=UTC).astimezone(tokyo)
@@ -245,7 +269,7 @@ def test_a_duplicated_origin_still_reconciles_against_a_real_second_origin() -> 
         for close, digit in (("300.00", "a"), ("333.08", "b"))
     ]
     grade = classify_cell(family_policy(CLOSE_FAMILY), "listing:xnas:aapl", (*bars, _twelve("333.079987")), CUTOFF)
-    assert grade.band is Band.HIGH and grade.independent_origins == 2
+    assert grade.band is Band.MEDIUM and grade.independent_origins == 2
     assert grade.origins == ("origin:twelve-data:v1", "origin:yahoo:v1")
     assert grade.values["origin:yahoo:v1"] == "333.08"
 
@@ -285,13 +309,11 @@ def test_every_bar_field_is_its_own_family_under_the_quality_reports_policy() ->
     assert family_policy("volume").unit == "shares" and family_policy("open").unit == "USD"
 
 
-def test_a_two_origin_agreed_bar_is_high_on_all_five_fields() -> None:
+def test_a_two_origin_agreed_bar_is_medium_on_all_five_fields() -> None:
     grades = _bar_grades((_YAHOO, _YAHOO_BAR), (_TWELVE, _TWELVE_BAR))
     assert set(grades) == set(PRICE_BAR_FIELDS)
-    assert {name: grade.band for name, grade in grades.items()} == dict.fromkeys(PRICE_BAR_FIELDS, Band.HIGH)
-    assert all(
-        grade.reason == "independent_origins_agree" and grade.independent_origins == 2 for grade in grades.values()
-    )
+    assert {name: grade.band for name, grade in grades.items()} == dict.fromkeys(PRICE_BAR_FIELDS, Band.MEDIUM)
+    assert all(grade.reason == "two_origins_agree" and grade.independent_origins == 2 for grade in grades.values())
     assert grades["volume"].tolerance == VOLUME_RECONCILIATION_POLICY.policy_id
     assert grades["open"].tolerance == RECONCILIATION_POLICY.policy_id
     assert grades["volume"].delta == "0" and grades["high"].delta == "0.00001"
@@ -300,9 +322,9 @@ def test_a_two_origin_agreed_bar_is_high_on_all_five_fields() -> None:
 def test_a_close_only_second_origin_corroborates_the_close_alone() -> None:
     """A Twelve Data v2 observation carries the close and no bar keys: it asserts nothing for
     open/high/low/volume — present with no value, never a conflict — so those families are
-    honestly single-origin while the close is HIGH."""
+    honestly single-origin while the close is MEDIUM."""
     grades = _bar_grades((_YAHOO, _YAHOO_BAR), (_TWELVE, {"close": "305.92999"}))
-    assert grades[CLOSE_FAMILY].band is Band.HIGH
+    assert grades[CLOSE_FAMILY].band is Band.MEDIUM and grades[CLOSE_FAMILY].reason == "two_origins_agree"
     for name in ("open", "high", "low", "volume"):
         assert grades[name].band is Band.LOW and grades[name].reason == "single_origin", name
         assert grades[name].origins == ("origin:yahoo:v1",) and grades[name].outcome is None, name
@@ -311,15 +333,15 @@ def test_a_close_only_second_origin_corroborates_the_close_alone() -> None:
 
 def test_a_volume_conflict_is_the_volume_familys_finding_alone() -> None:
     """A primary-listing-only count (roughly half the consolidated tape) disagrees on volume
-    under the 2% policy while every price field, the close included, stays HIGH."""
+    under the 0.1% policy while every price field, the close included, stays MEDIUM."""
     grades = _bar_grades((_YAHOO, _YAHOO_BAR), (_TWELVE, {**_TWELVE_BAR, "volume": "14500000"}))
     volume = grades["volume"]
-    assert volume.band is Band.MEDIUM and volume.reason == "not_agreed_within_tolerance"
-    assert volume.outcome == ReconciliationOutcome.CONFLICT_ABSTAINED.value
+    assert volume.band is Band.LOW and volume.reason == "cross_origin_conflict"
+    assert volume.outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value
     assert volume.tolerance == VOLUME_RECONCILIATION_POLICY.policy_id
     assert volume.delta == "13686700" and volume.relative_delta == "0.485573"
     prices = ("open", "high", "low", "close")
-    assert {name: grades[name].band for name in prices} == dict.fromkeys(prices, Band.HIGH)
+    assert {name: grades[name].band for name in prices} == dict.fromkeys(prices, Band.MEDIUM)
 
 
 def test_a_bar_without_a_close_asserts_nothing_and_the_v1_close_is_read_under_price() -> None:
@@ -342,7 +364,7 @@ def test_accuracy_compares_each_bar_field_with_the_quality_reports_grade_of_that
     persisted = cr.quality_report_field_outcomes(
         {"reconciliation_cells": {"listing:xnas:aapl": {"outcome": "agreed", "fields": fields}}}
     )
-    assert persisted["volume"] == {"listing:xnas:aapl": "conflict_abstained"}
+    assert persisted["volume"] == {"listing:xnas:aapl": "conflict_priority_served"}
     assert persisted["close"] == {"listing:xnas:aapl": "agreed"}
     cells = {name: {"listing:xnas:aapl": grades[name]} for name in PRICE_BAR_FIELDS}
     entries = {
@@ -432,14 +454,14 @@ _MOOMOO_FACT = {
     "period_end": "2025-12-31",
     "revenue": "100000000",
     "gross_profit": "40000000",
-    "net_income": "9060000",
+    "net_income": "9005000",
     "total_assets": "500000000",
     "by_period_end": {
         "2024-12-31": {"revenue": "80000000", "gross_profit": "30000000", "net_income": "5000000"},
         "2025-12-31": {
             "revenue": "100000000",
             "gross_profit": "40000000",
-            "net_income": "9060000",
+            "net_income": "9005000",
             "total_assets": "500000000",
         },
     },
@@ -477,38 +499,38 @@ def test_the_fused_fundamentals_carry_the_quality_reports_policy_and_the_others_
     assert cr.CROSS_CHECKED_FAMILIES == (*PRICE_BAR_FIELDS, *FINANCIAL_FACT_FUSION_FIELDS)
 
 
-def test_two_lineages_agreeing_at_the_primarys_period_are_high() -> None:
+def test_two_lineages_agreeing_at_the_primarys_period_are_medium() -> None:
     """SEC company-facts and moomoo's statements agree on every fused field at the primary's
-    fiscal period end: HIGH under `financial-fact-fusion:v1`, the net income gap inside 1%."""
+    fiscal period end: MEDIUM under 09-17 rule (2 origins agree within 0.1%)."""
     grades = _financial_grades(_financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, _MOOMOO_FACT))
     for name in FINANCIAL_FACT_FUSION_FIELDS:
         grade = grades[name]
-        assert grade.band is Band.HIGH and grade.reason == "independent_origins_agree", name
+        assert grade.band is Band.MEDIUM and grade.reason == "two_origins_agree", name
         assert grade.outcome == ReconciliationOutcome.AGREED.value and grade.independent_origins == 2, name
         assert grade.tolerance == FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
         assert grade.origins == ("origin:moomoo-financials:v1", "origin:sec-company-facts:v1"), name
         assert grade.excluded == (), name
     assert grades["net_income"].values == {
-        "origin:moomoo-financials:v1": "9060000",
+        "origin:moomoo-financials:v1": "9005000",
         "origin:sec-company-facts:v1": "9000000",
     }
-    assert grades["net_income"].delta == "60000" and grades["net_income"].relative_delta == "0.006623"
+    assert grades["net_income"].delta == "5000" and grades["net_income"].relative_delta == "0.000555"
     # The fields no policy fuses are unchanged: the statements origin asserts none of them.
     assert grades["shares_outstanding"].band is Band.MISSING
     assert grades["pre_provision_profit"].band is Band.MISSING
 
 
-def test_two_lineages_disagreeing_beyond_tolerance_are_medium() -> None:
+def test_two_lineages_disagreeing_beyond_tolerance_are_low() -> None:
     conflicting = {
         **_MOOMOO_FACT,
         "by_period_end": {"2025-12-31": {**_MOOMOO_FACT["by_period_end"]["2025-12-31"], "revenue": "103000000"}},
     }
     grades = _financial_grades(_financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, conflicting))
     revenue = grades["revenue"]
-    assert revenue.band is Band.MEDIUM and revenue.reason == "not_agreed_within_tolerance"
-    assert revenue.outcome == ReconciliationOutcome.CONFLICT_ABSTAINED.value
+    assert revenue.band is Band.LOW and revenue.reason == "cross_origin_conflict"
+    assert revenue.outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value
     assert revenue.delta == "3000000" and revenue.relative_delta == "0.029126"
-    assert grades["gross_profit"].band is Band.HIGH, "one field's disagreement is that field's finding"
+    assert grades["gross_profit"].band is Band.MEDIUM, "one field's disagreement is that field's finding"
 
 
 def test_a_second_origin_without_the_primarys_period_is_low_other_period() -> None:
@@ -555,11 +577,11 @@ def test_a_second_origin_in_another_currency_never_corroborates() -> None:
         assert mismatched[name].band is Band.LOW and mismatched[name].reason == "single_origin", name
         assert mismatched[name].values["origin:moomoo-financials:v1"] is None, name
     agreed = _financial_grades(_financial(_SEC, eur_primary), _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "EUR"}))
-    assert all(agreed[name].band is Band.HIGH for name in FINANCIAL_FACT_FUSION_FIELDS)
+    assert all(agreed[name].band is Band.MEDIUM for name in FINANCIAL_FACT_FUSION_FIELDS)
     legacy = _financial_grades(
         _financial(_SEC, _PRIMARY_FACT), _financial(_MOOMOO, {**_MOOMOO_FACT, "currency": "USD"})
     )
-    assert all(legacy[name].band is Band.HIGH for name in FINANCIAL_FACT_FUSION_FIELDS)
+    assert all(legacy[name].band is Band.MEDIUM for name in FINANCIAL_FACT_FUSION_FIELDS)
 
 
 def test_an_undated_primary_figure_is_not_corroborated_and_an_absent_one_leaves_the_second_alone() -> None:
@@ -568,7 +590,7 @@ def test_an_undated_primary_figure_is_not_corroborated_and_an_absent_one_leaves_
     is covered by the second origin's headline figure alone."""
     undated = {name: value for name, value in _PRIMARY_FACT.items() if name != "vintage"}
     grades = _financial_grades(_financial(_SEC, undated), _financial(_MOOMOO, _MOOMOO_FACT))
-    assert grades["revenue"].band is Band.HIGH and grades["gross_profit"].band is Band.HIGH
+    assert grades["revenue"].band is Band.MEDIUM and grades["gross_profit"].band is Band.MEDIUM
     for name in ("net_income", "total_assets"):
         assert grades[name].band is Band.LOW and grades[name].reason == "single_origin", name
         assert grades[name].values["origin:moomoo-financials:v1"] is None, name
@@ -576,7 +598,7 @@ def test_an_undated_primary_figure_is_not_corroborated_and_an_absent_one_leaves_
         _financial(_SEC, {**_PRIMARY_FACT, "net_income": None}), _financial(_MOOMOO, _MOOMOO_FACT)
     )
     assert absent["net_income"].band is Band.LOW and absent["net_income"].origins == ("origin:moomoo-financials:v1",)
-    assert absent["net_income"].values["origin:moomoo-financials:v1"] == "9060000"
+    assert absent["net_income"].values["origin:moomoo-financials:v1"] == "9005000"
 
 
 def test_an_origin_asserts_from_its_newest_observation_whichever_order_the_rows_came_in() -> None:
@@ -594,7 +616,7 @@ def test_an_origin_asserts_from_its_newest_observation_whichever_order_the_rows_
     forward, backward = _financial_grades(*rows), _financial_grades(*reversed(rows))
     assert forward == backward
     revenue = forward["revenue"]
-    assert revenue.band is Band.HIGH and revenue.origins == (
+    assert revenue.band is Band.MEDIUM and revenue.origins == (
         "origin:moomoo-financials:v1",
         "origin:sec-company-facts:v1",
     )
@@ -751,8 +773,8 @@ def test_a_listing_in_one_route_only_is_low() -> None:
 def test_aggregate_counts_shares_and_agreement_rate_over_compared_cells() -> None:
     policy = family_policy(CLOSE_FAMILY)
     grades = [
-        classify_cell(policy, "listing:xnas:a", (_yahoo("100"), _twelve("100.1")), CUTOFF),  # high
-        classify_cell(policy, "listing:xnas:b", (_yahoo("100"), _twelve("103")), CUTOFF),  # medium
+        classify_cell(policy, "listing:xnas:a", (_yahoo("100"), _twelve("100.05"), _moomoo("100")), CUTOFF),  # high
+        classify_cell(policy, "listing:xnas:b", (_yahoo("100"), _twelve("100.05")), CUTOFF),  # medium
         classify_cell(policy, "listing:xnas:c", (_yahoo("100"),), CUTOFF),  # low
         classify_cell(policy, "listing:xnas:d", (_yahoo(None),), CUTOFF),  # missing
     ]
@@ -760,15 +782,15 @@ def test_aggregate_counts_shares_and_agreement_rate_over_compared_cells() -> Non
     assert summary["cells"] == 4
     assert (summary["high"], summary["medium"], summary["low"], summary["missing"]) == (1, 1, 1, 1)
     assert summary["share"] == {"high": "0.2500", "medium": "0.2500", "low": "0.2500", "missing": "0.2500"}
-    # Agreement is judged only where two independent origins were compared: 1 of 2.
-    assert summary["compared"] == 2 and summary["agreement_rate"] == "0.5000"
-    assert summary["origins"] == ["origin:twelve-data:v1", "origin:yahoo:v1"]
+    # Agreement is judged where two or more independent origins were compared: both agreed within 0.1%.
+    assert summary["compared"] == 2 and summary["agreed"] == 2 and summary["agreement_rate"] == "1.0000"
+    assert summary["origins"] == ["origin:moomoo-kline:v1", "origin:twelve-data:v1", "origin:yahoo:v1"]
     assert summary["tolerance"] == RECONCILIATION_POLICY.policy_id
     assert summary["reasons"] == {
-        "independent_origins_agree": 1,
         "no_origin_value": 1,
-        "not_agreed_within_tolerance": 1,
         "single_origin": 1,
+        "three_origins_agree": 1,
+        "two_origins_agree": 1,
     }
 
 

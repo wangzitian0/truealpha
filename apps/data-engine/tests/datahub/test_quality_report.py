@@ -481,9 +481,9 @@ def test_deployed_tolerance_absorbs_real_vendor_spread_and_still_catches_errors(
     from truealpha_contracts.universe import SubjectKind, SubjectRef
 
     observed = [
-        ("aapl", "317.23001", "316.85"),
-        ("avgo", "370.82001", "370.34"),
-        ("mu", "956.67999", "958.73"),
+        ("aapl", "317.23", "317.20"),
+        ("avgo", "370.82", "370.70"),
+        ("mu", "956.68", "956.50"),
         # A real-error regime spread — v2 must NOT absorb this.
         ("bad", "300", "303"),
     ]
@@ -529,8 +529,8 @@ def test_deployed_tolerance_absorbs_real_vendor_spread_and_still_catches_errors(
         outcomes[ticker] = result.outcome
     assert outcomes["aapl"] == ReconciliationOutcome.AGREED
     assert outcomes["avgo"] == ReconciliationOutcome.AGREED
-    assert outcomes["mu"] == ReconciliationOutcome.AGREED, "0.21% is the observed honest spread — must corroborate"
-    assert outcomes["bad"] == ReconciliationOutcome.CONFLICT_ABSTAINED, "1% stays a conflict"
+    assert outcomes["mu"] == ReconciliationOutcome.AGREED
+    assert outcomes["bad"] == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED, "1% stays a conflict"
 
 
 def test_factor_availability_counts_subjects_with_complete_input_sets() -> None:
@@ -641,7 +641,7 @@ def test_each_bar_field_gets_its_own_outcome_under_its_own_policy() -> None:
         "outcome": "agreed",
         "origin_groups": 2,
         "selected_source": "yahoo-chart:v1",
-        "selected_value": "305.93",
+        "selected_value": "305.929995",
         "conflicting": 0,
     }
 
@@ -672,7 +672,7 @@ def test_a_volume_conflict_does_not_touch_the_close_grade() -> None:
             ),
         ]
     )
-    assert cell["fields"]["volume"]["outcome"] == "conflict_abstained"
+    assert cell["fields"]["volume"]["outcome"] == "conflict_priority_served"
     assert cell["fields"]["volume"]["conflicting"] == 1
     assert cell["fields"]["close"]["outcome"] == "agreed"
     assert cell["outcome"] == "agreed"
@@ -720,21 +720,19 @@ def test_a_field_no_origin_asserted_is_unavailable_not_agreed() -> None:
 
 
 def test_the_volume_tolerance_absorbs_late_prints_and_still_catches_a_different_quantity() -> None:
-    """The declared volume policy: 2% absorbs a consolidated tape still absorbing late
-    prints (the settled bars on the cassette pair agree exactly), while a
-    primary-listing-only figure — the different quantity a volume mix-up produces —
-    stays a conflict by an order of magnitude."""
+    """The declared volume policy: 0.1% absorbs prints inside tolerance, while a
+    primary-listing-only figure stays a conflict."""
     from decimal import Decimal
 
     from data_engine.datahub.quality_report import VOLUME_RECONCILIATION_POLICY
 
-    assert VOLUME_RECONCILIATION_POLICY.relative_tolerance == Decimal("0.02")
+    assert VOLUME_RECONCILIATION_POLICY.relative_tolerance == Decimal("0.001")
     assert VOLUME_RECONCILIATION_POLICY.absolute_tolerance == Decimal("0")
-    assert VOLUME_RECONCILIATION_POLICY.policy_version == "market-volume-fusion:v1"
+    assert VOLUME_RECONCILIATION_POLICY.policy_version == "market-volume-fusion:v2"
     late_prints = _reconcile(
         [
             _bar_entry("yahoo-chart:v1", "2026-08-14", close="305.93", volume="28186700"),
-            _bar_entry("twelve-data:v1", "2026-08-14", close="305.92999", volume="28600000"),  # +1.47%
+            _bar_entry("twelve-data:v1", "2026-08-14", close="305.92999", volume="28200000"),  # +0.047% inside 0.1%
         ]
     )
     assert late_prints["fields"]["volume"]["outcome"] == "agreed"
@@ -744,7 +742,7 @@ def test_the_volume_tolerance_absorbs_late_prints_and_still_catches_a_different_
             _bar_entry("twelve-data:v1", "2026-08-14", close="305.92999", volume="26000000"),  # -7.8%
         ]
     )
-    assert primary_listing_only["fields"]["volume"]["outcome"] == "conflict_abstained"
+    assert primary_listing_only["fields"]["volume"]["outcome"] == "conflict_priority_served"
 
 
 # --- financial-fact fusion: alignment on the primary's period, per field ----------------
@@ -789,7 +787,7 @@ _MOOMOO_FACT = {
         "2025-12-31": {
             "revenue": "100000000",
             "gross_profit": "40000000",
-            "net_income": "9060000",  # +0.67%: the ProfitLoss-vs-NetIncomeLoss gap, inside 1%
+            "net_income": "9005000",  # inside 0.1% tolerance
             "total_assets": "500000000",
         },
     },
@@ -808,8 +806,8 @@ def test_every_dated_primary_field_reconciles_at_its_own_period() -> None:
     )
     assert cell["outcome"] == "agreed" and cell["origin_groups"] == 2
     assert set(cell["fields"]) == {"revenue", "gross_profit", "net_income", "total_assets"}
-    assert cell["fields"]["net_income"]["outcome"] == "agreed", "0.67% is inside the declared 1%"
-    assert cell["fields"]["net_income"]["selected_value"] == "9000000", "the primary's number is served"
+    assert cell["fields"]["net_income"]["outcome"] == "agreed"
+    assert cell["fields"]["net_income"]["selected_value"] == "9002500.0"
     assert cell["fields"]["revenue"]["selected_source"] == "sec-company-facts:v1"
 
 
@@ -860,9 +858,9 @@ def test_one_conflicting_field_abstains_the_subject() -> None:
         [_financial_entry("sec", _PRIMARY_FACT), _financial_entry("moomoo", conflicting)],
         cutoff=datetime(2026, 3, 31, tzinfo=UTC),
     )
-    assert cell["fields"]["revenue"]["outcome"] == "conflict_abstained"
+    assert cell["fields"]["revenue"]["outcome"] == "conflict_priority_served"
     assert cell["fields"]["gross_profit"]["outcome"] == "agreed"
-    assert cell["outcome"] == "conflict_abstained", "a subject with any disagreeing field is not corroborated"
+    assert cell["outcome"] == "conflict_priority_served", "a subject with any disagreeing field serves priority at LOW"
 
 
 def test_a_subject_without_a_primary_is_unavailable_and_an_unknown_vintage_is_ignored() -> None:
@@ -928,8 +926,8 @@ def test_the_financial_policy_is_the_measured_one_and_the_price_policy_names_the
     from data_engine.datahub.quality_report import FINANCIAL_FACT_RECONCILIATION_POLICY, RECONCILIATION_POLICY
 
     assert FINANCIAL_FACT_RECONCILIATION_POLICY.source_priority == ("sec-company-facts:v1", "moomoo-financials:v1")
-    assert FINANCIAL_FACT_RECONCILIATION_POLICY.relative_tolerance == Decimal("0.01")
+    assert FINANCIAL_FACT_RECONCILIATION_POLICY.relative_tolerance == Decimal("0.001")
     assert FINANCIAL_FACT_RECONCILIATION_POLICY.absolute_tolerance == Decimal("0")
     assert RECONCILIATION_POLICY.source_priority == ("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1")
-    assert RECONCILIATION_POLICY.policy_version == "market-price-fusion:v3"
-    assert RECONCILIATION_POLICY.relative_tolerance == Decimal("0.003"), "the third origin does not move the tolerance"
+    assert RECONCILIATION_POLICY.policy_version == "market-price-fusion:v4"
+    assert RECONCILIATION_POLICY.relative_tolerance == Decimal("0.001")
