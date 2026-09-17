@@ -54,6 +54,27 @@ def _policy(policy: SignPolicy, classes: frozenset[IssuerClass] = _EVERY_CLASS) 
     return {issuer_class: policy for issuer_class in classes}
 
 
+#: The datahub/factor boundary (owner decision 2026-09-17, #528 D1). The datahub records facts as
+#: they are: a value is refused only when it cannot exist or cannot be computed — a quantity that is
+#: physically non-negative carrying a negative number (a parse or unit defect), a zero or missing
+#: denominator, a non-finite number. Everything economic — profits, income, value added,
+#: efficiencies — may be negative, and a negative number is data, not a defect. Distorted or
+#: special-case data (a financial issuer's balance sheet under a uniform capital charge, one-offs,
+#: currency effects) is interpreted by the FACTOR layer, through declared, versioned edges and
+#: node policies, never by rewriting or refusing the fact.
+#:
+#: So `must-be-non-negative` is reserved for the keys below, each with the reason it cannot be
+#: negative; `test_must_be_non_negative_is_reserved_for_physical_quantities` holds every node to it.
+PHYSICALLY_NON_NEGATIVE: Mapping[str, str] = MappingProxyType(
+    {
+        "total_assets": "a balance of assets; a negative total is a sign or unit defect in the filing parse",
+        "employees_total": "a count of people",
+        "risk_free_rate": "a definition parameter we set, not a captured fact",
+        "capital_charge": "total_assets × risk_free_rate, both non-negative by the entries above",
+    }
+)
+
+
 def _captured(family: str) -> ConfidenceBand:
     return ConfidenceBand(rule=ConfidenceRule.AS_CAPTURED, family=family)
 

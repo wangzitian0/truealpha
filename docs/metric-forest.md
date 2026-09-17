@@ -331,6 +331,33 @@ When step E lands, each component carries its own policy. `node-sign-policy` ass
 no code change, because the columns are added to `PUBLISHED_COLUMNS` (and later generated,
 §7).
 
+### 6.1 The datahub/factor boundary (owner decision 2026-09-17, #528 D1)
+
+**The datahub records facts as they are.** GPPE may be negative; so may gross profit, net income,
+MVA, or any efficiency. A negative economic number is data, and the datahub never rewrites,
+clips, winsorizes, sign-flips or refuses it.
+
+A datahub value is refused (or published unavailable, with a reason code) only when it **cannot
+exist or cannot be computed**:
+
+| case | example | datahub outcome |
+|---|---|---|
+| undefined arithmetic | a zero or missing denominator (`employees_total = 0`), a non-finite number | unavailable, reason named |
+| a physically non-negative quantity carries a negative number | total assets < 0, a negative headcount | refused — a parse, sign or unit defect in the capture |
+| no comparable input | a period, unit or currency that cannot be aligned; look-ahead | unavailable / not compared |
+
+**Distorted or special-case data is the factor layer's job**: a financial issuer's balance sheet
+under a uniform capital charge (JPM's negative GPPE), one-offs, currency effects, outliers,
+winsorization and class-specific adjustments are expressed as declared, versioned edges
+(parameters, per-class bindings) and node policies in this forest — never as a change to the
+captured fact, which stays available for every other consumer.
+
+In the registry this is `factors.forest.registry.PHYSICALLY_NON_NEGATIVE`: `must-be-non-negative`
+is reserved for the quantities listed there, each with the reason it cannot be negative, and
+`test_must_be_non_negative_is_reserved_for_physical_quantities` fails when any other node forbids
+a negative value. Every new node (MVA, SBC, labor cost, marketing cost, …) is therefore
+`may-be-negative` or `sign-is-signal` unless it is a physical quantity.
+
 ## 7. The wide row, generated from the registry
 
 **Cell identity.** A cell is `(run, issuer, node_id, period)`.
@@ -445,6 +472,9 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 Step B needs no migration.
 
 ## 12. Open owner decisions
+
+- **D1 — decided 2026-09-17:** GPPE may be negative; v0.2.0 is `sign-is-signal` for every class, and the datahub/factor boundary is §6.1.
+
 
 | id | decision | needed by |
 |---|---|---|
