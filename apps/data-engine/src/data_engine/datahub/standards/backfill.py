@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from importlib import import_module
@@ -226,6 +226,17 @@ def _cell_line(cell: OpenCell, outcome: ExtractionOutcome) -> str:
     return f"{head} {outcome.detail}"
 
 
+def summary_metric(standard: str, universe: str, mode: Mode, status: str) -> str:
+    """The health-log metric one run's count is filed under."""
+    return f"{standard}:{universe}:{mode}:{status}"
+
+
+def completed_metric(standard: str, universe: str) -> str:
+    """The row every backfill that reaches its end writes — zero open cells included — and so
+    the evidence that this standard has been backfilled over this universe here at all."""
+    return summary_metric(standard, universe, "backfill", "open_cells")
+
+
 def _persist_summary(connection: Any, report: BackfillReport) -> None:
     """The run's per-status counts, in the existing health log: a probe is an answer only
     if it survives the run that produced it (init.md §6, `ingestion_health_log`)."""
@@ -233,9 +244,31 @@ def _persist_summary(connection: Any, report: BackfillReport) -> None:
     for status, count in sorted(report.outcomes.items()):
         connection.execute(
             "insert into staging.ingestion_health_log (source, metric, value, note) values (%s, %s, %s, %s)",
-            (HEALTH_LOG_SOURCE, f"{report.standard}:{report.universe}:{report.mode}:{status}", count, note),
+            (HEALTH_LOG_SOURCE, summary_metric(report.standard, report.universe, report.mode, status), count, note),
         )
     connection.execute(
         "insert into staging.ingestion_health_log (source, metric, value, note) values (%s, %s, %s, %s)",
-        (HEALTH_LOG_SOURCE, f"{report.standard}:{report.universe}:{report.mode}:open_cells", report.open, note),
+        (
+            HEALTH_LOG_SOURCE,
+            summary_metric(report.standard, report.universe, report.mode, "open_cells"),
+            report.open,
+            note,
+        ),
     )
+
+
+def never_backfilled(connection: Any, *, universes: Sequence[str], standards: Sequence[str]) -> list[tuple[str, str]]:
+    """(universe, standard) pairs no backfill has ever completed over in this environment.
+
+    Read from the health log `_persist_summary` writes at the end of every backfill run, so a
+    run that died before its end does not count, and a probe does not either.
+    """
+    expected = {
+        completed_metric(standard, universe): (universe, standard) for universe in universes for standard in standards
+    }
+    rows = connection.execute(
+        "select distinct metric from staging.ingestion_health_log where source = %s and metric = any(%s)",
+        (HEALTH_LOG_SOURCE, sorted(expected)),
+    ).fetchall()
+    done = {str(row[0]) for row in rows}
+    return [pair for metric, pair in expected.items() if metric not in done]

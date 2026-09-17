@@ -324,6 +324,26 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
     return report_id
 
 
+def stored_report_run(connection: Connection[Any], universe_id: str) -> str | None:
+    """The run the newest stored report for `universe_id` describes: what `/admin/datahub`
+    serves for that universe (`datahub-stats.ts` `QUESTION_COVERAGE_SQL` picks the newest row
+    per universe id by `created_at`).
+
+    A head whose run this names has its reports: the coverage op runs after the purity op in
+    every job that writes either, so a stored report for the head means purity ran for it too.
+    """
+    row = connection.execute(
+        """
+        select run_id from mart.question_coverage_report
+        where universe_id = %s
+        order by created_at desc
+        limit 1
+        """,
+        (universe_id,),
+    ).fetchone()
+    return str(row[0]) if row else None
+
+
 def summary_line(report: Mapping[str, Any]) -> str:
     parts = []
     for question, entry in report["questions"].items():

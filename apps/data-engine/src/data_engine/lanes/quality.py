@@ -29,7 +29,8 @@ import contextlib
 import io
 import json
 import runpy
-from datetime import UTC, datetime
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import dagster as dg
@@ -37,12 +38,30 @@ import psycopg
 from truealpha_contracts.common import CaptureEnvironment
 
 from data_engine.config import settings
+from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
+from data_engine.lanes.capture import TICKS
+from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
+from data_engine.quality import surface_proof
 from data_engine.quality.nightly_verdicts import TICK_TAG, check_name, tick_from_config, tick_of, verdict
 from data_engine.sources import gateway
 
 OUTPUT_INVARIANTS_JOB_NAME = "output_invariants_check"
 # 00:15 UTC: after the canary (23:47) has published, before anything reads the day's head.
+# The QQQ tick (23:20) can still be running then — since the moomoo origins it ran until 23:55
+# on 2026-09-16, and a smaller Twelve Data share (#900) slows it further — so the surface proof
+# waits for every universe to settle rather than judging a head its reports have not reached.
 OUTPUT_INVARIANTS_CRON = "15 0 * * *"
+#: How long the surface proof waits for a universe to settle, and how often it looks. Three
+#: hours takes the proof past any tick that is merely slow (the verdict still lands hours
+#: before deploy-freshness reads it at 07:00); a tick still running after that is the governed
+#: pointer's freshness check to page on (`tools/datahub_freshness.py`), and the proof names the
+#: universe IN-PROGRESS instead of calling its surfaces wrong.
+SURFACE_SETTLE_TIMEOUT = timedelta(hours=3)
+SURFACE_SETTLE_POLL_SECONDS = 60.0
+#: How long after a head's pointer row is written its reports may still be missing without the
+#: proof calling it a mismatch: the pointer sensor looks every 30 s and a head-reports run
+#: takes about a minute. Past this, missing reports mean the sensor did not follow the head.
+HEAD_REPORTS_GRACE = timedelta(minutes=10)
 
 CONFIDENCE_REPORT_JOB_NAME = "datahub_confidence_report"
 # 00:45 UTC: after the invariants (00:15) have had their say on the same heads, and the
@@ -118,25 +137,124 @@ def invariants_summary(lines: list[str], exit_code: int) -> str:
     return f"exit {exit_code}: {len(failed)} failed ({named}); {counts}"
 
 
+#: A run in one of these has not finished; a queued run is committed to running.
+UNFINISHED_RUN_STATUSES = (
+    dg.DagsterRunStatus.QUEUED,
+    dg.DagsterRunStatus.NOT_STARTED,
+    dg.DagsterRunStatus.STARTING,
+    dg.DagsterRunStatus.STARTED,
+    dg.DagsterRunStatus.CANCELING,
+)
+#: An unfinished run created longer ago than this is not a reason to wait: no tick or report
+#: run takes half a day, and a run whose worker died without marking it would otherwise excuse
+#: its universe's mismatches every night.
+IN_FLIGHT_MAX_AGE = timedelta(hours=12)
+
+
+def _tick_universe(key: str | None) -> str:
+    # A tick with no universe head is the hand-curated TOPT corpus (`UniverseTick`).
+    return key or "topt"
+
+
+def runs_in_flight(instance: dg.DagsterInstance, *, now: datetime | None = None) -> dict[str, str]:
+    """universe -> the unfinished run that will move its head or rewrite its reports.
+
+    The capture ticks move a head (the job names the universe); the head-reports and backfill
+    jobs rewrite its purity rows and coverage report (the run config names it, so a run an
+    operator launched untagged counts too). Runs created more than `IN_FLIGHT_MAX_AGE` before
+    `now` are not counted."""
+    created_after = (now or datetime.now(UTC)) - IN_FLIGHT_MAX_AGE
+    ticks = {
+        tick.job_name: _tick_universe(tick.universe_head_kind)
+        for tick in TICKS
+        if _tick_universe(tick.universe_head_kind) in UNIVERSE_PREFIXES
+    }
+    found: dict[str, str] = {}
+    for job_name in (*ticks, HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME):
+        runs = instance.get_runs(
+            filters=dg.RunsFilter(
+                job_name=job_name, statuses=list(UNFINISHED_RUN_STATUSES), created_after=created_after
+            )
+        )
+        for run in runs:
+            universe = ticks.get(job_name) or run_universe(run.run_config or {})
+            if universe in UNIVERSE_PREFIXES:
+                found.setdefault(
+                    universe, f"{job_name} run {run.run_id[:8]} is {run.status.value.lower().replace('_', ' ')}"
+                )
+    return found
+
+
+def settling(connection: psycopg.Connection, instance: dg.DagsterInstance, *, now: datetime) -> dict[str, str]:
+    """Every universe the proof should not judge yet, with why: an unfinished run for it, or a
+    head recorded within `HEAD_REPORTS_GRACE` whose reports do not name it yet."""
+    pending = runs_in_flight(instance, now=now)
+    for universe, why in surface_proof.fresh_heads_without_reports(
+        connection, now=now, grace=HEAD_REPORTS_GRACE
+    ).items():
+        pending.setdefault(universe, why)
+    return pending
+
+
+#: Indirected so a test can wait without sleeping.
+_sleep = time.sleep
+
+
+def _await_settled(context: dg.OpExecutionContext) -> None:
+    """Poll until no universe is settling, or until `SURFACE_SETTLE_TIMEOUT` has passed."""
+    deadline = time.monotonic() + SURFACE_SETTLE_TIMEOUT.total_seconds()
+    while True:
+        with psycopg.connect(settings.database_url) as connection:
+            pending = settling(connection, context.instance, now=datetime.now(UTC))
+        if not pending:
+            return
+        described = "; ".join(f"{universe}: {why}" for universe, why in sorted(pending.items()))
+        if time.monotonic() >= deadline:
+            context.log.warning(f"still settling after {SURFACE_SETTLE_TIMEOUT}: {described}")
+            return
+        context.log.info(f"waiting for {described}")
+        _sleep(SURFACE_SETTLE_POLL_SECONDS)
+
+
 @dg.op
 def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
     """Every report surface serves the governed head (#855 C1): replay each App reader's own
     run selection and the coverage report's recomputation against this environment's
     database; one line per surface in the log; fail the run on any surface that serves
-    another run than the pointer names, or a report the tables no longer agree with."""
-    from data_engine.quality.surface_proof import prove, summary_lines
+    another run than the pointer names, or a report the tables no longer agree with.
+
+    Judged on a settled head, never a moving one (2026-09-17: the proof read the QQQ head a
+    tick had committed at 23:55 against a coverage report written at 23:31). It waits for every
+    universe to settle, then proves inside ONE repeatable-read snapshot, so a commit that lands
+    mid-proof cannot put a new head beside an old report. A universe still settling when the
+    wait runs out is IN-PROGRESS: named, and not a failure."""
+    from data_engine.quality.surface_proof import prove, summary_lines, verdict_counts
 
     with verdict(
         REPORT_SURFACE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
+        _await_settled(context)
         with psycopg.connect(settings.database_url) as connection:
-            surfaces = prove(connection, executed_at=datetime.now(UTC))
+            connection.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+            connection.read_only = True
+            now = datetime.now(UTC)
+            pending = settling(connection, context.instance, now=now)
+            surfaces = prove(connection, executed_at=now, settling=pending)
         for line in summary_lines(surfaces):
             context.log.info(line)
-        failed = [surface for surface in surfaces if not surface.ok]
-        context.add_output_metadata({"surfaces": len(surfaces), "mismatched": len(failed)})
-        outcome.summary = f"{len(surfaces) - len(failed)}/{len(surfaces)} surfaces serve the governed head" + (
-            f"; mismatched: {', '.join(surface.surface for surface in failed)}" if failed else ""
+        failed = [surface for surface in surfaces if surface.mismatched]
+        settling_surfaces = [surface for surface in surfaces if surface.state == "IN-PROGRESS"]
+        context.add_output_metadata(
+            {"surfaces": len(surfaces), "mismatched": len(failed), "in_progress": len(settling_surfaces)}
+        )
+        outcome.summary = (
+            verdict_counts(surfaces).split(";", 1)[0]
+            + (
+                f"; in progress: {', '.join(surface.surface for surface in settling_surfaces)}"
+                if settling_surfaces
+                else ""
+            )
+            + (f"; mismatched: {', '.join(surface.surface for surface in failed)}" if failed else "")
         )
         if failed:
             raise dg.Failure(
