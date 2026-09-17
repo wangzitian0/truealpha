@@ -1,9 +1,9 @@
 # Metric forest
 
-Design for #528, following the owner decision of 2026-09-17. Status: proposed. Step B (the
-registry and GPPE v0.2.0 as its first tree) is implemented in `libs/factors/src/factors/forest/`
-by #909 (§11).
-`init.md` stays the authority. This document describes how rule 17 and §7 module 2 are
+Design for #528, following the owner decision of 2026-09-17. Status: proposed. Nothing in
+this document is merged yet. Step B (the registry, with GPPE v0.2.0 as its first tree) is
+proposed in #909 (§11), which adds `libs/factors/src/factors/forest/`. Where a section says what
+step B does, it describes #909, not `main`. `init.md` stays the authority. This document describes how rule 17 and §7 module 2 are
 implemented without a hardcoded formula.
 
 ## 0. The decisions this implements
@@ -33,7 +33,7 @@ implemented without a hardcoded formula.
     loop fills it.
   - Nothing says how metrics compose, so every new formula is new code.
 - **The two sign checks contradict the definition.**
-  - `tools/output_invariants.py` had `gppe-not-negative`, which claims that no negative GPPE
+  - `tools/output_invariants.py` has `gppe-not-negative`, which claims that no negative GPPE
     can be true.
   - `plausibility_policy.sign_per_branch` claims a financial or insurance operating metric
     cannot be negative.
@@ -246,8 +246,8 @@ same situation headcount was in.
 | `localcontext(prec=34, ROUND_HALF_EVEN)` | `tree.decimal_precision = 34`, `rounding = ROUND_HALF_EVEN` |
 | the required inputs per branch, and their `missing_*` reasons | `required_inputs(tree, class)`: each input names its `topt_snapshot_field` alias, and the reason is `missing_<field>` |
 
-`compute_topt_gppe` now evaluates the tree. Three tests in
-`libs/factors/tests/forest/test_gppe_tree.py` show that nothing moved:
+In #909, `compute_topt_gppe` evaluates the tree. Three tests, added by #909 in
+`libs/factors/tests/forest/test_gppe_tree.py`, show that nothing moves:
 
 1. The tree equals the former kernel, kept verbatim in the test. The comparison uses the
    value and the string representation (exponent included), over a grid that crosses each
@@ -265,8 +265,8 @@ same situation headcount was in.
 3. The tree's identity is frozen under `production-topt-v0.2.0`, and the tree's version is
    bound to `GppeV0Definition.factor_version`.
 
-`tools/mutations.json` re-proves check 2 weekly by binding a bank's numerator to
-`total_assets`.
+#909 also adds a `tools/mutations.json` entry, `forest/gppe-tree-reproduces-v020`. It re-proves
+check 2 weekly by binding a bank's numerator to `total_assets`.
 
 Out of scope for step B: `factors.base.gross_profit_per_employee` evaluates in the ambient
 decimal context (precision 28), not 34. Moving it onto the tree is a numeric change for the
@@ -296,26 +296,30 @@ strategy path, so it is its own versioned step (H).
 | `may-be-negative` | arithmetic, meaning nothing by itself | holds silently | accepts |
 | no policy for the row's class | any value is unvouched | fails | refuses |
 
-Both checks are generated from the forest. `factors.forest.PUBLISHED_COLUMNS` ties each
+In #909, both checks are generated from the forest. `factors.forest.PUBLISHED_COLUMNS` ties each
 published mart column to its node, and there is no second list of what a negative number
 means. The suite also asserts two things the tree implies:
 
 - **Sign propagation:** for `gppe ← ratio(capital_adjusted_gross_profit, employees_total)`
-  with a non-negative denominator, the two published signs agree.
+  with a non-negative denominator, the two published signs agree. A published output whose
+  numerator is NULL also fails.
 - **One node, one value:** `operating_efficiency` and `gppe` carry the same node, so they
-  must be equal.
+  must be equal (`is distinct from`, so a NULL on one side fails too).
 
 Under v0.2.0 the nodes declare #59's reading: `gppe` and `capital_adjusted_gross_profit` are
 `sign-is-signal` for every class. JPM's −514,726 is therefore neither refused nor exempted:
-it is printed by name on every tick and every nightly run. The exemption file no longer names
-#528.
+it is printed by name on every tick and every nightly run. #909 therefore removes the #528
+entry from `tools/output_invariant_exemptions.json`, which today still defers
+`gppe-not-negative` until 2026-09-23.
 
-Red-proofs, all against a real materialized governed head
+Red-proofs that #909 adds, all against a real materialized governed head
 (`apps/data-engine/tests/production_topt/test_node_sign_invariant.py`):
 
 - the same JPM row fails under a forest whose GPPE node forbids a negative financial value;
-- a sign flip between `gppe` and `capital_adjusted_gross_profit` fails;
-- `operating_efficiency` ≠ `gppe` fails.
+- a sign flip between `gppe` and `capital_adjusted_gross_profit` fails, and so does a published
+  `gppe` whose numerator is NULL;
+- `operating_efficiency` ≠ `gppe` fails, including a NULL beside a value. The 0030 values
+  check is NOT VALID, so grandfathered rows can carry that shape.
 
 When step E lands, each component carries its own policy. `node-sign-policy` asserts it with
 no code change, because the columns are added to `PUBLISHED_COLUMNS` (and later generated,
@@ -415,7 +419,7 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 | step | scope | acceptance (standing) |
 |---|---|---|
 | **A** | This document | review |
-| **B** | #909. `factors.forest` types and evaluator; GPPE v0.2.0 registered, and `compute_topt_gppe` evaluates it; `node-sign-policy` in the suite and in plausibility policy v2; the `gppe-not-negative` exemption removed; 2 mutation entries | golden result ids and frozen tree identity (`test_gppe_tree.py`); DB red-proofs (`test_node_sign_invariant.py`); `mutations.json` |
+| **B** | Proposed in #909: `factors.forest` types and evaluator; GPPE v0.2.0 registered, and `compute_topt_gppe` switched to evaluate it; `node-sign-policy` in the suite and in plausibility policy v2; the `gppe-not-negative` exemption removed; 2 mutation entries | golden result ids and frozen tree identity (`test_gppe_tree.py`); DB red-proofs (`test_node_sign_invariant.py`); `mutations.json` |
 | C | Inputs of the decomposition: `financial_assets` and `financial_returns` (with basis) as `METRICS` entries and `MetricStandard`s. The SEC adapter captures them with vintage and basis. Confidence families. No factor change. | a planner and adapter test on fixtures, and a coverage row per standard (#733) |
 | D | `mart.metric_node_values` (one migration) and its writer from `evaluate()` for every registered tree; the three status dimensions per cell; the pivot reader and `FOREST.columns()`; `PUBLISHED_COLUMNS` generated; input keys and coverage from the forest | a synthetic node adds no migration (`check_factor_contract.py`); the pivot equals the fixed columns on the governed head |
 | E | Tree `labor_efficiency.operating_financial @ v1`: the operating and financial components for every issuer, with class bindings reviewed under #71 and a new `gppe-definition` id carrying the tree sha; golden decisions re-baselined once | #528 criteria (1)–(4): four issuer classes; both components on the row; a pre-change cutoff replays byte-identically under v0.2.0; per-component sign policy red-proven |
