@@ -205,3 +205,27 @@ def test_published_columns_name_registered_nodes() -> None:
     for table, columns in PUBLISHED_COLUMNS.items():
         for column in columns:
             assert published_node(table, column).kind is NodeKind.DERIVED
+
+
+def test_must_be_non_negative_is_reserved_for_physical_quantities() -> None:
+    """The datahub/factor boundary (#528 D1, 2026-09-17): the datahub refuses only what cannot
+    exist or cannot be computed. A node may forbid a negative value only if its quantity is
+    physically non-negative (and says why in `PHYSICALLY_NON_NEGATIVE`); profits, income, value
+    added and efficiencies may be negative, and their distortions belong to the factor layer."""
+    from factors.forest.model import SignPolicy
+    from factors.forest.registry import PHYSICALLY_NON_NEGATIVE
+
+    forbidding = {
+        node.key
+        for node in FOREST.nodes
+        if any(policy is SignPolicy.MUST_BE_NON_NEGATIVE for policy in node.sign_policy.values())
+    }
+    unexplained = sorted(forbidding - set(PHYSICALLY_NON_NEGATIVE))
+    assert not unexplained, (
+        f"{unexplained} forbid a negative value but are not physically non-negative quantities; "
+        "an economic quantity is `may-be-negative` or `sign-is-signal`, and a distortion is the "
+        "factor layer's edge or policy, not a datahub refusal"
+    )
+    stale = sorted(set(PHYSICALLY_NON_NEGATIVE) - {node.key for node in FOREST.nodes})
+    assert not stale, f"{stale} are listed as physically non-negative but are not forest nodes"
+    assert all(reason.strip() for reason in PHYSICALLY_NON_NEGATIVE.values())

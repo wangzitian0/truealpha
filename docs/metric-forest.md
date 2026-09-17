@@ -331,6 +331,33 @@ When step E lands, each component carries its own policy. `node-sign-policy` ass
 no code change, because the columns are added to `PUBLISHED_COLUMNS` (and later generated,
 §7).
 
+### 6.1 The datahub/factor boundary (owner decision 2026-09-17, #528 D1)
+
+**The datahub records facts as they are.** GPPE may be negative; so may gross profit, net income,
+MVA, or any efficiency. A negative economic number is data, and the datahub never rewrites,
+clips, winsorizes, sign-flips or refuses it.
+
+A datahub value is refused (or published unavailable, with a reason code) only when it **cannot
+exist or cannot be computed**:
+
+| case | example | datahub outcome |
+|---|---|---|
+| undefined arithmetic | a zero or missing denominator (`employees_total = 0`), a non-finite number | unavailable, reason named |
+| a physically non-negative quantity carries a negative number | total assets < 0, a negative headcount | refused — a parse, sign or unit defect in the capture |
+| no comparable input | a period, unit or currency that cannot be aligned; look-ahead | unavailable / not compared |
+
+**Distorted or special-case data is the factor layer's job**: a financial issuer's balance sheet
+under a uniform capital charge (JPM's negative GPPE), one-offs, currency effects, outliers,
+winsorization and class-specific adjustments are expressed as declared, versioned edges
+(parameters, per-class bindings) and node policies in this forest — never as a change to the
+captured fact, which stays available for every other consumer.
+
+In the registry this is `factors.forest.registry.PHYSICALLY_NON_NEGATIVE`: `must-be-non-negative`
+is reserved for the quantities listed there, each with the reason it cannot be negative, and
+`test_must_be_non_negative_is_reserved_for_physical_quantities` fails when any other node forbids
+a negative value. Every new node (MVA, SBC, labor cost, marketing cost, …) is therefore
+`may-be-negative` or `sign-is-signal` unless it is a physical quantity.
+
 ## 7. The wide row, generated from the registry
 
 **Cell identity.** A cell is `(run, issuer, node_id, period)`.
@@ -437,18 +464,25 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 **What must happen before 2026-09-23 for the exemption:**
 
 1. Step B is reviewed and merged.
-2. The owner confirms D1 below.
+2. The owner confirms D1 below (done 2026-09-17, §12).
 3. A data-engine release containing B reaches staging and production by 2026-09-23 UTC. The
    image carries `tools/output_invariant_exemptions.json` and the gate code. The exemption is
    valid through 2026-09-23 and lapses on 2026-09-24.
 
 Step B needs no migration.
 
-## 12. Open owner decisions
+## 12. Owner decisions
+
+### Decided
+
+| id | decision | decided |
+|---|---|---|
+| D1 | GPPE may be negative: v0.2.0's sign policy is `sign-is-signal` for every class (#59's frozen reading), declared and printed rather than exempted. The datahub records the fact; the datahub/factor boundary is §6.1. | 2026-09-17 (#528) |
+
+### Open
 
 | id | decision | needed by |
 |---|---|---|
-| D1 | GPPE v0.2.0's sign policy is `sign-is-signal` for every class (#59's frozen reading), declared and printed rather than exempted. The alternative, `must-be-non-negative` for banks, refuses every TOPT tick until step E ships. | step B, before 2026-09-23 |
 | D2 | A bank's `operating_capital` binding in step E: total assets − securities portfolio; equity-based; or no operating charge for banks at all | step E |
 | D3 | Invested capital for MVA: equity + debt − cash, or total assets − non-interest-bearing current liabilities; and whether market value is taken at the cutoff or at fiscal year end | step G |
 | D4 | Labor cost composition (#59 item 2: salaries + SBC). Which concepts to use, and whether the loop extracts salaries where `LaborAndRelatedExpense` is absent (2/9 samples) | step G |
