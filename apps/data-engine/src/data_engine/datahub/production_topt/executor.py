@@ -13,6 +13,11 @@ its port then also implements `FailoverFetchPort`. The executor asks for a failo
 once the primary is exhausted — every RETRY spent, or a TRACE_ONLY answer — never on a
 STOP. A served failover resolves the obligation SUCCESS while its attempts keep the
 primary's failure reasons, so the ledger never forgets why the primary did not serve.
+
+A primary can also answer with something a further origin may serve better: a bar from a
+session older than the one the cell asks for (#862, the 2026-09-15 KHC close). Its success
+then names that shortfall (`FetchSuccess.failover_reason`); the executor asks `failover`
+with it, and the primary's own success stands when no origin can serve.
 Which origins exist, in which order, and what counts as the same datum stay the source's
 business; this loop only knows that one was asked.
 """
@@ -146,6 +151,11 @@ class FetchSuccess:
     # cell the primary could not (#862). The record is that origin's own assertion — its
     # parser identity, its bytes — and its payload names the origin under the same key.
     served_by_failover: str | None = None
+    # Set only by a `FailoverFetchPort`'s `fetch`: the primary served, but short of what
+    # the cell asks for — a bar from an older session than the settled one (#862). The
+    # executor then asks `failover` with this reason; this success stands if no origin
+    # can serve, and is replaced (the attempt keeping this reason) if one can.
+    failover_reason: ObligationReasonCode | None = None
 
     @property
     def raw_sha256(self) -> str:
@@ -164,6 +174,12 @@ class FetchSuccess:
                 # The payload is what the snapshot binds and every report reads; a
                 # substitution it does not declare is a silent one.
                 raise ValueError("a failover success must declare its serving origin in its payload")
+        if self.failover_reason is not None:
+            if self.served_by_failover is not None:
+                raise ValueError("a failover success cannot itself ask for a failover")
+            if disposition_for(self.failover_reason) is ObligationDisposition.STOP:
+                # A STOP is a broken run, never a gap another origin may fill.
+                raise ValueError(f"{self.failover_reason.value} is a STOP reason, not a failover reason")
 
 
 @dataclass(frozen=True)
@@ -321,6 +337,14 @@ class ToptCaptureExecutor:
             if isinstance(result, FetchSuccess):
                 if result.served_by_failover is not None:
                     raise ValueError(f"{item.work_item_id}: a failover success must come from `failover`, not `fetch`")
+                if result.failover_reason is not None:
+                    # The primary served short (#862): a further origin may serve the cell
+                    # instead, and the attempt then keeps the primary's shortfall.
+                    served = self._failover(item, fetch, result.failover_reason)
+                    if served is not None:
+                        reasons.append(result.failover_reason)
+                        self._write_success(item, served, run_ref, recorded_at)
+                        return self._terminal(item, reasons, ObligationTerminalState.SUCCESS, served), False
                 reasons.append(None)
                 self._write_success(item, result, run_ref, recorded_at)
                 return self._terminal(item, reasons, ObligationTerminalState.SUCCESS, result), False
