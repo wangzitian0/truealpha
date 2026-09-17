@@ -29,6 +29,8 @@ class _Conn:
 
     def execute(self, sql, params=()):
         text = " ".join(sql.split())
+        if text.startswith("select pg_advisory_xact_lock("):
+            return _R([(None,)])
         if text.startswith("select invocation_id, decision"):
             return _R([])
         if text.startswith("insert into staging.model_invocations"):

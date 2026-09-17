@@ -25,6 +25,8 @@ class _Conn:
 
     def execute(self, sql, params=()):
         text = " ".join(sql.split())
+        if text.startswith("select pg_advisory_xact_lock("):
+            return _R([(None,)])
         if text.startswith("select invocation_id, decision"):
             assert "status_code < 400" in text and "request_sha256 = %s" in text
             return _R([self.replay_row] if self.replay_row else [])
@@ -175,6 +177,7 @@ def test_a_prior_invocation_is_replayed_without_calling_the_provider(seated):
         "c" * 64,
         "zhipu-glm-coding-plan",
         "glm-served-earlier",
+        "glm-test",
     )
     conn = _Conn(replay_row=row)
 

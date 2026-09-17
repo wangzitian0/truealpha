@@ -42,6 +42,8 @@ class _Conn:
 
     def execute(self, sql, params=()):
         text = " ".join(sql.split())
+        if text.startswith("select pg_advisory_xact_lock("):
+            return _R([(None,)])
         if text.startswith("select invocation_id, decision"):
             return _R([self.replay_row] if self.replay_row else [])
         if text.startswith("insert into staging.model_invocations"):
@@ -265,6 +267,7 @@ def test_an_identical_prior_ask_is_replayed_instead_of_re_asked(seated) -> None:
         "req-sha",
         "zai",
         "glm-served",
+        "glm-test",
     )
 
     def transport(url, headers, body):  # noqa: ARG001
