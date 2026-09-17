@@ -464,21 +464,25 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 **What must happen before 2026-09-23 for the exemption:**
 
 1. Step B is reviewed and merged.
-2. The owner confirms D1 below.
+2. The owner confirms D1 below (done 2026-09-17, §12).
 3. A data-engine release containing B reaches staging and production by 2026-09-23 UTC. The
    image carries `tools/output_invariant_exemptions.json` and the gate code. The exemption is
    valid through 2026-09-23 and lapses on 2026-09-24.
 
 Step B needs no migration.
 
-## 12. Open owner decisions
+## 12. Owner decisions
 
-- **D1 — decided 2026-09-17:** GPPE may be negative; v0.2.0 is `sign-is-signal` for every class, and the datahub/factor boundary is §6.1.
+### Decided
 
+| id | decision | decided |
+|---|---|---|
+| D1 | GPPE may be negative: v0.2.0's sign policy is `sign-is-signal` for every class (#59's frozen reading), declared and printed rather than exempted. The datahub records the fact; the datahub/factor boundary is §6.1. | 2026-09-17 (#528) |
+
+### Open
 
 | id | decision | needed by |
 |---|---|---|
-| D1 | GPPE v0.2.0's sign policy is `sign-is-signal` for every class (#59's frozen reading), declared and printed rather than exempted. The alternative, `must-be-non-negative` for banks, refuses every TOPT tick until step E ships. | step B, before 2026-09-23 |
 | D2 | A bank's `operating_capital` binding in step E: total assets − securities portfolio; equity-based; or no operating charge for banks at all | step E |
 | D3 | Invested capital for MVA: equity + debt − cash, or total assets − non-interest-bearing current liabilities; and whether market value is taken at the cutoff or at fiscal year end | step G |
 | D4 | Labor cost composition (#59 item 2: salaries + SBC). Which concepts to use, and whether the loop extracts salaries where `LaborAndRelatedExpense` is absent (2/9 samples) | step G |
