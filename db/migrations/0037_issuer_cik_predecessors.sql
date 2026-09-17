@@ -24,10 +24,22 @@ begin
 end;
 $$;
 
-drop trigger if exists reject_mutation on staging.issuer_cik_predecessors;
-create trigger reject_mutation
-before update or delete on staging.issuer_cik_predecessors
-for each row execute function staging.reject_cik_predecessor_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.issuer_cik_predecessors'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_cik_predecessors FOR EACH ROW EXECUTE FUNCTION staging.reject_cik_predecessor_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.issuer_cik_predecessors;
+        create trigger reject_mutation
+        before update or delete on staging.issuer_cik_predecessors
+        for each row execute function staging.reject_cik_predecessor_mutation();
+    end if;
+end
+$$;
 
 -- Seed: ExxonMobil. SEC's ticker index repointed XOM to the post-reorganization
 -- holdco CIK 2115436 (zero us-gaap concepts, formerNames []); consolidated

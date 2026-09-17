@@ -17,8 +17,14 @@ create table if not exists raw.fetches (
     check (recorded_at >= fetched_at)
 );
 
-create index if not exists idx_raw_fetches_source_time
-    on raw.fetches (source, source_record_id, fetched_at desc);
+do $$
+begin
+    if to_regclass('raw.idx_raw_fetches_source_time') is null then
+        create index if not exists idx_raw_fetches_source_time
+            on raw.fetches (source, source_record_id, fetched_at desc);
+    end if;
+end
+$$;
 
 create or replace function raw.reject_mutation()
 returns trigger language plpgsql as $$
@@ -27,10 +33,22 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_raw_fetches_append_only on raw.fetches;
-create trigger trg_raw_fetches_append_only
-before update or delete on raw.fetches
-for each row execute function raw.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.fetches'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_raw_fetches_append_only BEFORE DELETE OR UPDATE ON raw.fetches FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation()'
+    ) then
+        drop trigger if exists trg_raw_fetches_append_only on raw.fetches;
+        create trigger trg_raw_fetches_append_only
+        before update or delete on raw.fetches
+        for each row execute function raw.reject_mutation();
+    end if;
+end
+$$;
 
 -- A source identifier locates a source-specific KG entity node. Resolution
 -- then traverses a point-in-time same_as edge to the unified entity; this is a
@@ -50,8 +68,14 @@ create table if not exists staging.kg_identifiers (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_kg_identifiers_asof
-    on staging.kg_identifiers (source, identifier_type, identifier_value, transaction_time desc);
+do $$
+begin
+    if to_regclass('staging.idx_kg_identifiers_asof') is null then
+        create index if not exists idx_kg_identifiers_asof
+            on staging.kg_identifiers (source, identifier_type, identifier_value, transaction_time desc);
+    end if;
+end
+$$;
 
 create table if not exists staging.market_prices (
     id                  bigint generated always as identity primary key,
@@ -74,8 +98,14 @@ create table if not exists staging.market_prices (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_market_prices_asof
-    on staging.market_prices (unified_id, trading_date, transaction_time desc);
+do $$
+begin
+    if to_regclass('staging.idx_market_prices_asof') is null then
+        create index if not exists idx_market_prices_asof
+            on staging.market_prices (unified_id, trading_date, transaction_time desc);
+    end if;
+end
+$$;
 
 create table if not exists staging.analyst_rating_events (
     id                  bigint generated always as identity primary key,
@@ -96,8 +126,14 @@ create table if not exists staging.analyst_rating_events (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_analyst_rating_events_asof
-    on staging.analyst_rating_events (company_id, transaction_time desc, recommendation_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_analyst_rating_events_asof') is null then
+        create index if not exists idx_analyst_rating_events_asof
+            on staging.analyst_rating_events (company_id, transaction_time desc, recommendation_at desc);
+    end if;
+end
+$$;
 
 create table if not exists staging.fund_holding_facts (
     id                      bigint generated always as identity primary key,
@@ -119,40 +155,106 @@ create table if not exists staging.fund_holding_facts (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_fund_holding_facts_asof
-    on staging.fund_holding_facts (fund_id, report_period, transaction_time desc);
+do $$
+begin
+    if to_regclass('staging.idx_fund_holding_facts_asof') is null then
+        create index if not exists idx_fund_holding_facts_asof
+            on staging.fund_holding_facts (fund_id, report_period, transaction_time desc);
+    end if;
+end
+$$;
 
-create unique index if not exists uq_financial_facts_vintage
-    on staging.financial_facts (
-        unified_id,
-        metric,
-        fiscal_period,
-        transaction_time,
-        source,
-        coalesce(raw_ref, '')
-    );
+do $$
+begin
+    if to_regclass('staging.uq_financial_facts_vintage') is null then
+        create unique index if not exists uq_financial_facts_vintage
+            on staging.financial_facts (
+                unified_id,
+                metric,
+                fiscal_period,
+                transaction_time,
+                source,
+                coalesce(raw_ref, '')
+            );
+    end if;
+end
+$$;
 
-create unique index if not exists uq_kg_edges_vintage
-    on staging.kg_edges (
-        from_id,
-        to_id,
-        relation_type,
-        transaction_time,
-        source,
-        coalesce(raw_ref, '')
-    );
+do $$
+begin
+    if to_regclass('staging.uq_kg_edges_vintage') is null then
+        create unique index if not exists uq_kg_edges_vintage
+            on staging.kg_edges (
+                from_id,
+                to_id,
+                relation_type,
+                transaction_time,
+                source,
+                coalesce(raw_ref, '')
+            );
+    end if;
+end
+$$;
 
 -- Source facts must name when they became knowable. Ingestion time remains a
 -- separate audit field and must never stand in for transaction time.
-alter table staging.financial_facts
-    alter column transaction_time drop default;
-alter table staging.financial_facts
-    add column if not exists recorded_at timestamptz not null default now();
+do $$
+begin
+    if exists (
+        select 1
+        from pg_attrdef as default_row
+        join pg_attribute as column_row
+          on column_row.attrelid = default_row.adrelid
+         and column_row.attnum = default_row.adnum
+        where default_row.adrelid = 'staging.financial_facts'::regclass
+          and column_row.attname = 'transaction_time'
+    ) then
+        alter table staging.financial_facts
+            alter column transaction_time drop default;
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.financial_facts'::regclass
+          and attname = 'recorded_at' and not attisdropped
+    ) then
+        alter table staging.financial_facts
+            add column if not exists recorded_at timestamptz not null default now();
+    end if;
+end
+$$;
 
-alter table staging.kg_edges
-    alter column transaction_time drop default;
-alter table staging.kg_edges
-    add column if not exists recorded_at timestamptz not null default now();
+do $$
+begin
+    if exists (
+        select 1
+        from pg_attrdef as default_row
+        join pg_attribute as column_row
+          on column_row.attrelid = default_row.adrelid
+         and column_row.attnum = default_row.adnum
+        where default_row.adrelid = 'staging.kg_edges'::regclass
+          and column_row.attname = 'transaction_time'
+    ) then
+        alter table staging.kg_edges
+            alter column transaction_time drop default;
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.kg_edges'::regclass
+          and attname = 'recorded_at' and not attisdropped
+    ) then
+        alter table staging.kg_edges
+            add column if not exists recorded_at timestamptz not null default now();
+    end if;
+end
+$$;
 
 create or replace function staging.reject_point_in_time_mutation()
 returns trigger language plpgsql as $$
@@ -161,26 +263,98 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_financial_facts_append_only on staging.financial_facts;
-create trigger trg_financial_facts_append_only before update or delete on staging.financial_facts
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.financial_facts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_financial_facts_append_only BEFORE DELETE OR UPDATE ON staging.financial_facts FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_financial_facts_append_only on staging.financial_facts;
+        create trigger trg_financial_facts_append_only before update or delete on staging.financial_facts
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_kg_edges_append_only on staging.kg_edges;
-create trigger trg_kg_edges_append_only before update or delete on staging.kg_edges
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.kg_edges'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_kg_edges_append_only BEFORE DELETE OR UPDATE ON staging.kg_edges FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_kg_edges_append_only on staging.kg_edges;
+        create trigger trg_kg_edges_append_only before update or delete on staging.kg_edges
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_kg_identifiers_append_only on staging.kg_identifiers;
-create trigger trg_kg_identifiers_append_only before update or delete on staging.kg_identifiers
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.kg_identifiers'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_kg_identifiers_append_only BEFORE DELETE OR UPDATE ON staging.kg_identifiers FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_kg_identifiers_append_only on staging.kg_identifiers;
+        create trigger trg_kg_identifiers_append_only before update or delete on staging.kg_identifiers
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_market_prices_append_only on staging.market_prices;
-create trigger trg_market_prices_append_only before update or delete on staging.market_prices
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.market_prices'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_market_prices_append_only BEFORE DELETE OR UPDATE ON staging.market_prices FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_market_prices_append_only on staging.market_prices;
+        create trigger trg_market_prices_append_only before update or delete on staging.market_prices
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_analyst_rating_events_append_only on staging.analyst_rating_events;
-create trigger trg_analyst_rating_events_append_only before update or delete on staging.analyst_rating_events
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.analyst_rating_events'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_analyst_rating_events_append_only BEFORE DELETE OR UPDATE ON staging.analyst_rating_events FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_analyst_rating_events_append_only on staging.analyst_rating_events;
+        create trigger trg_analyst_rating_events_append_only before update or delete on staging.analyst_rating_events
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_fund_holding_facts_append_only on staging.fund_holding_facts;
-create trigger trg_fund_holding_facts_append_only before update or delete on staging.fund_holding_facts
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.fund_holding_facts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_fund_holding_facts_append_only BEFORE DELETE OR UPDATE ON staging.fund_holding_facts FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_fund_holding_facts_append_only on staging.fund_holding_facts;
+        create trigger trg_fund_holding_facts_append_only before update or delete on staging.fund_holding_facts
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;

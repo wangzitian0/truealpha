@@ -26,5 +26,11 @@ create table if not exists staging.strategy_backtest_inputs (
     unique (issuer_id, cutoff_at, input_key, recorded_at)
 );
 
-create index if not exists idx_strategy_backtest_inputs_asof
-    on staging.strategy_backtest_inputs (cutoff_at, issuer_id, input_key, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_strategy_backtest_inputs_asof') is null then
+        create index if not exists idx_strategy_backtest_inputs_asof
+            on staging.strategy_backtest_inputs (cutoff_at, issuer_id, input_key, recorded_at desc);
+    end if;
+end
+$$;

@@ -14,8 +14,31 @@ create table if not exists staging.contract_objects (
     check (jsonb_typeof(payload) = 'object')
 );
 
-alter table staging.contract_objects
-    alter column recorded_at set default clock_timestamp();
+-- Boot-lock guards (2026-09-17 incident): `db/apply_migrations.sh` replays this file on
+-- every llm-service boot, and every statement below used to take its lock whether or not
+-- there was anything to change. `alter column ... set default` is ACCESS EXCLUSIVE,
+-- `create index if not exists` takes SHARE on the table BEFORE it looks for the name, and
+-- `drop trigger` + `create trigger` is SHARE ROW EXCLUSIVE. A production backfill holding
+-- ROW EXCLUSIVE on this table kept the v0.0.81 boot waiting 108 s here; the rollout failed
+-- and the API was down until the backfill committed. Each statement now runs only when the
+-- catalog says the object is not already in the state it declares, so a replay is a read.
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_attrdef as default_row
+        join pg_attribute as column_row
+          on column_row.attrelid = default_row.adrelid
+         and column_row.attnum = default_row.adnum
+        where default_row.adrelid = 'staging.contract_objects'::regclass
+          and column_row.attname = 'recorded_at'
+          and pg_get_expr(default_row.adbin, default_row.adrelid) = 'clock_timestamp()'
+    ) then
+        alter table staging.contract_objects
+            alter column recorded_at set default clock_timestamp();
+    end if;
+end
+$$;
 
 -- The migration may already have run locally while Gate 0 is being expanded.
 -- Replace any earlier anonymous kind check instead of leaving stale tiers unable
@@ -89,10 +112,33 @@ begin
 end;
 $$;
 
-create index if not exists idx_contract_objects_kind_recorded
-    on staging.contract_objects (contract_kind, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_contract_objects_kind_recorded') is null then
+        create index if not exists idx_contract_objects_kind_recorded
+            on staging.contract_objects (contract_kind, recorded_at desc);
+    end if;
+end
+$$;
 
-drop trigger if exists trg_contract_objects_append_only on staging.contract_objects;
-create trigger trg_contract_objects_append_only
-before update or delete on staging.contract_objects
-for each row execute function raw.reject_mutation();
+-- The literal is `pg_get_triggerdef` of the statement below, so a replay that finds the
+-- trigger exactly as declared touches nothing; an edited definition still converges.
+-- Postgres prints the events in its own fixed order (INSERT, DELETE, UPDATE, TRUNCATE),
+-- whatever order the statement lists them in. A literal that drifts from the statement
+-- makes every replay take the lock, which test_migration_boot_locks.py fails on.
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.contract_objects'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_contract_objects_append_only BEFORE DELETE OR UPDATE ON staging.contract_objects FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation()'
+    ) then
+        drop trigger if exists trg_contract_objects_append_only on staging.contract_objects;
+        create trigger trg_contract_objects_append_only
+        before update or delete on staging.contract_objects
+        for each row execute function raw.reject_mutation();
+    end if;
+end
+$$;

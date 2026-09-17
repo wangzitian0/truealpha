@@ -12,20 +12,48 @@ create table if not exists app.research_documents (
     unique (document_id, tenant_id, owner_principal_id)
 );
 
-alter table app.research_documents enable row level security;
-alter table app.research_documents force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.research_documents'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.research_documents enable row level security;
+        alter table app.research_documents force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists research_documents_owner_isolation on app.research_documents;
-create policy research_documents_owner_isolation on app.research_documents
-    for all
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    )
-    with check (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.research_documents'::regclass
+          and polname = 'research_documents_owner_isolation'
+          and polcmd = '*'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+    ) then
+        drop policy if exists research_documents_owner_isolation on app.research_documents;
+        create policy research_documents_owner_isolation on app.research_documents
+            for all
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            )
+            with check (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
 -- Immutable per revision: a re-render (source/template change) always
 -- inserts a new revision_id rather than altering a prior one, so prior
@@ -67,28 +95,74 @@ create table if not exists app.research_document_revisions (
     -- dedup case it's supposed to allow.
 );
 
-create index if not exists idx_research_document_revisions_document
-    on app.research_document_revisions (document_id, created_at);
+do $$
+begin
+    if to_regclass('app.idx_research_document_revisions_document') is null then
+        create index if not exists idx_research_document_revisions_document
+            on app.research_document_revisions (document_id, created_at);
+    end if;
+end
+$$;
 
-alter table app.research_document_revisions enable row level security;
-alter table app.research_document_revisions force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.research_document_revisions'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.research_document_revisions enable row level security;
+        alter table app.research_document_revisions force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists research_document_revisions_owner_isolation on app.research_document_revisions;
-create policy research_document_revisions_owner_isolation on app.research_document_revisions
-    for all
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    )
-    with check (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.research_document_revisions'::regclass
+          and polname = 'research_document_revisions_owner_isolation'
+          and polcmd = '*'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+    ) then
+        drop policy if exists research_document_revisions_owner_isolation on app.research_document_revisions;
+        create policy research_document_revisions_owner_isolation on app.research_document_revisions
+            for all
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            )
+            with check (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
-drop trigger if exists trg_research_document_revisions_append_only on app.research_document_revisions;
-create trigger trg_research_document_revisions_append_only
-before update or delete on app.research_document_revisions
-for each row execute function app.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.research_document_revisions'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_research_document_revisions_append_only BEFORE DELETE OR UPDATE ON app.research_document_revisions FOR EACH ROW EXECUTE FUNCTION app.reject_mutation()'
+    ) then
+        drop trigger if exists trg_research_document_revisions_append_only on app.research_document_revisions;
+        create trigger trg_research_document_revisions_append_only
+        before update or delete on app.research_document_revisions
+        for each row execute function app.reject_mutation();
+    end if;
+end
+$$;
 
 -- Presence of a row is the soft-delete: get/list treat a tombstoned
 -- document identically to a nonexistent one (non-enumerating), same
@@ -105,25 +179,65 @@ create table if not exists app.research_document_tombstones (
     unique (document_id)
 );
 
-alter table app.research_document_tombstones enable row level security;
-alter table app.research_document_tombstones force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.research_document_tombstones'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.research_document_tombstones enable row level security;
+        alter table app.research_document_tombstones force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists research_document_tombstones_owner_isolation on app.research_document_tombstones;
-create policy research_document_tombstones_owner_isolation on app.research_document_tombstones
-    for all
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    )
-    with check (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.research_document_tombstones'::regclass
+          and polname = 'research_document_tombstones_owner_isolation'
+          and polcmd = '*'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+    ) then
+        drop policy if exists research_document_tombstones_owner_isolation on app.research_document_tombstones;
+        create policy research_document_tombstones_owner_isolation on app.research_document_tombstones
+            for all
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            )
+            with check (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
-drop trigger if exists trg_research_document_tombstones_append_only on app.research_document_tombstones;
-create trigger trg_research_document_tombstones_append_only
-before update or delete on app.research_document_tombstones
-for each row execute function app.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.research_document_tombstones'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_research_document_tombstones_append_only BEFORE DELETE OR UPDATE ON app.research_document_tombstones FOR EACH ROW EXECUTE FUNCTION app.reject_mutation()'
+    ) then
+        drop trigger if exists trg_research_document_tombstones_append_only on app.research_document_tombstones;
+        create trigger trg_research_document_tombstones_append_only
+        before update or delete on app.research_document_tombstones
+        for each row execute function app.reject_mutation();
+    end if;
+end
+$$;
 
 -- Short-lived, single-redemption download ticket — structurally identical
 -- to 0030's app.clarification_tokens (the closest existing analog): atomic
@@ -153,20 +267,48 @@ create table if not exists app.research_document_download_tickets (
         references app.research_document_revisions (revision_id, document_id, tenant_id, owner_principal_id)
 );
 
-alter table app.research_document_download_tickets enable row level security;
-alter table app.research_document_download_tickets force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.research_document_download_tickets'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.research_document_download_tickets enable row level security;
+        alter table app.research_document_download_tickets force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists research_document_download_tickets_owner_isolation on app.research_document_download_tickets;
-create policy research_document_download_tickets_owner_isolation on app.research_document_download_tickets
-    for all
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    )
-    with check (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.research_document_download_tickets'::regclass
+          and polname = 'research_document_download_tickets_owner_isolation'
+          and polcmd = '*'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+    ) then
+        drop policy if exists research_document_download_tickets_owner_isolation on app.research_document_download_tickets;
+        create policy research_document_download_tickets_owner_isolation on app.research_document_download_tickets
+            for all
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            )
+            with check (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
 create or replace function app.reject_document_ticket_field_tamper()
 returns trigger language plpgsql as $$
@@ -184,10 +326,22 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_research_document_download_tickets_guard_update on app.research_document_download_tickets;
-create trigger trg_research_document_download_tickets_guard_update
-before update on app.research_document_download_tickets
-for each row execute function app.reject_document_ticket_field_tamper();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.research_document_download_tickets'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_research_document_download_tickets_guard_update BEFORE UPDATE ON app.research_document_download_tickets FOR EACH ROW EXECUTE FUNCTION app.reject_document_ticket_field_tamper()'
+    ) then
+        drop trigger if exists trg_research_document_download_tickets_guard_update on app.research_document_download_tickets;
+        create trigger trg_research_document_download_tickets_guard_update
+        before update on app.research_document_download_tickets
+        for each row execute function app.reject_document_ticket_field_tamper();
+    end if;
+end
+$$;
 
 -- Administrator non-content audit projection: counts/timestamps and
 -- tombstone status only, never artifact bytes, source_artifact_id, or the
@@ -195,9 +349,9 @@ for each row execute function app.reject_document_ticket_field_tamper();
 -- the tenant-scoped administrator check (an administrator's own principals
 -- row must belong to the *requested* tenant, not merely exist somewhere —
 -- see #396 PR #406's second review round).
-create or replace view app.document_audit_metadata
-with (security_barrier = true)
-as
+do $$
+declare
+    wanted constant text := $view$
 select
     d.tenant_id,
     d.document_id,
@@ -217,7 +371,23 @@ where d.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
       and reader.tenant_id = d.tenant_id
       and reader.principal_kind = 'administrator'
 )
-group by d.tenant_id, d.document_id, d.owner_principal_id, d.created_at, t.document_id;
+group by d.tenant_id, d.document_id, d.owner_principal_id, d.created_at, t.document_id
+$view$;
+begin
+    -- Boot-lock guard: `create or replace view` is ACCESS EXCLUSIVE on the view and
+    -- queues every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('app.document_audit_metadata') is null
+       or pg_get_viewdef(to_regclass('app.document_audit_metadata'))
+          is distinct from pg_get_viewdef('pg_temp.boot_guard_candidate'::regclass)
+       or (select reloptions from pg_class where oid = to_regclass('app.document_audit_metadata'))
+          is distinct from '{security_barrier=true}'::text[]
+    then
+        execute 'create or replace view app.document_audit_metadata with (security_barrier = true) as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 -- Grants to app_runtime/app_audit_reader live in db/roles.sql, not here:
 -- migrations run before roles.sql creates those roles (see #396/0030).

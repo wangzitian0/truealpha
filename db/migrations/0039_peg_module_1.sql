@@ -18,33 +18,69 @@
 -- (#530). The adapter reduces the series where it already holds the whole payload, and
 -- the endpoints travel in the observation payload so the window stays auditable.
 
-alter table staging.strategy_backtest_inputs
-    drop constraint if exists strategy_backtest_inputs_input_key_check;
+-- Replay guard: 20260908T1027 drops this constraint for good, so re-adding it on every
+-- boot validated every row under ACCESS EXCLUSIVE only for 1027 to drop it again, and
+-- would abort the boot the day a registered key outside this list lands (#615's shape).
+-- The rebuild runs only while 0032's narrower check is still in place.
+do $$
+begin
+    if exists (
+        select 1 from pg_constraint
+        where conrelid = 'staging.strategy_backtest_inputs'::regclass
+          and conname = 'strategy_backtest_inputs_input_key_check'
+          and pg_get_constraintdef(oid) <> 'CHECK ((input_key = ANY (ARRAY[''gross_profit''::text, ''total_assets''::text, ''headcount''::text, ''revenue''::text, ''shares_outstanding''::text, ''last_close''::text, ''net_income''::text, ''earnings_cagr_3y''::text])))'
+    ) then
+        alter table staging.strategy_backtest_inputs
+            drop constraint if exists strategy_backtest_inputs_input_key_check;
 
-alter table staging.strategy_backtest_inputs
-    add constraint strategy_backtest_inputs_input_key_check
-    check (input_key = any (array[
-        'gross_profit',
-        'total_assets',
-        'headcount',
-        'revenue',
-        'shares_outstanding',
-        'last_close',
-        'net_income',
-        'earnings_cagr_3y'
-    ]));
+        alter table staging.strategy_backtest_inputs
+            add constraint strategy_backtest_inputs_input_key_check
+            check (input_key = any (array[
+                'gross_profit',
+                'total_assets',
+                'headcount',
+                'revenue',
+                'shares_outstanding',
+                'last_close',
+                'net_income',
+                'earnings_cagr_3y'
+            ]));
+    end if;
+end
+$$;
 
-alter table mart.strategy_decisions
-    add column if not exists peg numeric;
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.strategy_decisions'::regclass
+          and attname = 'peg' and not attisdropped
+    ) then
+        alter table mart.strategy_decisions
+            add column if not exists peg numeric;
+    end if;
+end
+$$;
 
 -- PEG is only interpretable for positive growth and positive earnings, and the factor
 -- returns None rather than a signed value in every degenerate case. A stored non-positive
 -- PEG would therefore mean the factor was bypassed, so the database refuses it.
-alter table mart.strategy_decisions
-    drop constraint if exists strategy_decisions_peg_positive;
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conrelid = 'mart.strategy_decisions'::regclass
+          and conname = 'strategy_decisions_peg_positive'
+          and pg_get_constraintdef(oid) = 'CHECK (((peg IS NULL) OR (peg > (0)::numeric)))'
+    ) then
+        alter table mart.strategy_decisions
+            drop constraint if exists strategy_decisions_peg_positive;
 
-alter table mart.strategy_decisions
-    add constraint strategy_decisions_peg_positive check (peg is null or peg > 0);
+        alter table mart.strategy_decisions
+            add constraint strategy_decisions_peg_positive check (peg is null or peg > 0);
+    end if;
+end
+$$;
 
 comment on column mart.strategy_decisions.peg is
     'Module 1 PEG (#284): market cap / net income, divided by the annual earnings growth '

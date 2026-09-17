@@ -106,10 +106,22 @@ create table if not exists staging.entity_kinds (
         or (not is_abstract and uuid_namespace = staging.entity_uuid_namespace('kind:' || kind)))
 );
 
-drop trigger if exists reject_mutation on staging.entity_kinds;
-create trigger reject_mutation
-before update or delete on staging.entity_kinds
-for each row execute function staging.reject_entity_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entity_kinds'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.entity_kinds FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.entity_kinds;
+        create trigger reject_mutation
+        before update or delete on staging.entity_kinds
+        for each row execute function staging.reject_entity_mutation();
+    end if;
+end
+$$;
 
 insert into staging.entity_kinds (kind, parent_kind, is_abstract, uuid_namespace, description)
 select kind, parent_kind, is_abstract,
@@ -176,10 +188,22 @@ create table if not exists staging.entity_alias_schemes (
     recorded_at      timestamptz not null default clock_timestamp()
 );
 
-drop trigger if exists reject_mutation on staging.entity_alias_schemes;
-create trigger reject_mutation
-before update or delete on staging.entity_alias_schemes
-for each row execute function staging.reject_entity_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entity_alias_schemes'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.entity_alias_schemes FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.entity_alias_schemes;
+        create trigger reject_mutation
+        before update or delete on staging.entity_alias_schemes
+        for each row execute function staging.reject_entity_mutation();
+    end if;
+end
+$$;
 
 insert into staging.entity_alias_schemes
     (scheme, applies_to_kind, is_unique, value_reusable, value_pattern, authority, description) values
@@ -239,10 +263,22 @@ create table if not exists staging.entities (
     constraint entity_id_is_uuidv5 check (substring(entity_id::text from 15 for 1) = '5')
 );
 
-drop trigger if exists reject_mutation on staging.entities;
-create trigger reject_mutation
-before update or delete on staging.entities
-for each row execute function staging.reject_entity_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entities'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.entities FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.entities;
+        create trigger reject_mutation
+        before update or delete on staging.entities
+        for each row execute function staging.reject_entity_mutation();
+    end if;
+end
+$$;
 
 -- The name an entity id is derived from.
 create or replace function staging.entity_birth_name(p_scheme text, p_value text, p_generation integer)
@@ -274,10 +310,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_entity on staging.entities;
-create trigger validate_entity
-before insert on staging.entities
-for each row execute function staging.validate_entity();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entities'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_entity BEFORE INSERT ON staging.entities FOR EACH ROW EXECUTE FUNCTION staging.validate_entity()'
+    ) then
+        drop trigger if exists validate_entity on staging.entities;
+        create trigger validate_entity
+        before insert on staging.entities
+        for each row execute function staging.validate_entity();
+    end if;
+end
+$$;
 
 -- ---------------------------------------------------------------------------------------
 -- Aliases
@@ -307,13 +355,37 @@ create table if not exists staging.entity_aliases (
     constraint entity_alias_vintage unique (scheme, value, entity_id, valid_from, transaction_time, method, source)
 );
 
-create index if not exists idx_entity_aliases_lookup on staging.entity_aliases (scheme, value);
-create index if not exists idx_entity_aliases_entity on staging.entity_aliases (entity_id);
+do $$
+begin
+    if to_regclass('staging.idx_entity_aliases_lookup') is null then
+        create index if not exists idx_entity_aliases_lookup on staging.entity_aliases (scheme, value);
+    end if;
+end
+$$;
+do $$
+begin
+    if to_regclass('staging.idx_entity_aliases_entity') is null then
+        create index if not exists idx_entity_aliases_entity on staging.entity_aliases (entity_id);
+    end if;
+end
+$$;
 
-drop trigger if exists reject_mutation on staging.entity_aliases;
-create trigger reject_mutation
-before update or delete on staging.entity_aliases
-for each row execute function staging.reject_entity_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entity_aliases'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.entity_aliases FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.entity_aliases;
+        create trigger reject_mutation
+        before update or delete on staging.entity_aliases
+        for each row execute function staging.reject_entity_mutation();
+    end if;
+end
+$$;
 
 -- ---------------------------------------------------------------------------------------
 -- Relations
@@ -336,10 +408,22 @@ create table if not exists staging.entity_relation_types (
         check (uuid_namespace = staging.entity_uuid_namespace('relation:' || relation_type))
 );
 
-drop trigger if exists reject_mutation on staging.entity_relation_types;
-create trigger reject_mutation
-before update or delete on staging.entity_relation_types
-for each row execute function staging.reject_entity_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entity_relation_types'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.entity_relation_types FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.entity_relation_types;
+        create trigger reject_mutation
+        before update or delete on staging.entity_relation_types
+        for each row execute function staging.reject_entity_mutation();
+    end if;
+end
+$$;
 
 insert into staging.entity_relation_types
     (relation_type, domain_kind, range_kind, same_kind, is_identity, inverse_name, description, uuid_namespace)
@@ -396,13 +480,37 @@ create table if not exists staging.entity_relations (
     constraint entity_relation_id_is_uuidv5 check (substring(relation_id::text from 15 for 1) = '5')
 );
 
-create index if not exists idx_entity_relations_from on staging.entity_relations (from_entity_id, relation_type);
-create index if not exists idx_entity_relations_to on staging.entity_relations (to_entity_id, relation_type);
+do $$
+begin
+    if to_regclass('staging.idx_entity_relations_from') is null then
+        create index if not exists idx_entity_relations_from on staging.entity_relations (from_entity_id, relation_type);
+    end if;
+end
+$$;
+do $$
+begin
+    if to_regclass('staging.idx_entity_relations_to') is null then
+        create index if not exists idx_entity_relations_to on staging.entity_relations (to_entity_id, relation_type);
+    end if;
+end
+$$;
 
-drop trigger if exists reject_mutation on staging.entity_relations;
-create trigger reject_mutation
-before update or delete on staging.entity_relations
-for each row execute function staging.reject_entity_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entity_relations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.entity_relations FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.entity_relations;
+        create trigger reject_mutation
+        before update or delete on staging.entity_relations
+        for each row execute function staging.reject_entity_mutation();
+    end if;
+end
+$$;
 
 -- ---------------------------------------------------------------------------------------
 -- Retractions
@@ -424,13 +532,37 @@ create table if not exists staging.entity_retractions (
     constraint entity_retraction_recorded_after_knowable check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_entity_retractions_alias on staging.entity_retractions (alias_id) where alias_id is not null;
-create index if not exists idx_entity_retractions_relation on staging.entity_retractions (relation_id) where relation_id is not null;
+do $$
+begin
+    if to_regclass('staging.idx_entity_retractions_alias') is null then
+        create index if not exists idx_entity_retractions_alias on staging.entity_retractions (alias_id) where alias_id is not null;
+    end if;
+end
+$$;
+do $$
+begin
+    if to_regclass('staging.idx_entity_retractions_relation') is null then
+        create index if not exists idx_entity_retractions_relation on staging.entity_retractions (relation_id) where relation_id is not null;
+    end if;
+end
+$$;
 
-drop trigger if exists reject_mutation on staging.entity_retractions;
-create trigger reject_mutation
-before update or delete on staging.entity_retractions
-for each row execute function staging.reject_entity_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entity_retractions'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.entity_retractions FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.entity_retractions;
+        create trigger reject_mutation
+        before update or delete on staging.entity_retractions
+        for each row execute function staging.reject_entity_mutation();
+    end if;
+end
+$$;
 
 -- ---------------------------------------------------------------------------------------
 -- Derived ids
@@ -640,10 +772,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_entity_alias on staging.entity_aliases;
-create trigger validate_entity_alias
-before insert on staging.entity_aliases
-for each row execute function staging.validate_entity_alias();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entity_aliases'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_entity_alias BEFORE INSERT ON staging.entity_aliases FOR EACH ROW EXECUTE FUNCTION staging.validate_entity_alias()'
+    ) then
+        drop trigger if exists validate_entity_alias on staging.entity_aliases;
+        create trigger validate_entity_alias
+        before insert on staging.entity_aliases
+        for each row execute function staging.validate_entity_alias();
+    end if;
+end
+$$;
 
 -- Insert guard for relations: domain and range kinds, same-kind identity edges, and for a
 -- merge exactly one effective successor and no cycle.
@@ -684,10 +828,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_entity_relation on staging.entity_relations;
-create trigger validate_entity_relation
-before insert on staging.entity_relations
-for each row execute function staging.validate_entity_relation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entity_relations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_entity_relation BEFORE INSERT ON staging.entity_relations FOR EACH ROW EXECUTE FUNCTION staging.validate_entity_relation()'
+    ) then
+        drop trigger if exists validate_entity_relation on staging.entity_relations;
+        create trigger validate_entity_relation
+        before insert on staging.entity_relations
+        for each row execute function staging.validate_entity_relation();
+    end if;
+end
+$$;
 
 -- An entity no alias names is unreachable: its birth alias must exist by commit.
 create or replace function staging.require_entity_birth_alias()
@@ -706,16 +862,30 @@ begin
 end;
 $$;
 
-drop trigger if exists require_birth_alias on staging.entities;
-create constraint trigger require_birth_alias
-after insert on staging.entities
-deferrable initially deferred
-for each row execute function staging.require_entity_birth_alias();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.entities'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE CONSTRAINT TRIGGER require_birth_alias AFTER INSERT ON staging.entities DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION staging.require_entity_birth_alias()'
+    ) then
+        drop trigger if exists require_birth_alias on staging.entities;
+        create constraint trigger require_birth_alias
+        after insert on staging.entities
+        deferrable initially deferred
+        for each row execute function staging.require_entity_birth_alias();
+    end if;
+end
+$$;
 
 -- Current state, for set-based readers and the admin surface: every alias with its
 -- effective end and the entity its holder survives as. Point-in-time reads use
 -- staging.entity_resolve with explicit times.
-create or replace view staging.entity_alias_resolution as
+do $$
+declare
+    wanted constant text := $view$
 select alias.alias_id,
        alias.scheme,
        alias.value,
@@ -729,10 +899,26 @@ select alias.alias_id,
        alias.method,
        alias.confidence
 from staging.entity_aliases alias
-join staging.entities entity on entity.entity_id = alias.entity_id;
+join staging.entities entity on entity.entity_id = alias.entity_id
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('staging.entity_alias_resolution') is null
+       or pg_get_viewdef(to_regclass('staging.entity_alias_resolution'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view staging.entity_alias_resolution as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 -- Export shape for a graph database: stable node and edge ids, labels from the kind path.
-create or replace view staging.entity_graph_nodes as
+do $$
+declare
+    wanted constant text := $view$
 select entity.entity_id,
        entity.kind,
        (with recursive lineage(kind, depth) as (
@@ -753,9 +939,25 @@ select entity.entity_id,
              and (current.valid_to is null or current.valid_to > current.valid_from)
        ), '[]'::jsonb) as aliases,
        entity.minted_at
-from staging.entities entity;
+from staging.entities entity
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('staging.entity_graph_nodes') is null
+       or pg_get_viewdef(to_regclass('staging.entity_graph_nodes'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view staging.entity_graph_nodes as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
-create or replace view staging.entity_graph_edges as
+do $$
+declare
+    wanted constant text := $view$
 select relation.relation_id,
        relation.relation_type,
        relation_type.is_identity,
@@ -772,4 +974,18 @@ join staging.entity_relation_types relation_type using (relation_type)
 where not exists (
     select 1 from staging.entity_retractions retraction
     where retraction.relation_id = relation.relation_id
-      and (relation_type.is_identity or retraction.valid_to <= relation.valid_from));
+      and (relation_type.is_identity or retraction.valid_to <= relation.valid_from))
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('staging.entity_graph_edges') is null
+       or pg_get_viewdef(to_regclass('staging.entity_graph_edges'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view staging.entity_graph_edges as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;

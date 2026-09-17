@@ -23,16 +23,34 @@ create table if not exists mart.nightly_verdicts (
     recorded_at     timestamptz not null default clock_timestamp()
 );
 
-create index if not exists ix_nightly_verdicts_latest
-    on mart.nightly_verdicts (check_name, ran_at desc, recorded_at desc);
+do $$
+begin
+    if to_regclass('mart.ix_nightly_verdicts_latest') is null then
+        create index if not exists ix_nightly_verdicts_latest
+            on mart.nightly_verdicts (check_name, ran_at desc, recorded_at desc);
+    end if;
+end
+$$;
 
 comment on table mart.nightly_verdicts is
     '#876: one row per run of each nightly in-environment check (check_name[@universe]), green and red; ran_at is the tick (or completion time of a manual run); the newest row per check is reported on /health as nightly_verdicts and bounded by tools/nightly_verdicts.py.';
 
-drop trigger if exists reject_mutation on mart.nightly_verdicts;
-create trigger reject_mutation
-before update or delete on mart.nightly_verdicts
-for each row execute function mart.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.nightly_verdicts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.nightly_verdicts FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on mart.nightly_verdicts;
+        create trigger reject_mutation
+        before update or delete on mart.nightly_verdicts
+        for each row execute function mart.reject_mutation();
+    end if;
+end
+$$;
 
 -- Read role: mart_readonly (the service's read-only account; the blanket grant in roles.sql
 -- covers only tables that existed when the role was created). Conditional because CI applies

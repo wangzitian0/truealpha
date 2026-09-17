@@ -59,10 +59,22 @@ create table if not exists staging.evidence_nodes (
         check (supersedes_node_id is null or supersedes_node_id <> node_id)
 );
 
-drop trigger if exists reject_mutation on staging.evidence_nodes;
-create trigger reject_mutation
-before update or delete on staging.evidence_nodes
-for each row execute function staging.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.evidence_nodes'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.evidence_nodes FOR EACH ROW EXECUTE FUNCTION staging.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.evidence_nodes;
+        create trigger reject_mutation
+        before update or delete on staging.evidence_nodes
+        for each row execute function staging.reject_mutation();
+    end if;
+end
+$$;
 
 -- Edges ------------------------------------------------------------------------------------
 create table if not exists staging.evidence_edges (
@@ -92,15 +104,39 @@ create table if not exists staging.evidence_edges (
         check (valid_to is null or valid_to >= valid_from)
 );
 
-create index if not exists evidence_edges_from_idx
-    on staging.evidence_edges (from_kind, from_id);
-create index if not exists evidence_edges_to_idx
-    on staging.evidence_edges (to_kind, to_id);
+do $$
+begin
+    if to_regclass('staging.evidence_edges_from_idx') is null then
+        create index if not exists evidence_edges_from_idx
+            on staging.evidence_edges (from_kind, from_id);
+    end if;
+end
+$$;
+do $$
+begin
+    if to_regclass('staging.evidence_edges_to_idx') is null then
+        create index if not exists evidence_edges_to_idx
+            on staging.evidence_edges (to_kind, to_id);
+    end if;
+end
+$$;
 
-drop trigger if exists reject_mutation on staging.evidence_edges;
-create trigger reject_mutation
-before update or delete on staging.evidence_edges
-for each row execute function staging.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.evidence_edges'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.evidence_edges FOR EACH ROW EXECUTE FUNCTION staging.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.evidence_edges;
+        create trigger reject_mutation
+        before update or delete on staging.evidence_edges
+        for each row execute function staging.reject_mutation();
+    end if;
+end
+$$;
 
 -- Governed current pointer -----------------------------------------------------------------
 create table if not exists mart.current_pointer (
@@ -133,18 +169,47 @@ create table if not exists mart.current_pointer (
         unique (environment, universe_id, universe_version, factor_id, sequence)
 );
 
-drop trigger if exists reject_mutation on mart.current_pointer;
-create trigger reject_mutation
-before update or delete on mart.current_pointer
-for each row execute function mart.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.current_pointer'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.current_pointer FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on mart.current_pointer;
+        create trigger reject_mutation
+        before update or delete on mart.current_pointer
+        for each row execute function mart.reject_mutation();
+    end if;
+end
+$$;
 
 -- The latest advance per governed key.
-create or replace view mart.current_pointer_head as
+-- Boot-lock guard: `create or replace view` takes ACCESS EXCLUSIVE on the view, which
+-- queues behind every open reader. Replace it only when the definition differs; the
+-- comparison normalizes both sides through pg_get_viewdef, so no literal can drift.
+do $$
+declare
+    wanted constant text := $view$
 select distinct on (environment, universe_id, universe_version, factor_id)
     pointer_id, content_sha256, environment, universe_id, universe_version, factor_id,
     target_run_id, sequence, previous_run_id, advanced_at
 from mart.current_pointer
-order by environment, universe_id, universe_version, factor_id, sequence desc;
+order by environment, universe_id, universe_version, factor_id, sequence desc
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    -- to_regclass, not ::regclass: a cast of a missing name fails when the expression is planned.
+    if pg_get_viewdef(to_regclass('mart.current_pointer_head'))
+       is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.current_pointer_head as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 -- `mart_readonly` receives select on new mart relations from db/roles.sql, which runs after
 -- migrations. No grant here: the role does not exist yet during a fresh migration pass.

@@ -22,7 +22,19 @@ create table if not exists mart.strategy_input_coverage (
 comment on table mart.strategy_input_coverage is
     '#496: per-issuer required-input completeness per capture run (L2 funnel metric). Append-only; missing_keys is the actionable gap list.';
 
-drop trigger if exists reject_mutation on mart.strategy_input_coverage;
-create trigger reject_mutation
-before update or delete on mart.strategy_input_coverage
-for each row execute function mart.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.strategy_input_coverage'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.strategy_input_coverage FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on mart.strategy_input_coverage;
+        create trigger reject_mutation
+        before update or delete on mart.strategy_input_coverage
+        for each row execute function mart.reject_mutation();
+    end if;
+end
+$$;

@@ -40,7 +40,9 @@
 -- CIK. Instruments: a CUSIP-keyed trio and a FIGI-keyed trio name the same listing, their
 -- issuers are the same proven component, and an N-PORT line with that CUSIP resolves to
 -- the same CIK; one FIGI per CUSIP and one CUSIP per FIGI.
-create or replace view staging.entity_backfill_plan as
+do $$
+declare
+    wanted constant text := $view$
 with usage as (
     select payload.normalized_payload->>'issuer_id' as issuer_id,
            payload.normalized_payload->>'instrument_id' as instrument_id,
@@ -463,7 +465,21 @@ select 'relation',
            when claimants > 1 then 'conflict:listing-claimed-by-several-instruments'
            else 'planned'
        end
-from relation_state;
+from relation_state
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('staging.entity_backfill_plan') is null
+       or pg_get_viewdef(to_regclass('staging.entity_backfill_plan'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view staging.entity_backfill_plan as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 comment on view staging.entity_backfill_plan is
     '#877 PR-2: the entity backfill as one read-only SELECT over pre-existing tables. '

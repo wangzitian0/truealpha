@@ -73,35 +73,65 @@ create table if not exists staging.normalized_records (
     )
 );
 
-create unique index if not exists uq_normalized_records_content
-    on staging.normalized_records (content_sha256);
+do $$
+begin
+    if to_regclass('staging.uq_normalized_records_content') is null then
+        create unique index if not exists uq_normalized_records_content
+            on staging.normalized_records (content_sha256);
+    end if;
+end
+$$;
 
-create unique index if not exists uq_normalized_records_single_successor
-    on staging.normalized_records (supersedes_record_id)
-    where supersedes_record_id is not null;
+do $$
+begin
+    if to_regclass('staging.uq_normalized_records_single_successor') is null then
+        create unique index if not exists uq_normalized_records_single_successor
+            on staging.normalized_records (supersedes_record_id)
+            where supersedes_record_id is not null;
+    end if;
+end
+$$;
 
-create index if not exists idx_normalized_records_snapshot
-    on staging.normalized_records (
-        semantic_type_id,
-        semantic_type_version,
-        subject_kind,
-        subject_id,
-        transaction_time desc,
-        recorded_at desc
-    );
+do $$
+begin
+    if to_regclass('staging.idx_normalized_records_snapshot') is null then
+        create index if not exists idx_normalized_records_snapshot
+            on staging.normalized_records (
+                semantic_type_id,
+                semantic_type_version,
+                subject_kind,
+                subject_id,
+                transaction_time desc,
+                recorded_at desc
+            );
+    end if;
+end
+$$;
 
-create index if not exists idx_normalized_records_valid_time
-    on staging.normalized_records using gist (valid_time);
+do $$
+begin
+    if to_regclass('staging.idx_normalized_records_valid_time') is null then
+        create index if not exists idx_normalized_records_valid_time
+            on staging.normalized_records using gist (valid_time);
+    end if;
+end
+$$;
 
-create index if not exists idx_normalized_records_registry_snapshot
-    on staging.normalized_records (
-        source_registry_entry_id,
-        semantic_type_id,
-        semantic_type_version,
-        subject_kind,
-        subject_id,
-        transaction_time desc
-    );
+do $$
+begin
+    if to_regclass('staging.idx_normalized_records_registry_snapshot') is null then
+        create index if not exists idx_normalized_records_registry_snapshot
+            on staging.normalized_records (
+                source_registry_entry_id,
+                semantic_type_id,
+                semantic_type_version,
+                subject_kind,
+                subject_id,
+                transaction_time desc
+            );
+    end if;
+end
+$$;
 
 create table if not exists staging.filing_documents (
     normalized_record_id text primary key
@@ -143,11 +173,27 @@ create table if not exists staging.filing_documents (
 -- A reviewed normalizer revision may append a new normalized identity over the
 -- same immutable raw fetch. The normalized-record primary key, not the source
 -- coordinate, is therefore the projection identity.
-alter table staging.filing_documents
-    drop constraint if exists filing_documents_vintage_unique;
+do $$
+begin
+    if exists (
+        select 1 from pg_constraint
+        where conrelid = 'staging.filing_documents'::regclass
+          and conname = 'filing_documents_vintage_unique'
+    ) then
+        alter table staging.filing_documents
+            drop constraint if exists filing_documents_vintage_unique;
+    end if;
+end
+$$;
 
-create index if not exists idx_filing_documents_asof
-    on staging.filing_documents (issuer_id, report_period, transaction_time desc, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_filing_documents_asof') is null then
+        create index if not exists idx_filing_documents_asof
+            on staging.filing_documents (issuer_id, report_period, transaction_time desc, recorded_at desc);
+    end if;
+end
+$$;
 
 create or replace function staging.validate_normalized_raw_lineage()
 returns trigger language plpgsql as $$
@@ -245,32 +291,92 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_normalized_records_validate_raw_lineage
-    on staging.normalized_records;
-create trigger trg_normalized_records_validate_raw_lineage
-before insert on staging.normalized_records
-for each row execute function staging.validate_normalized_raw_lineage();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.normalized_records'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_normalized_records_validate_raw_lineage BEFORE INSERT ON staging.normalized_records FOR EACH ROW EXECUTE FUNCTION staging.validate_normalized_raw_lineage()'
+    ) then
+        drop trigger if exists trg_normalized_records_validate_raw_lineage
+            on staging.normalized_records;
+        create trigger trg_normalized_records_validate_raw_lineage
+        before insert on staging.normalized_records
+        for each row execute function staging.validate_normalized_raw_lineage();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_normalized_records_validate_restatement
-    on staging.normalized_records;
-create trigger trg_normalized_records_validate_restatement
-before insert on staging.normalized_records
-for each row execute function staging.validate_normalized_restatement();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.normalized_records'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_normalized_records_validate_restatement BEFORE INSERT ON staging.normalized_records FOR EACH ROW EXECUTE FUNCTION staging.validate_normalized_restatement()'
+    ) then
+        drop trigger if exists trg_normalized_records_validate_restatement
+            on staging.normalized_records;
+        create trigger trg_normalized_records_validate_restatement
+        before insert on staging.normalized_records
+        for each row execute function staging.validate_normalized_restatement();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_filing_documents_validate_projection
-    on staging.filing_documents;
-create trigger trg_filing_documents_validate_projection
-before insert on staging.filing_documents
-for each row execute function staging.validate_filing_document_projection();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.filing_documents'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_filing_documents_validate_projection BEFORE INSERT ON staging.filing_documents FOR EACH ROW EXECUTE FUNCTION staging.validate_filing_document_projection()'
+    ) then
+        drop trigger if exists trg_filing_documents_validate_projection
+            on staging.filing_documents;
+        create trigger trg_filing_documents_validate_projection
+        before insert on staging.filing_documents
+        for each row execute function staging.validate_filing_document_projection();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_normalized_records_append_only
-    on staging.normalized_records;
-create trigger trg_normalized_records_append_only
-before update or delete on staging.normalized_records
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.normalized_records'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_normalized_records_append_only BEFORE DELETE OR UPDATE ON staging.normalized_records FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_normalized_records_append_only
+            on staging.normalized_records;
+        create trigger trg_normalized_records_append_only
+        before update or delete on staging.normalized_records
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;
 
-drop trigger if exists trg_filing_documents_append_only
-    on staging.filing_documents;
-create trigger trg_filing_documents_append_only
-before update or delete on staging.filing_documents
-for each row execute function staging.reject_point_in_time_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.filing_documents'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_filing_documents_append_only BEFORE DELETE OR UPDATE ON staging.filing_documents FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()'
+    ) then
+        drop trigger if exists trg_filing_documents_append_only
+            on staging.filing_documents;
+        create trigger trg_filing_documents_append_only
+        before update or delete on staging.filing_documents
+        for each row execute function staging.reject_point_in_time_mutation();
+    end if;
+end
+$$;

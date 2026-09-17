@@ -51,10 +51,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_trigger_update on staging.pipeline_trigger_requests;
-create trigger validate_trigger_update
-before update on staging.pipeline_trigger_requests
-for each row execute function staging.validate_pipeline_trigger_update();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.pipeline_trigger_requests'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_trigger_update BEFORE UPDATE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.validate_pipeline_trigger_update()'
+    ) then
+        drop trigger if exists validate_trigger_update on staging.pipeline_trigger_requests;
+        create trigger validate_trigger_update
+        before update on staging.pipeline_trigger_requests
+        for each row execute function staging.validate_pipeline_trigger_update();
+    end if;
+end
+$$;
 
 create or replace function staging.reject_pipeline_trigger_delete()
 returns trigger language plpgsql as $$
@@ -63,7 +75,19 @@ begin
 end;
 $$;
 
-drop trigger if exists reject_trigger_delete on staging.pipeline_trigger_requests;
-create trigger reject_trigger_delete
-before delete on staging.pipeline_trigger_requests
-for each row execute function staging.reject_pipeline_trigger_delete();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.pipeline_trigger_requests'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_trigger_delete BEFORE DELETE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.reject_pipeline_trigger_delete()'
+    ) then
+        drop trigger if exists reject_trigger_delete on staging.pipeline_trigger_requests;
+        create trigger reject_trigger_delete
+        before delete on staging.pipeline_trigger_requests
+        for each row execute function staging.reject_pipeline_trigger_delete();
+    end if;
+end
+$$;

@@ -76,19 +76,53 @@ create table if not exists app.private_research_objects (
     recorded_at       timestamptz not null default now()
 );
 
-create index if not exists idx_private_research_objects_owner
-    on app.private_research_objects (tenant_id, owner_principal_id, resource_id);
+do $$
+begin
+    if to_regclass('app.idx_private_research_objects_owner') is null then
+        create index if not exists idx_private_research_objects_owner
+            on app.private_research_objects (tenant_id, owner_principal_id, resource_id);
+    end if;
+end
+$$;
 
-alter table app.private_research_objects enable row level security;
-alter table app.private_research_objects force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.private_research_objects'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.private_research_objects enable row level security;
+        alter table app.private_research_objects force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists private_research_owner_isolation on app.private_research_objects;
-create policy private_research_owner_isolation on app.private_research_objects
-    for select
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.private_research_objects'::regclass
+          and polname = 'private_research_owner_isolation'
+          and polcmd = 'r'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from null
+    ) then
+        drop policy if exists private_research_owner_isolation on app.private_research_objects;
+        create policy private_research_owner_isolation on app.private_research_objects
+            for select
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
 create table if not exists app.authorization_decisions (
     decision_id           text primary key check (decision_id ~ '^access-decision:[0-9a-f]{64}$'),
@@ -139,10 +173,22 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_access_audit_events_validate_tenant on app.access_audit_events;
-create trigger trg_access_audit_events_validate_tenant
-before insert on app.access_audit_events
-for each row execute function app.validate_access_audit_decision_tenant();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.access_audit_events'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_access_audit_events_validate_tenant BEFORE INSERT ON app.access_audit_events FOR EACH ROW EXECUTE FUNCTION app.validate_access_audit_decision_tenant()'
+    ) then
+        drop trigger if exists trg_access_audit_events_validate_tenant on app.access_audit_events;
+        create trigger trg_access_audit_events_validate_tenant
+        before insert on app.access_audit_events
+        for each row execute function app.validate_access_audit_decision_tenant();
+    end if;
+end
+$$;
 
 -- drop first, not create-or-replace (#455): 0024 later widens this view with
 -- additional trailing columns, which `create or replace view` cannot undo on a
@@ -155,34 +201,44 @@ for each row execute function app.validate_access_audit_decision_tenant();
 -- 0024 (which always runs after 0022) redefines the view again immediately after,
 -- and db/roles.sql (which always runs last) re-grants it, so the final state is
 -- unaffected -- only the momentary mid-migration shape changes.
-drop view if exists app.access_audit_metadata;
-create view app.access_audit_metadata
-with (security_barrier = true)
-as
-select
-    event.audit_event_id,
-    event.decision_id,
-    event.tenant_id,
-    event.principal_id,
-    decision.action,
-    decision.resource_id,
-    decision.publication_policy_id,
-    decision.decision,
-    decision.reason_code,
-    event.event_kind,
-    event.occurred_at,
-    event.recorded_at
-from app.access_audit_events as event
-join app.authorization_decisions as decision
-  on decision.decision_id = event.decision_id
- and decision.tenant_id is not distinct from event.tenant_id
-where event.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-  and exists (
-      select 1
-      from app.principals as reader
-      where reader.principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-        and reader.principal_kind = 'administrator'
-  );
+-- Boot-lock guard: 0024 owns this view's final definition (`create or replace`, guarded
+-- by a definition compare), so this file only creates it where it does not exist yet.
+-- Re-creating it here on every replay would take ACCESS EXCLUSIVE twice per boot and
+-- flip the view to this narrower shape and back.
+do $$
+begin
+    if to_regclass('app.access_audit_metadata') is null then
+        drop view if exists app.access_audit_metadata;
+        create view app.access_audit_metadata
+        with (security_barrier = true)
+        as
+        select
+            event.audit_event_id,
+            event.decision_id,
+            event.tenant_id,
+            event.principal_id,
+            decision.action,
+            decision.resource_id,
+            decision.publication_policy_id,
+            decision.decision,
+            decision.reason_code,
+            event.event_kind,
+            event.occurred_at,
+            event.recorded_at
+        from app.access_audit_events as event
+        join app.authorization_decisions as decision
+          on decision.decision_id = event.decision_id
+         and decision.tenant_id is not distinct from event.tenant_id
+        where event.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+          and exists (
+              select 1
+              from app.principals as reader
+              where reader.principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+                and reader.principal_kind = 'administrator'
+          );
+    end if;
+end
+$$;
 
 do $$
 declare
@@ -200,12 +256,27 @@ begin
         'access_audit_events'
     ]
     loop
-        execute format('drop trigger if exists %I on app.%I', 'trg_' || table_name || '_append_only', table_name);
-        execute format(
-            'create trigger %I before update or delete on app.%I for each row execute function app.reject_mutation()',
-            'trg_' || table_name || '_append_only',
-            table_name
-        );
+        -- Boot-lock guard: drop + create is SHARE ROW EXCLUSIVE; skip it when the trigger
+        -- already matches the canonical (`pg_get_triggerdef`) form of this statement.
+        if not exists (
+            select 1
+            from pg_trigger
+            where tgrelid = format('app.%I', table_name)::regclass
+              and not tgisinternal
+              and pg_get_triggerdef(oid) = format(
+                  'CREATE TRIGGER %I BEFORE DELETE OR UPDATE ON app.%I '
+                  'FOR EACH ROW EXECUTE FUNCTION app.reject_mutation()',
+                  'trg_' || table_name || '_append_only',
+                  table_name
+              )
+        ) then
+            execute format('drop trigger if exists %I on app.%I', 'trg_' || table_name || '_append_only', table_name);
+            execute format(
+                'create trigger %I before update or delete on app.%I for each row execute function app.reject_mutation()',
+                'trg_' || table_name || '_append_only',
+                table_name
+            );
+        end if;
     end loop;
 end;
 $$;

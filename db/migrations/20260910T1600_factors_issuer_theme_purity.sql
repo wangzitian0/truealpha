@@ -78,8 +78,14 @@ create table if not exists mart.issuer_theme_purity (
     )
 );
 
-create index if not exists ix_issuer_theme_purity_ranking
-    on mart.issuer_theme_purity (theme_id, cutoff desc, theme_share desc nulls last);
+do $$
+begin
+    if to_regclass('mart.ix_issuer_theme_purity_ranking') is null then
+        create index if not exists ix_issuer_theme_purity_ranking
+            on mart.issuer_theme_purity (theme_id, cutoff desc, theme_share desc nulls last);
+    end if;
+end
+$$;
 
 comment on table mart.issuer_theme_purity is
     '#772 (init.md §7 module 6): one theme-purity row per issuer per theme per governed run. theme_share is over consolidated_revenue, never over the classified parts — a missed segment would otherwise RAISE the share and rank the worst extraction as the purest name.';

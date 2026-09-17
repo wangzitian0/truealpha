@@ -30,13 +30,31 @@ comment on table staging.etf_constituent_facts is
     'PIT ETF/index constituent rows with raw lineage; universe list versions are '
     'published from snapshots of this plane, never hand-edited (#539).';
 
-create index if not exists etf_constituent_facts_lookup
-    on staging.etf_constituent_facts (etf_symbol, as_of desc, ticker);
+do $$
+begin
+    if to_regclass('staging.etf_constituent_facts_lookup') is null then
+        create index if not exists etf_constituent_facts_lookup
+            on staging.etf_constituent_facts (etf_symbol, as_of desc, ticker);
+    end if;
+end
+$$;
 
-drop trigger if exists reject_mutation on staging.etf_constituent_facts;
-create trigger reject_mutation
-before update or delete on staging.etf_constituent_facts
-for each row execute function raw.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.etf_constituent_facts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.etf_constituent_facts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on staging.etf_constituent_facts;
+        create trigger reject_mutation
+        before update or delete on staging.etf_constituent_facts
+        for each row execute function raw.reject_mutation();
+    end if;
+end
+$$;
 
 -- Register the universe-list contract kinds with the identity check, the 0038 way:
 -- kind 'universe-list:<etf>' pairs with contract ids 'universe-list:<sha256>'.

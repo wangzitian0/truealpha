@@ -12,10 +12,22 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_market_prices_reject_insert on staging.market_prices;
-create trigger trg_market_prices_reject_insert
-before insert on staging.market_prices
-for each row execute function staging.reject_legacy_market_price_insert();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'staging.market_prices'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_market_prices_reject_insert BEFORE INSERT ON staging.market_prices FOR EACH ROW EXECUTE FUNCTION staging.reject_legacy_market_price_insert()'
+    ) then
+        drop trigger if exists trg_market_prices_reject_insert on staging.market_prices;
+        create trigger trg_market_prices_reject_insert
+        before insert on staging.market_prices
+        for each row execute function staging.reject_legacy_market_price_insert();
+    end if;
+end
+$$;
 
 create table if not exists staging.mvp_market_prices (
     normalized_record_id  text primary key references staging.normalized_records(normalized_record_id),
@@ -54,8 +66,14 @@ create table if not exists staging.mvp_market_prices (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_mvp_market_prices_asof
-    on staging.mvp_market_prices (listing_id, trading_date, transaction_time desc, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_mvp_market_prices_asof') is null then
+        create index if not exists idx_mvp_market_prices_asof
+            on staging.mvp_market_prices (listing_id, trading_date, transaction_time desc, recorded_at desc);
+    end if;
+end
+$$;
 
 create table if not exists staging.mvp_financial_facts (
     normalized_record_id  text primary key references staging.normalized_records(normalized_record_id),
@@ -81,8 +99,14 @@ create table if not exists staging.mvp_financial_facts (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_mvp_financial_facts_asof
-    on staging.mvp_financial_facts (entity_id, metric, fiscal_period, transaction_time desc, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_mvp_financial_facts_asof') is null then
+        create index if not exists idx_mvp_financial_facts_asof
+            on staging.mvp_financial_facts (entity_id, metric, fiscal_period, transaction_time desc, recorded_at desc);
+    end if;
+end
+$$;
 
 create table if not exists staging.mvp_corporate_actions (
     normalized_record_id          text primary key references staging.normalized_records(normalized_record_id),
@@ -117,8 +141,14 @@ create table if not exists staging.mvp_corporate_actions (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_mvp_corporate_actions_asof
-    on staging.mvp_corporate_actions (security_id, transaction_time desc, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_mvp_corporate_actions_asof') is null then
+        create index if not exists idx_mvp_corporate_actions_asof
+            on staging.mvp_corporate_actions (security_id, transaction_time desc, recorded_at desc);
+    end if;
+end
+$$;
 
 create table if not exists staging.mvp_universe_memberships (
     normalized_record_id  text primary key references staging.normalized_records(normalized_record_id),
@@ -136,10 +166,16 @@ create table if not exists staging.mvp_universe_memberships (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_mvp_universe_memberships_asof
-    on staging.mvp_universe_memberships (
-        universe_id, subject_kind, subject_id, transaction_time desc, recorded_at desc
-    );
+do $$
+begin
+    if to_regclass('staging.idx_mvp_universe_memberships_asof') is null then
+        create index if not exists idx_mvp_universe_memberships_asof
+            on staging.mvp_universe_memberships (
+                universe_id, subject_kind, subject_id, transaction_time desc, recorded_at desc
+            );
+    end if;
+end
+$$;
 
 create table if not exists staging.mvp_issuer_security_links (
     normalized_record_id                 text primary key references staging.normalized_records(normalized_record_id),
@@ -162,8 +198,14 @@ create table if not exists staging.mvp_issuer_security_links (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_mvp_issuer_security_links_asof
-    on staging.mvp_issuer_security_links (issuer_id, security_id, transaction_time desc, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_mvp_issuer_security_links_asof') is null then
+        create index if not exists idx_mvp_issuer_security_links_asof
+            on staging.mvp_issuer_security_links (issuer_id, security_id, transaction_time desc, recorded_at desc);
+    end if;
+end
+$$;
 
 create table if not exists staging.mvp_security_listing_links (
     normalized_record_id      text primary key references staging.normalized_records(normalized_record_id),
@@ -189,8 +231,14 @@ create table if not exists staging.mvp_security_listing_links (
     check (recorded_at >= transaction_time)
 );
 
-create index if not exists idx_mvp_security_listing_links_asof
-    on staging.mvp_security_listing_links (security_id, listing_id, transaction_time desc, recorded_at desc);
+do $$
+begin
+    if to_regclass('staging.idx_mvp_security_listing_links_asof') is null then
+        create index if not exists idx_mvp_security_listing_links_asof
+            on staging.mvp_security_listing_links (security_id, listing_id, transaction_time desc, recorded_at desc);
+    end if;
+end
+$$;
 
 create or replace function staging.validate_mvp_projection()
 returns trigger language plpgsql as $$
@@ -235,28 +283,58 @@ begin
             ('mvp_security_listing_links', 'semantic.security-listing-link')
         ) as values_table(table_name, semantic_type_id)
     loop
-        execute format(
-            'drop trigger if exists %I on staging.%I',
-            'trg_' || projection.table_name || '_validate',
-            projection.table_name
-        );
-        execute format(
-            'create trigger %I before insert on staging.%I '
-            'for each row execute function staging.validate_mvp_projection(%L)',
-            'trg_' || projection.table_name || '_validate',
-            projection.table_name,
-            projection.semantic_type_id
-        );
-        execute format(
-            'drop trigger if exists %I on staging.%I',
-            'trg_' || projection.table_name || '_append_only',
-            projection.table_name
-        );
-        execute format(
-            'create trigger %I before update or delete on staging.%I '
-            'for each row execute function staging.reject_point_in_time_mutation()',
-            'trg_' || projection.table_name || '_append_only',
-            projection.table_name
-        );
+        -- Boot-lock guard: drop + create is SHARE ROW EXCLUSIVE on the projection table,
+        -- so it runs only when `pg_get_triggerdef` differs from the canonical form of the
+        -- statement it would execute; a replay over the finished chain is a read.
+        if not exists (
+            select 1
+            from pg_trigger
+            where tgrelid = format('staging.%I', projection.table_name)::regclass
+              and not tgisinternal
+              and pg_get_triggerdef(oid) = format(
+                  'CREATE TRIGGER %I BEFORE INSERT ON staging.%I '
+                  'FOR EACH ROW EXECUTE FUNCTION staging.validate_mvp_projection(%L)',
+                  'trg_' || projection.table_name || '_validate',
+                  projection.table_name,
+                  projection.semantic_type_id
+              )
+        ) then
+            execute format(
+                'drop trigger if exists %I on staging.%I',
+                'trg_' || projection.table_name || '_validate',
+                projection.table_name
+            );
+            execute format(
+                'create trigger %I before insert on staging.%I '
+                'for each row execute function staging.validate_mvp_projection(%L)',
+                'trg_' || projection.table_name || '_validate',
+                projection.table_name,
+                projection.semantic_type_id
+            );
+        end if;
+        if not exists (
+            select 1
+            from pg_trigger
+            where tgrelid = format('staging.%I', projection.table_name)::regclass
+              and not tgisinternal
+              and pg_get_triggerdef(oid) = format(
+                  'CREATE TRIGGER %I BEFORE DELETE OR UPDATE ON staging.%I '
+                  'FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation()',
+                  'trg_' || projection.table_name || '_append_only',
+                  projection.table_name
+              )
+        ) then
+            execute format(
+                'drop trigger if exists %I on staging.%I',
+                'trg_' || projection.table_name || '_append_only',
+                projection.table_name
+            );
+            execute format(
+                'create trigger %I before update or delete on staging.%I '
+                'for each row execute function staging.reject_point_in_time_mutation()',
+                'trg_' || projection.table_name || '_append_only',
+                projection.table_name
+            );
+        end if;
     end loop;
 end $$;

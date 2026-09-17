@@ -20,8 +20,14 @@ create table if not exists staging.kg_edges (
     raw_ref           text                    -- pointer back to the original record in the raw schema
 );
 
-create index if not exists idx_kg_edges_asof
-    on staging.kg_edges (from_id, relation_type, transaction_time desc);
+do $$
+begin
+    if to_regclass('staging.idx_kg_edges_asof') is null then
+        create index if not exists idx_kg_edges_asof
+            on staging.kg_edges (from_id, relation_type, transaction_time desc);
+    end if;
+end
+$$;
 
 create table if not exists staging.financial_facts (
     id                bigint generated always as identity primary key,
@@ -40,5 +46,11 @@ create table if not exists staging.financial_facts (
     is_restatement    boolean not null default false
 );
 
-create index if not exists idx_financial_facts_asof
-    on staging.financial_facts (unified_id, metric, fiscal_period, transaction_time desc);
+do $$
+begin
+    if to_regclass('staging.idx_financial_facts_asof') is null then
+        create index if not exists idx_financial_facts_asof
+            on staging.financial_facts (unified_id, metric, fiscal_period, transaction_time desc);
+    end if;
+end
+$$;

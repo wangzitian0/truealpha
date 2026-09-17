@@ -20,16 +20,30 @@
 -- adds with a default only where the column is semantically total (cost = 1 call), and
 -- every object guarded with IF NOT EXISTS. Existing moomoo rows keep their meaning.
 
-alter table staging.api_call_ledger
-    add column if not exists status_code        integer,
-    add column if not exists error              text,
-    add column if not exists duration_ms        integer,
-    add column if not exists request_uri        text,
-    add column if not exists payload_sha256     text,
-    add column if not exists byte_length        bigint,   -- raw.fetches.byte_length is bigint
-    add column if not exists cost               numeric not null default 1,
-    add column if not exists capacity_window_id text,
-    add column if not exists run_key            text;
+-- Boot-lock guard (2026-09-17): `add column if not exists` takes ACCESS EXCLUSIVE even when
+-- the column is already there, so the replay on every boot only alters a table that lacks it.
+do $$
+begin
+    if exists (
+        select 1 from unnest(array['status_code', 'error', 'duration_ms', 'request_uri', 'payload_sha256', 'byte_length', 'cost', 'capacity_window_id', 'run_key']) as wanted(column_name)
+        where not exists (
+            select 1 from pg_attribute
+            where attrelid = 'staging.api_call_ledger'::regclass and attname = wanted.column_name and not attisdropped
+        )
+    ) then
+        alter table staging.api_call_ledger
+            add column if not exists status_code        integer,
+            add column if not exists error              text,
+            add column if not exists duration_ms        integer,
+            add column if not exists request_uri        text,
+            add column if not exists payload_sha256     text,
+            add column if not exists byte_length        bigint,   -- raw.fetches.byte_length is bigint
+            add column if not exists cost               numeric not null default 1,
+            add column if not exists capacity_window_id text,
+            add column if not exists run_key            text;
+    end if;
+end
+$$;
 
 do $$ begin
     if not exists (select 1 from pg_constraint
@@ -48,16 +62,40 @@ do $$ begin
 end $$;
 
 -- The dashboard's two reads: "today, per source" and "the last N calls".
-create index if not exists ix_api_call_ledger_source_called_at
-    on staging.api_call_ledger (source, called_at desc);
-create index if not exists ix_api_call_ledger_called_at
-    on staging.api_call_ledger (called_at desc);
+do $$
+begin
+    if to_regclass('staging.ix_api_call_ledger_source_called_at') is null then
+        create index if not exists ix_api_call_ledger_source_called_at
+            on staging.api_call_ledger (source, called_at desc);
+    end if;
+end
+$$;
+do $$
+begin
+    if to_regclass('staging.ix_api_call_ledger_called_at') is null then
+        create index if not exists ix_api_call_ledger_called_at
+            on staging.api_call_ledger (called_at desc);
+    end if;
+end
+$$;
 -- The traceability join in both directions: ledger row -> landed bytes, and the
 -- reverse question "which request produced this fetch".
-create index if not exists ix_api_call_ledger_payload_sha256
-    on staging.api_call_ledger (payload_sha256) where payload_sha256 is not null;
-create index if not exists ix_raw_fetches_payload_sha256
-    on raw.fetches (payload_sha256);
+do $$
+begin
+    if to_regclass('staging.ix_api_call_ledger_payload_sha256') is null then
+        create index if not exists ix_api_call_ledger_payload_sha256
+            on staging.api_call_ledger (payload_sha256) where payload_sha256 is not null;
+    end if;
+end
+$$;
+do $$
+begin
+    if to_regclass('raw.ix_raw_fetches_payload_sha256') is null then
+        create index if not exists ix_raw_fetches_payload_sha256
+            on raw.fetches (payload_sha256);
+    end if;
+end
+$$;
 
 comment on table staging.api_call_ledger is
     'External call ledger (#729): one row per request to any vendor or model provider, success or failure. '

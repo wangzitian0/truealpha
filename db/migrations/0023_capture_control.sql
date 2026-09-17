@@ -452,10 +452,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_campaign_address on raw.capture_campaigns;
-create trigger zz_validate_campaign_address
-before insert on raw.capture_campaigns
-for each row execute function raw.validate_capture_campaign_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_campaigns'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_campaign_address BEFORE INSERT ON raw.capture_campaigns FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_campaign_address()'
+    ) then
+        drop trigger if exists zz_validate_campaign_address on raw.capture_campaigns;
+        create trigger zz_validate_campaign_address
+        before insert on raw.capture_campaigns
+        for each row execute function raw.validate_capture_campaign_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_run_address()
 returns trigger language plpgsql as $$
@@ -479,10 +491,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_run_address on raw.capture_runs;
-create trigger zz_validate_run_address
-before insert on raw.capture_runs
-for each row execute function raw.validate_capture_run_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_runs'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_run_address BEFORE INSERT ON raw.capture_runs FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_run_address()'
+    ) then
+        drop trigger if exists zz_validate_run_address on raw.capture_runs;
+        create trigger zz_validate_run_address
+        before insert on raw.capture_runs
+        for each row execute function raw.validate_capture_run_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_list_version_address()
 returns trigger language plpgsql as $$
@@ -509,10 +533,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_list_version_address on raw.capture_list_versions;
-create trigger zz_validate_list_version_address
-before insert on raw.capture_list_versions
-for each row execute function raw.validate_capture_list_version_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_list_versions'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_list_version_address BEFORE INSERT ON raw.capture_list_versions FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_list_version_address()'
+    ) then
+        drop trigger if exists zz_validate_list_version_address on raw.capture_list_versions;
+        create trigger zz_validate_list_version_address
+        before insert on raw.capture_list_versions
+        for each row execute function raw.validate_capture_list_version_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_obligation_address()
 returns trigger language plpgsql as $$
@@ -557,10 +593,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_obligation_address on raw.capture_obligations;
-create trigger zz_validate_obligation_address
-before insert on raw.capture_obligations
-for each row execute function raw.validate_capture_obligation_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_obligations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_obligation_address BEFORE INSERT ON raw.capture_obligations FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_obligation_address()'
+    ) then
+        drop trigger if exists zz_validate_obligation_address on raw.capture_obligations;
+        create trigger zz_validate_obligation_address
+        before insert on raw.capture_obligations
+        for each row execute function raw.validate_capture_obligation_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_work_item_address()
 returns trigger language plpgsql as $$
@@ -594,10 +642,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_work_item_address on raw.capture_work_items;
-create trigger zz_validate_work_item_address
-before insert on raw.capture_work_items
-for each row execute function raw.validate_capture_work_item_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_work_items'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_work_item_address BEFORE INSERT ON raw.capture_work_items FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_work_item_address()'
+    ) then
+        drop trigger if exists zz_validate_work_item_address on raw.capture_work_items;
+        create trigger zz_validate_work_item_address
+        before insert on raw.capture_work_items
+        for each row execute function raw.validate_capture_work_item_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_binding_address()
 returns trigger language plpgsql as $$
@@ -616,10 +676,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_binding_address on raw.capture_obligation_work_bindings;
-create trigger zz_validate_binding_address
-before insert on raw.capture_obligation_work_bindings
-for each row execute function raw.validate_capture_binding_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_obligation_work_bindings'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_binding_address BEFORE INSERT ON raw.capture_obligation_work_bindings FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_binding_address()'
+    ) then
+        drop trigger if exists zz_validate_binding_address on raw.capture_obligation_work_bindings;
+        create trigger zz_validate_binding_address
+        before insert on raw.capture_obligation_work_bindings
+        for each row execute function raw.validate_capture_binding_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_attempt_address()
 returns trigger language plpgsql as $$
@@ -644,10 +716,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_attempt_address on raw.capture_attempts;
-create trigger zz_validate_attempt_address
-before insert on raw.capture_attempts
-for each row execute function raw.validate_capture_attempt_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_attempts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_attempt_address BEFORE INSERT ON raw.capture_attempts FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_attempt_address()'
+    ) then
+        drop trigger if exists zz_validate_attempt_address on raw.capture_attempts;
+        create trigger zz_validate_attempt_address
+        before insert on raw.capture_attempts
+        for each row execute function raw.validate_capture_attempt_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_attempt_result_address()
 returns trigger language plpgsql as $$
@@ -678,10 +762,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_attempt_result_address on raw.capture_attempt_results;
-create trigger zz_validate_attempt_result_address
-before insert on raw.capture_attempt_results
-for each row execute function raw.validate_capture_attempt_result_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_attempt_results'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_attempt_result_address BEFORE INSERT ON raw.capture_attempt_results FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_attempt_result_address()'
+    ) then
+        drop trigger if exists zz_validate_attempt_result_address on raw.capture_attempt_results;
+        create trigger zz_validate_attempt_result_address
+        before insert on raw.capture_attempt_results
+        for each row execute function raw.validate_capture_attempt_result_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_checkpoint_address()
 returns trigger language plpgsql as $$
@@ -703,10 +799,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_checkpoint_address on raw.capture_checkpoints;
-create trigger zz_validate_checkpoint_address
-before insert on raw.capture_checkpoints
-for each row execute function raw.validate_capture_checkpoint_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_checkpoints'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_checkpoint_address BEFORE INSERT ON raw.capture_checkpoints FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_checkpoint_address()'
+    ) then
+        drop trigger if exists zz_validate_checkpoint_address on raw.capture_checkpoints;
+        create trigger zz_validate_checkpoint_address
+        before insert on raw.capture_checkpoints
+        for each row execute function raw.validate_capture_checkpoint_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_recapture_plan_address()
 returns trigger language plpgsql as $$
@@ -804,10 +912,22 @@ begin
 end;
 $$;
 
-drop trigger if exists zz_validate_recapture_plan_address on raw.recapture_plans;
-create trigger zz_validate_recapture_plan_address
-before insert on raw.recapture_plans
-for each row execute function raw.validate_recapture_plan_address();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.recapture_plans'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER zz_validate_recapture_plan_address BEFORE INSERT ON raw.recapture_plans FOR EACH ROW EXECUTE FUNCTION raw.validate_recapture_plan_address()'
+    ) then
+        drop trigger if exists zz_validate_recapture_plan_address on raw.recapture_plans;
+        create trigger zz_validate_recapture_plan_address
+        before insert on raw.recapture_plans
+        for each row execute function raw.validate_recapture_plan_address();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_list_member()
 returns trigger language plpgsql as $$
@@ -829,10 +949,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_list_member on raw.capture_list_version_members;
-create trigger validate_list_member
-before insert on raw.capture_list_version_members
-for each row execute function raw.validate_capture_list_member();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_list_version_members'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_list_member BEFORE INSERT ON raw.capture_list_version_members FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_list_member()'
+    ) then
+        drop trigger if exists validate_list_member on raw.capture_list_version_members;
+        create trigger validate_list_member
+        before insert on raw.capture_list_version_members
+        for each row execute function raw.validate_capture_list_member();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_campaign_list_version()
 returns trigger language plpgsql as $$
@@ -866,10 +998,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_campaign_list_version on raw.capture_campaign_list_versions;
-create trigger validate_campaign_list_version
-before insert on raw.capture_campaign_list_versions
-for each row execute function raw.validate_campaign_list_version();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_campaign_list_versions'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_campaign_list_version BEFORE INSERT ON raw.capture_campaign_list_versions FOR EACH ROW EXECUTE FUNCTION raw.validate_campaign_list_version()'
+    ) then
+        drop trigger if exists validate_campaign_list_version on raw.capture_campaign_list_versions;
+        create trigger validate_campaign_list_version
+        before insert on raw.capture_campaign_list_versions
+        for each row execute function raw.validate_campaign_list_version();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_obligation_list()
 returns trigger language plpgsql as $$
@@ -894,10 +1038,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_obligation_list on raw.capture_obligations;
-create trigger validate_obligation_list
-before insert on raw.capture_obligations
-for each row execute function raw.validate_capture_obligation_list();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_obligations'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_obligation_list BEFORE INSERT ON raw.capture_obligations FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_obligation_list()'
+    ) then
+        drop trigger if exists validate_obligation_list on raw.capture_obligations;
+        create trigger validate_obligation_list
+        before insert on raw.capture_obligations
+        for each row execute function raw.validate_capture_obligation_list();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_obligation_work_campaign()
 returns trigger language plpgsql as $$
@@ -925,10 +1081,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_binding_campaign on raw.capture_obligation_work_bindings;
-create trigger validate_binding_campaign
-before insert on raw.capture_obligation_work_bindings
-for each row execute function raw.validate_obligation_work_campaign();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_obligation_work_bindings'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_binding_campaign BEFORE INSERT ON raw.capture_obligation_work_bindings FOR EACH ROW EXECUTE FUNCTION raw.validate_obligation_work_campaign()'
+    ) then
+        drop trigger if exists validate_binding_campaign on raw.capture_obligation_work_bindings;
+        create trigger validate_binding_campaign
+        before insert on raw.capture_obligation_work_bindings
+        for each row execute function raw.validate_obligation_work_campaign();
+    end if;
+end
+$$;
 
 create or replace function raw.enforce_capture_checkpoint_progress()
 returns trigger language plpgsql as $$
@@ -975,10 +1143,22 @@ begin
 end;
 $$;
 
-drop trigger if exists enforce_checkpoint_progress on raw.capture_checkpoints;
-create trigger enforce_checkpoint_progress
-before insert on raw.capture_checkpoints
-for each row execute function raw.enforce_capture_checkpoint_progress();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_checkpoints'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER enforce_checkpoint_progress BEFORE INSERT ON raw.capture_checkpoints FOR EACH ROW EXECUTE FUNCTION raw.enforce_capture_checkpoint_progress()'
+    ) then
+        drop trigger if exists enforce_checkpoint_progress on raw.capture_checkpoints;
+        create trigger enforce_checkpoint_progress
+        before insert on raw.capture_checkpoints
+        for each row execute function raw.enforce_capture_checkpoint_progress();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_checkpoint_obligation_refs()
 returns trigger language plpgsql as $$
@@ -999,10 +1179,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_checkpoint_obligation_refs on raw.capture_checkpoints;
-create trigger validate_checkpoint_obligation_refs
-before insert on raw.capture_checkpoints
-for each row execute function raw.validate_checkpoint_obligation_refs();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_checkpoints'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_checkpoint_obligation_refs BEFORE INSERT ON raw.capture_checkpoints FOR EACH ROW EXECUTE FUNCTION raw.validate_checkpoint_obligation_refs()'
+    ) then
+        drop trigger if exists validate_checkpoint_obligation_refs on raw.capture_checkpoints;
+        create trigger validate_checkpoint_obligation_refs
+        before insert on raw.capture_checkpoints
+        for each row execute function raw.validate_checkpoint_obligation_refs();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_recapture_obligation_refs()
 returns trigger language plpgsql as $$
@@ -1022,10 +1214,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_recapture_obligation_refs on raw.recapture_plans;
-create trigger validate_recapture_obligation_refs
-before insert on raw.recapture_plans
-for each row execute function raw.validate_recapture_obligation_refs();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.recapture_plans'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_recapture_obligation_refs BEFORE INSERT ON raw.recapture_plans FOR EACH ROW EXECUTE FUNCTION raw.validate_recapture_obligation_refs()'
+    ) then
+        drop trigger if exists validate_recapture_obligation_refs on raw.recapture_plans;
+        create trigger validate_recapture_obligation_refs
+        before insert on raw.recapture_plans
+        for each row execute function raw.validate_recapture_obligation_refs();
+    end if;
+end
+$$;
 
 create or replace function raw.enforce_capture_attempt_sequence()
 returns trigger language plpgsql as $$
@@ -1073,10 +1277,22 @@ begin
 end;
 $$;
 
-drop trigger if exists enforce_attempt_sequence on raw.capture_attempts;
-create trigger enforce_attempt_sequence
-before insert on raw.capture_attempts
-for each row execute function raw.enforce_capture_attempt_sequence();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_attempts'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER enforce_attempt_sequence BEFORE INSERT ON raw.capture_attempts FOR EACH ROW EXECUTE FUNCTION raw.enforce_capture_attempt_sequence()'
+    ) then
+        drop trigger if exists enforce_attempt_sequence on raw.capture_attempts;
+        create trigger enforce_attempt_sequence
+        before insert on raw.capture_attempts
+        for each row execute function raw.enforce_capture_attempt_sequence();
+    end if;
+end
+$$;
 
 create or replace function raw.validate_capture_attempt_result()
 returns trigger language plpgsql as $$
@@ -1110,10 +1326,22 @@ begin
 end;
 $$;
 
-drop trigger if exists validate_attempt_result on raw.capture_attempt_results;
-create trigger validate_attempt_result
-before insert on raw.capture_attempt_results
-for each row execute function raw.validate_capture_attempt_result();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'raw.capture_attempt_results'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER validate_attempt_result BEFORE INSERT ON raw.capture_attempt_results FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_attempt_result()'
+    ) then
+        drop trigger if exists validate_attempt_result on raw.capture_attempt_results;
+        create trigger validate_attempt_result
+        before insert on raw.capture_attempt_results
+        for each row execute function raw.validate_capture_attempt_result();
+    end if;
+end
+$$;
 
 create or replace function raw.reject_capture_control_mutation()
 returns trigger language plpgsql as $$
@@ -1133,12 +1361,26 @@ begin
         'capture_obligation_work_bindings', 'capture_attempts',
         'capture_attempt_results', 'capture_checkpoints', 'recapture_plans'
     ] loop
-        execute format('drop trigger if exists reject_mutation on raw.%I', table_name);
-        execute format(
-            'create trigger reject_mutation before update or delete on raw.%I '
-            'for each row execute function raw.reject_capture_control_mutation()',
-            table_name
-        );
+        -- Boot-lock guard: drop + create takes SHARE ROW EXCLUSIVE on the table; skip it
+        -- when the trigger is already exactly this one (the literal is its pg_get_triggerdef).
+        if not exists (
+            select 1
+            from pg_trigger
+            where tgrelid = format('raw.%I', table_name)::regclass
+              and not tgisinternal
+              and pg_get_triggerdef(oid) = format(
+                  'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON raw.%I '
+                  'FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation()',
+                  table_name
+              )
+        ) then
+            execute format('drop trigger if exists reject_mutation on raw.%I', table_name);
+            execute format(
+                'create trigger reject_mutation before update or delete on raw.%I '
+                'for each row execute function raw.reject_capture_control_mutation()',
+                table_name
+            );
+        end if;
     end loop;
 end;
 $$;

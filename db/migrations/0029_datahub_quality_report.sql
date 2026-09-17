@@ -13,7 +13,19 @@ create table if not exists mart.datahub_quality_report (
         check (split_part(report_id, ':', 2) = content_sha256)
 );
 
-drop trigger if exists reject_mutation on mart.datahub_quality_report;
-create trigger reject_mutation
-before update or delete on mart.datahub_quality_report
-for each row execute function mart.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.datahub_quality_report'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.datahub_quality_report FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation()'
+    ) then
+        drop trigger if exists reject_mutation on mart.datahub_quality_report;
+        create trigger reject_mutation
+        before update or delete on mart.datahub_quality_report
+        for each row execute function mart.reject_mutation();
+    end if;
+end
+$$;

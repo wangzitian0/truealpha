@@ -31,17 +31,35 @@ create table if not exists mart.strategy_run_capture_bindings (
     primary key (capture_run_id, strategy_run_id)
 );
 
-create index if not exists idx_strategy_run_capture_bindings_strategy_run
-    on mart.strategy_run_capture_bindings (strategy_run_id);
+do $$
+begin
+    if to_regclass('mart.idx_strategy_run_capture_bindings_strategy_run') is null then
+        create index if not exists idx_strategy_run_capture_bindings_strategy_run
+            on mart.strategy_run_capture_bindings (strategy_run_id);
+    end if;
+end
+$$;
 
 comment on table mart.strategy_run_capture_bindings is
     '#877: which capture run a strategy run was evaluated for. Readers scope core results '
     'and the governed strategy run through this link, never through the cutoff alone.';
 
-drop trigger if exists trg_strategy_run_capture_bindings_append_only on mart.strategy_run_capture_bindings;
-create trigger trg_strategy_run_capture_bindings_append_only
-before update or delete on mart.strategy_run_capture_bindings
-for each row execute function mart.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'mart.strategy_run_capture_bindings'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_strategy_run_capture_bindings_append_only BEFORE DELETE OR UPDATE ON mart.strategy_run_capture_bindings FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation()'
+    ) then
+        drop trigger if exists trg_strategy_run_capture_bindings_append_only on mart.strategy_run_capture_bindings;
+        create trigger trg_strategy_run_capture_bindings_append_only
+        before update or delete on mart.strategy_run_capture_bindings
+        for each row execute function mart.reject_mutation();
+    end if;
+end
+$$;
 
 -- History: every strategy run recorded before the tick wrote bindings is bound to the TOPT
 -- capture run at its executed_at, but ONLY when that cutoff has exactly one materialized
@@ -77,7 +95,9 @@ on conflict do nothing;
 -- newest advance. Per strategy key the view yields at most one run, the latest bound to
 -- the head's capture run, so a forced run that advanced the pointer resolves its own
 -- strategy run and a forced run that was withheld resolves nothing.
-create or replace view mart.governed_strategy_run as
+do $$
+declare
+    wanted constant text := $view$
 with head as (
     select environment, universe_id, universe_version, factor_id, target_run_id, sequence, advanced_at
     from mart.current_pointer_head
@@ -107,13 +127,29 @@ join lateral (
     join mart.strategy_runs candidate on candidate.strategy_run_id = binding.strategy_run_id
     where binding.capture_run_id = head.target_run_id
     order by candidate.strategy_key, binding.bound_at desc, candidate.strategy_run_id desc
-) run on true;
+) run on true
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.governed_strategy_run') is null
+       or pg_get_viewdef(to_regclass('mart.governed_strategy_run'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.governed_strategy_run as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 -- The one capture run a strategy run's decisions are read against: the governed head's,
 -- when the governed head resolves this strategy run; otherwise the latest binding. Both
 -- strategy-run twins join core results through this view (`strategy-run-repository.ts`,
 -- `strategy_run_postgres.py`), so a decision meets exactly one core result.
-create or replace view mart.strategy_run_capture as
+do $$
+declare
+    wanted constant text := $view$
 select distinct on (binding.strategy_run_id)
        binding.strategy_run_id,
        binding.capture_run_id,
@@ -125,7 +161,21 @@ left join mart.governed_strategy_run governed
 order by binding.strategy_run_id,
          (governed.strategy_run_id is not null) desc,
          binding.bound_at desc,
-         binding.capture_run_id desc;
+         binding.capture_run_id desc
+$view$;
+begin
+    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
+    -- changes, queueing every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.strategy_run_capture') is null
+       or pg_get_viewdef(to_regclass('mart.strategy_run_capture'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.strategy_run_capture as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 comment on view mart.strategy_run_capture is
     '#877: the capture run a strategy run''s decisions are read against (the governed head''s '

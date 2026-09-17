@@ -17,20 +17,48 @@ create table if not exists app.conversations (
     unique (conversation_id, tenant_id, owner_principal_id)
 );
 
-alter table app.conversations enable row level security;
-alter table app.conversations force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.conversations'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.conversations enable row level security;
+        alter table app.conversations force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists conversations_owner_isolation on app.conversations;
-create policy conversations_owner_isolation on app.conversations
-    for all
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    )
-    with check (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.conversations'::regclass
+          and polname = 'conversations_owner_isolation'
+          and polcmd = '*'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+    ) then
+        drop policy if exists conversations_owner_isolation on app.conversations;
+        create policy conversations_owner_isolation on app.conversations
+            for all
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            )
+            with check (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
 create table if not exists app.conversation_messages (
     message_id         text primary key check (length(message_id) > 0),
@@ -57,29 +85,75 @@ create table if not exists app.conversation_messages (
     unique (message_id, tenant_id, owner_principal_id)
 );
 
-create index if not exists idx_conversation_messages_conversation
-    on app.conversation_messages (conversation_id, created_at);
+do $$
+begin
+    if to_regclass('app.idx_conversation_messages_conversation') is null then
+        create index if not exists idx_conversation_messages_conversation
+            on app.conversation_messages (conversation_id, created_at);
+    end if;
+end
+$$;
 
-alter table app.conversation_messages enable row level security;
-alter table app.conversation_messages force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.conversation_messages'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.conversation_messages enable row level security;
+        alter table app.conversation_messages force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists conversation_messages_owner_isolation on app.conversation_messages;
-create policy conversation_messages_owner_isolation on app.conversation_messages
-    for all
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    )
-    with check (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.conversation_messages'::regclass
+          and polname = 'conversation_messages_owner_isolation'
+          and polcmd = '*'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+    ) then
+        drop policy if exists conversation_messages_owner_isolation on app.conversation_messages;
+        create policy conversation_messages_owner_isolation on app.conversation_messages
+            for all
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            )
+            with check (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
 -- Messages are append-only: no edit, no delete. Reuses app.reject_mutation() from 0022.
-drop trigger if exists trg_conversation_messages_append_only on app.conversation_messages;
-create trigger trg_conversation_messages_append_only
-before update or delete on app.conversation_messages
-for each row execute function app.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.conversation_messages'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_conversation_messages_append_only BEFORE DELETE OR UPDATE ON app.conversation_messages FOR EACH ROW EXECUTE FUNCTION app.reject_mutation()'
+    ) then
+        drop trigger if exists trg_conversation_messages_append_only on app.conversation_messages;
+        create trigger trg_conversation_messages_append_only
+        before update or delete on app.conversation_messages
+        for each row execute function app.reject_mutation();
+    end if;
+end
+$$;
 
 create table if not exists app.clarification_tokens (
     token_id                text primary key check (length(token_id) > 0),
@@ -103,20 +177,48 @@ create table if not exists app.clarification_tokens (
         references app.conversation_messages (message_id, tenant_id, owner_principal_id)
 );
 
-alter table app.clarification_tokens enable row level security;
-alter table app.clarification_tokens force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.clarification_tokens'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.clarification_tokens enable row level security;
+        alter table app.clarification_tokens force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists clarification_tokens_owner_isolation on app.clarification_tokens;
-create policy clarification_tokens_owner_isolation on app.clarification_tokens
-    for all
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    )
-    with check (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.clarification_tokens'::regclass
+          and polname = 'clarification_tokens_owner_isolation'
+          and polcmd = '*'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+    ) then
+        drop policy if exists clarification_tokens_owner_isolation on app.clarification_tokens;
+        create policy clarification_tokens_owner_isolation on app.clarification_tokens
+            for all
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            )
+            with check (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
 -- Single redemption is enforced at the repository layer via an atomic
 -- conditional UPDATE (`WHERE redeemed_at IS NULL AND expires_at > now()`),
@@ -142,10 +244,22 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_clarification_tokens_guard_update on app.clarification_tokens;
-create trigger trg_clarification_tokens_guard_update
-before update on app.clarification_tokens
-for each row execute function app.reject_clarification_token_field_tamper();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.clarification_tokens'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_clarification_tokens_guard_update BEFORE UPDATE ON app.clarification_tokens FOR EACH ROW EXECUTE FUNCTION app.reject_clarification_token_field_tamper()'
+    ) then
+        drop trigger if exists trg_clarification_tokens_guard_update on app.clarification_tokens;
+        create trigger trg_clarification_tokens_guard_update
+        before update on app.clarification_tokens
+        for each row execute function app.reject_clarification_token_field_tamper();
+    end if;
+end
+$$;
 
 create table if not exists app.research_gap_requests (
     gap_request_id      text primary key check (length(gap_request_id) > 0),
@@ -161,36 +275,76 @@ create table if not exists app.research_gap_requests (
         references app.conversations (conversation_id, tenant_id, owner_principal_id)
 );
 
-alter table app.research_gap_requests enable row level security;
-alter table app.research_gap_requests force row level security;
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_class
+        where oid = 'app.research_gap_requests'::regclass
+          and relrowsecurity
+          and relforcerowsecurity
+    ) then
+        alter table app.research_gap_requests enable row level security;
+        alter table app.research_gap_requests force row level security;
+    end if;
+end
+$$;
 
-drop policy if exists research_gap_requests_owner_isolation on app.research_gap_requests;
-create policy research_gap_requests_owner_isolation on app.research_gap_requests
-    for all
-    using (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    )
-    with check (
-        tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
-        and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
-    );
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_policy
+        where polrelid = 'app.research_gap_requests'::regclass
+          and polname = 'research_gap_requests_owner_isolation'
+          and polcmd = '*'
+          and polpermissive
+          and polroles = '{0}'::oid[]
+          and pg_get_expr(polqual, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+          and pg_get_expr(polwithcheck, polrelid) is not distinct from '((tenant_id = NULLIF(current_setting(''truealpha.tenant_id''::text, true), ''''::text)) AND (owner_principal_id = NULLIF(current_setting(''truealpha.principal_id''::text, true), ''''::text)))'
+    ) then
+        drop policy if exists research_gap_requests_owner_isolation on app.research_gap_requests;
+        create policy research_gap_requests_owner_isolation on app.research_gap_requests
+            for all
+            using (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            )
+            with check (
+                tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
+                and owner_principal_id = nullif(current_setting('truealpha.principal_id', true), '')
+            );
+    end if;
+end
+$$;
 
 -- Content-free: no consent flag or declined row exists. A row's mere
 -- existence is the consented case (#225); a declined suggestion never
 -- reaches this table at all (repository layer never calls insert for it).
-drop trigger if exists trg_research_gap_requests_append_only on app.research_gap_requests;
-create trigger trg_research_gap_requests_append_only
-before update or delete on app.research_gap_requests
-for each row execute function app.reject_mutation();
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_trigger
+        where tgrelid = 'app.research_gap_requests'::regclass
+          and not tgisinternal
+          and pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_research_gap_requests_append_only BEFORE DELETE OR UPDATE ON app.research_gap_requests FOR EACH ROW EXECUTE FUNCTION app.reject_mutation()'
+    ) then
+        drop trigger if exists trg_research_gap_requests_append_only on app.research_gap_requests;
+        create trigger trg_research_gap_requests_append_only
+        before update or delete on app.research_gap_requests
+        for each row execute function app.reject_mutation();
+    end if;
+end
+$$;
 
 -- Administrator non-content audit projection: counts/timestamps only, ever
 -- exposed to an administrator, never message/prompt content. Mirrors
 -- app.access_audit_metadata's shape (0022): security_barrier + an inline
 -- administrator check, granted only to app_audit_reader.
-create or replace view app.conversation_audit_metadata
-with (security_barrier = true)
-as
+do $$
+declare
+    wanted constant text := $view$
 select
     c.tenant_id,
     c.conversation_id,
@@ -208,7 +362,23 @@ where c.tenant_id = nullif(current_setting('truealpha.tenant_id', true), '')
       and reader.tenant_id = c.tenant_id
       and reader.principal_kind = 'administrator'
 )
-group by c.tenant_id, c.conversation_id, c.owner_principal_id, c.created_at;
+group by c.tenant_id, c.conversation_id, c.owner_principal_id, c.created_at
+$view$;
+begin
+    -- Boot-lock guard: `create or replace view` is ACCESS EXCLUSIVE on the view and
+    -- queues every reader behind it; replace only when the definition differs.
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('app.conversation_audit_metadata') is null
+       or pg_get_viewdef(to_regclass('app.conversation_audit_metadata'))
+          is distinct from pg_get_viewdef('pg_temp.boot_guard_candidate'::regclass)
+       or (select reloptions from pg_class where oid = to_regclass('app.conversation_audit_metadata'))
+          is distinct from '{security_barrier=true}'::text[]
+    then
+        execute 'create or replace view app.conversation_audit_metadata with (security_barrier = true) as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
 
 -- Grants to app_runtime/app_audit_reader live in db/roles.sql, not here:
 -- migrations run before roles.sql creates those roles (see #396, and the

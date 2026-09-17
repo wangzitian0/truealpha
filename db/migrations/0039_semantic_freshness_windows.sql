@@ -10,82 +10,119 @@
 -- falls back to the policy's single freshness_max_age, so existing policies keep
 -- their exact behavior.
 
-alter table raw.capture_schedule_policies
-    add column if not exists semantic_freshness_max_age jsonb not null default '{}'::jsonb;
-alter table raw.capture_schedule_policies
-    drop constraint if exists semantic_freshness_max_age_is_object;
-alter table raw.capture_schedule_policies
-    add constraint semantic_freshness_max_age_is_object
-    check (jsonb_typeof(semantic_freshness_max_age) = 'object');
+do $$
+begin
+    if not exists (
+        select 1 from pg_attribute
+        where attrelid = 'raw.capture_schedule_policies'::regclass
+          and attname = 'semantic_freshness_max_age' and not attisdropped
+    ) then
+        alter table raw.capture_schedule_policies
+            add column if not exists semantic_freshness_max_age jsonb not null default '{}'::jsonb;
+    end if;
+end
+$$;
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conrelid = 'raw.capture_schedule_policies'::regclass
+          and conname = 'semantic_freshness_max_age_is_object'
+          and pg_get_constraintdef(oid) = 'CHECK ((jsonb_typeof(semantic_freshness_max_age) = ''object''::text))'
+    ) then
+        alter table raw.capture_schedule_policies
+            drop constraint if exists semantic_freshness_max_age_is_object;
+        alter table raw.capture_schedule_policies
+            add constraint semantic_freshness_max_age_is_object
+            check (jsonb_typeof(semantic_freshness_max_age) = 'object');
+    end if;
+end
+$$;
 
 -- Both freshness-grading views, redefined verbatim from 0026 with the window
 -- expression swapped for the per-semantic coalesce.
 
-create or replace view mart.topt_core_meta_info as
-select
-    result.result_id,
-    result.invocation_id,
-    result.snapshot_id,
-    result.run_id,
-    result.release_manifest_id,
-    result.universe_id,
-    result.universe_version,
-    result.universe_sha256,
-    result.cutoff,
-    result.issuer_id,
-    result.instrument_id,
-    result.listing_id,
-    result.input_observation_ids,
-    result.gppe_invocation_id,
-    result.gppe_result_id,
-    result.gppe_definition_id,
-    result.gppe_definition_sha256,
-    result.tier_definition_id,
-    result.tier_definition_sha256,
-    result.confidence,
-    result.freshness,
-    result.created_at,
-    lineage.items as lineage
-from mart.topt_core_results result
-join lateral (
-    select jsonb_agg(
-        jsonb_build_object(
-            'observation_id', observation.observation_id,
-            'semantic_type', observation.semantic_type,
-            'semantic_version', observation.semantic_version,
-            'source_vintage_id', observation.source_vintage_id,
-            'source_request_id', vintage.source_request_id,
-            'source_registry_entry_id', request.source_registry_entry_id,
-            'source_policy_id', request.source_policy_id,
-            'parser_version', observation.parser_version,
-            'mapping_version', observation.mapping_version,
-            'normalized_payload_sha256', observation.normalized_payload_sha256,
-            'confidence', observation.confidence,
-            'freshness', case
-                when result.cutoff - observation.knowable_at <= coalesce(nullif(policy.semantic_freshness_max_age->>observation.semantic_type, '')::interval, policy.freshness_max_age) then 'fresh'
-                else 'stale'
-            end,
-            'knowable_at', observation.knowable_at,
-            'recorded_at', observation.recorded_at
-        ) order by observation.observation_id
-    ) as items
-    from unnest(result.input_observation_ids) selected(observation_id)
-    join staging.capture_normalized_observations observation using (observation_id)
-    join staging.capture_observation_obligations usage using (observation_id)
-    join raw.capture_obligations obligation
-      on obligation.obligation_id = usage.capture_obligation_id
-     and obligation.run_id = result.run_id
-    join raw.capture_obligation_work_bindings binding
-      on binding.obligation_id = obligation.obligation_id
-    join raw.capture_work_items work using (work_item_id)
-    join raw.capture_schedule_policies policy using (schedule_policy_id)
-    join raw.capture_source_vintages vintage using (source_vintage_id)
-    join raw.capture_source_requests request
-      on request.source_request_id = vintage.source_request_id
-     and request.source_request_id = work.source_request_id
-) lineage on true;
+-- Replay guard: 20260908T1014 and 20260910T0930 redefine this view after this file,
+-- so re-replacing it here on every boot would take ACCESS EXCLUSIVE on it (blocking
+-- every reader) only to have the later files replace it back. This definition is
+-- applied only while the view does not exist; the last migration that defines the
+-- view owns its shape and replaces it when its definition differs.
+do $$
+begin
+    if to_regclass('mart.topt_core_meta_info') is null then
+        create or replace view mart.topt_core_meta_info as
+        select
+            result.result_id,
+            result.invocation_id,
+            result.snapshot_id,
+            result.run_id,
+            result.release_manifest_id,
+            result.universe_id,
+            result.universe_version,
+            result.universe_sha256,
+            result.cutoff,
+            result.issuer_id,
+            result.instrument_id,
+            result.listing_id,
+            result.input_observation_ids,
+            result.gppe_invocation_id,
+            result.gppe_result_id,
+            result.gppe_definition_id,
+            result.gppe_definition_sha256,
+            result.tier_definition_id,
+            result.tier_definition_sha256,
+            result.confidence,
+            result.freshness,
+            result.created_at,
+            lineage.items as lineage
+        from mart.topt_core_results result
+        join lateral (
+            select jsonb_agg(
+                jsonb_build_object(
+                    'observation_id', observation.observation_id,
+                    'semantic_type', observation.semantic_type,
+                    'semantic_version', observation.semantic_version,
+                    'source_vintage_id', observation.source_vintage_id,
+                    'source_request_id', vintage.source_request_id,
+                    'source_registry_entry_id', request.source_registry_entry_id,
+                    'source_policy_id', request.source_policy_id,
+                    'parser_version', observation.parser_version,
+                    'mapping_version', observation.mapping_version,
+                    'normalized_payload_sha256', observation.normalized_payload_sha256,
+                    'confidence', observation.confidence,
+                    'freshness', case
+                        when result.cutoff - observation.knowable_at <= coalesce(nullif(policy.semantic_freshness_max_age->>observation.semantic_type, '')::interval, policy.freshness_max_age) then 'fresh'
+                        else 'stale'
+                    end,
+                    'knowable_at', observation.knowable_at,
+                    'recorded_at', observation.recorded_at
+                ) order by observation.observation_id
+            ) as items
+            from unnest(result.input_observation_ids) selected(observation_id)
+            join staging.capture_normalized_observations observation using (observation_id)
+            join staging.capture_observation_obligations usage using (observation_id)
+            join raw.capture_obligations obligation
+              on obligation.obligation_id = usage.capture_obligation_id
+             and obligation.run_id = result.run_id
+            join raw.capture_obligation_work_bindings binding
+              on binding.obligation_id = obligation.obligation_id
+            join raw.capture_work_items work using (work_item_id)
+            join raw.capture_schedule_policies policy using (schedule_policy_id)
+            join raw.capture_source_vintages vintage using (source_vintage_id)
+            join raw.capture_source_requests request
+              on request.source_request_id = vintage.source_request_id
+             and request.source_request_id = work.source_request_id
+        ) lineage on true;
+    end if;
+end
+$$;
 
-create or replace view mart.topt_capture_meta_info as
+-- This is the last migration that defines this view, so it owns the shape: the
+-- replacement (ACCESS EXCLUSIVE on the view) runs only when the stored definition
+-- differs from this one, compared through an identical temporary view.
+do $$
+declare
+    wanted constant text := $view$
 select
     obligation.run_id,
     obligation.obligation_id,
@@ -158,4 +195,16 @@ left join lateral (
           and candidate.knowable_at <= campaign.cutoff
     ) selected
     where selected.selection_count = 1
-) observation on true;
+) observation on true
+$view$;
+begin
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.topt_capture_meta_info') is null
+       or pg_get_viewdef(to_regclass('mart.topt_capture_meta_info'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.topt_capture_meta_info as ' || wanted;
+    end if;
+    drop view pg_temp.boot_guard_candidate;
+end
+$$;
