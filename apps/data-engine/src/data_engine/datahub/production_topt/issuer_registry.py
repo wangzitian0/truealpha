@@ -15,8 +15,10 @@ than being scored through a proxy that does not describe them.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
+from typing import Any
 
 import httpx
 from factors.production_topt import OperatingBranch
@@ -41,6 +43,47 @@ _INSURANCE_SIC = range(6300, 6400)
 # never a ticker allowlist. V and MA are 7389; widening this set is a one-line versioned
 # change if the owner intends another industry to qualify.
 _NO_COGS_SERVICES_SIC = frozenset({7389})
+
+
+# The EDGAR forms that carry an issuer's periodic financial statements: audited annual
+# reports and reviewed quarterly ones, with their amendments and transition-period variants.
+# A figure asserted in any other form (a proxy statement's pay-versus-performance table, an
+# earnings-release 8-K, a 6-K) is not the statement: DEF 14A carried FANG's FY2025 net income
+# at $1,547M against the 10-K's $1,664M (-7.0%), and it won on filing date alone.
+ANNUAL_STATEMENT_FORMS = frozenset({"10-K", "10-K/A", "10-KT", "10-KT/A", "20-F", "20-F/A", "40-F", "40-F/A"})
+INTERIM_STATEMENT_FORMS = frozenset({"10-Q", "10-Q/A", "10-QT", "10-QT/A"})
+STATEMENT_FORMS = ANNUAL_STATEMENT_FORMS | INTERIM_STATEMENT_FORMS
+
+
+@dataclass(frozen=True)
+class StatementFiling:
+    """One periodic-statement filing in the issuer's EDGAR index: what period it reports
+    and when it became public. The index lists a filing the day it is accepted, while the
+    company-facts API can lag it by a quarter (V, PYPL and NXPI in 2026-09), so this is the
+    newest period the pipeline can prove was filed."""
+
+    form: str
+    filed: date
+    period_end: date
+
+    @property
+    def annual(self) -> bool:
+        return self.form in ANNUAL_STATEMENT_FORMS
+
+
+def statement_filings(submissions: Mapping[str, Any]) -> tuple[StatementFiling, ...]:
+    """Every periodic-statement filing the submissions document's recent index lists."""
+    recent = submissions.get("filings", {}).get("recent", {})
+    columns: Sequence[Sequence[Any]] = [recent.get(key) or () for key in ("form", "filingDate", "reportDate")]
+    filings: list[StatementFiling] = []
+    for form, filed, period_end in zip(*columns, strict=False):
+        if form not in STATEMENT_FORMS or not filed or not period_end:
+            continue
+        try:
+            filings.append(StatementFiling(form, date.fromisoformat(filed), date.fromisoformat(period_end)))
+        except (TypeError, ValueError):
+            continue
+    return tuple(filings)
 
 
 class IssuerRegistryUnavailableError(RuntimeError):
@@ -76,6 +119,9 @@ class IssuerClassification:
 
     operating_branch: OperatingBranch
     revenue_proxy_allowed: bool
+    # The periodic-statement filings the EDGAR index lists, read from the same submissions
+    # document, so a capture can tell when its company-facts figures trail a filed period.
+    statement_filings: tuple[StatementFiling, ...] = ()
 
 
 def resolve_issuer_classifications(ciks: Mapping[str, int]) -> dict[int, IssuerClassification]:
@@ -97,5 +143,6 @@ def resolve_issuer_classifications(ciks: Mapping[str, int]) -> dict[int, IssuerC
             classifications[cik] = IssuerClassification(
                 operating_branch=operating_branch_for_sic(sic),
                 revenue_proxy_allowed=revenue_proxy_allowed_for_sic(sic),
+                statement_filings=statement_filings(submissions),
             )
     return classifications
