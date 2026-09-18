@@ -1,10 +1,10 @@
 # Metric forest
 
-Design for #528, following the owner decision of 2026-09-17. Status: proposed. Nothing in
-this document is merged yet. Step B (the registry, with GPPE v0.2.0 as its first tree) is
-proposed in #909 (§11), which adds `libs/factors/src/factors/forest/`. Where a section says what
-step B does, it describes #909, not `main`. `init.md` stays the authority. This document describes how rule 17 and §7 module 2 are
-implemented without a hardcoded formula.
+Design for #528, following the owner decision of 2026-09-17. Status: active.
+Step B (the registry, with GPPE v0.2.0 as its first tree) merged in #909 (§11),
+which adds `libs/factors/src/factors/forest/`. `init.md` stays the authority.
+This document describes how rule 17 and §7 module 2 are implemented without a
+hardcoded formula.
 
 ## 0. The decisions this implements
 

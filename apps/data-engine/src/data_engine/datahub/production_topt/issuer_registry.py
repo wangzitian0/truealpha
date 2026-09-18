@@ -99,8 +99,3 @@ def resolve_issuer_classifications(ciks: Mapping[str, int]) -> dict[int, IssuerC
                 revenue_proxy_allowed=revenue_proxy_allowed_for_sic(sic),
             )
     return classifications
-
-
-def resolve_operating_branches(ciks: Mapping[str, int]) -> dict[int, OperatingBranch]:
-    """Operating branch only, for callers that do not need the full classification."""
-    return {cik: item.operating_branch for cik, item in resolve_issuer_classifications(ciks).items()}
