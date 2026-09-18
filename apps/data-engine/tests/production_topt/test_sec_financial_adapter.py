@@ -9,15 +9,19 @@ from data_engine.datahub.production_topt.issuer_registry import (
     revenue_proxy_allowed_for_sic,
 )
 from data_engine.datahub.production_topt.sec_financial_adapter import (
+    DEFAULT_RULESET,
     FinancialFactsBundle,
     HeadcountFact,
     SecFinancialFactAdapter,
     SecTarget,
     SourceUnavailableError,
+    _statement_period_ends,
     annual_values_by_period_end,
     build_bundle,
+    company_facts_record_id,
     gross_profit,
     insurance_pre_claims_profit,
+    merge_company_facts,
     pre_provision_profit,
     sec_financial_fetcher,
 )
@@ -1359,3 +1363,149 @@ def test_an_exhausted_sec_budget_defers_the_cell_through_the_deployed_fetcher(ca
     assert isinstance(result, FetchFailure)
     assert result.reason_code is ObligationReasonCode.DEFERRED_CAPACITY
     assert asked == [] and len(call_ledger) == 2
+
+
+def test_statement_period_ends_handles_non_usd_units() -> None:
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "EUR": [
+                            {"end": "2025-12-31", "val": 500, "filed": "2026-02-01", "form": "10-K"},
+                            {"end": "2026-03-31", "val": 520, "filed": "2026-04-15", "form": "10-Q"},
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    latest, latest_annual = _statement_period_ends(facts, DEFAULT_RULESET, date(2026, 3, 31))
+    assert latest == date(2025, 12, 31)
+    assert latest_annual == date(2025, 12, 31)
+
+
+def test_merge_company_facts_combines_holdco_and_predecessor_documents() -> None:
+    holdco_facts = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [{"end": "2026-06-30", "val": 464482000000, "filed": "2026-08-05", "form": "10-Q"}]
+                    }
+                },
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [{"end": "2026-06-30", "val": 4111911960, "filed": "2026-08-05", "form": "10-Q"}]
+                    }
+                },
+            }
+        }
+    }
+    predecessor_facts = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [{"end": "2025-12-31", "val": 400000000000, "filed": "2026-02-15", "form": "10-K"}]
+                    }
+                },
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            _annual(
+                                "2025-12-31",
+                                "2025-01-01",
+                                340000000000,
+                                "2026-02-15",
+                                accn="0000034088-26-000010",
+                            )
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    merged = merge_company_facts(
+        [
+            (company_facts_record_id(2115436), holdco_facts),
+            (company_facts_record_id(34088), predecessor_facts),
+        ],
+        DEFAULT_RULESET,
+    )
+    bundle = build_bundle(merged, date(2026, 9, 1), OperatingBranch.NON_FINANCIAL)
+    assert bundle.total_assets == Decimal("464482000000")
+    assert bundle.shares_outstanding == Decimal("4111911960")
+    assert bundle.revenue == Decimal("340000000000")
+    assert bundle.vintages["total_assets"]["document"] == "companyfacts:CIK0002115436"
+    assert bundle.vintages["revenue"]["document"] == "companyfacts:CIK0000034088"
+
+
+def test_adapter_fetch_merges_holdco_and_predecessor_when_documents_present() -> None:
+    holdco_doc = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [{"end": "2026-06-30", "val": 464482000000, "filed": "2026-08-05", "form": "10-Q"}]
+                    }
+                },
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [{"end": "2026-06-30", "val": 4111911960, "filed": "2026-08-05", "form": "10-Q"}]
+                    }
+                },
+            }
+        }
+    }
+    pred_doc = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            _annual(
+                                "2025-12-31",
+                                "2025-01-01",
+                                340000000000,
+                                "2026-02-15",
+                                accn="0000034088-26-000010",
+                            )
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    holdco_bundle = build_bundle(
+        holdco_doc, date(2026, 9, 1), OperatingBranch.NON_FINANCIAL, raw_bytes=b'{"holdco": true}'
+    )
+    pred_bundle = build_bundle(
+        pred_doc, date(2026, 9, 1), OperatingBranch.NON_FINANCIAL, raw_bytes=b'{"predecessor": true}'
+    )
+
+    def fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        return holdco_bundle if cik == 2115436 else pred_bundle
+
+    item = _work_item("c" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=date(2026, 9, 1),
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+    )
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher)
+    outcome = adapter.fetch(item)
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.record.payload["total_assets"] == "464482000000"
+    assert outcome.record.payload["revenue"] == "340000000000"
+    assert outcome.record.payload["shares_basis"] == "point_in_time"
+    assert outcome.raw.body == b'{"holdco": true}'
+    from data_engine.datahub.production_topt.materialization import FinancialFactPayload
+
+    validated = FinancialFactPayload(**outcome.record.payload)
+    assert validated.shares_basis == "point_in_time"
+    assert validated.total_assets == Decimal("464482000000")

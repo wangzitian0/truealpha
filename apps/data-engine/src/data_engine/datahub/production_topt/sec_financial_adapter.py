@@ -923,19 +923,20 @@ def _statement_period_ends(
     latest_annual: date | None = None
     for item in _declared_concepts(ruleset, "total_assets"):
         body = facts.get("facts", {}).get(item.taxonomy, {}).get(item.concept, {})
-        for entry in body.get("units", {}).get("USD", ()):
-            form, filed_raw, end_raw = entry.get("form"), entry.get("filed"), entry.get("end")
-            if form not in STATEMENT_FORMS or entry.get("start") is not None or not filed_raw or not end_raw:
-                continue
-            try:
-                filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
-            except ValueError:
-                continue
-            if filed > cutoff:
-                continue
-            latest = end if latest is None else max(latest, end)
-            if form in ANNUAL_STATEMENT_FORMS:
-                latest_annual = end if latest_annual is None else max(latest_annual, end)
+        for entries in body.get("units", {}).values():
+            for entry in entries:
+                form, filed_raw, end_raw = entry.get("form"), entry.get("filed"), entry.get("end")
+                if form not in STATEMENT_FORMS or entry.get("start") is not None or not filed_raw or not end_raw:
+                    continue
+                try:
+                    filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
+                except ValueError:
+                    continue
+                if filed > cutoff:
+                    continue
+                latest = end if latest is None else max(latest, end)
+                if form in ANNUAL_STATEMENT_FORMS:
+                    latest_annual = end if latest_annual is None else max(latest_annual, end)
     return latest, latest_annual
 
 
@@ -1008,6 +1009,7 @@ class SecFinancialFactAdapter:
         headcount_extractor: HeadcountExtractor | None = None,
         mapping_version: str = MAPPING_VERSION,
         corroborating_origins: Sequence[FinancialFactCorroboratingOrigin] = (),
+        ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
     ) -> None:
         self._targets = targets
         self._fetcher = fetcher
@@ -1017,6 +1019,7 @@ class SecFinancialFactAdapter:
         # numbers mean while every row still claims the same mapping identity.
         self._mapping_version = mapping_version
         self._corroborating_origins = tuple(corroborating_origins)
+        self._ruleset = ruleset
 
     def _corroborate(self, target: SecTarget) -> tuple[Corroboration, ...]:
         """Ask every configured second origin about this issuer; an origin that errors,
@@ -1081,14 +1084,29 @@ class SecFinancialFactAdapter:
                 # corporate reorganization, or (XOM from 2026-09, #745's residual) a holdco
                 # whose first filings carry the balance sheet and share count but no
                 # revenue or profit. The issuer's own predecessor CIK (owner-signed
-                # registry, or the capture lineage) is the same company's filing history,
-                # so its document is used whole: one raw source per observation, and the
-                # fallback disables itself the day the holdco reports income. Only the
-                # selected document's bytes are archived with the observation: the sparse
-                # mapped-CIK payload is discarded when the predecessor replaces it.
+                # registry, or the capture lineage) is the same company's filing history.
+                # When both documents are available, their declared concepts are merged
+                # (see `merge_company_facts`) so the latest balance-sheet and share counts
+                # from the holdco combine with the predecessor's income-statement figures.
                 fallback = self._fetcher(target.predecessor_cik, target.cutoff, target.operating_branch)
                 if fallback is not None and _asserts_income(fallback):
-                    bundle = fallback
+                    if bundle.document is not None and fallback.document is not None:
+                        merged = merge_company_facts(
+                            [
+                                (company_facts_record_id(target.cik), bundle.document),
+                                (company_facts_record_id(target.predecessor_cik), fallback.document),
+                            ],
+                            self._ruleset,
+                        )
+                        bundle = build_bundle(
+                            merged,
+                            target.cutoff,
+                            target.operating_branch,
+                            raw_bytes=bundle.raw_bytes,
+                            ruleset=self._ruleset,
+                        )
+                    else:
+                        bundle = fallback
         except BudgetExhausted:
             # SEC's daily call budget is spent for this environment: deferred, named, not
             # "the issuer files nothing" (rule 6, #729). The gate's listener counted it.
@@ -1141,6 +1159,7 @@ class SecFinancialFactAdapter:
             "headcount": _s(headcount),
             "revenue": _s(bundle.revenue),
             "shares_outstanding": _s(bundle.shares_outstanding),
+            "shares_basis": bundle.shares_basis,
             "pre_provision_profit": _s(bundle.pre_provision_profit),
             "operating_period_end": _d(bundle.operating_period_end),
             "revenue_period_end": _d(bundle.revenue_period_end),
@@ -1360,4 +1379,5 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
         headcount_extractor=None if connection is None else PostgresHeadcountExtractor(connection),
         mapping_version=f"{MAPPING_VERSION}+{ruleset.content_sha256[:12]}",
         corroborating_origins=() if second_origin is None else (second_origin,),
+        ruleset=ruleset,
     )
