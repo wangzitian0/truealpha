@@ -69,6 +69,7 @@ class FinancialFactPayload(_FrozenModel):
     headcount: Decimal | None
     revenue: Decimal | None
     shares_outstanding: Decimal | None
+    shares_basis: str | None = None
     pre_provision_profit: Decimal | None
     # The fiscal periods behind the two headline figures. Optional so a snapshot frozen
     # before #496 still validates; new captures always carry them, which is what makes
