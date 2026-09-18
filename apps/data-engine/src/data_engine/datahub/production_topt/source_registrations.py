@@ -554,7 +554,7 @@ def configured_origin_sources(semantic_type: str) -> set[str]:
             required.add(f"{TWELVE_DATA_ORIGIN}:v1")
         if settings.moomoo_kline_origin_enabled:
             required.add(f"{MOOMOO_KLINE_ORIGIN}:v1")
-    elif reg.source_id == "sec-companyfacts":
+    elif reg.source_id == "sec-company-facts":
         if settings.moomoo_financials_origin_enabled:
             required.add(f"{MOOMOO_FINANCIALS_ORIGIN}:v1")
     return required

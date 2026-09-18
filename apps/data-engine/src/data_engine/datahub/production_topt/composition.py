@@ -766,12 +766,16 @@ def _satisfy_from_recent_observations(
     for target_id, semantic_type, anchor_vintage, knowable_at, observations, parser_versions in rows:
         required_sources = configured_origin_sources(semantic_type)
         present_sources = set()
+        disqualified = False
         for pv in parser_versions:
             if pv in PARSER_VERSION_HISTORY or pv == PARSER_VERSION:
                 present_sources.add("primary")
             elif pv in SOURCE_BY_PARSER:
                 present_sources.add(SOURCE_BY_PARSER[pv][0])
-        if present_sources != required_sources:
+            else:
+                disqualified = True
+                break
+        if disqualified or present_sources != required_sources:
             continue
         by_target[target_id] = {
             "semantic": semantic_type,
