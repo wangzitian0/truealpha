@@ -55,6 +55,12 @@ from data_engine.datahub.production_topt.executor import (
     NormalizedRecord,
     RawResponse,
 )
+from data_engine.datahub.production_topt.issuer_registry import (
+    ANNUAL_STATEMENT_FORMS,
+    INTERIM_STATEMENT_FORMS,
+    STATEMENT_FORMS,
+    StatementFiling,
+)
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 from data_engine.sources.gateway import BudgetExhausted
 
@@ -69,6 +75,17 @@ if TYPE_CHECKING:
 # An annual period: shorter spans are quarterly facts that must not be compared with
 # annual ones. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
+
+# The key a merged company-facts entry carries naming the document it came from (see
+# `merge_company_facts`). Not an SEC key; SEC's own keys are all lower-case words.
+_DOCUMENT_KEY = "_document"
+
+# Which inputs describe a balance-sheet instant (compared with the newest filed statement
+# period) and which a fiscal year (compared with the newest filed annual period). A share
+# count is an instant even when its last resort is a period average: the question is
+# whether a newer count was filed, and one was whenever a newer statement was.
+_INSTANT_INPUTS = frozenset({"total_assets", "shares_outstanding", "financial_assets"})
+_ANNUAL_INPUTS = frozenset({"gross_profit", "revenue", "net_income", "financial_returns"})
 
 # How far before the cutoff a share count may have been measured and still be used.
 #
@@ -150,6 +167,23 @@ class FinancialFactsBundle:
     financial_returns: Decimal | None = None
     financial_returns_basis: str | None = None
     financial_returns_is_proxy: bool = False
+    # Which share-count quantity resolved: the point-in-time count, or the owner-approved
+    # weighted-average last resort (#496/#514). The two are different quantities, so a
+    # market capitalisation built on the second must say so (None when neither resolved).
+    shares_basis: str | None = None
+    # The newest balance-sheet date this document proves was filed in a periodic statement,
+    # and the newest such date filed in an annual report. An input dated before the
+    # matching one is a figure the issuer has already superseded (see `_stale_inputs`).
+    latest_statement_period_end: date | None = None
+    latest_annual_period_end: date | None = None
+    # The parsed company-facts document, kept so two documents of one issuer can be merged
+    # and parsed again as one filing history. Never part of the payload or the bundle's
+    # identity.
+    document: Mapping[str, Any] | None = field(default=None, repr=False, compare=False)
+
+
+SHARES_POINT_IN_TIME = "point_in_time"
+SHARES_WEIGHTED_AVERAGE_BASIC = "weighted_average_basic"
 
 
 @dataclass(frozen=True)
@@ -181,6 +215,15 @@ class SecTarget:
     # all (a real state: XOM's post-reorganization holdco CIK publishes no
     # us-gaap taxonomy). Registry/lineage-driven — never a ticker allowlist.
     predecessor_cik: int | None = None
+    # True when `predecessor_cik` comes from the owner-signed registry
+    # (`staging.issuer_cik_predecessors`) rather than the capture lineage. Only a signed row
+    # proves the two CIKs are one issuer, so only a signed row merges the two documents per
+    # field; a lineage-resolved CIK keeps the whole-document fallback.
+    predecessor_signed: bool = False
+    # The issuer's periodic-statement filings from its EDGAR index (see
+    # `issuer_registry.StatementFiling`), for telling a figure the issuer has superseded
+    # from a current one.
+    statement_filings: tuple[StatementFiling, ...] = ()
     # #533: whether this issuer's industry may substitute revenue for an untagged gross
     # profit. Resolved from the EDGAR SIC at planning, exactly like `operating_branch`.
     # Defaults False so a target assembled without the registry cannot inherit a
@@ -322,6 +365,32 @@ class _Datum:
     form: str | None = None
     fy: int | None = None
     fp: str | None = None
+    # Whether `form` is a periodic financial statement (`issuer_registry.STATEMENT_FORMS`);
+    # None when the entry named no form (synthetic fixtures), which is never demoted.
+    statement_form: bool | None = None
+    # The company-facts document the figure was read from, when several were merged.
+    document: str | None = None
+
+    @property
+    def rank(self) -> int:
+        """0 for a statement figure, 1 for one from any other form: lower wins."""
+        return 1 if self.statement_form is False else 0
+
+
+def _statement_form(form: str | None) -> bool | None:
+    return None if form is None else form in STATEMENT_FORMS
+
+
+def _combined_statement_form(datums: Sequence[_Datum]) -> bool | None:
+    flags = [datum.statement_form for datum in datums]
+    if False in flags:
+        return False
+    return None if None in flags else True
+
+
+def _combined_document(datums: Sequence[_Datum]) -> str | None:
+    documents = sorted({datum.document for datum in datums if datum.document is not None})
+    return "+".join(documents) if documents else None
 
 
 def annual_values_by_period_end(
@@ -334,10 +403,17 @@ def annual_values_by_period_end(
     shorter spans are quarterly and must never be compared with annual figures.
 
     One period end appears many times in company-facts — the original filing plus every
-    later document that restated or simply re-reported it. The latest *filing* wins, never
-    the entry that happens to sit last in the JSON array: selecting by array position makes
+    later document that restated or simply re-reported it. A periodic statement (10-K, 10-Q,
+    20-F, 40-F and their amendments) outranks every other form for the same period, and a
+    figure from another form is used only when no statement asserts that period; its datum
+    says so (`statement_form=False`). Within a rank the latest *filing* wins, never the
+    entry that happens to sit last in the JSON array: selecting by array position makes
     restatement handling depend on the vendor's serialization order, which is the
     "never select the most recently inserted row" rule read backwards.
+
+    A span reported in a quarterly statement is never a fiscal year, however long: AMZN's
+    10-Q for Q2 2026 reports trailing-twelve-month net income (2025-07-01..2026-06-30,
+    $135,281M), which the duration floor alone admitted as the newest annual figure.
     """
     entries = facts.get("facts", {}).get(taxonomy, {}).get(concept, {}).get("units", {}).get(unit)
     if not entries:
@@ -352,27 +428,33 @@ def annual_values_by_period_end(
         )
         if filed_raw is None or end_raw is None or val is None:
             continue
+        form = _text_or_none(entry.get("form"))
         try:
             filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
-            if start_raw is not None and (end - date.fromisoformat(start_raw)).days < _ANNUAL_MINIMUM_DAYS:
+            if start_raw is not None and (
+                form in INTERIM_STATEMENT_FORMS or (end - date.fromisoformat(start_raw)).days < _ANNUAL_MINIMUM_DAYS
+            ):
                 continue
             value = Decimal(str(val))
         except (InvalidOperation, ValueError):
             continue
         if filed > cutoff:
             continue
+        fy_raw = entry.get("fy")
+        datum = _Datum(
+            value=value,
+            filed=filed,
+            period_end=end,
+            accession=_text_or_none(entry.get("accn")),
+            form=form,
+            fy=int(fy_raw) if isinstance(fy_raw, int) or (isinstance(fy_raw, str) and fy_raw.isdigit()) else None,
+            fp=_text_or_none(entry.get("fp")),
+            statement_form=_statement_form(form),
+            document=_text_or_none(entry.get(_DOCUMENT_KEY)),
+        )
         existing = values.get(end)
-        if existing is None or filed > existing.filed:
-            fy_raw = entry.get("fy")
-            values[end] = _Datum(
-                value=value,
-                filed=filed,
-                period_end=end,
-                accession=_text_or_none(entry.get("accn")),
-                form=_text_or_none(entry.get("form")),
-                fy=int(fy_raw) if isinstance(fy_raw, int) or (isinstance(fy_raw, str) and fy_raw.isdigit()) else None,
-                fp=_text_or_none(entry.get("fp")),
-            )
+        if existing is None or (datum.rank, -datum.filed.toordinal()) < (existing.rank, -existing.filed.toordinal()):
+            values[end] = datum
     return values
 
 
@@ -396,11 +478,17 @@ def _merge_variants(
     is what lets the series follow the issuer across that switch. Earlier variants win a
     period they share, so declaration order still expresses preference — it just can no
     longer decide *recency*.
+
+    A statement figure outranks declaration order: MA tags `NetIncomeLoss` only in its
+    proxy statements and reports the 10-K figure under `ProfitLoss`, so the preferred tag
+    alone would serve the proxy statement's number for every year.
     """
     merged: dict[date, _Datum] = {}
     for taxonomy, concept in concepts:
         for end, datum in annual_values_by_period_end(facts, taxonomy, concept, unit, cutoff).items():
-            merged.setdefault(end, datum)
+            existing = merged.get(end)
+            if existing is None or datum.rank < existing.rank:
+                merged[end] = datum
     return merged
 
 
@@ -413,12 +501,14 @@ def _preferred_variant(
     recency must not promote one: a more recent number for a different quantity is still a
     different quantity. Falling back only when the preferred concept is entirely absent keeps
     the substitution rare, deliberate, and driven by availability rather than by dates.
+    A concept the issuer asserts only outside its periodic statements is reached only when
+    no concept is asserted in one.
     """
-    for taxonomy, concept in concepts:
-        values = annual_values_by_period_end(facts, taxonomy, concept, unit, cutoff)
-        if values:
+    series = [annual_values_by_period_end(facts, taxonomy, concept, unit, cutoff) for taxonomy, concept in concepts]
+    for values in series:
+        if any(datum.rank == 0 for datum in values.values()):
             return values
-    return {}
+    return next((values for values in series if values), {})
 
 
 def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date, _Datum]) -> _Datum | None:
@@ -446,6 +536,8 @@ def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date
         form=later.form,
         fy=later.fy,
         fp=later.fp,
+        statement_form=_combined_statement_form((base[end], subtracted[end])),
+        document=_combined_document((base[end], subtracted[end])),
     )
 
 
@@ -498,7 +590,9 @@ def _gross_profit_resolved(
     )
     candidates = [datum for datum in (direct, derived) if datum is not None]
     if candidates:
-        return max(candidates, key=lambda datum: datum.period_end), False
+        # The later period wins; for the same period a statement figure outranks another
+        # form, and the reported figure outranks the derived one.
+        return max(candidates, key=lambda datum: (datum.period_end, -datum.rank)), False
     if _files_no_cogs_concepts(facts, ruleset):
         # #496 owner decision (2026-07-28): an issuer whose company-facts carry NO
         # GrossProfit and NO COGS-family concept AT ALL uses revenue as the gross-profit
@@ -602,6 +696,8 @@ def _sum_at(end: date, datums: Sequence[_Datum]) -> _Datum:
         form=later.form,
         fy=later.fy,
         fp=later.fp,
+        statement_form=_combined_statement_form(datums),
+        document=_combined_document(datums),
     )
 
 
@@ -722,6 +818,9 @@ def build_bundle(
         _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)), cutoff
     )
     shares = shares_primary or shares_fallback
+    shares_basis = (
+        SHARES_POINT_IN_TIME if shares_primary else SHARES_WEIGHTED_AVERAGE_BASIC if shares_fallback else None
+    )
     # When every candidate is refused the newest measurement date is still recorded, so the
     # warehouse says HOW stale the best candidate was rather than leaving an
     # indistinguishable null. Fail-closed is deliberate: the factor then reports
@@ -777,6 +876,7 @@ def build_bundle(
         vintages["net_income_periods"] = {
             end.isoformat(): _vintage(datum) for end, datum in sorted(earnings_periods.items())
         }
+    latest_statement, latest_annual = _statement_period_ends(facts, ruleset, cutoff)
     return FinancialFactsBundle(
         gross_profit=_v(profit),
         total_assets=_v(assets),
@@ -802,18 +902,86 @@ def build_bundle(
         financial_returns=_v(financial.returns),
         financial_returns_basis=financial.returns_basis,
         financial_returns_is_proxy=financial.returns_is_proxy,
+        shares_basis=shares_basis,
+        latest_statement_period_end=latest_statement,
+        latest_annual_period_end=latest_annual,
+        document=facts,
     )
+
+
+def _statement_period_ends(
+    facts: Mapping[str, Any], ruleset: ConceptMappingRuleset, cutoff: date
+) -> tuple[date | None, date | None]:
+    """The newest balance-sheet date filed in any periodic statement, and in an annual one.
+
+    Every 10-K and 10-Q carries total assets at its own period end, so the balance-sheet
+    concept dates the newest statement the document holds. Read off the raw entries rather
+    than the resolved series, whose winner for a period is the LATEST filing and so names a
+    10-Q for a fiscal year end the next quarter re-reported.
+    """
+    latest: date | None = None
+    latest_annual: date | None = None
+    for item in _declared_concepts(ruleset, "total_assets"):
+        body = facts.get("facts", {}).get(item.taxonomy, {}).get(item.concept, {})
+        for entry in body.get("units", {}).get("USD", ()):
+            form, filed_raw, end_raw = entry.get("form"), entry.get("filed"), entry.get("end")
+            if form not in STATEMENT_FORMS or entry.get("start") is not None or not filed_raw or not end_raw:
+                continue
+            try:
+                filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
+            except ValueError:
+                continue
+            if filed > cutoff:
+                continue
+            latest = end if latest is None else max(latest, end)
+            if form in ANNUAL_STATEMENT_FORMS:
+                latest_annual = end if latest_annual is None else max(latest_annual, end)
+    return latest, latest_annual
+
+
+def company_facts_record_id(cik: int) -> str:
+    """The vendor identity of one company-facts document in raw storage."""
+    return f"companyfacts:CIK{cik:010d}"
+
+
+def merge_company_facts(
+    documents: Sequence[tuple[str, Mapping[str, Any]]], ruleset: ConceptMappingRuleset
+) -> dict[str, Any]:
+    """One filing history from one issuer's company-facts documents under several CIKs.
+
+    XOM's 2026 reorganization split its filings: the predecessor CIK 34088 holds the annual
+    history, and the holdco CIK 2115436 holds the 10-Q for Q2 2026 (total assets $464,482M at
+    2026-06-30). Parsing either document alone serves a number the issuer has superseded, so
+    the declared concepts of every document are pooled and parsed once: each field then
+    resolves by the usual rules (statement forms first, the latest period, the latest filing
+    within a period), whichever document asserted it. Each entry is tagged with its
+    document's record id, so every resolved figure names the bytes it was read from. On an
+    exact tie the earlier document wins, so callers list the current CIK first.
+    """
+    declared = {(item.taxonomy, item.concept) for mapping in ruleset.mappings for item in mapping.concepts}
+    merged: dict[str, Any] = {"facts": {}}
+    for record_id, document in documents:
+        for taxonomy, concept in sorted(declared):
+            body = document.get("facts", {}).get(taxonomy, {}).get(concept)
+            if not body:
+                continue
+            units = merged["facts"].setdefault(taxonomy, {}).setdefault(concept, {"units": {}})["units"]
+            for unit, entries in body.get("units", {}).items():
+                units.setdefault(unit, []).extend({**entry, _DOCUMENT_KEY: record_id} for entry in entries)
+    return merged
 
 
 def _vintage(datum: _Datum) -> dict[str, Any]:
     """The filing identity of one resolved figure, JSON-ready and key-sorted."""
     return {
         "accession": datum.accession,
+        "document": datum.document,
         "filed": datum.filed.isoformat(),
         "form": datum.form,
         "fp": datum.fp,
         "fy": datum.fy,
         "period_end": datum.period_end.isoformat(),
+        "statement_form": datum.statement_form,
     }
 
 

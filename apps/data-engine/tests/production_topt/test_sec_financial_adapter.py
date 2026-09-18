@@ -1152,6 +1152,8 @@ def test_the_bundle_names_the_filing_behind_each_input() -> None:
         "fp": "FY",
         "fy": 2025,
         "period_end": "2025-12-31",
+        "document": None,
+        "statement_form": True,
     }
     assert bundle.vintages["gross_profit"]["accession"] == "0000320193-26-000010"
     assert bundle.vintages["net_income"]["period_end"] == "2025-12-31"
