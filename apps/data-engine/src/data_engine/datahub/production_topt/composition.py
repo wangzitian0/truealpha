@@ -507,7 +507,8 @@ def _record_and_refuse(
 
     It deliberately does not let the run through. `freeze_snapshot` must never
     materialize a partial universe, and the governed pointer must not advance to one;
-    both are protected by the pointer gate (#536).
+    this raise prevents reaching `freeze_snapshot`, while pointer advancement is protected
+    downstream by the pointer gate (#536).
 
     `halt_reason` colours the raised message only. The persisted report stays purely
     status-derived so that re-deriving it produces the same content hash; the halting
