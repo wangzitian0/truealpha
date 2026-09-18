@@ -8,8 +8,9 @@ but cannot invent (init.md rule 3 in spirit: the fact stays anchored to a verbat
 
 Every call is an append-only invocation record (init.md §9): provider, model, base URL host,
 the instruction/schema digests, request and response digests, token cost, and the decision.
-A second run for the same (subject, accession, instructions, model) REPLAYS the stored
-decision without calling the provider. The call itself goes through the ledger
+A second run for the same (subject, accession, instructions, model) REPLAYS the FIRST stored
+answer without calling the provider, and parallel runs asking the same question wait for
+each other rather than both asking. The call itself goes through the ledger
 (`record_call`, rule 6) with its token cost, under the `filing-extraction-model` seat.
 
 `as_selector()` at the bottom adapts `select_headcount` to the shared extraction
@@ -24,9 +25,11 @@ import hashlib
 import json
 import urllib.request
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import partial
 from typing import Any
 from urllib.parse import urlparse
 
@@ -206,30 +209,85 @@ def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[
     return int(status or 0), response
 
 
+def _without_model(request_body: dict[str, Any]) -> dict[str, Any]:
+    """The request minus the model name: what was asked, whoever was asked to answer it."""
+    return {key: value for key, value in request_body.items() if key != "model"}
+
+
+#: The FIRST answer is the answer (§9: replay reuses the stored result). Before this read
+#: was `order by id desc`, the newest answer won. Two heads that asked the same question
+#: in parallel each stored an answer, and the next run replayed whichever landed last.
+#: In prod, 5 of 269 answered digests disagreed. AAPL/Semiconductors and
+#: MU/AI-infrastructure purity changed between the TOPT and QQQ heads.
+#:
+#: A row matches in one of two ways:
+#: - the same request digest under the same requested model (the original key);
+#: - the same request under a different requested name, where the provider reports that
+#:   it served the model now configured. The coding plan serves the `glm-4.7` alias with
+#:   `glm-5.3-flash`. Pinning `LLM_MODEL=glm-5.3-flash` therefore changes the request
+#:   digest but not the model that answers, so the answers already stored for it replay.
+#:
+#: A row whose `served_model` is null matches only the first way, which was the whole key
+#: before, so existing rows replay as they did.
+_REPLAY_SQL = """
+select invocation_id, decision, response_sha256, prompt_tokens, completion_tokens, request_sha256, provider,
+       served_model, model
+from staging.model_invocations
+where subject_cik = %s and accession = %s
+  and status_code is not null and status_code < 400
+  and ((request_sha256 = %s and model = %s)
+       or (served_model = %s and (request - 'model') = %s::jsonb))
+order by id asc
+limit 1
+"""
+
+#: One asker per question at a time. The key is the request WITHOUT the model name, the
+#: same scope the replay read matches, so an alias ask and a pinned-name ask for one
+#: question also wait for each other. It uses the `hashtextextended('<table>:<key>', 0)`
+#: form the other advisory locks in `db/migrations` use.
+_LOCK_SQL = "select pg_advisory_xact_lock(hashtextextended(%s, 0))"
+
+
+def _lock_question(connection: Any, *, cik: int, accession: str, question: str) -> None:
+    """Wait until no other transaction is asking this question.
+
+    The lock is transaction-scoped. It is released when the holder's transaction ends,
+    which is also when that holder's invocation row becomes visible. A waiter that gets the
+    lock therefore sees the row in its next statement (READ COMMITTED takes a new snapshot
+    per statement) and replays it instead of asking again. The replay read must be a
+    separate statement: a statement that waited on the lock still uses the snapshot taken
+    before the wait.
+
+    The theme-purity producer holds its locks until its op commits, and takes them in
+    (cik, theme) order in every universe, so two heads cannot wait on each other in a
+    cycle. The standards backfill commits after every cell, so it holds at most one lock.
+    """
+    digest = hashlib.sha256(question.encode()).hexdigest()
+    connection.execute(_LOCK_SQL, (f"staging.model_invocations:{cik}:{accession}:{digest}",))
+
+
 def _replay(
-    connection: Any, *, task: ModelTask, cik: int, accession: str, model: str, request_sha256: str
+    connection: Any,
+    *,
+    task: ModelTask,
+    cik: int,
+    accession: str,
+    model: str,
+    request_sha256: str,
+    question: str,
 ) -> ModelInvocation | None:
-    """An identical prior ask — same subject, filing, instructions, candidates, decoding
-    settings and model, i.e. the same request digest — that the provider answered (status
-    < 400). A changed candidate set or schema is a different request and is asked afresh;
-    a vendor error is recorded but never replayed as an answer (review on #754)."""
-    row = connection.execute(
-        """
-        select invocation_id, decision, response_sha256, prompt_tokens, completion_tokens, request_sha256, provider,
-               served_model
-        from staging.model_invocations
-        where subject_cik = %s and accession = %s and request_sha256 = %s and model = %s
-          and status_code is not null and status_code < 400
-        order by id desc limit 1
-        """,
-        (cik, accession, request_sha256, model),
-    ).fetchone()
+    """The first answer the provider gave (status < 400) to an identical prior ask. An
+    identical ask has the same subject, filing, instructions, candidates and decoding
+    settings, asked of the same model; see `_REPLAY_SQL` for the two ways a row matches.
+    A changed candidate set or schema is a different request and is asked again. A vendor
+    error is recorded but never replayed as an answer (review on #754)."""
+    row = connection.execute(_REPLAY_SQL, (cik, accession, request_sha256, model, model, question)).fetchone()
     if row is None:
         return None
     decision = row[1] if isinstance(row[1], dict) else json.loads(row[1])
     return ModelInvocation(
         decision=decision,
-        model=model,
+        model=row[8],
         provider=row[6],
         prompt_sha256=task.prompt_sha256,
         request_sha256=row[5],
@@ -260,9 +318,12 @@ def invoke(
     """Ask the seated model one task's question; record the invocation. Task-agnostic.
 
     `persist=False` (probe mode) neither replays nor records an invocation — it only asks,
-    and the call still lands in the ledger. With a connection and `persist=True`, every ask
-    is recorded (answers and vendor errors alike) and an identical prior ANSWERED ask is
-    replayed instead of re-asked (§9: replay never silently calls the model again).
+    and the call still lands in the ledger. With a connection and `persist=True`:
+    - every ask is recorded, answers and vendor errors alike;
+    - the first ANSWERED identical ask is replayed instead of asked again (§9: replay never
+      silently calls the model again);
+    - identical asks from parallel runs are serialized on the question (`_lock_question`),
+      so only one of them reaches the provider.
 
     `parse` reads the provider's content into the task's own decision shape; `refusal`
     builds that same shape for a vendor error, so a failed ask is still a well-formed
@@ -272,15 +333,74 @@ def invoke(
         raise ModelNotConfigured("LLM_API_KEY is not set; no provider seated (#70 scope 1)")
     model = settings.llm_model
     request_body = build_chat_request(task, user_content, model=model)
-    request_bytes = json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
-    request_sha256 = hashlib.sha256(request_bytes).hexdigest()
-    if persist and connection is not None:
-        replayed = _replay(
-            connection, task=task, cik=cik, accession=accession, model=model, request_sha256=request_sha256
-        )
-        if replayed is not None:
-            return replayed
+    ask = partial(
+        _ask,
+        task=task,
+        model=model,
+        request_body=request_body,
+        cik=cik,
+        accession=accession,
+        caller=caller,
+        standard=standard,
+        parse=parse,
+        refusal=refusal,
+        transport=transport,
+        now=now,
+    )
+    if not persist or connection is None:
+        invocation, error = ask(None)
+    else:
+        # On an autocommit connection the lock's transaction would end with the lock
+        # statement. An explicit transaction holds the lock until the row is written, and
+        # commits the row, a recorded refusal included, before the error below is raised.
+        with connection.transaction() if getattr(connection, "autocommit", False) else nullcontext():
+            question = json.dumps(_without_model(request_body), sort_keys=True, ensure_ascii=False)
+            _lock_question(connection, cik=cik, accession=accession, question=question)
+            replayed = _replay(
+                connection,
+                task=task,
+                cik=cik,
+                accession=accession,
+                model=model,
+                request_sha256=_request_sha256(request_body),
+                question=question,
+            )
+            if replayed is not None:
+                return replayed
+            invocation, error = ask(connection)
+    if error is not None:
+        raise error
+    return invocation
 
+
+def _request_sha256(request_body: dict[str, Any]) -> str:
+    return hashlib.sha256(_request_bytes(request_body)).hexdigest()
+
+
+def _request_bytes(request_body: dict[str, Any]) -> bytes:
+    return json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
+
+
+def _ask(
+    connection: Any | None,
+    *,
+    task: ModelTask,
+    model: str,
+    request_body: dict[str, Any],
+    cik: int,
+    accession: str,
+    caller: str,
+    standard: str,
+    parse: Callable[[str], dict[str, Any]],
+    refusal: Callable[[str], dict[str, Any]],
+    transport: Transport | None,
+    now: Callable[[], datetime],
+) -> tuple[ModelInvocation, ModelHTTPError | None]:
+    """One provider call, recorded on `connection` when there is one. A vendor error is
+    returned rather than raised, so the caller can end the recording transaction before
+    raising it."""
+    request_bytes = _request_bytes(request_body)
+    request_sha256 = hashlib.sha256(request_bytes).hexdigest()
     url = settings.llm_base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"}
     started_at = now()
@@ -315,6 +435,9 @@ def invoke(
             "request_sha256": request_sha256,
             "response_sha256": response_sha256,
             "started_at": started_at.isoformat(),
+            # The model that answered is part of the invocation's identity. The key is left
+            # out when the provider did not report a model, so the id is computed as before.
+            **({"served_model": served_model} if served_model else {}),
         }
     )
     invocation = ModelInvocation(
@@ -330,7 +453,7 @@ def invoke(
         replayed=False,
         served_model=served_model,
     )
-    if persist and connection is not None:
+    if connection is not None:
         connection.execute(
             """
             insert into staging.model_invocations
@@ -368,8 +491,8 @@ def invoke(
             ),
         )
     if status >= 400:
-        raise ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}")
-    return invocation
+        return invocation, ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}")
+    return invocation, None
 
 
 def select_headcount(

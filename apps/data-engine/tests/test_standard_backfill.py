@@ -68,6 +68,8 @@ class FakeConnection:
             accession = like.removeprefix("accession=").split(" ")[0]
             hits = [r for r in self.headcount_rows if r[0] == cik and f"accession={accession} " in r[5]]
             return _Result([(1,)] if hits else [])
+        if text.startswith("select pg_advisory_xact_lock("):
+            return _Result([(None,)])
         if text.startswith("select invocation_id, decision"):
             return _Result([])
         if text.startswith("insert into staging.model_invocations"):
