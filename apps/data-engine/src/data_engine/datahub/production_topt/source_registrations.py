@@ -538,7 +538,7 @@ SOURCE_BY_PARSER: dict[str, tuple[str, str, str]] = source_by_parser()
 
 
 def configured_origin_sources(semantic_type: str) -> set[str]:
-    """The origin_source strings that must be present in a bound set for reuse (#635).
+    """The required source identifiers ('primary' sentinel plus configured origin:mapping strings) for reuse (#635).
 
     If the current environment has configured a corroborating origin (e.g. Twelve Data
     or moomoo), an older anchor that was captured with a narrower source set must not be
