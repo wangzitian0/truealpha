@@ -25,7 +25,7 @@ dials OpenD, the tests use a cassette-backed double. No test needs OpenD.
 The SDK speaks protobuf over TCP and hands back DataFrames and dicts, never a response
 body. The landed bytes are therefore the SDK's decoded answer in canonical JSON — the
 closest byte-for-byte artifact the vendor path exposes — and the parser identity names
-that rendering (`moomoo-kline-parser:v1` / `moomoo-financials-parser:v1`).
+that rendering (`moomoo-kline-parser:v2` / `moomoo-financials-parser:v1`).
 
 ## The quantity, per origin
 

@@ -291,9 +291,14 @@ def _routes(
     # The moomoo K-line third origin and the moomoo statements second origin, over the
     # same fake vendor answers, so a corroborated run persists three price assertions
     # and two financial-fact assertions per cell through the deployed sink.
+    from data_engine.datahub.production_topt.source_registrations import (
+        MOOMOO_FINANCIALS_PARSER_VERSION,
+        MOOMOO_KLINE_PARSER_VERSION,
+    )
+
     third_origin = CorroboratingOrigin(
         origin="moomoo-kline",
-        parser_version="moomoo-kline-parser:v1",
+        parser_version=MOOMOO_KLINE_PARSER_VERSION,
         mapping_version="moomoo-kline-map:v1",
         value_key="close",
         confidence=Decimal("0.80"),
@@ -302,7 +307,7 @@ def _routes(
     )
     financial_second_origin = FinancialFactCorroboratingOrigin(
         origin="moomoo-financials",
-        parser_version="moomoo-financials-parser:v1",
+        parser_version=MOOMOO_FINANCIALS_PARSER_VERSION,
         mapping_version="moomoo-financials-map:v1",
         confidence=Decimal("0.75"),
         fetch=lambda ticker, cutoff: _moomoo_statements(ticker),

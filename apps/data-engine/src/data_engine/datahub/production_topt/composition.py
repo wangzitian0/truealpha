@@ -84,7 +84,7 @@ from data_engine.datahub.production_topt.capture_orchestration import run_topt_c
 from data_engine.datahub.production_topt.executor import SourceFetchPort
 from data_engine.datahub.production_topt.market_price_adapter import last_settled_session_date
 from data_engine.datahub.production_topt.materialization import PostgresToptCoreRepository
-from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
+from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION, PARSER_VERSION_HISTORY
 from data_engine.datahub.production_topt.persistence import (
     CaptureTimeline,
     ObligationBinding,
@@ -97,8 +97,10 @@ from data_engine.datahub.production_topt.source_registrations import (
     FRESHNESS_WINDOWS,
     REGISTRATIONS,
     RELEASE_SEMANTICS,
+    SOURCE_BY_PARSER,
     RouteCell,
     RouteContext,
+    configured_origin_sources,
     registered_semantic_types,
     registration_for,
 )
@@ -628,14 +630,14 @@ def _satisfy_from_recent_observations(
             join jsonb_to_recordset(%(coordinates)s::jsonb)
                  as coordinate(subject_id text, issuer_id text, instrument_id text, listing_id text)
               on coordinate.subject_id = ob.subject_id
-            where ob.run_id = %(run_id)s
+             and ob.run_id = %(run_id)s
               -- Release-derived semantics never ride reuse: their payload IS the
               -- run's identity and must come from THIS run's own governed corpus
               -- (#684). Deriving them fresh costs no vendor call.
-              and not (regexp_replace(ob.capture_requirement_id, ':v1$', '') = any(%(release_semantics)s::text[]))
+             and not (regexp_replace(ob.capture_requirement_id, ':v1$', '') = any(%(release_semantics)s::text[]))
               -- The freeze step reads a date partition only (materialization); an
               -- obligation it could not freeze has nothing to reuse into either.
-              and ob.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+             and ob.partition_key ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
         ), anchors as (
             select m.obligation_id as target_obligation_id,
                    m.semantic_type,
@@ -645,7 +647,8 @@ def _satisfy_from_recent_observations(
                    o.knowable_at,
                    row_number() over (
                        partition by m.obligation_id
-                       order by done.completed_at desc,
+                       order by orig_done.completed_at desc,
+                                done.completed_at desc,
                                 -- #874: completion stamps derive from the cutoff, so a
                                 -- forced re-run of a tick ties with the run it corrects;
                                 -- the forced capture is the newer look at the vendor.
@@ -661,7 +664,6 @@ def _satisfy_from_recent_observations(
             join raw.capture_obligation_results done
               on done.capture_obligation_id = src_ob.obligation_id
              and done.terminal_state in ('success', 'unchanged')
-             and done.completed_at > %(cutoff)s - %(max_age)s::interval
              and done.completed_at <= %(cutoff)s
             join raw.capture_attempt_results attempt on attempt.attempt_id = done.final_attempt_id
             join staging.capture_normalized_observations o
@@ -689,6 +691,16 @@ def _satisfy_from_recent_observations(
              -- Filtered before ranking, so an older anchor that IS valid still qualifies.
              and (o.valid_from at time zone 'UTC')::date <= m.partition_key::date
              and (o.valid_to is null or (o.valid_to at time zone 'UTC')::date >= m.partition_key::date)
+            -- Bounding the age of the original observation (#635):
+            -- `done.completed_at` is reset to `cutoff` on an `unchanged` run, creating
+            -- an infinite renewal chain across 26.8h. Bounding the age requires checking
+            -- `orig_done.completed_at` for the original `success` obligation that actually
+            -- fetched the observation.
+            join raw.capture_obligation_results orig_done
+              on orig_done.capture_obligation_id = o.capture_obligation_id
+             and orig_done.terminal_state = 'success'
+             and orig_done.completed_at > %(cutoff)s - %(max_age)s::interval
+             and orig_done.completed_at <= %(cutoff)s
             -- #684: the source run's identity keying rides in every normalized
             -- payload; an anchor with a foreign trio must not qualify.
             join staging.capture_observation_payloads anchor_payload
@@ -699,6 +711,7 @@ def _satisfy_from_recent_observations(
         ), bound_set as (
             select a.target_obligation_id, a.semantic_type, a.anchor_vintage_id, a.knowable_at,
                    bound.observation_id,
+                   bound.parser_version,
                    -- Judged per member, decided per set (below). NULL (no payload row,
                    -- a missing key) is a disqualification, not an abstention.
                    coalesce(
@@ -732,7 +745,8 @@ def _satisfy_from_recent_observations(
         -- by row reused a partial set: a cell that lost an origin to the guard
         -- still resolved UNCHANGED, one corroboration short.
         select target_obligation_id, semantic_type, anchor_vintage_id, knowable_at,
-               array_agg(observation_id order by observation_id) as observations
+               array_agg(observation_id order by observation_id) as observations,
+               array_agg(parser_version order by observation_id) as parser_versions
         from bound_set
         group by target_obligation_id, semantic_type, anchor_vintage_id, knowable_at
         having bool_and(qualifies)
@@ -748,15 +762,27 @@ def _satisfy_from_recent_observations(
     ).fetchall()
 
     settled = last_settled_session_date(cutoff)
-    by_target: dict[str, dict[str, Any]] = {
-        target_id: {
+    by_target: dict[str, dict[str, Any]] = {}
+    for target_id, semantic_type, anchor_vintage, knowable_at, observations, parser_versions in rows:
+        required_sources = configured_origin_sources(semantic_type)
+        present_sources = set()
+        disqualified = False
+        for pv in parser_versions:
+            if pv in PARSER_VERSION_HISTORY or pv == PARSER_VERSION:
+                present_sources.add("primary")
+            elif pv in SOURCE_BY_PARSER:
+                present_sources.add(SOURCE_BY_PARSER[pv][0])
+            else:
+                disqualified = True
+                break
+        if disqualified or present_sources != required_sources:
+            continue
+        by_target[target_id] = {
             "semantic": semantic_type,
             "vintage": anchor_vintage,
             "knowable_at": knowable_at,
             "observations": list(observations),
         }
-        for target_id, semantic_type, anchor_vintage, knowable_at, observations in rows
-    }
 
     repository = PostgresCaptureControlRepository(connection)
     satisfied: set[str] = set()

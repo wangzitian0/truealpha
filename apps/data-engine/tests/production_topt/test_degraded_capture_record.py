@@ -52,7 +52,7 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
-from data_engine.datahub.production_topt import composition
+from data_engine.datahub.production_topt import composition, twelve_data_origin
 from data_engine.datahub.production_topt.composition import (
     CaptureNotPublishableError,
     PlannedRun,
@@ -308,12 +308,28 @@ def _offline_routes(
     return routes
 
 
+#: The environment settings the corroborating-origin factories read, with nothing
+#: configured: the offline routes consult no second origin unless a test hands one in,
+#: and #635's reuse must judge a bound set against the same configuration.
+_NO_CONFIGURED_ORIGINS: dict[str, object] = {
+    "twelve_data_api_key": "",
+    "moomoo_kline_origin_enabled": False,
+    "moomoo_financials_origin_enabled": False,
+}
+
+_TWELVE_DATA_CONFIGURED: dict[str, object] = {
+    **_NO_CONFIGURED_ORIGINS,
+    "twelve_data_api_key": "test-key-configured",
+}
+
+
 def _arm(
     monkeypatch,
     *,
     sabotage: tuple[int, ObligationReasonCode] | None = None,
     spy: list[str] | None = None,
     fetched: list[tuple[str, str, str]] | None = None,
+    origin_settings: dict[str, object] | None = None,
     **route_options,
 ) -> None:
     """Route the tick through offline adapters, optionally failing one obligation.
@@ -322,7 +338,13 @@ def _arm(
     from SEC over the network, so an empty spy is the evidence that a tick was refused
     before it reached a vendor at all. `fetched` records each fetch a route served (see
     `_CountingPort`); `route_options` reach `_offline_routes`.
+
+    `origin_settings` configures this environment's corroborating origins (a developer's
+    `.env` must not decide it): a test that routes a second origin also configures it, so
+    the reuse source-set check sees what a deployed route builder would consult.
     """
+    for name, value in {**_NO_CONFIGURED_ORIGINS, **(origin_settings or {})}.items():
+        monkeypatch.setattr(settings, name, value)
     monkeypatch.setattr(raw_store, "object_store", _InMemoryObjectStore)
 
     def build(plan: PlannedRun, connection=None) -> dict[str, SourceFetchPort]:
@@ -968,13 +990,17 @@ def test_reuse_binds_the_whole_bound_set_or_nothing(tick_database_url, monkeypat
     rest. Here a second origin's bar is knowable at 23:00Z — after the target's 22:40Z
     cutoff, on the same session date, so the adapter's date-level guard admits it. The
     anchor (the primary) qualifies; the set does not, so the price cells must fetch.
-    The financial cells, whose sets are clean, still reuse."""
+    The financial cells, whose sets are clean, still reuse.
+
+    The late origin carries a registered, configured origin's identity (Twelve Data's), so
+    the set is otherwise exactly what a fetch now would bind: the look-ahead member is the
+    only reason to refuse it."""
     day = date(2026, 4, 14)  # a Tuesday; nothing else in this module captures near it
     late_origin = CorroboratingOrigin(
-        origin="late-origin",
-        parser_version="late-origin-parser:v1",
-        mapping_version="late-origin-map:v1",
-        value_key="close",
+        origin=twelve_data_origin.ORIGIN,
+        parser_version=twelve_data_origin.PARSER_VERSION,
+        mapping_version=twelve_data_origin.MAPPING_VERSION,
+        value_key=twelve_data_origin.VALUE_KEY,
         confidence=Decimal("0.80"),
         fetch=lambda symbol, cutoff: MarketPriceQuote(
             raw_bytes=f"late:{symbol}:{day.isoformat()}".encode(),
@@ -989,6 +1015,7 @@ def test_reuse_binds_the_whole_bound_set_or_nothing(tick_database_url, monkeypat
         quote=lambda: _quote(day),
         price_cutoff=day,
         corroborating_origins=(late_origin,),
+        origin_settings=_TWELVE_DATA_CONFIGURED,
     )
     # Completes at 22:33Z (cutoff - 57 min): inside the target's window, and newer than
     # anything else in it, so it is the anchor.
@@ -1462,3 +1489,69 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
     assert len({decision.issuer_id for decision in report.decisions}) == 20
     assert aapl_issuer in {decision.issuer_id for decision in report.decisions}
     assert all(decision.confidence == topt_confidence[decision.issuer_id] for decision in report.decisions)
+
+
+def test_reuse_age_is_bounded_to_original_success_fetch_not_unchanged_renewal(tick_database_url, monkeypatch) -> None:
+    """#635: an observation captured at T0 is reused at T0 + 4h with terminal_state UNCHANGED.
+    At T0 + 14h, the UNCHANGED result completed 10h ago (< 12h), but the original SUCCESS fetch
+    completed 14h ago (> 12h max age). The observation must NOT be reused into T0 + 14h;
+    it must fetch fresh to eliminate the 12h self-renewal drift."""
+    _arm(monkeypatch)
+    t0 = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
+
+    # 1. First run: fetches fresh at T0 (SUCCESS)
+    _run_tick(tick_database_url, version="t0-fetch", cutoff=t0)
+
+    # 2. Second run: at T0 + 4h (within 12h) -> reuses (UNCHANGED)
+    t1 = t0 + timedelta(hours=4)
+    probe = psycopg.connect(tick_database_url)
+    try:
+        plan1 = composition.plan_and_persist(probe, cutoff=t1, version="t1-check")
+        satisfied1 = composition._satisfy_from_recent_observations(probe, plan1, cutoff=t1)
+        assert len(satisfied1) > 0, "T1 must reuse from T0"
+    finally:
+        probe.rollback()
+        probe.close()
+    _run_tick(tick_database_url, version="t1-reuse", cutoff=t1)
+
+    # 3. Third run: at T0 + 14h.
+    # While t1 completed 10 hours ago (< 12h), the original observation was fetched at t0 (14 hours ago).
+    # Since 14h > 12h max age, it must NOT reuse from t1 or t0.
+    t2 = t0 + timedelta(hours=14)
+    probe = psycopg.connect(tick_database_url)
+    try:
+        plan2 = composition.plan_and_persist(probe, cutoff=t2, version="t2-check")
+        satisfied2 = composition._satisfy_from_recent_observations(probe, plan2, cutoff=t2)
+        assert len(satisfied2) == 0, f"Expected 0 satisfied, but got {len(satisfied2)}: {satisfied2}"
+    finally:
+        probe.rollback()
+        probe.close()
+
+
+def test_reuse_refuses_when_configured_origin_sources_differ(tick_database_url, monkeypatch) -> None:
+    """An anchor captured with only primary must NOT be reused if Twelve Data is configured,
+    and vice versa: the bound set source completeness must match the current environment."""
+    t0 = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
+    # 1. T0 runs with NO configured origins (only primary)
+    _arm(monkeypatch, origin_settings=_NO_CONFIGURED_ORIGINS)
+    _run_tick(tick_database_url, version="t0-primary-only", cutoff=t0)
+
+    # 2. T1 at T0 + 1h with Twelve Data configured: must NOT reuse market-price
+    t1 = t0 + timedelta(hours=1)
+    monkeypatch.setattr(settings, "twelve_data_api_key", "test-key-configured")
+    probe = psycopg.connect(tick_database_url)
+    try:
+        plan1 = composition.plan_and_persist(probe, cutoff=t1, version="t1-twelve-configured")
+        satisfied1 = composition._satisfy_from_recent_observations(probe, plan1, cutoff=t1)
+        reused_by_subject: dict[str, dict[str, bool]] = {}
+        for work_item_id, binding in plan1.bindings.items():
+            semantic = binding.obligation.capture_requirement_id.removesuffix(":v1")
+            cells = reused_by_subject.setdefault(binding.obligation.subject.id, {})
+            cells[semantic] = work_item_id in satisfied1
+        # financial-fact reuses (its configured origins didn't change: only primary)
+        # market-price must NOT reuse because present={"primary"} != required={"primary", "twelve-data:v1"}
+        assert all(cells["financial-fact"] for cells in reused_by_subject.values())
+        assert not any(cells["market-price"] for cells in reused_by_subject.values())
+    finally:
+        probe.rollback()
+        probe.close()
