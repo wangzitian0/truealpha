@@ -29,6 +29,7 @@ const LINKS: readonly { href: string; label: string }[] = [
   { href: "/research/coverage", label: "Coverage" },
   { href: "/research/conversations", label: "Conversations" },
   { href: "/research/library", label: "Library" },
+  { href: "/research/backtest", label: "Backtest" },
 ];
 
 export function ResearchNav() {
