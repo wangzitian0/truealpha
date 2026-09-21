@@ -73,6 +73,7 @@ class RouteContext:
     coordinates: Mapping[str, tuple[str, str, str, str]]
     connection: psycopg.Connection[Any] | None
     drill: Any | None = None
+    raw_coordinates: Mapping[str, tuple[str, str, str, str]] | None = None
 
 
 class RouteBuilder(Protocol):

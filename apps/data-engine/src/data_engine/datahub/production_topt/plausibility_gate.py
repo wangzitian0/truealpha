@@ -75,7 +75,7 @@ _ROWS_SQL = """
 _PREVIOUS_HEAD_SQL = """
     select head.target_run_id
     from mart.current_pointer_head head
-    where head.environment = 'production'
+    where head.environment = (select environment from mart.environment_identity)
       and head.factor_id = %s
       and head.universe_id = %s
       and head.universe_version = %s

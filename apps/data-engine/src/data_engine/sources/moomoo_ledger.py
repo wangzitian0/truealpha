@@ -100,6 +100,9 @@ def record(
     status_code: int | None = None,
     error: str | None = None,
     duration_ms: int | None = None,
+    request_uri: str | None = None,
+    payload_sha256: str | None = None,
+    byte_length: int | None = None,
 ) -> None:
     """Record a call AFTER it happens — gate() below is what enforces the cap.
 
@@ -121,6 +124,9 @@ def record(
                 status_code=status_code,
                 error=None if error is None else error[:500],
                 duration_ms=duration_ms,
+                request_uri=request_uri,
+                payload_sha256=payload_sha256,
+                byte_length=byte_length,
                 run_key=gateway.current_run_key(),
                 capacity_window_id=gateway.capacity_window_id("moomoo", now),
             )
@@ -137,6 +143,9 @@ def record(
             "status_code": status_code,
             "error": None if error is None else error[:500],
             "duration_ms": duration_ms,
+            "request_uri": request_uri,
+            "payload_sha256": payload_sha256,
+            "byte_length": byte_length,
         }
     )
     _save(state)

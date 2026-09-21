@@ -1342,6 +1342,17 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
     for issuer_id, _, _, ticker in context.coordinates.values():
         if issuer_id.startswith("issuer:cik:"):
             cik_by_ticker[ticker] = int(issuer_id.removeprefix("issuer:cik:"))
+        elif connection is not None:
+            from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
+
+            if is_uuid(issuer_id):
+                cik_str = alias_of(connection, issuer_id, "cik", valid_at=context.cutoff_date, known_at=context.cutoff)
+                if cik_str is not None:
+                    cik_by_ticker[ticker] = int(cik_str)
+    if context.raw_coordinates:
+        for raw_issuer_id, _, _, ticker in context.raw_coordinates.values():
+            if ticker not in cik_by_ticker and raw_issuer_id.startswith("issuer:cik:"):
+                cik_by_ticker[ticker] = int(raw_issuer_id.removeprefix("issuer:cik:"))
     unresolved = sorted(tickers - set(cik_by_ticker))
     if unresolved:
         index = sec.ticker_cik_index()

@@ -81,7 +81,7 @@ select exists (
 #: `apps/app-web/src/server/mart/fund-valuation.ts` `QQQ_POINTER_HEAD_SQL`.
 _HOLDINGS_HEAD_SQL = """
 select target_run_id as run_id from mart.current_pointer_head
-where environment = 'production' and factor_id = 'gross_profit_per_employee'
+where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
   and universe_id like 'universe:qqq-us-%%'
 order by advanced_at desc limit 1
 """

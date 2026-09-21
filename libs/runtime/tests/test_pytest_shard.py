@@ -181,7 +181,7 @@ def test_the_shards_carry_equal_measured_work() -> None:
     heaviest_path = max(files, key=seconds)
     heaviest = seconds(heaviest_path)
     if heaviest <= sum(loads) / 3:
-        assert max(loads) / min(loads) <= 1.4, (
+        assert max(loads) / min(loads) <= 1.25, (
             f"the three shards carry {[round(x) for x in loads]} measured seconds — the slowest lane "
             f"sets the CI wall, and this spread means the packing stopped using measured time"
         )

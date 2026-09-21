@@ -77,7 +77,7 @@ EXEMPTIONS_PATH = Path(__file__).with_name("output_invariant_exemptions.json")
 SERVED_UNIVERSE_PREFIX = "universe:topt-"
 GOVERNED_HEAD = f"""
     select target_run_id from mart.current_pointer_head
-    where environment = 'production' and factor_id = 'gross_profit_per_employee'
+    where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
       and universe_id like '{SERVED_UNIVERSE_PREFIX}%'
     order by advanced_at desc limit 1
 """
@@ -490,14 +490,14 @@ INVARIANTS: tuple[Invariant, ...] = (
               target_run_id,
               sequence::text
             from mart.current_pointer_head
-            where environment = 'production' and factor_id = 'gross_profit_per_employee'
+            where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
               and universe_id like 'universe:topt-%'
               and now() - advanced_at > interval '36 hours'
             order by advanced_at desc limit 1
         """,
         population="""
             select count(*) from mart.current_pointer_head
-            where environment = 'production' and factor_id = 'gross_profit_per_employee'
+            where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
         """,
     ),
 )

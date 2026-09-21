@@ -31,7 +31,7 @@ Its ids are derived, so a rerun, or a run in another environment, mints the same
 import json
 import time
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import dagster as dg
@@ -90,7 +90,10 @@ def _cursor_time(cursor: str | None) -> datetime | None:
     if not cursor:
         return None
     try:
-        return datetime.fromisoformat(cursor)
+        dt = datetime.fromisoformat(cursor)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
     except ValueError:
         return None
 

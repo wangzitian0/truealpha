@@ -152,10 +152,14 @@ grant select on staging.contract_objects to app_ops_reader;
 -- #729: the external call ledger — /admin/datahub's Capacity and Traffic sections read
 -- every vendor request (success or failure) and join it to the landed raw.fetches row.
 grant select on staging.api_call_ledger to app_ops_reader;
+-- #877 PR-3: capture external entity references side table
+grant select on staging.capture_entity_refs to app_ops_reader;
 grant usage on schema mart to app_ops_reader;
 grant select on mart.current_pointer_head to app_ops_reader;
 -- #712: the data-engine build behind the newest run, for the /admin deployments card.
 grant select on mart.data_engine_identity to app_ops_reader;
+-- #756: the database environment identity, for admin / status readers.
+grant select on mart.environment_identity to app_ops_reader;
 -- The /admin/datahub dashboard (#641 D5) joins heads to their quality grades and
 -- lists recent capture runs — read-only views/tables, same posture as the rest.
 grant select on mart.datahub_quality_report to app_ops_reader;

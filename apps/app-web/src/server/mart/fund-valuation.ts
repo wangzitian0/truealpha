@@ -58,7 +58,8 @@ export type FundValuation = {
 
 const QQQ_POINTER_HEAD_SQL = `
   select target_run_id as run_id from mart.current_pointer_head
-  where environment = 'production' and factor_id = 'gross_profit_per_employee'
+  where environment = (select environment from mart.environment_identity)
+    and factor_id = 'gross_profit_per_employee'
     and universe_id like 'universe:qqq-us-%'
   order by advanced_at desc limit 1
 `;
@@ -67,7 +68,8 @@ const QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL = `
   select s.run_id
   from mart.topt_capture_status s
   join mart.datahub_quality_report q on q.run_id = s.run_id
-  where s.environment = 'production' and s.complete
+  where s.environment = (select environment from mart.environment_identity)
+    and s.complete
     and s.universe_id like 'universe:qqq-us-%'
   order by q.created_at desc, q.report_id desc limit 1
 `;

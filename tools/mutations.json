@@ -102,7 +102,7 @@
       "id": "invariants/head-matches-the-consumer",
       "guard": "libs/runtime/tests/test_output_invariants.py",
       "file": "tools/output_invariants.py",
-      "find": "    select target_run_id from mart.current_pointer_head\n    where environment = 'production' and factor_id = 'gross_profit_per_employee'\n",
+      "find": "    select target_run_id from mart.current_pointer_head\n    where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'\n",
       "replace": "    select target_run_id from mart.current_pointer_head\n",
       "command": [
         "uv",

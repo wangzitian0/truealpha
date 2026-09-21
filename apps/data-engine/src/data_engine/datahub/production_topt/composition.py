@@ -76,7 +76,6 @@ from truealpha_contracts.evidence_graph import (
 )
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
-from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
@@ -225,6 +224,25 @@ class PlannedRun:
     #: is satisfied from #635 reuse.
     forced_fetch: bool = False
     drill: Any | None = None
+    raw_coordinates: dict[str, tuple[str, str, str, str]] | None = None
+
+
+def ensure_environment_identity(
+    connection: psycopg.Connection[Any],
+    environment: str | CaptureEnvironment,
+) -> None:
+    """Declare the single authoritative environment identity in mart.environment_identity (#756)."""
+    env_str = environment.value if isinstance(environment, CaptureEnvironment) else str(environment)
+    connection.execute(
+        """
+        insert into mart.environment_identity (singleton, environment, declared_at)
+        values (true, %s, clock_timestamp())
+        on conflict (singleton) do update set
+            environment = excluded.environment,
+            declared_at = excluded.declared_at
+        """,
+        (env_str,),
+    )
 
 
 def plan_and_persist(
@@ -237,6 +255,7 @@ def plan_and_persist(
     universe_head_kind: str | None = None,
     force_fetch: bool = False,
     drill: Any | None = None,
+    environment: CaptureEnvironment | None = None,
 ) -> PlannedRun:
     """Freeze the run's scope and persist the dispatch intent; performs no source calls.
 
@@ -247,6 +266,13 @@ def plan_and_persist(
     `force_fetch` is recorded in the run plan (#874) and changes nothing else here:
     the caller gives a forced run its own `version` (`forced_capture_version`).
     """
+    if environment is None:
+        from data_engine.config import settings
+
+        environment = settings.capture_environment
+
+    ensure_environment_identity(connection, environment)
+
     if universe_head_kind is not None:
         from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 
@@ -259,9 +285,23 @@ def plan_and_persist(
     # (#530 item 2).
     published_at_raw = corpus.get("published_at")
     universe_published_at = datetime.fromisoformat(published_at_raw) if published_at_raw else None
-    coordinates = {
+    raw_coordinates = {
         str(row[2]): (str(row[0]), str(row[1]), str(row[2]), str(row[3])) for row in denominator["instruments"]
     }
+    as_of = (
+        date.fromisoformat(str(denominator["report_date"]))
+        if "report_date" in denominator
+        else cutoff.astimezone(UTC).date()
+    )
+    from data_engine.datahub.resolve_coordinates import resolve_coordinates
+
+    with connection.transaction():
+        coordinates = resolve_coordinates(
+            connection,
+            denominator["instruments"],
+            as_of=as_of,
+            known_at=cutoff,
+        )
     partition = str(denominator["report_date"])
     # The hand-curated TOPT corpus keeps its literal-pinned loader; every
     # self-pinned universe built by scripts/build_universe_corpus.py loads
@@ -294,11 +334,7 @@ def plan_and_persist(
     )
     campaign = CaptureCampaign(
         campaign_policy_id=f"capture-policy:{source_label}",
-        # Still the literal (#72 slice 2): `materialization.freeze_snapshot` refuses any
-        # campaign not stamped "production" and `a1_evidence` writes the same literal, so
-        # the stamp changes at all three sites together, with `settings.capture_environment`
-        # as the single source — not here alone.
-        environment=CaptureEnvironment.PRODUCTION,
+        environment=environment,
         cutoff=cutoff,
         universe_refs=(list_version.universe,),
     )
@@ -402,6 +438,7 @@ def plan_and_persist(
         universe_published_at=universe_published_at,
         forced_fetch=force_fetch,
         drill=drill,
+        raw_coordinates=raw_coordinates,
     )
 
 
@@ -424,6 +461,7 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
         coordinates=plan.coordinates,
         connection=connection,
         drill=plan.drill,
+        raw_coordinates=plan.raw_coordinates,
     )
     cells_by_source: dict[str, list[RouteCell]] = {}
     for work_item_id, binding in plan.bindings.items():
@@ -901,6 +939,8 @@ def run_topt_pipeline(
         retry=plan.retry,
         freshness_windows=plan.freshness_windows,
         default_freshness_max_age=plan.default_freshness_max_age,
+        coordinates=plan.coordinates,
+        raw_coordinates=plan.raw_coordinates,
     )
     if not resumed:
         # #874: a forced run consults every vendor; reuse is the scheduled ticks' economy.
@@ -968,6 +1008,7 @@ __all__ = [
     "ToptPipelineResult",
     "FORCED_VERSION_SUFFIX",
     "build_routes",
+    "ensure_environment_identity",
     "forced_capture_version",
     "live_version_for",
     "plan_and_persist",

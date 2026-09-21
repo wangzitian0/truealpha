@@ -31,10 +31,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
-from zoneinfo import ZoneInfo
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import CaptureWorkItem
@@ -380,21 +379,22 @@ PRICE_CONFIDENCE_FLOOR = Decimal("0.50")
 
 
 def graded_price_confidence(*, as_of: date, expected_session: date) -> Decimal:
-    """Per-cell price confidence (#641 D6) — a grade, not a constant.
+    """Per-cell price confidence (#641 D6, #863 calendar-aware) — a grade, not a constant.
 
     Rule 15 mandates per-cell confidence; financial facts honor it (0.50-0.92
     on the current heads) while every price cell asserted a flat 0.85. The
     grade starts at that same 0.85 (the no-SLA primary, init.md's yfinance
-    note) and drops 0.10 per SESSION the served bar lags the last settled
+    note) and drops 0.10 per TRADING SESSION the served bar lags the last settled
     session, floored at 0.50 — a capture that had to fall back (the vendor's
     overnight null-close window #622, holidays) now says so in its confidence
     instead of asserting the fresh-close grade for stale data.
+
+    Uses `truealpha_contracts.calendar` (#863) so exchange holidays (e.g. Thanksgiving)
+    are not penalized as session lag.
     """
-    lag_sessions = sum(
-        1
-        for offset in range(1, max((expected_session - as_of).days, 0) + 1)
-        if (as_of + timedelta(days=offset)).weekday() < 5
-    )
+    from truealpha_contracts.calendar import count_market_sessions_between
+
+    lag_sessions = count_market_sessions_between(as_of, expected_session)
     graded = PRIMARY_PRICE_CONFIDENCE - PRICE_GRADE_STEP * lag_sessions
     return max(graded, PRICE_CONFIDENCE_FLOOR)
 
@@ -422,16 +422,13 @@ def last_settled_session_date(cutoff: datetime) -> date:
     calendar day (weekends/holidays resolve naturally — no bar exists for them, so
     the fetcher's `<=` pick falls back to the last trading day). Derived from the
     run's CUTOFF, never the wall clock, so a replayed tick reproduces its window.
+
+    Uses the XNYS exchange calendar SSOT (#863) so market holidays are not asserted as
+    settled sessions.
     """
-    at_market = cutoff.astimezone(ZoneInfo("America/New_York"))
-    candidate = at_market.date() if at_market.time() >= time(16, 0) else at_market.date() - timedelta(days=1)
-    # Clamp to a weekday so the returned value IS a session date as named — a
-    # Saturday-evening cutoff must answer Friday, not Saturday (review on #638).
-    # Market holidays stay uncorrected without a calendar; the fetcher's `<=`
-    # max-pick falls back to the last real bar for those.
-    while candidate.weekday() >= 5:
-        candidate -= timedelta(days=1)
-    return candidate
+    from truealpha_contracts.calendar import settled_session_for_cutoff
+
+    return settled_session_for_cutoff(cutoff)
 
 
 def yahoo_quote_fetcher(symbol: str, cutoff: date) -> MarketPriceQuote | None:
@@ -528,7 +525,7 @@ def build_route(
     origins = [origin for origin in (twelve_data_origin(), moomoo_kline_origin()) if origin is not None]
     fetcher: MarketPriceFetcher = yahoo_quote_fetcher
     effective_drill = drill or getattr(context, "drill", None)
-    if effective_drill is not None:
+    if effective_drill is not None and hasattr(effective_drill, "arm"):
         fetcher, armed_origins = effective_drill.arm(settings.app_env, fetcher, origins)
         origins = list(armed_origins)
     return MarketPriceAdapter(targets, fetcher, corroborating_origins=tuple(origins))

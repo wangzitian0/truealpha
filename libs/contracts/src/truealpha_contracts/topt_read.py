@@ -75,7 +75,7 @@ class PostgresToptGppeRepository:
                 head = conn.execute(
                     """
                     select target_run_id as run_id from mart.current_pointer_head
-                    where environment = 'production' and factor_id = 'gross_profit_per_employee'
+                    where environment = (select environment from mart.environment_identity) and factor_id = 'gross_profit_per_employee'
                     and universe_id like %s
                     order by advanced_at desc limit 1
                     """,
@@ -87,7 +87,7 @@ class PostgresToptGppeRepository:
                         select s.run_id
                         from mart.topt_capture_status s
                         join mart.datahub_quality_report q on q.run_id = s.run_id
-                        where s.environment = 'production' and s.complete
+                        where s.environment = (select environment from mart.environment_identity) and s.complete
                         order by q.created_at desc, q.report_id desc limit 1
                         """
                     ).fetchone()

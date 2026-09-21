@@ -1,9 +1,11 @@
-.PHONY: help install runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit strategy-smoke lint format typecheck test prepush contract-conformance check clean
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit strategy-smoke lint format typecheck test prepush contract-conformance check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
 	@echo ""
 	@echo "Setup:"
+	@echo "  make bootstrap    Full physical bootstrap: uv sync + bun install + doctor"
+	@echo "  make doctor       Verify physical dev_env contracts and dependencies"
 	@echo "  make install      uv sync + bun install + pre-commit hooks"
 	@echo "  make runtime-up   Start Postgres/KG + MinIO and create the raw bucket"
 	@echo "  make stack-up     Build/start runtime + web + llm-service"
@@ -22,6 +24,14 @@ help:
 	@echo "Quality:"
 	@echo "  make check        lint + typecheck + test"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
+
+bootstrap:
+	uv sync --all-packages
+	cd apps/app-web && bun install --frozen-lockfile
+	uv run python tools/doctor.py
+
+doctor:
+	uv run python tools/doctor.py
 
 install:
 	uv sync --all-packages

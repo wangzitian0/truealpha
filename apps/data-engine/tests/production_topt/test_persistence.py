@@ -142,9 +142,9 @@ _FAILOVER_CLOSE = "40.02"
 
 def _victim(plan: PlannedRun) -> tuple[str, str]:
     """(listing_id, ticker) of the listing `_PrimaryOutage` and `_OneBrokenCell` target."""
-    listing_id = min(coordinate[2] for coordinate in plan.coordinates.values())
-    ticker = next(coordinate[3] for coordinate in plan.coordinates.values() if coordinate[2] == listing_id)
-    return listing_id, ticker
+    subject_id = min(plan.coordinates.keys())
+    ticker = plan.coordinates[subject_id][3]
+    return subject_id, ticker
 
 
 def _bundle(branch: OperatingBranch, *, blank_numerator: bool = False) -> FinancialFactsBundle:
@@ -199,14 +199,15 @@ def _routes(
     sec_targets: dict[str, SecTarget] = {}
     release_targets: dict[str, ReleaseDerivedRecord] = {}
     cik_by_ticker: dict[str, int] = {}
-    victim_listing = min(coordinate[2] for coordinate in plan.coordinates.values())
+    victim_subject_id = min(plan.coordinates.keys())
     blank_ciks: set[int] = set()
     for work_item_id, binding in plan.bindings.items():
         semantic_type = binding.obligation.capture_requirement_id.removesuffix(":v1")
-        issuer_id, instrument_id, listing_id, ticker = plan.coordinates[binding.obligation.subject.id]
-        cik = 100000 + sorted(plan.coordinates).index(listing_id)
+        subject_id = binding.obligation.subject.id
+        issuer_id, instrument_id, listing_id, ticker = plan.coordinates[subject_id]
+        cik = 100000 + sorted(plan.coordinates).index(subject_id)
         cik_by_ticker.setdefault(ticker, cik)
-        if broken.financial_fact_numerator and listing_id == victim_listing:
+        if broken.financial_fact_numerator and subject_id == victim_subject_id:
             blank_ciks.add(cik_by_ticker[ticker])
         if semantic_type == "market-price":
             price_targets[work_item_id] = MarketPriceTarget(
@@ -242,7 +243,7 @@ def _routes(
                 "listing_id": listing_id,
                 "ticker": ticker,
             }
-            if broken.identity_payload and semantic_type == "listing-identity" and listing_id == victim_listing:
+            if broken.identity_payload and semantic_type == "listing-identity" and subject_id == victim_subject_id:
                 payload.pop("ticker")
             release_targets[work_item_id] = ReleaseDerivedRecord(
                 semantic_type=semantic_type,
@@ -370,8 +371,8 @@ def _seed_headcounts(connection, plan: PlannedRun) -> None:
     """Land headcount facts the way any producer must: through the write path, into the
     table, with an evidence pointer. The capture then reads them like production does —
     a fake extractor would have skipped the plane this milestone is about."""
-    for listing_id in sorted({coordinate[2] for coordinate in plan.coordinates.values()}):
-        cik = 100000 + sorted(plan.coordinates).index(listing_id)
+    for idx, _subject_id in enumerate(sorted(plan.coordinates)):
+        cik = 100000 + idx
         record_headcount(
             connection,
             cik=cik,
@@ -404,6 +405,8 @@ def _capture(
         freshness_windows=plan.freshness_windows,
         default_freshness_max_age=plan.default_freshness_max_age,
         object_store=object_store or _InMemoryObjectStore(),
+        coordinates=plan.coordinates,
+        raw_coordinates=plan.raw_coordinates,
     )
     report = run_topt_capture(
         plan.run_id,
@@ -1406,16 +1409,18 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
     governed_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
         connection, cutoff=CUTOFF, executed_at=CUTOFF, risk_free_rate=Decimal("0.05"), capture_run_id=plan.run_id
     )
+    env = connection.execute("select environment from mart.environment_identity").fetchone()[0]
     pointer_sha = canonical_sha256({"probe": plan.run_id})
     connection.execute(
         """
         insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
                                           factor_id, target_run_id, sequence, previous_run_id, advanced_at)
-        values (%s, %s, 'production', %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        values (%s, %s, %s, %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
         """,
         (
             f"current-pointer:{pointer_sha}",
             pointer_sha,
+            env,
             snapshot.universe_id,
             snapshot.universe_version,
             plan.run_id,
@@ -1545,6 +1550,45 @@ def test_the_release_identity_the_run_stamps_is_measured_not_minted_from_a_liter
     assert in_database == measured[0]
 
 
+def test_pointer_writer_with_staging_environment_stores_staging_key(connection, monkeypatch) -> None:
+    """#756: running capture with environment tier STAGING stamps STAGING onto the campaign,
+    declares 'staging' in mart.environment_identity, and writes the pointer key with
+    environment 'staging'."""
+    from truealpha_contracts.common import CaptureEnvironment
+    from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
+
+    monkeypatch.setattr(settings, "environment_tier", RuntimeEnvironmentTier.STAGING)
+    assert settings.capture_environment == CaptureEnvironment.STAGING
+
+    planned = plan_and_persist(
+        connection,
+        cutoff=CUTOFF + timedelta(minutes=5),
+        version="test-756-staging",
+    )
+
+    # 1. Assert mart.environment_identity has 'staging'
+    identity = connection.execute("select environment from mart.environment_identity").fetchone()
+    assert identity is not None and identity[0] == "staging"
+
+    # 2. Assert raw.capture_campaigns has 'staging'
+    campaign_env = connection.execute(
+        """
+        select c.environment from raw.capture_campaigns c
+        join raw.capture_runs r on r.campaign_id = c.campaign_id
+        where r.run_id = %s
+        """,
+        (planned.run_id,),
+    ).fetchone()[0]
+    assert campaign_env == "staging"
+
+    # 3. Assert mart.topt_capture_status has 'staging'
+    status_env = connection.execute(
+        "select environment from mart.topt_capture_status where run_id = %s",
+        (planned.run_id,),
+    ).fetchone()[0]
+    assert status_env == "staging"
+
+
 # -- a cell the primary cannot serve (#862) -------------------------------------------------
 
 
@@ -1622,7 +1666,8 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
 
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
-    member = next(member for member in snapshot.members if member.listing_id == victim_listing)
+    victim_listing_id = plan.coordinates[victim_listing][2]
+    member = next(member for member in snapshot.members if member.listing_id == victim_listing_id)
     assert member.market_price.value == Decimal(_FAILOVER_CLOSE)
     assert member.market_price.confidence == Decimal("0.75")
     bound = connection.execute(
@@ -1635,7 +1680,7 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
         (member.market_price.input_id,),
     ).fetchone()
     assert bound == ("twelve-data-parser:v3", vintage_id, "twelve-data")
-    assert all(m.market_price.value == Decimal("40") for m in snapshot.members if m.listing_id != victim_listing)
+    assert all(m.market_price.value == Decimal("40") for m in snapshot.members if m.listing_id != victim_listing_id)
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     assert len(results) == 20
 
@@ -1650,7 +1695,7 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
 
     from data_engine.datahub.strategy_bridge import seed_strategy_inputs_from_capture
 
-    victim_issuer = next(c[0] for c in plan.coordinates.values() if c[2] == victim_listing)
+    victim_issuer = plan.coordinates[victim_listing][0]
     connection.execute("delete from staging.strategy_backtest_inputs where cutoff_at = %s", (CUTOFF,))
     seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
     closes = connection.execute(
