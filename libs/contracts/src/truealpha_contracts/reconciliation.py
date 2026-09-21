@@ -894,9 +894,13 @@ def _median_consensus_result(
         comparison_anchor_assertion_id=selected.assertion_id,
         selected_assertion_id=selected.assertion_id,
         selected_value_sha256=(
-            selected.normalized_value_sha256
-            if selected.numeric_value is not None and grade.served_value == selected.numeric_value
-            else canonical_sha256(str(grade.served_value))
+            grade.served_value
+            if isinstance(grade.served_value, str)
+            else (
+                selected.normalized_value_sha256
+                if selected.numeric_value is not None and grade.served_value == selected.numeric_value
+                else canonical_sha256(str(grade.served_value))
+            )
         ),
         selected_numeric_value=grade.served_value if isinstance(grade.served_value, Decimal) else None,
         selected_confidence_score=consensus_confidence(grade.band, selected.confidence_score),
