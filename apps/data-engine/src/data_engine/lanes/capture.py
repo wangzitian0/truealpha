@@ -22,7 +22,6 @@ from typing import Any
 
 import dagster as dg
 import psycopg
-from pydantic import Field
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
@@ -93,9 +92,6 @@ class ToptLiveTickConfig(dg.Config):
 
     executed_at: str
     force_fetch: bool = False
-    drill_primary_unavailable: list[str] = Field(default_factory=list)
-    drill_twelve_data_unavailable: bool = False
-    drill_primary_lagging: bool = False
 
 
 def _production_only(app_env: str) -> dg.DefaultScheduleStatus:
@@ -273,17 +269,6 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         gateway.capacity_scope(),
         psycopg.connect(settings.database_url) as connection,
     ):
-        drill = None
-        if config.drill_primary_unavailable or config.drill_primary_lagging:
-            from data_engine.datahub.production_topt.failover_drill import FailoverDrill
-
-            drill = FailoverDrill.for_launch(
-                app_env=settings.app_env,
-                force_fetch=config.force_fetch,
-                tickers=config.drill_primary_unavailable,
-                twelve_data_unavailable=config.drill_twelve_data_unavailable,
-                primary_lagging=config.drill_primary_lagging,
-            )
         pipeline = run_topt_pipeline(
             connection,
             cutoff=cutoff,
@@ -291,7 +276,6 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
             universe_head_kind=tick.universe_head_kind,
             label_prefix=tick.label_prefix,
             force_fetch=config.force_fetch,
-            drill=drill,
         )
         strategy: dict[str, Any] = {}
         if tick.run_strategy:

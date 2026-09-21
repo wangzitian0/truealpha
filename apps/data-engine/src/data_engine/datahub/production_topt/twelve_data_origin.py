@@ -452,7 +452,7 @@ class TwelveDataQuoteFetcher:
                 )
                 return settled
             today = self._today or datetime.now(UTC).date()
-            is_provisional = (settled.as_of == cutoff and today <= cutoff)
+            is_provisional = settled.as_of == cutoff and today <= cutoff
             return attach_settled_bar(series, settled=settled, is_provisional=is_provisional)
         series = self._get(_TIME_SERIES_URL, series_params)
         # No end of day for the partition date itself. Resolve the last session that HAS

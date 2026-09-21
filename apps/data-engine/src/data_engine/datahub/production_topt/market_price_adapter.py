@@ -247,7 +247,7 @@ class MarketPriceAdapter:
             valid_from=quote.as_of,
             transaction_time=quote.knowable_at,
             record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
-            corroborations=() if quote.as_of < target.cutoff else self._corroborate(target),
+            corroborations=self._corroborate(target),
             failover_reason=ObligationReasonCode.LOW_CONFIDENCE if quote.as_of < target.cutoff else None,
         )
 
