@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -19,7 +17,7 @@ def _quote(symbol: str, as_of: date) -> MarketPriceQuote:
         raw_bytes=b"{}",
         close=Decimal("150.00"),
         as_of=as_of,
-        knowable_at=datetime.combine(as_of, datetime.min.time()),
+        knowable_at=datetime.combine(as_of, datetime.min.time(), tzinfo=UTC),
     )
 
 

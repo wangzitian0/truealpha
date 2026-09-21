@@ -143,14 +143,6 @@ class SourceUnavailableError(Exception):
     """Raised by a fetcher for a transient failure the executor should retry."""
 
 
-class NotASessionCloseError(ValueError):
-    """Raised when a vendor payload asserts a quantity other than a regular-session close."""
-
-
-class MarketPriceSourceTransientError(RuntimeError):
-    """Raised by a fetcher for a transient failure the executor should retry."""
-
-
 # The primary failures a further origin may answer (#862): the primary had nothing to say
 # — unreachable, too slow, throttled, erroring, no bar, or its daily budget spent (#729: the
 # next origin is a different seat, admitted by its own budget). A STOP (look-ahead,

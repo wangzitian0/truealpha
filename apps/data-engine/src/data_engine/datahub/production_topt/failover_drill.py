@@ -165,7 +165,9 @@ class FailoverDrill:
                     return prior_quote
                 real_quote = fetch(symbol, cutoff)
                 if real_quote is not None:
-                    return replace(real_quote, as_of=prior)
+                    lag_days = (cutoff - prior).days
+                    lagged_knowable = real_quote.knowable_at - timedelta(days=lag_days)
+                    return replace(real_quote, as_of=prior, knowable_at=lagged_knowable)
                 return None
             return fetch(symbol, cutoff)
 
