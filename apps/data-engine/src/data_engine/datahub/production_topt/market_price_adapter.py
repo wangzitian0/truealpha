@@ -99,6 +99,7 @@ class MarketPriceQuote:
     high: Decimal | None = None
     low: Decimal | None = None
     volume: Decimal | None = None
+    is_provisional: bool = False
 
 
 # The bar fields both origins assert besides the close. They travel in the payload
@@ -114,6 +115,8 @@ def bar_payload(quote: MarketPriceQuote, *, close_key: str) -> dict[str, Any]:
     for field in BAR_FIELDS:
         value = getattr(quote, field)
         payload[field] = None if value is None else str(value)
+    if quote.is_provisional:
+        payload["is_provisional"] = True
     return payload
 
 
@@ -140,6 +143,14 @@ class SourceUnavailableError(Exception):
     """Raised by a fetcher for a transient failure the executor should retry."""
 
 
+class NotASessionCloseError(ValueError):
+    """Raised when a vendor payload asserts a quantity other than a regular-session close."""
+
+
+class MarketPriceSourceTransientError(RuntimeError):
+    """Raised by a fetcher for a transient failure the executor should retry."""
+
+
 # The primary failures a further origin may answer (#862): the primary had nothing to say
 # — unreachable, too slow, throttled, erroring, no bar, or its daily budget spent (#729: the
 # next origin is a different seat, admitted by its own budget). A STOP (look-ahead,
@@ -153,6 +164,7 @@ FAILOVER_REASONS: frozenset[ObligationReasonCode] = frozenset(
         ObligationReasonCode.SERVER_ERROR,
         ObligationReasonCode.FIELD_UNAVAILABLE,
         ObligationReasonCode.DEFERRED_CAPACITY,
+        ObligationReasonCode.LOW_CONFIDENCE,
     }
 )
 # The payload key the mart reads a served close from (`materialization.MarketPricePayload`).
@@ -242,6 +254,7 @@ class MarketPriceAdapter:
             transaction_time=quote.knowable_at,
             record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
             corroborations=self._corroborate(target),
+            failover_reason=ObligationReasonCode.LOW_CONFIDENCE if quote.as_of < target.cutoff else None,
         )
 
     def failover(self, work_item: CaptureWorkItem, primary_reason: ObligationReasonCode) -> FetchSuccess | None:

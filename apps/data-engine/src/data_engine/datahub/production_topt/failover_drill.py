@@ -56,6 +56,7 @@ _PRODUCTION_NAMES = frozenset({"production", "prod"})
 class DrillKind(StrEnum):
     PRIMARY_UNAVAILABLE = "primary_unavailable"
     PRIMARY_AND_TWELVE_DATA_UNAVAILABLE = "primary_and_twelve_data_unavailable"
+    PRIMARY_LAGGING = "primary_lagging"
 
 
 #: The failover origins each kind takes down besides the primary. A drilled cell served by
@@ -63,6 +64,7 @@ class DrillKind(StrEnum):
 _ORIGINS_DOWN: Mapping[DrillKind, tuple[str, ...]] = {
     DrillKind.PRIMARY_UNAVAILABLE: (),
     DrillKind.PRIMARY_AND_TWELVE_DATA_UNAVAILABLE: (TWELVE_DATA_ORIGIN,),
+    DrillKind.PRIMARY_LAGGING: (),
 }
 
 
@@ -91,7 +93,13 @@ class FailoverDrill:
 
     @classmethod
     def for_launch(
-        cls, *, app_env: str, force_fetch: bool, tickers: Sequence[str], twelve_data_unavailable: bool
+        cls,
+        *,
+        app_env: str,
+        force_fetch: bool,
+        tickers: Sequence[str],
+        twelve_data_unavailable: bool = False,
+        primary_lagging: bool = False,
     ) -> FailoverDrill | None:
         """The drill a tick launch asks for, or None when it asks for none. Refused in
         production, without `force_fetch`, and beyond `MAX_DRILL_TICKERS`."""
@@ -99,12 +107,21 @@ class FailoverDrill:
         if not names:
             if twelve_data_unavailable:
                 raise DrillRefused("drill_twelve_data_unavailable needs drill_primary_unavailable tickers")
+            if primary_lagging:
+                raise DrillRefused("drill_primary_lagging needs drill tickers")
             return None
         if is_production(app_env):
             raise DrillRefused(f"a failover drill never runs in production (APP_ENV={app_env!r})")
         if not force_fetch:
             raise DrillRefused("a failover drill must force a fetch (force_fetch: true), or it proves nothing")
-        kind = DrillKind.PRIMARY_AND_TWELVE_DATA_UNAVAILABLE if twelve_data_unavailable else DrillKind.PRIMARY_UNAVAILABLE
+        if primary_lagging and twelve_data_unavailable:
+            raise DrillRefused("cannot combine primary_lagging with twelve_data_unavailable")
+        if primary_lagging:
+            kind = DrillKind.PRIMARY_LAGGING
+        elif twelve_data_unavailable:
+            kind = DrillKind.PRIMARY_AND_TWELVE_DATA_UNAVAILABLE
+        else:
+            kind = DrillKind.PRIMARY_UNAVAILABLE
         return cls(kind=kind, tickers=names)
 
     @property
@@ -123,13 +140,38 @@ class FailoverDrill:
         if is_production(app_env):
             raise DrillRefused(f"a failover drill never arms in production (APP_ENV={app_env!r})")
         down = set(self.origins_down)
+        if self.kind is DrillKind.PRIMARY_LAGGING:
+            primary_fetcher = self._lagged(fetcher)
+        else:
+            primary_fetcher = self._broken(fetcher, "primary")
         return (
-            self._broken(fetcher, "primary"),
+            primary_fetcher,
             tuple(
                 replace(origin, fetch=self._broken(origin.fetch, origin.origin)) if origin.origin in down else origin
                 for origin in origins
             ),
         )
+
+    def _lagged(self, fetch: MarketPriceFetcher) -> Callable[[str, date], MarketPriceQuote | None]:
+        from datetime import timedelta
+
+        drilled = frozenset(self.tickers)
+
+        def lagged_fetch(symbol: str, cutoff: date) -> MarketPriceQuote | None:
+            if symbol in drilled:
+                prior = cutoff - timedelta(days=1)
+                while prior.weekday() >= 5:
+                    prior -= timedelta(days=1)
+                prior_quote = fetch(symbol, prior)
+                if prior_quote is not None:
+                    return prior_quote
+                real_quote = fetch(symbol, cutoff)
+                if real_quote is not None:
+                    return replace(real_quote, as_of=prior)
+                return None
+            return fetch(symbol, cutoff)
+
+        return lagged_fetch
 
     def _broken(self, fetch: MarketPriceFetcher, name: str) -> Callable[[str, date], MarketPriceQuote | None]:
         from data_engine.datahub.production_topt.market_price_adapter import SourceUnavailableError
