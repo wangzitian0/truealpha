@@ -173,7 +173,7 @@ class FinancialFactsBundle:
     shares_basis: str | None = None
     # The newest balance-sheet date this document proves was filed in a periodic statement,
     # and the newest such date filed in an annual report. An input dated before the
-    # matching one is a figure the issuer has already superseded (see `_stale_inputs`).
+    # matching one is a figure the issuer has already superseded (carried for downstream auditing).
     latest_statement_period_end: date | None = None
     latest_annual_period_end: date | None = None
     # The parsed company-facts document, kept so two documents of one issuer can be merged
@@ -1271,7 +1271,7 @@ def predecessor_ciks(
     connection: psycopg.Connection[Any],
     listing_ids: Sequence[str],
     issuer_by_listing: dict[str, str] | None = None,
-) -> dict[str, int]:
+) -> dict[str, PredecessorResolution]:
     """#496: each listing's predecessor company-facts CIK, consulted only when
     the index-mapped CIK's taxonomy is empty (post-reorganization holdco).
 
@@ -1282,7 +1282,7 @@ def predecessor_ciks(
        a revenue value (generic, self-maintaining once the A1 spine has seen
        an issuer parse successfully; empty for issuers that never did).
     """
-    resolved: dict[str, int] = {}
+    resolved: dict[str, PredecessorResolution] = {}
     if issuer_by_listing:
         registry = dict(
             connection.execute(
@@ -1377,6 +1377,7 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
             # otherwise refetch the same empty document.
             predecessor_cik=int(pred) if pred is not None and has_pred else None,
             predecessor_signed=getattr(pred, "signed", False) if pred is not None and has_pred else False,
+            statement_filings=classifications[cik].statement_filings if cik in classifications else (),
             ticker=cell.ticker,
         )
     # Resolved once per run through the governed pointer, so every cell in the run is
