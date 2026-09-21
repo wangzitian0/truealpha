@@ -16,6 +16,7 @@ from data_engine.quality.release_fetch_proof import (
     RED,
     SCHEDULE_TAG,
     _as_utc,
+    capture_run_of,
     evaluate,
     expected_origins,
     forced,
@@ -250,3 +251,134 @@ def test_evaluate_ok_when_all_origins_fetched(monkeypatch: pytest.MonkeyPatch) -
     assert proof.state == OK
     assert proof.ok is True
     assert "fetched" in proof.summary
+
+
+def test_evaluate_red_when_missing_origins(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    instance = MagicMock(spec=dg.DagsterInstance)
+    digest = "sha256:" + "a" * 64
+    now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
+
+    canary_record = MagicMock()
+    canary_record.create_timestamp = now
+
+    succ_run = MagicMock()
+    succ_run.job_name = "topt_live_pipeline"
+    succ_run.run_id = "run-succ-12345"
+    succ_run.tags = {SCHEDULE_TAG: "1"}
+    succ_run.run_config = {}
+    succ_run.status = dg.DagsterRunStatus.SUCCESS
+
+    succ_record = MagicMock()
+    succ_record.create_timestamp = now + timedelta(minutes=1)
+    succ_record.dagster_run = succ_run
+
+    instance.get_run_records.side_effect = lambda filters, **kwargs: (
+        [canary_record] if filters.tags and BOOT_CANARY_TAG in filters.tags else [succ_record]
+    )
+
+    step_output = MagicMock()
+    step_output.event_log_entry.dagster_event.step_output_data.metadata = {
+        release_fetch_proof.CAPTURE_RUN_METADATA: "capture-run-xyz"
+    }
+    step_record = MagicMock()
+    step_record.records = [step_output]
+    instance.get_records_for_run.return_value = step_record
+
+    connection.execute.return_value.fetchone.return_value = (digest,)
+
+    expected = frozenset({"sec:v1", "yahoo-chart:v1"})
+    monkeypatch.setattr(release_fetch_proof, "expected_origins", lambda: expected)
+    monkeypatch.setattr(release_fetch_proof, "fetched_by_origin", lambda conn, cap_id: {"sec:v1": 10})
+
+    proof = evaluate(connection, instance, digest=digest)
+    assert proof.state == RED
+    assert proof.ok is False
+    assert "fetched nothing from yahoo-chart:v1" in proof.summary
+
+
+def test_evaluate_red_when_expected_origins_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    instance = MagicMock(spec=dg.DagsterInstance)
+    digest = "sha256:" + "a" * 64
+    now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
+
+    canary_record = MagicMock()
+    canary_record.create_timestamp = now
+
+    succ_run = MagicMock()
+    succ_run.job_name = "topt_live_pipeline"
+    succ_run.run_id = "run-succ-12345"
+    succ_run.tags = {SCHEDULE_TAG: "1"}
+    succ_run.run_config = {}
+    succ_run.status = dg.DagsterRunStatus.SUCCESS
+
+    succ_record = MagicMock()
+    succ_record.create_timestamp = now + timedelta(minutes=1)
+    succ_record.dagster_run = succ_run
+
+    instance.get_run_records.side_effect = lambda filters, **kwargs: (
+        [canary_record] if filters.tags and BOOT_CANARY_TAG in filters.tags else [succ_record]
+    )
+
+    step_output = MagicMock()
+    step_output.event_log_entry.dagster_event.step_output_data.metadata = {
+        release_fetch_proof.CAPTURE_RUN_METADATA: "capture-run-xyz"
+    }
+    step_record = MagicMock()
+    step_record.records = [step_output]
+    instance.get_records_for_run.return_value = step_record
+
+    connection.execute.return_value.fetchone.return_value = (digest,)
+
+    monkeypatch.setattr(release_fetch_proof, "expected_origins", lambda: frozenset())
+    monkeypatch.setattr(release_fetch_proof, "fetched_by_origin", lambda conn, cap_id: {})
+
+    proof = evaluate(connection, instance, digest=digest)
+    assert proof.state == RED
+    assert proof.ok is False
+    assert "no expected origins configured" in proof.summary
+
+
+def test_evaluate_red_when_capture_run_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    instance = MagicMock(spec=dg.DagsterInstance)
+    digest = "sha256:" + "a" * 64
+    now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
+
+    canary_record = MagicMock()
+    canary_record.create_timestamp = now
+
+    succ_run = MagicMock()
+    succ_run.job_name = "topt_live_pipeline"
+    succ_run.run_id = "run-succ-12345"
+    succ_run.tags = {SCHEDULE_TAG: "1"}
+    succ_run.run_config = {}
+    succ_run.status = dg.DagsterRunStatus.SUCCESS
+
+    succ_record = MagicMock()
+    succ_record.create_timestamp = now + timedelta(minutes=1)
+    succ_record.dagster_run = succ_run
+
+    instance.get_run_records.side_effect = lambda filters, **kwargs: (
+        [canary_record] if filters.tags and BOOT_CANARY_TAG in filters.tags else [succ_record]
+    )
+
+    monkeypatch.setattr(release_fetch_proof, "capture_run_of", lambda inst, run_id: None)
+
+    proof = evaluate(connection, instance, digest=digest)
+    assert proof.state == RED
+    assert proof.ok is False
+    assert "names no capture run" in proof.summary
+
+
+def test_capture_run_of_handles_none_metadata() -> None:
+    instance = MagicMock(spec=dg.DagsterInstance)
+    step_output = MagicMock()
+    step_output.event_log_entry.dagster_event.step_output_data.metadata = None
+    step_record = MagicMock()
+    step_record.records = [step_output]
+    instance.get_records_for_run.return_value = step_record
+
+    result = capture_run_of(instance, "run-123")
+    assert result is None

@@ -20,8 +20,8 @@ The deployment starts at its boot canary run. `boot_canary_sensor` launches exac
 deployment (image digest plus configuration) and tags it with the digest. A rollback and a
 configuration change are new deployments, and each must prove itself again.
 
-`tools/deploy_freshness.py` turns a production release older than 26 hours without an ok
-verdict into a red leg.
+`tools/nightly_verdicts.py` checks this check and bounds it by 48 hours (twice its 24h
+cadence).
 """
 
 from __future__ import annotations
@@ -187,7 +187,8 @@ def capture_run_of(instance: dg.DagsterInstance, run_id: str) -> str | None:
     for record in records:
         event = record.event_log_entry.dagster_event
         output = event.step_output_data if event is not None else None
-        value = (output.metadata if output is not None else {}).get(CAPTURE_RUN_METADATA)
+        metadata = getattr(output, "metadata", None) or {}
+        value = metadata.get(CAPTURE_RUN_METADATA)
         text = getattr(value, "value", value)
         if text:
             return str(text)
@@ -230,6 +231,8 @@ def evaluate(connection: psycopg.Connection[Any], instance: dg.DagsterInstance, 
         return Proof(RED, f"{label}: its capture is stamped by {stamped}, not {short}…")
     fetched = fetched_by_origin(connection, capture_run_id)
     expected = expected_origins()
+    if not expected:
+        return Proof(RED, f"{label}: no expected origins configured")
     counts = ", ".join(f"{origin} {fetched.get(origin, 0)}" for origin in sorted(expected))
     missing = sorted(origin for origin in expected if fetched.get(origin, 0) <= 0)
     if missing:
