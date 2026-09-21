@@ -26,6 +26,8 @@ LANE_MODULES: tuple[str, ...] = (
     "data_engine.lanes.capture",
     # datahub: weekly constituents + N-PORT holdings + identity enrichment
     "data_engine.lanes.universe_refresh",
+    # datahub: daily multi-resolution OHLCV ingestion + PIT universe mask (#101)
+    "data_engine.lanes.market_data",
     # the DB-mediated manual trigger (#495): a sensor over the capture lane's jobs
     "data_engine.lanes.triggers",
     # data quality: the output-invariant suite against this environment's own database
