@@ -525,7 +525,7 @@ def build_route(
     # origin that is not configured for this environment is simply not asked. The same
     # origins serve, in that order, a cell the primary cannot (#862, `failover_order`).
     origins = [origin for origin in (twelve_data_origin(), moomoo_kline_origin()) if origin is not None]
-    fetcher = yahoo_quote_fetcher
+    fetcher: MarketPriceFetcher = yahoo_quote_fetcher
     if drill is not None:
         fetcher, armed_origins = drill.arm(settings.app_env, fetcher, origins)
         origins = list(armed_origins)
