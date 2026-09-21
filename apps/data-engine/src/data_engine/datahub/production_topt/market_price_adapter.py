@@ -51,6 +51,7 @@ from data_engine.datahub.production_topt.executor import (
     NormalizedRecord,
     RawResponse,
 )
+from data_engine.datahub.production_topt.failover_drill import FailoverDrill
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER
 from data_engine.sources.gateway import BudgetExhausted
@@ -492,12 +493,17 @@ def quote_from_chart(body: bytes, bars: Sequence[PriceBar], *, cutoff: date) -> 
 # -- registry route (#72) -----------------------------------------------------------------
 
 
-def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> MarketPriceAdapter:
+def build_route(
+    context: RouteContext,
+    cells: Sequence[RouteCell],
+    drill: FailoverDrill | None = None,
+) -> MarketPriceAdapter:
     """The market-price source's own routing: one target per planned cell, the Yahoo
     primary, the Twelve Data second origin and the moomoo K-line third origin — which are
     also, in that order, the failovers for a cell Yahoo cannot serve (#862). Named by
     the `yahoo-chart` registration in `source_registrations.py`; the composition root
     never sees these types."""
+    from data_engine.config import settings
     from data_engine.datahub.production_topt.moomoo_origin import moomoo_kline_origin
     from data_engine.datahub.production_topt.twelve_data_origin import twelve_data_origin
 
@@ -519,4 +525,8 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> MarketPric
     # origin that is not configured for this environment is simply not asked. The same
     # origins serve, in that order, a cell the primary cannot (#862, `failover_order`).
     origins = [origin for origin in (twelve_data_origin(), moomoo_kline_origin()) if origin is not None]
-    return MarketPriceAdapter(targets, yahoo_quote_fetcher, corroborating_origins=tuple(origins))
+    fetcher = yahoo_quote_fetcher
+    if drill is not None:
+        fetcher, armed_origins = drill.arm(settings.app_env, fetcher, origins)
+        origins = list(armed_origins)
+    return MarketPriceAdapter(targets, fetcher, corroborating_origins=tuple(origins))
