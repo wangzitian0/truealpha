@@ -1085,12 +1085,14 @@ class SecFinancialFactAdapter:
                 # whose first filings carry the balance sheet and share count but no
                 # revenue or profit. The issuer's own predecessor CIK (owner-signed
                 # registry, or the capture lineage) is the same company's filing history.
-                # When both documents are available, their declared concepts are merged
-                # (see `merge_company_facts`) so the latest balance-sheet and share counts
-                # from the holdco combine with the predecessor's income-statement figures.
+                # When both documents are available and the predecessor is owner-signed,
+                # their declared concepts are merged (see `merge_company_facts`) so the latest
+                # balance-sheet and share counts from the holdco combine with the predecessor's
+                # income-statement figures. An unsigned lineage-resolved predecessor keeps the
+                # whole-document fallback.
                 fallback = self._fetcher(target.predecessor_cik, target.cutoff, target.operating_branch)
                 if fallback is not None and _asserts_income(fallback):
-                    if bundle.document is not None and fallback.document is not None:
+                    if target.predecessor_signed and bundle.document is not None and fallback.document is not None:
                         merged = merge_company_facts(
                             [
                                 (company_facts_record_id(target.cik), bundle.document),
@@ -1254,6 +1256,17 @@ def _sec_ticker(ticker: str) -> str:
     return ticker.replace(".", "-")
 
 
+class PredecessorResolution(int):
+    """An int CIK that also carries whether the resolution was signed."""
+
+    signed: bool = False
+
+    def __new__(cls, val: int, *, signed: bool = False) -> PredecessorResolution:
+        obj = super().__new__(cls, val)
+        obj.signed = signed
+        return obj
+
+
 def predecessor_ciks(
     connection: psycopg.Connection[Any],
     listing_ids: Sequence[str],
@@ -1279,7 +1292,7 @@ def predecessor_ciks(
         )
         for listing_id, issuer_id in issuer_by_listing.items():
             if issuer_id in registry:
-                resolved[listing_id] = int(registry[issuer_id])
+                resolved[listing_id] = PredecessorResolution(int(registry[issuer_id]), signed=True)
 
     rows = connection.execute(
         """
@@ -1298,7 +1311,7 @@ def predecessor_ciks(
     for subject_id, record_id in rows:
         digits = record_id.removeprefix("companyfacts:CIK")
         if digits.isdigit():
-            resolved.setdefault(subject_id, int(digits))
+            resolved.setdefault(subject_id, PredecessorResolution(int(digits), signed=False))
     return resolved
 
 
@@ -1346,6 +1359,8 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
     targets: dict[str, SecTarget] = {}
     for cell in cells:
         cik = cik_by_ticker[cell.ticker]
+        pred = predecessors.get(cell.listing_id)
+        has_pred = pred is not None and pred != cik
         targets[cell.work_item_id] = SecTarget(
             cik=cik,
             cutoff=context.cutoff_date,
@@ -1360,9 +1375,8 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
             revenue_proxy_allowed=cik in classifications and classifications[cik].revenue_proxy_allowed,
             # only meaningful when it differs from the mapped CIK — the fallback would
             # otherwise refetch the same empty document.
-            predecessor_cik=(
-                predecessors.get(cell.listing_id) if predecessors.get(cell.listing_id) not in (None, cik) else None
-            ),
+            predecessor_cik=int(pred) if pred is not None and has_pred else None,
+            predecessor_signed=getattr(pred, "signed", False) if pred is not None and has_pred else False,
             ticker=cell.ticker,
         )
     # Resolved once per run through the governed pointer, so every cell in the run is

@@ -1496,6 +1496,7 @@ def test_adapter_fetch_merges_holdco_and_predecessor_when_documents_present() ->
         listing_id="listing:xnys:xom",
         operating_branch=OperatingBranch.NON_FINANCIAL,
         predecessor_cik=34088,
+        predecessor_signed=True,
     )
     adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher)
     outcome = adapter.fetch(item)
@@ -1509,3 +1510,21 @@ def test_adapter_fetch_merges_holdco_and_predecessor_when_documents_present() ->
     validated = FinancialFactPayload(**outcome.record.payload)
     assert validated.shares_basis == "point_in_time"
     assert validated.total_assets == Decimal("464482000000")
+
+    # Unsigned predecessor (e.g. lineage-only) keeps whole-document fallback instead of merging
+    unsigned_target = SecTarget(
+        cik=2115436,
+        cutoff=date(2026, 9, 1),
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+        predecessor_signed=False,
+    )
+    adapter_unsigned = SecFinancialFactAdapter({item.work_item_id: unsigned_target}, fetcher)
+    outcome_unsigned = adapter_unsigned.fetch(item)
+    assert isinstance(outcome_unsigned, FetchSuccess)
+    assert outcome_unsigned.raw.body == b'{"predecessor": true}'
+    assert outcome_unsigned.record.payload["revenue"] == "340000000000"
+    assert outcome_unsigned.record.payload["total_assets"] is None
