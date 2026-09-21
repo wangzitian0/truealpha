@@ -62,9 +62,11 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.reconciliation import (
+    ConsensusBand,
     ReconciliationCell,
     ReconciliationOutcome,
     ReconciliationPolicy,
+    ReconciliationResult,
     SourceAssertion,
     reconcile_source_assertions,
 )
@@ -170,9 +172,9 @@ DEFAULT_SAMPLE_SUBJECTS: Mapping[str, tuple[str, ...]] = {
 DEFAULT_ORACLE_ISSUERS = 5
 
 BAND_DEFINITIONS: Mapping[str, str] = {
-    "high": "at least two independent origins asserted a value and the family's declared policy graded them agreed",
-    "medium": "at least two origins asserted a value but no policy exists, or they disagree beyond tolerance, or they share one lineage",
-    "low": "exactly one origin asserted a value",
+    "high": "at least three independent origin groups agreed within 0.1% tolerance; served value is median, confidence 1.00",
+    "medium": "exactly two independent origin groups agreed within 0.1% tolerance; served value is mean",
+    "low": "single origin, or no consensus; served value is priority source",
     "missing": "no origin asserted a value",
 }
 INDEPENDENCE_RULE = (
@@ -555,21 +557,44 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
             relative=relative,
             comparison=comparison,
         )
-    outcome = _reconcile(policy, subject_id, valued, numeric, cutoff)
-    graded = {
-        ReconciliationOutcome.AGREED: (Band.HIGH, "independent_origins_agree"),
-        ReconciliationOutcome.CONFLICT_ABSTAINED: (Band.MEDIUM, "not_agreed_within_tolerance"),
-        ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS: (Band.LOW, "single_eligible_origin"),
-        ReconciliationOutcome.NOT_YET_KNOWABLE: (Band.MISSING, "not_knowable_at_cutoff"),
-        ReconciliationOutcome.UNAVAILABLE: (Band.MISSING, "no_eligible_origin"),
-    }
-    band, reason = graded[outcome]
+    result = _reconcile(policy, subject_id, valued, numeric, cutoff)
+    if result.band is not None:
+        if result.band is ConsensusBand.HIGH:
+            band = Band.HIGH
+            reason = "independent_origins_agree"
+        elif result.band is ConsensusBand.MEDIUM:
+            band = Band.MEDIUM
+            reason = "two_origins_agree"
+        elif result.band is ConsensusBand.LOW:
+            band = Band.LOW
+            reason = (
+                "cross_origin_conflict"
+                if result.outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED
+                else "single_eligible_origin"
+            )
+        else:
+            band = Band.MISSING
+            reason = (
+                "not_knowable_at_cutoff"
+                if result.outcome == ReconciliationOutcome.NOT_YET_KNOWABLE
+                else "no_eligible_origin"
+            )
+    else:
+        graded = {
+            ReconciliationOutcome.AGREED: (Band.HIGH, "independent_origins_agree"),
+            ReconciliationOutcome.CONFLICT_ABSTAINED: (Band.MEDIUM, "not_agreed_within_tolerance"),
+            ReconciliationOutcome.CONFLICT_PRIORITY_SERVED: (Band.LOW, "cross_origin_conflict"),
+            ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS: (Band.LOW, "single_eligible_origin"),
+            ReconciliationOutcome.NOT_YET_KNOWABLE: (Band.MISSING, "not_knowable_at_cutoff"),
+            ReconciliationOutcome.UNAVAILABLE: (Band.MISSING, "no_eligible_origin"),
+        }
+        band, reason = graded.get(result.outcome, (Band.LOW, "unknown"))
     return grade(
         band,
         reason,
         asserted,
         independent,
-        outcome=outcome.value,
+        outcome=result.outcome.value,
         delta=delta,
         relative=relative,
         comparison=comparison,
@@ -582,7 +607,7 @@ def _reconcile(
     origins: Sequence[OriginValue],
     numeric: Mapping[str, Decimal | None],
     cutoff: datetime,
-) -> ReconciliationOutcome:
+) -> ReconciliationResult:
     """Run the accepted fusion engine over the origins' assertions under the family policy."""
     assert policy.reconciliation is not None
     cell = ReconciliationCell(
@@ -616,10 +641,9 @@ def _reconcile(
                 lineage_complete=True,
             )
         )
-    result = reconcile_source_assertions(
+    return reconcile_source_assertions(
         cell=cell, assertions=tuple(assertions), policy=policy.reconciliation, cutoff=cutoff
     )
-    return result.outcome
 
 
 def aggregate(policy: FamilyPolicy, grades: Iterable[CellGrade]) -> dict[str, Any]:
@@ -631,9 +655,14 @@ def aggregate(policy: FamilyPolicy, grades: Iterable[CellGrade]) -> dict[str, An
     compared = sum(
         1
         for grade in rows
-        if grade.outcome in (ReconciliationOutcome.AGREED.value, ReconciliationOutcome.CONFLICT_ABSTAINED.value)
+        if grade.outcome
+        in (
+            ReconciliationOutcome.AGREED.value,
+            ReconciliationOutcome.CONFLICT_ABSTAINED.value,
+            ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value,
+        )
     )
-    agreed = sum(1 for grade in rows if grade.band is Band.HIGH)
+    agreed = sum(1 for grade in rows if grade.outcome == ReconciliationOutcome.AGREED.value)
     reasons = Counter(grade.reason for grade in rows)
     return {
         "semantic_type": policy.semantic_type,
@@ -641,6 +670,7 @@ def aggregate(policy: FamilyPolicy, grades: Iterable[CellGrade]) -> dict[str, An
         **{band.value: counts.get(band.value, 0) for band in Band},
         "share": {band.value: _ratio(counts.get(band.value, 0), total) or "0" for band in Band},
         "compared": compared,
+        "agreed": agreed,
         "agreement_rate": _ratio(agreed, compared),
         "tolerance": policy.reconciliation.policy_id if policy.reconciliation else None,
         "tolerance_policy": _policy_payload(policy.reconciliation),
@@ -1285,7 +1315,7 @@ def field_accuracy(
     return {
         "origins": summary.get("origins", []),
         "compared": summary.get("compared", 0),
-        "agreed": summary.get("high", 0),
+        "agreed": summary.get("agreed", summary.get("high", 0)),
         "agreement_rate": summary.get("agreement_rate"),
         "tolerance_policy": _policy_payload(policy.reconciliation),
         "quality_report_id": quality_report_id,

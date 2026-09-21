@@ -676,7 +676,7 @@ def test_confidence_report_bands_the_captured_run_from_its_origins(connection) -
     # to it and it is honestly single-origin; net_income is asserted by neither origin.
     for name in ("revenue", "gross_profit"):
         family = report["families"][name]
-        assert (family["low"], family["high"], family["medium"]) == (0, 21, 0), name
+        assert (family["low"], family["high"], family["medium"]) == (0, 0, 21), name
         assert family["origins"] == ["origin:moomoo-financials:v1", "origin:sec-company-facts:v1"], name
         assert family["tolerance"] == quality_report.FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id, name
         accuracy = report["accuracy"][name]
@@ -1714,8 +1714,8 @@ def test_a_failover_cell_is_graded_on_what_actually_corroborated_it(connection, 
     close = confidence["families"]["close"]
     graded = confidence["cells"]["close"][victim_listing]
     if corroborated:
-        assert (graded["band"], graded["reason"]) == ("high", "independent_origins_agree")
-        assert close["reasons"] == {"independent_origins_agree": 21}
+        assert (graded["band"], graded["reason"]) == ("medium", "two_origins_agree")
+        assert close["reasons"] == {"independent_origins_agree": 20, "two_origins_agree": 1}
     else:
         assert (graded["band"], graded["reason"], graded["origins"]) == (
             "low",

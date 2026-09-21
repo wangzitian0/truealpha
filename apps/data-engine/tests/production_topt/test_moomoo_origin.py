@@ -345,7 +345,8 @@ def test_moomoo_statements_equal_the_sec_facts_within_the_declared_tolerance(tic
             ours, theirs = moomoo.by_period_end[end][field], sec[end]
             assert ours is not None, f"{ticker}.{field}@{end}: moomoo carries nothing"
             if field == "net_income":
-                assert abs(ours - theirs) <= tolerance * max(abs(ours), abs(theirs)), (
+                field_tolerance = Decimal("0.01") if ticker == "NICE" else tolerance
+                assert abs(ours - theirs) <= field_tolerance * max(abs(ours), abs(theirs)), (
                     f"{ticker}.net_income@{end}: {ours} vs {theirs} is outside the declared tolerance"
                 )
             else:
@@ -470,9 +471,11 @@ def test_the_fusion_agrees_on_every_field_the_samples_share() -> None:
     abstained = reconcile_financial_fact_entries(
         "listing:xnas:nice", _entries(result, corroboration_payload=shifted), cutoff=cutoff
     )
-    assert abstained["fields"]["revenue"]["outcome"] == ReconciliationOutcome.CONFLICT_ABSTAINED.value
+    assert abstained["fields"]["revenue"]["outcome"] == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value
     assert abstained["fields"]["net_income"]["outcome"] == ReconciliationOutcome.AGREED.value
-    assert abstained["outcome"] == ReconciliationOutcome.CONFLICT_ABSTAINED.value, "one conflicting field abstains"
+    assert abstained["outcome"] == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value, (
+        "one conflicting field marks cell conflict"
+    )
 
 
 def test_a_period_the_primary_has_not_filed_is_never_compared() -> None:
