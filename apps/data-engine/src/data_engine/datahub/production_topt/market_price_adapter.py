@@ -51,6 +51,7 @@ from data_engine.datahub.production_topt.executor import (
     NormalizedRecord,
     RawResponse,
 )
+from data_engine.datahub.production_topt.failover_drill import FailoverDrill
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
 from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER
 from data_engine.sources.gateway import BudgetExhausted
@@ -99,6 +100,7 @@ class MarketPriceQuote:
     high: Decimal | None = None
     low: Decimal | None = None
     volume: Decimal | None = None
+    is_provisional: bool = False
 
 
 # The bar fields both origins assert besides the close. They travel in the payload
@@ -109,11 +111,13 @@ BAR_FIELDS: tuple[str, ...] = ("open", "high", "low", "volume")
 
 
 def bar_payload(quote: MarketPriceQuote, *, close_key: str) -> dict[str, Any]:
-    """The five bar values as base-10 strings (null where absent), never binary floats."""
+    """The five bar values as base-10 strings (null where absent), plus optional boolean is_provisional flag."""
     payload: dict[str, Any] = {close_key: str(quote.close)}
     for field in BAR_FIELDS:
         value = getattr(quote, field)
         payload[field] = None if value is None else str(value)
+    if quote.is_provisional:
+        payload["is_provisional"] = True
     return payload
 
 
@@ -141,10 +145,11 @@ class SourceUnavailableError(Exception):
 
 
 # The primary failures a further origin may answer (#862): the primary had nothing to say
-# — unreachable, too slow, throttled, erroring, no bar, or its daily budget spent (#729: the
-# next origin is a different seat, admitted by its own budget). A STOP (look-ahead,
-# contract) is a broken run and never failed over; "not yet knowable" is the primary
-# asserting the datum does not exist yet, which another origin must not contradict.
+# — unreachable, too slow, throttled, erroring, no bar, its daily budget spent (#729: the
+# next origin is a different seat, admitted by its own budget), or LOW_CONFIDENCE when the
+# primary lagged behind the target session. A STOP (look-ahead, contract) is a broken run
+# and never failed over; "not yet knowable" is the primary asserting the datum does not
+# exist yet, which another origin must not contradict.
 FAILOVER_REASONS: frozenset[ObligationReasonCode] = frozenset(
     {
         ObligationReasonCode.TRANSIENT_NETWORK,
@@ -153,6 +158,7 @@ FAILOVER_REASONS: frozenset[ObligationReasonCode] = frozenset(
         ObligationReasonCode.SERVER_ERROR,
         ObligationReasonCode.FIELD_UNAVAILABLE,
         ObligationReasonCode.DEFERRED_CAPACITY,
+        ObligationReasonCode.LOW_CONFIDENCE,
     }
 )
 # The payload key the mart reads a served close from (`materialization.MarketPricePayload`).
@@ -242,6 +248,7 @@ class MarketPriceAdapter:
             transaction_time=quote.knowable_at,
             record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
             corroborations=self._corroborate(target),
+            failover_reason=ObligationReasonCode.LOW_CONFIDENCE if quote.as_of < target.cutoff else None,
         )
 
     def failover(self, work_item: CaptureWorkItem, primary_reason: ObligationReasonCode) -> FetchSuccess | None:
@@ -487,12 +494,17 @@ def quote_from_chart(body: bytes, bars: Sequence[PriceBar], *, cutoff: date) -> 
 # -- registry route (#72) -----------------------------------------------------------------
 
 
-def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> MarketPriceAdapter:
+def build_route(
+    context: RouteContext,
+    cells: Sequence[RouteCell],
+    drill: FailoverDrill | None = None,
+) -> MarketPriceAdapter:
     """The market-price source's own routing: one target per planned cell, the Yahoo
     primary, the Twelve Data second origin and the moomoo K-line third origin — which are
     also, in that order, the failovers for a cell Yahoo cannot serve (#862). Named by
     the `yahoo-chart` registration in `source_registrations.py`; the composition root
     never sees these types."""
+    from data_engine.config import settings
     from data_engine.datahub.production_topt.moomoo_origin import moomoo_kline_origin
     from data_engine.datahub.production_topt.twelve_data_origin import twelve_data_origin
 
@@ -514,4 +526,9 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> MarketPric
     # origin that is not configured for this environment is simply not asked. The same
     # origins serve, in that order, a cell the primary cannot (#862, `failover_order`).
     origins = [origin for origin in (twelve_data_origin(), moomoo_kline_origin()) if origin is not None]
-    return MarketPriceAdapter(targets, yahoo_quote_fetcher, corroborating_origins=tuple(origins))
+    fetcher: MarketPriceFetcher = yahoo_quote_fetcher
+    effective_drill = drill or getattr(context, "drill", None)
+    if effective_drill is not None:
+        fetcher, armed_origins = effective_drill.arm(settings.app_env, fetcher, origins)
+        origins = list(armed_origins)
+    return MarketPriceAdapter(targets, fetcher, corroborating_origins=tuple(origins))

@@ -710,3 +710,55 @@ def test_an_exhausted_budget_defers_the_cell_through_the_deployed_fetcher(call_l
     assert isinstance(result, FetchFailure)
     assert result.reason_code is ObligationReasonCode.DEFERRED_CAPACITY
     assert len(call_ledger) == 3
+
+
+def test_lagging_primary_bar_triggers_failover_to_corroborating_origin() -> None:
+    """When the primary returns a quote from an older session than target.cutoff,
+    fetch() marks failover_reason=LOW_CONFIDENCE, which allows failover to the next origin."""
+
+    item = _work_item("a" * 64)
+    # Primary quote lags by 1 session (prior day)
+    lagged_quote = _quote(_CUTOFF - timedelta(days=1), "149.00")
+    # Failover origin (Twelve Data) has the settled quote for the target cutoff
+    current_quote = _vendor_quote("td", _CUTOFF, "150.25")
+    twelve_fetch = _CountingFetch(current_quote)
+
+    adapter = _failover_adapter(item, lambda s, c: lagged_quote, _twelve_data(twelve_fetch))
+    # Direct fetch indicates failover_reason
+    fetch_result = adapter.fetch(item)
+    assert isinstance(fetch_result, FetchSuccess)
+    assert fetch_result.failover_reason == ObligationReasonCode.LOW_CONFIDENCE
+
+    # Execution through capture invokes failover and serves from Twelve Data
+    _report, sink = _capture(item, adapter)
+    served = sink.calls[0]["success"]
+    assert served.served_by_failover == "twelve-data"
+    assert served.record.payload["close"] == "150.25"
+    assert served.record.payload["served_by_failover"] == "twelve-data"
+
+
+def test_provisional_quote_and_payload_validation() -> None:
+    """MarketPriceQuote carrying is_provisional=True populates the payload flag,
+    and MarketPricePayload validates it."""
+    from data_engine.datahub.production_topt.market_price_adapter import bar_payload
+    from data_engine.datahub.production_topt.materialization import MarketPricePayload
+
+    provisional_quote = MarketPriceQuote(
+        raw_bytes=b"{}",
+        close=Decimal("150.25"),
+        as_of=_CUTOFF,
+        knowable_at=datetime.combine(_CUTOFF, datetime.min.time(), tzinfo=UTC),
+        is_provisional=True,
+    )
+    payload = bar_payload(provisional_quote, close_key="close")
+    assert payload.get("is_provisional") is True
+
+    full_payload = {
+        "issuer_id": "issuer:lei:X",
+        "instrument_id": "security:cusip:Y",
+        "listing_id": "listing:xnas:aapl",
+        "currency": "USD",
+        **payload,
+    }
+    validated = MarketPricePayload(**full_payload)
+    assert validated.is_provisional is True

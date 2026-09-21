@@ -249,13 +249,19 @@ def _bar(row: Mapping[str, Any]) -> dict[str, Decimal | None]:
 
 
 def _quote(
-    *, raw_bytes: bytes, as_of: date, close: Decimal, bar: Mapping[str, Decimal | None] | None = None
+    *,
+    raw_bytes: bytes,
+    as_of: date,
+    close: Decimal,
+    bar: Mapping[str, Decimal | None] | None = None,
+    is_provisional: bool = False,
 ) -> MarketPriceQuote:
     return MarketPriceQuote(
         raw_bytes=raw_bytes,
         close=close,
         as_of=as_of,
         knowable_at=datetime.combine(as_of, datetime.min.time(), tzinfo=UTC),
+        is_provisional=is_provisional,
         **(bar or {}),
     )
 
@@ -314,7 +320,9 @@ def parse_last_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPric
     return None
 
 
-def attach_settled_bar(raw_bytes: bytes, *, settled: MarketPriceQuote) -> MarketPriceQuote:
+def attach_settled_bar(
+    raw_bytes: bytes, *, settled: MarketPriceQuote, is_provisional: bool = False
+) -> MarketPriceQuote:
     """`settled` (the `/eod` close) with its session's bar from a `time_series` window,
     when that window has a row for the session that closes AT the settled close.
 
@@ -349,7 +357,13 @@ def attach_settled_bar(raw_bytes: bytes, *, settled: MarketPriceQuote) -> Market
             bar = _bar(row)
         except NotASessionCloseError:
             return settled
-        return _quote(raw_bytes=raw_bytes, as_of=settled.as_of, close=settled.close, bar=bar)
+        return _quote(
+            raw_bytes=raw_bytes,
+            as_of=settled.as_of,
+            close=settled.close,
+            bar=bar,
+            is_provisional=is_provisional,
+        )
     return settled
 
 
@@ -362,11 +376,18 @@ class TwelveDataQuoteFetcher:
     day, resolves the last settled session (bar included) instead.
     """
 
-    def __init__(self, api_key: str, *, throttle_seconds: int = _THROTTLE_SECONDS) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        throttle_seconds: int = _THROTTLE_SECONDS,
+        today: date | None = None,
+    ) -> None:
         if not api_key:
             raise ValueError("Twelve Data origin requires an API key")
         self._api_key = api_key
         self._throttle_seconds = throttle_seconds
+        self._today = today
         self._cache: dict[tuple[str, date], MarketPriceQuote | None] = {}
 
     def __call__(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
@@ -430,7 +451,9 @@ class TwelveDataQuoteFetcher:
                     error,
                 )
                 return settled
-            return attach_settled_bar(series, settled=settled)
+            today = self._today or datetime.now(UTC).date()
+            is_provisional = settled.as_of == cutoff and today == cutoff
+            return attach_settled_bar(series, settled=settled, is_provisional=is_provisional)
         series = self._get(_TIME_SERIES_URL, series_params)
         # No end of day for the partition date itself. Resolve the last session that HAS
         # settled — the same session the primary resolves to on a weekend or holiday.

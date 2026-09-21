@@ -224,6 +224,7 @@ class PlannedRun:
     #: An operator-forced run (#874): recorded in the run plan; none of its obligations
     #: is satisfied from #635 reuse.
     forced_fetch: bool = False
+    drill: Any | None = None
 
 
 def plan_and_persist(
@@ -235,6 +236,7 @@ def plan_and_persist(
     label_prefix: str = "production-topt",
     universe_head_kind: str | None = None,
     force_fetch: bool = False,
+    drill: Any | None = None,
 ) -> PlannedRun:
     """Freeze the run's scope and persist the dispatch intent; performs no source calls.
 
@@ -399,6 +401,7 @@ def plan_and_persist(
         default_freshness_max_age=policy.freshness_max_age,
         universe_published_at=universe_published_at,
         forced_fetch=force_fetch,
+        drill=drill,
     )
 
 
@@ -420,6 +423,7 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
         universe_published_at=plan.universe_published_at,
         coordinates=plan.coordinates,
         connection=connection,
+        drill=plan.drill,
     )
     cells_by_source: dict[str, list[RouteCell]] = {}
     for work_item_id, binding in plan.bindings.items():
@@ -837,6 +841,7 @@ def run_topt_pipeline(
     label_prefix: str = "production-topt",
     universe_head_kind: str | None = None,
     force_fetch: bool = False,
+    drill: Any | None = None,
 ) -> ToptPipelineResult:
     """Capture, then commit; freeze → materialize → report in the caller's transaction.
 
@@ -866,6 +871,7 @@ def run_topt_pipeline(
         label_prefix=label_prefix,
         universe_head_kind=universe_head_kind,
         force_fetch=force_fetch,
+        drill=drill,
     )
     status = PostgresCaptureControlRepository(connection).status(plan.run_id)
     # #628: a COMPLETE, fully successful capture that already sits committed is the
