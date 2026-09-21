@@ -532,8 +532,8 @@
       "id": "nightly-verdicts/a-recorded-check-cannot-go-unwatched",
       "guard": "libs/runtime/tests/test_nightly_verdicts.py",
       "file": "apps/data-engine/src/data_engine/lanes/quality.py",
-      "find": "    MODEL_KEY_HEALTH_VERDICT,\n)\n",
-      "replace": "    MODEL_KEY_HEALTH_VERDICT,\n    \"unwatched_check\",\n)\n",
+      "find": "    RELEASE_FETCH_PROOF_VERDICT,\n)\n",
+      "replace": "    RELEASE_FETCH_PROOF_VERDICT,\n    \"unwatched_check\",\n)\n",
       "command": [
         "uv",
         "run",

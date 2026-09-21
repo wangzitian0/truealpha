@@ -17,6 +17,10 @@ from data_engine.config import settings
 from data_engine.lanes.capture import CANARY_JOB_NAME, TICK_BY_JOB, TOPT_LIVE_JOB_NAME, ToptLiveTickConfig
 from data_engine.lanes.capture import defs as capture_defs
 
+#: The tag on the one canary run each deployment launches; `quality.release_fetch_proof`
+#: dates the deployment by it.
+BOOT_CANARY_TAG = "truealpha/boot_canary"
+
 
 @dg.sensor(
     # Every declared tick is a manual-trigger target (#72 scope 4): the sensor's job
@@ -184,7 +188,7 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
             ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at, force_fetch=force_fetch)}
         ),
         tags={
-            "truealpha/boot_canary": digest,
+            BOOT_CANARY_TAG: digest,
             "truealpha/build": settings.git_commit_sha or "unknown",
             "truealpha/configuration": settings.configuration_sha256 or "unknown",
         },

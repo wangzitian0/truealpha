@@ -125,6 +125,27 @@ def test_health_reports_the_newest_verdict_per_nightly_check(monkeypatch) -> Non
     assert {"status", "git_sha", "data_engine_parser", "data_engine_git_sha", "governed_pointers"} <= set(payload)
 
 
+def test_a_pending_verdict_is_reported_as_null_not_as_red(monkeypatch) -> None:
+    """release_fetch_proof records `ok = null` until the deployment's first fetching tick has
+    run. Coerced by `bool()`, the pending proof read as a failed check and paged every deploy."""
+    from datetime import UTC, datetime
+
+    import psycopg
+
+    ran = datetime(2026, 9, 17, 6, 15, tzinfo=UTC)
+    connection = _VerdictsOnly([("release_fetch_proof", ran, None, "no scheduled or forced run yet")])
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: connection)
+    payload = TestClient(app).get("/health").json()
+    assert payload["nightly_verdicts"] == [
+        {
+            "check": "release_fetch_proof",
+            "ran_at": "2026-09-17T06:15:00+00:00",
+            "ok": None,
+            "summary": "no scheduled or forced run yet",
+        }
+    ]
+
+
 def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
     """Three properties in one client, because they were traded for each other.
 

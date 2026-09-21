@@ -39,7 +39,7 @@ def _main_set(_ref: str) -> str:
     return _module.EXPECTATIONS_PATH.read_text(encoding="utf-8")
 
 
-def _verdict(name: str, hours_ago: float, *, ok: bool = True, summary: str = "ok") -> dict[str, object]:
+def _verdict(name: str, hours_ago: float, *, ok: bool | None = True, summary: str = "ok") -> dict[str, object]:
     return {"check": name, "ran_at": (NOW - timedelta(hours=hours_ago)).isoformat(), "ok": ok, "summary": summary}
 
 
@@ -84,6 +84,23 @@ def test_the_bound_is_twice_the_cadence() -> None:
     within = [v for v in _all_green() if v["check"] != "output_invariants"]
     within.append(_verdict("output_invariants", EXPECTED["output_invariants"].max_age_hours - 1))
     assert _run(within) == 0
+
+
+def test_a_pending_verdict_passes_and_is_reported_in_notes(capsys: pytest.CaptureFixture[str]) -> None:
+    verdicts = [v for v in _all_green() if v["check"] != "release_fetch_proof"]
+    verdicts.append(_verdict("release_fetch_proof", 2.0, ok=None, summary="no scheduled or forced run yet"))
+    assert _run(verdicts) == 0
+    out = capsys.readouterr().out
+    assert "pending: release_fetch_proof: pending (no scheduled or forced run yet)" in out
+
+
+def test_a_stale_pending_verdict_fails(capsys: pytest.CaptureFixture[str]) -> None:
+    limit = EXPECTED["release_fetch_proof"].max_age_hours
+    verdicts = [v for v in _all_green() if v["check"] != "release_fetch_proof"]
+    verdicts.append(_verdict("release_fetch_proof", limit + 1, ok=None, summary="no run yet"))
+    assert _run(verdicts) == 1
+    err = capsys.readouterr().err
+    assert "release_fetch_proof" in err and "stopped ticking" in err
 
 
 def test_a_missing_check_fails(capsys: pytest.CaptureFixture[str]) -> None:
