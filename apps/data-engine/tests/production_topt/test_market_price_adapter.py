@@ -730,7 +730,7 @@ def test_lagging_primary_bar_triggers_failover_to_corroborating_origin() -> None
     assert fetch_result.failover_reason == ObligationReasonCode.LOW_CONFIDENCE
 
     # Execution through capture invokes failover and serves from Twelve Data
-    report, sink = _capture(item, adapter)
+    _report, sink = _capture(item, adapter)
     served = sink.calls[0]["success"]
     assert served.served_by_failover == "twelve-data"
     assert served.record.payload["close"] == "150.25"
