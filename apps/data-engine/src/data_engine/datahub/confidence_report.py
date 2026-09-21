@@ -561,7 +561,7 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
     if result.band is not None:
         if result.band is ConsensusBand.HIGH:
             band = Band.HIGH
-            reason = "three_origins_agree" if len(asserted) >= 3 else "independent_origins_agree"
+            reason = "independent_origins_agree"
         elif result.band is ConsensusBand.MEDIUM:
             band = Band.MEDIUM
             reason = "two_origins_agree"

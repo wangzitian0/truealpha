@@ -247,7 +247,9 @@ def _median(values: list[Decimal]) -> Decimal:
     middle = len(ordered) // 2
     if len(ordered) % 2:
         return ordered[middle]
-    return _exact_multiply(_exact_add(ordered[middle - 1], ordered[middle]), Decimal("0.5"))
+    if ordered[middle - 1] == ordered[middle]:
+        return ordered[middle]
+    return _exact_add(ordered[middle - 1], ordered[middle]) / Decimal(2)
 
 
 def _consensus_value(
