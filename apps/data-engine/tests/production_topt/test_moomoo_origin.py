@@ -473,7 +473,9 @@ def test_the_fusion_agrees_on_every_field_the_samples_share() -> None:
     )
     assert abstained["fields"]["revenue"]["outcome"] == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value
     assert abstained["fields"]["net_income"]["outcome"] == ReconciliationOutcome.AGREED.value
-    assert abstained["outcome"] == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value, "one conflicting field marks cell conflict"
+    assert abstained["outcome"] == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value, (
+        "one conflicting field marks cell conflict"
+    )
 
 
 def test_a_period_the_primary_has_not_filed_is_never_compared() -> None:
