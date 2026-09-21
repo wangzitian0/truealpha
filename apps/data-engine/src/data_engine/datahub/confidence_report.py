@@ -93,6 +93,7 @@ from data_engine.datahub.quality_report import (
     utc_day,
 )
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, GovernedHead, governed_head
+from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
 from data_engine.quality import vendor_oracle
 
 REPORT_VERSION = "datahub-confidence-report:v1"
@@ -853,9 +854,23 @@ class _Subject:
         self.origins.setdefault(family, []).append(origin)
 
 
-def _cik_of(issuer_id: str | None) -> int | None:
-    match = _CIK_ID.match(issuer_id or "")
-    return int(match.group(1)) if match else None
+def _cik_of(
+    issuer_id: str | None,
+    connection: Connection[Any] | None = None,
+    cutoff: datetime | None = None,
+) -> int | None:
+    if not issuer_id:
+        return None
+    match = _CIK_ID.match(issuer_id)
+    if match:
+        return int(match.group(1))
+    if is_uuid(issuer_id) and connection is not None:
+        valid_at = cutoff.date() if cutoff else date.today()
+        known_at = cutoff or datetime.now(UTC)
+        val = alias_of(connection, issuer_id, "cik", valid_at=valid_at, known_at=known_at)
+        if val is not None:
+            return int(val)
+    return None
 
 
 def bar_origins(
@@ -1101,7 +1116,9 @@ def _add_headcount_producers(connection: Connection[Any], subjects: Mapping[str,
     (`staging.issuer_headcount_facts`, #70): the fused payload carries one winner, the plane
     holds all of them, and the standard counts sources present."""
     ciks = {
-        cik: subject_id for subject_id, subject in subjects.items() if (cik := _cik_of(subject.issuer_id)) is not None
+        cik: subject_id
+        for subject_id, subject in subjects.items()
+        if (cik := _cik_of(subject.issuer_id, connection=connection, cutoff=cutoff)) is not None
     }
     if not ciks:
         return

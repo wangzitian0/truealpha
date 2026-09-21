@@ -74,25 +74,33 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
         # dual-class identity survived end to end.
         bad.append(f"snapshot counts {snapshot} != (5, 6, 24)")
 
-    branches: dict[str, str] = dict(
-        connection.execute(
-            "select issuer_id, operating_branch from mart.topt_core_results where run_id = %s",
-            (run_id,),
-        ).fetchall()
-    )
     expected_branches = {
         "issuer:cik:0000320193": "non_financial",  # AAPL
         "issuer:cik:0000049196": "financial",  # HBAN, SIC 6021
         "issuer:cik:0000020286": "insurance",  # CINF, SIC 6331
     }
-    for issuer, expected in expected_branches.items():
-        got = branches.get(issuer)
-        if got != expected:
-            bad.append(f"{issuer}: operating_branch {got!r} != {expected!r}")
+    for legacy_cik, expected in expected_branches.items():
+        cik_digits = legacy_cik.removeprefix("issuer:cik:")
+        got = connection.execute(
+            "select operating_branch from mart.topt_core_results"
+            " where run_id = %s and ("
+            "   issuer_id = %s"
+            "   or issuer_id::text = (select staging.entity_resolve('cik', %s, current_date, now())::text)"
+            ")",
+            (run_id, legacy_cik, cik_digits),
+        ).fetchone()
+        if got is None:
+            bad.append(f"{legacy_cik}: no row in mart")
+        elif got[0] != expected:
+            bad.append(f"{legacy_cik}: operating_branch {got[0]!r} != {expected!r}")
 
     aapl = connection.execute(
-        "select availability, gppe from mart.topt_core_results where run_id = %s and issuer_id = %s",
-        (run_id, "issuer:cik:0000320193"),
+        "select availability, gppe from mart.topt_core_results"
+        " where run_id = %s and ("
+        "   issuer_id = %s"
+        "   or issuer_id::text = (select staging.entity_resolve('cik', %s, current_date, now())::text)"
+        ")",
+        (run_id, "issuer:cik:0000320193", "0000320193"),
     ).fetchone()
     if aapl is None:
         bad.append("AAPL row missing from mart")
@@ -129,7 +137,10 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
                (select (body->>'shares_outstanding')::numeric from payload where semantic_type = 'financial-fact' limit 1),
                (select (body->>'close')::numeric from payload where semantic_type = 'market-price' limit 1)
         from mart.topt_core_results result
-        where result.run_id = %s and result.issuer_id = 'issuer:cik:0001652044'
+        where result.run_id = %s and (
+            result.issuer_id = 'issuer:cik:0001652044'
+            or result.issuer_id::text = (select staging.entity_resolve('cik', '0001652044', current_date, now())::text)
+        )
         """,
         (run_id, run_id),
     ).fetchone()

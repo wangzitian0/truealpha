@@ -59,7 +59,7 @@ const livePages = frozen.routes
 // TOPT's too once TOPT resolves to CIK/FIGI. A listing's symbol may carry digits
 // (`listing:xnas:t001` in the data-engine fixtures, numeric symbols on other venues).
 const ID_PATTERN =
-  /(issuer:(?:lei|cik):[A-Z0-9]{10,}|security:(?:cusip|figi):[A-Za-z0-9]{9,}|listing:x[a-z]+:[a-z0-9.]+)/;
+  /(issuer:(?:lei|cik):[A-Z0-9]{10,}|security:(?:cusip|figi):[A-Za-z0-9]{9,}|listing:x[a-z]+:[a-z0-9.]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
 /**
  * (a) No raw entity id as VISIBLE text on a research first screen. innerText

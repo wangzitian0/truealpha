@@ -11,13 +11,14 @@ vendor spend is proportional to what is actually missing.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
 from data_engine.datahub.production_topt.universe_corpus import load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
+from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
 
 TOPT_UNIVERSE = "topt"
 TOPT_CORPUS_FILENAME = "corpus.v1.json"
@@ -58,7 +59,14 @@ def universe_issuers(connection: Any, universe: str) -> list[UniverseIssuer]:
     for issuer_id, _security_id, listing_id, ticker in corpus["topt_denominator"]["instruments"]:
         if issuer_id in issuers:
             continue
-        cik = int(issuer_id.removeprefix("issuer:cik:")) if issuer_id.startswith("issuer:cik:") else None
+        cik: int | None
+        if issuer_id.startswith("issuer:cik:"):
+            cik = int(issuer_id.removeprefix("issuer:cik:"))
+        elif is_uuid(issuer_id):
+            _cik_val = alias_of(connection, issuer_id, "cik", valid_at=date.today(), known_at=datetime.now(UTC))
+            cik = int(_cik_val) if _cik_val is not None else None
+        else:
+            cik = None
         issuers[issuer_id] = UniverseIssuer(issuer_id=issuer_id, ticker=ticker, listing_id=listing_id, cik=cik)
     predecessors = dict(
         connection.execute(
