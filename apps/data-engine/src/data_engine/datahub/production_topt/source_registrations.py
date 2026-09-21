@@ -276,7 +276,7 @@ TWELVE_DATA_VALUE_KEY = "close"
 # identities live here, next to Twelve Data's, for the same reason: the quality report
 # recognises a vintage from the registry, never from the adapter that wrote it.
 MOOMOO_KLINE_ORIGIN = "moomoo-kline"
-MOOMOO_KLINE_PARSER_VERSION = "moomoo-kline-parser:v1"
+MOOMOO_KLINE_PARSER_VERSION = "moomoo-kline-parser:v2"
 MOOMOO_KLINE_MAPPING_VERSION = "moomoo-kline-map:v1"
 MOOMOO_KLINE_VALUE_KEY = "close"
 MOOMOO_FINANCIALS_ORIGIN = "moomoo-financials"
@@ -425,7 +425,7 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 origin_source=f"{MOOMOO_KLINE_ORIGIN}:v1",
                 origin_id=f"origin:{MOOMOO_KLINE_ORIGIN}:v1",
                 value_key=MOOMOO_KLINE_VALUE_KEY,
-                parser_versions=(MOOMOO_KLINE_PARSER_VERSION,),
+                parser_versions=("moomoo-kline-parser:v1", MOOMOO_KLINE_PARSER_VERSION),
                 ledger_seat="moomoo",
             ),
         ),
@@ -535,3 +535,26 @@ SEMANTIC_TYPES: tuple[str, ...] = registered_semantic_types()
 RELEASE_SEMANTICS: frozenset[str] = semantic_types_of("release-derived")
 FRESHNESS_WINDOWS: dict[str, timedelta] = freshness_windows()
 SOURCE_BY_PARSER: dict[str, tuple[str, str, str]] = source_by_parser()
+
+
+def configured_origin_sources(semantic_type: str) -> set[str]:
+    """The required source identifiers ('primary' sentinel plus configured origin:mapping strings) for reuse (#635).
+
+    If the current environment has configured a corroborating origin (e.g. Twelve Data
+    or moomoo), an older anchor that was captured with a narrower source set must not be
+    reused; conversely, if an origin is unconfigured or disabled, a set that carries it
+    must not be reused into this environment.
+    """
+    from data_engine.config import settings
+
+    reg = registration_for(semantic_type)
+    required = {"primary"}
+    if reg.source_id == "yahoo-chart":
+        if settings.twelve_data_api_key:
+            required.add(f"{TWELVE_DATA_ORIGIN}:v1")
+        if settings.moomoo_kline_origin_enabled:
+            required.add(f"{MOOMOO_KLINE_ORIGIN}:v1")
+    elif reg.source_id == "sec-company-facts":
+        if settings.moomoo_financials_origin_enabled:
+            required.add(f"{MOOMOO_FINANCIALS_ORIGIN}:v1")
+    return required

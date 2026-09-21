@@ -273,7 +273,7 @@ def test_the_market_price_adapter_attaches_the_third_origin_under_moomoos_own_so
     (corroboration,) = result.corroborations
     assert corroboration.origin == "moomoo-kline"
     assert corroboration.record.payload["close"] == "338.19"
-    assert corroboration.record.parser_version == "moomoo-kline-parser:v1"
+    assert corroboration.record.parser_version == origin_module.KLINE_PARSER_VERSION
     assert corroboration.raw.source is DataSource.MOOMOO, "moomoo bytes land under moomoo's prefix, not Yahoo's"
     assert corroboration.raw.record_id == "moomoo-kline:AAPL:2026-07-29"
 
