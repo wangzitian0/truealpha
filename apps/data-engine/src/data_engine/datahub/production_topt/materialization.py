@@ -151,7 +151,7 @@ class MarketPricePayload(_FrozenModel):
     high: Decimal | None = None
     low: Decimal | None = None
     volume: Decimal | None = None
-    is_provisional: bool | None = None
+    is_provisional: bool = False
     # The registered origin that served this cell because the primary could not (#862);
     # absent on every primary-served payload. The observation's parser vintage says the
     # same thing — this is the declaration the reports and the fusion invariant read.
