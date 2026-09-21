@@ -85,9 +85,7 @@ class FailoverDrill:
         if not self.tickers:
             raise DrillRefused("a failover drill names at least one ticker")
         if len(self.tickers) > MAX_DRILL_TICKERS:
-            raise DrillRefused(
-                f"a failover drill names at most {MAX_DRILL_TICKERS} tickers, got {len(self.tickers)}"
-            )
+            raise DrillRefused(f"a failover drill names at most {MAX_DRILL_TICKERS} tickers, got {len(self.tickers)}")
         if tuple(sorted(set(self.tickers))) != self.tickers:
             raise DrillRefused("drill tickers must be distinct and sorted")
 
@@ -180,7 +178,9 @@ class FailoverDrill:
 
         def drilled_fetch(symbol: str, cutoff: date) -> MarketPriceQuote | None:
             if symbol in drilled:
-                raise SourceUnavailableError(f"failover drill ({self.kind.value}): {name} made unavailable for {symbol}")
+                raise SourceUnavailableError(
+                    f"failover drill ({self.kind.value}): {name} made unavailable for {symbol}"
+                )
             return fetch(symbol, cutoff)
 
         return drilled_fetch
@@ -210,7 +210,9 @@ def drill_capture_version(version: str, drill: FailoverDrill) -> str:
     return version if version.endswith(suffix) else f"{version}{suffix}"
 
 
-def verdict(stamp: Mapping[str, Any], cells: Mapping[str, Mapping[str, Any]], served_by_failover: int) -> dict[str, Any]:
+def verdict(
+    stamp: Mapping[str, Any], cells: Mapping[str, Mapping[str, Any]], served_by_failover: int
+) -> dict[str, Any]:
     """The drill's result, read from the report's own reconciliation cells: it passes only
     when every drilled listing was served by failover, by an origin the drill did not take
     down, and the run's `served_by_failover_count` equals the drilled cell count."""

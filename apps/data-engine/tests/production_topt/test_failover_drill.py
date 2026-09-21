@@ -67,9 +67,7 @@ def test_for_launch_kinds() -> None:
     )
     assert drill2 is not None and drill2.kind == DrillKind.PRIMARY_AND_TWELVE_DATA_UNAVAILABLE
 
-    drill3 = FailoverDrill.for_launch(
-        app_env="staging", force_fetch=True, tickers=["NVDA"], primary_lagging=True
-    )
+    drill3 = FailoverDrill.for_launch(app_env="staging", force_fetch=True, tickers=["NVDA"], primary_lagging=True)
     assert drill3 is not None and drill3.kind == DrillKind.PRIMARY_LAGGING
 
 

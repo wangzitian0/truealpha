@@ -762,4 +762,3 @@ def test_provisional_quote_and_payload_validation() -> None:
     }
     validated = MarketPricePayload(**full_payload)
     assert validated.is_provisional is True
-
