@@ -241,8 +241,15 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
             except psycopg.Error:
                 connection.rollback()
             try:
+                # `ok` is null for a pending verdict (release_fetch_proof before its first
+                # proving tick): reported as null, never coerced to a red false.
                 verdicts = [
-                    {"check": str(check), "ran_at": ran_at.isoformat(), "ok": bool(ok), "summary": str(summary)}
+                    {
+                        "check": str(check),
+                        "ran_at": ran_at.isoformat(),
+                        "ok": None if ok is None else bool(ok),
+                        "summary": str(summary),
+                    }
                     for check, ran_at, ok, summary in connection.execute(NIGHTLY_VERDICTS_SQL).fetchall()
                 ]
             except psycopg.Error:

@@ -61,11 +61,18 @@ class _Sink:
     def __exit__(self, *_exc: object) -> bool:
         return False
 
-    def execute(self, sql: str, params: tuple) -> None:
+    def execute(self, sql: str, params: tuple = ()) -> _Sink:
         if self.fail:
             raise psycopg.OperationalError("connection to server failed")
-        assert "insert into mart.nightly_verdicts" in sql
-        self.rows.append(params)
+        if "insert into mart.nightly_verdicts" in sql:
+            self.rows.append(params)
+        return self
+
+    def fetchall(self) -> list:
+        return []
+
+    def fetchone(self) -> Any:
+        return None
 
 
 def test_a_green_check_records_ok_on_its_own_autocommit_connection(monkeypatch) -> None:

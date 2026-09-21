@@ -84,7 +84,7 @@ class Expectation:
 class Verdict:
     check: str
     ran_at: datetime
-    ok: bool
+    ok: bool | None
     summary: str
 
 
@@ -143,8 +143,8 @@ def read_report(url: str, http_get: HttpGet) -> HealthReport:
             if ran_at.tzinfo is None:
                 ran_at = ran_at.replace(tzinfo=UTC)
             ok = entry["ok"]
-            if not isinstance(ok, bool):
-                raise TypeError(f"ok is {ok!r}, not a boolean")
+            if ok is not None and not isinstance(ok, bool):
+                raise TypeError(f"ok is {ok!r}, not a boolean or null")
             verdicts.append(Verdict(str(entry["check"]), ran_at, ok, str(entry.get("summary", ""))))
         except (KeyError, TypeError, ValueError) as exc:
             raise VerdictCheckFailure(f"{url} reports a malformed verdict entry: {entry!r}") from exc
@@ -329,6 +329,18 @@ def judge(
                 f"{name}: newest verdict is dated {verdict.ran_at.isoformat()} ({-age:.1f} h in the future) — "
                 f"a run launched with a future tick masks every real one, so this verdict cannot vouch for today"
             )
+            continue
+        if verdict.ok is None:
+            stale = age > expectation.max_age_hours
+            if stale:
+                failures.append(
+                    f"{name}: newest verdict is from {verdict.ran_at.isoformat()} ({age:.1f} h ago, limit "
+                    f"{expectation.max_age_hours:g} h) — job {expectation.job or '?'} stopped ticking or stopped "
+                    f"reaching its verdict; check the Dagster daemon and the job's recent runs"
+                )
+                continue
+            if notes is not None:
+                notes.append(f"{name}: pending ({verdict.summary})")
             continue
         if not verdict.ok:
             failures.append(f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}")
