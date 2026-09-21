@@ -289,9 +289,7 @@ def test_evaluate_red_when_missing_origins(monkeypatch: pytest.MonkeyPatch) -> N
 
     expected = frozenset({"sec:v1", "yahoo-chart:v1"})
     monkeypatch.setattr(release_fetch_proof, "expected_origins", lambda: expected)
-    monkeypatch.setattr(
-        release_fetch_proof, "fetched_by_origin", lambda conn, cap_id: {"sec:v1": 10}
-    )
+    monkeypatch.setattr(release_fetch_proof, "fetched_by_origin", lambda conn, cap_id: {"sec:v1": 10})
 
     proof = evaluate(connection, instance, digest=digest)
     assert proof.state == RED
@@ -384,4 +382,3 @@ def test_capture_run_of_handles_none_metadata() -> None:
 
     result = capture_run_of(instance, "run-123")
     assert result is None
-
