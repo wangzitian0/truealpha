@@ -50,7 +50,7 @@ if (!BASE || !EMAIL || !PASSWORD) {
 
 const frozen = JSON.parse(readFileSync(new URL("../routes.frozen.json", import.meta.url), "utf8"));
 const livePages = frozen.routes
-  .filter((r) => r.live && !r.path.startsWith("/api/") && !r.path.includes("[") && r.path !== "/" && !r.path.startsWith("/admin/api"))
+  .filter((r) => r.live && !r.path.includes("/api/") && !r.path.includes("[") && r.path !== "/")
   .map((r) => r.path);
 
 // Every scheme a raw entity id is minted in, not only TOPT's (#877 H5): the planes key

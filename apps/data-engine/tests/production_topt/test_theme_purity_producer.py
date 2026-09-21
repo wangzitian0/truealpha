@@ -474,7 +474,11 @@ def test_rows_are_the_governed_runs_members_under_the_ids_the_run_gives_them(con
 
     members = governed_members(connection, run_id=plan.run_id)
     run_issuers = {cell.subject_id for cell in gppe_cells(connection, plan.run_id)}
-    assert run_issuers and all(issuer.startswith("issuer:lei:") for issuer in run_issuers), "the case #828 is about"
+    from data_engine.datahub.resolve_coordinates import is_uuid
+
+    assert run_issuers and all(is_uuid(issuer) or issuer.startswith("issuer:lei:") for issuer in run_issuers), (
+        "the case #828 is about"
+    )
     assert set(members.values()) == run_issuers, "every member resolves, to the id the run itself uses"
 
     member_cik, member_id = min(members.items())

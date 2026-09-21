@@ -461,6 +461,7 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
         coordinates=plan.coordinates,
         connection=connection,
         drill=plan.drill,
+        raw_coordinates=plan.raw_coordinates,
     )
     cells_by_source: dict[str, list[RouteCell]] = {}
     for work_item_id, binding in plan.bindings.items():
