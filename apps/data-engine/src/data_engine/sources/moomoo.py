@@ -14,6 +14,8 @@ moomoo's own docs only rate-limit these endpoints (bursts per 30s); see
 init.md Section 5's 2026-07-10 correction.
 """
 
+import hashlib
+import json
 import socket
 import time
 from collections.abc import Iterator
@@ -101,6 +103,19 @@ def _call(ctx, endpoint: str, caller: str, fn):
         raise MoomooConnectionError(f"{endpoint} raised: {e}") from e
     ret, rest = result[0], result[1:]
     ok = ret == moomoo.RET_OK
+    payload_sha: str | None = None
+    byte_length: int | None = None
+    if ok:
+        try:
+            from data_engine.jsonable import to_jsonable
+
+            payload_data = to_jsonable(rest[0] if len(rest) == 1 else rest)
+            raw = json.dumps(payload_data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+            payload_sha = hashlib.sha256(raw).hexdigest()
+            byte_length = len(raw)
+        except Exception:
+            payload_sha = None
+            byte_length = None
     try:
         record(
             endpoint,
@@ -109,6 +124,8 @@ def _call(ctx, endpoint: str, caller: str, fn):
             status_code=int(ret) if isinstance(ret, int) else None,
             error=None if ok else str(rest[0] if rest else "unknown error"),
             duration_ms=int((time.monotonic() - started) * 1000),
+            payload_sha256=payload_sha,
+            byte_length=byte_length,
         )
     except Exception as ledger_err:
         # Deliberately drop the payload: an unaudited-but-kept result would let

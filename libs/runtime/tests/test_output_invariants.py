@@ -193,7 +193,7 @@ def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
     head = ts.split("POINTER_HEAD_SQL", 1)[1].split("`", 2)[1]
     for predicate in (
         "current_pointer_head",
-        "environment = 'production'",
+        "environment = (select environment from mart.environment_identity)",
         "factor_id = 'gross_profit_per_employee'",
         "order by advanced_at desc",
     ):
@@ -202,6 +202,11 @@ def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
             f"the invariants resolve the governed head without {predicate!r}, so they check a run "
             f"the App does not serve"
         )
+    # #756: Each consumer's head query must carry no environment literal
+    assert "'production'" not in head, "consumer carries 'production' literal (#756)"
+    assert "'staging'" not in head, "consumer carries 'staging' literal (#756)"
+    assert "'production'" not in _module.GOVERNED_HEAD, "GOVERNED_HEAD carries 'production' literal (#756)"
+    assert "'staging'" not in _module.GOVERNED_HEAD, "GOVERNED_HEAD carries 'staging' literal (#756)"
 
 
 def _run_ordering(sql: str) -> str:

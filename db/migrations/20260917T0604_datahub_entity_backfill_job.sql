@@ -879,9 +879,12 @@ as $$
         select distinct used.legacy_id
         from staging.capture_observation_payloads payload
         cross join lateral (values
-            (payload.normalized_payload->>'issuer_id'),
-            (payload.normalized_payload->>'instrument_id'),
-            (payload.normalized_payload->>'listing_id')) as used(legacy_id)
+            (case when jsonb_typeof(payload.normalized_payload->'issuer_id') = 'string'
+                  then payload.normalized_payload->>'issuer_id' end),
+            (case when jsonb_typeof(payload.normalized_payload->'instrument_id') = 'string'
+                  then payload.normalized_payload->>'instrument_id' end),
+            (case when jsonb_typeof(payload.normalized_payload->'listing_id') = 'string'
+                  then payload.normalized_payload->>'listing_id' end)) as used(legacy_id)
         where used.legacy_id is not null
         union
         select member->>position
@@ -892,6 +895,7 @@ as $$
         cross join (values (0), (1), (2)) as slot(position)
         where head.contract_kind like 'universe-list:%'
           and jsonb_typeof(member) = 'array'
+          and jsonb_typeof(member->position) = 'string'
           and member->>position is not null
     )
     select case

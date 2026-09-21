@@ -762,3 +762,59 @@ def test_provisional_quote_and_payload_validation() -> None:
     }
     validated = MarketPricePayload(**full_payload)
     assert validated.is_provisional is True
+
+
+def test_last_settled_session_and_confidence_honor_exchange_holidays() -> None:
+    """#863: Exchange calendar SSOT.
+
+    Thanksgiving 2026-11-26 21:00 ET cutoff -> settles to 2026-11-25 (Wednesday).
+    Black Friday 2026-11-27 17:00 ET (early close session) -> settles to 2026-11-27.
+    Price confidence does not penalize market holidays as lag.
+    """
+    from datetime import date as _date
+    from decimal import Decimal as _D
+    from zoneinfo import ZoneInfo as _ZI
+
+    from data_engine.datahub.production_topt.market_price_adapter import (
+        graded_price_confidence,
+        last_settled_session_date,
+    )
+
+    ny = _ZI("America/New_York")
+
+    # 1. Thanksgiving evening 21:00 ET settles to Wednesday 2026-11-25
+    thanksgiving_evening = datetime(2026, 11, 26, 21, 0, tzinfo=ny)
+    assert last_settled_session_date(thanksgiving_evening).isoformat() == "2026-11-25"
+
+    # 2. Black Friday evening 17:00 ET settles to Friday 2026-11-27
+    black_friday_evening = datetime(2026, 11, 27, 17, 0, tzinfo=ny)
+    assert last_settled_session_date(black_friday_evening).isoformat() == "2026-11-27"
+
+    # 3. Confidence does not penalize Thanksgiving holiday as an extra lag session
+    wednesday = _date(2026, 11, 25)
+    friday = _date(2026, 11, 27)
+    # Only 1 trading session elapsed between Wednesday close and Friday close (Thursday was closed)
+    # 0.85 - 0.10 * 1 = 0.75 (previously was incorrectly penalized as 2 sessions -> 0.65)
+    assert graded_price_confidence(as_of=wednesday, expected_session=friday) == _D("0.75")
+
+
+def test_build_route_defensively_ignores_drill_without_arm() -> None:
+    """A drill object without arm() method is safely ignored rather than raising AttributeError."""
+    from data_engine.datahub.production_topt import market_price_adapter as module
+    from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
+
+    item = _work_item("8" * 64)
+    context = RouteContext(
+        cutoff=_RUN_CUTOFF,
+        cutoff_date=_CUTOFF,
+        price_cutoff_date=_CUTOFF,
+        partition_start=datetime(2026, 3, 31, tzinfo=UTC),
+        universe_published_at=None,
+        coordinates={},
+        connection=None,
+    )
+    cells = [
+        RouteCell(item.work_item_id, "market-price", "issuer:lei:X", "security:cusip:Y", "listing:xnas:goog", "GOOG")
+    ]
+    adapter = module.build_route(context, cells, drill=object())
+    assert adapter is not None

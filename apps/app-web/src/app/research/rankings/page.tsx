@@ -7,6 +7,7 @@ import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resoluti
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
 import { formatRatio, formatSignedRatio, signColor } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
+import { CardExportButton } from "@/components/card-export-button";
 
 export const dynamic = "force-dynamic";
 
@@ -52,9 +53,12 @@ export default async function RankingsPage({
 
       {state.kind === "ready" && (
         <>
-          <p className="text-sm text-gray-500">
-            Cutoff {state.data.cutoffAt} — {state.data.page.total} member(s).
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <p className="text-sm text-gray-500">
+              Cutoff {state.data.cutoffAt} — {state.data.page.total} member(s).
+            </p>
+            <CardExportButton cutoff={params.cutoff} />
+          </div>
           <div className="overflow-x-auto rounded-xl border border-border">
             <table className="w-full text-left text-sm">
               <caption className="sr-only">Ranked issuers for the large-model-value theme at {state.data.cutoffAt}</caption>

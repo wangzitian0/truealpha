@@ -220,12 +220,13 @@ def register_run_evidence(
     and its evidence is what explains the stall.
     """
     status = connection.execute(
-        "select universe_id, universe_version, cutoff from mart.topt_capture_status where run_id = %s",
+        "select universe_id, universe_version, cutoff, environment from mart.topt_capture_status where run_id = %s",
         (run_id,),
     ).fetchone()
     if status is None:
         raise ValueError(f"no capture status for run {run_id}")
-    universe_id, universe_version, cutoff = status
+    universe_id, universe_version, cutoff, raw_env = status
+    env = CaptureEnvironment(raw_env)
 
     stamp = BitemporalStamp(valid_from=cutoff.date(), transaction_time=cutoff, recorded_at=cutoff)
     run_ref = EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=run_id)
@@ -239,7 +240,7 @@ def register_run_evidence(
     repo.append([manifest_node], [edge])
 
     key = CurrentPointerKey(
-        environment=CaptureEnvironment.PRODUCTION,
+        environment=env,
         universe_id=universe_id,
         universe_version=universe_version,
         factor_id=POINTER_FACTOR_ID,

@@ -41,6 +41,23 @@ def test_record_counts_failed_calls_too(tmp_path, monkeypatch):
     assert ledger.calls_this_month() == 1
 
 
+def test_record_preserves_payload_sha_and_byte_length(tmp_path, monkeypatch):
+    monkeypatch.setattr(ledger, "LEDGER_PATH", tmp_path / "ledger.json")
+    ledger.record(
+        "get_history_kline",
+        "test",
+        ok=True,
+        request_uri="moomoo://US.AAPL",
+        payload_sha256="abc123sha",
+        byte_length=42,
+    )
+    calls = ledger._load()["calls"]
+    assert len(calls) == 1
+    assert calls[0]["request_uri"] == "moomoo://US.AAPL"
+    assert calls[0]["payload_sha256"] == "abc123sha"
+    assert calls[0]["byte_length"] == 42
+
+
 def test_throttle_paces_a_full_window(monkeypatch):
     monkeypatch.setattr(ledger.settings, "moomoo_calls_per_30s", 2)
     ledger._recent_calls.clear()

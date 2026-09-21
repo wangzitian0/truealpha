@@ -1,7 +1,7 @@
 {
   "harvested_from_run": "35089913590",
   "root": "apps/data-engine/tests",
-  "files": 78,
+  "files": 80,
   "total_seconds": 182.43,
   "seconds_by_file": {
     "apps/data-engine/tests/datahub/test_a1_evidence.py": 0.16,
@@ -18,7 +18,9 @@
     "apps/data-engine/tests/production_topt/test_concept_mapping.py": 0.07,
     "apps/data-engine/tests/production_topt/test_core_meta_info_vintage.py": 0.06,
     "apps/data-engine/tests/production_topt/test_corroboration_audit.py": 0.0,
-    "apps/data-engine/tests/production_topt/test_degraded_capture_record.py": 76.83,
+    "apps/data-engine/tests/production_topt/test_degraded_capture_forced.py": 24.59,
+    "apps/data-engine/tests/production_topt/test_degraded_capture_record.py": 18.44,
+    "apps/data-engine/tests/production_topt/test_degraded_capture_reuse.py": 33.80,
     "apps/data-engine/tests/production_topt/test_executor.py": 0.0,
     "apps/data-engine/tests/production_topt/test_fund_consolidation.py": 0.22,
     "apps/data-engine/tests/production_topt/test_headcount_facts.py": 0.09,

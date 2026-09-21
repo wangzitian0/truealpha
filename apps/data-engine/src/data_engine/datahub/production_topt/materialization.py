@@ -454,8 +454,10 @@ class PostgresToptCoreRepository:
             failed,
             complete,
         ) = status
+        identity_row = self._connection.execute("select environment from mart.environment_identity").fetchone()
+        governed_env = identity_row[0] if identity_row is not None else "production"
         if (
-            environment != "production"
+            environment != governed_env
             or complete is not True
             or (
                 terminal,
@@ -466,10 +468,12 @@ class PostgresToptCoreRepository:
             )
             != (obligations, obligations, 0, 0, 0)
         ):
-            raise ValueError("core snapshot requires a completely successful Production run")
+            raise ValueError(f"core snapshot requires a completely successful {governed_env.title()} run")
         rows = self._load_observations(run_id, cutoff=cutoff)
         if len(rows) != obligations:
-            raise ValueError("complete Production run does not expose one normalized payload per obligation")
+            raise ValueError(
+                f"complete {governed_env.title()} run does not expose one normalized payload per obligation"
+            )
         grouped: dict[str, dict[str, _ObservationRow]] = {}
         for row in rows:
             by_type = grouped.setdefault(row.listing_id, {})
@@ -597,7 +601,7 @@ class PostgresToptCoreRepository:
         coordinates = {
             (item.issuer_id, item.instrument_id, item.listing_id) for item in (listing, membership, financial, price)
         }
-        if coordinates != {(listing.issuer_id, listing.instrument_id, listing_id)}:
+        if coordinates != {(listing.issuer_id, listing.instrument_id, listing.listing_id)}:
             raise ValueError(f"listing {listing_id} normalized payload identities disagree")
         if financial.currency != price.currency:
             raise ValueError(f"listing {listing_id} financial and market currencies disagree")
@@ -892,7 +896,7 @@ class PostgresToptCoreRepository:
         resolved = resolve_raw_pointers(self._connection, all_ids)
         payload_rows = self._connection.execute(
             """
-            select o.subject_id, p.normalized_payload
+            select coalesce(p.normalized_payload->>'listing_id', o.subject_id), p.normalized_payload
             from staging.capture_normalized_observations o
             join staging.capture_observation_payloads p using (observation_id)
             where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
@@ -931,7 +935,7 @@ class PostgresToptCoreRepository:
         observation_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
         rows = self._connection.execute(
             """
-            select o.subject_id,
+            select coalesce(p.normalized_payload->>'listing_id', o.subject_id),
                    p.normalized_payload->>'operating_period_end',
                    p.normalized_payload->>'revenue_period_end',
                    p.normalized_payload->>'shares_period_end'

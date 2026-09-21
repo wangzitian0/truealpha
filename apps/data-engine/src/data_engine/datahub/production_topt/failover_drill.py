@@ -7,7 +7,8 @@ rows. A drill makes the break deliberately, for a few named tickers, and checks 
 * **What breaks.** The primary price fetcher raises `SourceUnavailableError` for the drilled
   tickers — exactly what an unreachable Yahoo raises — so the executor spends its retries
   and asks `failover`. `PRIMARY_AND_TWELVE_DATA_UNAVAILABLE` also makes Twelve Data raise
-  for those tickers, which proves the fall-through to moomoo. Every other ticker, and every
+  for those tickers, which proves the fall-through to moomoo. `PRIMARY_LAGGING` serves a lagged
+  prior-session quote to test low-confidence failover. Every other ticker, and every
   other semantic, runs untouched.
 * **Where it may run.** Never in production: `FailoverDrill.for_launch` refuses there, and
   `arm` refuses again at route build. A drill must also force a fetch (#874), so it reaches
@@ -192,7 +193,7 @@ class FailoverDrill:
         the run must serve by failover. `coordinates` is subject -> (issuer, instrument,
         listing, ticker); a drilled ticker outside the universe is refused, since a drill
         that breaks nothing proves nothing."""
-        listings = {ticker: listing for _issuer, _instrument, listing, ticker in coordinates.values()}
+        listings = {coordinate[3]: subject_id for subject_id, coordinate in coordinates.items()}
         missing = sorted(set(self.tickers) - set(listings))
         if missing:
             raise DrillRefused(f"drill tickers not in this run's universe: {', '.join(missing)}")

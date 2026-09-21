@@ -70,6 +70,10 @@
       "live": true
     },
     {
+      "path": "/research/api/cards/export",
+      "live": true
+    },
+    {
       "path": "/admin",
       "live": true
     },

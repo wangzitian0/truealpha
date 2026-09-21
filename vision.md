@@ -45,3 +45,18 @@ two immediate scheduled runs, or code existence are not completion evidence.
 This success state proves a reproducible research product and an honest evaluation path.
 It does not by itself prove that any factor, tier, screen, or strategy produces positive
 alpha; that requires a separate empirical claim and evidence.
+
+## Capabilities Delivery Ledger (SSOT Status)
+
+| Capability / Factor Module | Architecture Reference | Target Scope | Current Status | Issues & Deliverables |
+|---|---|---|---|---|
+| **Module 1: PEG (Switchable Conventions)** | `factors.base.peg` | Historical CAGR, Consensus, Guidance | **Partial [Live]** | Historical CAGR is live; Consensus and Guidance are explicitly unsourced (#284) |
+| **Module 2: Gross Profit per Employee** | `factors.base.gross_profit_per_employee` | Operating AI leverage | **[Live]** | Deployed in TOPT pipeline; split-adjustment tracked in #770 |
+| **Module 3: Supply Chain / Value Chain** | `factors.base...` | Upstream-downstream alpha | **[Building]** | Planned under Milestone M2-B (#772) |
+| **Module 4: Analyst Backtesting** | `apps/data-engine/sources/moomoo` | Historical analyst accuracy | **[Designed]** | Blocked on moomoo live data path (#771) |
+| **Module 5: ETF-as-Virtual-Company** | `factors.base.etf_virtual_company` | Holdings fundamentals aggregation | **[Live]** | Holdings aggregation and virtual valuation verified |
+| **Module 6: Pure-Blood Company Screening** | `factors.base.theme_purity` | Segment revenue exposure purity | **[Building]** | Core logic implemented; full production schedule under M2-B (#772) |
+| **Module 7: Three-Tier Valuation Gap** | `factors.composite.three_tier_valuation` | P/S tier gap against GPPE | **[Live]** | Composite factor verified; definition locked in contracts |
+| **Xiaohongshu Card Deck Generation** | `contracts/research_cards` | Automated material export | **[Building]** | Contract defined; Next.js server-side Satori PNG export in progress |
+| **Conversational Research Q&A** | `apps/app-web` `/research/conversations` | Natural language fact retrieval | **[Building]** | Tier 3 in roadmap; routes currently under construction |
+

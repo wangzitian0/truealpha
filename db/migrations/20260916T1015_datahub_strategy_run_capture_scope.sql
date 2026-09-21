@@ -130,16 +130,14 @@ join lateral (
 ) run on true
 $view$;
 begin
-    -- `create or replace view` takes ACCESS EXCLUSIVE on the view even when nothing
-    -- changes, queueing every reader behind it; replace only when the definition differs.
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.governed_strategy_run') is null
-       or pg_get_viewdef(to_regclass('mart.governed_strategy_run'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
+    -- Superseded: 20260921T0940_datahub_environment_identity.sql redefines mart.governed_strategy_run
+    -- later in the chain and owns its definition. Replacing it here would put this
+    -- older definition back (ACCESS EXCLUSIVE on the view) on every replay, only for
+    -- that file to replace it again, so this definition creates the view only on a
+    -- database that has none.
+    if to_regclass('mart.governed_strategy_run') is null then
         execute 'create or replace view mart.governed_strategy_run as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
 
