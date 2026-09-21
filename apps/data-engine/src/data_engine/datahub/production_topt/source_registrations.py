@@ -72,6 +72,7 @@ class RouteContext:
     universe_published_at: datetime | None
     coordinates: Mapping[str, tuple[str, str, str, str]]
     connection: psycopg.Connection[Any] | None
+    drill: Any | None = None
 
 
 class RouteBuilder(Protocol):

@@ -247,7 +247,7 @@ class MarketPriceAdapter:
             valid_from=quote.as_of,
             transaction_time=quote.knowable_at,
             record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
-            corroborations=self._corroborate(target),
+            corroborations=() if quote.as_of < target.cutoff else self._corroborate(target),
             failover_reason=ObligationReasonCode.LOW_CONFIDENCE if quote.as_of < target.cutoff else None,
         )
 
@@ -527,7 +527,8 @@ def build_route(
     # origins serve, in that order, a cell the primary cannot (#862, `failover_order`).
     origins = [origin for origin in (twelve_data_origin(), moomoo_kline_origin()) if origin is not None]
     fetcher: MarketPriceFetcher = yahoo_quote_fetcher
-    if drill is not None:
-        fetcher, armed_origins = drill.arm(settings.app_env, fetcher, origins)
+    effective_drill = drill or getattr(context, "drill", None)
+    if effective_drill is not None:
+        fetcher, armed_origins = effective_drill.arm(settings.app_env, fetcher, origins)
         origins = list(armed_origins)
     return MarketPriceAdapter(targets, fetcher, corroborating_origins=tuple(origins))

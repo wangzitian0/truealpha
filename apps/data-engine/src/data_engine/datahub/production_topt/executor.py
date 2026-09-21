@@ -345,9 +345,7 @@ class ToptCaptureExecutor:
                         reasons.append(result.failover_reason)
                         self._write_success(item, served, run_ref, recorded_at)
                         return self._terminal(item, reasons, ObligationTerminalState.SUCCESS, served), False
-                    reasons.append(result.failover_reason)
-                else:
-                    reasons.append(None)
+                reasons.append(None)
                 self._write_success(item, result, run_ref, recorded_at)
                 return self._terminal(item, reasons, ObligationTerminalState.SUCCESS, result), False
             reasons.append(result.reason_code)
