@@ -50,6 +50,10 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecFinancialFactAdapter,
     SecTarget,
 )
+from data_engine.datahub.production_topt.source_registrations import (
+    MOOMOO_FINANCIALS_PARSER_VERSION,
+    MOOMOO_KLINE_PARSER_VERSION,
+)
 from factors.production_topt import GppeV0Definition, OperatingBranch
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.datahub import ObligationTerminalState
@@ -291,11 +295,6 @@ def _routes(
     # The moomoo K-line third origin and the moomoo statements second origin, over the
     # same fake vendor answers, so a corroborated run persists three price assertions
     # and two financial-fact assertions per cell through the deployed sink.
-    from data_engine.datahub.production_topt.source_registrations import (
-        MOOMOO_FINANCIALS_PARSER_VERSION,
-        MOOMOO_KLINE_PARSER_VERSION,
-    )
-
     third_origin = CorroboratingOrigin(
         origin="moomoo-kline",
         parser_version=MOOMOO_KLINE_PARSER_VERSION,
@@ -569,7 +568,7 @@ def test_a_corroboration_that_cannot_be_persisted_never_fails_the_primary(connec
         ).fetchall()
     )
     assert "twelve-data-parser:v1" not in parsers
-    assert parsers["moomoo-kline-parser:v1"] == 21, "one lost corroboration must not take the next with it"
+    assert parsers[MOOMOO_KLINE_PARSER_VERSION] == 21, "one lost corroboration must not take the next with it"
 
     sink = PostgresCaptureControlSink(
         connection,
