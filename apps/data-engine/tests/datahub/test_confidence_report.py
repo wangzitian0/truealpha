@@ -789,7 +789,7 @@ def test_aggregate_counts_shares_and_agreement_rate_over_compared_cells() -> Non
     assert summary["reasons"] == {
         "no_origin_value": 1,
         "single_origin": 1,
-        "three_origins_agree": 1,
+        "independent_origins_agree": 1,
         "two_origins_agree": 1,
     }
 

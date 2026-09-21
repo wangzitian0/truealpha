@@ -807,7 +807,7 @@ def test_every_dated_primary_field_reconciles_at_its_own_period() -> None:
     assert cell["outcome"] == "agreed" and cell["origin_groups"] == 2
     assert set(cell["fields"]) == {"revenue", "gross_profit", "net_income", "total_assets"}
     assert cell["fields"]["net_income"]["outcome"] == "agreed"
-    assert cell["fields"]["net_income"]["selected_value"] == "9002500.0"
+    assert cell["fields"]["net_income"]["selected_value"] == "9002500"
     assert cell["fields"]["revenue"]["selected_source"] == "sec-company-facts:v1"
 
 

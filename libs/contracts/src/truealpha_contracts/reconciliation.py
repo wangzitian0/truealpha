@@ -893,7 +893,11 @@ def _median_consensus_result(
         conflicting_assertion_ids=tuple(by_group[group].assertion_id for group in grade.outlier_group_ids),
         comparison_anchor_assertion_id=selected.assertion_id,
         selected_assertion_id=selected.assertion_id,
-        selected_value_sha256=selected.normalized_value_sha256,
+        selected_value_sha256=(
+            selected.normalized_value_sha256
+            if selected.numeric_value is not None and grade.served_value == selected.numeric_value
+            else canonical_sha256(str(grade.served_value))
+        ),
         selected_numeric_value=grade.served_value if isinstance(grade.served_value, Decimal) else None,
         selected_confidence_score=consensus_confidence(grade.band, selected.confidence_score),
         reason_codes=tuple(reasons),

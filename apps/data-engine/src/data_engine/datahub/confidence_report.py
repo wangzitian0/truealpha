@@ -567,10 +567,18 @@ def classify_cell(policy: FamilyPolicy, subject_id: str, origins: Sequence[Origi
             reason = "two_origins_agree"
         elif result.band is ConsensusBand.LOW:
             band = Band.LOW
-            reason = "cross_origin_conflict" if len(asserted) > 1 else "single_eligible_origin"
+            reason = (
+                "cross_origin_conflict"
+                if result.outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED
+                else "single_eligible_origin"
+            )
         else:
             band = Band.MISSING
-            reason = "not_knowable_at_cutoff"
+            reason = (
+                "not_knowable_at_cutoff"
+                if result.outcome == ReconciliationOutcome.NOT_YET_KNOWABLE
+                else "no_eligible_origin"
+            )
     else:
         graded = {
             ReconciliationOutcome.AGREED: (Band.HIGH, "independent_origins_agree"),
