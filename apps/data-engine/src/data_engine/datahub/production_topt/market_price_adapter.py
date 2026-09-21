@@ -111,7 +111,7 @@ BAR_FIELDS: tuple[str, ...] = ("open", "high", "low", "volume")
 
 
 def bar_payload(quote: MarketPriceQuote, *, close_key: str) -> dict[str, Any]:
-    """The five bar values as base-10 strings (null where absent), never binary floats."""
+    """The five bar values as base-10 strings (null where absent), plus optional boolean is_provisional flag."""
     payload: dict[str, Any] = {close_key: str(quote.close)}
     for field in BAR_FIELDS:
         value = getattr(quote, field)
@@ -145,10 +145,11 @@ class SourceUnavailableError(Exception):
 
 
 # The primary failures a further origin may answer (#862): the primary had nothing to say
-# — unreachable, too slow, throttled, erroring, no bar, or its daily budget spent (#729: the
-# next origin is a different seat, admitted by its own budget). A STOP (look-ahead,
-# contract) is a broken run and never failed over; "not yet knowable" is the primary
-# asserting the datum does not exist yet, which another origin must not contradict.
+# — unreachable, too slow, throttled, erroring, no bar, its daily budget spent (#729: the
+# next origin is a different seat, admitted by its own budget), or LOW_CONFIDENCE when the
+# primary lagged behind the target session. A STOP (look-ahead, contract) is a broken run
+# and never failed over; "not yet knowable" is the primary asserting the datum does not
+# exist yet, which another origin must not contradict.
 FAILOVER_REASONS: frozenset[ObligationReasonCode] = frozenset(
     {
         ObligationReasonCode.TRANSIENT_NETWORK,
