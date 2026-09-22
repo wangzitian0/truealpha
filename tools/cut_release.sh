@@ -38,7 +38,12 @@
 #   regex or anything else that touches git or gh — the owner's 2026-09-17
 #   decision ("先在 staging 做吧，prod 回头再说", #860) is that an automatic
 #   release is staging-only, full stop, so this combination refuses before any
-#   side effect rather than after deriving --prs or verifying a PR.
+#   side effect rather than after deriving --prs or verifying a PR. It also
+#   dispatches the staging surface walk explicitly once the staging deploy is
+#   green (#945): the deploy dispatch above runs under github.token, which
+#   GitHub never cascades into a workflow_run trigger, so relying on
+#   deploy-release.yml's completion to fire walk-release.yml (as the non-auto
+#   path does, under a real operator PAT) would wait forever.
 #
 # --prs is now OPTIONAL (#855 A3, #860): omitted, the PR list is DERIVED from
 #   every squash-merge between the newest reachable vX.Y.Z tag and main HEAD
@@ -583,6 +588,20 @@ echo "== staging =="
 STAGING_RUN=$(deploy staging | tail -1)
 probe "$STAGING_URL"
 note "staging run $STAGING_RUN green (fact 1 of 2)"
+if [ "$AUTO" = "1" ]; then
+  # #945: --auto's deploy dispatch above runs under github.token
+  # (auto-release-staging.yml) — GitHub never cascades a workflow_run trigger
+  # for anything a workflow's own GITHUB_TOKEN set in motion (the same rule
+  # #940 hit one hop earlier, on the tag push itself), so deploy-release.yml's
+  # completion would never fire walk-release.yml's workflow_run trigger and
+  # wait_for_walk below would always burn its full 3-minute budget waiting for
+  # a run that can never appear. Dispatch the walk explicitly instead of
+  # waiting on a cascade this token cannot produce. The non-auto (real
+  # operator PAT) path is unchanged: a real PAT DOES cascade, so dispatching
+  # explicitly here too would walk the same deploy twice.
+  note "--auto: dispatching the staging walk explicitly (github.token does not cascade workflow_run)"
+  gh workflow run walk-release.yml --repo "$REPO" -f deploy_type=staging -f version_ref="$TAG" >/dev/null
+fi
 echo "== staging surface walk =="
 wait_for_walk staging
 note "staging verified: deploy green AND surface walk green for $TAG (fact 2 of 2)"

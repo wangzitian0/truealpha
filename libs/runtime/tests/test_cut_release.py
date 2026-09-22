@@ -313,7 +313,9 @@ def test_auto_marks_the_tag_so_the_daily_cap_can_count_it(ceremony: Ceremony) ->
 
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert "Release-Trigger: auto-staging" in ceremony.tag_message("v0.0.2")
-    [deploy] = dispatched(calls)
+    # #945: --auto also explicitly dispatches the staging walk (see below), so
+    # this is no longer the only dispatched call — isolate the deploy one.
+    [deploy] = [call for call in dispatched(calls) if call[2] == "deploy-release.yml"]
     assert "deploy_type=staging" in deploy
     assert not any("deploy_type=prod" in call for call in dispatched(calls)), "--auto must never reach a prod deploy"
 
@@ -371,3 +373,41 @@ def test_a_hand_cut_release_never_carries_the_automatic_trailer(ceremony: Ceremo
 
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     assert "Release-Trigger: auto-staging" not in ceremony.tag_message("v0.0.2")
+
+
+# --- #945: --auto's deploy dispatch runs under github.token (the SAME token
+# whose recursive-workflow guard #940 already hit one hop earlier), so
+# deploy-release.yml's own completion never cascades walk-release.yml's
+# workflow_run trigger. wait_for_walk would then always wait out its full
+# 3-minute budget for a run that can never appear. --auto must instead
+# dispatch the staging walk explicitly once the staging deploy is confirmed
+# green. The non-auto (real operator PAT) path is unchanged: a real PAT DOES
+# cascade, so dispatching explicitly there too would walk the same deploy
+# twice.
+
+
+def workflow_dispatches(calls: list, workflow: str) -> list[list[str]]:
+    return [call for call in dispatched(calls) if call[2] == workflow]
+
+
+def test_auto_explicitly_dispatches_the_staging_walk(ceremony: Ceremony) -> None:
+    result, calls = ceremony.run("v0.0.2", "--auto")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    walk_calls = workflow_dispatches(calls, "walk-release.yml")
+    assert len(walk_calls) == 1, f"expected exactly one explicit walk dispatch, got: {walk_calls}"
+    [walk] = walk_calls
+    assert "deploy_type=staging" in walk and "version_ref=v0.0.2" in walk
+
+
+def test_a_manual_release_never_explicitly_dispatches_the_walk(ceremony: Ceremony) -> None:
+    """Without --auto, a real operator PAT triggers deploy-release.yml's own
+    workflow_run cascade — dispatching the walk explicitly here too would walk
+    the same deploy twice."""
+    result, calls = ceremony.run("v0.0.2")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    walk_calls = workflow_dispatches(calls, "walk-release.yml")
+    assert walk_calls == [], (
+        f"a manual release must rely on the workflow_run cascade, not dispatch directly: {walk_calls}"
+    )
