@@ -45,6 +45,7 @@ SCHEDULE_TAG = "dagster/schedule_name"
 CAPTURE_RUN_METADATA = "capture_run_id"
 
 OK, PENDING, RED = "ok", "pending", "red"
+MAX_PROVING_WINDOW_HOURS = 26.0
 
 #: Whether a corroborating origin is switched on in this deployment, keyed by its
 #: `OriginRegistration.origin_source`. A registered origin missing here raises
@@ -178,7 +179,17 @@ def first_fetching_run(instance: dg.DagsterInstance, since: datetime) -> dg.RunR
             if _as_utc(record.create_timestamp) >= since
             and (record.dagster_run.tags.get(SCHEDULE_TAG) or forced(record.dagster_run))
         )
-    return min(candidates, key=lambda record: _as_utc(record.create_timestamp), default=None)
+    if not candidates:
+        return None
+    successful = [c for c in candidates if c.dagster_run.status == dg.DagsterRunStatus.SUCCESS]
+    if successful:
+        return min(successful, key=lambda r: _as_utc(r.create_timestamp))
+    in_progress = [
+        c for c in candidates if c.dagster_run.status in (dg.DagsterRunStatus.QUEUED, dg.DagsterRunStatus.STARTED)
+    ]
+    if in_progress:
+        return min(in_progress, key=lambda r: _as_utc(r.create_timestamp))
+    return min(candidates, key=lambda r: _as_utc(r.create_timestamp))
 
 
 def capture_run_of(instance: dg.DagsterInstance, run_id: str) -> str | None:
@@ -201,7 +212,13 @@ def _label(record: dg.RunRecord) -> str:
     return f"{how} {run.job_name} run {run.run_id[:8]}"
 
 
-def evaluate(connection: psycopg.Connection[Any], instance: dg.DagsterInstance, *, digest: str) -> Proof:
+def evaluate(
+    connection: psycopg.Connection[Any],
+    instance: dg.DagsterInstance,
+    *,
+    digest: str,
+    now: datetime | None = None,
+) -> Proof:
     digest = digest.strip()
     if not digest.startswith("sha256:"):
         return Proof(PENDING, "no data-engine image digest in this environment (local/CI)")
@@ -211,6 +228,13 @@ def evaluate(connection: psycopg.Connection[Any], instance: dg.DagsterInstance, 
         return Proof(PENDING, f"no boot canary run for {short}… yet; the deployment has not started its proof")
     record = first_fetching_run(instance, since)
     if record is None:
+        current_time = _as_utc(now) if now is not None else datetime.now(UTC)
+        pending_age = (current_time - since.astimezone(UTC)).total_seconds() / 3600.0
+        if pending_age > MAX_PROVING_WINDOW_HOURS:
+            return Proof(
+                RED,
+                f"{short}… awaiting its first tick for {pending_age:.1f}h (limit {MAX_PROVING_WINDOW_HOURS:g}h); proof timed out",
+            )
         return Proof(
             PENDING,
             f"no scheduled or forced live-pipeline run since the deployment of {short}… at "
