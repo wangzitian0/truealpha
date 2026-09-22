@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { listBacktestRuns } from "@/server/mart/backtest-repository";
-import { formatPercentFromFraction } from "@/client/format";
+import { formatPercentFromFraction, formatRatio } from "@/client/format";
 
 export const dynamic = "force-dynamic";
 
@@ -68,25 +68,25 @@ export default async function BacktestListPage() {
                     {r.start_date} ~ {r.end_date}
                   </td>
                   <td className="px-4 py-3 text-right font-mono font-medium text-emerald-400">
-                    {r.cagr_monthly !== null ? formatPercentFromFraction(String(r.cagr_monthly)) : "—"}
+                    {formatPercentFromFraction(r.cagr_monthly) ?? "—"}
                   </td>
                   <td className="px-4 py-3 text-right font-mono">
-                    {r.sharpe_daily !== null ? r.sharpe_daily.toFixed(2) : "—"}
+                    {formatRatio(r.sharpe_daily) ?? "—"}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-rose-400">
-                    {r.max_dd_daily !== null ? formatPercentFromFraction(String(r.max_dd_daily)) : "—"}
+                    {formatPercentFromFraction(r.max_dd_daily) ?? "—"}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-gray-400">
-                    {r.turnover_monthly !== null ? r.turnover_monthly.toFixed(2) : "—"}
+                    {formatRatio(r.turnover_monthly) ?? "—"}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span
                       className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
                         r.status === "succeeded"
                           ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                          : r.status === "failed"
-                          ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                          : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                          : r.status === "running" || r.status === "pending"
+                          ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                          : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
                       }`}
                     >
                       {r.status}

@@ -25,8 +25,15 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
     return <div className="p-8 text-center text-gray-400">No valuation data available</div>;
   }
 
-  const minNav = Math.min(...allVals.map((v) => (activeTab === "nav" ? v.cum_nav : v.drawdown)));
-  const maxNav = Math.max(...allVals.map((v) => (activeTab === "nav" ? v.cum_nav : v.drawdown)));
+  const getVal = (v: BacktestValuationRecord): number => {
+    const raw = activeTab === "nav" ? v.cum_nav : v.drawdown;
+    if (raw === null || raw === undefined) return 0;
+    const n = parseFloat(raw);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const minNav = Math.min(...allVals.map(getVal));
+  const maxNav = Math.max(...allVals.map(getVal));
   const rangeNav = Math.max(maxNav - minNav, 0.01);
 
   const width = 800;
@@ -38,7 +45,7 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
 
   const renderPath = (data: BacktestValuationRecord[], color: string, strokeWidth = 2) => {
     if (data.length === 0) return null;
-    const points = data.map((d, i) => `${toX(i, data.length)},${toY(activeTab === "nav" ? d.cum_nav : d.drawdown)}`);
+    const points = data.map((d, i) => `${toX(i, data.length)},${toY(getVal(d))}`);
     return <path d={`M ${points.join(" L ")}`} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />;
   };
 
