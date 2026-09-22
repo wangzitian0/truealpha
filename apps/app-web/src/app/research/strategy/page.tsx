@@ -28,6 +28,7 @@ function cell(value: string | null): string {
  * note on the component below. */
 const NOTICE_STYLE = {
   denied: "text-amber-400",
+  empty: "text-gray-400",
   error: "text-red-400",
   unavailable: "text-gray-400",
 } as const;
@@ -63,9 +64,11 @@ export default async function StrategyRunsPage() {
         >
           {outcome.kind === "denied"
             ? "Access denied. No verified session for this request."
-            : outcome.kind === "error"
-              ? `Error loading strategy run: ${outcome.message}`
-              : `Unavailable: ${outcome.detail.reason} (${outcome.detail.strategy_id})`}
+            : outcome.kind === "empty"
+              ? "No decisions recorded for this strategy run."
+              : outcome.kind === "error"
+                ? `Error loading strategy run: ${outcome.message}`
+                : `Unavailable: ${outcome.detail.reason} (${outcome.detail.strategy_id})`}
         </p>
       )}
 

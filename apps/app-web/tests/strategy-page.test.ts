@@ -95,4 +95,19 @@ const MEMBER_PRINCIPAL: StrategyRunPrincipal = { context: TEST_CONTEXT, principa
   assert(outcome.message.includes("simulated fixture read failure"), `unexpected message: ${outcome.message}`);
 }
 
-console.log("#349/#371/#493 strategy-page loader outcomes passed");
+// --- empty: repository returns a report with 0 decisions (#958) ---
+{
+  const emptyReport: StrategyRunReport = {
+    strategy_id: "large_model_value_v0",
+    source: "mart",
+    corpus_sha256: "0".repeat(64),
+    decisions: [],
+    golden_mismatches: [],
+  };
+  const outcome = await loadStrategyRunPage(ADMIN_PRINCIPAL, "large_model_value_v0", {
+    getLatest: async () => emptyReport,
+  });
+  assert(outcome.kind === "empty", `expected empty, got ${outcome.kind}`);
+}
+
+console.log("#349/#371/#493/#958 strategy-page loader outcomes passed");

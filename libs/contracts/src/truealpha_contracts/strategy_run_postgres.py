@@ -138,6 +138,10 @@ class PostgresStrategyRunRepository:
 
                     cursor.execute(_DECISIONS_SQL, (run_row["strategy_run_id"],))
                     decision_rows = cursor.fetchall()
+                    if strategy_id != "large_model_value_v0":
+                        return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")
+                    if len(decision_rows) == 0:
+                        return StrategyRunUnavailable(strategy_id=strategy_id, reason="empty_decisions")
         except psycopg.Error:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="database_unavailable")
 

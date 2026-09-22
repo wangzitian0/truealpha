@@ -96,7 +96,8 @@ export interface StrategyRunUnavailable {
 		| "fixture_hash_mismatch"
 		| "no_runs_recorded"
 		| "database_unavailable"
-		| "schema_mismatch";
+		| "schema_mismatch"
+		| "empty_decisions";
 }
 
 export class StrategyRunContractError extends Error {

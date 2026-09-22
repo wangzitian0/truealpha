@@ -30,6 +30,7 @@ export interface StrategyRunPrincipal {
 
 export type StrategyRunPageOutcome =
   | { kind: "ready"; report: StrategyRunReport }
+  | { kind: "empty" }
   | { kind: "unavailable"; detail: StrategyRunUnavailable }
   | { kind: "denied" }
   | { kind: "error"; message: string };
@@ -46,7 +47,10 @@ export async function loadStrategyRunPage(
 
   try {
     const result = await repository.getLatest(strategyId, principal.context);
-    if ("decisions" in result) return { kind: "ready", report: result };
+    if ("decisions" in result) {
+      if (result.decisions.length === 0) return { kind: "empty" };
+      return { kind: "ready", report: result };
+    }
     return { kind: "unavailable", detail: result };
   } catch (error) {
     return { kind: "error", message: error instanceof Error ? error.message : String(error) };
