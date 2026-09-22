@@ -570,21 +570,32 @@ def _latest_vintages(
     connection: psycopg.Connection,
     table: str,
     records: Sequence[PriceBarRecord],
-) -> dict[tuple[str, date], tuple[Any, Any, Any, Any, Any]]:
-    """The latest known (open, high, low, close, volume) per (symbol, trading_date)
-    already in `table`, for exactly the (symbol, date) pairs `records` is about to write.
+) -> dict[tuple[str, date], tuple[Any, Any, Any, Any, Any, str]]:
+    """The latest known (open, high, low, close, volume, adjust) per (symbol,
+    trading_date) already in `table`, for exactly the (symbol, date) pairs `records`
+    is about to write.
 
     Append-only means every GENUINE change gets its own row -- it does not mean every
     re-fetch of unchanged history piles up an identical row. This pipeline refetches the
     full 3y/10y lookback on every scheduled run (#938's lane), so without this check an
     append-only insert would grow each table by ~5000 rows per symbol per run forever.
+
+    `adjust` is part of the comparison (#939 review Medium), not just OHLCV: it is the
+    one other field every appended row persists explicitly per-call
+    (`insert_market_prices_daily`/`_monthly`'s `adjust` parameter) and that can
+    legitimately change between pipeline runs. Comparing OHLCV alone let a re-ingest
+    under a NEW adjust policy whose values happened to come back numerically identical
+    to the prior vintage (no split/dividend between the two policies for this date) be
+    swallowed as "unchanged" -- the row's `adjust` column silently stayed on the OLD
+    policy forever, which is exactly the policy drift an append-only history exists to
+    make visible.
     """
     if not records:
         return {}
     symbols = sorted({r.symbol for r in records})
     dates = sorted({r.date for r in records})
     query = f"""
-        select distinct on (symbol, trading_date) symbol, trading_date, open, high, low, close, volume
+        select distinct on (symbol, trading_date) symbol, trading_date, open, high, low, close, volume, adjust
         from {table}
         where symbol = any(%s) and trading_date = any(%s)
         order by symbol, trading_date, recorded_at desc;
@@ -592,7 +603,7 @@ def _latest_vintages(
     with connection.cursor() as cur:
         cur.execute(query, (symbols, dates))
         rows = cur.fetchall()
-    return {(row[0], row[1]): (row[2], row[3], row[4], row[5], row[6]) for row in rows}
+    return {(row[0], row[1]): (row[2], row[3], row[4], row[5], row[6], row[7]) for row in rows}
 
 
 def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decimal, str]:
@@ -603,8 +614,16 @@ def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decim
     `raw.fetches` object pointer this pipeline does not write -- it never persists to
     `raw.fetches`/object storage (unlike `production_topt`'s adapters), which stays a
     known gap, not a pretended one.
+
+    `raw_ref` includes `adjust` (#939 review Low): without it, two rows for the same
+    (symbol, date) persisted under different adjust policies got an IDENTICAL raw_ref,
+    so the provenance reference alone could not tell which policy a given vintage came
+    from.
     """
-    raw_ref = f"{_RAW_REF_PREFIX}:{record.source}:{record.symbol}:{record.resolution}:{record.date.isoformat()}"
+    raw_ref = (
+        f"{_RAW_REF_PREFIX}:{record.source}:{record.symbol}:{record.resolution}:"
+        f"{record.date.isoformat()}:{adjust}"
+    )
     return xnys_session_close_utc(record.date), SINGLE_SOURCE_CONFIDENCE, raw_ref
 
 
@@ -634,7 +653,7 @@ def insert_market_prices_daily(
     """
     rows = []
     for r in records:
-        if existing.get((r.symbol, r.date)) == (r.open, r.high, r.low, r.close, r.volume):
+        if existing.get((r.symbol, r.date)) == (r.open, r.high, r.low, r.close, r.volume, adjust):
             continue
         transaction_time, confidence, raw_ref = _provenance(r, adjust=adjust)
         rows.append(
@@ -679,7 +698,7 @@ def insert_market_prices_monthly(
     """
     rows = []
     for r in records:
-        if existing.get((r.symbol, r.date)) == (r.open, r.high, r.low, r.close, r.volume):
+        if existing.get((r.symbol, r.date)) == (r.open, r.high, r.low, r.close, r.volume, adjust):
             continue
         transaction_time, confidence, raw_ref = _provenance(r, adjust=adjust)
         rows.append(

@@ -12,7 +12,7 @@ evaluated with before persistence ever saw it.
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, datetime
 
 import psycopg
 import pytest
@@ -21,6 +21,7 @@ from data_engine.datahub.market_prices import PriceBarRecord, insert_market_pric
 from data_engine.datahub.universe_mask import (
     UniverseMaskReason,
     compute_and_persist_universe_mask_from_db,
+    evaluate_symbol_pit,
 )
 
 
@@ -95,3 +96,72 @@ def test_1d_and_1m_masks_do_not_collide(connection) -> None:
         "-- the second write overwrote the first (missing `resolution` in the primary key)"
     )
     assert all(r[1] is True and r[2] == UniverseMaskReason.OK for r in rows), rows
+
+
+def test_extract_bar_date_normalizes_a_datetime_valued_bar_date() -> None:
+    """#939 review Medium: `_extract_bar_date` returned a `datetime` unchanged whenever
+    a bar's date-bearing attribute happened to hold one, because `isinstance(d, date)`
+    is also true for `datetime` (a `date` subclass). `evaluate_symbol_pit` then compares
+    that value against a plain `date` cutoff (`<= cutoff_date`), which raises
+    `TypeError: can't compare datetime.datetime to datetime.date` -- nothing in this
+    module's public contract (`PriceBarRecord`'s `date` field is untyped at runtime, and
+    the module docstring advertises "bar object, dataclass, or dictionary" generically)
+    rules out a caller handing it a `datetime`-valued bar."""
+    symbol = "T938DTBAR"
+    cutoff = date(2026, 3, 31)
+    bar = PriceBarRecord(
+        symbol=symbol,
+        date=datetime(2026, 3, 31, 9, 30),  # a datetime, not a date -- the trigger shape
+        open=100,
+        high=101,
+        low=99,
+        close=100,
+        volume=1000,
+        source="twelvedata",
+        resolution="1M",
+    )
+
+    record = evaluate_symbol_pit(
+        symbol=symbol,
+        cutoff_date=cutoff,
+        bars=[bar],
+        min_periods=1,
+        resolution="1M",
+    )
+
+    assert record.eligible is True
+    assert record.reason_code == UniverseMaskReason.OK
+
+
+def test_1m_eligibility_requires_the_exact_snapped_month_end_bar() -> None:
+    """#939 review Medium: the 1M `has_current_bar` check accepted ANY bar in the same
+    calendar year/month as `cutoff_date`, not just the actual snapped month-end XNYS
+    session bar. A symbol suspended exactly on the month-end session (bar missing at the
+    snapped cutoff) but still trading earlier in the same month was misread as eligible
+    -- the opposite of contract item 1's fail-closed intent for a missing cutoff bar."""
+    symbol = "T938MEND"
+    cutoff = date(2026, 3, 31)  # the actual last XNYS session of March 2026
+    early_march_bar = PriceBarRecord(
+        symbol=symbol,
+        date=date(2026, 3, 2),  # trades earlier in March, but NOT on the month-end session
+        open=100,
+        high=101,
+        low=99,
+        close=100,
+        volume=1000,
+        source="twelvedata",
+        resolution="1M",
+    )
+
+    record = evaluate_symbol_pit(
+        symbol=symbol,
+        cutoff_date=cutoff,
+        bars=[early_march_bar],
+        min_periods=1,
+        resolution="1M",
+    )
+
+    assert record.eligible is False, (
+        "a bar earlier in the month must not stand in for the missing month-end session bar"
+    )
+    assert record.reason_code == UniverseMaskReason.SUSPENDED

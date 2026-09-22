@@ -77,6 +77,13 @@ def _extract_bar_date(bar: Any) -> date:
     else:
         raise ValueError(f"Unable to extract date from bar: {bar!r}")
 
+    if isinstance(d, datetime):
+        # `datetime` is a `date` subclass, so this must be checked before the plain
+        # `date` branch below (#939 review Medium): a bar whose date-bearing attribute
+        # is a `datetime` instance must be normalized to its calendar date, or a later
+        # `<= cutoff_date` comparison against a plain `date` raises `TypeError: can't
+        # compare datetime.datetime to datetime.date`.
+        return d.date()
     if isinstance(d, date):
         return d
     if isinstance(d, str):
@@ -192,11 +199,13 @@ def evaluate_symbol_pit(
 
     # Check if latest bar matches the cutoff period
     if resolution == "1M":
+        # Exact match to the month's own last XNYS session only (#939 review Medium):
+        # any bar elsewhere in the same calendar month used to also count as "current",
+        # so a symbol suspended exactly on the snapped month-end session -- but still
+        # trading earlier in the month -- was misread as eligible instead of SUSPENDED,
+        # the opposite of contract item 1's fail-closed intent for a missing cutoff bar.
         expected_session = snap_to_last_xnys_session_of_month(cutoff_date)
-        # Matches if the latest bar date is the expected session, or in the same month
-        has_current_bar = (latest_date == expected_session) or (
-            latest_date.year == cutoff_date.year and latest_date.month == cutoff_date.month
-        )
+        has_current_bar = latest_date == expected_session
     else:
         # Daily: exact date match
         has_current_bar = latest_date == cutoff_date

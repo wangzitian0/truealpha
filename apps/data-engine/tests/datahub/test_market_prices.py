@@ -104,6 +104,62 @@ def test_price_upsert_is_a_no_op_for_an_unchanged_revisit(connection) -> None:
     assert count == 1
 
 
+def test_price_upsert_treats_an_adjust_policy_change_as_a_genuine_vintage(connection) -> None:
+    """#939 review Medium: `_latest_vintages` only compared (open, high, low, close,
+    volume) against the incoming record, never `adjust` -- the one other field every
+    appended row persists explicitly and that can legitimately change between pipeline
+    runs (#938 contract item 4, `DEFAULT_ADJUST`). A re-ingest under a NEW adjust policy
+    whose OHLCV happens to come back numerically identical to the prior vintage (e.g. no
+    split/dividend occurred between the two adjust policies for this date) was silently
+    swallowed as "unchanged" -- the row's `adjust` column stayed on the OLD policy
+    forever, which is exactly the kind of policy drift an append-only history exists to
+    make visible."""
+    symbol = "T938ADJUST"
+    trading_date = date(2026, 1, 17)
+
+    first = insert_market_prices_daily(connection, [_bar(symbol, trading_date, 100)], adjust="splits")
+    second = insert_market_prices_daily(connection, [_bar(symbol, trading_date, 100)], adjust="raw")
+
+    assert first == 1
+    assert second == 1, (
+        "a changed adjust policy must always append a new vintage row, even when its "
+        "OHLCV coincidentally matches the previous vintage"
+    )
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "select adjust from staging.market_prices_daily "
+            "where symbol = %s and trading_date = %s order by recorded_at asc",
+            (symbol, trading_date),
+        )
+        adjusts = [row[0] for row in cur.fetchall()]
+
+    assert adjusts == ["splits", "raw"], adjusts
+
+
+def test_raw_ref_distinguishes_adjust_policy_for_the_same_symbol_and_date(connection) -> None:
+    """#939 review Low: `_provenance`'s `raw_ref` format string encoded source/symbol/
+    resolution/date but not `adjust` -- two rows for the same (symbol, date) persisted
+    under different adjust policies got an IDENTICAL `raw_ref`, so the provenance
+    reference could not tell which policy a given vintage came from."""
+    symbol = "T938RAWREF"
+    trading_date = date(2026, 1, 19)
+
+    insert_market_prices_daily(connection, [_bar(symbol, trading_date, 100)], adjust="splits")
+    insert_market_prices_daily(connection, [_bar(symbol, trading_date, 999)], adjust="raw")
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "select adjust, raw_ref from staging.market_prices_daily "
+            "where symbol = %s and trading_date = %s order by recorded_at asc",
+            (symbol, trading_date),
+        )
+        rows = cur.fetchall()
+
+    assert len(rows) == 2, rows
+    assert rows[0][1] != rows[1][1], f"raw_ref does not distinguish adjust policy: {rows}"
+
+
 @pytest.mark.parametrize(
     ("table", "insert_fn"),
     [
