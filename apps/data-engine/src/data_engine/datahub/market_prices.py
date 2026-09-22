@@ -37,6 +37,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -224,6 +225,7 @@ _XNYS_CLOSE_HOUR = 16
 _XNYS_EARLY_CLOSE_HOUR = 13
 
 
+@lru_cache(maxsize=32)
 def xnys_early_close_days(year: int) -> set[date]:
     """Compute scheduled New York Stock Exchange (XNYS) 13:00 ET early-close days for a given year.
 
