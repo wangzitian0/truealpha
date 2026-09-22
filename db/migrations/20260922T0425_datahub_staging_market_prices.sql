@@ -16,8 +16,24 @@ create table if not exists staging.market_prices_daily (
     primary key (symbol, date)
 );
 
-alter table staging.market_prices_daily add column if not exists confidence numeric not null default 1.0;
-alter table staging.market_prices_daily add column if not exists raw_ref text;
+do $$
+begin
+    if to_regclass('staging.market_prices_daily') is not null and not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.market_prices_daily'::regclass and attname = 'confidence' and not attisdropped
+    ) then
+        alter table staging.market_prices_daily
+            add column if not exists confidence numeric not null default 1.0;
+    end if;
+    if to_regclass('staging.market_prices_daily') is not null and not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.market_prices_daily'::regclass and attname = 'raw_ref' and not attisdropped
+    ) then
+        alter table staging.market_prices_daily
+            add column if not exists raw_ref text;
+    end if;
+end
+$$;
 
 do $$
 begin
@@ -47,8 +63,24 @@ create table if not exists staging.market_prices_monthly (
     primary key (symbol, date)
 );
 
-alter table staging.market_prices_monthly add column if not exists confidence numeric not null default 1.0;
-alter table staging.market_prices_monthly add column if not exists raw_ref text;
+do $$
+begin
+    if to_regclass('staging.market_prices_monthly') is not null and not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.market_prices_monthly'::regclass and attname = 'confidence' and not attisdropped
+    ) then
+        alter table staging.market_prices_monthly
+            add column if not exists confidence numeric not null default 1.0;
+    end if;
+    if to_regclass('staging.market_prices_monthly') is not null and not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.market_prices_monthly'::regclass and attname = 'raw_ref' and not attisdropped
+    ) then
+        alter table staging.market_prices_monthly
+            add column if not exists raw_ref text;
+    end if;
+end
+$$;
 
 do $$
 begin
@@ -73,8 +105,24 @@ create table if not exists staging.universe_mask (
     primary key (symbol, cutoff_date)
 );
 
-alter table staging.universe_mask add column if not exists confidence numeric not null default 1.0;
-alter table staging.universe_mask add column if not exists raw_ref text;
+do $$
+begin
+    if to_regclass('staging.universe_mask') is not null and not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.universe_mask'::regclass and attname = 'confidence' and not attisdropped
+    ) then
+        alter table staging.universe_mask
+            add column if not exists confidence numeric not null default 1.0;
+    end if;
+    if to_regclass('staging.universe_mask') is not null and not exists (
+        select 1 from pg_attribute
+        where attrelid = 'staging.universe_mask'::regclass and attname = 'raw_ref' and not attisdropped
+    ) then
+        alter table staging.universe_mask
+            add column if not exists raw_ref text;
+    end if;
+end
+$$;
 
 do $$
 begin
