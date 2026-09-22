@@ -27,6 +27,18 @@ REAL server clock too, so the CHECK never fires regardless of whether the fix is
 present -- the assertion passes by accident, not by proof. Anchoring to the real
 "today" is the only way to make "this month is still open" true from Postgres's own
 point of view on every day this test actually runs.
+
+`_refresh_market_data` takes `now: datetime` (an instant), not `as_of: date`, as of the
+#939 follow-up fix: `parse_monthly_bars`'s closed-vs-still-open check needed
+time-of-day precision a bare `date` cannot carry (see `market_prices.py`). The test
+below derives `now` from its own `as_of` (any instant on that calendar day, since the
+guard already keeps `as_of` off the one day where the time of day would matter);
+`test_refresh_market_data_op_does_not_crash_on_the_months_own_close_day_before_close`
+below constructs THAT exact boundary directly instead -- a synthetic `now` a few
+minutes before a computed month-end's own close, independent of real wall-clock time
+entirely, because a `date.today()`-based fixture can only ever land on that one day
+about once every 21 runs, and #939's second-round (blind) audit found that the first
+version of this file avoided it outright rather than ever exercising it.
 """
 
 from __future__ import annotations
@@ -34,13 +46,13 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.market_prices import TwelveDataClient, last_xnys_session_of_month
+from data_engine.datahub.market_prices import TwelveDataClient, last_xnys_session_of_month, xnys_session_close_utc
 from data_engine.datahub.universe_mask import UniverseMaskReason
 from data_engine.lanes.market_data import _refresh_market_data
 
@@ -126,8 +138,13 @@ def test_refresh_market_data_op_mid_month_writes_ok_not_suspended(connection) ->
     # `in_progress_month_end` (a date that has not happened yet as of `as_of`),
     # `staging.market_prices_monthly`'s `check (recorded_at >= transaction_time)` raised
     # CheckViolation on it, and the whole op -- daily insert and mask backfill included
-    # -- rolled back with it.
-    _refresh_market_data(context, connection, symbols=[symbol], as_of=as_of, client=client)
+    # -- rolled back with it. Any instant on `as_of`'s own calendar day works here: this
+    # test's `as_of` is guaranteed (by the guard above) to NOT be the current month's own
+    # closing session, so the exact time of day is not what this test is about -- see
+    # `test_refresh_market_data_op_does_not_crash_on_the_months_own_close_day_before_close`
+    # below for that boundary.
+    now = datetime(as_of.year, as_of.month, as_of.day, 12, 0, tzinfo=UTC)
+    _refresh_market_data(context, connection, symbols=[symbol], now=now, client=client)
 
     with connection.cursor() as cur:
         cur.execute(
@@ -170,4 +187,61 @@ def test_refresh_market_data_op_mid_month_writes_ok_not_suspended(connection) ->
     assert in_progress_month_end not in monthly_dates_written, (
         f"a monthly bar was written at {in_progress_month_end}, which has not happened yet "
         f"as of {as_of} -- the in-progress month's row must be skipped, not asserted"
+    )
+
+
+def test_refresh_market_data_op_does_not_crash_on_the_months_own_close_day_before_close(connection) -> None:
+    """#939 follow-up High: a blind re-audit of the first fix (`snapped_date > as_of_date`,
+    two `date`s) found the exact boundary the test above structurally could never hit --
+    its `as_of = date.today()` guard steps back a day whenever today happens to BE the
+    current month's own last session, so across 365 days a year it never once lands on
+    that exact day. `now` here is fully synthetic, built from a computed month-end, not
+    real time -- this reproduces the regression deterministically on any day this test
+    is actually run, which is the point: "green today" must not be able to mean
+    "the bug isn't there" when it could just as easily mean "the test structurally
+    cannot land on the one day that would show it".
+    """
+    symbol = "T939BOUNDARY"
+    month_end = last_xnys_session_of_month(2026, 9)  # 2026-09-30: a real XNYS session
+    close_instant = xnys_session_close_utc(month_end)
+    now = close_instant - timedelta(minutes=5)  # this month's own last session, before its close
+
+    last_closed_year, last_closed_month = _prior_month(2026, 9)
+    last_closed_month_end = last_xnys_session_of_month(last_closed_year, last_closed_month)
+
+    # 12 closed month-end sessions, PLUS the boundary row itself: Twelve Data's "month
+    # to date" datetime for THIS month, dated on the month's own last session -- the
+    # exact case a `snapped_date > as_of_date` (date-only) comparison cannot tell apart
+    # from an already-closed bar, because the two dates are EQUAL, not `>`.
+    monthly_dates = _monthly_session_dates(last_closed_year, last_closed_month, 12) + [month_end]
+    client = _fake_client(monthly_dates)
+
+    context = dg.build_op_context()
+    # Must not raise: pre-follow-up-fix, this row's transaction_time (month_end's own
+    # 16:00 ET close) was still five minutes in the future relative to `now`, but
+    # `snapped_date > as_of_date` compared `month_end > month_end` -- False -- and let
+    # it through. staging.market_prices_monthly's CHECK then fired, and the whole op
+    # (daily insert and mask backfill included) rolled back with it.
+    _refresh_market_data(context, connection, symbols=[symbol], now=now, client=client)
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "select trading_date from staging.market_prices_monthly where symbol = %s",
+            (symbol,),
+        )
+        monthly_dates_written = {row[0] for row in cur.fetchall()}
+    assert month_end not in monthly_dates_written, (
+        f"a monthly bar was written at {month_end}, {close_instant - now} before its own "
+        "close -- the still-open boundary row must be skipped, not asserted"
+    )
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "select eligible, reason_code from staging.universe_mask "
+            "where symbol = %s and cutoff_date = %s and resolution = '1M'",
+            (symbol, last_closed_month_end),
+        )
+        row = cur.fetchone()
+    assert row == (True, UniverseMaskReason.OK), (
+        f"expected {symbol} eligible at the last CLOSED month {last_closed_month_end}, got {row}"
     )

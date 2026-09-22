@@ -478,26 +478,32 @@ def parse_monthly_bars(
     payload: dict[str, Any],
     min_date: date | None = None,
     *,
-    as_of: date | None = None,
+    now: datetime,
 ) -> list[PriceBarRecord]:
     """Parse monthly bars from Twelve Data /time_series payload, snapping dates to last XNYS session.
 
-    A monthly bar is asserted only once its month has CLOSED as of `as_of` (#939 audit
-    finding). Twelve Data's `interval=1month` response, when the current month has not
-    finished, includes a running "month to date" row whose raw `datetime` is simply the
-    latest available trading day -- not a period close. Snapping THAT date forward to the
-    month's last XNYS session (unconditionally, as this function used to) produces a
-    `trading_date`/`transaction_time` that has not happened yet: `staging.market_prices_monthly`'s
-    `check (recorded_at >= transaction_time)` correctly refuses that row, and because
-    `lanes.market_data._refresh_market_data` writes daily inserts, monthly inserts, and
-    the mask backfill on one uncommitted connection, that refusal rolled back the whole
-    op -- turning #938's "silently misreads ~20/21 trading days as suspended" into
-    "crashes on ~20/21 trading days" (worse, not better). A bar whose snapped month has
-    not closed by `as_of` is skipped outright rather than admitted with a loosened check:
-    there genuinely is no monthly close to assert yet, and the CHECK constraint pins
-    exactly that invariant, not an implementation accident to route around.
+    A monthly bar is asserted only once its month's own XNYS session has actually
+    CLOSED as of `now` -- compared at INSTANT precision, never by date (#939 follow-up
+    finding: a first version of this fix compared `snapped_date > as_of_date`, two
+    `date`s. On the current month's own last XNYS session, BEFORE that session's own
+    16:00 ET close, `snapped_date == as_of_date` -- not `>` -- so the row was NOT
+    skipped, its `transaction_time` (that day's own close, still in the future) was
+    still ahead of the real `recorded_at`, and `staging.market_prices_monthly`'s
+    `check (recorded_at >= transaction_time)` fired anyway: the crash this function
+    exists to prevent shrank from "~20/21 trading days a month" to "the one day a
+    month before its own close", but a manual Materialize/backfill/debug run in that
+    window -- or any scheduler retiming that erodes the 15-75 minute buffer the
+    production cron's post-close time happens to leave -- still hits it).
+
+    `now` is a required instant, not a `date` with a silent real-clock fallback: the
+    previous `as_of: date | None = None` signature let a caller (or a test) supply a
+    calendar day while the actual close-or-not determination silently needed
+    time-of-day precision that no `date` can carry, and every caller had to
+    independently know to pass one that was already past its own close. Requiring the
+    caller's own instant here removes that guesswork -- the only sound way to answer
+    "has this month closed" is to compare against the moment being asked from, not a
+    day snapped off it.
     """
-    as_of_date = as_of or datetime.now(UTC).date()
     records: list[PriceBarRecord] = []
     values = payload.get("values", [])
     if not isinstance(values, list):
@@ -513,9 +519,12 @@ def parse_monthly_bars(
             continue
 
         snapped_date = snap_to_last_xnys_session_of_month(raw_date)
-        if snapped_date > as_of_date:
-            # The month this row belongs to has not closed yet as of `as_of` -- this is
-            # the vendor's in-progress month-to-date row, not a settled monthly bar.
+        if now < xnys_session_close_utc(snapped_date):
+            # This bar's month has not closed as of `now` -- this is the vendor's
+            # in-progress month-to-date row, not a settled monthly bar. Instant
+            # precision, not `snapped_date > now.date()`: on the month's own last
+            # session, before its own close, the two dates are EQUAL, and a
+            # date-only comparison would let it through.
             continue
         if min_date is not None and snapped_date < min_date:
             continue
@@ -693,15 +702,25 @@ def ingest_twelve_data_market_prices(
     connection: psycopg.Connection | None = None,
     daily_lookback_years: int = 3,
     monthly_lookback_years: int = 10,
-    as_of: date | None = None,
+    now: datetime | None = None,
     adjust: str = DEFAULT_ADJUST,
 ) -> IngestionSummary:
     """Ingest 20 TOPT symbols for 3 years daily and 10 years monthly via Twelve Data /time_series.
 
     Issues 1 call per symbol per resolution (40 calls total for 20 symbols). Every call
     passes `adjust` explicitly (#938 contract item 4).
+
+    `now` (an instant, not a date) is the single source of truth for "as of when":
+    the lookback-window floor (`min_daily_date`/`min_monthly_date`) and the
+    closed-vs-still-open determination `parse_monthly_bars` makes both derive from it,
+    so they cannot silently disagree about what day it is (#939 follow-up finding: a
+    prior version took a `date` here for the lookback floor and separately let
+    `parse_monthly_bars` default to its own independent `datetime.now(UTC)` call for
+    the closed/open check -- two clocks that only happened to agree because nothing
+    forced them to run microseconds apart).
     """
-    as_of_date = as_of or datetime.now(UTC).date()
+    now_instant = now or datetime.now(UTC)
+    as_of_date = now_instant.date()
     min_daily_date = as_of_date - timedelta(days=daily_lookback_years * 365 + 30)
     min_monthly_date = as_of_date - timedelta(days=monthly_lookback_years * 365 + 60)
 
@@ -721,7 +740,7 @@ def ingest_twelve_data_market_prices(
         # 1 call for monthly
         monthly_payload = td_client.fetch_time_series(symbol, interval="1month", outputsize=5000, adjust=adjust)
         calls_made += 1
-        monthly_bars = parse_monthly_bars(symbol, monthly_payload, min_date=min_monthly_date, as_of=as_of_date)
+        monthly_bars = parse_monthly_bars(symbol, monthly_payload, min_date=min_monthly_date, now=now_instant)
         all_monthly_records.extend(monthly_bars)
 
     daily_inserted = 0

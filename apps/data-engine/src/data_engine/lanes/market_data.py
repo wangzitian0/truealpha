@@ -88,22 +88,32 @@ def _refresh_market_data(
     connection: psycopg.Connection,
     *,
     symbols: Sequence[str],
-    as_of: date,
+    now: datetime,
     client: "TwelveDataClient | None" = None,
 ) -> dict[str, Any]:
     """The op body, factored out so a test can inject a fake Twelve Data transport and a
     real (or fake) connection without going through `dg.OpExecutionContext` plumbing --
-    the #731 lane convention `universe_refresh._refresh_universes` also follows."""
+    the #731 lane convention `universe_refresh._refresh_universes` also follows.
+
+    `now` is a required instant, not a `date` (#939 follow-up finding): the cutoff
+    functions below only ever needed a `date`, but threading a `date` all the way into
+    `ingest_twelve_data_market_prices` -> `parse_monthly_bars` silently discarded the
+    time-of-day precision that function's closed-vs-still-open check actually needs,
+    and nothing enforced that whoever built that `date` had waited for a session close
+    first. `as_of` here is derived from `now` once, for the two calendar-only cutoff
+    functions that only ever wanted a date.
+    """
     from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS, ingest_twelve_data_market_prices
     from data_engine.datahub.universe_mask import compute_and_persist_universe_mask_from_db
 
     symbols = tuple(symbols) or DEFAULT_TOPT_SYMBOLS
+    as_of = now.date()
 
     summary = ingest_twelve_data_market_prices(
         symbols=symbols,
         client=client,
         connection=connection,
-        as_of=as_of,
+        now=now,
     )
     context.log.info(
         f"market_data: ingested {summary.daily_inserted} daily / {summary.monthly_inserted} monthly new-vintage "
@@ -154,13 +164,13 @@ def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
     every cutoff each resolution's table holds."""
     from data_engine.datahub.market_prices import DEFAULT_TOPT_SYMBOLS
 
-    as_of = datetime.now(UTC).date()
+    now = datetime.now(UTC)
     with (
         gateway.run_scope(f"dagster:{context.run_id}"),
         gateway.capacity_scope(),
         psycopg.connect(settings.database_url) as connection,
     ):
-        _refresh_market_data(context, connection, symbols=DEFAULT_TOPT_SYMBOLS, as_of=as_of)
+        _refresh_market_data(context, connection, symbols=DEFAULT_TOPT_SYMBOLS, now=now)
         connection.commit()
 
 

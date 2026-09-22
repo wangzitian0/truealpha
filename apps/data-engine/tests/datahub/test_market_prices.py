@@ -11,7 +11,7 @@ know about this date before the value changed."
 from __future__ import annotations
 
 import os
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import psycopg
 import pytest
@@ -22,6 +22,7 @@ from data_engine.datahub.market_prices import (
     insert_market_prices_monthly,
     last_xnys_session_of_month,
     parse_monthly_bars,
+    xnys_session_close_utc,
 )
 
 
@@ -133,25 +134,25 @@ def test_market_prices_rejects_in_place_mutation(connection, table, insert_fn, s
 
 def test_parse_monthly_bars_skips_the_in_progress_month() -> None:
     """#939 audit High finding: a monthly bar is asserted only once its month has
-    CLOSED as of `as_of` -- wall-clock-independent by construction, since `as_of` is an
+    CLOSED as of `now` -- wall-clock-independent by construction, since `now` is an
     explicit local value here, not `datetime.now()`, and this would fail identically no
     matter what day it is actually run.
 
     Twelve Data's `interval=1month` response, while the current month is still open,
     includes a running "month to date" row whose raw `datetime` is simply the latest
-    available trading day (here, `as_of` itself) -- not a period close. The pre-fix
-    behaviour snapped that date forward to the month's last XNYS session regardless,
-    producing a `trading_date` (and therefore `transaction_time`) that has not happened
-    yet: 2026-09-30 when `as_of` is 2026-09-22. `staging.market_prices_monthly`'s
+    available trading day (here, two days before `now`) -- not a period close. The
+    pre-fix behaviour snapped that date forward to the month's last XNYS session
+    regardless, producing a `trading_date` (and therefore `transaction_time`) that has
+    not happened yet: 2026-09-30 when `now` is 2026-09-22. `staging.market_prices_monthly`'s
     `check (recorded_at >= transaction_time)` then refuses the row -- correctly, since
     there genuinely is no September close to assert on the 22nd -- but because
     `lanes.market_data._refresh_market_data` writes the daily insert, the monthly
     insert, and the mask backfill on one uncommitted connection, that refusal used to
     roll back the whole op.
     """
-    as_of = date(2026, 9, 22)
+    now = datetime(2026, 9, 22, 12, 0, tzinfo=UTC)
     closed_month_end = last_xnys_session_of_month(2026, 8)  # August already closed by Sep 22
-    in_progress_raw_date = as_of - timedelta(days=2)  # a recent September trading day, unsnapped
+    in_progress_raw_date = now.date() - timedelta(days=2)  # a recent September trading day, unsnapped
 
     payload = {
         "values": [
@@ -174,10 +175,76 @@ def test_parse_monthly_bars_skips_the_in_progress_month() -> None:
         ]
     }
 
-    bars = parse_monthly_bars("T939SIX", payload, as_of=as_of)
+    bars = parse_monthly_bars("T939SIX", payload, now=now)
 
     dates = [b.date for b in bars]
     assert dates == [closed_month_end], (
         f"expected only the closed August bar, got {dates} -- the in-progress September "
         "row must be skipped, not snapped forward into a future trading_date"
     )
+
+
+def test_parse_monthly_bars_skips_the_bar_on_its_own_close_day_before_close() -> None:
+    """#939 follow-up High: a BLIND re-audit of the first fix (date-only comparison,
+    `snapped_date > as_of_date`) found the exact boundary the first test never
+    constructed. On the month's OWN last XNYS session, BEFORE that session's own
+    16:00 ET close, `snapped_date == now.date()` -- not `>` -- so a date-only
+    comparison let the row through with a `transaction_time` (that day's own close)
+    still in the future relative to the real insertion instant, and the CHECK
+    constraint fired anyway. This constructs that boundary directly against a fixed,
+    computed month-end and a `now` a few minutes before its own close -- deterministic
+    regardless of what day this test actually runs, unlike a `date.today()`-based
+    fixture which would only ever land on this exact day about once every 21 runs (and
+    the #939 second-round audit's finding: the prior version of this file's lane-level
+    test actively AVOIDED this exact day with a "step back one day" guard instead of
+    ever exercising it).
+    """
+    month_end = last_xnys_session_of_month(2026, 9)  # 2026-09-30: a real XNYS session
+    close_instant = xnys_session_close_utc(month_end)
+    now = close_instant - timedelta(minutes=5)  # still five minutes short of the close
+
+    payload = {
+        "values": [
+            {
+                "datetime": month_end.isoformat(),
+                "open": "100",
+                "high": "101",
+                "low": "99",
+                "close": "100",
+                "volume": "1000",
+            },
+        ]
+    }
+
+    bars = parse_monthly_bars("T939NINE", payload, now=now)
+
+    assert bars == [], (
+        f"expected the still-open {month_end} bar to be skipped {close_instant - now} "
+        f"before its own close, got {bars} -- a date-only comparison lets a bar dated "
+        "on its own close day through before that close has actually happened"
+    )
+
+
+def test_parse_monthly_bars_includes_the_bar_right_after_its_own_close() -> None:
+    """The other side of the boundary above: once the session's own close instant has
+    passed, the same bar is no longer in progress and must be admitted."""
+    month_end = last_xnys_session_of_month(2026, 9)
+    close_instant = xnys_session_close_utc(month_end)
+    now = close_instant + timedelta(minutes=5)
+
+    payload = {
+        "values": [
+            {
+                "datetime": month_end.isoformat(),
+                "open": "100",
+                "high": "101",
+                "low": "99",
+                "close": "100",
+                "volume": "1000",
+            },
+        ]
+    }
+
+    bars = parse_monthly_bars("T939TEN", payload, now=now)
+
+    assert [b.date for b in bars] == [month_end]
