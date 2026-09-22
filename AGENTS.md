@@ -40,7 +40,7 @@ tests prove it, review and green CI gate the merge.
    Evaluate unresolved actionable findings against the budget of High = 0, Medium <= 2, and
    Low <= 4 on the exact head immediately before merge readiness is declared. A green
    `ci-required`, a deployable `main`, and backward-compatible migrations are also required.
-   Once a PR is merge-ready the agent that owns it merges it. Only a merge whose pipeline
+   Once a PR is merge-ready, the agent that owns it merges it. Only a merge whose pipeline
    reaches production (a release promote, see `docs/release-protocol.md`) waits for the
    owner's approval of that exact head SHA.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
