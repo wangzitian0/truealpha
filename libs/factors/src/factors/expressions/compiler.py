@@ -20,16 +20,21 @@ from truealpha_contracts.ast import (
 )
 
 
+def _safe_is_nan(expr: pl.Expr) -> pl.Expr:
+    """Safely check for NaN across any dtype without raising InvalidOperationError."""
+    return expr.cast(pl.Float64, strict=False).is_nan().fill_null(False)
+
+
 def _safe_div(left: pl.Expr, right: pl.Expr) -> pl.Expr:
     """Safe division guarding against division by zero, null, and NaN."""
-    is_invalid_denom = right.is_null() | right.is_nan() | (right == 0)
-    is_invalid_numer = left.is_null() | left.is_nan()
+    is_invalid_denom = right.is_null() | _safe_is_nan(right) | (right == 0)
+    is_invalid_numer = left.is_null() | _safe_is_nan(left)
     return pl.when(is_invalid_denom | is_invalid_numer).then(None).otherwise(left / right)
 
 
 def _safe_rank(inner: pl.Expr, cutoff_col: str) -> pl.Expr:
     """Cross-sectional ranking normalized to [0, 1] over cutoff, strictly treating NaN as null."""
-    clean_inner = pl.when(inner.is_null() | inner.is_nan()).then(None).otherwise(inner)
+    clean_inner = pl.when(inner.is_null() | _safe_is_nan(inner)).then(None).otherwise(inner)
     rank_expr = clean_inner.rank(method="average").over(cutoff_col)
     count_expr = clean_inner.count().over(cutoff_col)
     return (

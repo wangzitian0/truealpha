@@ -38,7 +38,7 @@ from factors.expressions.dsl import col
 
 
 def _load_prices(connection: psycopg.Connection, table: str, symbols: list[str]) -> pl.DataFrame:
-    query = f"select symbol, date, close from {table} where symbol = any(%s) order by date asc"  # noqa: S608 - table is one of two fixed literals below
+    query = f"select symbol, trading_date as date, close from {table} where symbol = any(%s) order by trading_date asc"  # noqa: S608 - table is one of two fixed literals below
     with connection.cursor() as cur:
         cur.execute(query, (symbols,))
         rows = cur.fetchall()
