@@ -89,8 +89,8 @@ class StrategyBacktestGateway:
             # The latest period also answers as the scalar, so `net_income` stays a
             # required-input the coverage check and the multiple can both see.
             scalars = by_issuer.setdefault(issuer_id, {})
-            if input_key not in scalars or fiscal_period > max(periodic[issuer_id][input_key]):
-                scalars[input_key] = periodic[issuer_id][input_key][max(periodic[issuer_id][input_key])]
+            latest_period = max(periodic[issuer_id][input_key])
+            scalars[input_key] = periodic[issuer_id][input_key][latest_period]
         return [
             IssuerInput(
                 issuer_id=issuer_id,

@@ -283,3 +283,46 @@ def test_nested_momentum_expression() -> None:
     assert values[0] is None
     assert np.isclose(values[1], 0.10)
     assert np.isclose(values[2], 0.10)
+
+
+def test_polars_compiler_non_float_is_nan_support() -> None:
+    # BUG-02: compiler calling .is_nan() on non-float columns raises InvalidOperationError
+    df_int = pl.DataFrame(
+        {
+            "cutoff": ["2023-01-31", "2023-01-31"],
+            "symbol": ["A", "B"],
+            "val": [10, 20],
+        }
+    )
+
+    # Int division
+    div_expr = compile_to_polars(col("val") / 2)
+    res_div = df_int.with_columns(out=div_expr)
+    assert res_div["out"].to_list() == [5.0, 10.0]
+
+    # Int rank
+    rank_expr = compile_to_polars(Rank("val"), cutoff_col="cutoff")
+    res_rank = df_int.with_columns(out=rank_expr)
+    assert res_rank["out"].to_list() == [0.0, 1.0]
+
+    # Bool column division
+    df_bool = pl.DataFrame(
+        {
+            "cutoff": ["2023-01-31", "2023-01-31"],
+            "symbol": ["A", "B"],
+            "val": [True, False],
+        }
+    )
+    res_bool = df_bool.with_columns(out=div_expr)
+    assert res_bool["out"].to_list() == [0.5, 0.0]
+
+    # Str column rank
+    df_str = pl.DataFrame(
+        {
+            "cutoff": ["2023-01-31", "2023-01-31"],
+            "symbol": ["A", "B"],
+            "val": ["foo", "bar"],
+        }
+    )
+    res_str = df_str.with_columns(out=rank_expr)
+    assert res_str["out"].to_list() == [1.0, 0.0]
