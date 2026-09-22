@@ -869,7 +869,10 @@ def _cik_of(
         known_at = cutoff or datetime.now(UTC)
         val = alias_of(connection, issuer_id, "cik", valid_at=valid_at, known_at=known_at)
         if val is not None:
-            return int(val)
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return None
     return None
 
 
