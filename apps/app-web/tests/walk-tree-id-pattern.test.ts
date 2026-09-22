@@ -35,6 +35,7 @@ const RAW_IDS = [
   "listing:xnys:brk.b",
   "listing:xnas:t001", // a symbol with digits (the data-engine fixtures mint these)
   "listing:xhkg:0700", // an all-digit symbol, as non-US venues list them
+  "018f9e6a-7b3e-7a1b-8c2d-9e0f1a2b3c4d", // UUID entity id (#877 PR-4)
 ];
 for (const id of RAW_IDS) {
   const match = `Ranked first: ${id} with a gap of 12%`.match(ID_PATTERN);
