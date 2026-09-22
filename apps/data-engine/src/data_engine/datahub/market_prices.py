@@ -248,6 +248,8 @@ class PriceBarRecord:
     volume: Decimal | None
     source: str = "twelvedata"
     resolution: str = "1D"  # '1D' or '1M'
+    confidence: Decimal = Decimal("1.0")
+    raw_ref: str | None = None
 
 
 def parse_decimal(value: Any) -> Decimal | None:
@@ -450,8 +452,8 @@ def insert_market_prices_daily(
 
     query = """
         insert into staging.market_prices_daily (
-            symbol, date, open, high, low, close, volume, source, ingested_at
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, now())
+            symbol, date, open, high, low, close, volume, source, confidence, raw_ref, ingested_at
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
         on conflict (symbol, date) do update set
             open = excluded.open,
             high = excluded.high,
@@ -459,6 +461,8 @@ def insert_market_prices_daily(
             close = excluded.close,
             volume = excluded.volume,
             source = excluded.source,
+            confidence = excluded.confidence,
+            raw_ref = excluded.raw_ref,
             ingested_at = excluded.ingested_at;
     """
     rows = [
@@ -471,6 +475,8 @@ def insert_market_prices_daily(
             r.close,
             r.volume,
             r.source,
+            r.confidence if r.confidence is not None else Decimal("1.0"),
+            r.raw_ref,
         )
         for r in records
     ]
@@ -489,8 +495,8 @@ def insert_market_prices_monthly(
 
     query = """
         insert into staging.market_prices_monthly (
-            symbol, date, open, high, low, close, volume, source, resolution, ingested_at
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+            symbol, date, open, high, low, close, volume, source, resolution, confidence, raw_ref, ingested_at
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
         on conflict (symbol, date) do update set
             open = excluded.open,
             high = excluded.high,
@@ -499,6 +505,8 @@ def insert_market_prices_monthly(
             volume = excluded.volume,
             source = excluded.source,
             resolution = excluded.resolution,
+            confidence = excluded.confidence,
+            raw_ref = excluded.raw_ref,
             ingested_at = excluded.ingested_at;
     """
     rows = [
@@ -512,6 +520,8 @@ def insert_market_prices_monthly(
             r.volume,
             r.source,
             r.resolution,
+            r.confidence if r.confidence is not None else Decimal("1.0"),
+            r.raw_ref,
         )
         for r in records
     ]

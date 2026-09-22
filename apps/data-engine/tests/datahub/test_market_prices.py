@@ -12,6 +12,7 @@ Tests:
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 from decimal import Decimal
 
@@ -403,6 +404,8 @@ def test_database_insert_and_upsert_idempotency() -> None:
     try:
         conn = psycopg.connect(settings.database_url, autocommit=True, connect_timeout=3)
     except psycopg.OperationalError:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail("Postgres required by environment but unreachable")
         pytest.skip("Postgres unreachable")
 
     try:
@@ -469,3 +472,32 @@ def test_database_insert_and_upsert_idempotency() -> None:
             cur.execute("delete from staging.market_prices_daily where symbol = 'TEST.AAPL'")
             cur.execute("delete from staging.market_prices_monthly where symbol = 'TEST.AAPL'")
         conn.close()
+
+
+def test_price_bar_record_confidence_and_raw_ref_defaults() -> None:
+    rec = PriceBarRecord(
+        symbol="AAPL",
+        date=date(2026, 3, 31),
+        open=Decimal("200"),
+        high=Decimal("205"),
+        low=Decimal("199"),
+        close=Decimal("204"),
+        volume=Decimal("1000000"),
+    )
+    assert rec.confidence == Decimal("1.0")
+    assert rec.raw_ref is None
+
+    custom = PriceBarRecord(
+        symbol="AAPL",
+        date=date(2026, 3, 31),
+        open=Decimal("200"),
+        high=Decimal("205"),
+        low=Decimal("199"),
+        close=Decimal("204"),
+        volume=Decimal("1000000"),
+        confidence=Decimal("0.9"),
+        raw_ref="raw.fetches:123",
+    )
+    assert custom.confidence == Decimal("0.9")
+    assert custom.raw_ref == "raw.fetches:123"
+

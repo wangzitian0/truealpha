@@ -26,6 +26,14 @@ from data_engine.datahub.market_prices import snap_to_last_xnys_session_of_month
 
 log = logging.getLogger(__name__)
 
+ALLOWED_SOURCE_TABLES = frozenset(
+    {
+        "staging.market_prices_daily",
+        "staging.market_prices_monthly",
+        "staging.mvp_market_prices",
+    }
+)
+
 
 class UniverseMaskReason:
     """Reason codes for universe eligibility mask."""
@@ -44,6 +52,8 @@ class UniverseMaskRecord:
     cutoff_date: date
     eligible: bool
     reason_code: str
+    confidence: Decimal = Decimal("1.0")
+    raw_ref: str | None = None
     computed_at: datetime | None = None
 
 
@@ -58,6 +68,8 @@ def _extract_bar_date(bar: Any) -> date:
     else:
         raise ValueError(f"Unable to extract date from bar: {bar!r}")
 
+    if isinstance(d, datetime):
+        return d.date()
     if isinstance(d, date):
         return d
     if isinstance(d, str):
@@ -171,10 +183,7 @@ def evaluate_symbol_pit(
     # Check if latest bar matches the cutoff period
     if resolution == "1M":
         expected_session = snap_to_last_xnys_session_of_month(cutoff_date)
-        # Matches if the latest bar date is the expected session, or in the same month
-        has_current_bar = (latest_date == expected_session) or (
-            latest_date.year == cutoff_date.year and latest_date.month == cutoff_date.month
-        )
+        has_current_bar = latest_date == expected_session
     else:
         # Daily: exact date match
         has_current_bar = latest_date == cutoff_date
@@ -255,7 +264,7 @@ def compute_universe_mask(
     return records
 
 
-def persist_universe_mask(
+def insert_universe_mask(
     connection: psycopg.Connection,
     records: Sequence[UniverseMaskRecord],
 ) -> int:
@@ -265,17 +274,32 @@ def persist_universe_mask(
 
     query = """
         insert into staging.universe_mask (
-            symbol, cutoff_date, eligible, reason_code, computed_at
-        ) values (%s, %s, %s, %s, now())
+            symbol, cutoff_date, eligible, reason_code, confidence, raw_ref, computed_at
+        ) values (%s, %s, %s, %s, %s, %s, now())
         on conflict (symbol, cutoff_date) do update set
             eligible = excluded.eligible,
             reason_code = excluded.reason_code,
+            confidence = excluded.confidence,
+            raw_ref = excluded.raw_ref,
             computed_at = excluded.computed_at;
     """
-    rows = [(r.symbol, r.cutoff_date, r.eligible, r.reason_code) for r in records]
+    rows = [
+        (
+            r.symbol,
+            r.cutoff_date,
+            r.eligible,
+            r.reason_code,
+            r.confidence if r.confidence is not None else Decimal("1.0"),
+            r.raw_ref,
+        )
+        for r in records
+    ]
     with connection.cursor() as cur:
         cur.executemany(query, rows)
     return len(rows)
+
+
+persist_universe_mask = insert_universe_mask
 
 
 def compute_and_persist_universe_mask_from_db(
@@ -289,6 +313,9 @@ def compute_and_persist_universe_mask_from_db(
     resolution: str = "1M",
 ) -> list[UniverseMaskRecord]:
     """Load historical prices from database, compute PIT universe mask, and persist."""
+    if source_table not in ALLOWED_SOURCE_TABLES:
+        raise ValueError(f"Invalid source_table: {source_table}")
+
     if not symbols or not cutoff_dates:
         return []
 
@@ -327,5 +354,5 @@ def compute_and_persist_universe_mask_from_db(
         resolution=resolution,
     )
 
-    persist_universe_mask(connection, records)
+    insert_universe_mask(connection, records)
     return records

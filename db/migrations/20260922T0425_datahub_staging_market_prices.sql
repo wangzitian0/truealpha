@@ -10,9 +10,14 @@ create table if not exists staging.market_prices_daily (
     close        numeric,
     volume       numeric,
     source       text not null default 'twelvedata',
+    confidence   numeric not null default 1.0,
+    raw_ref      text,
     ingested_at  timestamptz not null default now(),
     primary key (symbol, date)
 );
+
+alter table staging.market_prices_daily add column if not exists confidence numeric not null default 1.0;
+alter table staging.market_prices_daily add column if not exists raw_ref text;
 
 do $$
 begin
@@ -36,9 +41,14 @@ create table if not exists staging.market_prices_monthly (
     volume       numeric,
     source       text not null default 'twelvedata',
     resolution   text not null default '1M',
+    confidence   numeric not null default 1.0,
+    raw_ref      text,
     ingested_at  timestamptz not null default now(),
     primary key (symbol, date)
 );
+
+alter table staging.market_prices_monthly add column if not exists confidence numeric not null default 1.0;
+alter table staging.market_prices_monthly add column if not exists raw_ref text;
 
 do $$
 begin
@@ -57,9 +67,14 @@ create table if not exists staging.universe_mask (
     cutoff_date  date not null,
     eligible     boolean not null,
     reason_code  text not null,
+    confidence   numeric not null default 1.0,
+    raw_ref      text,
     computed_at  timestamptz not null default now(),
     primary key (symbol, cutoff_date)
 );
+
+alter table staging.universe_mask add column if not exists confidence numeric not null default 1.0;
+alter table staging.universe_mask add column if not exists raw_ref text;
 
 do $$
 begin

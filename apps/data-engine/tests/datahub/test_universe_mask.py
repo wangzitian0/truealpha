@@ -14,16 +14,21 @@ Tests:
 
 from __future__ import annotations
 
-from datetime import date
+import os
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 import pytest
 from data_engine.datahub.universe_mask import (
+    ALLOWED_SOURCE_TABLES,
     UniverseMaskReason,
     UniverseMaskRecord,
+    _extract_bar_date,
+    compute_and_persist_universe_mask_from_db,
     compute_universe_mask,
     evaluate_symbol_pit,
+    insert_universe_mask,
     persist_universe_mask,
 )
 
@@ -330,6 +335,8 @@ def test_persist_universe_mask_to_postgres() -> None:
     try:
         conn = psycopg.connect(settings.database_url, autocommit=True, connect_timeout=3)
     except psycopg.OperationalError:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail("Postgres required by environment but unreachable")
         pytest.skip("Postgres unreachable")
 
     cutoff = date(2026, 3, 31)
@@ -370,3 +377,72 @@ def test_persist_universe_mask_to_postgres() -> None:
         with conn.cursor() as cur:
             cur.execute("delete from staging.universe_mask where symbol in ('TEST.AAPL', 'TEST.NEW')")
         conn.close()
+
+
+def test_extract_bar_date_normalizes_datetime_to_date() -> None:
+    dt = datetime(2026, 3, 31, 15, 30, 0)
+    res = _extract_bar_date({"date": dt})
+    assert res == date(2026, 3, 31)
+    assert type(res) is date
+    assert not isinstance(res, datetime)
+
+
+def test_monthly_resolution_requires_exact_snapped_session() -> None:
+    from data_engine.datahub.market_prices import last_xnys_session_of_month
+
+    cutoff = last_xnys_session_of_month(2026, 3)
+    bars = _generate_monthly_bars("MIDMONTH", date(2025, 1, 1), 15)
+    # Mutate the last bar's date to be mid-month rather than last XNYS session
+    bars[-1]["date"] = date(2026, 3, 15)
+
+    rec = evaluate_symbol_pit(
+        symbol="MIDMONTH",
+        cutoff_date=cutoff,
+        listing_date=date(2024, 1, 1),
+        bars=bars,
+        min_periods=12,
+        resolution="1M",
+    )
+    assert not rec.eligible
+    assert rec.reason_code == UniverseMaskReason.SUSPENDED
+
+
+def test_compute_and_persist_universe_mask_from_db_validates_source_table() -> None:
+    assert "staging.market_prices_daily" in ALLOWED_SOURCE_TABLES
+    assert "staging.market_prices_monthly" in ALLOWED_SOURCE_TABLES
+    assert "staging.mvp_market_prices" in ALLOWED_SOURCE_TABLES
+
+    with pytest.raises(ValueError, match="Invalid source_table:"):
+        compute_and_persist_universe_mask_from_db(
+            None,  # type: ignore[arg-type]
+            ["AAPL"],
+            [date(2026, 3, 31)],
+            source_table="staging.malicious_table",
+        )
+
+
+def test_universe_mask_record_confidence_and_raw_ref_defaults() -> None:
+    rec = UniverseMaskRecord(
+        symbol="AAPL",
+        cutoff_date=date(2026, 3, 31),
+        eligible=True,
+        reason_code=UniverseMaskReason.OK,
+    )
+    assert rec.confidence == Decimal("1.0")
+    assert rec.raw_ref is None
+
+    custom = UniverseMaskRecord(
+        symbol="AAPL",
+        cutoff_date=date(2026, 3, 31),
+        eligible=True,
+        reason_code=UniverseMaskReason.OK,
+        confidence=Decimal("0.85"),
+        raw_ref="raw.fetches:456",
+    )
+    assert custom.confidence == Decimal("0.85")
+    assert custom.raw_ref == "raw.fetches:456"
+
+
+def test_insert_universe_mask_alias() -> None:
+    assert insert_universe_mask is persist_universe_mask
+
