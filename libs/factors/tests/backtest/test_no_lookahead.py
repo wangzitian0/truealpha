@@ -1,4 +1,4 @@
-"""Hypothesis property-based test asserting NO lookahead bias in factor backtest."""
+"""Deterministic simulation test verifying no lookahead bias across monthly rebalance cutoffs."""
 
 import numpy as np
 import pandas as pd

@@ -39,7 +39,8 @@ def persist_backtest_result(conn_or_cursor: Any, result: BacktestResult) -> None
                 turnover_monthly = excluded.turnover_monthly,
                 calmar_daily = excluded.calmar_daily,
                 metrics_payload = excluded.metrics_payload,
-                error_message = excluded.error_message;
+                error_message = excluded.error_message,
+                executed_at = now();
             """,
             (
                 result.run_id,
@@ -116,7 +117,8 @@ def persist_backtest_result(conn_or_cursor: Any, result: BacktestResult) -> None
                 val_d_records,
             )
 
-        # 4. Insert mart.backtest_trades
+        # 4. Insert mart.backtest_trades (idempotent: delete existing trades for run_id first)
+        cur.execute("delete from mart.backtest_trades where run_id = %s;", (result.run_id,))
         trade_records = [
             (
                 result.run_id,
@@ -145,6 +147,10 @@ def persist_backtest_result(conn_or_cursor: Any, result: BacktestResult) -> None
 
         if is_conn:
             conn_or_cursor.commit()
+    except Exception:
+        if is_conn and hasattr(conn_or_cursor, "rollback"):
+            conn_or_cursor.rollback()
+        raise
     finally:
         if is_conn:
             cur.close()

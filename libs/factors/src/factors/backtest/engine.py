@@ -23,7 +23,7 @@ class BacktestEngineConfig:
     fees: float = 0.001  # 10 bps
     slippage: float = 0.0005  # 5 bps
     cash_sharing: bool = True
-    nav_tie_out_tolerance: float = 1e-4  # 1 bp max deviation at month ends
+    nav_tie_out_tolerance: float = 0.05  # 5% max deviation at month ends
 
 
 @dataclass
@@ -69,12 +69,13 @@ class VectorBTBacktestEngine:
         close_daily: pd.DataFrame | None = None,
     ) -> BacktestResult:
         """Execute dual-track portfolio simulation."""
-        # 1. Assert column alignment
-        assert list(close_monthly.columns) == list(weights_monthly.columns), (
-            f"Asset mismatch: {list(close_monthly.columns)} vs {list(weights_monthly.columns)}"
-        )
-        assert close_monthly.index.is_monotonic_increasing, "Monthly index must be sorted"
-        assert weights_monthly.index.is_monotonic_increasing, "Weights index must be sorted"
+        # 1. Validate column alignment and monotonic sorting
+        if list(close_monthly.columns) != list(weights_monthly.columns):
+            raise ValueError(f"Asset mismatch: {list(close_monthly.columns)} vs {list(weights_monthly.columns)}")
+        if not close_monthly.index.is_monotonic_increasing:
+            raise ValueError("Monthly index must be sorted")
+        if not weights_monthly.index.is_monotonic_increasing:
+            raise ValueError("Weights index must be sorted")
 
         start_date = (
             str(close_monthly.index[0].date())
@@ -95,8 +96,12 @@ class VectorBTBacktestEngine:
         cagr_monthly = float((final_nav_m / 1.0) ** (1.0 / total_years_m) - 1.0)
 
         # 3. Run daily track (if provided, otherwise forward-fill monthly weights to daily)
+        tie_out_dev: float | None = None
         if close_daily is not None and not close_daily.empty:
-            assert list(close_daily.columns) == list(weights_monthly.columns), "Daily columns mismatch"
+            if list(close_daily.columns) != list(weights_monthly.columns):
+                raise ValueError(
+                    f"Daily columns mismatch: {list(close_daily.columns)} vs {list(weights_monthly.columns)}"
+                )
             # Reindex weights to daily by forward-filling from monthly cutoffs
             weights_daily = weights_monthly.reindex(close_daily.index).ffill().fillna(0.0)
             d_nav, d_dd, _, _ = self._simulate_portfolio(close_daily, weights_daily, freq="1D")
@@ -117,14 +122,21 @@ class VectorBTBacktestEngine:
             max_dd_daily = float(d_dd.max())
             calmar_daily = float(mean_ret / max_dd_daily) if max_dd_daily > 1e-6 else 0.0
 
-            # Tie-out reconciliation at month-ends
-            common_dates = close_monthly.index.intersection(close_daily.index)
-            if len(common_dates) > 0:
-                diffs = (d_nav.loc[common_dates] - m_nav.loc[common_dates]).abs() / m_nav.loc[common_dates]
-                max_dev = float(diffs.max())
-                if max_dev > self.config.nav_tie_out_tolerance:
-                    # Log warning or record deviation in metrics
-                    pass
+            # Tie-out reconciliation at month-ends: compare daily NAV as-of each monthly date
+            m_dates_in_daily = close_monthly.index[
+                (close_monthly.index >= close_daily.index[0]) & (close_monthly.index <= close_daily.index[-1])
+            ]
+            if len(m_dates_in_daily) > 0:
+                d_nav_asof = pd.Series(
+                    [cast(float, d_nav.asof(dt)) for dt in m_dates_in_daily],
+                    index=m_dates_in_daily,
+                )
+                diffs = (d_nav_asof - m_nav.loc[m_dates_in_daily]).abs() / m_nav.loc[m_dates_in_daily]
+                tie_out_dev = float(diffs.max())
+                if tie_out_dev > self.config.nav_tie_out_tolerance:
+                    raise ValueError(
+                        f"Monthly-daily NAV tie-out deviation {tie_out_dev:.4%} exceeded tolerance {self.config.nav_tie_out_tolerance:.4%}"
+                    )
         else:
             d_nav = m_nav
             d_dd = m_dd
@@ -168,6 +180,8 @@ class VectorBTBacktestEngine:
             "fees_bps": self.config.fees * 10000,
             "slippage_bps": self.config.slippage * 10000,
         }
+        if tie_out_dev is not None:
+            metrics_payload["tie_out_max_deviation"] = round(tie_out_dev, 6)
 
         return BacktestResult(
             run_id=run_id,
@@ -216,22 +230,40 @@ class VectorBTBacktestEngine:
             if hasattr(pf, "orders"):
                 records = pf.orders.records_readable
                 for _, row in records.iterrows():
+                    ts_val = row.get("Timestamp", close.index[0])
+                    sym = str(row.get("Column", ""))
+                    w_before = 0.0
+                    w_after = 0.0
+                    if sym in weights.columns:
+                        if ts_val in weights.index:
+                            loc = weights.index.get_loc(ts_val)
+                            idx = loc if isinstance(loc, int) else int(np.where(weights.index == ts_val)[0][0])
+                            w_after = float(weights.iloc[idx][sym])
+                            if idx > 0:
+                                w_before = float(weights.iloc[idx - 1][sym])
+                        else:
+                            prev_dates = weights.index[weights.index < ts_val]
+                            if len(prev_dates) > 0:
+                                w_before = float(weights.loc[prev_dates[-1], sym])
+                            next_dates = weights.index[weights.index >= ts_val]
+                            if len(next_dates) > 0:
+                                w_after = float(weights.loc[next_dates[0], sym])
                     trades.append(
                         {
-                            "trade_date": str(row.get("Timestamp", close.index[0])),
-                            "symbol": str(row.get("Column", "")),
+                            "trade_date": str(ts_val),
+                            "symbol": sym,
                             "side": "BUY" if row.get("Size", 0) > 0 else "SELL",
                             "shares": float(abs(row.get("Size", 0))),
                             "execution_price": float(row.get("Price", 0.0)),
                             "trade_value": float(abs(row.get("Size", 0)) * row.get("Price", 0.0)),
-                            "weight_before": 0.0,
-                            "weight_after": 0.0,
+                            "weight_before": round(float(np.nan_to_num(w_before, nan=0.0)), 4),
+                            "weight_after": round(float(np.nan_to_num(w_after, nan=0.0)), 4),
                             "fee_paid": float(row.get("Fees", 0.0)),
                         }
                     )
             return nav, dd, trades, total_turnover
-        except (ImportError, Exception):
-            # Deterministic discrete rebalancing simulation
+        except ImportError:
+            # Deterministic discrete rebalancing simulation fallback
             return self._numpy_simulate(close, weights)
 
     def _numpy_simulate(

@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 from factors.backtest.engine import (
     BacktestEngineConfig,
     VectorBTBacktestEngine,
@@ -67,7 +68,8 @@ def test_backtest_dual_resolution_tie_out():
     # Generate daily data for the last 6 months
     start_d = close_m.index[6]
     end_d = close_m.index[-1]
-    daily_dates = pd.date_range(start_d, end_d, freq="B")
+    # Ensure daily index includes the monthly dates so reconciliation logic is exercised
+    daily_dates = pd.bdate_range(start_d, end_d).union(close_m.index[6:]).sort_values()
 
     # Interpolate daily close from monthly
     close_d = close_m.reindex(close_m.index.union(daily_dates)).interpolate(method="time").reindex(daily_dates)
@@ -79,3 +81,44 @@ def test_backtest_dual_resolution_tie_out():
     assert res.sharpe_daily != 0.0
     assert len(res.valuations_daily) == len(daily_dates)
     assert len(res.valuations_monthly) == len(close_m)
+    # Verify tie-out reconciliation was exercised and recorded in metrics_payload
+    assert "tie_out_max_deviation" in res.metrics_payload
+    assert res.metrics_payload["tie_out_max_deviation"] <= engine.config.nav_tie_out_tolerance
+
+
+def test_backtest_dual_resolution_tie_out_exceeds_tolerance_raises():
+    close_m, weights_m = _generate_synthetic_data(n_months=12, n_symbols=3)
+    start_d = close_m.index[6]
+    end_d = close_m.index[-1]
+    daily_dates = pd.bdate_range(start_d, end_d).union(close_m.index[6:]).sort_values()
+    close_d = close_m.reindex(close_m.index.union(daily_dates)).interpolate(method="time").reindex(daily_dates)
+
+    # With a strict tolerance like 0.0001 (1 bp), the ~1% daily rebalance deviation must raise ValueError
+    strict_engine = VectorBTBacktestEngine(BacktestEngineConfig(nav_tie_out_tolerance=0.0001))
+    with pytest.raises(ValueError, match="Monthly-daily NAV tie-out deviation"):
+        strict_engine.run("strategy_dual", "v1.0", "universe:test", close_m, weights_m, close_daily=close_d)
+
+
+def test_backtest_parameter_validation_raises():
+    close_df, weights_df = _generate_synthetic_data(n_months=12, n_symbols=3)
+    engine = VectorBTBacktestEngine()
+
+    # Column mismatch
+    bad_weights = weights_df.rename(columns={"SYM_0": "SYM_OTHER"})
+    with pytest.raises(ValueError, match="Asset mismatch"):
+        engine.run("strat", "v1", "u1", close_df, bad_weights)
+
+    # Unsorted monthly close
+    unsorted_close = close_df.iloc[::-1]
+    with pytest.raises(ValueError, match="Monthly index must be sorted"):
+        engine.run("strat", "v1", "u1", unsorted_close, weights_df)
+
+    # Unsorted monthly weights
+    unsorted_weights = weights_df.iloc[::-1]
+    with pytest.raises(ValueError, match="Weights index must be sorted"):
+        engine.run("strat", "v1", "u1", close_df, unsorted_weights)
+
+    # Daily column mismatch
+    bad_daily = close_df.rename(columns={"SYM_0": "SYM_OTHER"})
+    with pytest.raises(ValueError, match="Daily columns mismatch"):
+        engine.run("strat", "v1", "u1", close_df, weights_df, close_daily=bad_daily)
