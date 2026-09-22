@@ -326,4 +326,3 @@ def test_polars_compiler_non_float_is_nan_support() -> None:
     )
     res_str = df_str.with_columns(out=rank_expr)
     assert res_str["out"].to_list() == [1.0, 0.0]
-
