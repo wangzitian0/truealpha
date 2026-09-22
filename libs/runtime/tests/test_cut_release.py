@@ -408,4 +408,6 @@ def test_a_manual_release_never_explicitly_dispatches_the_walk(ceremony: Ceremon
 
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     walk_calls = workflow_dispatches(calls, "walk-release.yml")
-    assert walk_calls == [], f"a manual release must rely on the workflow_run cascade, not dispatch directly: {walk_calls}"
+    assert walk_calls == [], (
+        f"a manual release must rely on the workflow_run cascade, not dispatch directly: {walk_calls}"
+    )
