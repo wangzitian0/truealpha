@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -34,6 +34,10 @@ def test_as_utc_normalizes_timestamps() -> None:
 
     epoch = now_aware.timestamp()
     assert _as_utc(epoch) == now_aware
+
+    other_tz = timezone(timedelta(hours=8))
+    now_other = datetime(2026, 9, 21, 20, 0, 0, tzinfo=other_tz)
+    assert _as_utc(now_other) == now_aware
 
     with pytest.raises(TypeError):
         _as_utc("2026-09-21")  # type: ignore[arg-type]
@@ -385,7 +389,7 @@ def test_capture_run_of_handles_none_metadata() -> None:
     assert result is None
 
 
-def test_evaluate_red_when_pending_exceeds_max_window(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_evaluate_red_when_pending_exceeds_max_window() -> None:
     connection = MagicMock()
     instance = MagicMock(spec=dg.DagsterInstance)
     digest = "sha256:" + "a" * 64
@@ -490,3 +494,105 @@ def test_fetched_by_origin_aggregates_counts_and_filters_none() -> None:
     fake_conn = FakeConnection(rows)
     result = fetched_by_origin(fake_conn, "cap-1")  # type: ignore[arg-type]
     assert result == {"yahoo-chart:v1": 10, "twelve-data:v1": 20}
+
+
+def test_evaluate_recovers_when_earlier_run_had_missing_origins_but_later_run_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    instance = MagicMock(spec=dg.DagsterInstance)
+    digest = "sha256:" + "a" * 64
+    now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
+
+    canary_record = MagicMock()
+    canary_record.create_timestamp = now
+
+    run1 = MagicMock()
+    run1.job_name = "topt_live_pipeline"
+    run1.run_id = "run-succ-11111"
+    run1.tags = {SCHEDULE_TAG: "1"}
+    run1.run_config = {}
+    run1.status = dg.DagsterRunStatus.SUCCESS
+
+    record1 = MagicMock()
+    record1.create_timestamp = now + timedelta(minutes=10)
+    record1.dagster_run = run1
+
+    run2 = MagicMock()
+    run2.job_name = "topt_live_pipeline"
+    run2.run_id = "run-succ-22222"
+    run2.tags = {SCHEDULE_TAG: "1"}
+    run2.run_config = {}
+    run2.status = dg.DagsterRunStatus.SUCCESS
+
+    record2 = MagicMock()
+    record2.create_timestamp = now + timedelta(minutes=30)
+    record2.dagster_run = run2
+
+    def mock_get_run_records(filters: dg.RunsFilter, **kwargs: Any) -> list:
+        if filters.tags and BOOT_CANARY_TAG in filters.tags:
+            return [canary_record]
+        if filters.job_name == "topt_live_pipeline":
+            return [record1, record2]
+        return []
+
+    instance.get_run_records.side_effect = mock_get_run_records
+
+    monkeypatch.setattr(
+        release_fetch_proof,
+        "capture_run_of",
+        lambda inst, run_id: "cap-1" if run_id == "run-succ-11111" else "cap-2",
+    )
+
+    connection.execute.return_value.fetchone.return_value = (digest,)
+
+    expected = frozenset({"sec:v1", "yahoo-chart:v1"})
+    monkeypatch.setattr(release_fetch_proof, "expected_origins", lambda: expected)
+
+    def mock_fetched_by_origin(conn: Any, cap_id: str) -> dict[str, int]:
+        if cap_id == "cap-1":
+            return {"sec:v1": 10}
+        return {"sec:v1": 10, "yahoo-chart:v1": 20}
+
+    monkeypatch.setattr(release_fetch_proof, "fetched_by_origin", mock_fetched_by_origin)
+
+    proof = evaluate(connection, instance, digest=digest)
+    assert proof.state == OK
+    assert proof.ok is True
+    assert "fetched" in proof.summary
+
+
+def test_evaluate_red_when_in_progress_run_exceeds_max_window() -> None:
+    connection = MagicMock()
+    instance = MagicMock(spec=dg.DagsterInstance)
+    digest = "sha256:" + "a" * 64
+    boot_time = datetime.now(UTC) - timedelta(hours=27)
+
+    canary_record = MagicMock()
+    canary_record.create_timestamp = boot_time
+
+    in_progress_run = MagicMock()
+    in_progress_run.job_name = "topt_live_pipeline"
+    in_progress_run.run_id = "run-prog-12345"
+    in_progress_run.tags = {SCHEDULE_TAG: "1"}
+    in_progress_run.run_config = {}
+    in_progress_run.status = dg.DagsterRunStatus.STARTED
+
+    in_progress_record = MagicMock()
+    in_progress_record.create_timestamp = boot_time + timedelta(minutes=10)
+    in_progress_record.dagster_run = in_progress_run
+
+    def mock_get_run_records(filters: dg.RunsFilter, **kwargs: Any) -> list:
+        if filters.tags and BOOT_CANARY_TAG in filters.tags:
+            return [canary_record]
+        if filters.job_name == "topt_live_pipeline":
+            return [in_progress_record]
+        return []
+
+    instance.get_run_records.side_effect = mock_get_run_records
+
+    proof = evaluate(connection, instance, digest=digest)
+    assert proof.state == RED
+    assert proof.ok is False
+    assert "proof timed out" in proof.summary
+    assert "limit" in proof.summary

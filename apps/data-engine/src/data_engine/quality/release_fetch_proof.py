@@ -37,6 +37,7 @@ import psycopg
 from data_engine.config import settings
 from data_engine.datahub.production_topt.source_registrations import REGISTRATIONS, SourceRegistration
 from data_engine.lanes.capture import TICK_BY_JOB
+from data_engine.lanes.quality import UNFINISHED_RUN_STATUSES
 from data_engine.lanes.triggers import BOOT_CANARY_TAG
 
 #: Dagster's own tag on every run a schedule launched.
@@ -143,7 +144,7 @@ def _as_utc(stamp: datetime | float | int) -> datetime:
     if isinstance(stamp, (int, float)):
         return datetime.fromtimestamp(stamp, tz=UTC)
     if isinstance(stamp, datetime):
-        return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
+        return stamp.astimezone(UTC) if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
     raise TypeError(f"expected datetime or numeric timestamp, got {type(stamp)}")
 
 
@@ -165,8 +166,8 @@ def forced(run: dg.DagsterRun) -> bool:
     return bool(config.get("force_fetch") if isinstance(config, dict) else False)
 
 
-def first_fetching_run(instance: dg.DagsterInstance, since: datetime) -> dg.RunRecord | None:
-    """The earliest live-pipeline run created at or after `since` that had to fetch."""
+def fetching_runs(instance: dg.DagsterInstance, since: datetime) -> list[dg.RunRecord]:
+    """All live-pipeline runs created at or after `since` that had to fetch, ordered by creation time."""
     candidates: list[dg.RunRecord] = []
     for job_name in TICK_BY_JOB:
         records = instance.get_run_records(
@@ -179,17 +180,22 @@ def first_fetching_run(instance: dg.DagsterInstance, since: datetime) -> dg.RunR
             if _as_utc(record.create_timestamp) >= since
             and (record.dagster_run.tags.get(SCHEDULE_TAG) or forced(record.dagster_run))
         )
+    candidates.sort(key=lambda record: _as_utc(record.create_timestamp))
+    return candidates
+
+
+def first_fetching_run(instance: dg.DagsterInstance, since: datetime) -> dg.RunRecord | None:
+    """The earliest live-pipeline run created at or after `since` that had to fetch."""
+    candidates = fetching_runs(instance, since)
     if not candidates:
         return None
     successful = [c for c in candidates if c.dagster_run.status == dg.DagsterRunStatus.SUCCESS]
     if successful:
         return min(successful, key=lambda r: _as_utc(r.create_timestamp))
-    in_progress = [
-        c for c in candidates if c.dagster_run.status in (dg.DagsterRunStatus.QUEUED, dg.DagsterRunStatus.STARTED)
-    ]
+    in_progress = [c for c in candidates if c.dagster_run.status in UNFINISHED_RUN_STATUSES]
     if in_progress:
         return min(in_progress, key=lambda r: _as_utc(r.create_timestamp))
-    return min(candidates, key=lambda r: _as_utc(r.create_timestamp))
+    return candidates[0]
 
 
 def capture_run_of(instance: dg.DagsterInstance, run_id: str) -> str | None:
@@ -212,38 +218,20 @@ def _label(record: dg.RunRecord) -> str:
     return f"{how} {run.job_name} run {run.run_id[:8]}"
 
 
-def evaluate(
+def _evaluate_run(
     connection: psycopg.Connection[Any],
     instance: dg.DagsterInstance,
+    record: dg.RunRecord,
     *,
     digest: str,
-    now: datetime | None = None,
+    short: str,
 ) -> Proof:
-    digest = digest.strip()
-    if not digest.startswith("sha256:"):
-        return Proof(PENDING, "no data-engine image digest in this environment (local/CI)")
-    short = digest[:19]
-    since = deployment_started_at(instance, digest)
-    if since is None:
-        return Proof(PENDING, f"no boot canary run for {short}… yet; the deployment has not started its proof")
-    record = first_fetching_run(instance, since)
-    if record is None:
-        current_time = _as_utc(now) if now is not None else datetime.now(UTC)
-        pending_age = (current_time - since.astimezone(UTC)).total_seconds() / 3600.0
-        if pending_age > MAX_PROVING_WINDOW_HOURS:
-            return Proof(
-                RED,
-                f"{short}… awaiting its first tick for {pending_age:.1f}h (limit {MAX_PROVING_WINDOW_HOURS:g}h); proof timed out",
-            )
-        return Proof(
-            PENDING,
-            f"no scheduled or forced live-pipeline run since the deployment of {short}… at "
-            f"{since.astimezone(UTC).isoformat(timespec='minutes')}",
-        )
     label = _label(record)
     status = record.dagster_run.status
     if status in _FINISHED_RED:
         return Proof(RED, f"{label} ended {status.value.lower()} on {short}…")
+    if status in UNFINISHED_RUN_STATUSES:
+        return Proof(PENDING, f"{label} is {status.value.lower().replace('_', ' ')}")
     if status != dg.DagsterRunStatus.SUCCESS:
         return Proof(PENDING, f"{label} is {status.value.lower().replace('_', ' ')}")
     capture_run_id = capture_run_of(instance, record.dagster_run.run_id)
@@ -262,3 +250,58 @@ def evaluate(
     if missing:
         return Proof(RED, f"{label} fetched nothing from {', '.join(missing)} (reuse only or lost); fetched {counts}")
     return Proof(OK, f"{label} on {short}… fetched {counts}")
+
+
+def evaluate(
+    connection: psycopg.Connection[Any],
+    instance: dg.DagsterInstance,
+    *,
+    digest: str,
+    now: datetime | None = None,
+) -> Proof:
+    digest = digest.strip()
+    if not digest.startswith("sha256:"):
+        return Proof(PENDING, "no data-engine image digest in this environment (local/CI)")
+    short = digest[:19]
+    since = deployment_started_at(instance, digest)
+    if since is None:
+        return Proof(PENDING, f"no boot canary run for {short}… yet; the deployment has not started its proof")
+
+    current_time = _as_utc(now) if now is not None else datetime.now(UTC)
+    pending_age = (current_time - since.astimezone(UTC)).total_seconds() / 3600.0
+    is_timed_out = pending_age > MAX_PROVING_WINDOW_HOURS
+
+    candidates = fetching_runs(instance, since)
+
+    # 1. Any candidate run successfully proved the deployment?
+    for record in candidates:
+        if record.dagster_run.status == dg.DagsterRunStatus.SUCCESS:
+            proof = _evaluate_run(connection, instance, record, digest=digest, short=short)
+            if proof.state == OK:
+                return proof
+
+    # 2. Timeout watchdog: if pending exceeds window (no runs or in-progress runs stuck)
+    in_progress = [c for c in candidates if c.dagster_run.status in UNFINISHED_RUN_STATUSES]
+    if is_timed_out and (not candidates or in_progress):
+        return Proof(
+            RED,
+            f"{short}… awaiting its first tick for {pending_age:.1f}h (limit {MAX_PROVING_WINDOW_HOURS:g}h); proof timed out",
+        )
+
+    # 3. No candidate runs yet and not timed out
+    if not candidates:
+        return Proof(
+            PENDING,
+            f"no scheduled or forced live-pipeline run since the deployment of {short}… at "
+            f"{since.astimezone(UTC).isoformat(timespec='minutes')}",
+        )
+
+    # 4. In-progress run exists and not timed out
+    if in_progress:
+        earliest_in_prog = min(in_progress, key=lambda r: _as_utc(r.create_timestamp))
+        label = _label(earliest_in_prog)
+        status = earliest_in_prog.dagster_run.status
+        return Proof(PENDING, f"{label} is {status.value.lower().replace('_', ' ')}")
+
+    # 5. All candidate runs finished but none proved OK -> report failure from earliest candidate
+    return _evaluate_run(connection, instance, candidates[0], digest=digest, short=short)
