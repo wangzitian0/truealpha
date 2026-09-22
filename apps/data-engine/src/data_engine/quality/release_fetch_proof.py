@@ -268,42 +268,43 @@ def evaluate(
         return Proof(PENDING, f"no boot canary run for {short}… yet; the deployment has not started its proof")
 
     current_time = _as_utc(now) if now is not None else datetime.now(UTC)
-    pending_age = (current_time - since.astimezone(UTC)).total_seconds() / 3600.0
-    is_timed_out = pending_age > MAX_PROVING_WINDOW_HOURS
+    deployment_age = (current_time - since.astimezone(UTC)).total_seconds() / 3600.0
 
     candidates = fetching_runs(instance, since)
 
-    # 1. Any candidate run successfully proved the deployment?
-    for record in candidates:
+    # 1. Any candidate run successfully proved the deployment? (Iterate newest->oldest to short-circuit DB work)
+    for record in reversed(candidates):
         if record.dagster_run.status == dg.DagsterRunStatus.SUCCESS:
             proof = _evaluate_run(connection, instance, record, digest=digest, short=short)
             if proof.state == OK:
                 return proof
 
-    # 2. Timeout watchdog: if pending exceeds window (no runs or in-progress runs stuck)
-    in_progress = [c for c in candidates if c.dagster_run.status in UNFINISHED_RUN_STATUSES]
-    if is_timed_out and (not candidates or in_progress):
-        reason = (
-            f"in-progress run hung for {pending_age:.1f}h"
-            if in_progress
-            else f"awaiting its first tick for {pending_age:.1f}h"
-        )
-        return Proof(RED, f"{short}… {reason} (limit {MAX_PROVING_WINDOW_HOURS:g}h); proof timed out")
-
-    # 3. No candidate runs yet and not timed out
+    # 2. Timeout watchdog for deployment awaiting its first tick
     if not candidates:
+        if deployment_age > MAX_PROVING_WINDOW_HOURS:
+            return Proof(
+                RED,
+                f"{short}… awaiting its first tick for {deployment_age:.1f}h (limit {MAX_PROVING_WINDOW_HOURS:g}h); proof timed out",
+            )
         return Proof(
             PENDING,
             f"no scheduled or forced live-pipeline run since the deployment of {short}… at "
             f"{since.astimezone(UTC).isoformat(timespec='minutes')}",
         )
 
-    # 4. In-progress run exists and not timed out
+    # 3. Check in-progress runs
+    in_progress = [c for c in candidates if c.dagster_run.status in UNFINISHED_RUN_STATUSES]
     if in_progress:
         earliest_in_prog = min(in_progress, key=lambda r: _as_utc(r.create_timestamp))
+        run_age = (current_time - _as_utc(earliest_in_prog.create_timestamp)).total_seconds() / 3600.0
+        if run_age > MAX_PROVING_WINDOW_HOURS:
+            return Proof(
+                RED,
+                f"{short}… in-progress run hung for {run_age:.1f}h (limit {MAX_PROVING_WINDOW_HOURS:g}h); proof timed out",
+            )
         label = _label(earliest_in_prog)
         status = earliest_in_prog.dagster_run.status
         return Proof(PENDING, f"{label} is {status.value.lower().replace('_', ' ')}")
 
-    # 5. All candidate runs finished but none proved OK -> report failure from earliest candidate
+    # 4. All candidate runs finished but none proved OK -> report failure from earliest candidate
     return _evaluate_run(connection, instance, candidates[0], digest=digest, short=short)

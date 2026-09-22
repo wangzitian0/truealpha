@@ -597,3 +597,38 @@ def test_evaluate_red_when_in_progress_run_exceeds_max_window() -> None:
     assert "in-progress run hung" in proof.summary
     assert "proof timed out" in proof.summary
     assert "limit" in proof.summary
+
+
+def test_evaluate_pending_when_recent_in_progress_run_on_old_deployment() -> None:
+    connection = MagicMock()
+    instance = MagicMock(spec=dg.DagsterInstance)
+    digest = "sha256:" + "a" * 64
+    now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
+    boot_time = now - timedelta(hours=27)
+
+    canary_record = MagicMock()
+    canary_record.create_timestamp = boot_time
+
+    in_progress_run = MagicMock()
+    in_progress_run.job_name = "topt_live_pipeline"
+    in_progress_run.run_id = "run-prog-recent"
+    in_progress_run.tags = {SCHEDULE_TAG: "1"}
+    in_progress_run.run_config = {}
+    in_progress_run.status = dg.DagsterRunStatus.STARTED
+
+    in_progress_record = MagicMock()
+    in_progress_record.create_timestamp = now - timedelta(minutes=10)
+    in_progress_record.dagster_run = in_progress_run
+
+    def mock_get_run_records(filters: dg.RunsFilter, **kwargs: Any) -> list:
+        if filters.tags and BOOT_CANARY_TAG in filters.tags:
+            return [canary_record]
+        if filters.job_name == "topt_live_pipeline":
+            return [in_progress_record]
+        return []
+
+    instance.get_run_records.side_effect = mock_get_run_records
+
+    proof = evaluate(connection, instance, digest=digest, now=now)
+    assert proof.state == PENDING
+    assert "is started" in proof.summary
