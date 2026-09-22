@@ -621,8 +621,7 @@ def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decim
     from.
     """
     raw_ref = (
-        f"{_RAW_REF_PREFIX}:{record.source}:{record.symbol}:{record.resolution}:"
-        f"{record.date.isoformat()}:{adjust}"
+        f"{_RAW_REF_PREFIX}:{record.source}:{record.symbol}:{record.resolution}:{record.date.isoformat()}:{adjust}"
     )
     return xnys_session_close_utc(record.date), SINGLE_SOURCE_CONFIDENCE, raw_ref
 
