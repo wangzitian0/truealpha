@@ -247,6 +247,16 @@ def _evaluate_issuer(
     )
     band = definition.tier_valuation.band_for(labor_efficiency)
     target_ps = _quantize((band.target_ps_lower_bound + band.target_ps_upper_bound) / Decimal(2), tier_q)
+    if tier_result.value is None:
+        return (
+            _excluded(
+                issuer.issuer_id,
+                ExclusionReason.MISSING_MARKET_VALUE_INPUT,
+                confidence=tier_result.confidence,
+            ),
+            None,
+        )
+
     valuation_gap = _quantize(tier_result.value, gap_q)
     confidence = tier_result.confidence
 

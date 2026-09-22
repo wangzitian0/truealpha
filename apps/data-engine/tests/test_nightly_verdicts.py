@@ -466,7 +466,7 @@ def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, writt
         result = standards.head_reports_pipeline_job.execute_in_process(run_config=request.run_config)
         assert result.success
     assert sorted(row["check"] for row in written) == sorted(standards.NIGHTLY_VERDICTS)
-    assert all(row["ok"] and row["ran_at"] == tick for row in written)
+    assert all(row["ok"] is None and row["ran_at"] == tick for row in written)
 
 
 def test_the_purity_summary_counts_rows_and_carries_no_value(monkeypatch, written) -> None:

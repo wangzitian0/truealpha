@@ -82,6 +82,20 @@ def test_nonpositive_revenue_is_excluded_not_divided() -> None:
     assert result.flags == ["nonpositive_revenue"]
 
 
+@pytest.mark.parametrize("metric", ["price", "shares_outstanding"])
+def test_nonpositive_market_value_input_is_excluded(metric: str) -> None:
+    facts = [
+        _fact("price", "0" if metric == "price" else "50"),
+        _fact("shares_outstanding", "0" if metric == "shares_outstanding" else "1000000"),
+        _fact("revenue", "20000000"),
+    ]
+
+    result = price_to_sales(facts, entity_id="e1", as_of=_AS_OF)
+
+    assert result.value is None
+    assert result.flags == ["nonpositive_market_value"]
+
+
 def test_qlib_expression_reproduces_the_decimal_result() -> None:
     """Matrix-compatible cross-check: the pinned Qlib runtime must reproduce
     the same value as the native Decimal computation above (#21 criterion 3

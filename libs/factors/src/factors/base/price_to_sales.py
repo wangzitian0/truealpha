@@ -130,6 +130,18 @@ def price_to_sales(
     assert price_fact is not None and shares_fact is not None and revenue_fact is not None
     assert price_fact.value is not None and shares_fact.value is not None and revenue_fact.value is not None
 
+    if price_fact.value <= 0 or shares_fact.value <= 0:
+        return FactorResult(
+            factor="price_to_sales",
+            entity_id=entity_id,
+            value=None,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal(0),
+            as_of=as_of,
+            data_availability="unverified",
+            flags=["nonpositive_market_value"],
+        )
+
     if revenue_fact.value <= 0:
         return FactorResult(
             factor="price_to_sales",
