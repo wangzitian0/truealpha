@@ -882,6 +882,66 @@ def test_auto_release_checks_out_a_local_main_with_full_tag_history() -> None:
     assert checkout["with"]["fetch-depth"] == 0
 
 
+def test_auto_release_pushes_the_tag_with_a_real_user_token_not_github_token() -> None:
+    """#940: v0.0.87's tag push ran under the default GITHUB_TOKEN, and
+    GitHub's recursive-workflow guard silently drops any run-triggering event
+    produced by a push made with that token — the tag was pushed, claimed its
+    number, and 0 workflow runs ever started for it (measured: v0.0.86, pushed
+    by a human, triggered `ci-required` normally the same day). A live probe
+    on a throwaway branch/tag reproduced the same split before this fix
+    landed: INFRA2_PAT push -> 1 downstream run, github.token push -> 0. The
+    guard does not apply to a PAT (it is tied to a real user — `gh api user`
+    resolves INFRA2_PAT to the repo owner, not github-actions[bot]), so the
+    checkout must carry it: everything else in this job's git operations,
+    including cut_release.sh's own `git push origin $TAG`, inherits whatever
+    credential checkout configures.
+
+    This only proves the workflow's SHAPE — that the field is wired — not
+    that GitHub's live recursion guard behaves as documented; that half is
+    platform behaviour no unit test can exercise (the same honest limitation
+    #936 already flagged for this file) and was instead verified by the probe
+    above, by hand, against the real repository."""
+    checkout = next(
+        spec
+        for spec in job(AUTO_RELEASE, "release")["steps"]
+        if str(spec.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"].get("token") == "${{ secrets.INFRA2_PAT }}", (
+        "the tag push must run under a real-user credential, not this workflow's own "
+        "GITHUB_TOKEN, or its push triggers nothing downstream (#940)"
+    )
+
+
+def test_auto_release_fails_closed_before_checkout_when_the_push_credential_is_missing() -> None:
+    """A missing or rotated INFRA2_PAT must not silently fall through to a
+    bare `actions/checkout` (which would default back to github.token,
+    reintroducing #940) or fail later on checkout's own opaque auth error."""
+    release_steps = job(AUTO_RELEASE, "release")["steps"]
+    names = [s.get("name") for s in release_steps]
+    guard_index = names.index("Require a push credential GitHub's own token cannot provide")
+    checkout_index = next(
+        i for i, s in enumerate(release_steps) if str(s.get("uses", "")).startswith("actions/checkout")
+    )
+    assert guard_index < checkout_index, "the guard must run before checkout can fall back to github.token"
+    guard = release_steps[guard_index]
+    assert "secrets.INFRA2_PAT" in spec_text(guard)
+    assert "exit 1" in spec_text(guard)
+
+
+def test_auto_release_reads_the_push_credential_from_env_not_inlined_in_the_script() -> None:
+    """#941 review: the guard's secret check must come through `env:`, the
+    same pattern deploy-release.yml's own INFRA2_PAT check already uses — not
+    spliced directly into the `run:` block, which would put the secret
+    reference inside the rendered shell text `${{ }}`-expanded rather than
+    read from a shell variable."""
+    guard = step(AUTO_RELEASE, "Require a push credential GitHub's own token cannot provide")
+    assert guard.get("env", {}).get("INFRA2_PAT") == "${{ secrets.INFRA2_PAT }}"
+    assert "secrets.INFRA2_PAT" not in str(guard.get("run", "")), (
+        "the secret must be read from the env var, not interpolated directly into run:"
+    )
+    assert "INFRA2_PAT" in str(guard.get("run", "")), "the run: block must still read the env var it was given"
+
+
 def test_auto_release_configures_a_git_identity_before_tagging() -> None:
     """No other workflow in this repository creates a `git commit` or `git tag
     -a` — they all go through `gh`, which needs no local identity. This is the
@@ -939,12 +999,14 @@ def test_auto_release_is_serialised_so_two_decisions_never_race_one_tag() -> Non
 
 
 def test_auto_release_has_only_the_permissions_it_needs() -> None:
-    """`contents: write` to push the tag, `actions: write` to dispatch and poll
-    the deploy/walk/tag-CI runs, `pull-requests: read` for the derived PR
-    review-thread check — nothing broader."""
+    """`contents: read` for github.token's own `gh api`/`gh run list` reads of
+    main and tag history (#941 review: the tag PUSH runs under INFRA2_PAT, not
+    this token, so it no longer needs `write`), `actions: write` to dispatch
+    and poll the deploy/walk/tag-CI runs, `pull-requests: read` for the
+    derived PR review-thread check — nothing broader."""
     workflow = yaml.safe_load(source(AUTO_RELEASE))
     permissions = workflow["permissions"]
-    assert permissions["contents"] == "write"
+    assert permissions["contents"] == "read"
     assert permissions["actions"] == "write"
     assert permissions["pull-requests"] == "read"
     assert set(permissions) == {"contents", "actions", "pull-requests"}

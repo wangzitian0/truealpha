@@ -37,8 +37,13 @@ on:
     branches: [main]
 
 permissions:
-  # `git push origin vX.Y.Z` (tools/cut_release.sh).
-  contents: write
+  # `git push origin vX.Y.Z` (tools/cut_release.sh) runs under INFRA2_PAT, not
+  # this token (#940): checkout is given the PAT explicitly, so GITHUB_TOKEN
+  # never writes contents in this job. `read` still covers everything
+  # `github.token` itself does here — `tools/auto_release.py`'s
+  # `GET /repos/.../commits/main` and cut_release.sh's own `gh api`/`gh run
+  # list` reads of main and the tag's history.
+  contents: read
   # `gh workflow run` / `gh run list` / `gh run view` to dispatch and poll the
   # staging deploy, the surface walk, and the tag's own ci-required.
   actions: write
@@ -65,6 +70,35 @@ jobs:
         # test_auto_release.py — 1200s = 20 * 60.
         run: sleep 1200
 
+      - name: Require a push credential GitHub's own token cannot provide
+        # #940: `tools/cut_release.sh`'s `git push origin $TAG` a few steps
+        # down used the default GITHUB_TOKEN, and GitHub's recursive-workflow
+        # guard silently drops any run-triggering event produced by a push
+        # made WITH that token — "using the GITHUB_TOKEN... will not create a
+        # new workflow run" (GitHub Actions docs on triggering workflows from
+        # a workflow). Measured directly against this repository: v0.0.87,
+        # pushed by this workflow's own github.token, triggered 0 workflow
+        # runs; v0.0.86, pushed by a human, triggered ci-required normally.
+        # A probe on a throwaway branch/tag reproduced the same split live
+        # (INFRA2_PAT: 1 downstream run; github.token: 0) before this fix
+        # landed. The guard does not apply to a PAT — it is tied to a real
+        # user (`gh api user` resolves INFRA2_PAT to the owner account, not
+        # github-actions[bot]) — so the checkout below is given INFRA2_PAT
+        # instead, and every git command for the rest of this job (including
+        # cut_release.sh's tag push) inherits it through
+        # actions/checkout's persist-credentials. Failing here beats checkout
+        # failing on an opaque auth error. The secret is passed through `env:`
+        # rather than interpolated into this `run:` block directly (the same
+        # pattern deploy-release.yml's own INFRA2_PAT check uses) so its value
+        # is never spliced into the generated shell text.
+        env:
+          INFRA2_PAT: ${{ secrets.INFRA2_PAT }}
+        run: |
+          if [ -z "${INFRA2_PAT:-}" ]; then
+            echo "::error::INFRA2_PAT is required to push a release tag that can trigger its own ci-required run (#940)"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           # Explicit, not left to default `github.ref`: `tools/cut_release.sh`
@@ -75,6 +109,11 @@ jobs:
           # every release tag locally (`git for-each-ref refs/tags`), and
           # `tools/cut_release.sh` walks main's own log back to the last one.
           fetch-depth: 0
+          # #940: a real user PAT, not github.token — see the step above.
+          # `persist-credentials` (default true) carries this token to every
+          # later git command in this job, in particular cut_release.sh's
+          # `git push origin $TAG`.
+          token: ${{ secrets.INFRA2_PAT }}
 
       - name: Configure git identity for the release tag
         # No other workflow in this repository creates a `git commit` or an
