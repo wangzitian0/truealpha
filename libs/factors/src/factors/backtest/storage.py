@@ -11,7 +11,7 @@ from factors.backtest.engine import BacktestResult
 def persist_backtest_result(conn_or_cursor: Any, result: BacktestResult) -> None:
     """Write BacktestResult into mart.backtest_runs, mart.backtest_valuations, and mart.backtest_trades.
 
-    Enforces delete-then-insert idempotency on trade records and valuation records by run_id,
+    Enforces delete-then-insert idempotency on trade records by run_id (and upsert on runs and valuations),
     guaranteeing repeated runs never duplicate trades.
     """
     is_conn = hasattr(conn_or_cursor, "cursor")

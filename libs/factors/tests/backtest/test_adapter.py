@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import polars as pl
+import pytest
 from factors.backtest.adapter import (
     compile_factor_panel,
     compute_topk_dropout_weights,
@@ -91,6 +92,25 @@ def test_compile_factor_panel_missing_mask_defaults_to_ineligible_fail_closed() 
     msft_rows = panel.filter(pl.col("symbol") == "MSFT").sort("date")
     assert msft_rows["factor_value"][0] is None  # absent from mask -> False -> None
     assert msft_rows["factor_value"][1] is None  # absent date from mask -> False -> None
+
+
+def test_compile_factor_panel_mask_missing_eligible_raises() -> None:
+    """Anti-Puppet: passing mask_df without 'eligible' column must raise ValueError."""
+    prices = pl.DataFrame(
+        {
+            "date": ["2023-01-31"],
+            "symbol": ["AAPL"],
+            "close": [150.0],
+        }
+    )
+    mask_without_eligible = pl.DataFrame(
+        {
+            "cutoff_date": ["2023-01-31"],
+            "symbol": ["AAPL"],
+        }
+    )
+    with pytest.raises(ValueError, match="mask_df must contain 'eligible' column"):
+        compile_factor_panel("close", prices, mask_df=mask_without_eligible)
 
 
 def test_topk_absent_mask_row_is_ineligible() -> None:

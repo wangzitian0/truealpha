@@ -17,7 +17,7 @@ def _to_pandas(df: pl.DataFrame | pd.DataFrame) -> pd.DataFrame:
         return df.copy()
     try:
         return df.to_pandas()
-    except (ModuleNotFoundError, Exception):
+    except (ModuleNotFoundError, ImportError):
         return pd.DataFrame(df.to_dict(as_series=False))
 
 
@@ -71,6 +71,8 @@ def compile_factor_panel(
     # Apply dynamic universe mask if provided (Fail-Closed: missing mask row -> eligible = False)
     if mask_df is not None:
         mdf = _to_polars(mask_df)
+        if "eligible" not in mdf.columns:
+            raise ValueError("mask_df must contain 'eligible' column")
         m_date_col = _find_date_col(mdf.columns)
         join_right_cols = ["symbol", m_date_col, "eligible"]
         avail_right_cols = [c for c in join_right_cols if c in mdf.columns]
