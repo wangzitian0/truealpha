@@ -999,11 +999,14 @@ def test_auto_release_is_serialised_so_two_decisions_never_race_one_tag() -> Non
 
 
 def test_auto_release_has_only_the_permissions_it_needs() -> None:
-    """`contents: read` for github.token's own `gh api`/`gh run list` reads of
-    main and tag history (#941 review: the tag PUSH runs under INFRA2_PAT, not
-    this token, so it no longer needs `write`), `actions: write` to dispatch
-    and poll the deploy/walk/tag-CI runs, `pull-requests: read` for the
-    derived PR review-thread check — nothing broader."""
+    """`contents: read` for the one contents read `github.token` still does —
+    `tools/auto_release.py`'s `GET /repos/.../commits/main` (#941 review: the
+    tag PUSH runs under INFRA2_PAT, not this token, so it no longer needs
+    `write`). `gh run list` / `gh run view` (main's ci-required, the tag's own
+    ci-required, the deploy/walk runs) are the Actions API, not `contents` —
+    covered by `actions: write`, which also dispatches the staging deploy and
+    surface walk. `pull-requests: read` is for the derived PR review-thread
+    check. Nothing broader."""
     workflow = yaml.safe_load(source(AUTO_RELEASE))
     permissions = workflow["permissions"]
     assert permissions["contents"] == "read"

@@ -39,13 +39,18 @@ on:
 permissions:
   # `git push origin vX.Y.Z` (tools/cut_release.sh) runs under INFRA2_PAT, not
   # this token (#940): checkout is given the PAT explicitly, so GITHUB_TOKEN
-  # never writes contents in this job. `read` still covers everything
-  # `github.token` itself does here — `tools/auto_release.py`'s
-  # `GET /repos/.../commits/main` and cut_release.sh's own `gh api`/`gh run
-  # list` reads of main and the tag's history.
+  # never writes contents in this job. `read` covers the one contents read
+  # `github.token` itself still does — `tools/auto_release.py`'s
+  # `GET /repos/.../commits/main`. Nothing else in this job reads or writes
+  # contents through this token: `gh run list` / `gh run view` below (main's
+  # ci-required, the tag's own ci-required, the deploy/walk runs) are the
+  # Actions API, governed by `actions`, not `contents` — see the next
+  # permission.
   contents: read
-  # `gh workflow run` / `gh run list` / `gh run view` to dispatch and poll the
-  # staging deploy, the surface walk, and the tag's own ci-required.
+  # Actions API: `gh workflow run` / `gh run list` / `gh run view`, to
+  # dispatch and poll the staging deploy, the surface walk, and the tag's own
+  # ci-required — this is what covers cut_release.sh's own polling of main
+  # HEAD's and the tag's run history, not `contents` above.
   actions: write
   # `gh pr view` / the review-thread GraphQL query, for the derived --prs batch.
   pull-requests: read
