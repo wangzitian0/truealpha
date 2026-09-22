@@ -55,8 +55,10 @@ class PostgresToptReadRepository:
                 from mart.topt_capture_status s
                 join mart.datahub_quality_report q on q.run_id = s.run_id
                 where s.environment = (select environment from mart.environment_identity) and s.complete
+                and s.universe_id like %s
                 order by q.created_at desc, q.report_id desc limit 1
-                """
+                """,
+                (f"{SERVED_UNIVERSE_PREFIX}%",),
             ).fetchone()
         return None if row is None else row[0]
 

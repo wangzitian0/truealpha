@@ -105,6 +105,8 @@ function fakeRunner(
   assert("cells" in result, `expected a report, got unavailable: ${JSON.stringify(result)}`);
   assert(result.run_id === RUN_ID, "run_id must round-trip from the fallback head query");
   assert(calls.some((c) => c.sql.includes("current_pointer_head")), "must try the pointer first");
+  const fallbackCall = calls.find((c) => c.sql.includes("topt_capture_status") && c.sql.includes("datahub_quality_report"));
+  assert(fallbackCall !== undefined && fallbackCall.sql.includes("universe_id like 'universe:topt-%'"), "fallback query must filter to universe:topt-%");
 
   console.log("#434 topt-gppe-repository acceptance-fallback ready path passed");
 }
@@ -123,6 +125,8 @@ function fakeRunner(
   assert(!("cells" in result), "expected unavailable when no head resolves");
   assert(result.reason.includes("no accepted"), `unexpected reason: ${result.reason}`);
   assert(calls.length === 2, `expected exactly two queries (pointer, then fallback), got ${calls.length}`);
+  const fallbackCall = calls.find((c) => c.sql.includes("topt_capture_status"));
+  assert(fallbackCall !== undefined && fallbackCall.sql.includes("universe_id like 'universe:topt-%'"), "fallback query must filter to universe:topt-%");
 
   console.log("#433 topt-gppe-repository no-accepted-run path passed");
 }

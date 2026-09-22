@@ -22,6 +22,7 @@ from typing import Any
 import psycopg
 from truealpha_contracts import topt_read as topt_read_module
 from truealpha_contracts.topt_read import PostgresToptGppeRepository
+from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
 
 RUN_ID = "capture-run:" + "b" * 64
 
@@ -97,7 +98,10 @@ def test_latest_resolves_head_from_current_pointer_before_the_acceptance_fallbac
 
 
 def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkeypatch: Any) -> None:
-    def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
+    calls: list[tuple[str, Any]] = []
+
+    def responder(sql: str, params: Any) -> list[dict[str, Any]]:
+        calls.append((sql, params))
         if "current_pointer_head" in sql:
             return []
         if "obligation_count" in sql:
@@ -118,6 +122,35 @@ def test_latest_falls_back_to_acceptance_gated_join_when_pointer_is_empty(monkey
     assert report.run_id == RUN_ID
     assert report.cells == ()
     assert report.quality is None
+
+    fallback_call = next((s, p) for s, p in calls if "topt_capture_status" in s and "datahub_quality_report" in s)
+    assert "universe_id like %s" in fallback_call[0]
+    assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)
+
+
+def test_latest_fallback_returns_unavailable_when_only_canary_run_exists(monkeypatch: Any) -> None:
+    calls: list[tuple[str, Any]] = []
+
+    def responder(sql: str, params: Any) -> list[dict[str, Any]]:
+        calls.append((sql, params))
+        if "current_pointer_head" in sql:
+            return []
+        if "topt_capture_status" in sql and "datahub_quality_report" in sql:
+            if params and params == (f"{SERVED_UNIVERSE_PREFIX}%",):
+                return []
+            return [{"run_id": "capture-run:canary"}]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    _install_fake_connect(monkeypatch, responder)
+    repo = PostgresToptGppeRepository(database_url="postgresql://unused/unused")
+
+    result = repo.latest()
+
+    assert isinstance(result, topt_read_module.ToptGppeUnavailable)
+    assert result.reason == "no accepted (quality-reported) production TOPT run"
+    fallback_call = next((s, p) for s, p in calls if "topt_capture_status" in s and "datahub_quality_report" in s)
+    assert "universe_id like %s" in fallback_call[0]
+    assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)
 
 
 def test_requested_count_follows_the_runs_own_denominator(monkeypatch: Any) -> None:

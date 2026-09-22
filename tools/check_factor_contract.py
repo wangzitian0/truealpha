@@ -352,6 +352,15 @@ def main() -> int:
                     "it serves whichever pipeline advanced last"
                 )
                 break
+        for block in re.finditer(r"from mart\.topt_capture_status(?P<body>.{0,600})", text, re.S):
+            body = re.sub(r"--[^\n]*", "", block.group("body"))
+            if "datahub_quality_report" in body and "universe_id" not in body:
+                failures.append(
+                    f"{path.relative_to(REPO)} resolves mart.topt_capture_status without a "
+                    "universe predicate — the universe is part of the governed key, and dropping "
+                    "it serves whichever pipeline advanced last"
+                )
+                break
 
     # --- I2: one encoder, one parser. Nobody re-implements the period-tag format ---
     for path in sorted((REPO / "libs").rglob("*.py")) + sorted((REPO / "apps").rglob("*.py")):
