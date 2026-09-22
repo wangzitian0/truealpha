@@ -46,6 +46,14 @@
       "live": true
     },
     {
+      "path": "/research/backtest",
+      "live": true
+    },
+    {
+      "path": "/research/backtest/[id]",
+      "live": true
+    },
+    {
       "path": "/research/entities/[id]",
       "live": true
     },
