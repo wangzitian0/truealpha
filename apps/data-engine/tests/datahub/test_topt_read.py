@@ -1,11 +1,32 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from typing import Any
 
 import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.topt_read import PostgresToptReadRepository
+from truealpha_contracts.universes import SERVED_UNIVERSE_PREFIX
+
+
+class _FakeCursor:
+    def __init__(self, row: Any = None) -> None:
+        self._row = row
+
+    def fetchone(self) -> Any:
+        return self._row
+
+
+class _FakeConnection:
+    def __init__(self, responder: Callable[[str, Any], Any]) -> None:
+        self._responder = responder
+        self.calls: list[tuple[str, Any]] = []
+
+    def execute(self, sql: str, params: Any = None) -> _FakeCursor:
+        self.calls.append((sql, params))
+        return _FakeCursor(self._responder(sql, params))
 
 
 @pytest.fixture
@@ -64,3 +85,46 @@ def test_limit_is_bounded(connection) -> None:
     repo = PostgresToptReadRepository(connection)
     with pytest.raises(ValueError, match="limit must be between"):
         repo.gppe_results("capture-run:" + "a" * 64, limit=999)
+
+
+def test_fallback_head_scopes_to_served_universe() -> None:
+    run_id = "capture-run:" + "a" * 64
+
+    def responder(sql: str, params: Any) -> Any:
+        if "current_pointer_head" in sql:
+            return None
+        if "topt_capture_status" in sql and "datahub_quality_report" in sql:
+            if params and params == (f"{SERVED_UNIVERSE_PREFIX}%",):
+                return (run_id,)
+            return None
+        raise AssertionError(f"unexpected query: {sql}")
+
+    conn = _FakeConnection(responder)
+    repo = PostgresToptReadRepository(conn)  # type: ignore[arg-type]
+    resolved = repo.current_run_id()
+
+    assert resolved == run_id
+    fallback_call = next((s, p) for s, p in conn.calls if "topt_capture_status" in s)
+    assert "s.universe_id like %s" in fallback_call[0]
+    assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)
+
+
+def test_fallback_head_returns_none_when_only_canary_run_exists() -> None:
+    def responder(sql: str, params: Any) -> Any:
+        if "current_pointer_head" in sql:
+            return None
+        if "topt_capture_status" in sql and "datahub_quality_report" in sql:
+            # Query filters by universe:topt-%, so canary run is excluded
+            if params and params == (f"{SERVED_UNIVERSE_PREFIX}%",):
+                return None
+            return ("capture-run:canary",)
+        raise AssertionError(f"unexpected query: {sql}")
+
+    conn = _FakeConnection(responder)
+    repo = PostgresToptReadRepository(conn)  # type: ignore[arg-type]
+    resolved = repo.current_run_id()
+
+    assert resolved is None
+    fallback_call = next((s, p) for s, p in conn.calls if "topt_capture_status" in s)
+    assert "s.universe_id like %s" in fallback_call[0]
+    assert fallback_call[1] == (f"{SERVED_UNIVERSE_PREFIX}%",)

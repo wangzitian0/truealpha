@@ -42,6 +42,7 @@ const ACCEPTANCE_FALLBACK_HEAD_SQL = `
   join mart.datahub_quality_report q on q.run_id = s.run_id
   where s.environment = (select environment from mart.environment_identity)
     and s.complete
+    and s.universe_id like 'universe:topt-%'
   order by q.created_at desc, q.report_id desc limit 1
 `;
 
