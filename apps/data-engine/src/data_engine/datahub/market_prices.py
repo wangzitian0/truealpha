@@ -221,6 +221,39 @@ def most_recent_xnys_session(d: date) -> date:
 
 _XNYS_TZ = ZoneInfo("America/New_York")
 _XNYS_CLOSE_HOUR = 16
+_XNYS_EARLY_CLOSE_HOUR = 13
+
+
+def xnys_early_close_days(year: int) -> set[date]:
+    """Compute scheduled New York Stock Exchange (XNYS) 13:00 ET early-close days for a given year.
+
+    XNYS observes three scheduled early closes a year at 13:00 ET:
+    1. Day after Thanksgiving (always the 4th Friday in November).
+    2. December 24 (Christmas Eve), when it is an XNYS trading day.
+    3. July 3 (day before Independence Day), when it is an XNYS trading day (i.e. when July 4
+       falls on Tue, Wed, Thu, Fri; note that when July 4 is Saturday, July 3 is the observed
+       full holiday; when July 4 is Sunday, July 3 is Friday and regular hours, so early
+       close is when July 4 is Tue-Fri).
+    """
+    early_closes: set[date] = set()
+
+    # 1. Day after Thanksgiving (always the 4th Friday in November)
+    first_thu_nov = 1 + (3 - date(year, 11, 1).weekday()) % 7
+    thanksgiving = date(year, 11, first_thu_nov + 21)
+    early_closes.add(thanksgiving + timedelta(days=1))
+
+    # 2. December 24 (Christmas Eve), when it is an XNYS trading day
+    xmas_eve = date(year, 12, 24)
+    if is_xnys_trading_day(xmas_eve):
+        early_closes.add(xmas_eve)
+
+    # 3. July 3 (day before Independence Day), when it is an XNYS trading day
+    # (i.e. when July 4 falls on Tue, Wed, Thu, Fri)
+    july4 = date(year, 7, 4)
+    if july4.weekday() in (1, 2, 3, 4) and is_xnys_trading_day(date(year, 7, 3)):
+        early_closes.add(date(year, 7, 3))
+
+    return early_closes
 
 
 def xnys_session_close_utc(trading_date: date) -> datetime:
@@ -232,9 +265,10 @@ def xnys_session_close_utc(trading_date: date) -> datetime:
     date alone -- never `datetime.now()` (AGENTS.md: "Write transaction_time explicitly
     from a source property, never an insertion-clock default").
     """
-    local_close = datetime(
-        trading_date.year, trading_date.month, trading_date.day, _XNYS_CLOSE_HOUR, 0, tzinfo=_XNYS_TZ
+    close_hour = (
+        _XNYS_EARLY_CLOSE_HOUR if trading_date in xnys_early_close_days(trading_date.year) else _XNYS_CLOSE_HOUR
     )
+    local_close = datetime(trading_date.year, trading_date.month, trading_date.day, close_hour, 0, tzinfo=_XNYS_TZ)
     return local_close.astimezone(UTC)
 
 
