@@ -70,6 +70,34 @@ def test_compile_factor_panel_with_dynamic_universe_mask() -> None:
     assert row2["factor_value"][0] == 55.0  # Eligible in month 2 -> factor_value intact
 
 
+def test_compile_factor_panel_missing_mask_defaults_to_eligible() -> None:
+    prices = pl.DataFrame(
+        {
+            "date": ["2023-01-31", "2023-01-31", "2023-02-28"],
+            "symbol": ["AAPL", "MSFT", "MSFT"],
+            "close": [150.0, 200.0, 210.0],
+        }
+    )
+
+    # mask only contains AAPL for 2023-01-31 (explicitly False). MSFT and 2023-02-28 are not present in mask.
+    mask = pl.DataFrame(
+        {
+            "cutoff_date": ["2023-01-31"],
+            "symbol": ["AAPL"],
+            "eligible": [False],
+        }
+    )
+
+    panel = compile_factor_panel("close", prices, mask_df=mask)
+
+    aapl_row = panel.filter(pl.col("symbol") == "AAPL")
+    assert aapl_row["factor_value"][0] is None  # explicitly False -> None
+
+    msft_rows = panel.filter(pl.col("symbol") == "MSFT").sort("date")
+    assert msft_rows["factor_value"][0] == 200.0  # missing symbol from mask -> defaults to eligible
+    assert msft_rows["factor_value"][1] == 210.0  # missing date from mask -> defaults to eligible
+
+
 def test_compute_topk_dropout_weights_initial_cutoff() -> None:
     # 6 symbols in cutoff 1, top_k = 3
     factor_df = pl.DataFrame(

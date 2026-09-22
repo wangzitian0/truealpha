@@ -36,8 +36,8 @@ def compile_to_polars(
     - Mul(a, b) -> a * b
     - Div(a, b) -> safe division: pl.when(b == 0).then(None).otherwise(a / b)
     - Ref(x, n) -> x.shift(n).over(symbol_col) (requires prior sort on [symbol, date])
-    - Mean(x, n) -> x.rolling_mean(window_size=n, min_periods=n).over(symbol_col)
-    - Std(x, n) -> x.rolling_std(window_size=n, min_periods=n, ddof=1).over(symbol_col)
+    - Mean(x, n) -> x.rolling_mean(window_size=n, min_samples=n).over(symbol_col)
+    - Std(x, n) -> x.rolling_std(window_size=n, min_samples=n, ddof=1).over(symbol_col)
     - Rank(x) -> cross-sectional ranking (rank - 1)/(count - 1) normalized to [0, 1] over cutoff
     """
     if isinstance(node, pl.Expr):

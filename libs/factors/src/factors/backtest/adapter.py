@@ -91,11 +91,11 @@ def compile_factor_panel(
         )
         if "eligible" in pdf.columns:
             pdf = pdf.with_columns(
-                pl.when(pl.col("eligible") == True)  # noqa: E712
+                pl.when(pl.col("eligible").fill_null(True) == True)  # noqa: E712
                 .then(pl.col("factor_value"))
                 .otherwise(None)
                 .alias("factor_value"),
-                pl.when(pl.col("eligible") == True)  # noqa: E712
+                pl.when(pl.col("eligible").fill_null(True) == True)  # noqa: E712
                 .then(pl.col("factor_val"))
                 .otherwise(None)
                 .alias("factor_val"),
