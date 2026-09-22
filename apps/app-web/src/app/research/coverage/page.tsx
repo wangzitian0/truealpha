@@ -31,9 +31,11 @@ export default async function CoveragePage() {
         <p role="status" className="mt-4 rounded-lg border border-border bg-card p-4 text-gray-400">
           {outcome.kind === "unavailable"
             ? `No strategy run recorded yet (${outcome.detail.reason}).`
-            : outcome.kind === "error"
-              ? `Error loading coverage: ${outcome.message}`
-              : "Access denied. No verified session for this request."}
+            : outcome.kind === "empty"
+              ? "No decisions recorded for this strategy run."
+              : outcome.kind === "error"
+                ? `Error loading coverage: ${outcome.message}`
+                : "Access denied. No verified session for this request."}
         </p>
       </section>
     );

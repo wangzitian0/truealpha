@@ -97,10 +97,13 @@ class StrategyRunUnavailable(_StrictFrozenModel):
         "unknown_strategy_id",
         "fixture_missing",
         "fixture_hash_mismatch",
+        "fixture_not_found",
+        "fixture_corrupted",
         # #361: the Postgres-backed repository's fail-closed outcomes.
         "no_runs_recorded",
         "database_unavailable",
         "schema_mismatch",
+        "empty_decisions",
     ]
 
 

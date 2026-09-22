@@ -166,6 +166,42 @@ def test_fixture_repository_fails_closed_on_corrupt_json(monkeypatch: pytest.Mon
     assert result.reason == "fixture_hash_mismatch"
 
 
+def test_postgres_repository_returns_unavailable_when_decision_rows_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+
+    class _FakeCursor:
+        def __enter__(self) -> _FakeCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, _query: object, _params: object = None) -> None:
+            return None
+
+        def fetchone(self) -> dict[str, str]:
+            return {"strategy_run_id": "test_run", "corpus_sha256": "0" * 64}
+
+        def fetchall(self) -> list[object]:
+            return []
+
+    class _FakeConnection:
+        def __enter__(self) -> _FakeConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self, **_kwargs: object) -> _FakeCursor:
+            return _FakeCursor()
+
+    monkeypatch.setattr("psycopg.connect", lambda *args, **kwargs: _FakeConnection())
+    repository = PostgresStrategyRunRepository(database_url="postgresql://fake")
+    result = repository.get_latest(strategy_id="large_model_value_v0", context=_context())
+    assert isinstance(result, StrategyRunUnavailable)
+    assert result.reason == "empty_decisions"
+
+
 class _MissingAnchor:
     def joinpath(self, _name: str) -> _MissingAnchor:
         return self

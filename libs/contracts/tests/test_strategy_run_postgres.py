@@ -124,6 +124,18 @@ def test_returns_unavailable_when_no_runs_recorded(connection) -> None:
     assert result.reason == "no_runs_recorded"
 
 
+def test_returns_unavailable_when_decision_rows_is_empty(connection) -> None:
+    strategy_key = "large_model_value_v0"
+    run_id = "strategy-run:" + uuid.uuid4().hex + "0" * 32
+    _insert_run(connection, run_id, strategy_key, executed_at=datetime.now(UTC))
+
+    repository = PostgresStrategyRunRepository(database_url=_resolve_database_url())
+    result = repository.get_latest(strategy_id=strategy_key, context=_context())
+
+    assert isinstance(result, StrategyRunUnavailable)
+    assert result.reason == "empty_decisions"
+
+
 def test_returns_the_latest_run_with_real_decisions(connection) -> None:
     # StrategyRunReport.strategy_id is a narrow Literal["large_model_value_v0"]
     # -- the only strategy the DTO admits today -- so, unlike the other tests
