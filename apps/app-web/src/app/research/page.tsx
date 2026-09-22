@@ -54,7 +54,9 @@ export default async function ResearchOverviewPage() {
 						? governed
 							? `Data as of ${latestCutoff} — the run the governed capture head resolves to; MCP and chat read the same one.`
 							: `Data as of ${latestCutoff} — the newest recorded run; no governed capture head resolves a strategy run on this database yet.`
-						: "No strategy run recorded yet."}
+						: strategy.kind === "empty"
+							? "No decisions recorded for this strategy run."
+							: "No strategy run recorded yet."}
 					{age && (
 						<span
 							data-testid="served-run-age"
