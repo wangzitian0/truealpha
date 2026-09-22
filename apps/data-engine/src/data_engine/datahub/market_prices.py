@@ -477,8 +477,27 @@ def parse_monthly_bars(
     symbol: str,
     payload: dict[str, Any],
     min_date: date | None = None,
+    *,
+    as_of: date | None = None,
 ) -> list[PriceBarRecord]:
-    """Parse monthly bars from Twelve Data /time_series payload, snapping dates to last XNYS session."""
+    """Parse monthly bars from Twelve Data /time_series payload, snapping dates to last XNYS session.
+
+    A monthly bar is asserted only once its month has CLOSED as of `as_of` (#939 audit
+    finding). Twelve Data's `interval=1month` response, when the current month has not
+    finished, includes a running "month to date" row whose raw `datetime` is simply the
+    latest available trading day -- not a period close. Snapping THAT date forward to the
+    month's last XNYS session (unconditionally, as this function used to) produces a
+    `trading_date`/`transaction_time` that has not happened yet: `staging.market_prices_monthly`'s
+    `check (recorded_at >= transaction_time)` correctly refuses that row, and because
+    `lanes.market_data._refresh_market_data` writes daily inserts, monthly inserts, and
+    the mask backfill on one uncommitted connection, that refusal rolled back the whole
+    op -- turning #938's "silently misreads ~20/21 trading days as suspended" into
+    "crashes on ~20/21 trading days" (worse, not better). A bar whose snapped month has
+    not closed by `as_of` is skipped outright rather than admitted with a loosened check:
+    there genuinely is no monthly close to assert yet, and the CHECK constraint pins
+    exactly that invariant, not an implementation accident to route around.
+    """
+    as_of_date = as_of or datetime.now(UTC).date()
     records: list[PriceBarRecord] = []
     values = payload.get("values", [])
     if not isinstance(values, list):
@@ -494,6 +513,10 @@ def parse_monthly_bars(
             continue
 
         snapped_date = snap_to_last_xnys_session_of_month(raw_date)
+        if snapped_date > as_of_date:
+            # The month this row belongs to has not closed yet as of `as_of` -- this is
+            # the vendor's in-progress month-to-date row, not a settled monthly bar.
+            continue
         if min_date is not None and snapped_date < min_date:
             continue
 
@@ -698,7 +721,7 @@ def ingest_twelve_data_market_prices(
         # 1 call for monthly
         monthly_payload = td_client.fetch_time_series(symbol, interval="1month", outputsize=5000, adjust=adjust)
         calls_made += 1
-        monthly_bars = parse_monthly_bars(symbol, monthly_payload, min_date=min_monthly_date)
+        monthly_bars = parse_monthly_bars(symbol, monthly_payload, min_date=min_monthly_date, as_of=as_of_date)
         all_monthly_records.extend(monthly_bars)
 
     daily_inserted = 0

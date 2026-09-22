@@ -11,12 +11,18 @@ know about this date before the value changed."
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
+from data_engine.datahub.market_prices import (
+    PriceBarRecord,
+    insert_market_prices_daily,
+    insert_market_prices_monthly,
+    last_xnys_session_of_month,
+    parse_monthly_bars,
+)
 
 
 @pytest.fixture
@@ -96,17 +102,82 @@ def test_price_upsert_is_a_no_op_for_an_unchanged_revisit(connection) -> None:
     assert count == 1
 
 
-def test_market_prices_daily_rejects_in_place_mutation(connection) -> None:
-    """The append-only trigger is the backstop even if a future caller reaches for
-    `UPDATE`/`DELETE` directly instead of going through `insert_market_prices_daily`."""
-    symbol = "T938FOUR"
-    trading_date = date(2026, 1, 17)
-    insert_market_prices_daily(connection, [_bar(symbol, trading_date, 100)])
+@pytest.mark.parametrize(
+    ("table", "insert_fn"),
+    [
+        ("staging.market_prices_daily", insert_market_prices_daily),
+        ("staging.market_prices_monthly", insert_market_prices_monthly),
+    ],
+    ids=["daily", "monthly"],
+)
+@pytest.mark.parametrize("statement", ["update", "delete"])
+def test_market_prices_rejects_in_place_mutation(connection, table, insert_fn, statement) -> None:
+    """The append-only trigger is `BEFORE DELETE OR UPDATE` (#939 audit Low finding: the
+    prior version of this test only ever sent UPDATE, and only against the daily table --
+    DELETE and the monthly table were unguarded by any test). Both tables, both statements,
+    must be rejected the same way."""
+    symbol = f"T938FIVE-{table.split('.')[-1]}-{statement}"
+    trading_date = date(2026, 1, 18)
+    insert_fn(connection, [_bar(symbol, trading_date, 100)])
 
+    sql = (
+        f"update {table} set close = 1 where symbol = %s and trading_date = %s"
+        if statement == "update"
+        else f"delete from {table} where symbol = %s and trading_date = %s"
+    )
     with pytest.raises(psycopg.errors.RaiseException):
         with connection.cursor() as cur:
-            cur.execute(
-                "update staging.market_prices_daily set close = 1 where symbol = %s and trading_date = %s",
-                (symbol, trading_date),
-            )
+            cur.execute(sql, (symbol, trading_date))
     connection.rollback()
+
+
+def test_parse_monthly_bars_skips_the_in_progress_month() -> None:
+    """#939 audit High finding: a monthly bar is asserted only once its month has
+    CLOSED as of `as_of` -- wall-clock-independent by construction, since `as_of` is an
+    explicit local value here, not `datetime.now()`, and this would fail identically no
+    matter what day it is actually run.
+
+    Twelve Data's `interval=1month` response, while the current month is still open,
+    includes a running "month to date" row whose raw `datetime` is simply the latest
+    available trading day (here, `as_of` itself) -- not a period close. The pre-fix
+    behaviour snapped that date forward to the month's last XNYS session regardless,
+    producing a `trading_date` (and therefore `transaction_time`) that has not happened
+    yet: 2026-09-30 when `as_of` is 2026-09-22. `staging.market_prices_monthly`'s
+    `check (recorded_at >= transaction_time)` then refuses the row -- correctly, since
+    there genuinely is no September close to assert on the 22nd -- but because
+    `lanes.market_data._refresh_market_data` writes the daily insert, the monthly
+    insert, and the mask backfill on one uncommitted connection, that refusal used to
+    roll back the whole op.
+    """
+    as_of = date(2026, 9, 22)
+    closed_month_end = last_xnys_session_of_month(2026, 8)  # August already closed by Sep 22
+    in_progress_raw_date = as_of - timedelta(days=2)  # a recent September trading day, unsnapped
+
+    payload = {
+        "values": [
+            {
+                "datetime": closed_month_end.isoformat(),
+                "open": "100",
+                "high": "101",
+                "low": "99",
+                "close": "100",
+                "volume": "1000",
+            },
+            {
+                "datetime": in_progress_raw_date.isoformat(),
+                "open": "110",
+                "high": "111",
+                "low": "109",
+                "close": "110",
+                "volume": "1100",
+            },
+        ]
+    }
+
+    bars = parse_monthly_bars("T939SIX", payload, as_of=as_of)
+
+    dates = [b.date for b in bars]
+    assert dates == [closed_month_end], (
+        f"expected only the closed August bar, got {dates} -- the in-progress September "
+        "row must be skipped, not snapped forward into a future trading_date"
+    )
