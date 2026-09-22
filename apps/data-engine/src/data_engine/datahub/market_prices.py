@@ -20,7 +20,6 @@ import json
 import logging
 import threading
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -32,6 +31,7 @@ from typing import Any
 import psycopg
 
 from data_engine.config import settings
+from data_engine.sources import gateway
 
 log = logging.getLogger(__name__)
 
@@ -286,13 +286,14 @@ class TwelveDataClient:
         self.call_count = 0
 
     def _default_transport(self, url: str) -> tuple[int, bytes]:
+        """Through the external call ledger (#729): every Twelve Data request this
+        client makes is one row in `staging.api_call_ledger`, status-honest (a 4xx/5xx
+        body is the vendor's answer, not an exception) like `twelve_data_origin`'s."""
         req = urllib.request.Request(url, headers={"User-Agent": "TrueAlpha-DataEngine/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return resp.status, resp.read()
-        except urllib.error.HTTPError as error:
-            body = error.read()
-            return error.code, body
+        status, body = gateway.urlopen(
+            "twelvedata", "time_series", req, caller="market_prices.fetch_time_series", timeout=30
+        )
+        return status or 0, body
 
     def fetch_time_series(
         self,

@@ -144,6 +144,46 @@ def test_snap_to_last_xnys_session_weekday_month_end() -> None:
 # -----------------------------------------------------------------------------
 
 
+class _FakeUrlopenResponse:
+    """Enough of `http.client.HTTPResponse` for `gateway.urlopen`'s context manager."""
+
+    def __init__(self, body: bytes, status: int = 200) -> None:
+        self._body = body
+        self.status = status
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _FakeUrlopenResponse:
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        return False
+
+
+def test_default_transport_routes_through_the_external_call_ledger(call_ledger, monkeypatch) -> None:
+    """With no `transport_fn` override, the client's real network path is
+    `gateway.urlopen`, not a bare `urllib.request.urlopen` (#729): every Twelve Data
+    request lands one row in `staging.api_call_ledger`, same as `twelve_data_origin`'s."""
+    import urllib.request
+
+    body = json.dumps({"meta": {"symbol": "AAPL"}, "values": [], "status": "ok"}).encode()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None: _FakeUrlopenResponse(body, 200))
+
+    client = TwelveDataClient(api_key="test_key")
+    data = client.fetch_time_series("AAPL", interval="1day")
+
+    assert data["status"] == "ok"
+    (row,) = call_ledger
+    assert (row.source, row.endpoint, row.caller, row.ok) == (
+        "twelvedata",
+        "time_series",
+        "market_prices.fetch_time_series",
+        True,
+    )
+    assert row.payload_sha256 is not None, "the join key to raw.fetches.payload_sha256"
+
+
 def test_twelvedata_client_handles_429_exponential_backoff() -> None:
     attempts = 0
     slept: list[float] = []
