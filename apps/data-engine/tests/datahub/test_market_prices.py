@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -23,6 +24,7 @@ from data_engine.datahub.market_prices import (
     last_xnys_session_of_month,
     parse_daily_bars,
     parse_monthly_bars,
+    xnys_early_close_days,
     xnys_session_close_utc,
 )
 
@@ -361,3 +363,101 @@ def test_parse_daily_bars_includes_a_bar_right_after_its_own_close() -> None:
     bars = parse_daily_bars("T939TWELVE", payload, now=now)
 
     assert [b.date for b in bars] == [today]
+
+
+def test_xnys_early_close_days_rules() -> None:
+    """#942: verify xnys_early_close_days for each scheduled early-close rule.
+
+    1. Day after Thanksgiving: always 4th Friday in November
+    2. Christmas Eve (Dec 24): when an XNYS trading day
+    3. July 3 (day before Independence Day): when July 4 falls on Tue-Fri
+    """
+    # 2024: July 4 is Thu -> July 3 is early close; Dec 24 is Tue -> early close; Nov 29 is Black Fri
+    assert xnys_early_close_days(2024) == {
+        date(2024, 7, 3),
+        date(2024, 11, 29),
+        date(2024, 12, 24),
+    }
+
+    # 2025: July 4 is Fri -> July 3 is early close; Dec 24 is Wed -> early close; Nov 28 is Black Fri
+    assert xnys_early_close_days(2025) == {
+        date(2025, 7, 3),
+        date(2025, 11, 28),
+        date(2025, 12, 24),
+    }
+
+    # 2026: July 4 is Sat -> July 3 is observed full holiday, NOT early close
+    assert xnys_early_close_days(2026) == {
+        date(2026, 11, 27),
+        date(2026, 12, 24),
+    }
+
+    # 2027: Dec 25 is Sat -> Dec 24 is observed full holiday, NOT early close; July 4 is Sun -> July 3 is Sat
+    assert xnys_early_close_days(2027) == {
+        date(2027, 11, 26),
+    }
+
+
+@pytest.mark.parametrize(
+    ("close_type", "early_date"),
+    [
+        ("day_after_thanksgiving", date(2024, 11, 29)),
+        ("christmas_eve", date(2024, 12, 24)),
+        ("july_3_pre_independence_day", date(2024, 7, 3)),
+    ],
+)
+def test_xnys_early_close_instant_boundary(close_type: str, early_date: date) -> None:
+    """#942: instant-precision boundary tests for all three early-close types.
+
+    Verifies:
+    1. xnys_session_close_utc returns 13:00 ET on that date.
+    2. Synthetic now 5 minutes before 13:00 ET (12:55 ET) asserts parse_daily_bars skips the bar.
+    3. Synthetic now 5 minutes after 13:00 ET (13:05 ET) asserts parse_daily_bars admits the bar.
+    """
+    et_tz = ZoneInfo("America/New_York")
+    close_instant = xnys_session_close_utc(early_date)
+
+    # 1. Verify xnys_session_close_utc returns 13:00 ET
+    local_close = close_instant.astimezone(et_tz)
+    assert local_close.hour == 13
+    assert local_close.minute == 0
+    assert local_close.second == 0
+
+    payload = {
+        "values": [
+            {
+                "datetime": early_date.isoformat(),
+                "open": "100",
+                "high": "101",
+                "low": "99",
+                "close": "100",
+                "volume": "1000",
+            },
+        ]
+    }
+
+    # 2. Synthetic now 5 minutes before 13:00 ET (12:55 ET): session still open, skip bar
+    now_before = close_instant - timedelta(minutes=5)
+    bars_before = parse_daily_bars("T942BOUNDARY", payload, now=now_before)
+    assert bars_before == [], (
+        f"expected early-close bar on {early_date} ({close_type}) to be skipped 5 minutes "
+        f"before 13:00 ET close, got {bars_before}"
+    )
+
+    # 3. Synthetic now 5 minutes after 13:00 ET (13:05 ET): session closed, admit bar
+    now_after = close_instant + timedelta(minutes=5)
+    bars_after = parse_daily_bars("T942BOUNDARY", payload, now=now_after)
+    assert [b.date for b in bars_after] == [early_date], (
+        f"expected early-close bar on {early_date} ({close_type}) to be admitted 5 minutes "
+        f"after 13:00 ET close, got {bars_after}"
+    )
+
+
+def test_xnys_regular_day_close_remains_16_et() -> None:
+    """Verify regular non-early-close trading day closes at 16:00 ET, not 13:00 ET."""
+    regular_day = date(2024, 11, 27)  # Wednesday before Thanksgiving
+    et_tz = ZoneInfo("America/New_York")
+    close_instant = xnys_session_close_utc(regular_day)
+    local_close = close_instant.astimezone(et_tz)
+    assert local_close.hour == 16
+    assert local_close.minute == 0
