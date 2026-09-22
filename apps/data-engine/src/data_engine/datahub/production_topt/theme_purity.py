@@ -449,12 +449,19 @@ def materialize_theme_purity(
     return tuple(written)
 
 
+def _short_id(entity_id: str) -> str:
+    """Short display label: CIK digits for legacy ``issuer:cik:`` ids, first 8 chars for UUIDs."""
+    if entity_id.startswith("issuer:cik:"):
+        return entity_id.removeprefix("issuer:cik:")
+    return entity_id[:8]
+
+
 def summary_line(rows: tuple[ThemePurity, ...]) -> str:
     if not rows:
         return "theme purity: no issuer has a segment partition at this cutoff"
     published = [r for r in rows if r.result.value is not None]
     parts = [
-        f"{r.entity_id.removeprefix('issuer:cik:')}/{r.theme}={r.result.value:.4f}"
+        f"{_short_id(r.entity_id)}/{r.theme}={r.result.value:.4f}"
         for r in sorted(published, key=lambda r: r.result.value or Decimal(0), reverse=True)[:5]
     ]
     return f"theme purity: {len(published)}/{len(rows)} published" + (

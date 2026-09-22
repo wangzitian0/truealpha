@@ -64,7 +64,10 @@ def universe_issuers(connection: Any, universe: str) -> list[UniverseIssuer]:
             cik = int(issuer_id.removeprefix("issuer:cik:"))
         elif is_uuid(issuer_id):
             _cik_val = alias_of(connection, issuer_id, "cik", valid_at=date.today(), known_at=datetime.now(UTC))
-            cik = int(_cik_val) if _cik_val is not None else None
+            try:
+                cik = int(_cik_val) if _cik_val is not None else None
+            except (ValueError, TypeError):
+                cik = None
         else:
             cik = None
         issuers[issuer_id] = UniverseIssuer(issuer_id=issuer_id, ticker=ticker, listing_id=listing_id, cik=cik)

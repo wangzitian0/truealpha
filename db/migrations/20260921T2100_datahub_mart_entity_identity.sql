@@ -80,13 +80,14 @@ select
     dc.cik,
     dl.lei
 from staging.entities e
-left join direct_tickers dt on dt.survivor_id = staging.entity_survivor(e.entity_id, 'infinity')
-left join issuer_tickers it on it.issuer_id = staging.entity_survivor(e.entity_id, 'infinity')
-left join instrument_tickers inst on inst.instrument_id = staging.entity_survivor(e.entity_id, 'infinity')
-left join direct_names dn on dn.survivor_id = staging.entity_survivor(e.entity_id, 'infinity')
-left join legacy_aliases la on la.survivor_id = staging.entity_survivor(e.entity_id, 'infinity')
-left join direct_ciks dc on dc.survivor_id = staging.entity_survivor(e.entity_id, 'infinity')
-left join direct_leis dl on dl.survivor_id = staging.entity_survivor(e.entity_id, 'infinity')
+cross join lateral (select staging.entity_survivor(e.entity_id, 'infinity') as id) survivor
+left join direct_tickers dt on dt.survivor_id = survivor.id
+left join issuer_tickers it on it.issuer_id = survivor.id
+left join instrument_tickers inst on inst.instrument_id = survivor.id
+left join direct_names dn on dn.survivor_id = survivor.id
+left join legacy_aliases la on la.survivor_id = survivor.id
+left join direct_ciks dc on dc.survivor_id = survivor.id
+left join direct_leis dl on dl.survivor_id = survivor.id
 left join staging.kg_entities kg on (kg.id = e.entity_id::text or (la.legacy_id is not null and kg.id = la.legacy_id))
 $view$;
 begin
