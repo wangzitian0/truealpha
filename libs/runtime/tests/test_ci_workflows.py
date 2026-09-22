@@ -60,6 +60,7 @@ MAIN_HEALTH = "main-health.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
+QLIB = "ci-qlib.yml"
 NIGHTLY = "nightly-dagster-liveness.yml"
 WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
@@ -1738,6 +1739,69 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
             f"{lane} runs on the nightly too — the nightly is meant to be liveness-only, "
             f"not a timer that re-runs the whole suite"
         )
+
+
+def test_qlib_filter_covers_all_pinned_runtime_tests_and_their_sources() -> None:
+    """#956: .github/workflows/ci-qlib.yml runs reproducibility proofs for base
+    factors (gross_profit_per_employee, peg, price_to_sales) and tiny contract batches
+    against pinned Qlib. These tests pytest.importorskip("qlib"), so under ci-python
+    they skip. If ci-required.yml's qlib paths filter does not cover the tests and the
+    factor sources they test, a PR touching only those files skips ci-qlib (which required
+    treats as passing), leaving the reproducibility proofs unarmed in CI.
+    """
+    workflow = yaml.safe_load(source(REQUIRED))
+    filter_step = next(
+        (step for step in workflow["jobs"]["changes"]["steps"] if "filters" in (step.get("with") or {})),
+        None,
+    )
+    assert filter_step is not None, "ci-required's changes job no longer carries a paths-filter step"
+    filters = yaml.safe_load(filter_step["with"]["filters"])
+
+    assert "qlib" in filters, "the changes job no longer declares a qlib filter"
+    qlib_paths = set(filters["qlib"])
+
+    test_step = step(QLIB, "Run the pinned Qlib runtime tests without optional skips")
+    run_cmd = str(test_step.get("run", ""))
+    tokens = shlex.split(run_cmd)
+    assert "pytest" in tokens, f"ci-qlib.yml test step does not invoke pytest: {run_cmd!r}"
+    pytest_idx = tokens.index("pytest")
+    test_targets = [token for token in tokens[pytest_idx + 1 :] if not token.startswith("-")]
+    assert test_targets, "ci-qlib.yml pytest command specifies no test targets"
+
+    def covered(path: str, patterns: set[str]) -> bool:
+        for pattern in patterns:
+            if pattern == path:
+                return True
+            if pattern.endswith("/**"):
+                prefix = pattern[: -len("/**")]
+                if path == prefix or path.startswith(prefix + "/"):
+                    return True
+        return False
+
+    for target in test_targets:
+        assert (REPO_ROOT / target).exists(), f"test target {target} does not exist in repo"
+
+    uncovered_targets = {target for target in test_targets if not covered(target, qlib_paths)}
+    assert not uncovered_targets, (
+        f"test targets {uncovered_targets} are executed in ci-qlib.yml but not covered by "
+        f"ci-required.yml's qlib filter — PRs modifying these tests would skip ci-qlib (#956)"
+    )
+
+    factor_sources = {
+        "libs/factors/src/factors/base/gross_profit_per_employee.py",
+        "libs/factors/src/factors/base/peg.py",
+        "libs/factors/src/factors/base/price_to_sales.py",
+        "libs/factors/src/factors/qlib_engine.py",
+        "libs/contracts/src/truealpha_contracts/qlib_expression.py",
+    }
+    for src in factor_sources:
+        assert (REPO_ROOT / src).exists(), f"factor source {src} does not exist in repo"
+
+    uncovered_sources = {src for src in factor_sources if not covered(src, qlib_paths)}
+    assert not uncovered_sources, (
+        f"factor sources {uncovered_sources} are tested under ci-qlib.yml but not covered by "
+        f"ci-required.yml's qlib filter — PRs modifying these formulas would skip ci-qlib (#956)"
+    )
 
 
 def test_the_routing_probe_gets_a_base_not_an_endpoint() -> None:
