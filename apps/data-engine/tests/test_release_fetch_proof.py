@@ -96,13 +96,13 @@ def test_evaluate_pending_when_no_fetching_run_since_deployment() -> None:
     connection = MagicMock()
     instance = MagicMock(spec=dg.DagsterInstance)
     digest = "sha256:" + "a" * 64
-    now = datetime.now(UTC)
+    now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
 
     canary_record = MagicMock()
     canary_record.create_timestamp = now
     instance.get_run_records.side_effect = lambda filters, **kwargs: [canary_record] if filters.tags else []
 
-    proof = evaluate(connection, instance, digest=digest)
+    proof = evaluate(connection, instance, digest=digest, now=now)
     assert proof.state == PENDING
     assert "no scheduled or forced live-pipeline run since" in proof.summary
 
@@ -594,5 +594,6 @@ def test_evaluate_red_when_in_progress_run_exceeds_max_window() -> None:
     proof = evaluate(connection, instance, digest=digest)
     assert proof.state == RED
     assert proof.ok is False
+    assert "in-progress run hung" in proof.summary
     assert "proof timed out" in proof.summary
     assert "limit" in proof.summary

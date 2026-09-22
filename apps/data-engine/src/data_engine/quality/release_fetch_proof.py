@@ -283,10 +283,12 @@ def evaluate(
     # 2. Timeout watchdog: if pending exceeds window (no runs or in-progress runs stuck)
     in_progress = [c for c in candidates if c.dagster_run.status in UNFINISHED_RUN_STATUSES]
     if is_timed_out and (not candidates or in_progress):
-        return Proof(
-            RED,
-            f"{short}… awaiting its first tick for {pending_age:.1f}h (limit {MAX_PROVING_WINDOW_HOURS:g}h); proof timed out",
+        reason = (
+            f"in-progress run hung for {pending_age:.1f}h"
+            if in_progress
+            else f"awaiting its first tick for {pending_age:.1f}h"
         )
+        return Proof(RED, f"{short}… {reason} (limit {MAX_PROVING_WINDOW_HOURS:g}h); proof timed out")
 
     # 3. No candidate runs yet and not timed out
     if not candidates:
