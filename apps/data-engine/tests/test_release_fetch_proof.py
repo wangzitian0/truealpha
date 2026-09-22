@@ -164,7 +164,7 @@ def test_evaluate_pending_when_first_fetching_run_is_in_progress() -> None:
         [canary_record] if filters.tags and BOOT_CANARY_TAG in filters.tags else [running_record]
     )
 
-    proof = evaluate(connection, instance, digest=digest)
+    proof = evaluate(connection, instance, digest=digest, now=now + timedelta(minutes=2))
     assert proof.state == PENDING
     assert "is started" in proof.summary
 
