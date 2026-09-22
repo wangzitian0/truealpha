@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "The single implementation of the seven analytics modules (init.md Section 7). data-engine and llm-service import from here — computation logic exists in exactly one place."
 requires-python = ">=3.12"
 dependencies = [
+    "polars>=1.0.0",
     "pydantic>=2.7.0",
     "truealpha-contracts",
 ]
