@@ -151,6 +151,13 @@ after a hand-cut one. `libs/runtime/tests/test_auto_release.py` and the
 `--auto`/`--prod` cases in `test_cut_release.py` hold all of this against the
 unfixed code, not just the fixed one.
 
+What counts as reaching production: only running `cut_release.sh <tag> --prod`
+(which triggers `deploy-release.yml` with `deploy_type=prod` to deploy to
+production) counts as a production pipeline. Normal PR merges to `main` deploy
+only to staging and do not reach production; once a PR is merge-ready under
+`AGENTS.md` rule 4, the agent that owns it merges it without waiting for owner
+approval.
+
 ## Staging verification is two facts, not one
 
 Before #855/#860, a release's Playwright walk ran INSIDE `deploy-release.yml`'s
