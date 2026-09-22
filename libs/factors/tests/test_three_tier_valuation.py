@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from factors.composite.three_tier_valuation import three_tier_valuation
 from factors.types import FactorResult, UnitFamily
 from truealpha_contracts.strategy import ThreeTierValuationDefinition
@@ -142,3 +143,56 @@ def test_data_availability_is_verified_only_when_every_consumed_input_is() -> No
     result = three_tier_valuation(inputs, entity_id="e1", as_of=_AS_OF, definition=definition)
 
     assert result.data_availability == "unverified"
+
+
+def test_multiple_entities_in_inputs_does_not_cross_talk() -> None:
+    definition = _v0_definition()
+    inputs = [
+        # Entity 1 has low GPPE (traditional band: target P/S 0.30-2.00, midpoint 1.15)
+        FactorResult(
+            factor="gross_profit_per_employee",
+            entity_id="e1",
+            value=Decimal("50000"),
+            unit_family=_UNIT_FAMILY["gross_profit_per_employee"],
+            confidence=Decimal("0.9"),
+            as_of=_AS_OF,
+            data_availability="verified",
+        ),
+        # Entity 2 has high GPPE (large-model-native band: target P/S 6.00-12.00, midpoint 9.00)
+        FactorResult(
+            factor="gross_profit_per_employee",
+            entity_id="e2",
+            value=Decimal("500000"),
+            unit_family=_UNIT_FAMILY["gross_profit_per_employee"],
+            confidence=Decimal("0.9"),
+            as_of=_AS_OF,
+            data_availability="verified",
+        ),
+        # Entity 2 price_to_sales
+        FactorResult(
+            factor="price_to_sales",
+            entity_id="e2",
+            value=Decimal("5.0"),
+            unit_family=_UNIT_FAMILY["price_to_sales"],
+            confidence=Decimal("0.9"),
+            as_of=_AS_OF,
+            data_availability="verified",
+        ),
+    ]
+
+    result = three_tier_valuation(inputs, entity_id="e2", as_of=_AS_OF, definition=definition)
+
+    # Entity 2 should use its own GPPE (500000 -> large_model_native midpoint 9.00; gap = 9.00/5.0 - 1 = 0.8)
+    assert result.value == Decimal("0.8")
+
+
+def test_duplicate_factor_for_same_entity_fails_closed() -> None:
+    definition = _v0_definition()
+    inputs = [
+        _factor_result("gross_profit_per_employee", "50000", "0.9"),
+        _factor_result("gross_profit_per_employee", "60000", "0.9"),
+        _factor_result("price_to_sales", "1.0", "0.9"),
+    ]
+
+    with pytest.raises(ValueError, match="e1: multiple factor results for factor 'gross_profit_per_employee'"):
+        three_tier_valuation(inputs, entity_id="e1", as_of=_AS_OF, definition=definition)

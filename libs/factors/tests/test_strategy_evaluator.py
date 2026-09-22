@@ -18,7 +18,11 @@ from factors.composite.strategy_evaluator import (
     evaluate_cutoff,
     rank_and_select,
 )
-from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV0Definition
+from truealpha_contracts.strategy import (
+    ExclusionReason,
+    GoldenDecisionOutcome,
+    LargeModelValueV0Definition,
+)
 
 _CORPUS_PATH = Path(__file__).parents[2] / "contracts" / "tests" / "fixtures" / "large_model_value_v0_strategy.v1.json"
 _CORPUS_SHA256 = "8cdb081d887ff7754ac52a1eb02679b94a1c1c71b1eb32c606c06f5d6fe96083"
@@ -344,3 +348,47 @@ def test_the_evaluator_projects_the_keys_the_registry_declares() -> None:
     assert _input_keys("gross_profit_per_employee") == ("gross_profit", "total_assets", "headcount")
     assert _input_keys("price_to_sales") == ("last_close", "shares_outstanding", "revenue")
     assert _input_keys("peg") == ("last_close", "shares_outstanding", "net_income")
+
+
+def test_nonpositive_price_does_not_crash_evaluator() -> None:
+    decisions = evaluate_cutoff(
+        [_peg_inputs(last_close="0")],
+        definition=_definition(),
+        cutoff_at=_PEG_CUTOFF,
+        risk_free_rate=Decimal("0"),
+    )
+    assert len(decisions) == 1
+    assert decisions[0].eligible is False
+    assert decisions[0].exclusion_reason in (
+        ExclusionReason.STALE_REQUIRED_INPUT,
+        ExclusionReason.MISSING_MARKET_VALUE_INPUT,
+    )
+
+
+def test_tier_result_none_value_returns_missing_market_value_input(monkeypatch) -> None:
+    from factors.composite import strategy_evaluator
+    from factors.types import FactorResult, UnitFamily
+
+    def _mock_three_tier(*args, **kwargs):
+        return FactorResult(
+            factor="three_tier_valuation",
+            entity_id="issuer:peg",
+            value=None,
+            unit_family=UnitFamily.RATIO,
+            confidence=Decimal("0.85"),
+            as_of=_PEG_CUTOFF,
+            data_availability="unverified",
+            flags=["nonpositive_price_to_sales"],
+        )
+
+    monkeypatch.setattr(strategy_evaluator, "three_tier_valuation", _mock_three_tier)
+
+    decisions = evaluate_cutoff(
+        [_peg_inputs()],
+        definition=_definition(),
+        cutoff_at=_PEG_CUTOFF,
+        risk_free_rate=Decimal("0"),
+    )
+    assert len(decisions) == 1
+    assert decisions[0].eligible is False
+    assert decisions[0].exclusion_reason == ExclusionReason.MISSING_MARKET_VALUE_INPUT

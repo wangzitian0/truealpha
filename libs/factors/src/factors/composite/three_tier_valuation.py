@@ -39,8 +39,11 @@ from factors.registry import factor
 from factors.types import DataAvailability, FactorResult, UnitFamily
 
 
-def _result(name: str, inputs: Sequence[FactorResult]) -> FactorResult | None:
-    return next((item for item in inputs if item.factor == name), None)
+def _result(name: str, inputs: Sequence[FactorResult], entity_id: str) -> FactorResult | None:
+    matches = [item for item in inputs if item.factor == name and item.entity_id == entity_id]
+    if len(matches) > 1:
+        raise ValueError(f"{entity_id}: multiple factor results for factor {name!r}")
+    return matches[0] if matches else None
 
 
 @factor("three_tier_valuation", kind="composite", module=7)
@@ -51,8 +54,8 @@ def three_tier_valuation(
     as_of: datetime,
     definition: ThreeTierValuationDefinition,
 ) -> FactorResult:
-    gppe = _result("gross_profit_per_employee", inputs)
-    price_to_sales = _result("price_to_sales", inputs)
+    gppe = _result("gross_profit_per_employee", inputs, entity_id)
+    price_to_sales = _result("price_to_sales", inputs, entity_id)
 
     if gppe is None or gppe.value is None:
         return FactorResult(

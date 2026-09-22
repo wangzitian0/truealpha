@@ -217,6 +217,7 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         head = governed_head(connection, universe_prefix=prefix, environment=CaptureEnvironment.PRODUCTION.value)
         if head is None:
             context.log.warning("no governed head for %s; no theme purity rows", config.universe)
+            outcome.pending = True
             outcome.summary = "no governed head; no rows"
             return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
         # The classifier is told which issuer it is judging (#849): the ticker, from the same
@@ -261,6 +262,7 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
         report = compile_report(connection, universe=config.universe, executed_at=executed_at)
         if report is None:
             context.log.warning("no governed head for %s; no coverage report", config.universe)
+            outcome.pending = True
             outcome.summary = "no governed head; no report"
             return json.dumps({"universe": config.universe, "report": None})
         report_id = persist(connection, report)
