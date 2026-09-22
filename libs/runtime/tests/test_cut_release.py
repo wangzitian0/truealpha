@@ -131,6 +131,12 @@ class Ceremony:
                 tags[ref[len("refs/tags/") : -3]] = sha
         return tags
 
+    def tag_message(self, name: str) -> str:
+        """The exact annotation origin holds for `name` — what
+        `tools/auto_release.py`'s `read_tags` will see on its next run."""
+        git(self.work, "fetch", "-q", "origin", f"refs/tags/{name}:refs/tags/{name}")
+        return git(self.work, "for-each-ref", "--format=%(contents)", f"refs/tags/{name}")
+
     def run(self, tag: str, *arguments: str, served: str = "") -> tuple[subprocess.CompletedProcess[str], list]:
         log = self.root / "gh.log"
         log.write_text("", encoding="utf-8")
@@ -264,3 +270,47 @@ def test_an_existing_tag_at_another_commit_is_still_a_collision(
     assert refusal in result.stderr, result.stderr
     assert not dispatched(calls)
     assert not verified_prs(calls), "the collision must fail before any PR is verified"
+
+
+# --- --auto: the owner's 2026-09-17 decision ("先在 staging 做吧，prod 回头再说") --
+# is that an automatic release is staging-only, full stop. #860.
+
+
+def test_auto_and_prod_cannot_be_combined_and_nothing_happens(ceremony: Ceremony) -> None:
+    """The direct proof that --prod can never be passed out of the automatic
+    path: even a caller that DID combine them is refused before the tag regex,
+    before --prs derivation, before any git or gh call — not merely "the
+    workflow happens not to write --prod today"."""
+    before = ceremony.remote_tags()
+
+    result, calls = ceremony.run("v0.0.2", "--auto", "--prod")
+
+    assert result.returncode != 0
+    assert "--auto and --prod cannot be combined" in result.stderr, result.stderr
+    assert ceremony.remote_tags() == before, "a refused combination must not claim the tag number"
+    assert calls == [], "must refuse before a single gh call — not merely before dispatching a deploy"
+    assert not dispatched(calls)
+
+
+def test_auto_marks_the_tag_so_the_daily_cap_can_count_it(ceremony: Ceremony) -> None:
+    """`tools/auto_release.py`'s daily cap counts tags carrying AUTO_TRAILER
+    (`Release-Trigger: auto-staging`) — this is the only place that line is
+    written, and it must reach the pushed tag's own annotation, not just this
+    run's log."""
+    result, calls = ceremony.run("v0.0.2", "--auto")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "Release-Trigger: auto-staging" in ceremony.tag_message("v0.0.2")
+    [deploy] = dispatched(calls)
+    assert "deploy_type=staging" in deploy
+    assert not any("deploy_type=prod" in call for call in dispatched(calls)), "--auto must never reach a prod deploy"
+
+
+def test_a_hand_cut_release_never_carries_the_automatic_trailer(ceremony: Ceremony) -> None:
+    """The converse of the above: an operator release (no --auto) must not
+    accidentally look automatic, or a hand release would silently eat into
+    the next day's automatic budget."""
+    result, calls = ceremony.run("v0.0.2")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "Release-Trigger: auto-staging" not in ceremony.tag_message("v0.0.2")

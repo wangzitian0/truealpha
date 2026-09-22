@@ -110,6 +110,47 @@ number cut at an already-released HEAD still has nothing to release.
 `libs/runtime/tests/test_cut_release.py` runs the script end to end against a
 throwaway origin to check this.
 
+## Staging cuts itself; production still does not
+
+On 2026-09-17 green merges to main sat untagged for up to 16.5 minutes because
+nobody ran this ceremony by hand (#860). `auto-release-staging.yml` now runs
+`tools/cut_release.sh --auto` for you, on one condition the owner set that day:
+"先在 staging 做吧，prod 回头再说" — staging only, full stop. Production still
+moves only on a deliberate `--prod` run; nothing about the automatic path
+changes that.
+
+The workflow triggers on every green `ci-required` push to main, then waits
+20 minutes before it does anything — not a courtesy delay, a debounce. A
+second merge landing in that window does not queue a second release behind
+the first: it lands on main, and the FIRST push's wait wakes up to find main
+has moved past the commit that started it. `tools/auto_release.py` (the
+decision, not the trigger) checks GitHub for the CURRENT main HEAD every time
+it runs, never trusts what triggered it, and stands down the moment the two
+disagree — that later push already started its own independent wait, and
+batching one release out of a burst of merges falls out of the same
+mechanism as the cadence rule above, not a separate scheduler.
+
+Five more reasons stand between "quiet" and "tagged", checked in this order,
+first match wins (`tools/auto_release.py`'s own docstring is the source of
+truth if this drifts): main HEAD is not green, main HEAD already carries a
+tag, a release would restart the data engine inside staging's nightly tick
+window (22:45–00:00Z, `DEPLOY_LEAD` margin included), today's automatic-release
+count is already at the daily cap (4, an owner-set bound — hand-cut releases
+never count against it, only tags carrying the `Release-Trigger: auto-staging`
+trailer `--auto` writes), or a release is already in flight (a deploy run, a
+surface walk, or a tag's own `ci-required`, any of them incomplete).
+
+`--auto` is the one new flag on `cut_release.sh`, and it does exactly two
+things: it writes that trailer, and it refuses outright if `--prod` is also
+given. That refusal is the second, independent lock on "staging only" — the
+first is that `auto-release-staging.yml` never types `--prod` anywhere in the
+file at all (`libs/runtime/tests/test_ci_workflows.py` greps the literal
+string). Promotion after an automatic release is unchanged: an operator reads
+staging's evidence and runs `cut_release.sh vX.Y.Z --prod` by hand, same as
+after a hand-cut one. `libs/runtime/tests/test_auto_release.py` and the
+`--auto`/`--prod` cases in `test_cut_release.py` hold all of this against the
+unfixed code, not just the fixed one.
+
 ## Staging verification is two facts, not one
 
 Before #855/#860, a release's Playwright walk ran INSIDE `deploy-release.yml`'s

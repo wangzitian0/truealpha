@@ -45,6 +45,7 @@ WorkflowContractError = _contract.WorkflowContractError
 job = _contract.job
 source = _contract.source
 step = _contract.step
+steps = _contract.steps
 step_text = _contract.step_text
 spec_text = _contract.spec_text
 triggers = _contract.triggers
@@ -63,6 +64,7 @@ NIGHTLY = "nightly-dagster-liveness.yml"
 WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
 LIVENESS = "scheduler-liveness.yml"
+AUTO_RELEASE = "auto-release-staging.yml"
 
 
 # --- the locator itself ------------------------------------------------------
@@ -813,6 +815,139 @@ def test_the_close_guard_can_reopen_and_sees_full_history() -> None:
     assert "issues: write" in workflow, "the guard cannot reopen anything without it"
     assert "fetch-depth: 0" in workflow and "fetch --tags" in workflow
     assert triggers(CLOSE_GUARD)["issues"]["types"] == ["closed"]
+
+
+# --- auto-release-staging: the owner's 2026-09-17 decision ("先在 staging 做吧，
+# prod 回头再说", #860) is that an automatic release is staging-only, full stop.
+# `tools/auto_release.py`'s own decision logic is tested in test_auto_release.py
+# (#583's boundary: a tool's behaviour is tested beside the tool, a workflow's
+# shape is tested here); these tests are only about what this file can never
+# be made to do.
+
+
+def test_auto_release_never_writes_prod_anywhere_in_the_file() -> None:
+    """The direct, textual proof: no STEP this workflow runs ever types the
+    substring `--prod` — scoped to parsed step content (`run`/`if`/`env`/
+    `with`/`uses`), not the surrounding comments that explain why, which
+    necessarily name the very flag they forbid. `cut_release.sh` itself
+    additionally refuses `--auto --prod` together (test_cut_release.py) — this
+    is the other half of that defense: the automated path never types it."""
+    offenders = [spec_text(spec) for spec in steps(AUTO_RELEASE) if "--prod" in spec_text(spec)]
+    assert not offenders, offenders
+
+
+def test_auto_release_triggers_only_after_a_green_push_to_main() -> None:
+    """`branches: [main]` matches the head BRANCH NAME, which a pull_request
+    from a fork's own `main` also carries (main-health.yml's own comment) —
+    only a push event is a main commit, and only a green one may release."""
+    trigger = triggers(AUTO_RELEASE)
+    assert trigger["workflow_run"]["workflows"] == ["ci-required"]
+    assert trigger["workflow_run"]["types"] == ["completed"]
+    assert trigger["workflow_run"]["branches"] == ["main"]
+    release_job = job(AUTO_RELEASE, "release")
+    condition = str(release_job["if"])
+    assert "github.event.workflow_run.event == 'push'" in condition
+    assert "github.event.workflow_run.conclusion == 'success'" in condition
+
+
+def test_auto_release_is_debounced_for_twenty_minutes_before_it_re_reads_head() -> None:
+    """Owner constraint: a burst of merges batches into one release. The wait
+    itself is a plain sleep; what makes it a DEBOUNCE rather than a blind delay
+    is that `tools/auto_release.py` re-reads main HEAD from the GitHub API
+    afterwards and defers to a later push's own run if one landed
+    (test_auto_release.py's reason-1 tests) — this test only pins the
+    workflow's own half: the wait is exactly 20 minutes, and it runs before the
+    checkout that will see whatever landed during it."""
+    quiet = step_text(AUTO_RELEASE, "Quiet period")
+    assert "sleep 1200" in quiet, "1200s = 20 min; test_auto_release.py's tick-window tests use the same constant"
+    release_steps = job(AUTO_RELEASE, "release")["steps"]
+    names = [s.get("name") for s in release_steps]
+    checkout_index = next(
+        i for i, s in enumerate(release_steps) if str(s.get("uses", "")).startswith("actions/checkout")
+    )
+    assert names.index("Quiet period") < checkout_index, (
+        "the checkout must happen AFTER the wait, or it cannot see a later push"
+    )
+
+
+def test_auto_release_checks_out_a_local_main_with_full_tag_history() -> None:
+    """`cut_release.sh` runs `git rev-parse main` and reads every vX.Y.Z tag —
+    a detached checkout or a shallow one makes both silently wrong."""
+    checkout = next(
+        spec
+        for spec in job(AUTO_RELEASE, "release")["steps"]
+        if str(spec.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"]["ref"] == "main"
+    assert checkout["with"]["fetch-depth"] == 0
+
+
+def test_auto_release_configures_a_git_identity_before_tagging() -> None:
+    """No other workflow in this repository creates a `git commit` or `git tag
+    -a` — they all go through `gh`, which needs no local identity. This is the
+    first one that does (via `cut_release.sh`'s annotated tag), and a GitHub
+    Actions runner carries no default `user.name`/`user.email`: an annotated
+    tag fails outright without one."""
+    workflow = source(AUTO_RELEASE)
+    assert "git config user.name" in workflow
+    assert "git config user.email" in workflow
+
+    steps = job(AUTO_RELEASE, "release")["steps"]
+    identity_index = next(i for i, s in enumerate(steps) if "git config user.name" in str(s.get("run", "")))
+    cut_index = next(i for i, s in enumerate(steps) if "cut_release.sh" in str(s.get("run", "")))
+    assert identity_index < cut_index
+
+
+def test_auto_release_decides_with_stdlib_only_and_installs_no_workspace() -> None:
+    """`tools/auto_release.py`'s own docstring: "the job that runs this
+    installs nothing but the checkout." A `uv sync` here would be pure waste —
+    and if the tool ever stopped being stdlib-only, `test_ci_workflows.py`'s
+    own `test_every_workflow_installs_what_the_tools_it_runs_import` would
+    catch the missing install, so this is a cost check, not a safety net."""
+    offenders = [spec_text(spec) for spec in steps(AUTO_RELEASE) if "uv sync" in spec_text(spec)]
+    assert not offenders, offenders
+    decide_text = step_text(AUTO_RELEASE, "Decide whether to release")
+    assert "python3 tools/auto_release.py" in decide_text
+
+
+def test_auto_release_writes_trigger_sha_only_through_env_not_into_the_script() -> None:
+    """workflow_run executes this file from the default branch (main-health.yml's
+    own comment on the same trigger type) with a write token; nothing from the
+    triggering run is interpolated straight into a `run:` block regardless."""
+    decide_step = step(AUTO_RELEASE, "Decide whether to release")
+    assert decide_step["env"]["TRIGGER_SHA"] == "${{ github.event.workflow_run.head_sha }}"
+    assert "github.event.workflow_run" not in str(decide_step.get("run", ""))
+
+
+def test_auto_release_only_cuts_when_the_tool_said_release_and_passes_its_own_tag() -> None:
+    """The gate between "decided" and "acted": a step that ran regardless of
+    `steps.decide.outputs.release` would tag on every green main push, quiet
+    period or not."""
+    cut_step = step(AUTO_RELEASE, "Cut the release (staging only)")
+    assert cut_step["if"] == "steps.decide.outputs.release == 'true'"
+    text = spec_text(cut_step)
+    assert "cut_release.sh" in text
+    assert "--auto" in text, "marks the tag so tools/auto_release.py's own daily cap can count it (test_cut_release.py)"
+    assert "TAG" in cut_step.get("env", {}) and cut_step["env"]["TAG"] == "${{ steps.decide.outputs.tag }}"
+
+
+def test_auto_release_is_serialised_so_two_decisions_never_race_one_tag() -> None:
+    workflow = yaml.safe_load(source(AUTO_RELEASE))
+    concurrency = workflow["concurrency"]
+    assert concurrency["group"] == "auto-release-staging"
+    assert concurrency["cancel-in-progress"] is False
+
+
+def test_auto_release_has_only_the_permissions_it_needs() -> None:
+    """`contents: write` to push the tag, `actions: write` to dispatch and poll
+    the deploy/walk/tag-CI runs, `pull-requests: read` for the derived PR
+    review-thread check — nothing broader."""
+    workflow = yaml.safe_load(source(AUTO_RELEASE))
+    permissions = workflow["permissions"]
+    assert permissions["contents"] == "write"
+    assert permissions["actions"] == "write"
+    assert permissions["pull-requests"] == "read"
+    assert set(permissions) == {"contents", "actions", "pull-requests"}
 
 
 # --- the boundary this file exists to hold -----------------------------------
