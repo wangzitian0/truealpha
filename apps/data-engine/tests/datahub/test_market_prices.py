@@ -500,4 +500,3 @@ def test_price_bar_record_confidence_and_raw_ref_defaults() -> None:
     )
     assert custom.confidence == Decimal("0.9")
     assert custom.raw_ref == "raw.fetches:123"
-

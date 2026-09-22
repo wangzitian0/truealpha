@@ -445,4 +445,3 @@ def test_universe_mask_record_confidence_and_raw_ref_defaults() -> None:
 
 def test_insert_universe_mask_alias() -> None:
     assert insert_universe_mask is persist_universe_mask
-
