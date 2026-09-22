@@ -84,6 +84,9 @@ PROD_URL="https://truealpha.club"
 TAG="${1:?usage: cut_release.sh vX.Y.Z --message \"...\" [--prs \"N,N\"] [--prod] [--dry-run] [--resume] [--redeploy] [--auto]}"
 shift
 PRS="" MESSAGE="" PROD=0 DRY=0 RESUME=0 REDEPLOY=0 AUTO=0
+# Set once THIS run pushes a brand-new tag (not a --resume of one already on
+# origin) — see abandon_fresh_tag_on_origin below.
+FRESHLY_TAGGED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --prs) PRS="$2"; shift 2 ;;
@@ -230,6 +233,42 @@ push_tag_with_last_instant_lock() {
   done
   rm -f "$push_err"
   fail "could not claim a free tag after 5 attempts starting from the requested number — check for a runaway parallel release"
+}
+
+# #940: auto-release-staging.yml pushed a tag whose own ci-required run never
+# started at all — GitHub's recursive-workflow-run guard silently drops any
+# `push` made with a workflow's own GITHUB_TOKEN, so `git push origin $TAG`
+# succeeded, claimed the number, and then nothing was ever there to wait for.
+# v0.0.87 sat 20 minutes, timed out, and was left on origin: claimed, never
+# validated, never deployed. That push now uses a real user PAT instead (see
+# auto-release-staging.yml), which is the actual fix; this is the cleanup for
+# every OTHER way a fresh tag's own ci-required can still fail to go green
+# (an actually-red run, a transient API outage, GitHub being slow) so a
+# systemic failure does not silently spend the daily automatic-release cap
+# (tools/auto_release.py) on dangling numbers, one per ~20-minute retry.
+#
+# --auto only. A manual ceremony never calls this: docs/release-protocol.md's
+# "An abandoned tag costs nothing" already covers the operator case on
+# purpose — an operator who chose a specific version by hand may already be
+# coordinating around that exact number elsewhere, and this repository never
+# deletes a release tag a human asked for out from under them. The automatic
+# path is different: nothing outside this run has seen or can reference a
+# number it alone chose, so there is nothing to lose by releasing it back.
+#
+# Only reachable from the branch that just pushed a NEW tag this run (not a
+# --resume of one already on origin, and not after the tag's own ci-required
+# already went green — see the two call sites below): a tag with green CI is
+# a real, resumable release (`--redeploy` exists precisely to pick it back
+# up), never something this function should delete.
+abandon_fresh_tag_on_origin() {
+  { [ "$AUTO" = "1" ] && [ "$FRESHLY_TAGGED" = "1" ]; } || return 0
+  note "releasing $TAG on origin (--auto): its own ci-required never went green, so nothing was ever deployed against it (docs/release-protocol.md)"
+  if git push origin ":refs/tags/$TAG" 2>&1 | sed 's/^/  /' >&2; then
+    note "$TAG removed from origin"
+  else
+    echo "cut_release: could not delete origin tag $TAG — remove it by hand: git push origin :refs/tags/$TAG" >&2
+  fi
+  git tag -d "$TAG" >/dev/null 2>&1 || true
 }
 
 echo "== preconditions for $TAG =="
@@ -430,6 +469,7 @@ else
   else
     echo "== tagging =="
     push_tag_with_last_instant_lock
+    FRESHLY_TAGGED=1
   fi
 
   echo "== waiting for tag ci-required =="
@@ -439,7 +479,7 @@ else
       -q "[.[]|select(.headBranch==\"$TAG\" and .event==\"push\")][0] | \"\(.databaseId) \(.status) \(.conclusion)\"")
     case "$TAG_RUN" in
       *completed\ success) break ;;
-      *completed*) fail "tag ci-required failed: $TAG_RUN" ;;
+      *completed*) abandon_fresh_tag_on_origin; fail "tag ci-required failed: $TAG_RUN" ;;
     esac
     sleep 10
   done
@@ -447,10 +487,14 @@ else
   # seen: only a run that finished green may become the deploy's source_run_id (review).
   case "$TAG_RUN" in
     *completed\ success) ;;
-    *) fail "tag ci-required for $TAG is not green after 20 minutes (last seen: ${TAG_RUN:-nothing}) — not dispatching a deploy on it" ;;
+    *) abandon_fresh_tag_on_origin
+       fail "tag ci-required for $TAG is not green after 20 minutes (last seen: ${TAG_RUN:-nothing}) — not dispatching a deploy on it" ;;
   esac
   TAG_RUN_ID=$(echo "$TAG_RUN" | awk '{print $1}')
-  [ -n "$TAG_RUN_ID" ] || fail "tag run never appeared"
+  if [ -z "$TAG_RUN_ID" ]; then
+    abandon_fresh_tag_on_origin
+    fail "tag run never appeared"
+  fi
   note "tag run $TAG_RUN_ID green"
 fi
 

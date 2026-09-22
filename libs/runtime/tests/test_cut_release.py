@@ -57,7 +57,12 @@ elif args[:2] == ["run", "list"]:
     if workflow == "ci-required.yml":
         print("101 completed success")
     elif workflow == "":
-        print("202 completed success")  # the tag's own push run
+        # The tag's own push run (also what --redeploy checks). Overridable so
+        # a test can reproduce #940: a fresh tag whose own ci-required never
+        # started returns exactly this shape for `[.[]|select(...)][0]` over
+        # an empty array — real jq indexes null, not an error, so the tag's
+        # real 2026-09-22 failure read "last seen: null null null" verbatim.
+        print(os.environ.get("FAKE_TAG_RUN_STATE", "202 completed success"))
     elif workflow == "deploy-release.yml":
         print("303")
     elif workflow == "walk-release.yml":
@@ -137,7 +142,13 @@ class Ceremony:
         git(self.work, "fetch", "-q", "origin", f"refs/tags/{name}:refs/tags/{name}")
         return git(self.work, "for-each-ref", "--format=%(contents)", f"refs/tags/{name}")
 
-    def run(self, tag: str, *arguments: str, served: str = "") -> tuple[subprocess.CompletedProcess[str], list]:
+    def run(
+        self,
+        tag: str,
+        *arguments: str,
+        served: str = "",
+        extra_env: dict[str, str] | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], list]:
         log = self.root / "gh.log"
         log.write_text("", encoding="utf-8")
         env = {
@@ -146,6 +157,7 @@ class Ceremony:
             "FAKE_GH_LOG": str(log),
             "FAKE_GH_MERGES": json.dumps(self.merges),
             "FAKE_SERVED_TAG": served or tag,
+            **(extra_env or {}),
         }
         result = subprocess.run(
             ["bash", str(CUT_RELEASE), tag, "--message", "test release", *arguments],
@@ -304,6 +316,51 @@ def test_auto_marks_the_tag_so_the_daily_cap_can_count_it(ceremony: Ceremony) ->
     [deploy] = dispatched(calls)
     assert "deploy_type=staging" in deploy
     assert not any("deploy_type=prod" in call for call in dispatched(calls)), "--auto must never reach a prod deploy"
+
+
+# --- #940: a fresh --auto tag whose own ci-required never goes green -------
+# GitHub's recursive-workflow guard silently drops any run-triggering event
+# produced by a push made with a workflow's own GITHUB_TOKEN — v0.0.87 was
+# pushed that way, triggered 0 downstream runs, and this script's 20-minute
+# wait timed out with nothing to show for it. auto-release-staging.yml now
+# pushes with a real user PAT instead (the actual fix, not testable here —
+# see its own comment); these tests cover the other half, what happens when a
+# fresh tag's own CI still fails to go green for any other reason.
+
+
+def test_auto_releases_its_own_dangling_tag_when_ci_required_never_goes_green(ceremony: Ceremony) -> None:
+    """Reproduces the exact failure v0.0.87 hit: `[.[]|select(...)][0]` over
+    an empty run list is `null`, and real jq happily interpolates that as the
+    literal string "null" three times — which is what the real incident's log
+    actually read. --auto must not leave that number dangling on origin for
+    the next retry to trip over and burn another slot of the daily cap."""
+    before = ceremony.remote_tags()
+
+    result, calls = ceremony.run("v0.0.2", "--auto", extra_env={"FAKE_TAG_RUN_STATE": "null null null"})
+
+    assert result.returncode != 0
+    assert "not green after 20 minutes" in result.stderr, result.stderr
+    assert "last seen: null null null" in result.stderr, result.stderr
+    assert ceremony.remote_tags() == before, "the dangling v0.0.2 tag must be released back, not left on origin"
+    assert not dispatched(calls), "a tag whose own CI never went green must never reach a deploy dispatch"
+
+
+def test_a_manual_release_leaves_its_dangling_tag_alone(ceremony: Ceremony) -> None:
+    """The converse: without --auto, the same failure must NOT delete the
+    tag. docs/release-protocol.md's "An abandoned tag costs nothing" already
+    covers the manual ceremony on purpose — an operator who chose vX.Y.Z by
+    hand may already be coordinating around that exact number elsewhere, and
+    this repository never deletes a release tag a human asked for out from
+    under them. Only the fully-automatic path — nothing outside the run has
+    seen or can reference a number it alone chose — gets the cleanup above."""
+    result, calls = ceremony.run("v0.0.2", extra_env={"FAKE_TAG_RUN_STATE": "null null null"})
+
+    assert result.returncode != 0
+    assert "not green after 20 minutes" in result.stderr, result.stderr
+    assert "v0.0.2" in ceremony.remote_tags(), (
+        "a manually-cut dangling tag must be left exactly as docs/release-protocol.md says"
+    )
+    assert not dispatched(calls)
 
 
 def test_a_hand_cut_release_never_carries_the_automatic_trailer(ceremony: Ceremony) -> None:
