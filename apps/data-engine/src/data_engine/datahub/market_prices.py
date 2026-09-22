@@ -438,8 +438,25 @@ def parse_daily_bars(
     symbol: str,
     payload: dict[str, Any],
     min_date: date | None = None,
+    *,
+    now: datetime,
 ) -> list[PriceBarRecord]:
-    """Parse daily bars from Twelve Data /time_series payload into PriceBarRecord list."""
+    """Parse daily bars from Twelve Data /time_series payload into PriceBarRecord list.
+
+    A daily bar is asserted only once its own XNYS session has actually CLOSED as of
+    `now` -- instant precision, symmetric with `parse_monthly_bars` (#939 third-round
+    High 2: this function had NO closed-vs-still-open gate at all through two rounds of
+    fixing the identical defect in the monthly parser. `staging.market_prices_daily`
+    carries the exact same `check (recorded_at >= transaction_time)` as the monthly
+    table, and Twelve Data's `interval=1day` response, while today's session is still
+    open, also includes a running "today so far" row. The production cron happens to
+    always run after close (75 min buffer in EDT, 15 min in EST) so scheduled runs
+    never hit this, but any manual Materialize/backfill/retry during market hours did,
+    and rolled back the whole op -- daily AND monthly AND the mask backfill, on the
+    same uncommitted connection -- exactly the failure mode `lanes.market_data`'s
+    `_refresh_market_data` docstring itself names as the risk of a fix applied to only
+    one of two structurally identical call sites.
+    """
     records: list[PriceBarRecord] = []
     values = payload.get("values", [])
     if not isinstance(values, list):
@@ -454,6 +471,10 @@ def parse_daily_bars(
         except (ValueError, TypeError):
             continue
 
+        if now < xnys_session_close_utc(bar_date):
+            # This session has not closed yet as of `now` -- the vendor's
+            # still-in-progress "today" row, not a settled daily bar.
+            continue
         if min_date is not None and bar_date < min_date:
             continue
 
@@ -734,7 +755,7 @@ def ingest_twelve_data_market_prices(
         # 1 call for daily
         daily_payload = td_client.fetch_time_series(symbol, interval="1day", outputsize=5000, adjust=adjust)
         calls_made += 1
-        daily_bars = parse_daily_bars(symbol, daily_payload, min_date=min_daily_date)
+        daily_bars = parse_daily_bars(symbol, daily_payload, min_date=min_daily_date, now=now_instant)
         all_daily_records.extend(daily_bars)
 
         # 1 call for monthly

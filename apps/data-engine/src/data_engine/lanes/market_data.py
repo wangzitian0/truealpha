@@ -24,14 +24,19 @@ freeze": a spent shared key that looks like a quiet vendor because nothing admit
 refused the calls that spent it.
 
 No lookahead: the mask is only ever computed from bars at or before its own cutoff date
-(`universe_mask.evaluate_symbol_pit`), and a cutoff is always a real XNYS session
-(`_daily_cutoff`/`_monthly_cutoff`) -- never a raw wall-clock date, which is what made
-~20 of every 21 trading days in a month read the whole universe as `suspended` under 1M
-before this fix (contract item 1).
+(`universe_mask.evaluate_symbol_pit`), and a cutoff is always a real, actually-CLOSED
+XNYS session (`_daily_cutoff`/`_monthly_cutoff`) -- never a raw wall-clock date (which
+is what made ~20 of every 21 trading days in a month read the whole universe as
+`suspended` under 1M, contract item 1) and never a real session that merely HASN'T
+closed yet either (#939 third-round High 1: a first fix eliminated the raw-date form of
+this but a cutoff of "this month's end" or "today" before that session's own close
+reproduces the identical defect against a bar the parser correctly hasn't written yet
+-- both cutoff functions fall back to the most recent session that has actually
+closed).
 """
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import dagster as dg
@@ -50,26 +55,56 @@ MARKET_DATA_REFRESH_JOB_NAME = "market_data_refresh_pipeline"
 MARKET_DATA_REFRESH_CRON = "15 21 * * 1-5"
 
 
-def _daily_cutoff(as_of: date) -> date:
-    """The most recent XNYS trading session at or before `as_of`.
+def _prior_month(year: int, month: int) -> tuple[int, int]:
+    return (year - 1, 12) if month == 1 else (year, month - 1)
 
-    Never `as_of` itself: a run on a weekend or a market holiday has no daily bar for
-    that raw date, and `evaluate_symbol_pit`'s exact-date match on 1D would misread the
-    whole universe as `suspended` for the same reason contract item 1 documents for 1M.
+
+def _daily_cutoff(now: datetime) -> date:
+    """The most recent XNYS trading session that has actually CLOSED as of `now`.
+
+    Never `now.date()` itself unless that session has closed: a run on a weekend or a
+    market holiday has no daily bar for that raw date (`evaluate_symbol_pit`'s
+    exact-date match on 1D would misread the whole universe as `suspended` for the same
+    reason contract item 1 documents for 1M), and -- #939 third-round High 1's finding
+    about `_monthly_cutoff`, applied here for the same reason -- a cutoff of TODAY
+    while today's own session is still open points at a bar `parse_daily_bars` (#939
+    third-round High 2) now correctly declines to write yet, misreading the same
+    missing-bar as `suspended` instead of "not closed yet". Instant precision, matching
+    `parse_daily_bars`'s own gate, not a second independent clock.
     """
-    from data_engine.datahub.market_prices import most_recent_xnys_session
+    from data_engine.datahub.market_prices import most_recent_xnys_session, xnys_session_close_utc
 
-    return most_recent_xnys_session(as_of)
+    today = now.date()
+    candidate = most_recent_xnys_session(today)
+    if candidate == today and now < xnys_session_close_utc(candidate):
+        candidate = most_recent_xnys_session(today - timedelta(days=1))
+    return candidate
 
 
-def _monthly_cutoff(as_of: date) -> date:
-    """The current month's own last XNYS session -- never `as_of` itself (#938 contract
-    item 1). `parse_monthly_bars` already snaps every monthly bar to this date, so a raw
-    `as_of` cutoff mismatches the bar it should match on ~20 of every 21 trading days and
-    reads the whole universe as `suspended`."""
-    from data_engine.datahub.market_prices import last_xnys_session_of_month
+def _monthly_cutoff(now: datetime) -> date:
+    """The most recent month-end XNYS session that has actually CLOSED as of `now`:
+    this month's own last session if it has closed, else last month's.
 
-    return last_xnys_session_of_month(as_of.year, as_of.month)
+    Never `last_xnys_session_of_month(now.year, now.month)` unconditionally (#939
+    third-round High 1): that returns a FUTURE date on every day before that session's
+    own close, and `parse_monthly_bars` (correctly, since the follow-up fix) never
+    wrote a bar for it yet -- `evaluate_symbol_pit` then reads the missing bar as
+    `suspended` and upserts that verdict for the WHOLE universe at
+    `cutoff_date=<this month's end>`, which is exactly the row a downstream reader
+    asking for "the latest monthly cutoff" would query. #932's original defect
+    (~20/21 trading days a month reading the universe as suspended) was never
+    eliminated by the follow-up fix -- only moved from the `as_of` cutoff to this one.
+    Symmetric with `_daily_cutoff`, both gated by the same closed-as-of-`now` check
+    `parse_monthly_bars`/`parse_daily_bars` use to decide whether to write the bar in
+    the first place.
+    """
+    from data_engine.datahub.market_prices import last_xnys_session_of_month, xnys_session_close_utc
+
+    candidate = last_xnys_session_of_month(now.year, now.month)
+    if now >= xnys_session_close_utc(candidate):
+        return candidate
+    year, month = _prior_month(now.year, now.month)
+    return last_xnys_session_of_month(year, month)
 
 
 def _distinct_trading_dates(connection: psycopg.Connection, table: str, symbols: Sequence[str]) -> list[date]:
@@ -107,7 +142,6 @@ def _refresh_market_data(
     from data_engine.datahub.universe_mask import compute_and_persist_universe_mask_from_db
 
     symbols = tuple(symbols) or DEFAULT_TOPT_SYMBOLS
-    as_of = now.date()
 
     summary = ingest_twelve_data_market_prices(
         symbols=symbols,
@@ -124,10 +158,10 @@ def _refresh_market_data(
     # cutoff (covers a run whose fetch yielded nothing new, e.g. a holiday or an
     # unchanged re-fetch de-duplicated by `_latest_vintages`).
     daily_cutoffs = sorted(
-        set(_distinct_trading_dates(connection, "staging.market_prices_daily", symbols)) | {_daily_cutoff(as_of)}
+        set(_distinct_trading_dates(connection, "staging.market_prices_daily", symbols)) | {_daily_cutoff(now)}
     )
     monthly_cutoffs = sorted(
-        set(_distinct_trading_dates(connection, "staging.market_prices_monthly", symbols)) | {_monthly_cutoff(as_of)}
+        set(_distinct_trading_dates(connection, "staging.market_prices_monthly", symbols)) | {_monthly_cutoff(now)}
     )
 
     daily_mask = compute_and_persist_universe_mask_from_db(

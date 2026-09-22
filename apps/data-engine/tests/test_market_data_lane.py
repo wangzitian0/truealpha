@@ -54,7 +54,7 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub.market_prices import TwelveDataClient, last_xnys_session_of_month, xnys_session_close_utc
 from data_engine.datahub.universe_mask import UniverseMaskReason
-from data_engine.lanes.market_data import _refresh_market_data
+from data_engine.lanes.market_data import _daily_cutoff, _monthly_cutoff, _refresh_market_data
 
 
 @pytest.fixture
@@ -189,6 +189,28 @@ def test_refresh_market_data_op_mid_month_writes_ok_not_suspended(connection) ->
         f"as of {as_of} -- the in-progress month's row must be skipped, not asserted"
     )
 
+    # #939 third-round High 1: the defect wasn't eliminated by the follow-up fix, only
+    # moved -- `_monthly_cutoff` used to return `in_progress_month_end` UNCONDITIONALLY,
+    # so this exact cutoff got a `suspended` mask row for the whole universe on every
+    # day of the month except the one it closes on (the same #932/#938 shape, just keyed
+    # to a different cutoff). The prior version of this test never queried this table at
+    # this cutoff at all -- checking only that the price table had no bar -- so it never
+    # could have caught this. There must be NO row here: an absent row is fail-closed
+    # ("no verdict yet"), a `suspended` row would be a false, asserted-with-confidence
+    # verdict about a month that has not happened yet.
+    with connection.cursor() as cur:
+        cur.execute(
+            "select eligible, reason_code from staging.universe_mask "
+            "where symbol = %s and cutoff_date = %s and resolution = '1M'",
+            (symbol, in_progress_month_end),
+        )
+        in_progress_mask_row = cur.fetchone()
+    assert in_progress_mask_row is None, (
+        f"unexpected 1M mask row at the not-yet-real cutoff {in_progress_month_end}: "
+        f"{in_progress_mask_row} -- the cutoff for a month that has not closed must not "
+        "be asserted at all, whole-universe-suspended or otherwise"
+    )
+
 
 def test_refresh_market_data_op_does_not_crash_on_the_months_own_close_day_before_close(connection) -> None:
     """#939 follow-up High: a blind re-audit of the first fix (`snapped_date > as_of_date`,
@@ -244,4 +266,144 @@ def test_refresh_market_data_op_does_not_crash_on_the_months_own_close_day_befor
         row = cur.fetchone()
     assert row == (True, UniverseMaskReason.OK), (
         f"expected {symbol} eligible at the last CLOSED month {last_closed_month_end}, got {row}"
+    )
+
+    # #939 third-round High 1, at this exact deterministic boundary: no mask row at the
+    # not-yet-real cutoff either. Pre-High-1-fix, `_monthly_cutoff` returned `month_end`
+    # unconditionally and this row would read `suspended` for the whole universe.
+    with connection.cursor() as cur:
+        cur.execute(
+            "select eligible, reason_code from staging.universe_mask "
+            "where symbol = %s and cutoff_date = %s and resolution = '1M'",
+            (symbol, month_end),
+        )
+        in_progress_mask_row = cur.fetchone()
+    assert in_progress_mask_row is None, (
+        f"unexpected 1M mask row at the not-yet-real cutoff {month_end}: {in_progress_mask_row}"
+    )
+
+
+def test_monthly_cutoff_falls_back_to_the_prior_closed_month_before_this_months_close() -> None:
+    """#939 third-round High 1, at the `_monthly_cutoff` unit level: unconditionally
+    returning `last_xnys_session_of_month(now.year, now.month)` -- this month's own
+    end -- is a FUTURE date on every instant before that session's own close. Fully
+    synthetic `now`, independent of real wall-clock day."""
+    month_end = last_xnys_session_of_month(2026, 9)
+    close_instant = xnys_session_close_utc(month_end)
+    now = close_instant - timedelta(minutes=5)
+
+    last_closed_year, last_closed_month = _prior_month(2026, 9)
+    expected = last_xnys_session_of_month(last_closed_year, last_closed_month)
+
+    assert _monthly_cutoff(now) == expected
+
+
+def test_monthly_cutoff_uses_this_month_right_after_its_close() -> None:
+    month_end = last_xnys_session_of_month(2026, 9)
+    close_instant = xnys_session_close_utc(month_end)
+    now = close_instant + timedelta(minutes=5)
+
+    assert _monthly_cutoff(now) == month_end
+
+
+def test_daily_cutoff_falls_back_to_the_prior_closed_session_before_todays_close() -> None:
+    """#939 third-round High 1's finding applied symmetrically to `_daily_cutoff`: once
+    `parse_daily_bars` (third-round High 2) also declines to write a bar for a session
+    that has not closed yet, a cutoff of TODAY before today's own close would reproduce
+    the identical "cutoff points at a bar that was correctly never written" defect for
+    1D that `_monthly_cutoff` had for 1M."""
+    today = date(2026, 9, 22)  # a real XNYS trading day (Tuesday)
+    close_instant = xnys_session_close_utc(today)
+    now = close_instant - timedelta(minutes=5)
+
+    assert _daily_cutoff(now) == date(2026, 9, 21)  # the prior trading day (Monday)
+
+
+def test_daily_cutoff_uses_today_right_after_its_close() -> None:
+    today = date(2026, 9, 22)
+    close_instant = xnys_session_close_utc(today)
+    now = close_instant + timedelta(minutes=5)
+
+    assert _daily_cutoff(now) == today
+
+
+def test_daily_cutoff_falls_back_across_a_weekend_before_mondays_close() -> None:
+    """The fallback itself must land on a real trading day, not just "yesterday" --
+    Monday's own close hasn't happened yet, and the weekend before it has no session at
+    all, so the answer must be the prior Friday."""
+    monday = date(2026, 9, 21)
+    close_instant = xnys_session_close_utc(monday)
+    now = close_instant - timedelta(minutes=5)
+
+    assert _daily_cutoff(now) == date(2026, 9, 18)  # the prior Friday
+
+
+def test_refresh_market_data_op_does_not_crash_on_todays_session_before_its_close(connection) -> None:
+    """#939 third-round High 2: `parse_daily_bars` had NO closed-vs-still-open gate at
+    all through two rounds of fixing the identical defect in the monthly parser, and no
+    test -- red or green -- ever exercised it. `now` here is fully synthetic (a real
+    trading day's own close, minus five minutes), independent of real wall-clock day.
+    """
+    symbol = "T939DAILYBOUNDARY"
+    today = date(2026, 9, 22)
+    close_instant = xnys_session_close_utc(today)
+    now = close_instant - timedelta(minutes=5)  # today's own session, before its close
+    prior_session = date(2026, 9, 21)
+
+    # 12 consecutive closed trading-day bars (>= default min_periods=12) ending the day
+    # before `today`, PLUS `today`'s own still-open "so far" row -- Twelve Data's actual
+    # shape for `interval=1day` mid-session.
+    daily_dates = [date(2026, 9, d) for d in range(4, 22) if date(2026, 9, d).weekday() < 5][-12:] + [today]
+
+    def transport(url: str) -> tuple[int, bytes]:
+        query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+        if query.get("interval") == "1day":
+            values = [
+                {"datetime": d.isoformat(), "open": "100", "high": "101", "low": "99", "close": "100", "volume": "1000"}
+                for d in daily_dates
+            ]
+        else:
+            values = []
+        return 200, json.dumps({"values": values}).encode()
+
+    client = TwelveDataClient(api_key="test", transport_fn=transport)
+    context = dg.build_op_context()
+    # Must not raise: pre-fix, `today`'s still-open row's transaction_time (today's own
+    # 16:00 ET close) was still five minutes in the future relative to `now`, and
+    # `parse_daily_bars` had no gate to skip it -- staging.market_prices_daily's CHECK
+    # fired, and the whole op (monthly insert and both mask backfills included) rolled
+    # back with it.
+    _refresh_market_data(context, connection, symbols=[symbol], now=now, client=client)
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "select trading_date from staging.market_prices_daily where symbol = %s",
+            (symbol,),
+        )
+        daily_dates_written = {row[0] for row in cur.fetchall()}
+    assert today not in daily_dates_written, (
+        f"a daily bar was written at {today}, {close_instant - now} before its own close "
+        "-- the still-open boundary row must be skipped, not asserted"
+    )
+
+    # And no mask row at the not-yet-real cutoff `today` either (#939 High 1 applied to
+    # 1D): `_daily_cutoff` must fall back to the prior CLOSED session.
+    with connection.cursor() as cur:
+        cur.execute(
+            "select eligible, reason_code from staging.universe_mask "
+            "where symbol = %s and cutoff_date = %s and resolution = '1D'",
+            (symbol, today),
+        )
+        today_mask_row = cur.fetchone()
+    assert today_mask_row is None, f"unexpected 1D mask row at the not-yet-closed cutoff {today}: {today_mask_row}"
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "select eligible, reason_code from staging.universe_mask "
+            "where symbol = %s and cutoff_date = %s and resolution = '1D'",
+            (symbol, prior_session),
+        )
+        prior_mask_row = cur.fetchone()
+    assert prior_mask_row == (True, UniverseMaskReason.OK), (
+        f"expected {symbol} eligible at the last CLOSED session {prior_session}, got {prior_mask_row}"
     )

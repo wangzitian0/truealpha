@@ -21,6 +21,7 @@ from data_engine.datahub.market_prices import (
     insert_market_prices_daily,
     insert_market_prices_monthly,
     last_xnys_session_of_month,
+    parse_daily_bars,
     parse_monthly_bars,
     xnys_session_close_utc,
 )
@@ -248,3 +249,59 @@ def test_parse_monthly_bars_includes_the_bar_right_after_its_own_close() -> None
     bars = parse_monthly_bars("T939TEN", payload, now=now)
 
     assert [b.date for b in bars] == [month_end]
+
+
+def test_parse_daily_bars_skips_a_bar_before_its_own_close() -> None:
+    """#939 third-round High 2: `parse_daily_bars` had NO closed-vs-still-open gate at
+    all through two rounds of fixing the identical defect in `parse_monthly_bars`.
+    Twelve Data's `interval=1day` response, while today's session is still open,
+    includes a running "today so far" row -- dated today, not snapped (daily bars are
+    never snapped), but just as much not yet a settled close. Fully synthetic `now`
+    (a real trading day's own close, minus five minutes), independent of real
+    wall-clock day.
+    """
+    today = date(2026, 9, 22)  # a real XNYS trading day
+    close_instant = xnys_session_close_utc(today)
+    now = close_instant - timedelta(minutes=5)
+
+    payload = {
+        "values": [
+            {
+                "datetime": today.isoformat(),
+                "open": "100",
+                "high": "101",
+                "low": "99",
+                "close": "100",
+                "volume": "1000",
+            },
+        ]
+    }
+
+    bars = parse_daily_bars("T939ELEVEN", payload, now=now)
+
+    assert bars == [], (
+        f"expected the still-open {today} bar to be skipped {close_instant - now} before its own close, got {bars}"
+    )
+
+
+def test_parse_daily_bars_includes_a_bar_right_after_its_own_close() -> None:
+    today = date(2026, 9, 22)
+    close_instant = xnys_session_close_utc(today)
+    now = close_instant + timedelta(minutes=5)
+
+    payload = {
+        "values": [
+            {
+                "datetime": today.isoformat(),
+                "open": "100",
+                "high": "101",
+                "low": "99",
+                "close": "100",
+                "volume": "1000",
+            },
+        ]
+    }
+
+    bars = parse_daily_bars("T939TWELVE", payload, now=now)
+
+    assert [b.date for b in bars] == [today]
