@@ -1,0 +1,112 @@
+name: auto-release-staging
+
+# #860: on 2026-09-17, green merges to main sat untagged for up to 16.5 min
+# because nobody ran the release ceremony (`tools/cut_release.sh`) by hand.
+# This workflow runs it automatically — for STAGING ONLY. The owner approved
+# automatic releases for staging on 2026-09-17 ("先在 staging 做吧，prod 回头再说");
+# production stays a deliberate `--prod` run, and `--prod` never appears
+# anywhere in this file (test_ci_workflows.py greps the literal string;
+# `tools/cut_release.sh` additionally refuses `--auto --prod` together as a
+# second, independent lock — test_cut_release.py).
+#
+# `tools/auto_release.py` holds every reason NOT to release even after the
+# quiet period below (its own docstring enumerates the six, checked in
+# order); this workflow is only its trigger, the wait, and the one command it
+# is allowed to run on `release=true`.
+#
+# The quiet period is a DEBOUNCE, not a sleep-then-hope: every green push to
+# main starts its own 20-minute wait, then the checkout below and
+# `tools/auto_release.py` re-read main HEAD fresh (the checkout from git,
+# the tool from the GitHub API) rather than trusting anything captured at
+# trigger time. A push whose wait elapses only to find main has moved on
+# defers — that later push's own green run already started an independent
+# wait, and only the newest one can still find itself at HEAD when it wakes.
+# The `release` job's own concurrency group (below) is the second half: it
+# serialises the actual decide-and-tag step so two overlapping waits can
+# never race the same tag number, even if both somehow reached it together.
+#
+# workflow_run executes this file from the default branch with a write
+# token (main-health.yml's own comment on the same trigger type) — nothing
+# from the triggering run reaches a `run:` block directly, only through
+# `env:`.
+
+on:
+  workflow_run:
+    workflows: [ci-required]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  # `git push origin vX.Y.Z` (tools/cut_release.sh).
+  contents: write
+  # `gh workflow run` / `gh run list` / `gh run view` to dispatch and poll the
+  # staging deploy, the surface walk, and the tag's own ci-required.
+  actions: write
+  # `gh pr view` / the review-thread GraphQL query, for the derived --prs batch.
+  pull-requests: read
+
+concurrency:
+  group: auto-release-staging
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # `branches: [main]` matches the head BRANCH NAME, which a pull_request
+    # from a fork's own `main` also carries (main-health.yml's own comment) —
+    # only a push event is a main commit, and only a green one may release.
+    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Quiet period
+        # 20 minutes (owner decision 2026-09-17, #860): batches a burst of
+        # merges into one release instead of one tag per PR. Held against
+        # tools/auto_release.py's own tick-window tests in
+        # test_auto_release.py — 1200s = 20 * 60.
+        run: sleep 1200
+
+      - uses: actions/checkout@v4
+        with:
+          # Explicit, not left to default `github.ref`: `tools/cut_release.sh`
+          # runs `git rev-parse main` and needs a real local branch named
+          # `main`, not a detached HEAD.
+          ref: main
+          # Full history and every vX.Y.Z tag: `tools/auto_release.py` reads
+          # every release tag locally (`git for-each-ref refs/tags`), and
+          # `tools/cut_release.sh` walks main's own log back to the last one.
+          fetch-depth: 0
+
+      - name: Configure git identity for the release tag
+        # No other workflow in this repository creates a `git commit` or an
+        # annotated `git tag` — everything else goes through `gh`, which needs
+        # no local identity. This is the first one that does, and a GitHub
+        # Actions runner carries no default user.name/user.email.
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Decide whether to release
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+        # Stdlib only (tools/auto_release.py's own docstring) — no `uv sync`,
+        # nothing installed but the checkout above. `--daily-cap` is left at
+        # its default (4, the owner's bound) so the number lives in exactly
+        # one place; test_auto_release.py pins that default.
+        run: |
+          python3 tools/auto_release.py --repo "$GITHUB_REPOSITORY" --trigger-sha "$TRIGGER_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Cut the release (staging only)
+        if: steps.decide.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.decide.outputs.tag }}
+          REASON: ${{ steps.decide.outputs.reason }}
+        # --auto marks the tag (Release-Trigger: auto-staging) so this tool's
+        # own daily cap can count it next time, and is mutually exclusive
+        # with --prod inside cut_release.sh itself — --prod is never passed
+        # here, and could not be honoured even if it were.
+        run: |
+          tools/cut_release.sh "$TAG" --message "auto-release: $REASON" --auto

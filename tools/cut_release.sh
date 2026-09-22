@@ -28,7 +28,17 @@
 #
 # Usage:
 #   tools/cut_release.sh vX.Y.Z --message "one-line summary" \
-#     [--prs "663,665"] [--prod] [--dry-run] [--resume] [--redeploy]
+#     [--prs "663,665"] [--prod] [--dry-run] [--resume] [--redeploy] [--auto]
+#
+# --auto marks the tag as machine-cut (`auto-release-staging.yml`, #860): it
+#   appends `Release-Trigger: auto-staging` to the tag annotation, which is the
+#   only thing `tools/auto_release.py`'s daily cap counts (a hand-cut tag never
+#   carries it, so an operator release never eats into the automatic budget).
+#   It is mutually exclusive with --prod and checked FIRST, before the tag
+#   regex or anything else that touches git or gh — the owner's 2026-09-17
+#   decision ("先在 staging 做吧，prod 回头再说", #860) is that an automatic
+#   release is staging-only, full stop, so this combination refuses before any
+#   side effect rather than after deriving --prs or verifying a PR.
 #
 # --prs is now OPTIONAL (#855 A3, #860): omitted, the PR list is DERIVED from
 #   every squash-merge between the newest reachable vX.Y.Z tag and main HEAD
@@ -71,12 +81,9 @@ REPO="wangzitian0/truealpha"
 STAGING_URL="https://truealpha-staging.truealpha.club"
 PROD_URL="https://truealpha.club"
 
-TAG="${1:?usage: cut_release.sh vX.Y.Z --message \"...\" [--prs \"N,N\"] [--prod] [--dry-run] [--resume] [--redeploy]}"
+TAG="${1:?usage: cut_release.sh vX.Y.Z --message \"...\" [--prs \"N,N\"] [--prod] [--dry-run] [--resume] [--redeploy] [--auto]}"
 shift
-# deploy-release.yml requires a stable vX.Y.Z tag; a malformed one would be
-# pushed (the lock!) and then rejected downstream, wasting the number (review).
-echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "cut_release: $TAG is not vX.Y.Z" >&2; exit 2; }
-PRS="" MESSAGE="" PROD=0 DRY=0 RESUME=0 REDEPLOY=0
+PRS="" MESSAGE="" PROD=0 DRY=0 RESUME=0 REDEPLOY=0 AUTO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --prs) PRS="$2"; shift 2 ;;
@@ -85,9 +92,24 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1; shift ;;
     --resume) RESUME=1; shift ;;
     --redeploy) REDEPLOY=1; shift ;;
+    --auto) AUTO=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# Checked before the tag regex, before --prs derivation, before anything else
+# touches git or gh: --auto is how auto-release-staging.yml (#860) cuts a
+# release, and the owner's 2026-09-17 decision is staging-only, full stop.
+# This is the second, independent lock on that decision — the first is that
+# no automated workflow ever writes --prod into the command it runs at all
+# (test_ci_workflows.py greps auto-release-staging.yml for the literal
+# string) — so a bug that DID add it here still cannot promote production.
+if [ "$AUTO" = "1" ] && [ "$PROD" = "1" ]; then
+  echo "cut_release: --auto and --prod cannot be combined — automatic releases are staging-only (owner decision 2026-09-17, #860)" >&2
+  exit 2
+fi
+# deploy-release.yml requires a stable vX.Y.Z tag; a malformed one would be
+# pushed (the lock!) and then rejected downstream, wasting the number (review).
+echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "cut_release: $TAG is not vX.Y.Z" >&2; exit 2; }
 # --prs is no longer required here (#855 A3): an empty value means "derive it
 # from every merge since the last release tag", done below once main is
 # current. It is still validated non-empty before use either way.
@@ -351,6 +373,15 @@ note "reviewed change for prod: #$REVIEWED_PR (merge == HEAD)"
 TAG_MESSAGE="$MESSAGE
 
 PRs: $PRS"
+# tools/auto_release.py's daily cap counts exactly this line (AUTO_TRAILER) on
+# a tag's annotation — never the invocation, since only the pushed tag itself
+# survives to the next run's `git for-each-ref`. A hand-cut release never
+# carries it, so an operator release stays outside the automatic budget.
+if [ "$AUTO" = "1" ]; then
+  TAG_MESSAGE="$TAG_MESSAGE
+
+Release-Trigger: auto-staging"
+fi
 
 # 4. main HEAD's ci-required is green — the tag inherits this SHA. A freshly
 #    merged HEAD has CI still running; wait bounded instead of failing on the

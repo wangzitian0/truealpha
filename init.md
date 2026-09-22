@@ -501,8 +501,14 @@ consumer, recovery, soak, capture-audit, and human-graduation evidence all pass.
 Release gates define claims and promotion order; implementation is conventional issue→PR
 work (see `AGENTS.md`). Grow evidence incrementally — prove a slice on a tiny fixed
 corpus before scaling it — and merge verified PRs independently into `main`; a merge
-never promotes an environment or implies gate completion. Disjoint capture, platform,
-strategy, consumption, and verification lanes work in parallel against exact
+never promotes an environment or implies gate completion. This holds exactly the same
+way once a green, quiet main HEAD is tagged automatically: `auto-release-staging.yml`
+(#860, owner decision 2026-09-17) cuts a Staging release on a debounced timer so nobody
+has to run the ceremony by hand, and stops there — Production only ever moves on a
+deliberate `tools/cut_release.sh --prod` run, a soaking Staging tag asserts nothing about
+any gate above, and the automation carries no authority to promote or close one (see
+`docs/release-protocol.md`, "Staging cuts itself; production still does not"). Disjoint
+capture, platform, strategy, consumption, and verification lanes work in parallel against exact
 content-hashed handoffs; coordinate through issues before touching shared surfaces
 (types, exports, registries, migration numbering, generated contracts, lockfiles,
 authoritative architecture documents).
