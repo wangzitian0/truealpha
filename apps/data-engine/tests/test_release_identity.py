@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from data_engine import release_identity
 from data_engine.config import Settings
-from infra2_sdk.runtime.config_schema import configuration_fingerprint
+from infra2_sdk.runtime.config_schema import manifest_config_fingerprint
 from infra2_sdk.runtime.identity import canonical_sha256 as estate_canonical_sha256
 from truealpha_contracts.common import canonical_sha256
 
@@ -118,7 +118,7 @@ def test_the_contract_fingerprint_hashes_the_declarations_not_the_deployed_value
     in hand and must reach the same answer as the container; and a value that changed
     between staging and production would give one release two identities."""
     manifest = release_identity.environment_contract(REPO_ROOT / "apps/data-engine/required-env.generated.json")
-    expected = configuration_fingerprint(
+    expected = manifest_config_fingerprint(
         manifest,
         {
             field.env: json.dumps(field.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)

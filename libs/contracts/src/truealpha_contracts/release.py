@@ -271,7 +271,7 @@ def resolve_accepted_release(
 #                                   its identity.
 #   environment_contract_sha256     the fingerprint of the environment contract the
 #                                   artifact declares (infra2-sdk
-#                                   ``configuration_fingerprint`` over the app's
+#                                   ``manifest_config_fingerprint`` over the app's
 #                                   ``required-env.generated.json``), so a release that
 #                                   changes what the deployment must supply changes its
 #                                   identity.

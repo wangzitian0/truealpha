@@ -7,7 +7,7 @@ the three facts it is made of out of the running artifact:
                                   in infra2's compose -- the vX.Y.Z tag `pin_release`
                                   resolved), through `settings`, never `os.environ`.
     migration_ids                 the ordered ids of `db/migrations/*.sql` the image ships.
-    environment_contract_sha256   infra2-sdk's `configuration_fingerprint` over the
+    environment_contract_sha256   infra2-sdk's `manifest_config_fingerprint` over the
                                   environment contract the image ships
                                   (`apps/data-engine/required-env.generated.json`).
 
@@ -102,7 +102,7 @@ def environment_contract(path: Path | None = None) -> EnvironmentManifest:
 def environment_contract_sha256(path: Path | None = None) -> str:
     """Fingerprint the environment CONTRACT -- the declarations, not the values.
 
-    `configuration_fingerprint` frames named inputs unambiguously and hashes each one before
+    `manifest_config_fingerprint` frames named inputs unambiguously and hashes each one before
     the outer digest. The inputs here are each field's full declaration, so the fingerprint
     moves when a variable is added, removed, renamed, or changes who produces it -- and does
     not move between staging and production, which is required: the deploy runner computes
