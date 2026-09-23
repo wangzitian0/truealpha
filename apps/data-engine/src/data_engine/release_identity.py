@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from infra2_sdk import manifests
-from infra2_sdk.runtime.config_schema import EnvironmentManifest, configuration_fingerprint
+from infra2_sdk.runtime.config_schema import EnvironmentManifest, manifest_config_fingerprint
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.release import live_release_payload
 
@@ -114,7 +114,7 @@ def environment_contract_sha256(path: Path | None = None) -> str:
         field.env: json.dumps(field.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         for field in manifest.fields
     }
-    return configuration_fingerprint(manifest, declarations)
+    return manifest_config_fingerprint(manifest, declarations)
 
 
 def measure(
