@@ -88,16 +88,15 @@ python -m pytest <tests_dir> -q   # 或 make test, npm test 等
 - **⚠️ 运行时是否是新版 (GREEN-WHILE-STALE)**: 进程活着 ≠ 跑的是你刚改的代码
 
 ```bash
-# 常驻进程 vs 源码：改完文件不等于生效。MCP server 被宿主作为子进程长驻，
-# 且 kill 它不会自动重连——只会让该会话永久失去工具，必须重启宿主本身。
-ft=$(stat -f %m <改动的文件>)
-pgrep -f <进程名> | while read p; do
-  pt=$(date -j -f "%a %b %d %T %Y" "$(ps -o lstart= -p $p)" +%s 2>/dev/null)
-  [ -n "$pt" ] && [ "$pt" -lt "$ft" ] && echo "STALE: PID $p 早于代码，跑的是旧逻辑"
-done
-
-# 编译产物 vs 源码：Go/Rust 改了源码不重编，二进制还是旧的
-[ <二进制> -nt <源码> ] || echo "STALE: 二进制比源码旧，需重新编译安装"
+# 文件改动时间 vs 进程已运行时长：进程若比文件还老，跑的就不是你刚改的代码。
+# 不用 stat -f / date -j——那是 macOS 专有写法，在 GNU/Linux（CI 与服务器上最常见）
+# 会直接失败，而这条探针的全部价值就在于它到处都能跑。
+FILE=<改动的文件>; PID=<进程 pid>
+python3 -c "import os,subprocess,sys,time; f,p=sys.argv[1],sys.argv[2]; \
+age=time.time()-os.stat(f).st_mtime; \
+el=subprocess.run(['ps','-o','etimes=','-p',p],capture_output=True,text=True).stdout.strip(); \
+print(f'文件改动于 {age:.0f}s 前，进程已运行 {el}s'); \
+print('进程比改动更老 → 跑的是旧代码' if el and int(el)>age else '进程晚于改动 → 可能是新代码')" "$FILE" "$PID"
 ```
 
 判定标准：

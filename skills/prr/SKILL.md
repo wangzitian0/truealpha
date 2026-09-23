@@ -104,9 +104,14 @@ REMOTE_HEAD=$(git rev-parse "origin/$HEAD_REF" 2>/dev/null || echo "")
 BASE_COMMIT=$(git rev-parse "origin/$BASE_REF")
 
 # Check if branch is behind base
+# 初始化：set -u 下未初始化的变量会直接终止脚本。
+NEEDS_REBASE=false
+STASHED=false
+# 只有 base 不是本地的祖先时才需要 rebase。本地领先于 base（已是最新）
+# 不需要，早先那个条件会把这种情况也判成需要。
 git merge-base --is-ancestor "$BASE_COMMIT" "$LOCAL_COMMIT" 2>/dev/null || NEEDS_REBASE=true
 
-if [ "$NEEDS_REBASE" = "true" ] || ! git merge-base --is-ancestor "$LOCAL_COMMIT" "$BASE_COMMIT" 2>/dev/null; then
+if [ "$NEEDS_REBASE" = "true" ]; then
   echo "🔄 Branch needs rebase. Rebasing onto origin/$BASE_REF..."
   
   # Check for uncommitted changes
