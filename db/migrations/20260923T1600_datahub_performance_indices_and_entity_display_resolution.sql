@@ -148,8 +148,3 @@ $$;
 
 comment on view mart.entity_display_resolution is
     '#987: issuer -> ticker/display_name for consumer rendering with fast entity_aliases lookup supporting both UUID entities and legacy string IDs.';
-
-grant select on mart.entity_display_resolution to mart_readonly;
-grant select on mart.entity_display_resolution to app_ops_reader;
-grant select on mart.governed_strategy_run to mart_readonly;
-grant select on mart.governed_strategy_run to app_ops_reader;
