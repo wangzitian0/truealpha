@@ -312,3 +312,60 @@ def a_copy(model, *, id_field, prefix):
     node = ast.parse(source).body[0]
     assert isinstance(node, ast.FunctionDef)
     assert _stamps_a_content_address(node)
+
+
+def _normalised(node: ast.FunctionDef) -> str:
+    """The function's shape with every identifier, argument, attribute and constant replaced,
+    so a copy that renamed things still hashes the same."""
+
+    class _Blank(ast.NodeTransformer):
+        def visit_Name(self, n):
+            return ast.copy_location(ast.Name(id="_", ctx=n.ctx), n)
+
+        def visit_arg(self, n):
+            return ast.copy_location(ast.arg(arg="_", annotation=None), n)
+
+        def visit_Attribute(self, n):
+            self.generic_visit(n)
+            return ast.copy_location(ast.Attribute(value=n.value, attr="_", ctx=n.ctx), n)
+
+        def visit_Constant(self, n):
+            return ast.copy_location(ast.Constant(value=None), n)
+
+    return ast.dump(_Blank().visit(ast.parse(ast.unparse(node)).body[0]))
+
+
+def test_no_function_body_is_duplicated_across_two_modules() -> None:
+    """The sweep this issue came from, armed.
+
+    #997 found five cross-file groups holding eleven functions. Consolidating the
+    content-address wrapper left one group -- `PlannedDemandCell.identify` and
+    `SnapshotDemandCell.identify`, twelve identical lines around an already-shared
+    derivation -- which is now `stamp_planned_cell_id`. This asserts the count stays at zero,
+    so the next copy fails here rather than waiting for someone to run the sweep by hand.
+
+    Bodies under four statements are out of scope: a duplicated one-liner is real and is not
+    worth the false-positive rate. That was the sweep's own threshold and it stays here so the
+    check and the finding measure the same thing.
+    """
+    by_shape: dict[str, list[str]] = {}
+    for root in _SOURCE_ROOTS:
+        assert root.is_dir(), f"source root {root} is missing, so this guard is not scanning it"
+        for path in sorted(root.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.FunctionDef) or len(node.body) < 4:
+                    continue
+                where = f"{path.relative_to(_REPO_ROOT).as_posix()}::{node.name}"
+                by_shape.setdefault(_normalised(node), []).append(where)
+
+    assert by_shape, "the sweep found no functions at all, so it is asserting nothing"
+    # Reported as groups of names. The key is a normalised AST dump, which is the right
+    # thing to compare and the wrong thing to print: the first draft of this message put a
+    # 1.6KB tree in front of the two filenames a reader needs.
+    cross_file = [
+        sorted(members) for members in by_shape.values() if len({member.split("::")[0] for member in members}) > 1
+    ]
+    assert not cross_file, (
+        "these function bodies are identical in shape across modules; give them one "
+        f"definition or say why they must stay apart: {sorted(cross_file)}"
+    )

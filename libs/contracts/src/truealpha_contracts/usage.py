@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import Protocol
 
 from pydantic import (
     BaseModel,
@@ -48,6 +49,50 @@ def planned_cell_id_for(
         }
     )
     return f"planned-demand-cell:{digest}"
+
+
+class _DemandCell(Protocol):
+    """What `stamp_planned_cell_id` requires of a model: the six fields the identity derives
+    from, and the field it writes. Stated as a Protocol rather than `BaseModel` because
+    `BaseModel` declares none of them -- mypy said so -- and because a third demand-cell model
+    then has to satisfy this shape to use the stamp, rather than discovering at runtime that
+    it is missing a field."""
+
+    requirement_id: str
+    capture_requirement_id: str
+    semantic_type_id: str
+    domain: DataDomain
+    subject: SubjectRef
+    partition_key: str
+    planned_cell_id: str
+
+
+def stamp_planned_cell_id(model: _DemandCell) -> None:
+    """Stamp `model.planned_cell_id` with the identity its six demand fields derive.
+
+    #997: `PlannedDemandCell` and `SnapshotDemandCell` carried byte-identical validator
+    bodies around this one derivation -- the same six keyword arguments, the same check, the
+    same write, differing only in whether the refusal said "frozen demand" or "frozen
+    snapshot demand". `planned_cell_id_for` was already shared; the twelve lines wrapping it
+    were not, which is the same shape as the nine copies of the content-address wrapper and
+    the reason the structural sweep still reported one cross-file group after those merged.
+
+    The message no longer names the model. A caller that needs to know which object was
+    refused has the exception's own context; a second model existed partly to carry a second
+    sentence.
+    """
+    expected_id = planned_cell_id_for(
+        requirement_id=model.requirement_id,
+        capture_requirement_id=model.capture_requirement_id,
+        semantic_type_id=model.semantic_type_id,
+        domain=model.domain,
+        subject=model.subject,
+        partition_key=model.partition_key,
+    )
+    supplied = model.planned_cell_id
+    if supplied not in ("", expected_id):
+        raise ValueError("planned_cell_id does not match its frozen demand")
+    object.__setattr__(model, "planned_cell_id", expected_id)
 
 
 class RequirementLevel(StrEnum):
@@ -123,17 +168,7 @@ class PlannedDemandCell(BaseModel):
 
     @model_validator(mode="after")
     def identify(self) -> PlannedDemandCell:
-        expected_id = planned_cell_id_for(
-            requirement_id=self.requirement_id,
-            capture_requirement_id=self.capture_requirement_id,
-            semantic_type_id=self.semantic_type_id,
-            domain=self.domain,
-            subject=self.subject,
-            partition_key=self.partition_key,
-        )
-        if self.planned_cell_id and self.planned_cell_id != expected_id:
-            raise ValueError("planned_cell_id does not match frozen demand")
-        object.__setattr__(self, "planned_cell_id", expected_id)
+        stamp_planned_cell_id(self)
         return self
 
     @property
