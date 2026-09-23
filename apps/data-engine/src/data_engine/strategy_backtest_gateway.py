@@ -13,13 +13,14 @@ exact snapshot it was computed from.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.fiscal_period import parse_annual
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 from data_engine.core_strategy_replay import Decision, _risk_free_rate, _to_decision
@@ -51,6 +52,19 @@ def seed_strategy_backtest_inputs(connection: Connection[Any], corpus: dict[str,
             )
             written += 1
     return written
+
+
+def _period_end_key(tag: str) -> date | str:
+    parsed = parse_annual(tag)
+    if parsed is not None:
+        return parsed.end
+    parts = tag.split(":")
+    if len(parts) >= 4:
+        try:
+            return date.fromisoformat(parts[-1])
+        except ValueError:
+            return parts[-1]
+    return tag
 
 
 class StrategyBacktestGateway:
@@ -89,7 +103,7 @@ class StrategyBacktestGateway:
             # The latest period also answers as the scalar, so `net_income` stays a
             # required-input the coverage check and the multiple can both see.
             scalars = by_issuer.setdefault(issuer_id, {})
-            latest_period = max(periodic[issuer_id][input_key])
+            latest_period = max(periodic[issuer_id][input_key], key=_period_end_key)
             scalars[input_key] = periodic[issuer_id][input_key][latest_period]
         return [
             IssuerInput(
