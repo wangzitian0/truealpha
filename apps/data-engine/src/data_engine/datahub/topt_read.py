@@ -73,9 +73,15 @@ class PostgresToptReadRepository:
                    r.payload->>'gppe' as gppe,
                    r.payload->>'confidence' as confidence
             from mart.topt_gppe_results r
-            left join mart.entity_identity ei
-              on (ei.entity_id::text = (r.payload->>'listing_id') or (ei.entity_id::text = r.issuer_id and ei.kind = 'issuer'))
-            where r.payload->>'run_id' = %s
+            left join lateral (
+                select ei.listing_id
+                from mart.entity_identity ei
+                where ei.entity_id::text = (r.payload->>'listing_id')
+                   or (ei.entity_id::text = r.issuer_id and ei.kind = 'issuer')
+                order by (ei.entity_id::text = (r.payload->>'listing_id')) desc
+                limit 1
+            ) ei on true
+            where r.run_id = %s
             order by coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) limit %s
             """,
             (run_id, limit),

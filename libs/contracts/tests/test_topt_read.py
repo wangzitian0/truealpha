@@ -268,9 +268,10 @@ def test_latest_joins_entity_identity_to_resolve_symbolic_listing_id(monkeypatch
     report = repo.latest()
 
     assert report.cells[0].listing_id == "listing:xnas:aapl"
-    assert not re.match(
+    assert not re.fullmatch(
         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
         report.cells[0].listing_id,
+        flags=re.IGNORECASE,
     )
     cells_query = next(sql for sql in calls if "topt_gppe_results" in sql)
     assert "mart.entity_identity ei" in cells_query
