@@ -77,13 +77,13 @@ app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
 # that can reach this port set the scheme and host used to build redirects, and
 # "it is not reachable from outside" is an assumption about networking rather
 # than something this process can check (review).
-#
-# Measured on the VPS: llm-service sits on dokploy-network at 10.0.1.249 and
-# Traefik at 10.0.1.76 on the same network. Overridable so a preview or a
+# Defaults to loopback addresses for standalone runnability; in private
+# deployments behind reverse proxies (e.g. Traefik), TRUSTED_PROXY_HOSTS can
+# be overridden to include proxy network subnets. Overridable so a preview or a
 # different topology declares its own, and a wrong value fails closed — the
 # headers are ignored and the redirect degrades to the pre-fix behaviour rather
 # than trusting a stranger.
-TRUSTED_PROXIES = os.environ.get("TRUSTED_PROXY_HOSTS", "127.0.0.1,::1,10.0.1.0/24")
+TRUSTED_PROXIES = os.environ.get("TRUSTED_PROXY_HOSTS", "127.0.0.1,::1")
 app.add_middleware(
     ProxyHeadersMiddleware,
     trusted_hosts=[host.strip() for host in TRUSTED_PROXIES.split(",") if host.strip()],
