@@ -1088,8 +1088,15 @@ def test_observation_valid_from_is_the_adapters_real_date_not_the_partition_anch
         (obligation_id,),
     ).fetchone()
     assert stored is not None
-    assert stored[0] == filed_long_before_the_capture
-    assert stored[0] != plan.timeline.partition_start
+    # The column round-trips as an aware datetime at midnight UTC (timestamptz); a bare
+    # `date` never compares equal to a `datetime` in Python even for the same day, so
+    # normalize before asserting -- an unnormalized comparison here would stay red
+    # forever regardless of the fix, not just before it.
+    stored_valid_from = stored[0].date() if isinstance(stored[0], datetime) else stored[0]
+    partition_start = plan.timeline.partition_start
+    partition_start_date = partition_start.date() if isinstance(partition_start, datetime) else partition_start
+    assert stored_valid_from == filed_long_before_the_capture
+    assert stored_valid_from != partition_start_date
 
 
 def test_sink_refuses_more_attempts_than_the_retry_policy_permits(connection) -> None:
