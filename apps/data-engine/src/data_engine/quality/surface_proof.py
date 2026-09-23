@@ -37,13 +37,13 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from psycopg import Connection
-from truealpha_contracts.common import CaptureEnvironment
 
 from data_engine.datahub.question_coverage import (
     GOVERNING_FACTOR,
     UNIVERSE_PREFIXES,
     GovernedHead,
     compile_report,
+    declared_environment,
     governed_head,
     stored_report_run,
 )
@@ -153,10 +153,13 @@ class SurfaceVerdict:
 
 
 def _heads(connection: Connection[Any]) -> dict[str, GovernedHead | None]:
-    environment = CaptureEnvironment.PRODUCTION.value
+    """#756: resolved under the environment this database declares, which is what
+    `mart.governed_strategy_run` -- the view `_STRATEGY_HEAD_SQL` reads on the other side of
+    this comparison -- has filtered on since that migration. While this function pinned the
+    literal `production` instead, the proof was comparing two different definitions of the
+    head and reporting the difference as a surface mismatch."""
     return {
-        universe: governed_head(connection, universe_prefix=prefix, environment=environment)
-        for universe, prefix in UNIVERSE_PREFIXES.items()
+        universe: governed_head(connection, universe_prefix=prefix) for universe, prefix in UNIVERSE_PREFIXES.items()
     }
 
 
@@ -166,12 +169,15 @@ def fresh_heads_without_reports(connection: Connection[Any], *, now: datetime, g
     pointer sensor launches for it. Older than `grace`, the same state is a MISMATCH — the
     sensor did not follow the head. Read-only."""
     settling: dict[str, str] = {}
+    # Read once: the environment is a property of the database, not of a universe, so asking
+    # per head is one query per universe for an answer that cannot change between them.
+    environment = declared_environment(connection)
     for universe, head in _heads(connection).items():
         if head is None or stored_report_run(connection, head.universe_id) == head.run_id:
             continue
         row = connection.execute(
             _POINTER_RECORDED_SQL,
-            (CaptureEnvironment.PRODUCTION.value, GOVERNING_FACTOR, head.universe_id, head.run_id),
+            (environment, GOVERNING_FACTOR, head.universe_id, head.run_id),
         ).fetchone()
         recorded = row[0] if row else None
         if recorded is not None and now - recorded < grace:
@@ -188,7 +194,6 @@ def prove(
 
     `settling` names the universes that have not settled (universe -> why): a surface of one
     that does not match is IN-PROGRESS rather than MISMATCH."""
-    environment = CaptureEnvironment.PRODUCTION.value
     heads = _heads(connection)
     topt, qqq = heads.get(TOPT), heads.get(QQQ)
     verdicts: list[SurfaceVerdict] = []
@@ -279,7 +284,7 @@ def prove(
                 )
             )
             continue
-        fresh = compile_report(connection, universe=universe, executed_at=executed_at, environment=environment)
+        fresh = compile_report(connection, universe=universe, executed_at=executed_at)
         drift = _drift(match[1] if match else None, fresh)
         verdicts.append(
             SurfaceVerdict(
@@ -332,7 +337,7 @@ def themes_verdict(
     its newer head is not expected. When no run any pointer named has rows, every head is a
     candidate and the newest is named, with what the plane under it holds.
     """
-    environment = CaptureEnvironment.PRODUCTION.value
+    environment = declared_environment(connection)
     present = {universe: head for universe, head in heads.items() if head is not None}
     covered = {
         universe: head

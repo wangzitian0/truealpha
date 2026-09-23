@@ -92,7 +92,12 @@ from data_engine.datahub.quality_report import (
     primary_financial_fields,
     utc_day,
 )
-from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES, GovernedHead, governed_head
+from data_engine.datahub.question_coverage import (
+    UNIVERSE_PREFIXES,
+    GovernedHead,
+    declared_environment,
+    governed_head,
+)
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
 from data_engine.quality import vendor_oracle
 
@@ -1494,14 +1499,13 @@ def compile_report(
     *,
     universe: str,
     executed_at: datetime,
-    environment: str = "production",
     sample_subjects: Sequence[str] | None = None,
     oracle_issuers: int = DEFAULT_ORACLE_ISSUERS,
     oracle: SecOracle | None = None,
 ) -> dict[str, Any] | None:
     """The report for one lane universe's governed head, or None when it has no head yet."""
     prefix = UNIVERSE_PREFIXES.get(universe, universe)
-    head = governed_head(connection, universe_prefix=prefix, environment=environment)
+    head = governed_head(connection, universe_prefix=prefix)
     if head is None:
         return None
     return build_report(
@@ -1509,7 +1513,7 @@ def compile_report(
         universe=universe,
         head=head,
         executed_at=executed_at,
-        environment=environment,
+        environment=declared_environment(connection),
         sample_subjects=sample_subjects,
         oracle_issuers=oracle_issuers,
         oracle=oracle,

@@ -36,6 +36,7 @@ class _Tables:
         partitions=0,
         theme_runs=None,
         theme_universes=None,
+        environment="staging",
     ):
         self.strategy, self.themes, self.holdings, self.funds, self.coverage = (
             strategy,
@@ -45,6 +46,10 @@ class _Tables:
             coverage,
         )
         self.partitions = partitions
+        #: What this database declares itself to be (#756). Deliberately NOT "production":
+        #: the literal these call sites used to name was `production`, so a fake that
+        #: declared the same thing would pass whether or not the resolution was converted.
+        self.environment = environment
         #: Runs with purity rows; by default only the one the reader serves.
         self.theme_runs = set(theme_runs) if theme_runs is not None else ({themes} if themes else set())
         #: Universe prefixes whose pointer ever named a run with purity rows; by default the
@@ -56,7 +61,13 @@ class _Tables:
 
     def execute(self, sql, params=()):
         text = " ".join(sql.split())
-        if "from mart.current_pointer p join mart.issuer_theme_purity" in text:
+        if text == "select environment from mart.environment_identity":
+            # #756: the proof resolves heads under the environment this database declares
+            # rather than under a literal. Matched on the WHOLE statement, not as a
+            # substring: the head queries embed this same text as a subquery, and a
+            # substring test answered them with an environment string instead of a run id.
+            self._rows = [(self.environment,)]
+        elif "from mart.current_pointer p join mart.issuer_theme_purity" in text:
             self._rows = [(params[2].removesuffix("%") in self.theme_universes,)]
         elif "from mart.issuer_theme_purity where run_id = %s" in text:
             self._rows = [(params[0] in self.theme_runs,)]
@@ -84,8 +95,10 @@ class _Tables:
 
 
 def _heads(monkeypatch, *, topt=NEW, qqq=QQQ, topt_cutoff=NOW, qqq_cutoff=NOW):
-    def governed_head(_connection, *, universe_prefix, environment):
-        assert environment == "production"
+    def governed_head(_connection, *, universe_prefix):
+        # #756: no environment argument to check. The signature is the assertion now -- a
+        # caller that still names one raises TypeError here instead of quietly resolving a
+        # lineage this database stopped advancing.
         is_topt = universe_prefix.startswith("universe:topt")
         run = topt if is_topt else qqq
         universe_id = TOPT_UNIVERSE if is_topt else QQQ_UNIVERSE
@@ -464,7 +477,7 @@ def test_a_head_recorded_minutes_ago_without_its_reports_is_settling_and_then_is
     universe_id = "universe:topt-settling-test"
     run = "capture-run:" + "e" * 64
 
-    def governed_head(_connection, *, universe_prefix, environment):
+    def governed_head(_connection, *, universe_prefix):
         if universe_prefix.startswith("universe:topt"):
             return surface_proof.GovernedHead(universe_id, run, NOW)
         return None

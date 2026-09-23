@@ -58,20 +58,56 @@ class GovernedHead:
     cutoff: datetime
 
 
-def governed_head(
-    connection: Connection[Any], *, universe_prefix: str, environment: str = "production"
-) -> GovernedHead | None:
+def declared_environment(connection: Connection[Any]) -> str:
+    """The environment this database declares for itself.
+
+    #756 made `mart.environment_identity` the one authority, written by data-engine at boot
+    from `settings.capture_environment`. Every reader that needs the value by name -- rather
+    than filtering on it in SQL -- takes it from here, so there is one place that knows and
+    no caller can name a literal that disagrees with the rows it is about to read.
+
+    No fallback. A database that has not declared itself cannot be read against an assumed
+    environment; that is how the literal `"production"` came to be written down in six places
+    in the first place, and a silent default would put it back.
+    """
+    row = connection.execute("select environment from mart.environment_identity").fetchone()
+    if row is None:
+        raise RuntimeError(
+            "mart.environment_identity is empty: this database has not declared its environment, "
+            "so no head can be resolved against it (#756)"
+        )
+    return str(row[0])
+
+
+def governed_head(connection: Connection[Any], *, universe_prefix: str) -> GovernedHead | None:
+    """The head this DATABASE governs, for `universe_prefix`.
+
+    #756: the environment is read from `mart.environment_identity`, which data-engine writes
+    at boot from `settings.capture_environment`, and is not a parameter. It used to be one,
+    defaulting to the literal `"production"`, and three callers named that literal explicitly
+    so a change to the default could not reach them. Both readings of the column were then
+    live at once: the migration converted every VIEW to the identity, and these Python readers
+    stayed on the literal.
+
+    On staging that fork was observable. Two lineages sat in `mart.current_pointer_head` for
+    the same universe -- one stamped `production` by the pre-#756 capture and frozen since
+    2026-09-21, one stamped by the identity and advancing. The identity-filtered readers (MCP,
+    the web pages) served the live run while `question_coverage` and `theme_purity` reported
+    `ok: true` on the frozen one, and the head-following sensor never saw an advance, so no
+    head reports were produced for any head this environment now registers.
+    """
     row = connection.execute(
         """
         select h.universe_id, h.target_run_id, min(r.cutoff)
         from mart.current_pointer_head h
         join mart.topt_gppe_results r on r.run_id = h.target_run_id
-        where h.environment = %s and h.factor_id = %s and h.universe_id like %s
+        where h.environment = (select environment from mart.environment_identity)
+          and h.factor_id = %s and h.universe_id like %s
         group by h.universe_id, h.target_run_id, h.advanced_at
         order by h.advanced_at desc
         limit 1
         """,
-        (environment, GOVERNING_FACTOR, universe_prefix + "%"),
+        (GOVERNING_FACTOR, universe_prefix + "%"),
     ).fetchone()
     if row is None:
         return None
@@ -255,11 +291,10 @@ def compile_report(
     *,
     universe: str,
     executed_at: datetime,
-    environment: str = "production",
 ) -> dict[str, Any] | None:
     """The report for one lane universe, or None when it has no governed head yet."""
     prefix = UNIVERSE_PREFIXES.get(universe, universe)
-    head = governed_head(connection, universe_prefix=prefix, environment=environment)
+    head = governed_head(connection, universe_prefix=prefix)
     if head is None:
         return None
     gppe = gppe_cells(connection, head.run_id)
@@ -293,7 +328,7 @@ def compile_report(
         "universe_id": head.universe_id,
         "run_id": head.run_id,
         "cutoff": head.cutoff.astimezone(UTC).isoformat(),
-        "environment": environment,
+        "environment": declared_environment(connection),
         "requirements_sha256": QUESTION_REQUIREMENTS_SHA256,
         "generated_at": executed_at.astimezone(UTC).isoformat(),
         "denominator": len(issuers),
