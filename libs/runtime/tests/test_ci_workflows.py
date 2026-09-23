@@ -2013,7 +2013,18 @@ QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # Frozen history. Accepted records pin these files' hashes, so editing the prose
     # inside one breaks the record rather than removing a dependency.
     "governance",
+    # #1003 committed this so an agent host reads the vendored skills at the path it
+    # looks in. Every entry under it is a symlink into `skills/`, which QLIB_SCAN_ROOTS
+    # already scans, so the content IS scanned -- through its real path, once rather than
+    # twice. The premise is what makes the exclusion safe, so
+    # test_every_claude_entry_is_a_symlink_into_a_scanned_root asserts it: a real file
+    # added here later would otherwise be silently out of scope, which is the exact shape
+    # of the two holes this guard has already had.
+    ".claude",
 )
+#: The excluded root above is only out of scope while everything in it resolves into one of
+#: QLIB_SCAN_ROOTS. Named here so the assertion and the exclusion cannot drift apart.
+_SYMLINK_ONLY_EXCLUDED_ROOT = ".claude"
 #: The repository's own top-level FILES are scanned too, non-recursively. `rglob` from a
 #: scan root cannot reach a file sitting at the repository root, and the root
 #: `pyproject.toml` is exactly where a `libs/factors/qlib-runtime` workspace member would
@@ -2577,4 +2588,43 @@ def test_walk_evidence_can_finish_waiting_inside_the_freshness_job() -> None:
     # The checks before that step take well under 5 min; leave them that much.
     assert walk_evidence.IN_FLIGHT_WAIT <= timedelta(minutes=timeout - 5), (
         f"walk_evidence may wait {walk_evidence.IN_FLIGHT_WAIT} but the freshness job times out at {timeout} min"
+    )
+
+
+def test_every_claude_entry_is_a_symlink_into_a_scanned_root() -> None:
+    """`.claude/` is excluded from the Qlib sweep on one premise: everything in it is a
+    symlink into `skills/`, which is scanned. This asserts the premise.
+
+    Without it the exclusion is a hole waiting for its first real file, which is how both of
+    this guard's previous holes were shaped -- a place the walk could not reach, found by
+    review rather than by the guard. Confirmed red by pointing one of the symlinks at a
+    directory outside the scan roots.
+    """
+    listing = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", _SYMLINK_ONLY_EXCLUDED_ROOT],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    entries = [entry for entry in listing.split("\0") if entry]
+    assert entries, (
+        f"{_SYMLINK_ONLY_EXCLUDED_ROOT}/ is excluded from the Qlib sweep but git tracks nothing "
+        f"there, so this assertion is checking nothing (GREEN-WHILE-EMPTY). Remove the exclusion "
+        f"or remove this test."
+    )
+
+    scanned = {(REPO_ROOT / root).resolve() for root in QLIB_SCAN_ROOTS}
+    escapes: list[str] = []
+    for entry in entries:
+        path = REPO_ROOT / entry
+        if not path.is_symlink():
+            escapes.append(f"{entry} is a real file, not a symlink")
+            continue
+        target = path.resolve()
+        if not any(target == root or root in target.parents for root in scanned):
+            escapes.append(f"{entry} -> {target} resolves outside every scanned root")
+    assert not escapes, (
+        f"{_SYMLINK_ONLY_EXCLUDED_ROOT}/ is excluded from the Qlib sweep only because everything "
+        f"in it is scanned through its real path. These are not: {escapes}. Either move them under "
+        f"a scan root or move {_SYMLINK_ONLY_EXCLUDED_ROOT} into QLIB_SCAN_ROOTS."
     )
