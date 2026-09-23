@@ -178,7 +178,7 @@ This repository consumes only released `infra2-sdk` contracts.
 
 | Environment | Postgres | Object storage | Provisioning |
 |---|---|---|---|
-| Local | `make runtime-up` or localhost | Local MinIO | `make db-migrate`; bucket bootstrap |
+| Local | `make runtime-up` or localhost | Local MinIO | `make db-reset` to start where CI starts, `make db-migrate` to move forward, `make db-check` to prove it matches; bucket bootstrap |
 | GitHub CI | Ephemeral service container | Ephemeral MinIO container | Per workflow run |
 | Staging | `truealpha-postgres-staging`, host loopback `:15432` | Platform MinIO staging, bucket `truealpha-raw` | infra2 release promotion and `apps/data-engine/scripts/setup_vps_ingest.sh` |
 | Production | `truealpha-postgres`, host loopback `:15433` | Platform MinIO, bucket `truealpha-raw` | Explicit graduation |
@@ -200,7 +200,10 @@ This repository consumes only released `infra2-sdk` contracts.
 
 - Install/check/test: `make install`, `make check`, `make test`.
 - Local dependencies: `make runtime-up`, `make runtime-check`.
-- Database: `make db-up`, `make db-migrate`.
+- Database: `make db-up`, `make db-migrate` (apply the chain forward), `make db-reset`
+  (drop, recreate, re-apply — the repair path when a database has drifted; replay does not
+  repair a table already in a superseded shape), `make db-check` (diff a live database
+  against the declared chain).
 - Python: `uv sync --all-packages`, `uv run pytest`, `uv run ruff check .`.
 - Web: `cd apps/app-web && bun install`, `bun run dev`, `bun run typecheck`,
   `bun run build`.
