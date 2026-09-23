@@ -141,7 +141,6 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
     from data_engine.lanes.standards import StandardBackfillConfig, run_theme_purity
     from truealpha_contracts.common import CaptureEnvironment
 
-    stamped = CaptureEnvironment.PRODUCTION.value  # what a1_evidence.register_run_evidence writes
     head = ("universe:topt-us-2026-03-31", "capture-run:" + "a" * 64, datetime(2026, 9, 14, 22, 45, tzinfo=UTC))
 
     class _Pointer:
@@ -149,8 +148,18 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
             self._row = None
 
         def execute(self, sql, params=()):
-            asked_for_stamped_tier = "current_pointer_head" in sql and stamped in tuple(params)
-            self._row = head if asked_for_stamped_tier else None
+            # #756: the op must resolve the head under the environment THIS DATABASE declares.
+            # The stub answers only a query that filters on `mart.environment_identity`, so a
+            # reversion to a named environment -- #826's `production` literal, or any other --
+            # finds no head here and this test says so. What the literal actually cost on
+            # staging was invisible: two lineages for one universe, the literal-pinned readers
+            # green on the frozen one.
+            resolves_the_declared_environment = (
+                "current_pointer_head" in sql
+                and "mart.environment_identity" in sql
+                and CaptureEnvironment.PRODUCTION.value not in tuple(params)
+            )
+            self._row = head if resolves_the_declared_environment else None
             return self
 
         def fetchone(self):
@@ -182,7 +191,9 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
     config = StandardBackfillConfig(executed_at="2026-09-20T09:07:00+00:00", universe="topt")
     out = _json.loads(run_theme_purity(dg.build_op_context(), config, "{}"))
 
-    assert out.get("reason") != "no_governed_head", "staging must find the head its own capture registered"
+    assert out.get("reason") != "no_governed_head", (
+        "the op must find the head through mart.environment_identity, not through a named environment"
+    )
     assert out["run_id"] == head[1]
     assert materialized == [{"run_id": head[1], "cutoff": head[2], "tickers": {"issuer:lei:X": "NFLX"}}], (
         "rows are written for THAT run, at ITS cutoff, and the classifier is told the ticker (#849)"
@@ -249,8 +260,9 @@ def _pointer(monkeypatch, *, heads: dict[str, str | None], stored: dict[str, str
 
     ids = {"topt": TOPT_ID, "universe-list:qqq": QQQ_ID}
 
-    def governed_head(_connection, *, universe_prefix, environment):
-        assert environment == "production", "the tier the ticks register their pointer under (#826)"
+    def governed_head(_connection, *, universe_prefix):
+        # #756 replaced #826's literal: the head is resolved under the environment the
+        # database declares, so there is no argument left to pin. The signature does it.
         universe = next(key for key, prefix in question_coverage.UNIVERSE_PREFIXES.items() if prefix == universe_prefix)
         run = heads.get(universe)
         return None if run is None else question_coverage.GovernedHead(ids[universe], run, HEAD_CUTOFF)

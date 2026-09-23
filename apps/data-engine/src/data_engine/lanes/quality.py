@@ -40,7 +40,6 @@ from pathlib import Path
 
 import dagster as dg
 import psycopg
-from truealpha_contracts.common import CaptureEnvironment
 
 from data_engine.config import settings
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
@@ -341,8 +340,6 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
                 connection,
                 universe=config.universe,
                 executed_at=executed_at,
-                # The capture tier the ticks register their pointer with, never APP_ENV (#826).
-                environment=CaptureEnvironment.PRODUCTION.value,
                 sample_subjects=config.sample_subjects or None,
                 oracle_issuers=config.oracle_issuers,
                 oracle=oracle,

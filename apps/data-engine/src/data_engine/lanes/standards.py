@@ -27,7 +27,6 @@ from typing import Any
 
 import dagster as dg
 import psycopg
-from truealpha_contracts.common import CaptureEnvironment
 from truealpha_contracts.standards import STANDARDS
 
 from data_engine.config import settings
@@ -209,12 +208,13 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         ) as outcome,
         psycopg.connect(settings.database_url) as connection,
     ):
-        # Resolved under the capture TIER the tick registers its pointer with
-        # (`CaptureEnvironment.PRODUCTION`, which staging's real-vendor capture stamps too),
-        # never under `APP_ENV`. Asking for `settings.app_env` found no head on staging on any
-        # tick, while the coverage op in the same run found one (#826). Named here rather than
-        # left to `governed_head`'s default, so a change to that default cannot bring it back.
-        head = governed_head(connection, universe_prefix=prefix, environment=CaptureEnvironment.PRODUCTION.value)
+        # #826 pinned the literal here because `settings.app_env` found no head on staging:
+        # the column held the capture TIER, which staging's real-vendor capture stamps
+        # `production`. #756 then made the column the DATABASE's declared identity and
+        # converted every view, leaving this literal reading a lineage that stopped advancing
+        # the day that migration landed. `governed_head` now resolves the identity itself, so
+        # there is no environment to name and no second reading to drift back to.
+        head = governed_head(connection, universe_prefix=prefix)
         if head is None:
             context.log.warning("no governed head for %s; no theme purity rows", config.universe)
             outcome.pending = True
@@ -404,9 +404,7 @@ def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartC
     if config.only_if_stale:
         prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
         with psycopg.connect(settings.database_url) as connection:
-            head = question_coverage.governed_head(
-                connection, universe_prefix=prefix, environment=CaptureEnvironment.PRODUCTION.value
-            )
+            head = question_coverage.governed_head(connection, universe_prefix=prefix)
             if head is not None and question_coverage.stored_report_run(connection, head.universe_id) == head.run_id:
                 summary[REPORTS_CURRENT] = head.run_id
         current = summary.get(REPORTS_CURRENT)
@@ -502,11 +500,7 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
     requests: list[dg.RunRequest] = []
     with psycopg.connect(settings.database_url) as connection:
         for universe in STANDARD_BACKFILL_UNIVERSES:
-            head = question_coverage.governed_head(
-                connection,
-                universe_prefix=UNIVERSE_PREFIXES[universe],
-                environment=CaptureEnvironment.PRODUCTION.value,
-            )
+            head = question_coverage.governed_head(connection, universe_prefix=UNIVERSE_PREFIXES[universe])
             if head is None or followed.get(universe) == head.run_id:
                 continue
             first_sight = universe not in followed
