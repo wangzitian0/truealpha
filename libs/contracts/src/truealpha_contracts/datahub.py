@@ -18,7 +18,8 @@ from typing import Any, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
+from truealpha_contracts.common import CaptureEnvironment
+from truealpha_contracts.common import identify_by_grain as _freeze_identity
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.universe import SubjectRef, UniverseRef
 
@@ -53,28 +54,6 @@ def _sorted_unique_strings(
         if immutable:
             _reject_mutable_coordinate(value, field_name)
     return tuple(sorted(values))
-
-
-def _freeze_identity(
-    model: BaseModel,
-    *,
-    id_field: str,
-    prefix: str,
-    identity_fields: tuple[str, ...],
-) -> None:
-    identity = model.model_dump(mode="json", include=set(identity_fields))
-    identity_sha256 = canonical_sha256({"kind": prefix, "identity": identity})
-    expected_id = f"{prefix}:{identity_sha256}"
-    content = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    expected_content_sha256 = canonical_sha256(content)
-    supplied_id = getattr(model, id_field)
-    supplied_content_sha256 = getattr(model, "content_sha256")
-    if supplied_id and supplied_id != expected_id:
-        raise ValueError(f"{id_field} does not match its declared identity grain")
-    if supplied_content_sha256 and supplied_content_sha256 != expected_content_sha256:
-        raise ValueError("content_sha256 does not match the complete canonical record")
-    object.__setattr__(model, id_field, expected_id)
-    object.__setattr__(model, "content_sha256", expected_content_sha256)
 
 
 def _decimal_input(value: Any) -> Any:
