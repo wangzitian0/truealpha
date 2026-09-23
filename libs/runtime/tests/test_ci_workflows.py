@@ -2005,6 +2005,12 @@ QLIB_SCAN_ROOTS = (".github", "apps", "db", "libs", "skills", "tools")
 #: appear in QLIB_SCAN_ROOTS — asserted below, because the two holes this guard has
 #: already had were both "a place the walk cannot reach", found by review rather than by
 #: the guard. A new top-level directory now fails this test until someone classifies it.
+#: The one excluded root whose exclusion rests on a premise rather than on its contents
+#: being out of scope outright: it is safe only while everything in it resolves into one of
+#: QLIB_SCAN_ROOTS. Used BY the tuple below, not merely named beside it, so the exclusion
+#: and the assertion cannot drift apart (#1006 review).
+_SYMLINK_ONLY_EXCLUDED_ROOT = ".claude"
+
 QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # The ADR for this migration (A5-polars-vectorbt-engine.md) and A0's amendment note
     # live here; init.md rule 25 points at them. Recording the migration is the opposite
@@ -2014,17 +2020,15 @@ QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # inside one breaks the record rather than removing a dependency.
     "governance",
     # #1003 committed this so an agent host reads the vendored skills at the path it
-    # looks in. Every entry under it is a symlink into `skills/`, which QLIB_SCAN_ROOTS
-    # already scans, so the content IS scanned -- through its real path, once rather than
-    # twice. The premise is what makes the exclusion safe, so
-    # test_every_claude_entry_is_a_symlink_into_a_scanned_root asserts it: a real file
-    # added here later would otherwise be silently out of scope, which is the exact shape
-    # of the two holes this guard has already had.
-    ".claude",
+    # looks in. Every entry under it is a symlink resolving INTO A SCANNED ROOT -- today
+    # all eight land in `skills/`, but the safety argument is the general one, and it is
+    # the general one that test_every_claude_entry_is_a_symlink_into_a_scanned_root
+    # asserts. The content is therefore swept through its real path, once rather than
+    # twice. That premise is the whole reason the exclusion is safe: a real file added
+    # here later would otherwise be silently out of scope, which is the exact shape of
+    # the two holes this guard has already had.
+    _SYMLINK_ONLY_EXCLUDED_ROOT,
 )
-#: The excluded root above is only out of scope while everything in it resolves into one of
-#: QLIB_SCAN_ROOTS. Named here so the assertion and the exclusion cannot drift apart.
-_SYMLINK_ONLY_EXCLUDED_ROOT = ".claude"
 #: The repository's own top-level FILES are scanned too, non-recursively. `rglob` from a
 #: scan root cannot reach a file sitting at the repository root, and the root
 #: `pyproject.toml` is exactly where a `libs/factors/qlib-runtime` workspace member would
@@ -2592,8 +2596,9 @@ def test_walk_evidence_can_finish_waiting_inside_the_freshness_job() -> None:
 
 
 def test_every_claude_entry_is_a_symlink_into_a_scanned_root() -> None:
-    """`.claude/` is excluded from the Qlib sweep on one premise: everything in it is a
-    symlink into `skills/`, which is scanned. This asserts the premise.
+    """The excluded root is excluded on one premise: everything in it is a symlink that
+    resolves into one of QLIB_SCAN_ROOTS. This asserts the premise, in those terms -- not
+    in terms of `skills/`, which is merely where all eight happen to land today.
 
     Without it the exclusion is a hole waiting for its first real file, which is how both of
     this guard's previous holes were shaped -- a place the walk could not reach, found by
