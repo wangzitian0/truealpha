@@ -180,9 +180,7 @@ def test_engine_identity_stays_outside_the_semantic_hash() -> None:
     # identity, and it is the value the corpus pinned before the engine migration.
     assert binding.strategy_definition_id == expected["strategy_definition_id"]
     assert alternate.strategy_definition_id == expected["strategy_definition_id"]
-    assert (
-        expected["strategy_definition_sha256"] == "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d"
-    )
+    assert expected["strategy_definition_sha256"] == "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d"
 
     definition_text = json.dumps(_corpus()["strategy_definition"])
     for engine_coordinate in ("polars", "operator_registry", "adapter", "distribution", "release_commit"):

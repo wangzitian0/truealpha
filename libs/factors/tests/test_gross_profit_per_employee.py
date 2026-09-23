@@ -164,9 +164,7 @@ def test_polars_expression_reproduces_the_decimal_result():
         _fact("total_assets", "4000000"),
         _fact("employees_total", "100"),
     ]
-    native = gross_profit_per_employee(
-        facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE
-    )
+    native = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     assert native.value is not None, native.flags
 
     compiled = panel.with_columns(factor_value=compile_expression(GPPE_EXPRESSION_DEFINITION))

@@ -23,6 +23,7 @@ import importlib.metadata
 import importlib.util
 import re
 import shlex
+import subprocess
 import sys
 import tomllib
 from datetime import UTC, datetime, timedelta
@@ -1881,11 +1882,7 @@ def test_no_lockfile_resolves_a_qlib_distribution() -> None:
     dependency was isolated from the root environment before #969 deleted it. A second
     lockfile reappearing is the shape this has to catch, so the glob is the check.
     """
-    lockfiles = [
-        path
-        for path in REPO_ROOT.rglob("uv.lock")
-        if not set(path.parts) & {".venv", ".git", "node_modules"}
-    ]
+    lockfiles = [path for path in REPO_ROOT.rglob("uv.lock") if not set(path.parts) & {".venv", ".git", "node_modules"}]
     assert lockfiles, "no uv.lock found at all — this check would pass by having nothing to read"
 
     for lockfile in lockfiles:
@@ -2001,16 +1998,40 @@ _QLIB_SCAN_TEXT_NAME_PREFIXES = ("Dockerfile.", "Makefile.")
 #: `__pycache__` or `node_modules` would still be skipped. That is what the lockfile and
 #: import checks above are for — they do not care what a directory is called.
 _QLIB_SCAN_GENERATED_DIR_NAMES = {
-    "__pycache__", ".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", "node_modules",
+    "__pycache__",
+    ".git",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "node_modules",
 }
 #: Deliberately absent: a bare `.env`. `Path(".env").suffix` is `""`, so listing `.env`
 #: here would never have matched it anyway — and matching it by NAME is not wanted, since
 #: a real `.env` is git-ignored secrets and this test prints the lines it objects to.
 #: The tracked `.env.example` is matched by `.example`.
 _QLIB_SCAN_TEXT_SUFFIXES = {
-    ".cfg", ".css", ".dockerfile", ".example", ".html", ".ini", ".js", ".json", ".jsx",
-    ".lock", ".md", ".mjs", ".py", ".sh", ".sql", ".toml", ".ts", ".tsx", ".txt",
-    ".yaml", ".yml",
+    ".cfg",
+    ".css",
+    ".dockerfile",
+    ".example",
+    ".html",
+    ".ini",
+    ".js",
+    ".json",
+    ".jsx",
+    ".lock",
+    ".md",
+    ".mjs",
+    ".py",
+    ".sh",
+    ".sql",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".yaml",
+    ".yml",
 }
 #: Files the sweep must actually have READ — not merely selected. An allowlist that
 #: silently stops matching is the failure mode this sweep has had repeatedly: the first
@@ -2091,9 +2112,9 @@ def test_every_top_level_directory_is_scanned_or_explicitly_excluded() -> None:
     `path.is_file()`. So a top-level directory outside QLIB_SCAN_ROOTS is invisible to
     the sweep silently: that is how `db/` (production code — the llm-service image COPYs
     it and its CMD runs `db/apply_migrations.sh` on every boot) and `skills/` went
-    unscanned. Listing the roots does not catch that; comparing the list against the tree
-    does, so a new top-level directory is a decision someone writes down in one of the
-    two tuples with a reason beside it.
+    unscanned. Listing the roots does not catch that; comparing the list against what git
+    TRACKS does, so a new committed top-level directory is a decision someone writes down
+    in one of the two tuples with a reason beside it.
 
     What this does NOT do is make the sweep sound. Directory scope was one of several
     path shapes the sweep has been wrong about, and the next one is not enumerable in
@@ -2102,12 +2123,32 @@ def test_every_top_level_directory_is_scanned_or_explicitly_excluded() -> None:
     quietly getting narrower.
     """
     classified = set(QLIB_SCAN_ROOTS) | set(QLIB_SCAN_EXCLUDED_ROOT_DIRS) | _QLIB_SCAN_GENERATED_DIR_NAMES
-    # EVERY top-level directory, dot-prefixed included. An earlier version waived names
-    # beginning with "." as tool state, to save a one-line edit when a new linter cache
-    # appears — and that waiver meant a new `.circleci/` or `.buildkite/` carrying
-    # `pip install pyqlib` bypassed both the scan and this test. `.github` already proves
-    # a dot-directory can hold code. The one-line edit is the cheaper side of that trade.
-    present = {path.name for path in REPO_ROOT.glob("*") if path.is_dir()}
+    # Git-TRACKED top-level directories, dot-prefixed included. Trackedness is the
+    # discriminator, and getting it wrong has now failed in both directions:
+    #
+    #   - waiving every dot-prefixed name (to avoid churn when a new linter cache
+    #     appears) let a committed `.circleci/` or `.buildkite/` carrying
+    #     `pip install pyqlib` bypass both the sweep and this test;
+    #   - demanding every directory on disk be classified made the test fail on whatever
+    #     untracked scratch directory a local tool had created — `.claude/`, `.codex/`,
+    #     `.pi/` — which is a machine's state, not the repository's.
+    #
+    # Tracked is exactly the property that matters: an untracked directory cannot reach a
+    # PR, a CI runner or an image, so it cannot reintroduce anything. A tracked one
+    # always can, whatever it is called. `.github` is the standing proof that a
+    # dot-directory holds code.
+    listing = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    tracked_paths = [entry for entry in listing.split("\0") if entry]
+    assert len(tracked_paths) > 100, (
+        f"git reports only {len(tracked_paths)} tracked files — this is not the repository, so a "
+        f"clean result would mean nothing (GREEN-WHILE-EMPTY)"
+    )
+    present = {entry.split("/", 1)[0] for entry in tracked_paths if "/" in entry}
     unclassified = present - classified
     assert not unclassified, (
         f"top-level director{'y' if len(unclassified) == 1 else 'ies'} {sorted(unclassified)} "
