@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import identify as _bind_content_address
 from truealpha_contracts.execution import FactorInvocationTemplate, FactorKind
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.universe import SubjectRef, UniverseRef
@@ -43,20 +44,6 @@ def _reject_mutable_coordinate(value: str, field_name: str) -> str:
     if value.lower() in _MUTABLE_TOKENS or (tokens and tokens[-1] in _MUTABLE_TOKENS):
         raise ValueError(f"{field_name} cannot use a mutable alias")
     return value
-
-
-def _bind_content_address(model: BaseModel, *, id_field: str, prefix: str) -> None:
-    payload = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    expected_hash = canonical_sha256(payload)
-    expected_id = f"{prefix}:{expected_hash}"
-    supplied_hash = getattr(model, "content_sha256")
-    supplied_id = getattr(model, id_field)
-    if supplied_hash and supplied_hash != expected_hash:
-        raise ValueError("content_sha256 does not match canonical content")
-    if supplied_id and supplied_id != expected_id:
-        raise ValueError(f"{id_field} does not match canonical content")
-    object.__setattr__(model, "content_sha256", expected_hash)
-    object.__setattr__(model, id_field, expected_id)
 
 
 def _validate_ref_hash(reference_id: str, content_sha256: str, field_name: str) -> None:

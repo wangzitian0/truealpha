@@ -27,7 +27,7 @@ from enum import StrEnum
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.research import ValuationTier
 
 from factors.forest import FOREST, GPPE_V0_TREE, AliasKind, IssuerClass, evaluate, required_inputs
@@ -59,18 +59,6 @@ def _normalize_decimal(value: Decimal) -> Decimal:
         return Decimal("0")
     with localcontext(Context(prec=max(_DECIMAL_CONTEXT.prec, len(value.as_tuple().digits)))):
         return value.normalize()
-
-
-def _identify(model: BaseModel, *, id_field: str, prefix: str) -> None:
-    payload = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    digest = canonical_sha256(payload)
-    expected_id = f"{prefix}:{digest}"
-    supplied_id = getattr(model, id_field)
-    supplied_hash = getattr(model, "content_sha256")
-    if supplied_id not in {"", expected_id} or supplied_hash not in {"", digest}:
-        raise ValueError(f"{prefix} identity does not match its canonical content")
-    object.__setattr__(model, id_field, expected_id)
-    object.__setattr__(model, "content_sha256", digest)
 
 
 class MetricAvailability(StrEnum):

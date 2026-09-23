@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.registries import RegistrySnapshot, SemanticTypeId
@@ -23,20 +24,6 @@ from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _STABLE_ID = r"^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$"
-
-
-def _identify(model: BaseModel, *, id_field: str, hash_field: str, prefix: str) -> None:
-    payload = model.model_dump(mode="json", exclude={id_field, hash_field})
-    expected_hash = canonical_sha256(payload)
-    expected_id = f"{prefix}:{expected_hash}"
-    supplied_hash = getattr(model, hash_field)
-    supplied_id = getattr(model, id_field)
-    if supplied_hash and supplied_hash != expected_hash:
-        raise ValueError(f"{hash_field} does not match canonical content")
-    if supplied_id and supplied_id != expected_id:
-        raise ValueError(f"{id_field} does not match canonical content")
-    object.__setattr__(model, hash_field, expected_hash)
-    object.__setattr__(model, id_field, expected_id)
 
 
 def planned_cell_id_for(
