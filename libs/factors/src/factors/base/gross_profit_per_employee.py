@@ -35,8 +35,8 @@ looks up itself — the caller supplies the frozen v0 value, exactly like
 `growth_convention` is an explicit parameter to the PEG factor.
 
 The arithmetic is also expressed as a matrix-compatible AST expression
-(`GPPE_EXPRESSION_DEFINITION`), built only from the
-Add/Div/Mean/Mul/Ref/Sub/Std/Rank nodes of `truealpha_contracts.ast`, so a
+(`GPPE_EXPRESSION_DEFINITION`), built only from shared
+`truealpha_contracts.ast` node types — no factor-specific node — so a
 compiled Polars execution through `factors.expressions.compiler` reproduces
 this function's Decimal output — proven by the cross-check test, not invoked
 on every call (the Decimal path above is the fast, exact source of truth;

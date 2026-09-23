@@ -43,8 +43,9 @@ The mandated reproducibility proof was nominally required and effectively dorman
    receive provenance-neutral inputs projected from durable PIT snapshots and the explicit
    post-decision market-event stream. Neither may crawl or select vintages, resolve membership,
    infer confidence or lineage, combine adjusted prices with explicit actions, or replace Decimal
-   monetary logic. Every run pins engine build, adapter, operator set, strategy and input snapshot
-   identities.
+   monetary logic. Every run pins the factor-expression engine build, its adapter, the strategy and
+   the input snapshot. The two exceptions to "unchanged" are the operator set and the backtest
+   engine, neither of which any binding pins today (see Consequences).
 4. **The native Decimal implementation stays the source of truth for monetary results.** A compiled
    expression is a reproducibility cross-check of that Decimal result, never its replacement. This
    is the same relationship the Qlib binding had, and it is what keeps the repository's
@@ -73,11 +74,13 @@ The mandated reproducibility proof was nominally required and effectively dorman
   dropped rather than renamed: keeping the digest would publish a hash of something that no longer
   exists, and substituting a placeholder would fabricate one. The Polars AST has no separately
   versioned registry to hash in its place. **Consequence, stated rather than left implicit:** a run
-  now pins engine build, adapter, strategy and input snapshot, but NOT the operator set, and rule 25
-  has been written to say exactly that instead of mandating a pin with no mechanism. Closing this gap
-  belongs to whoever builds the backtest runner (#26, #758 H2). The assertion the dropped field
-  backed — that two engine bindings over one definition differ — is preserved by comparing
-  `distribution` and `runtime_artifact_sha256` instead.
+  now pins the *factor-expression* engine build, its adapter, the strategy and the input snapshot,
+  but NOT the operator set — and `ExpressionEngineExecutionBinding` is `distribution="polars"`, so
+  it does not pin the backtest engine either. Rule 25 has been written to say exactly that instead
+  of mandating a pin with no mechanism. Closing both gaps belongs to whoever builds the backtest
+  runner (#26, #758 H2). The assertion the dropped field backed — that two engine bindings over one
+  definition differ — is preserved by comparing `distribution` and `runtime_artifact_sha256`
+  instead.
 - The `ExecutionEvidence` type that recorded which exact build produced a cross-check goes with the
   Qlib module. The cross-check itself survives as an ordinary test assertion.
 - `governance/batches/`, `governance/leases/` and `governance/evidence/` keep their S8/S9 Qlib
