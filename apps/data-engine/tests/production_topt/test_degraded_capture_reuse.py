@@ -559,7 +559,9 @@ def test_reuse_requires_parser_vintage_equality(tick_database_url, monkeypatch) 
 
 def test_reuse_binds_the_whole_bound_set_or_nothing(tick_database_url, monkeypatch) -> None:
     """#885 item 4: the reuse query's comment promised to fail closed over the WHOLE bound set."""
-    day = date(2026, 4, 14)
+    # Settled session vs. run clock (#530 item 1): the quote's own date must be the fixed
+    # corpus's real partition, not an arbitrary later day.
+    day = date(2026, 3, 31)
     late_origin = CorroboratingOrigin(
         origin=twelve_data_origin.ORIGIN,
         parser_version=twelve_data_origin.PARSER_VERSION,

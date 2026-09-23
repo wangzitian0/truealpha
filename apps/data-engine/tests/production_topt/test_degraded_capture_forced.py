@@ -530,7 +530,9 @@ def test_a_forced_run_fetches_every_obligation_despite_fresh_observations(tick_d
 
 def test_a_forced_fetch_of_changed_bytes_serves_the_new_vintage(tick_database_url, monkeypatch) -> None:
     """The recovery half of #874: a forced re-run lands the corrected bytes as a new vintage."""
-    day = date(2026, 4, 16)
+    # The quote's own settled session must be the fixed corpus's real partition (#530
+    # item 1); the run's own clock (cutoff) is free to be any later date.
+    day = date(2026, 3, 31)
     cutoff = datetime(2026, 4, 16, 22, 15, tzinfo=UTC)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
     first = _run_tick(tick_database_url, version="corrected-bytes", cutoff=cutoff)
@@ -604,7 +606,8 @@ def test_a_forced_capture_version_is_distinct_and_stable() -> None:
 
 def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, monkeypatch) -> None:
     """#874: at tie-break, the forced capture is the newer look at the vendor, and it wins."""
-    day = date(2026, 4, 21)
+    # Settled session vs. run clock, same as above (#530 item 1).
+    day = date(2026, 3, 31)
     cutoff = datetime(2026, 4, 21, 22, 15, tzinfo=UTC)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
     _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff)
@@ -644,7 +647,8 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
     from data_engine.datahub.question_coverage import peg_cells
     from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
 
-    day = date(2026, 5, 5)
+    # Settled session vs. run clock, same as above (#530 item 1).
+    day = date(2026, 3, 31)
     cutoff = datetime(2026, 5, 5, 22, 15, tzinfo=UTC)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
     scheduled = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
@@ -696,7 +700,8 @@ def test_a_withheld_forced_tick_never_displaces_the_governed_strategy_run(tick_d
     from data_engine.datahub.question_coverage import peg_cells
     from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
 
-    day = date(2026, 5, 7)
+    # Settled session vs. run clock, same as above (#530 item 1).
+    day = date(2026, 3, 31)
     cutoff = datetime(2026, 5, 7, 22, 15, tzinfo=UTC)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
     scheduled = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
