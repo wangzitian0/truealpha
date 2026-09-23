@@ -373,6 +373,7 @@ class PostgresCaptureControlSink:
             confidence=success.confidence,
             source_vintage_id=source_vintage_id,
             knowable_at=success.transaction_time,
+            valid_from=success.valid_from,
         )
 
     def _persist_corroboration_or_record_loss(self, binding: ObligationBinding, corroboration: Corroboration) -> None:
@@ -418,6 +419,9 @@ class PostgresCaptureControlSink:
             confidence=corroboration.confidence,
             source_vintage_id=vintage.source_vintage_id,
             knowable_at=corroboration.transaction_time,
+            # Corroboration carries no valid_from of its own (unlike FetchSuccess) --
+            # its own source time is the best available real date (#530 item 1).
+            valid_from=corroboration.transaction_time.date(),
         )
 
     def _corroborating_request(self, binding: ObligationBinding, *, origin: str, source: str) -> SourceRequest:
@@ -452,6 +456,7 @@ class PostgresCaptureControlSink:
         confidence: Decimal,
         source_vintage_id: str,
         knowable_at: datetime,
+        valid_from: date,
     ) -> None:
         obligation = binding.obligation
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
@@ -465,13 +470,18 @@ class PostgresCaptureControlSink:
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
-            # Deliberately the PARTITION anchor, not the adapter's date: the
-            # materializer selects observations whose valid_from covers the frozen
-            # partition (a live August bar asserts a value FOR the 2026-03-31
-            # partition). The adapter's own time lives in knowable_at below; the
-            # valid-time remodel is out of #530 slice 3's scope and tracked on the
-            # issue.
-            valid_from=self._timeline.partition_start,
+            # The caller's own real date (#530 item 1) -- a bar's as_of, a filing's
+            # knowable_at, a report_period -- never the partition anchor. Every
+            # adapter already computes this on FetchSuccess/Corroboration; it used
+            # to be discarded here in favor of self._timeline.partition_start, which
+            # made every observation eligible for its capturing partition only by
+            # accident (partition_start happens to be <= any later partition_key)
+            # and would silently exclude a genuinely-valid-since fact from an
+            # earlier historical replay. The materializer's selection predicate
+            # (`valid_from <= partition_key`) still gates look-ahead correctly here:
+            # a fact only becomes eligible once it is real-world true, not once it
+            # happened to be captured.
+            valid_from=valid_from,
             valid_to=None,
             # The adapter's transaction_time — filed date, bar date, manifest
             # time — never arithmetic on the cutoff (#530 slice 3).
