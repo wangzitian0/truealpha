@@ -169,12 +169,15 @@ def fresh_heads_without_reports(connection: Connection[Any], *, now: datetime, g
     pointer sensor launches for it. Older than `grace`, the same state is a MISMATCH — the
     sensor did not follow the head. Read-only."""
     settling: dict[str, str] = {}
+    # Read once: the environment is a property of the database, not of a universe, so asking
+    # per head is one query per universe for an answer that cannot change between them.
+    environment = declared_environment(connection)
     for universe, head in _heads(connection).items():
         if head is None or stored_report_run(connection, head.universe_id) == head.run_id:
             continue
         row = connection.execute(
             _POINTER_RECORDED_SQL,
-            (declared_environment(connection), GOVERNING_FACTOR, head.universe_id, head.run_id),
+            (environment, GOVERNING_FACTOR, head.universe_id, head.run_id),
         ).fetchone()
         recorded = row[0] if row else None
         if recorded is not None and now - recorded < grace:

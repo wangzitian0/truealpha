@@ -64,6 +64,10 @@ class _Sink:
     def execute(self, sql: str, params: tuple = ()) -> _Sink:
         if self.fail:
             raise psycopg.OperationalError("connection to server failed")
+        # #756: a database declares its own environment, and `declared_environment` refuses a
+        # database that has not. A sink that answered nothing here would fail every check that
+        # resolves a head, for the wrong reason.
+        self._declares_environment = sql.strip() == "select environment from mart.environment_identity"
         if "insert into mart.nightly_verdicts" in sql:
             self.rows.append(params)
         return self
@@ -72,7 +76,7 @@ class _Sink:
         return []
 
     def fetchone(self) -> Any:
-        return None
+        return ("staging",) if getattr(self, "_declares_environment", False) else None
 
 
 def test_a_green_check_records_ok_on_its_own_autocommit_connection(monkeypatch) -> None:
