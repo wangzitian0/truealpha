@@ -157,7 +157,10 @@ def _offline_routes(
     corroborating_origins: tuple[CorroboratingOrigin, ...] = (),
     cutoff_date: date | None = None,
 ) -> dict[str, SourceFetchPort]:
-    cutoff_date = cutoff_date or CUTOFF.date()
+    # The settled session (#530 item 1), matching build_route's context.price_cutoff_date
+    # -- not the tick's own run clock. A caller with a differently-partitioned corpus
+    # still passes its own cutoff_date explicitly; this is only the fallback.
+    cutoff_date = cutoff_date or plan.timeline.partition_start.date()
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
     release_targets: dict[str, ReleaseDerivedRecord] = {}
