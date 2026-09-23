@@ -80,7 +80,8 @@ jobs:
         run: |
           for f in db/tests/capture_control_contract.sql \
                    db/tests/headcount_extraction_contract.sql \
-                   db/tests/governed_research_access_contract.sql; do
+                   db/tests/governed_research_access_contract.sql \
+                   db/tests/role_boundary_contract.sql; do
             echo "== $f"
             psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
           done
