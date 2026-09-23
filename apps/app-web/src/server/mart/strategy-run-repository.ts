@@ -332,6 +332,10 @@ export class MartStrategyRunRepository {
 			return { strategy_id: strategyId, reason: "schema_mismatch" };
 		}
 
+		if (typeof runRow.strategy_run_id !== "string") {
+			return { strategy_id: strategyId, reason: "schema_mismatch" };
+		}
+
 		try {
 			return {
 				strategy_id: "large_model_value_v0",
@@ -347,12 +351,12 @@ export class MartStrategyRunRepository {
 				golden_mismatches: [],
 				// Run identity for the overview (#370 appended AC 3): lets the page prove it
 				// renders the same governed run the MCP strategy_run tool serves.
-				strategy_run_id: String(runRow.strategy_run_id),
+				strategy_run_id: runRow.strategy_run_id,
 				executed_at:
 					runRow.executed_at instanceof Date
 						? runRow.executed_at.toISOString()
 						: String(runRow.executed_at),
-				governed: runRow.is_governed === true,
+				governed: Boolean(runRow.is_governed),
 			};
 		} catch (error) {
 			if (error instanceof SchemaMismatchError) {

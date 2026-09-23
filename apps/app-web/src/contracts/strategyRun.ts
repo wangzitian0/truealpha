@@ -83,6 +83,8 @@ export interface StrategyRunReport {
 	corpus_sha256: string;
 	decisions: readonly StrategyRunDecision[];
 	golden_mismatches: readonly string[];
+	strategy_run_id?: string;
+	governed?: boolean;
 }
 
 export interface StrategyRunUnavailable {
@@ -330,7 +332,7 @@ function parseDecision(value: unknown, path: string): StrategyRunDecision {
 }
 
 /** Parses and strictly validates a `StrategyRunReport`, rejecting unknown fields. */
-export function parseStrategyRunReport(value: unknown): StrategyRunReport {
+export function asStrategyRunReport(value: unknown): StrategyRunReport {
 	const object = asObject(value, "$");
 	assertExactKeys(
 		object,
@@ -340,8 +342,11 @@ export function parseStrategyRunReport(value: unknown): StrategyRunReport {
 			"corpus_sha256",
 			"decisions",
 			"golden_mismatches",
+			"strategy_run_id",
+			"governed",
 		],
 		"$",
+		["strategy_run_id", "governed"],
 	);
 
 	if (object.strategy_id !== "large_model_value_v0")
@@ -367,14 +372,35 @@ export function parseStrategyRunReport(value: unknown): StrategyRunReport {
 		fail("$.golden_mismatches", "expected a string array");
 	}
 
-	return {
+	if (
+		object.strategy_run_id !== undefined &&
+		typeof object.strategy_run_id !== "string"
+	) {
+		fail("$.strategy_run_id", "expected a string");
+	}
+
+	if (
+		object.governed !== undefined &&
+		typeof object.governed !== "boolean"
+	) {
+		fail("$.governed", "expected a boolean");
+	}
+
+	const report: StrategyRunReport = {
 		strategy_id: "large_model_value_v0",
 		source: "strategy_smoke_fixture",
 		corpus_sha256: corpusSha256,
 		decisions,
 		golden_mismatches: object.golden_mismatches as string[],
+		governed: typeof object.governed === "boolean" ? object.governed : false,
 	};
+	if (typeof object.strategy_run_id === "string") {
+		report.strategy_run_id = object.strategy_run_id;
+	}
+	return report;
 }
+
+export const parseStrategyRunReport = asStrategyRunReport;
 
 // Resolved from process.cwd(), not import.meta.url: Next.js's webpack RSC
 // bundling substitutes a URL implementation that node:fs's readFileSync does
@@ -426,6 +452,10 @@ export class FixtureStrategyRunRepository {
 		if (strategyId !== report.strategy_id) {
 			return { strategy_id: strategyId, reason: "unknown_strategy_id" };
 		}
-		return report;
+		return {
+			...report,
+			strategy_run_id: "strategy_smoke_fixture",
+			governed: false,
+		};
 	}
 }

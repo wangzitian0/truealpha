@@ -65,6 +65,26 @@ def test_report_rejects_unknown_field() -> None:
         )
 
 
+def test_report_defaults_and_fields() -> None:
+    report = StrategyRunReport(
+        strategy_id="large_model_value_v0",
+        corpus_sha256="0" * 64,
+        decisions=(),
+    )
+    assert report.strategy_run_id is None
+    assert report.governed is False
+
+    report_with_fields = StrategyRunReport(
+        strategy_id="large_model_value_v0",
+        corpus_sha256="0" * 64,
+        decisions=(),
+        strategy_run_id="run:123",
+        governed=True,
+    )
+    assert report_with_fields.strategy_run_id == "run:123"
+    assert report_with_fields.governed is True
+
+
 def test_confidence_out_of_range_rejected() -> None:
     with pytest.raises(ValidationError):
         StrategyRunDecision(
@@ -93,6 +113,8 @@ def test_fixture_repository_returns_report_matching_committed_bytes() -> None:
     assert isinstance(report, StrategyRunReport)
     assert report.corpus_sha256 == payload["corpus_sha256"]
     assert len(report.decisions) == len(payload["decisions"])
+    assert report.strategy_run_id == "strategy_smoke_fixture"
+    assert report.governed is False
 
     selected = next(d for d in report.decisions if d.issuer_id == "issuer:adm" and d.cutoff_at.month == 3)
     expected = next(

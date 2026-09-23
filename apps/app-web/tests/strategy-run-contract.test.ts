@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 
 import {
+  asStrategyRunReport,
   FixtureStrategyRunRepository,
   parseStrategyRunReport,
   StrategyRunContractError,
@@ -60,11 +61,14 @@ assert(Array.isArray(raw.decisions) && raw.decisions.length === 10, "expected 10
 const report: StrategyRunReport = parseStrategyRunReport(raw);
 assert(report.strategy_id === "large_model_value_v0", "strategy_id mismatch");
 assert(report.golden_mismatches.length === 0, "committed fixture must have zero golden mismatches");
+assert(report.governed === false, "committed fixture must default governed to false");
 
 const repository = new FixtureStrategyRunRepository();
 const fromRepository = repository.getLatest("large_model_value_v0", testContext);
 assert("decisions" in fromRepository, "expected a StrategyRunReport from the repository");
 assert(fromRepository.decisions.length === report.decisions.length, "repository/parse decision count mismatch");
+assert(fromRepository.strategy_run_id === "strategy_smoke_fixture", "expected strategy_smoke_fixture run id");
+assert(fromRepository.governed === false, "expected governed false");
 
 const selected = report.decisions.find((d) => d.issuer_id === "issuer:adm" && d.cutoff_at.startsWith("2026-03"));
 assert(selected !== undefined, "expected issuer:adm at the March cutoff");
@@ -150,5 +154,25 @@ await expectRejected(
 // only ever return a structured StrategyRunUnavailable (see #351's review).
 const stillStructured = repository.getLatest("", testContext);
 assert(!("decisions" in stillStructured), "empty strategy_id must resolve to unavailable, not throw");
+
+await expectRejected(
+  "bad strategy_run_id",
+  () => parseStrategyRunReport({ ...raw, strategy_run_id: 123 }),
+  /expected a string/,
+);
+
+await expectRejected(
+  "bad governed",
+  () => parseStrategyRunReport({ ...raw, governed: "true" }),
+  /expected a boolean/,
+);
+
+const withFields = asStrategyRunReport({
+  ...raw,
+  strategy_run_id: "custom_run_123",
+  governed: true,
+});
+assert(withFields.strategy_run_id === "custom_run_123", "expected custom_run_123");
+assert(withFields.governed === true, "expected governed true");
 
 console.log("#347 Python/TypeScript strategy-run fixture parity passed");

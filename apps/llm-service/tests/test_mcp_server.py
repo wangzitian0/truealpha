@@ -164,6 +164,8 @@ async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture(
     # JSON-mode validation: the wire payload is JSON-native (lists), not Python tuples.
     report = StrategyRunReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
     assert report.strategy_id == "large_model_value_v0"
+    assert report.strategy_run_id == "strategy_smoke_fixture"
+    assert report.governed is False
     selected = next(d for d in report.decisions if d.issuer_id == "issuer:adm" and d.cutoff_at.month == 3)
     assert selected.outcome.value == "selected"
     assert str(selected.valuation_gap) == "1.6388"
@@ -223,6 +225,8 @@ async def test_claude_compatible_client_session_round_trip() -> None:
         report = StrategyRunReport.model_validate_json(json.dumps(result.structuredContent["result"]))
         assert len(report.decisions) == 10
         assert report.golden_mismatches == ()
+        assert report.strategy_run_id == "strategy_smoke_fixture"
+        assert report.governed is False
 
 
 @pytest.fixture

@@ -150,6 +150,8 @@ def test_returns_the_latest_run_with_real_decisions(connection) -> None:
     assert isinstance(result, StrategyRunReport)
     assert result.source == "mart"
     assert result.corpus_sha256 == _HASH64
+    assert result.strategy_run_id == newer
+    assert result.governed is False
     assert len(result.decisions) == 1
     decision = result.decisions[0]
     assert decision.issuer_id == "issuer:adm"
