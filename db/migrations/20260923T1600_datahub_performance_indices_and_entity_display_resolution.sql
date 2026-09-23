@@ -12,18 +12,27 @@
 -- 3. UUID-aware mart.entity_display_resolution: resolves tickers via staging.entity_aliases for modern UUID-keyed
 --    snapshot members, while maintaining full backward-compatibility with legacy listing:<mic>:<ticker> formats.
 
--- 1. Indexes
-create index if not exists idx_strategy_runs_strategy_key_order
-    on mart.strategy_runs (strategy_key, executed_at desc, created_at desc, strategy_run_id desc);
-
-create index if not exists idx_topt_core_results_lookup
-    on mart.topt_core_results (run_id, issuer_id, cutoff);
-
-create index if not exists idx_kg_identifiers_type_value
-    on staging.kg_identifiers (identifier_type, identifier_value);
-
-create index if not exists idx_kg_identifiers_entity_type
-    on staging.kg_identifiers (entity_id, identifier_type);
+-- 1. Indexes (guarded with to_regclass so replay never acquires SHARE locks on populated tables)
+do $$
+begin
+    if to_regclass('mart.idx_strategy_runs_strategy_key_order') is null then
+        create index idx_strategy_runs_strategy_key_order
+            on mart.strategy_runs (strategy_key, executed_at desc, created_at desc, strategy_run_id desc);
+    end if;
+    if to_regclass('mart.idx_topt_core_results_lookup') is null then
+        create index idx_topt_core_results_lookup
+            on mart.topt_core_results (run_id, issuer_id, cutoff);
+    end if;
+    if to_regclass('staging.idx_kg_identifiers_type_value') is null then
+        create index idx_kg_identifiers_type_value
+            on staging.kg_identifiers (identifier_type, identifier_value);
+    end if;
+    if to_regclass('staging.idx_kg_identifiers_entity_type') is null then
+        create index idx_kg_identifiers_entity_type
+            on staging.kg_identifiers (entity_id, identifier_type);
+    end if;
+end
+$$;
 
 -- 2. Redefine mart.governed_strategy_run
 do $$
