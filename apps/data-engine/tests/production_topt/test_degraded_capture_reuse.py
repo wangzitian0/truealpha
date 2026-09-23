@@ -695,6 +695,33 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
             for work_item_id, binding in plan.bindings.items()
             if work_item_id in satisfied
         ]
+        if reused:
+            # #530 item 1 diagnostic: which run's observation is being reused, and what
+            # partition_key/valid_from does it actually carry. Not local-DB reproducible.
+            probe_ob = next(
+                binding.obligation
+                for binding in plan.bindings.values()
+                if binding.obligation.subject.id == "listing:xnas:aapl"
+            )
+            print(f"DIAG probe obligation partition_key={probe_ob.partition} run_id={plan.run_id}")
+            print(f"DIAG qqq.run_id={qqq.run_id}")
+            rows = probe.execute(
+                """
+                select ob.run_id, ob.obligation_id, ob.partition_key, ob.capture_requirement_id,
+                       result.terminal_state, result.completed_at, o.observation_id, o.valid_from,
+                       o.knowable_at
+                from raw.capture_obligations ob
+                join raw.capture_obligation_results result on result.capture_obligation_id = ob.obligation_id
+                left join raw.capture_attempt_results attempt on attempt.attempt_id = result.final_attempt_id
+                left join staging.capture_normalized_observations o
+                  on o.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
+                where ob.subject_id = 'listing:xnas:aapl' and ob.capture_requirement_id = 'market-price:v1'
+                order by result.completed_at desc
+                limit 5
+                """
+            ).fetchall()
+            for row in rows:
+                print(f"DIAG aapl price row: {row}")
         assert reused == [], f"observations frozen for a later partition must not be reused: {sorted(set(reused))}"
     finally:
         probe.rollback()
