@@ -624,6 +624,32 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
             for work_item_id, binding in plan.bindings.items()
             if binding.obligation.capture_requirement_id == "market-price:v1"
         ]
+        if not (price_cells and all(work_item_id in satisfied for work_item_id in price_cells)):
+            # #530 item 1 diagnostic: dump the anchor's real state instead of guessing
+            # blind. Not local-DB reproducible from this environment.
+            follower_ob = plan.bindings[price_cells[0]].obligation
+            print(f"DIAG follower obligation_id={follower_ob.obligation_id} partition_key={follower_ob.partition}")
+            print(f"DIAG follower subject_id={follower_ob.subject.id} run_id={plan.run_id}")
+            print(f"DIAG price_cells count={len(price_cells)} satisfied count={len(satisfied)}")
+            anchors = probe.execute(
+                """
+                select ob.run_id, ob.obligation_id, ob.partition_key, result.terminal_state,
+                       result.completed_at, coalesce((rp.payload->>'forced_fetch')::boolean, false) as forced,
+                       o.observation_id, o.valid_from, o.valid_to, o.knowable_at, o.parser_version,
+                       o.source_vintage_id
+                from raw.capture_obligations ob
+                join raw.capture_obligation_results result on result.capture_obligation_id = ob.obligation_id
+                left join raw.production_topt_run_plans rp on rp.run_id = ob.run_id
+                left join raw.capture_attempt_results attempt on attempt.attempt_id = result.final_attempt_id
+                left join staging.capture_normalized_observations o
+                  on o.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
+                where ob.capture_requirement_id = 'market-price:v1' and ob.subject_id = %s
+                order by result.completed_at
+                """,
+                (follower_ob.subject.id,),
+            ).fetchall()
+            for row in anchors:
+                print(f"DIAG anchor row: {row}")
         assert price_cells and all(work_item_id in satisfied for work_item_id in price_cells)
         closes = probe.execute(
             """
