@@ -610,9 +610,10 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
     day = date(2026, 3, 31)
     cutoff = datetime(2026, 4, 21, 22, 15, tzinfo=UTC)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
-    _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff)
+    first_run = _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("39.25")), price_cutoff=day)
-    _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff, force_fetch=True)
+    forced_run = _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff, force_fetch=True)
+    print(f"DIAG first_run.run_id={first_run.run_id} forced_run.run_id={forced_run.run_id}")
 
     follower_cutoff = cutoff + timedelta(minutes=5)
     probe = psycopg.connect(tick_database_url)
@@ -627,29 +628,29 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
         if not (price_cells and all(work_item_id in satisfied for work_item_id in price_cells)):
             # #530 item 1 diagnostic: dump the anchor's real state instead of guessing
             # blind. Not local-DB reproducible from this environment.
-            follower_ob = plan.bindings[price_cells[0]].obligation
-            print(f"DIAG follower obligation_id={follower_ob.obligation_id} partition_key={follower_ob.partition}")
-            print(f"DIAG follower subject_id={follower_ob.subject.id} run_id={plan.run_id}")
-            print(f"DIAG price_cells count={len(price_cells)} satisfied count={len(satisfied)}")
-            anchors = probe.execute(
-                """
-                select ob.run_id, ob.obligation_id, ob.partition_key, result.terminal_state,
-                       result.completed_at, coalesce((rp.payload->>'forced_fetch')::boolean, false) as forced,
-                       o.observation_id, o.valid_from, o.valid_to, o.knowable_at, o.parser_version,
-                       o.source_vintage_id
-                from raw.capture_obligations ob
-                join raw.capture_obligation_results result on result.capture_obligation_id = ob.obligation_id
-                left join raw.production_topt_run_plans rp on rp.run_id = ob.run_id
-                left join raw.capture_attempt_results attempt on attempt.attempt_id = result.final_attempt_id
-                left join staging.capture_normalized_observations o
-                  on o.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
-                where ob.capture_requirement_id = 'market-price:v1' and ob.subject_id = %s
-                order by result.completed_at
-                """,
-                (follower_ob.subject.id,),
-            ).fetchall()
-            for row in anchors:
-                print(f"DIAG anchor row: {row}")
+            missing = [wi for wi in price_cells if wi not in satisfied]
+            print(f"DIAG missing {len(missing)}/{len(price_cells)} price cells; satisfied total={len(satisfied)}")
+            follower_ob = plan.bindings[missing[0]].obligation
+            print(f"DIAG missing[0] obligation_id={follower_ob.obligation_id} subject_id={follower_ob.subject.id}")
+            print(f"DIAG missing[0] partition_key={follower_ob.partition} follower plan.run_id={plan.run_id}")
+            for label, run_id in (("first", first_run.run_id), ("forced", forced_run.run_id)):
+                rows = probe.execute(
+                    """
+                    select ob.obligation_id, ob.partition_key, ob.subject_id, result.terminal_state,
+                           result.completed_at, o.observation_id, o.valid_from, o.valid_to,
+                           o.knowable_at, o.parser_version, o.source_vintage_id
+                    from raw.capture_obligations ob
+                    join raw.capture_obligation_results result on result.capture_obligation_id = ob.obligation_id
+                    left join raw.capture_attempt_results attempt on attempt.attempt_id = result.final_attempt_id
+                    left join staging.capture_normalized_observations o
+                      on o.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
+                    where ob.run_id = %s and ob.capture_requirement_id = 'market-price:v1'
+                      and ob.subject_id = %s
+                    """,
+                    (run_id, follower_ob.subject.id),
+                ).fetchall()
+                for row in rows:
+                    print(f"DIAG {label}_run row: {row}")
         assert price_cells and all(work_item_id in satisfied for work_item_id in price_cells)
         closes = probe.execute(
             """
