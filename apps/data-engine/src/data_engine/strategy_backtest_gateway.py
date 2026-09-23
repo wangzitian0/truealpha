@@ -54,17 +54,32 @@ def seed_strategy_backtest_inputs(connection: Connection[Any], corpus: dict[str,
     return written
 
 
-def _period_end_key(tag: str) -> date | str:
-    parsed = parse_annual(tag)
-    if parsed is not None:
-        return parsed.end
+def _period_end_key(tag: str) -> tuple[date, str]:
+    """Comparable key for fiscal period tags: (period_end_date, tag).
+
+    Guarantees uniform tuple[date, str] return type so max() never raises TypeError
+    even when tags have mixed shapes. Unparseable tags map to date.min so valid dates
+    always win. On equal dates, string comparison breaks ties in favor of higher
+    filing FY.
+    """
+    try:
+        parsed = parse_annual(tag)
+        if parsed is not None:
+            return parsed.end, tag
+    except ValueError:
+        pass
     parts = tag.split(":")
     if len(parts) >= 4:
         try:
-            return date.fromisoformat(parts[-1])
+            return date.fromisoformat(parts[-1]), tag
         except ValueError:
-            return parts[-1]
-    return tag
+            pass
+    if ":" not in tag and tag.startswith("FY") and len(tag) >= 6 and tag[2:6].isdigit():
+        try:
+            return date(int(tag[2:6]), 12, 31), tag
+        except ValueError:
+            pass
+    return date.min, tag
 
 
 class StrategyBacktestGateway:
