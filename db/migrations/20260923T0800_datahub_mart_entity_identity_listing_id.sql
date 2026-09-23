@@ -1,4 +1,4 @@
--- #954: expose symbolic listing_id on mart.entity_identity and point mart.entity_display_resolution at mart.entity_identity.
+-- #954: expose symbolic listing_id on mart.entity_identity.
 
 do $$
 declare
@@ -130,30 +130,3 @@ $$;
 
 comment on view mart.entity_identity is
     '#954: canonical entity identity projection for mart consumers (entity_id, kind, current_ticker, name, cik, lei, listing_id).';
-
-do $$
-declare
-    wanted constant text := $view$
-select distinct on (e.entity_id)
-    e.entity_id::text as issuer_id,
-    e.listing_id,
-    e.current_ticker as ticker,
-    e.name as display_name
-from mart.entity_identity e
-where e.kind = 'issuer'
-order by e.entity_id
-$view$;
-begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.entity_display_resolution') is null
-       or pg_get_viewdef(to_regclass('mart.entity_display_resolution'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
-        execute 'create or replace view mart.entity_display_resolution as ' || wanted;
-    end if;
-    drop view pg_temp.boot_guard_candidate;
-end
-$$;
-
-comment on view mart.entity_display_resolution is
-    '#954: issuer -> ticker/display_name/listing_id for consumer rendering, backed by mart.entity_identity.';
