@@ -143,8 +143,36 @@ def _stamps_a_content_address(node: ast.FunctionDef) -> bool:
         for child in ast.walk(node)
         if isinstance(child, ast.Call) and isinstance(child.func, (ast.Name, ast.Attribute))
     }
-    builds_an_id = any(isinstance(child, ast.JoinedStr) for child in ast.walk(node))
-    return "canonical_sha256" in called and "__setattr__" in called and builds_an_id
+    return "canonical_sha256" in called and "__setattr__" in called and _writes_an_interpolated_id(node)
+
+
+def _writes_an_interpolated_id(node: ast.FunctionDef) -> bool:
+    """Whether an f-string this function builds is what it writes through `object.__setattr__`.
+
+    "Contains an f-string anywhere" was too loose: a function that hashes, writes a field and
+    formats an ERROR MESSAGE with an f-string matched it, so the guard could fail CI on
+    something that stamps nothing (#1000 review). What every wrapper actually does is build
+    `f"{prefix}:{digest}"` and write that -- sometimes inline, more often through a local. Both
+    forms count; an f-string that only ever reaches a `raise` does not.
+    """
+    interpolated_names = {
+        target.id
+        for child in ast.walk(node)
+        if isinstance(child, ast.Assign) and isinstance(child.value, ast.JoinedStr)
+        for target in child.targets
+        if isinstance(target, ast.Name)
+    }
+    for child in ast.walk(node):
+        if not (isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)):
+            continue
+        if child.func.attr != "__setattr__":
+            continue
+        written = child.args[-1] if child.args else None
+        if isinstance(written, ast.JoinedStr):
+            return True
+        if isinstance(written, ast.Name) and written.id in interpolated_names:
+            return True
+    return False
 
 
 @functools.cache
@@ -249,3 +277,38 @@ def only_checks(self):
     node = ast.parse(source).body[0]
     assert isinstance(node, ast.FunctionDef)
     assert not _stamps_a_content_address(node)
+
+
+def test_an_f_string_used_only_for_an_error_message_is_not_a_stamp() -> None:
+    """The looser predicate -- any f-string anywhere -- matched this, so the guard could have
+    failed CI on a function that stamps nothing. A guard that fires wrongly is a guard someone
+    turns off."""
+    source = """
+def only_reports(self, model, *, id_field):
+    digest = canonical_sha256(model.model_dump(mode="json"))
+    if digest != self.expected:
+        raise ValueError(f"{id_field} does not match {digest}")
+    object.__setattr__(self, "checked", True)
+"""
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.FunctionDef)
+    assert any(isinstance(child, ast.JoinedStr) for child in ast.walk(node)), (
+        "this fixture must contain an f-string, or it is not testing the distinction"
+    )
+    assert not _stamps_a_content_address(node)
+
+
+@pytest.mark.parametrize("written", ["expected_id", 'f"{prefix}:{digest}"'])
+def test_an_id_is_recognised_whether_it_is_written_inline_or_through_a_local(written: str) -> None:
+    """Every merged copy assigned the f-string first and wrote the local; the copies planted to
+    reverse-verify the guard wrote it inline. Both are the same stamp."""
+    source = f"""
+def a_copy(model, *, id_field, prefix):
+    digest = canonical_sha256(model.model_dump(mode="json"))
+    expected_id = f"{{prefix}}:{{digest}}"
+    object.__setattr__(model, "content_sha256", digest)
+    object.__setattr__(model, id_field, {written})
+"""
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.FunctionDef)
+    assert _stamps_a_content_address(node)
