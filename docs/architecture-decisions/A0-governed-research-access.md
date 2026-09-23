@@ -1,6 +1,8 @@
 # A0 Governed Research Access Boundary
 
-Status: Accepted E2
+Status: Accepted E2. Amended 2026-09-23 (#969): the two red lines below named Qlib, the engine
+selected at the time. They now name the engine role instead, so they survive the migration to the
+Polars AST / VectorBT stack recorded in A5. The boundary itself is unchanged.
 
 This record freezes the stable Local/CI contract boundary accepted by `init.md`. Its DTOs
 are exported from the `truealpha_contracts` package root for explicitly named consumers.
@@ -34,8 +36,8 @@ without a separately approved break-glass design.
 Only an administrator action explicitly named by the immutable policy set may authorize
 `SUBMIT_REGISTERED_REPLAY` for a registered replay definition. This access contract does
 not persist or execute that request. A separate capability owns the append-only request
-service and Dagster adapter; no Web, MCP, chat, or access-layer code invokes Qlib,
-`BacktestDataGateway`, factors, or a Dagster launch API.
+service and Dagster adapter; no Web, MCP, chat, or access-layer code invokes the
+factor-expression or backtest engine, `BacktestDataGateway`, factors, or a Dagster launch API.
 
 One `AccessAuditRecord` pairs an immutable decision with its deterministic, content-free
 event. `AccessAuditRepository.append(record)` is the stable transactional port; the SQL
@@ -46,7 +48,8 @@ policy-mismatched decision/grant associations.
 
 Access identity is a consumption concern. `AccessContext`, tenant, principal, role,
 entitlement, and publication-policy fields do not enter factor inputs,
-`BacktestDataGateway`, `DecisionSnapshot`, `ReplayEventStream`, or Qlib. Authorization
+`BacktestDataGateway`, `DecisionSnapshot`, `ReplayEventStream`, or engine expression types.
+Authorization
 cannot change a historical factor or replay result; it only controls access to already
 materialized artifacts and private application state.
 

@@ -6,9 +6,10 @@ form (`market cap / net income`, recency-weighted) and these tests never touched
 there is one function and this exercises it.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import polars as pl
 import pytest
 from factors.base.peg import peg
 from factors.types import Fact, GrowthConvention, UnitFamily
@@ -196,42 +197,30 @@ def test_a_window_shorter_than_one_year_is_a_programming_error() -> None:
         _call(_inputs(*_STEADY), years=0)
 
 
-def test_the_pinned_qlib_expression_reproduces_the_decimal_peg() -> None:
-    """init.md rule 25: Qlib is the factor-expression engine, and the Decimal path is the
-    source of truth it must agree with. Module 2 has carried this cross-check since it
-    landed; module 1 shipped without one."""
-    qlib = pytest.importorskip("qlib")
-    del qlib
-
-    from datetime import date
-
+def test_the_polars_expression_reproduces_the_decimal_peg() -> None:
+    """init.md rule 25: the Polars AST is the factor-expression engine, and the Decimal
+    path is the source of truth it must agree with. Module 2 has carried this cross-check
+    since it landed; module 1 shipped without one, and until #969 both were skipped in
+    ci-python behind the previous engine's optional import. This one executes.
+    """
     from factors.base.peg import PEG_EXPRESSION_DEFINITION
-    from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY, evaluate_expression
-    from truealpha_contracts.qlib_expression import QlibExpressionExecutionBinding
+    from factors.expressions.compiler import compile_expression
 
     native = _call(_inputs(*_STEADY))
     assert native.value is not None, native.flags
 
-    session = date(2026, 6, 30)
-    _, outputs, _ = evaluate_expression(
-        PEG_EXPRESSION_DEFINITION,
-        BUILTIN_OPERATOR_REGISTRY,
-        panel={
-            "price": {_ENTITY: (100.0,)},
-            "shares_outstanding": {_ENTITY: (1000.0,)},
-            "net_income": {_ENTITY: (200.0,)},
+    panel = pl.DataFrame(
+        {
+            "symbol": [_ENTITY],
+            "date": [date(2026, 6, 30)],
+            "price": [100.0],
+            "shares_outstanding": [1000.0],
+            "net_income": [200.0],
             # the rate the Decimal path derived, fed in as the declared input it is
-            "growth_rate": {_ENTITY: (float(Decimal("17") / Decimal(60)),)},
-        },
-        instruments=(_ENTITY,),
-        sessions=(session,),
-        execution_binding=QlibExpressionExecutionBinding(
-            version="0.9.7",
-            release_commit="a" * 40,
-            runtime_artifact_sha256="b" * 64,
-            runtime_lock_sha256="c" * 64,
-            adapter_id="factors.qlib_engine.test",
-            adapter_implementation_sha256="d" * 64,
-        ),
+            "growth_rate": [float(Decimal("17") / Decimal(60))],
+        }
     )
-    assert outputs[(_ENTITY, session)] == pytest.approx(float(native.value), rel=1e-9)
+    compiled = panel.with_columns(factor_value=compile_expression(PEG_EXPRESSION_DEFINITION))
+    vectorised = compiled["factor_value"].to_list()[0]
+
+    assert vectorised == pytest.approx(float(native.value), rel=1e-9)

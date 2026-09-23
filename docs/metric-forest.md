@@ -24,7 +24,7 @@ hardcoded formula.
     `operating_branch` to pick the numerator (pre-provision profit for banks, gross profit
     otherwise). It then subtracts `total_assets × risk_free_rate` for every class and
     divides by headcount.
-  - `factors.base.gross_profit_per_employee` repeats the formula, together with a Qlib
+  - `factors.base.gross_profit_per_employee` repeats the formula, together with a compiled AST
     expression of it.
   - The docstring of the base factor says a negative value is "a valid low signal".
 - **The metric registry and the standards each answer one question.**
@@ -458,7 +458,7 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 | E | Tree `labor_efficiency.operating_financial @ v1`: the operating and financial components for every issuer, with class bindings reviewed under #71 and a new `gppe-definition` id carrying the tree sha; golden decisions re-baselined once | #528 criteria (1)–(4): four issuer classes; both components on the row; a pre-change cutoff replays byte-identically under v0.2.0; per-component sign policy red-proven |
 | F | Module 7 reads the operating component (M1 A5); versioned strategy policy | tier test per class; replay |
 | G | Trees `value_creation.mva`, `labor_efficiency.labor_cost` and `cost_structure`, with their input standards (SBC, labor, marketing, equity, debt, cash) through the #735 loop | coverage probe per standard; each tree's golden cases |
-| H | `factors.base.gross_profit_per_employee` and its Qlib expression generated from the tree (the precision decision) | the Qlib cross-check against the tree; strategy golden re-baselined if the precision changes |
+| H | `factors.base.gross_profit_per_employee` and its compiled AST expression generated from the tree (the precision decision) | the Polars cross-check against the tree; strategy golden re-baselined if the precision changes |
 | I | KG projection, the confidence report's node section, and App rendering | projection idempotent under an unchanged forest sha; `dashboard-read.test.ts` |
 
 **What must happen before 2026-09-23 for the exemption:**

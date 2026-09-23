@@ -19,10 +19,12 @@ workflow's shape does not belong beside one about a function's return value.
 from __future__ import annotations
 
 import ast
+import importlib.metadata
 import importlib.util
 import re
 import shlex
 import sys
+import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -60,7 +62,6 @@ MAIN_HEALTH = "main-health.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
-QLIB = "ci-qlib.yml"
 NIGHTLY = "nightly-dagster-liveness.yml"
 WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
@@ -92,7 +93,7 @@ def test_manual_image_release_is_explicit_and_waits_for_required_jobs() -> None:
     assert "github.ref == 'refs/heads/main' &&" in condition
     assert "inputs.force_images" in condition
     assert "github.event_name == 'push'" in condition
-    for dependency in ("security", "db", "python", "qlib", "runtime", "web"):
+    for dependency in ("security", "db", "python", "runtime", "web"):
         assert f"needs.{dependency}.result == 'success' || needs.{dependency}.result == 'skipped'" in condition, (
             f"images_release must wait for {dependency}"
         )
@@ -1378,7 +1379,7 @@ def test_a_tag_run_attests_instead_of_re_running() -> None:
     tag head_branch, title, success conclusion) is untouched, so this asserts
     the mechanics that make that safe:
 
-    - the five suite lanes are EXPLICITLY off on tags — not left to whatever the
+    - the four suite lanes are EXPLICITLY off on tags — not left to whatever the
       paths filter computes for a tag push, which is undefined behaviour;
     - the attestation queries main's runs for THIS sha, green, push — drop any
       of those qualifiers and a red or foreign run attests;
@@ -1388,7 +1389,7 @@ def test_a_tag_run_attests_instead_of_re_running() -> None:
     workflow = yaml.safe_load(source(REQUIRED))
     jobs = workflow["jobs"]
 
-    for lane in ("db", "python", "qlib", "runtime", "web"):
+    for lane in ("db", "python", "runtime", "web"):
         assert "github.ref_type != 'tag'" in str(jobs[lane]["if"]), (
             f"the {lane} lane runs on tags again — the tag run is back to re-proving an already-green SHA (#673 D2)"
         )
@@ -1741,14 +1742,25 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
         )
 
 
-def test_qlib_filter_covers_all_pinned_runtime_tests_and_their_sources() -> None:
-    """#956: .github/workflows/ci-qlib.yml runs reproducibility proofs for base
-    factors (gross_profit_per_employee, peg, price_to_sales) and tiny contract batches
-    against pinned Qlib. These tests pytest.importorskip("qlib"), so under ci-python
-    they skip. If ci-required.yml's qlib paths filter does not cover the tests and the
-    factor sources they test, a PR touching only those files skips ci-qlib (which required
-    treats as passing), leaving the reproducibility proofs unarmed in CI.
-    """
+#: The three factor-expression cross-check proofs #969 migrated from pinned Qlib to the
+#: Polars AST, and the sources each one proves. Kept as data so the two tests below
+#: disagree loudly if one is edited without the other.
+POLARS_CROSS_CHECK_TESTS = {
+    "libs/factors/tests/test_gross_profit_per_employee.py",
+    "libs/factors/tests/test_peg.py",
+    "libs/factors/tests/test_price_to_sales.py",
+}
+POLARS_CROSS_CHECK_SOURCES = {
+    "libs/factors/src/factors/base/gross_profit_per_employee.py",
+    "libs/factors/src/factors/base/peg.py",
+    "libs/factors/src/factors/base/price_to_sales.py",
+    "libs/factors/src/factors/expressions/compiler.py",
+    "libs/contracts/src/truealpha_contracts/ast.py",
+}
+
+
+def _paths_filter(name: str) -> set[str]:
+    """One named paths-filter from ci-required's changes job."""
     workflow = yaml.safe_load(source(REQUIRED))
     filter_step = next(
         (step for step in workflow["jobs"]["changes"]["steps"] if "filters" in (step.get("with") or {})),
@@ -1756,51 +1768,439 @@ def test_qlib_filter_covers_all_pinned_runtime_tests_and_their_sources() -> None
     )
     assert filter_step is not None, "ci-required's changes job no longer carries a paths-filter step"
     filters = yaml.safe_load(filter_step["with"]["filters"])
+    assert name in filters, f"the changes job no longer declares a {name} filter"
+    return set(filters[name])
 
-    assert "qlib" in filters, "the changes job no longer declares a qlib filter"
-    qlib_paths = set(filters["qlib"])
 
-    test_step = step(QLIB, "Run the pinned Qlib runtime tests without optional skips")
-    run_cmd = str(test_step.get("run", ""))
-    tokens = shlex.split(run_cmd)
-    assert "pytest" in tokens, f"ci-qlib.yml test step does not invoke pytest: {run_cmd!r}"
-    pytest_idx = tokens.index("pytest")
-    test_targets = [token for token in tokens[pytest_idx + 1 :] if not token.startswith("-")]
-    assert test_targets, "ci-qlib.yml pytest command specifies no test targets"
-
-    def covered(path: str, patterns: set[str]) -> bool:
-        for pattern in patterns:
-            if pattern == path:
+def _covered_by(path: str, patterns: set[str]) -> bool:
+    for pattern in patterns:
+        if pattern == path:
+            return True
+        if pattern.endswith("/**"):
+            prefix = pattern[: -len("/**")]
+            if path == prefix or path.startswith(prefix + "/"):
                 return True
-            if pattern.endswith("/**"):
-                prefix = pattern[: -len("/**")]
-                if path == prefix or path.startswith(prefix + "/"):
-                    return True
-        return False
+    return False
 
-    for target in test_targets:
-        assert (REPO_ROOT / target).exists(), f"test target {target} does not exist in repo"
 
-    uncovered_targets = {target for target in test_targets if not covered(target, qlib_paths)}
-    assert not uncovered_targets, (
-        f"test targets {uncovered_targets} are executed in ci-qlib.yml but not covered by "
-        f"ci-required.yml's qlib filter — PRs modifying these tests would skip ci-qlib (#956)"
+def test_the_polars_cross_check_proofs_are_armed_in_ci_python() -> None:
+    """#956's failure class, carried across #969's engine migration.
+
+    #956 found the three factor reproducibility proofs unarmed: they lived in
+    ci-qlib.yml, they `pytest.importorskip("qlib")`'d under ci-python, and ci-required's
+    qlib paths filter did not cover them — so a PR editing exactly those files ran the
+    proofs nowhere, and `required` treats a skipped job as success. Measured at the time
+    of the migration: the Qlib cross-checks had skipped in 11 of the last 12 ci-python
+    runs.
+
+    #969 deleted ci-qlib.yml and moved the proofs onto `polars`, a first-class
+    dependency. That removes the optional-import half BY CONSTRUCTION, and this test is
+    what keeps it removed: the same class cannot reappear under a new name (a new
+    optional engine, a new lane) without turning this red. Three properties, all of
+    which have to hold for the proof to actually execute:
+
+    1. the proofs and the sources they prove are covered by the `python` paths filter,
+       so a PR touching only those files still runs ci-python;
+    2. ci-python's test-core job actually runs `libs/factors/tests`;
+    3. no proof is gated behind `pytest.importorskip`, which would let the job run and
+       the assertion never execute.
+    """
+    python_paths = _paths_filter("python")
+
+    for relative in sorted(POLARS_CROSS_CHECK_TESTS | POLARS_CROSS_CHECK_SOURCES):
+        assert (REPO_ROOT / relative).exists(), (
+            f"{relative} does not exist — the cross-check inventory has drifted from the tree"
+        )
+
+    uncovered = {
+        relative
+        for relative in POLARS_CROSS_CHECK_TESTS | POLARS_CROSS_CHECK_SOURCES
+        if not _covered_by(relative, python_paths)
+    }
+    assert not uncovered, (
+        f"{sorted(uncovered)} are not covered by ci-required.yml's python paths filter — a PR "
+        f"touching only these files would skip ci-python, and `required` reads a skipped job as "
+        f"success, leaving the factor reproducibility proofs unarmed (#956, #969)"
     )
 
-    factor_sources = {
-        "libs/factors/src/factors/base/gross_profit_per_employee.py",
-        "libs/factors/src/factors/base/peg.py",
-        "libs/factors/src/factors/base/price_to_sales.py",
-        "libs/factors/src/factors/qlib_engine.py",
-        "libs/contracts/src/truealpha_contracts/qlib_expression.py",
-    }
-    for src in factor_sources:
-        assert (REPO_ROOT / src).exists(), f"factor source {src} does not exist in repo"
+    runs = [
+        str(step.get("run", ""))
+        for step in yaml.safe_load(source(PYTHON))["jobs"]["test-core"]["steps"]
+        if "pytest" in str(step.get("run", ""))
+    ]
+    assert any("libs/factors/tests" in run for run in runs), (
+        "ci-python's test-core job no longer runs libs/factors/tests — the proofs are covered by "
+        f"the filter but nothing executes them. pytest invocations found: {runs!r}"
+    )
 
-    uncovered_sources = {src for src in factor_sources if not covered(src, qlib_paths)}
-    assert not uncovered_sources, (
-        f"factor sources {uncovered_sources} are tested under ci-qlib.yml but not covered by "
-        f"ci-required.yml's qlib filter — PRs modifying these formulas would skip ci-qlib (#956)"
+    for relative in sorted(POLARS_CROSS_CHECK_TESTS):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert "importorskip" not in text, (
+            f"{relative} gates on pytest.importorskip again — the job runs, the test reports as "
+            f"passed, and the assertion never executes. That is exactly the state #969 migrated "
+            f"off Qlib to escape (11 of 12 ci-python runs skipped it)."
+        )
+        assert "compile_expression" in text or "compile_to_polars" in text, (
+            f"{relative} no longer compiles the migrated AST expression — the cross-check would "
+            f"assert the Decimal path against itself"
+        )
+
+
+# --- Qlib non-reintroduction: two bounded checks, then a best-effort sweep ------------
+#
+# #969 migrated the factor-expression engine from Qlib to the Polars AST. Keeping it
+# migrated needs a standing check, and the first four attempts at one were all text
+# walks — each round of review found another path shape the walk could not reach (an
+# extensionless Dockerfile, a repository-root file, an unscanned top-level directory, a
+# waived dot-directory, a bare-name skip matching at any depth). That is not four
+# careless implementations; it is what proving a negative over an unbounded surface
+# looks like. A walk has to be right about every path shape that exists and every one
+# that will exist.
+#
+# So the guarantee lives in the two checks below, over a surface of every uv.lock in
+# the tree (one today) and the interpreter running this suite. A dependency cannot
+# reach any environment without passing through a lockfile, and code cannot call a
+# module that will not resolve. The text sweep that follows is kept for what those two
+# cannot see — a workflow lane, a path filter, a stale instruction in a skill file, a
+# Dockerfile line not yet built — and is documented as best-effort, not as a guarantee.
+
+#: Matched as a substring against distribution names, so it covers `pyqlib` (the
+#: distribution), `qlib` (the import name) and anything like `qlib-server`.
+QLIB_DISTRIBUTION_MARKER = "qlib"
+
+
+def test_no_lockfile_resolves_a_qlib_distribution() -> None:
+    """Primary guard, part 1: the dependency cannot come back through a lockfile.
+
+    Bounded by construction — every `uv.lock` in the repository is parsed, not walked.
+    Nothing reaches a virtualenv, a CI runner or a production image without being
+    resolved here first, so this is the narrowest place the question can be asked.
+
+    Every lockfile, not just the root one: `libs/factors/qlib-runtime/` was a
+    workspace-EXCLUDED project with its own `uv.lock`, which is exactly how the Qlib
+    dependency was isolated from the root environment before #969 deleted it. A second
+    lockfile reappearing is the shape this has to catch, so the glob is the check.
+    """
+    lockfiles = [
+        path
+        for path in REPO_ROOT.rglob("uv.lock")
+        if not set(path.parts) & {".venv", ".git", "node_modules"}
+    ]
+    assert lockfiles, "no uv.lock found at all — this check would pass by having nothing to read"
+
+    for lockfile in lockfiles:
+        relative = lockfile.relative_to(REPO_ROOT).as_posix()
+        packages = tomllib.loads(lockfile.read_text(encoding="utf-8")).get("package", [])
+        assert len(packages) > 20, (
+            f"{relative} resolves only {len(packages)} packages — that is not a populated lockfile, "
+            f"so a clean result would mean nothing (GREEN-WHILE-EMPTY)"
+        )
+        names = sorted({str(package.get("name", "")).lower() for package in packages})
+        offenders = [name for name in names if QLIB_DISTRIBUTION_MARKER in name]
+        assert not offenders, (
+            f"{relative} resolves {offenders} — the Qlib dependency is back. #969 removed the "
+            f"factor-expression engine and the workspace-excluded `libs/factors/qlib-runtime` "
+            f"project that carried it; a lockfile entry puts it into every environment that "
+            f"installs from this file."
+        )
+
+
+def test_qlib_is_not_resolvable_in_this_environment() -> None:
+    """Primary guard, part 2: the module cannot be imported, whatever text sits where.
+
+    This is the property that actually matters. A text scan asks whether five letters
+    appear in a file it managed to reach; this asks whether the interpreter running the
+    test suite can load the thing — and if it cannot, no code path can use it.
+
+    Both halves are checked because they fail differently: a distribution can be
+    installed without being imported anywhere yet (`importlib.metadata`), and a module
+    can be importable from a path entry that no distribution declares
+    (`importlib.util.find_spec`).
+    """
+    installed = sorted(
+        {
+            name.lower()
+            for distribution in importlib.metadata.distributions()
+            if (name := distribution.metadata["Name"] or "")
+        }
+    )
+    assert len(installed) > 20, (
+        f"only {len(installed)} distributions are visible — the environment is not the one the "
+        f"suite runs in, so a clean result would mean nothing (GREEN-WHILE-EMPTY)"
+    )
+    offenders = [name for name in installed if QLIB_DISTRIBUTION_MARKER in name]
+    assert not offenders, (
+        f"{offenders} {'is' if len(offenders) == 1 else 'are'} installed in the environment this "
+        f"suite runs in — #969 removed the Qlib engine, and an installed distribution is a code "
+        f"path whatever the repository's text says"
+    )
+
+    assert importlib.util.find_spec("qlib") is None, (
+        "`import qlib` resolves in this environment — the deleted engine is importable again. "
+        "It need not be declared anywhere for this to be true: a path entry, an editable "
+        "install or a vendored directory is enough, which is why this is checked separately "
+        "from the distribution list above."
+    )
+
+
+#: Scanned for a Qlib reintroduction: every top-level directory that holds code, CI or
+#: an executed procedure. `db/` is production code, not data — `apps/llm-service`'s
+#: Dockerfile COPYs it and its CMD runs `db/apply_migrations.sh` on every container boot.
+#: `skills/` holds procedures an agent executes against this repository, one of which is
+#: `factor-acceptance`, the very procedure this migration changed.
+QLIB_SCAN_ROOTS = (".github", "apps", "db", "libs", "skills", "tools")
+#: Top-level directories deliberately NOT scanned. Every other top-level directory must
+#: appear in QLIB_SCAN_ROOTS — asserted below, because the two holes this guard has
+#: already had were both "a place the walk cannot reach", found by review rather than by
+#: the guard. A new top-level directory now fails this test until someone classifies it.
+QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
+    # The ADR for this migration (A5-polars-vectorbt-engine.md) and A0's amendment note
+    # live here; init.md rule 25 points at them. Recording the migration is the opposite
+    # of reintroducing it.
+    "docs",
+    # Frozen history. Accepted records pin these files' hashes, so editing the prose
+    # inside one breaks the record rather than removing a dependency.
+    "governance",
+)
+#: The repository's own top-level FILES are scanned too, non-recursively. `rglob` from a
+#: scan root cannot reach a file sitting at the repository root, and the root
+#: `pyproject.toml` is exactly where a `libs/factors/qlib-runtime` workspace member would
+#: come back — #969 removed one from it. Non-recursive on purpose: recursing the root
+#: would pull in the excluded directories above.
+QLIB_SCAN_REPOSITORY_ROOT_FILES = True
+#: Records of what a contract asserted at the time, not live references. Their bytes are
+#: hashed by accepted records (`governance/batches/D4-datahub-interface.v1.json` pins
+#: `datahub_interface.v2.json`'s whole-file sha256) or by their own versioned successors,
+#: so editing the prose inside them breaks the record rather than removing a dependency.
+#: The live statement of the same red line is in docs/architecture-decisions/.
+QLIB_SCAN_EXCLUDED_DIRS = (
+    "libs/contracts/tests/fixtures",
+    "apps/app-web/node_modules",
+    "apps/app-web/.next",
+)
+#: Top-level documents that carry the migration's own history. They only became reachable
+#: when the root files were added to the scan, and they are the same two the rest of this
+#: exclusion set already covers in spirit: `init.md` rule 25 points at the ADR, and
+#: `vision.md` is product scope, not a dependency surface.
+QLIB_SCAN_EXCLUDED_FILES = ("init.md", "vision.md")
+#: Files a deployed or tested code path is written in whose NAME carries the type rather
+#: than an extension. `Path("Dockerfile").suffix` is `""`, so a suffix allowlist alone
+#: drops every Dockerfile in the tree — including the three that build the production
+#: images, where `RUN pip install pyqlib` would reinstall the deleted engine.
+_QLIB_SCAN_TEXT_NAMES = {"Dockerfile", "Makefile", "makefile", "GNUmakefile", "Containerfile"}
+_QLIB_SCAN_TEXT_NAME_PREFIXES = ("Dockerfile.", "Makefile.")
+#: Directory names skipped wherever they appear, at any depth. Deliberately only names
+#: that are never source by convention — a VCS directory, a virtualenv, a tool cache, a
+#: vendored package tree. `dist`, `build` and `.next` USED to be here and were removed:
+#: those are ordinary words a source directory can legitimately be called, and matching
+#: them by bare name made `libs/factors/build/` and its whole subtree invisible. None of
+#: the three exists in this tree; `apps/app-web/.next` is excluded by resolved path in
+#: QLIB_SCAN_EXCLUDED_DIRS instead, which is how an ambiguous name should be handled.
+#:
+#: The residual is honest and stated: a source directory deliberately named
+#: `__pycache__` or `node_modules` would still be skipped. That is what the lockfile and
+#: import checks above are for — they do not care what a directory is called.
+_QLIB_SCAN_GENERATED_DIR_NAMES = {
+    "__pycache__", ".git", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", "node_modules",
+}
+#: Deliberately absent: a bare `.env`. `Path(".env").suffix` is `""`, so listing `.env`
+#: here would never have matched it anyway — and matching it by NAME is not wanted, since
+#: a real `.env` is git-ignored secrets and this test prints the lines it objects to.
+#: The tracked `.env.example` is matched by `.example`.
+_QLIB_SCAN_TEXT_SUFFIXES = {
+    ".cfg", ".css", ".dockerfile", ".example", ".html", ".ini", ".js", ".json", ".jsx",
+    ".lock", ".md", ".mjs", ".py", ".sh", ".sql", ".toml", ".ts", ".tsx", ".txt",
+    ".yaml", ".yml",
+}
+#: Files the sweep must actually have READ — not merely selected. An allowlist that
+#: silently stops matching is the failure mode this sweep has had repeatedly: the first
+#: version visited 782 files and could see none of the first five below, so a `pyqlib`
+#: line in a production Dockerfile or a re-added qlib-runtime workspace member would have
+#: left it green; the second could not enter `db/` at all. Naming them turns "the walk
+#: still reaches the risky files" into an assertion instead of an assumption — for these
+#: files. It says nothing about the ones nobody has thought of, which is why the binding
+#: checks are the lockfile and import ones above.
+QLIB_SCAN_MUST_REACH = (
+    "pyproject.toml",
+    "Makefile",
+    "docker-compose.yml",
+    "apps/data-engine/Dockerfile",
+    "apps/llm-service/Dockerfile",
+    "apps/app-web/Dockerfile",
+    # Runs on every production container boot (llm-service CMD), and is the shell script
+    # a `pip install pyqlib` would be easiest to hide in.
+    "db/apply_migrations.sh",
+    "skills/factor-acceptance/SKILL.md",
+    # A dot-directory that holds code, and the reason the classification rule below
+    # waives no directory for being dot-prefixed.
+    ".github/workflows/ci-required.yml",
+)
+
+
+def _is_scannable_text_file(path: Path) -> bool:
+    """True when the file's type is one this scan can read as text.
+
+    An allowlist, not a denylist, so a binary is never read by accident — but keyed on
+    the NAME as well as the extension, because a Dockerfile has no extension.
+    """
+    if path.suffix.lower() in _QLIB_SCAN_TEXT_SUFFIXES:
+        return True
+    if path.name in _QLIB_SCAN_TEXT_NAMES:
+        return True
+    return path.name.startswith(_QLIB_SCAN_TEXT_NAME_PREFIXES)
+
+
+def _qlib_scan_candidates() -> list[Path]:
+    """Every file the reintroduction scan reads, roots and repository-root files alike."""
+    excluded_dirs = tuple((REPO_ROOT / relative).resolve() for relative in QLIB_SCAN_EXCLUDED_DIRS)
+    excluded_files = {(REPO_ROOT / name).resolve() for name in QLIB_SCAN_EXCLUDED_FILES}
+    # A check for a name has to name it. This one file is exempt, by exact path rather
+    # than by directory, so a real reference anywhere else in libs/runtime/tests still
+    # trips the scan.
+    excluded_files.add(Path(__file__).resolve())
+
+    found: list[Path] = []
+    walked: list[Path] = []
+    if QLIB_SCAN_REPOSITORY_ROOT_FILES:
+        walked.extend(REPO_ROOT.glob("*"))
+    for root_name in QLIB_SCAN_ROOTS:
+        root = REPO_ROOT / root_name
+        assert root.is_dir(), f"{root_name} is not a directory — the scan roots have drifted"
+        walked.extend(root.rglob("*"))
+
+    for path in walked:
+        if not path.is_file() or path.is_symlink():
+            continue
+        if set(path.parts) & _QLIB_SCAN_GENERATED_DIR_NAMES:
+            continue
+        resolved = path.resolve()
+        if resolved in excluded_files:
+            continue
+        if any(directory in resolved.parents for directory in excluded_dirs):
+            continue
+        if not _is_scannable_text_file(path):
+            continue
+        found.append(path)
+    return found
+
+
+def test_every_top_level_directory_is_scanned_or_explicitly_excluded() -> None:
+    """Keeps the text sweep's scope EXPLICIT — it does not make the sweep complete.
+
+    `REPO_ROOT.glob("*")` yields directories as well as files, and they die at
+    `path.is_file()`. So a top-level directory outside QLIB_SCAN_ROOTS is invisible to
+    the sweep silently: that is how `db/` (production code — the llm-service image COPYs
+    it and its CMD runs `db/apply_migrations.sh` on every boot) and `skills/` went
+    unscanned. Listing the roots does not catch that; comparing the list against the tree
+    does, so a new top-level directory is a decision someone writes down in one of the
+    two tuples with a reason beside it.
+
+    What this does NOT do is make the sweep sound. Directory scope was one of several
+    path shapes the sweep has been wrong about, and the next one is not enumerable in
+    advance. The guarantee is test_no_lockfile_resolves_a_qlib_distribution and
+    test_qlib_is_not_resolvable_in_this_environment; this keeps a best-effort check from
+    quietly getting narrower.
+    """
+    classified = set(QLIB_SCAN_ROOTS) | set(QLIB_SCAN_EXCLUDED_ROOT_DIRS) | _QLIB_SCAN_GENERATED_DIR_NAMES
+    # EVERY top-level directory, dot-prefixed included. An earlier version waived names
+    # beginning with "." as tool state, to save a one-line edit when a new linter cache
+    # appears — and that waiver meant a new `.circleci/` or `.buildkite/` carrying
+    # `pip install pyqlib` bypassed both the scan and this test. `.github` already proves
+    # a dot-directory can hold code. The one-line edit is the cheaper side of that trade.
+    present = {path.name for path in REPO_ROOT.glob("*") if path.is_dir()}
+    unclassified = present - classified
+    assert not unclassified, (
+        f"top-level director{'y' if len(unclassified) == 1 else 'ies'} {sorted(unclassified)} "
+        f"{'is' if len(unclassified) == 1 else 'are'} neither scanned for a Qlib reintroduction nor "
+        f"explicitly excluded, so a reference there would leave test_no_code_path_reintroduces_qlib "
+        f"green. Add to QLIB_SCAN_ROOTS to scan it, or to QLIB_SCAN_EXCLUDED_ROOT_DIRS with the "
+        f"reason it is out of scope — the way docs/ and governance/ are."
+    )
+    for root_name in QLIB_SCAN_ROOTS:
+        assert (REPO_ROOT / root_name).is_dir(), f"{root_name} is a declared scan root but is not a directory"
+    for root_name in QLIB_SCAN_EXCLUDED_ROOT_DIRS:
+        assert (REPO_ROOT / root_name).is_dir(), (
+            f"{root_name} is excluded from the scan but no longer exists — drop the exclusion rather "
+            f"than leaving a rule about a directory that is gone"
+        )
+
+
+def test_no_code_path_reintroduces_qlib() -> None:
+    """BEST-EFFORT text sweep for Qlib references. Not the guarantee — the backstop.
+
+    Scope claim, stated plainly because four rounds of review proved the confident
+    version wrong: this walks the code surfaces named in QLIB_SCAN_ROOTS plus the
+    repository's top-level files, reading the file types in the two allowlists. A
+    reference in a path shape it does not reach will not be caught here. The shapes it
+    missed and now covers were an extensionless Dockerfile, a repository-root file, an
+    unscanned top-level directory, a waived dot-directory and a bare-name skip matching
+    at any depth — five, found by review rather than by this test, which is the evidence
+    for why it is not trusted as the primary control.
+
+    What it is genuinely good for is the part the bounded checks cannot see: a ci-qlib
+    workflow lane, a `qlib` path-filter entry, a stale instruction in a skill file, a
+    `pip install pyqlib` in a Dockerfile that has not been rebuilt yet. Those are text,
+    not resolved dependencies, and they are worth catching early.
+
+    What actually guarantees the migration stays migrated is upstream of this:
+    `test_no_lockfile_resolves_a_qlib_distribution` (a dependency cannot reach any
+    environment without passing through a lockfile) and
+    `test_qlib_is_not_resolvable_in_this_environment` (code cannot call a module that
+    will not resolve). Both are bounded — the tree's lockfiles and one interpreter — so
+    neither has a path shape to miss.
+
+    Out of scope deliberately, never by omission (see
+    test_every_top_level_directory_is_scanned_or_explicitly_excluded):
+
+    - `docs/` records the migration itself — `A5-polars-vectorbt-engine.md` is the ADR
+      for this change, and `A0-governed-research-access.md` carries an amendment note;
+    - `init.md` rule 25 keeps a one-clause historical pointer to A5, and `vision.md` is
+      product scope rather than a dependency surface (QLIB_SCAN_EXCLUDED_FILES);
+    - `governance/` is frozen history and its files' hashes are pinned by accepted tests;
+    - `libs/contracts/tests/fixtures/` holds versioned accepted-contract artifacts whose
+      whole-file hashes are recorded elsewhere (see QLIB_SCAN_EXCLUDED_DIRS).
+    """
+    offenders: list[str] = []
+    # Recorded from inside the read loop, not from the candidate list: a candidate that
+    # raises on decode is skipped, and a coverage claim built before the read would still
+    # count it. What this guard promises is that these files were SEARCHED.
+    read: set[str] = set()
+    for path in _qlib_scan_candidates():
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):  # pragma: no cover - binary or unreadable
+            continue
+        read.add(relative)
+        for number, line in enumerate(text.splitlines(), start=1):
+            if "qlib" in line.lower():
+                offenders.append(f"{relative}:{number}: {line.strip()[:120]}")
+
+    assert len(read) > 500, (
+        f"the scan only read {len(read)} files — the walk is not reaching the tree, so a clean "
+        f"result would mean nothing (GREEN-WHILE-EMPTY)"
+    )
+    for relative in QLIB_SCAN_MUST_REACH:
+        assert (REPO_ROOT / relative).is_file(), (
+            f"{relative} no longer exists, so this guard's coverage list is describing a tree that "
+            f"is gone — re-derive QLIB_SCAN_MUST_REACH rather than dropping the entry"
+        )
+        assert relative in read, (
+            f"the scan never read {relative} — a Qlib reference there would leave this test green. "
+            f"That is the exact hole this guard has had twice: a suffix allowlist drops every "
+            f"extensionless Dockerfile, rglob from a scan root cannot reach a repository-root file, "
+            f"and a top-level directory that is not a scan root is never entered at all."
+        )
+
+    assert not offenders, (
+        "Qlib is referenced again under "
+        + ", ".join((*QLIB_SCAN_ROOTS, "the repository root"))
+        + f" ({len(offenders)} line(s)). #969 migrated the factor-expression engine to the Polars "
+        "AST and deleted the Qlib side; a code path naming it again is a reintroduction, not a "
+        "leftover. If the reference is a historical record rather than a dependency, it belongs in "
+        "docs/ or governance/, not here. (This sweep is best-effort — the binding checks are "
+        "test_no_lockfile_resolves_a_qlib_distribution and "
+        "test_qlib_is_not_resolvable_in_this_environment.)\n" + "\n".join(sorted(offenders)[:40])
     )
 
 
@@ -2010,7 +2410,7 @@ def test_no_job_holds_a_cache_grant_it_does_not_use() -> None:
     browser job can save the chromium cache — and without a narrowing block the
     same token is held by a job whose main act is installing packages from a
     lockfile, which is where a supply-chain compromise would land (review).
-    ci-python/qlib/runtime never exposed this because they are single-job.
+    ci-python/ci-runtime never exposed this because they are single-job.
 
     So: in a called workflow whose caller grants `actions: write`, every job
     that does NOT cache must pin its own permissions without it.

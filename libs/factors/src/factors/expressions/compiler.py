@@ -116,45 +116,6 @@ def compile_to_polars(
         inner = compile_to_polars(node.expr, symbol_col, date_col, cutoff_col)
         return _safe_rank(inner, cutoff_col)
 
-    # Support duck-typing for Qlib nodes if present
-    if hasattr(node, "kind"):
-        kind = str(getattr(node, "kind"))
-        if kind == "feature":
-            return pl.col(str(getattr(node, "feature_binding_id", "feature")))
-        if kind == "numeric":
-            return pl.lit(float(getattr(node, "value", 0.0)))
-        if kind == "call":
-            op = str(getattr(node, "operator_id", "")).lower()
-            args: list[Any] = list(getattr(node, "arguments", []))
-            if len(args) >= 2:
-                if "add" in op:
-                    return compile_to_polars(args[0], symbol_col, date_col, cutoff_col) + compile_to_polars(
-                        args[1], symbol_col, date_col, cutoff_col
-                    )
-                if "sub" in op:
-                    return compile_to_polars(args[0], symbol_col, date_col, cutoff_col) - compile_to_polars(
-                        args[1], symbol_col, date_col, cutoff_col
-                    )
-                if "mul" in op:
-                    return compile_to_polars(args[0], symbol_col, date_col, cutoff_col) * compile_to_polars(
-                        args[1], symbol_col, date_col, cutoff_col
-                    )
-                if "div" in op:
-                    left = compile_to_polars(args[0], symbol_col, date_col, cutoff_col)
-                    right = compile_to_polars(args[1], symbol_col, date_col, cutoff_col)
-                    return _safe_div(left, right)
-                if "ref" in op:
-                    inner = compile_to_polars(args[0], symbol_col, date_col, cutoff_col)
-                    n = int(getattr(args[1], "value", 1))
-                    return inner.shift(n).over(symbol_col)
-                if "mean" in op:
-                    inner = compile_to_polars(args[0], symbol_col, date_col, cutoff_col)
-                    n = int(getattr(args[1], "value", 1))
-                    return inner.rolling_mean(window_size=n, min_samples=n).over(symbol_col)
-            if len(args) == 1 and "rank" in op:
-                inner = compile_to_polars(args[0], symbol_col, date_col, cutoff_col)
-                return _safe_rank(inner, cutoff_col)
-
     raise TypeError(f"Unsupported AST node type for compilation: {type(node)}: {node!r}")
 
 
