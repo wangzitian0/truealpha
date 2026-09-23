@@ -74,7 +74,13 @@ PG_PASSWORD=$(echo "$DB_URL" | sed -nE 's|^postgres(ql)?://[^:/@]+:([^@]*)@.*|\2
 # bridge subnets are configurable, so probe EVERY address the container holds
 # instead of pattern-matching ranges — the health check decides reachability
 # (overlay addresses simply fail it). Fall back to the Traefik route.
-S3_ENDPOINT="https://s3${SUFFIX}.zitian.party"
+if [ -z "$S3_ENDPOINT" ]; then
+  if [ -n "$INTERNAL_DOMAIN" ]; then
+    S3_ENDPOINT="https://s3${SUFFIX}.${INTERNAL_DOMAIN}"
+  else
+    S3_ENDPOINT="http://127.0.0.1:9000"
+  fi
+fi
 for ip in $(docker inspect "$MINIO" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'); do
   if curl -sf -m 3 "http://$ip:9000/minio/health/live" >/dev/null; then
     S3_ENDPOINT="http://$ip:9000"

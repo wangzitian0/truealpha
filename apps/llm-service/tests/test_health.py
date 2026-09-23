@@ -171,7 +171,7 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint() -> None:
     The request path is /mcp, not /api/mcp — Traefik strips the prefix before
     forwarding, and the redirect rebuilds it by hand.
     """
-    with TestClient(app, client=("10.0.1.76", 50000)) as client:
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
         # Absorbed from test_app_starts_with_the_mcp_mount_and_serves_health_under
         # _its_lifespan (#348): the MCP session manager is a module-level
         # singleton whose run() may be entered ONCE per instance, so two tests
