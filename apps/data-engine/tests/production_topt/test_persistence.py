@@ -194,7 +194,15 @@ def _routes(
     outage: _PrimaryOutage | None = None,
 ) -> dict[str, SourceFetchPort]:
     """The deployed adapters over fake fetchers, routed exactly as the composition root does."""
-    cutoff_date = CUTOFF.date()
+    # The settled session (#530 item 1): production's build_route uses
+    # context.price_cutoff_date here, "the last SETTLED session, not the calendar date"
+    # (market_price_adapter.py) -- CUTOFF is when the tick RUNS, not the session it
+    # captures for. They used to be interchangeable because valid_from ignored both;
+    # now that valid_from is the fact's own date, a fake quote dated CUTOFF (one day
+    # after the obligation's actual partition, plan.timeline.partition_start) would
+    # correctly be graded ineligible for this run's partition -- test the same
+    # settled-session semantics production uses instead of the run's own clock.
+    cutoff_date = plan.timeline.partition_start.date()
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
     release_targets: dict[str, ReleaseDerivedRecord] = {}
@@ -1708,7 +1716,10 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
     assert (final_outcome, final_reasons) == ("success", ["transient_network"])
     assert attempt_outcomes == ["transport_error", "transport_error", "success"]
     assert vintage_id is not None and under_planned_request is True
-    assert (record_id, landed_source) == (f"twelve-data:{victim_ticker}:{CUTOFF.date().isoformat()}", "twelvedata")
+    # The failover's own record id is stamped with the settled session it served
+    # (quote.as_of), not the tick's run clock -- see _routes' cutoff_date (#530 item 1).
+    settled_session = plan.timeline.partition_start.date()
+    assert (record_id, landed_source) == (f"twelve-data:{victim_ticker}:{settled_session.isoformat()}", "twelvedata")
     # Every other price cell is the primary's, with an untouched ledger.
     others = connection.execute(
         """
