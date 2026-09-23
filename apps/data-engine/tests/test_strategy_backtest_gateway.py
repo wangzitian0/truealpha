@@ -64,9 +64,9 @@ def test_e2e_strategy_runs_from_staging_through_gateway_to_mart(connection) -> N
 
     # The persisted run binds the exact captured snapshot; re-reading proves the lineage.
     row = connection.execute(
-        "select snapshot_id from mart.strategy_runs where strategy_run_id = %s", (run_id,)
+        "select snapshot_id, corpus_sha256 from mart.strategy_runs where strategy_run_id = %s", (run_id,)
     ).fetchone()
-    assert row == (snapshot_id,)
+    assert row == (snapshot_id, snapshot_id.split(":", 1)[1])
 
 
 def test_gateway_snapshot_id_is_content_addressed_on_captured_inputs(connection) -> None:
@@ -89,3 +89,29 @@ def test_gateway_snapshot_id_is_content_addressed_on_captured_inputs(connection)
         "issuer:nice",
         "issuer:shop",
     }
+
+
+def test_mutating_input_fact_changes_snapshot_and_corpus_sha256(connection) -> None:
+    """#955: mutating an input fact produces a different snapshot_id and corpus_sha256."""
+    corpus = _load_corpus()
+    seed_strategy_backtest_inputs(connection, corpus)
+    gateway = StrategyBacktestGateway(connection)
+    cutoff = corpus["golden_decision_set"]["decisions"][0]["cutoff_at"]
+
+    original_snapshot = gateway.snapshot_id(cutoff)
+    original_corpus_sha = original_snapshot.split(":", 1)[1]
+
+    # Mutate one fact in staging.strategy_backtest_inputs for this exact cutoff
+    connection.execute(
+        """
+        update staging.strategy_backtest_inputs
+        set value = value + 100
+        where ctid in (select ctid from staging.strategy_backtest_inputs where cutoff_at = %s limit 1)
+        """,
+        (cutoff,),
+    )
+    mutated_snapshot = gateway.snapshot_id(cutoff)
+    mutated_corpus_sha = mutated_snapshot.split(":", 1)[1]
+
+    assert mutated_snapshot != original_snapshot
+    assert mutated_corpus_sha != original_corpus_sha

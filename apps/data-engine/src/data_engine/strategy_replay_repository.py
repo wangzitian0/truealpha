@@ -47,11 +47,14 @@ CLAIM_CEILING = "preview"
 def _run_payload(
     definition: LargeModelValueV0Definition, *, executed_at: datetime, snapshot_id: str | None = None
 ) -> dict[str, Any]:
+    # #955: when bound to a PIT snapshot, corpus_sha256 reflects the actual inputs
+    # consumed by that cutoff's replay rather than the static fixture constant.
+    corpus_sha = snapshot_id.split(":", 1)[1] if snapshot_id and ":" in snapshot_id else CORPUS_SHA256
     payload: dict[str, Any] = {
         "strategy_key": definition.strategy_id,
         "strategy_version": definition.definition_version,
         "definition_content_sha256": definition.content_sha256,
-        "corpus_sha256": CORPUS_SHA256,
+        "corpus_sha256": corpus_sha,
         "claim_ceiling": CLAIM_CEILING,
         "executed_at": executed_at.isoformat(),
     }
@@ -87,7 +90,7 @@ def write_strategy_run(
             definition.strategy_id,
             definition.definition_version,
             definition.content_sha256,
-            CORPUS_SHA256,
+            payload["corpus_sha256"],
             CLAIM_CEILING,
             executed_at,
             snapshot_id,
