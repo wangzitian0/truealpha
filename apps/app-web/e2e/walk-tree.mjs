@@ -91,20 +91,20 @@ async function assertNoVisibleRawIds(page, path, problems) {
  */
 async function assertNoBlankResearchTableCells(page, path, problems) {
   if (!["/research/rankings", "/research/strategy", "/research/compare", "/research/coverage"].includes(path)) return;
-  const emptyFirstCells = await page.evaluate(() => {
+  const emptyEntityCells = await page.evaluate(() => {
     const rows = Array.from(document.querySelectorAll("tbody tr"));
     if (rows.length === 0) return 0;
     let emptyCount = 0;
     for (const row of rows) {
-      const firstCell = row.querySelector("td, th");
-      if (firstCell && firstCell.innerText.trim() === "") {
+      const entityCell = row.querySelector('th[scope="row"]');
+      if (entityCell && entityCell.innerText.trim() === "") {
         emptyCount += 1;
       }
     }
     return emptyCount;
   });
-  if (emptyFirstCells > 0) {
-    problems.push(`found ${emptyFirstCells} table row(s) with blank first cell (empty ticker/entity display)`);
+  if (emptyEntityCells > 0) {
+    problems.push(`found ${emptyEntityCells} table row(s) with blank entity cell (th[scope="row"]) on ${path}`);
   }
 }
 

@@ -93,9 +93,9 @@ with latest_members as (
     select distinct on (m.issuer_id)
         m.issuer_id,
         m.listing_id,
-        case when m.listing_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        case when m.listing_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
              then m.listing_id::uuid else null end as listing_uuid,
-        case when m.issuer_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        case when m.issuer_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
              then m.issuer_id::uuid else null end as issuer_uuid
     from staging.topt_core_snapshot_members m
     order by m.issuer_id, m.created_at desc
@@ -110,7 +110,7 @@ listing_tickers as (
         end as ticker
     from staging.entity_aliases
     where scheme in ('mic-ticker', 'legacy-id')
-    order by entity_id, (scheme = 'mic-ticker') desc
+    order by entity_id, (scheme = 'mic-ticker') desc, confidence desc, transaction_time desc, alias_id desc
 ),
 issuer_tickers as (
     select distinct on (entity_id)
@@ -122,7 +122,7 @@ issuer_tickers as (
         end as ticker
     from staging.entity_aliases
     where scheme in ('mic-ticker', 'legacy-id')
-    order by entity_id, (scheme = 'mic-ticker') desc
+    order by entity_id, (scheme = 'mic-ticker') desc, confidence desc, transaction_time desc, alias_id desc
 )
 select
     lm.issuer_id,
