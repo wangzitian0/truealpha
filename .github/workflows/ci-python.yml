@@ -35,10 +35,10 @@ jobs:
   # gates and every package's tests end to end. Split so the wall clock is the
   # slowest member, not the sum: gates ~60 s, core tests ~40 s, data-engine
   # ~150 s (the pole). Same commands, same env, nothing dropped — the split is
-  # topology only. The MinIO/migration steps are duplicated into both test jobs
-  # deliberately: a composite action would dedupe them at the cost of one more
-  # indirection layer, and the duplication is two YAML blocks that ci-db's
-  # tests already cross-check.
+  # topology only. The MinIO step is duplicated into both test jobs deliberately:
+  # a composite action would dedupe it at the cost of one more indirection layer.
+  # The migration step is NOT duplicated in any meaningful sense any more — both
+  # jobs run db/apply_migrations.sh, the one applier every call site shares (#984).
   gates:
     # The nightly `schedule` trigger exists only to re-run dagster-code-server-liveness
     # (#855 A4); it is not a standing nightly re-proof of the rest of the suite.
@@ -114,14 +114,10 @@ jobs:
           echo "MinIO did not become healthy" >&2
           docker logs minio >&2
           exit 1
-      - name: Apply DB migrations
+      - name: Apply the migration chain
         env:
-          PGPASSWORD: postgres
-        run: |
-          for f in db/migrations/*.sql db/roles.sql; do
-            echo "== $f"
-            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
-          done
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+        run: sh db/apply_migrations.sh
       - run: uv run pytest libs/contracts/tests libs/factors/tests libs/runtime/tests apps/llm-service/tests
         env:
           APP_ENV: ci
@@ -189,14 +185,10 @@ jobs:
           echo "MinIO did not become healthy" >&2
           docker logs minio >&2
           exit 1
-      - name: Apply DB migrations
+      - name: Apply the migration chain
         env:
-          PGPASSWORD: postgres
-        run: |
-          for f in db/migrations/*.sql db/roles.sql; do
-            echo "== $f"
-            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
-          done
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+        run: sh db/apply_migrations.sh
       - name: Run tests (shard ${{ matrix.shard }} of 3)
         run: |
           set -euo pipefail
@@ -275,13 +267,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --package truealpha-data-engine --frozen
-      - name: Apply DB migrations
+      - name: Apply the migration chain
         env:
-          PGPASSWORD: postgres
-        run: |
-          for f in db/migrations/*.sql db/roles.sql; do
-            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
-          done
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+        run: sh db/apply_migrations.sh
       - name: Write dagster.yaml
         run: |
           mkdir -p "$DAGSTER_HOME"

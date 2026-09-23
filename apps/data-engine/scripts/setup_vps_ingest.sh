@@ -48,11 +48,20 @@ echo "== python deps"
 cd "$REPO_DIR"
 uv sync --all-packages >/dev/null && echo synced
 
-echo "== migrations -> truealpha-postgres${SUFFIX} (idempotent)"
-for f in db/migrations/*.sql db/roles.sql; do
-  echo "   $f"
-  docker exec -i "truealpha-postgres${SUFFIX}" psql -U postgres -d truealpha -v ON_ERROR_STOP=1 -q < "$f"
-done
+# The one applier (#984), with psql reached through the container — the same transport
+# this step has always used, and for the same two reasons: it assumes nothing about what
+# is installed on the host, and the credential for the published loopback port is not
+# derived until further down this script. An empty host in the URI is the container's
+# own Unix socket, which the postgres image trusts, so no password crosses anything.
+#
+# Replay, not repair: `db/apply_migrations.sh` re-applies the declared chain over
+# whatever this database already holds. A relation left in a superseded shape stays in
+# it; `db/reset_database.sh` is the repair path, and it is deliberately NOT wired here
+# because dropping a staging or production database is an owner-gated action.
+echo "== migrations -> truealpha-postgres${SUFFIX} (replay of the declared chain)"
+TRUEALPHA_PSQL="docker exec -i truealpha-postgres${SUFFIX} psql" \
+MIGRATIONS_DATABASE_URL="postgresql:///truealpha?user=postgres" \
+  sh "$REPO_DIR/db/apply_migrations.sh"
 
 echo "== derive .env from the vault-rendered app env"
 # The compose publishes postgres on a host-loopback port (fixed per env once
