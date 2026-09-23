@@ -1,8 +1,4 @@
--- #877 PR-4: mart.entity_identity and entity display resolution (docs/entity-identity.md §6).
---
--- Exposes canonical entity identity to mart readers (entity_id, kind, current_ticker, name, cik, lei).
--- Readers in mart (e.g. mart_readonly, app_ops_reader) read mart.entity_identity through view owner permissions.
--- Updates mart.entity_display_resolution to read from mart.entity_identity while preserving backward compatibility.
+-- #954: expose symbolic listing_id on mart.entity_identity.
 
 do $$
 declare
@@ -71,6 +67,33 @@ legacy_aliases as (
     from latest_by_scheme
     where scheme = 'legacy-id'
     order by survivor_id
+),
+direct_listings as (
+    select distinct on (survivor_id)
+        survivor_id,
+        case
+            when scheme = 'legacy-id' and value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'
+            then value
+            when scheme = 'mic-ticker'
+            then 'listing:' || lower(split_part(value, ':', 1)) || ':' || lower(split_part(value, ':', 2))
+        end as listing_id
+    from latest_by_scheme
+    where scheme = 'legacy-id' or scheme = 'mic-ticker'
+    order by survivor_id, (scheme = 'legacy-id') desc
+),
+issuer_listings as (
+    select distinct on (r_issues.from_entity_id)
+        r_issues.from_entity_id as issuer_id,
+        dl.listing_id
+    from staging.entity_relations r_issues
+    join staging.entity_relations r_listed
+      on r_listed.from_entity_id = r_issues.to_entity_id
+     and r_listed.relation_type = 'listed_as'
+    join direct_listings dl
+      on dl.survivor_id = r_listed.to_entity_id
+    where r_issues.relation_type = 'issues'
+      and dl.listing_id is not null
+    order by r_issues.from_entity_id, r_issues.transaction_time desc
 )
 select
     e.entity_id,
@@ -78,7 +101,8 @@ select
     coalesce(dt.ticker, it.ticker, inst.ticker) as current_ticker,
     coalesce(dn.name, kg.display_name) as name,
     dc.cik,
-    dl.lei
+    dl.lei,
+    coalesce(dlist.listing_id, ilist.listing_id) as listing_id
 from staging.entities e
 cross join lateral (select staging.entity_survivor(e.entity_id, 'infinity') as id) survivor
 left join direct_tickers dt on dt.survivor_id = survivor.id
@@ -88,18 +112,21 @@ left join direct_names dn on dn.survivor_id = survivor.id
 left join legacy_aliases la on la.survivor_id = survivor.id
 left join direct_ciks dc on dc.survivor_id = survivor.id
 left join direct_leis dl on dl.survivor_id = survivor.id
+left join direct_listings dlist on dlist.survivor_id = survivor.id
+left join issuer_listings ilist on ilist.issuer_id = survivor.id
 left join staging.kg_entities kg on (kg.id = e.entity_id::text or (la.legacy_id is not null and kg.id = la.legacy_id))
 $view$;
 begin
-    -- Superseded: 20260923T0800_datahub_mart_entity_identity_listing_id.sql redefines mart.entity_identity
-    -- later in the chain and owns its definition. Replacing it here would attempt to drop trailing
-    -- columns (listing_id) on the second full-chain replay pass, so this definition creates the
-    -- view only on a database that has none.
-    if to_regclass('mart.entity_identity') is null then
-        execute 'create view mart.entity_identity as ' || wanted;
+    execute 'create temp view boot_guard_candidate as ' || wanted;
+    if to_regclass('mart.entity_identity') is null
+       or pg_get_viewdef(to_regclass('mart.entity_identity'))
+          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
+    then
+        execute 'create or replace view mart.entity_identity as ' || wanted;
     end if;
+    drop view pg_temp.boot_guard_candidate;
 end
 $$;
 
 comment on view mart.entity_identity is
-    '#877 PR-4: canonical entity identity projection for mart consumers (entity_id, kind, current_ticker, name, cik, lei).';
+    '#954: canonical entity identity projection for mart consumers (entity_id, kind, current_ticker, name, cik, lei, listing_id).';
