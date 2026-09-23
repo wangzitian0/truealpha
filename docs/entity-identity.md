@@ -301,12 +301,29 @@ UUIDs without touching them.
   - `canary_oracles`, which has literal `issuer:cik:` ids;
   - `holdings_enrichment`, which also writes aliases directly from PR-5 on.
 - **Mart.**
-  - A new `mart.entity_identity` (`entity_id`, `kind`, current ticker, name, CIK, LEI)
-    replaces the ticker parsing in `mart.entity_display_resolution`.
+  - A new `mart.entity_identity` (`entity_id`, `kind`, current ticker, name, CIK, LEI,
+    `listing_id` (#954), `legacy_id` (#953)) replaces the ticker parsing in
+    `mart.entity_display_resolution`.
   - It also replaces the `'listing:xnas:' || ticker` construction in
     `mart.fund_holdings_valuation`.
   - `mart_readonly` reads it through view-owner permissions, so consumers never touch
-    staging.
+    staging. View-owner permissions cover the view's TABLE references only: a
+    SECURITY INVOKER function called inside the body runs as the caller, so
+    `staging.entity_survivor` and `staging.entity_alias_valid_to` are SECURITY DEFINER
+    with a pinned `search_path` (#953). Before that they were not, and every
+    `mart_readonly` select on this view failed with `permission denied for schema
+    staging` — which is why #954's App-side twin never ran.
+  - **Every consumer that returns an entity coordinate translates it here.** This list is
+    not the guard; `apps/llm-service/tests/test_mcp_identity_leak.py` is. It enumerates
+    the registered MCP tools and fails on any bare-UUID identity field in any response,
+    because this inventory was the thing that missed both #954 and #953:
+
+    | Consumer | Field | Fixed by |
+    |---|---|---|
+    | `topt_read.py` / `topt-gppe-repository.ts` | `listing_id` | #954 / PR #967 |
+    | `strategy_run_postgres.py` / `strategy-run-repository.ts` | `issuer_id` | #953 |
+    | `research_report` / `research_card` MCP tools | `subject_id` | #953, via the strategy-run read they wrap |
+    | `entity-resolution.ts` | keyed by both the UUID and the `legacy_id` | #953 |
 - **The e2e raw-id guard** (`walk-tree.mjs`) adds a UUID pattern. A UUID on a page is a raw
   id leak just like `issuer:cik:`.
 - **Reports** keyed by listing or by run (quality, confidence, question coverage) compare

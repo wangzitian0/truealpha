@@ -13,7 +13,7 @@ import { randomBytes } from "node:crypto";
 
 import { Client } from "pg";
 
-import { MartStrategyRunRepository } from "../src/server/mart/strategy-run-repository";
+import { DECISIONS_SQL, MartStrategyRunRepository } from "../src/server/mart/strategy-run-repository";
 import type { AccessContext } from "../src/contracts/strategyRun";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -125,5 +125,108 @@ if (admin !== null) {
     await admin.query("delete from mart.strategy_decisions where strategy_run_id = $1", [runId]).catch(() => {});
     await admin.query("delete from mart.strategy_runs where strategy_run_id = $1", [runId]).catch(() => {});
     await admin.end().catch(() => {});
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #953: an entity-UUID issuer_id is translated to its symbolic identity.
+//
+// mart.strategy_decisions.issuer_id has held the opaque entity UUID since #928 wrote
+// entity coordinates. Both twins served it verbatim, so the MCP `strategy_run` tool
+// answered `02587046-dc99-5a44-b811-e2d086a58ccb` where staging v0.0.90 answered
+// `issuer:lei:29DX7H14B9S6O3FD6V18`. This is the TypeScript half of the fix: the same
+// lateral join to `mart.entity_identity` the Python twin carries, against the same real
+// schema, so "behaviourally identical twins" is executed rather than asserted in a
+// comment. Red-proven against `select d.issuer_id`: it reads back the bare UUID.
+// ---------------------------------------------------------------------------
+{
+  const client = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 3000 });
+  let connected = false;
+  try {
+    await client.connect();
+    connected = true;
+  } catch (error) {
+    await client.end().catch(() => {});
+    if (REQUIRE_DB) throw new Error(`configured Postgres is unreachable: ${String(error)}`);
+    console.log("mart-strategy-run-repository #953: no local Postgres and TRUEALPHA_REQUIRE_RUNTIME unset — SKIP");
+  }
+
+  if (connected) {
+    const strategyKey = "large_model_value_v0";
+    const runId = `strategy-run:${hex64()}`;
+    // LEI format is enforced by staging.validate_entity_alias (^[0-9A-Z]{18}[0-9]{2}$),
+    // and the entity UUID must be the uuidv5 its birth alias derives — so the entity is
+    // minted by staging.entity_mint rather than written by hand. A random LEI keeps
+    // repeated local runs from colliding on an append-only table.
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const lei =
+      Array.from({ length: 18 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("") +
+      String(Math.floor(Math.random() * 100)).padStart(2, "0");
+    const legacyId = `issuer:lei:${lei}`;
+
+    try {
+      // One transaction: staging.require_entity_birth_alias is a deferred constraint
+      // trigger, so the entity and its birth alias must commit together.
+      await client.query("begin");
+      const minted = await client.query(
+        "select staging.entity_mint('issuer', 'lei', $1, 'mart-strategy-run-repository-test') as entity_id",
+        [lei],
+      );
+      const entityUuid: string = minted.rows[0].entity_id;
+      await client.query(
+        `insert into staging.entity_aliases
+           (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref,
+            method, confidence, mapping_version)
+         values ($1, 'lei', $2, date '2026-01-01', timestamptz '2026-01-01',
+                 'mart-strategy-run-repository-test', 'test-ref', 'asserted', 1.0, 'v1'),
+                ($1, 'legacy-id', $3, date '2026-01-01', timestamptz '2026-01-01',
+                 'mart-strategy-run-repository-test', 'test-ref', 'asserted', 1.0, 'v1')`,
+        [entityUuid, lei, legacyId],
+      );
+      await client.query("commit");
+
+      await client.query(
+        `insert into mart.strategy_runs
+           (strategy_run_id, content_sha256, strategy_key, strategy_version,
+            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at)
+         values ($1, $2, $3, 'v0', $4, $5, 'preview', now())`,
+        [runId, hex64(), strategyKey, hex64(), hex64()],
+      );
+      await client.query(
+        `insert into mart.strategy_decisions
+           (strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
+            eligible, outcome)
+         values ($1, $2, $3, $4, '2026-03-31T23:59:59Z', true, 'selected')`,
+        [`strategy-decision:${hex64()}`, hex64(), runId, entityUuid],
+      );
+
+      const report = await new MartStrategyRunRepository().getLatest(strategyKey, CONTEXT);
+      assert("decisions" in report, `expected a report, got ${JSON.stringify(report)}`);
+      // A display lookup must never multiply the rows it decorates: mart.entity_identity's
+      // staging.kg_entities join can match one entity twice, which is why both twins use
+      // LATERAL ... limit 1 rather than a plain join.
+      assert(
+        report.decisions.length === 1,
+        `the identity join multiplied decisions: ${report.decisions.length}`,
+      );
+      const served = report.decisions[0].issuer_id;
+      assert(
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(served),
+        `issuer_id is still a bare entity UUID: ${served}`,
+      );
+      assert(served === legacyId, `expected the symbolic issuer identity ${legacyId}, got ${served}`);
+      // The SQL, not only the value: a future edit that drops the join but happens to be
+      // handed an already-symbolic id would pass the assertions above and leak again.
+      assert(
+        DECISIONS_SQL.includes("mart.entity_identity ei"),
+        "DECISIONS_SQL must resolve the issuer through mart.entity_identity",
+      );
+
+      console.log("#953 mart-strategy-run-repository symbolic issuer_id translation passed");
+    } finally {
+      await client.query("delete from mart.strategy_decisions where strategy_run_id = $1", [runId]).catch(() => {});
+      await client.query("delete from mart.strategy_runs where strategy_run_id = $1", [runId]).catch(() => {});
+      await client.end().catch(() => {});
+    }
   }
 }

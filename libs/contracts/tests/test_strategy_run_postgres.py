@@ -13,6 +13,8 @@ unaffected since it runs against an ephemeral Postgres container per run.
 from __future__ import annotations
 
 import os
+import re
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -25,6 +27,9 @@ from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunReposit
 
 _DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 _HASH64 = "c" * 64
+# The canonical 8-4-4-4-12 form. `mart` entity coordinates are UUIDs (#877/#928), so this
+# is what an untranslated identity looks like on a consumer surface (#953).
+_BARE_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
 def _resolve_database_url() -> str:
@@ -272,3 +277,98 @@ def test_fails_closed_on_database_unavailable() -> None:
 
     assert isinstance(result, StrategyRunUnavailable)
     assert result.reason == "database_unavailable"
+
+
+def _mint_issuer_with_legacy_alias(connection) -> tuple[str, str]:
+    """Mint a real issuer entity and give it the `legacy-id` alias the pre-#877
+    coordinates used, returning `(entity_uuid, legacy_id)`.
+
+    Real `staging.entity_mint` + real aliases, not hand-written rows: the UUID must
+    be the uuidv5 its birth alias derives (`staging.validate_entity`) and the alias
+    must be canonical (`staging.validate_entity_alias`), so a fabricated pair would
+    be rejected by the database rather than quietly standing in for one.
+    """
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    lei = "".join(secrets.choice(alphabet) for _ in range(18)) + f"{secrets.randbelow(100):02d}"
+    legacy_id = f"issuer:lei:{lei}"
+    # One transaction: `staging.require_entity_birth_alias` is a deferred constraint
+    # trigger, so an entity and its birth alias have to commit together. On an autocommit
+    # connection each statement is its own transaction and the mint alone fails.
+    with connection.transaction():
+        entity_uuid = connection.execute(
+            "select staging.entity_mint('issuer', 'lei', %s, 'test-strategy-run-postgres')", (lei,)
+        ).fetchone()[0]
+        connection.execute(
+            """
+            insert into staging.entity_aliases
+              (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref,
+               method, confidence, mapping_version)
+            values (%s, 'lei', %s, date '2026-01-01', timestamptz '2026-01-01',
+                    'test-strategy-run-postgres', 'test-ref', 'asserted', 1.0, 'v1'),
+                   (%s, 'legacy-id', %s, date '2026-01-01', timestamptz '2026-01-01',
+                    'test-strategy-run-postgres', 'test-ref', 'asserted', 1.0, 'v1')
+            """,
+            (entity_uuid, lei, entity_uuid, legacy_id),
+        )
+    return str(entity_uuid), legacy_id
+
+
+def test_an_entity_uuid_issuer_id_is_translated_to_its_symbolic_identity(connection) -> None:
+    """#953: `mart.strategy_decisions.issuer_id` has held the opaque entity UUID since
+    #928 wrote entity coordinates, and this repository served it verbatim — the MCP
+    `strategy_run` tool answered `02587046-dc99-5a44-b811-e2d086a58ccb` where staging
+    v0.0.90 answered `issuer:lei:29DX7H14B9S6O3FD6V18`. An id nobody outside this
+    database can resolve is not an identity.
+
+    Red-proven against the unfixed SELECT (`select d.issuer_id`): the assertion below
+    reads back the bare UUID. It goes green only because the read now joins
+    `mart.entity_identity` — the same projection #954/#967 used for topt_gppe's
+    `listing_id`, not a second translator.
+    """
+    strategy_key = "large_model_value_v0"
+    entity_uuid, legacy_id = _mint_issuer_with_legacy_alias(connection)
+    run_id = "strategy-run:" + uuid.uuid4().hex + "0" * 32
+    _insert_run(connection, run_id, strategy_key, executed_at=datetime.now(UTC))
+    _insert_decision(
+        connection,
+        "strategy-decision:" + uuid.uuid4().hex + "0" * 32,
+        run_id,
+        issuer_id=entity_uuid,
+        cutoff_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+    )
+
+    repository = PostgresStrategyRunRepository(database_url=_resolve_database_url())
+    result = repository.get_latest(strategy_id=strategy_key, context=_context())
+
+    assert isinstance(result, StrategyRunReport), f"expected a report, got {result!r}"
+    # Exactly one row: the translation is a display lookup, and a display lookup that
+    # multiplies the rows it decorates would invent decisions that were never made.
+    assert len(result.decisions) == 1, f"the identity join multiplied decisions: {result.decisions!r}"
+    served = result.decisions[0].issuer_id
+    assert not _BARE_UUID.fullmatch(served), f"issuer_id is still a bare entity UUID: {served}"
+    assert served == legacy_id, f"expected the symbolic issuer identity {legacy_id}, got {served}"
+
+
+def test_an_issuer_the_identity_store_does_not_know_keeps_its_raw_id(connection) -> None:
+    """The coalesce fallback, stated as a check rather than assumed: a decision whose
+    issuer is absent from `mart.entity_identity` (a fixture run, a preview run, a
+    pre-#877 legacy id) still reports the id the run recorded. Honesty over invention —
+    and the frozen parity canon in `conformance/strategy_run_parity.json`, whose issuers
+    are `issuer:zeta` / `issuer:adm`, depends on exactly this branch."""
+    strategy_key = "large_model_value_v0"
+    unknown_issuer = f"issuer:not-in-the-identity-store:{uuid.uuid4().hex}"
+    run_id = "strategy-run:" + uuid.uuid4().hex + "0" * 32
+    _insert_run(connection, run_id, strategy_key, executed_at=datetime.now(UTC))
+    _insert_decision(
+        connection,
+        "strategy-decision:" + uuid.uuid4().hex + "0" * 32,
+        run_id,
+        issuer_id=unknown_issuer,
+        cutoff_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+    )
+
+    repository = PostgresStrategyRunRepository(database_url=_resolve_database_url())
+    result = repository.get_latest(strategy_id=strategy_key, context=_context())
+
+    assert isinstance(result, StrategyRunReport)
+    assert result.decisions[0].issuer_id == unknown_issuer

@@ -91,10 +91,10 @@ left join direct_leis dl on dl.survivor_id = survivor.id
 left join staging.kg_entities kg on (kg.id = e.entity_id::text or (la.legacy_id is not null and kg.id = la.legacy_id))
 $view$;
 begin
-    -- Superseded: 20260923T0800_datahub_mart_entity_identity_listing_id.sql redefines mart.entity_identity
-    -- later in the chain and owns its definition. Replacing it here would attempt to drop trailing
-    -- columns (listing_id) on the second full-chain replay pass, so this definition creates the
-    -- view only on a database that has none.
+    -- Superseded: 20260923T1800_datahub_mart_entity_identity_legacy_id.sql redefines mart.entity_identity
+    -- last in the chain and owns its definition. Replacing it here would attempt to drop trailing
+    -- columns (listing_id, legacy_id) on the second full-chain replay pass, so this definition
+    -- creates the view only on a database that has none.
     if to_regclass('mart.entity_identity') is null then
         execute 'create view mart.entity_identity as ' || wanted;
     end if;

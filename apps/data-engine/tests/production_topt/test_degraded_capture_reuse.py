@@ -311,12 +311,37 @@ def _served_report(url: str):
     return report
 
 
+#: The identity the READ PATH serves for an entity coordinate: mart.entity_identity's
+#: symbolic legacy id, else the coordinate itself. `mart.topt_core_results.issuer_id` and
+#: `mart.strategy_decisions.issuer_id` hold the opaque entity UUID (#928), and
+#: PostgresStrategyRunRepository translates it on the way out (#953) so MCP callers get an
+#: id they can resolve. A test that correlates a served decision with a mart row therefore
+#: has to translate on the mart side too, or it is comparing two different id spaces --
+#: which is exactly what these assertions caught when the translation landed.
+_SERVED_IDENTITY_SQL = """
+    select coalesce(ei.legacy_id, t.issuer_id), t.confidence
+    from mart.topt_core_results t
+    left join lateral (
+        select ei.legacy_id from mart.entity_identity ei
+        where ei.entity_id::text = t.issuer_id limit 1
+    ) ei on true
+    where t.run_id = %s
+"""
+
+
 def _core_confidence(reader, run_id: str) -> dict[str, Decimal]:
-    return dict(
-        reader.execute(
-            "select issuer_id, confidence from mart.topt_core_results where run_id = %s", (run_id,)
-        ).fetchall()
-    )
+    return dict(reader.execute(_SERVED_IDENTITY_SQL, (run_id,)).fetchall())
+
+
+def _served_identity(reader, entity_id: str) -> str:
+    """One coordinate through the same translation, for an assertion about one issuer."""
+    row = reader.execute(
+        "select coalesce(ei.legacy_id, %s) from (select %s as id) q "
+        "left join lateral (select ei.legacy_id from mart.entity_identity ei "
+        "where ei.entity_id::text = q.id limit 1) ei on true",
+        (entity_id, entity_id),
+    ).fetchone()
+    return str(row[0])
 
 
 def _gate_closes(reader, sql: str, run_id: str) -> list[tuple[str, Decimal | None]]:
@@ -673,11 +698,12 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
         assert qqq_gate[aapl_listing] == Decimal("50") and set(qqq_gate.values()) == {Decimal("50")}
         assert topt_gate[aapl_listing] == Decimal("40") and len(topt_gate) == 20
         topt_confidence = _core_confidence(reader, topt["capture_run_id"])
+        aapl_served = _served_identity(reader, aapl_issuer)
 
     report = _served_report(tick_database_url)
     assert len(report.decisions) == 20
     assert len({decision.issuer_id for decision in report.decisions}) == 20
-    assert aapl_issuer in {decision.issuer_id for decision in report.decisions}
+    assert aapl_served in {decision.issuer_id for decision in report.decisions}
     assert all(decision.confidence == topt_confidence[decision.issuer_id] for decision in report.decisions)
 
 
