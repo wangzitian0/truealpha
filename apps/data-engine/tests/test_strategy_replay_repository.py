@@ -193,3 +193,37 @@ def test_the_peg_reason_is_persisted_outside_the_decisions_identity(connection) 
         "select peg_reason_codes from mart.strategy_decisions where strategy_decision_id = %s", (annotated_id,)
     ).fetchone()
     assert codes == ["non_positive_growth"]
+
+
+def test_corpus_sha256_derives_from_snapshot_id_when_provided() -> None:
+    """#955: when a run binds a PIT snapshot, corpus_sha256 reflects the actual facts
+    hash from the snapshot instead of the static fixture constant."""
+    from data_engine.core_strategy_replay import CORPUS_SHA256
+    from data_engine.strategy_replay_repository import _run_payload
+
+    _, definition = run()
+    snapshot_1 = "strategy-snapshot:" + "1" * 64
+    snapshot_2 = "strategy-snapshot:" + "2" * 64
+
+    payload_fixture = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=None)
+    assert payload_fixture["corpus_sha256"] == CORPUS_SHA256
+
+    payload_1 = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_1)
+    assert payload_1["corpus_sha256"] == "1" * 64
+
+    payload_2 = _run_payload(definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_2)
+    assert payload_2["corpus_sha256"] == "2" * 64
+
+    assert payload_1["corpus_sha256"] != payload_2["corpus_sha256"]
+    assert payload_1["corpus_sha256"] != CORPUS_SHA256
+
+
+def test_write_strategy_run_persists_computed_corpus_sha256(connection) -> None:
+    """#955: mart.strategy_runs persists the real input facts hash from snapshot_id."""
+    _, definition = run()
+    snapshot_id = "strategy-snapshot:" + "a" * 64
+    run_id = write_strategy_run(connection, definition, executed_at=_EXECUTED_AT, snapshot_id=snapshot_id)
+    (persisted_corpus_sha,) = connection.execute(
+        "select corpus_sha256 from mart.strategy_runs where strategy_run_id = %s", (run_id,)
+    ).fetchone()
+    assert persisted_corpus_sha == "a" * 64
