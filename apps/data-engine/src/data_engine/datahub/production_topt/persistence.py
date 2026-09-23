@@ -373,7 +373,11 @@ class PostgresCaptureControlSink:
             confidence=success.confidence,
             source_vintage_id=source_vintage_id,
             knowable_at=success.transaction_time,
-            valid_from=success.valid_from,
+            # NormalizedObservation.valid_from is an aware datetime; FetchSuccess.valid_from
+            # is a bare date (every adapter's own concept of "the fact's day"). Midnight UTC,
+            # matching the same date->datetime idiom already used throughout this module
+            # (persistence.py:116) and the adapters (#530 item 1).
+            valid_from=datetime.combine(success.valid_from, datetime.min.time(), tzinfo=UTC),
         )
 
     def _persist_corroboration_or_record_loss(self, binding: ObligationBinding, corroboration: Corroboration) -> None:
@@ -419,9 +423,10 @@ class PostgresCaptureControlSink:
             confidence=corroboration.confidence,
             source_vintage_id=vintage.source_vintage_id,
             knowable_at=corroboration.transaction_time,
-            # Corroboration carries no valid_from of its own (unlike FetchSuccess) --
-            # its own source time is the best available real date (#530 item 1).
-            valid_from=corroboration.transaction_time.date(),
+            # Corroboration carries no valid_from of its own (unlike FetchSuccess); its own
+            # source time is the best available real date and is already an aware datetime,
+            # unlike success.valid_from above (#530 item 1).
+            valid_from=corroboration.transaction_time,
         )
 
     def _corroborating_request(self, binding: ObligationBinding, *, origin: str, source: str) -> SourceRequest:
@@ -456,7 +461,7 @@ class PostgresCaptureControlSink:
         confidence: Decimal,
         source_vintage_id: str,
         knowable_at: datetime,
-        valid_from: date,
+        valid_from: datetime,
     ) -> None:
         obligation = binding.obligation
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
