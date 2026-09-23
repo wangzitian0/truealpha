@@ -1042,6 +1042,56 @@ def test_sink_refuses_a_ledger_that_contradicts_the_served_value(connection) -> 
     ).fetchone() == (0,)
 
 
+def test_observation_valid_from_is_the_adapters_real_date_not_the_partition_anchor(connection) -> None:
+    """#530 item 1: a fact's valid_from is its own real date, not the capturing tick's
+    partition anchor -- otherwise a fact is only eligible starting from whenever it
+    happened to be captured rather than from when it became real-world true (the defect
+    the 2010 Visa share count exposed: captured in 2026, it should have been eligible
+    for any replay since 2010, not only from its capture tick's own partition onward)."""
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-530-item1-valid-from")
+    sink = PostgresCaptureControlSink(
+        connection,
+        plan.bindings,
+        source_label=plan.source_label,
+        timeline=plan.timeline,
+        retry=plan.retry,
+        object_store=_InMemoryObjectStore(),
+    )
+    work_item = next(
+        item
+        for item in plan.work_items
+        if plan.bindings[item.work_item_id].obligation.capture_requirement_id == "financial-fact:v1"
+    )
+    obligation_id = plan.bindings[work_item.work_item_id].obligation.obligation_id
+    filed_long_before_the_capture = date(2026, 1, 15)
+    payload = {"revenue": "100000000"}
+    success = FetchSuccess(
+        raw=RawResponse(body=b"{}", source=DataSource.SEC, record_id="sec:filed-2026-01-15"),
+        normalized_sha256=canonical_sha256(payload),
+        confidence=Decimal("0.9"),
+        valid_from=filed_long_before_the_capture,
+        transaction_time=datetime(2026, 1, 15, tzinfo=UTC),
+        record=NormalizedRecord(
+            payload=payload, parser_version="sec-financial-adapter-parser:v1", mapping_version="sec-map:v1"
+        ),
+    )
+    sink.record_outcome(
+        work_item, attempt_reasons=(None,), terminal_state=ObligationTerminalState.SUCCESS, success=success
+    )
+    stored = connection.execute(
+        """
+        select o.valid_from
+        from staging.capture_observation_obligations oo
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        where oo.capture_obligation_id = %s
+        """,
+        (obligation_id,),
+    ).fetchone()
+    assert stored is not None
+    assert stored[0] == filed_long_before_the_capture
+    assert stored[0] != plan.timeline.partition_start
+
+
 def test_sink_refuses_more_attempts_than_the_retry_policy_permits(connection) -> None:
     plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-a1-attempts")
     sink = PostgresCaptureControlSink(
