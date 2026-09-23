@@ -606,16 +606,21 @@ def test_a_forced_capture_version_is_distinct_and_stable() -> None:
 
 def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, monkeypatch) -> None:
     """#874: at tie-break, the forced capture is the newer look at the vendor, and it wins."""
-    # #530 item 1 split this test's one `day` into two genuinely different concepts that
-    # _quote() used to conflate under a single parameter:
-    #   - `day` (-> as_of -> valid_from) must be the fixed corpus's real partition, or
-    #     freeze_snapshot's `valid_from <= partition_key` now correctly refuses it.
+    # #530 item 1 split this test's one `day` into three genuinely different concepts
+    # _quote()/a shared `price_cutoff=day` used to conflate:
+    #   - `as_of` (-> valid_from) must be the fixed corpus's real partition (2026-03-31),
+    #     or freeze_snapshot's `valid_from <= partition_key` now correctly refuses it.
     #   - `knowable_at` feeds composition._satisfy_from_recent_observations' session-bound
     #     reuse check (`_is_settled_session`), which requires it to equal
     #     last_settled_session_date(cutoff) -- verified locally
     #     (truealpha_contracts.calendar.settled_session_for_cutoff) to be 2026-04-21 for
-    #     this cutoff, not the corpus's 2026-03-31. Before this fix both read from `day`
-    #     and happened to agree only because the corpus partition was never checked.
+    #     this cutoff, not the corpus's 2026-03-31.
+    #   - `target.cutoff` (price_cutoff) is what the PRIMARY fetch's own look-ahead guard
+    #     compares knowable_at against (market_price_adapter.py:224: `knowable_at.date() >
+    #     target.cutoff` -> LOOK_AHEAD_VIOLATION, confirmed by CI when this was still
+    #     `day`); it must be >= knowable_at, i.e. settled_day, not the corpus partition.
+    # Before this PR none of these three were real, so one shared `day` equal to
+    # cutoff.date() (the original author's choice) satisfied all three by accident.
     day = date(2026, 3, 31)
     settled_day = date(2026, 4, 21)
     cutoff = datetime(2026, 4, 21, 22, 15, tzinfo=UTC)
@@ -628,9 +633,9 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
             knowable_at=datetime.combine(settled_day, datetime.min.time(), tzinfo=UTC),
         )
 
-    _arm(monkeypatch, quote=lambda: _reuse_quote(Decimal("40")), price_cutoff=day)
+    _arm(monkeypatch, quote=lambda: _reuse_quote(Decimal("40")), price_cutoff=settled_day)
     first_run = _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff)
-    _arm(monkeypatch, quote=lambda: _reuse_quote(Decimal("39.25")), price_cutoff=day)
+    _arm(monkeypatch, quote=lambda: _reuse_quote(Decimal("39.25")), price_cutoff=settled_day)
     forced_run = _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff, force_fetch=True)
     print(f"DIAG first_run.run_id={first_run.run_id} forced_run.run_id={forced_run.run_id}")
 
