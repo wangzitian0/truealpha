@@ -59,10 +59,9 @@ _NOT_YET_MERGED = {
     # call it -- but they duplicate each OTHER, in two variants that differ in whether the
     # identity payload is wrapped in a {"kind", "identity"} envelope. Merging them changes
     # minted ids, so it is its own change.
-    "libs/contracts/src/truealpha_contracts/capture_control.py._freeze": "identity grain, no envelope",
-    "libs/contracts/src/truealpha_contracts/capture_control.py._freeze_wrapped": (
-        "identity grain, enveloped, but guarded with a membership test rather than two "
-        "comparisons; aligning it is a separate change from merging it"
+    "libs/contracts/src/truealpha_contracts/capture_control.py._freeze": (
+        "identity grain WITHOUT the {'kind', 'identity'} envelope, so it mints different ids "
+        "from identify_by_grain; merging it changes ids already stored"
     ),
 }
 
@@ -224,8 +223,8 @@ def test_only_one_module_defines_content_addressing() -> None:
     definitions = _wrapper_definitions()
     unexpected = [name for name in definitions if name not in _THE_DEFINITIONS and name not in _NOT_YET_MERGED]
     assert not unexpected, (
-        "content addressing must be defined once, in truealpha_contracts.common.identify; "
-        f"these define their own: {unexpected}"
+        "content addressing is defined in truealpha_contracts.common and nowhere else "
+        f"({sorted(_THE_DEFINITIONS)}); these define their own: {unexpected}"
     )
     missing = sorted(_THE_DEFINITIONS - set(definitions))
     assert not missing, (

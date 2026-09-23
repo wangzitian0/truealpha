@@ -73,9 +73,11 @@ def identify_by_grain(model: BaseModel, *, id_field: str, prefix: str, identity_
     twice, differing in two error-message phrasings. The derivation was identical -- same
     envelope, same content payload -- so sharing it changes no id already minted.
 
-    `capture_control` holds two more of this shape, one of which hashes the identity WITHOUT
-    the envelope. That one mints different ids and is not this function; merging it is its own
-    change with its own equivalence argument.
+    `capture_control._freeze_wrapped` was a third copy, merged on the #1009 review: identical
+    derivation, and its set-membership guard is this one's tuple guard for every hashable
+    value. `capture_control._freeze` is NOT this function -- it hashes the identity without the
+    envelope, so it mints different ids, and merging it is its own change with its own
+    equivalence argument.
     """
     identity = model.model_dump(mode="json", include=set(identity_fields))
     expected_id = f"{prefix}:{canonical_sha256({'kind': prefix, 'identity': identity})}"
