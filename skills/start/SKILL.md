@@ -41,8 +41,6 @@ ship: repo
 ```bash
 # 列出所有 worktree，查看是否已有 issue 前缀的 worktree
 git worktree list | grep "issue<N>"
-# 或直接 ls worktree 目录
-ls -d ~/.gemini/antigravity/worktrees/*issue<N>* 2>/dev/null
 ```
 
 - 已被占据 → 警告用户，提示切换到该窗口或先 close
