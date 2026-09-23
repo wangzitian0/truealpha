@@ -627,6 +627,16 @@ def test_snapshot_recomputes_freshness_for_unchanged_observation_at_cutoff(conne
     assert affected.availability is ToptCoreAvailability.UNAVAILABLE
     assert tuple(reason.value for reason in affected.reason_codes) == ("stale_input",)
 
+    # #530: the quality report grades the same run from the same table this test just
+    # proved is stale (mart.topt_capture_meta_info); it must not fall back to the
+    # frozen capture_normalized_observations.freshness_state and call the cell fresh.
+    graded = quality_report.build_report(connection, run.run_id)
+    live_fresh_count = connection.execute(
+        "select count(*) from mart.topt_capture_meta_info where run_id = %s and freshness_state = 'fresh'",
+        (run.run_id,),
+    ).fetchone()[0]
+    assert graded["fresh_count"] == live_fresh_count
+
 
 def test_snapshot_rejects_ambiguous_mapping_for_terminal_source_vintage(connection) -> None:
     (
