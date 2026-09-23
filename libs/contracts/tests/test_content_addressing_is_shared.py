@@ -19,16 +19,19 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from truealpha_contracts.common import canonical_sha256, identify
 
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
 #: Every package whose modules must not define their own content-addressing wrapper.
 _SOURCE_ROOTS = (
-    pathlib.Path(__file__).resolve().parents[3] / "libs" / "contracts" / "src",
-    pathlib.Path(__file__).resolve().parents[3] / "libs" / "factors" / "src",
-    pathlib.Path(__file__).resolve().parents[3] / "apps" / "data-engine" / "src",
-    pathlib.Path(__file__).resolve().parents[3] / "apps" / "llm-service" / "src",
+    _REPO_ROOT / "libs" / "contracts" / "src",
+    _REPO_ROOT / "libs" / "factors" / "src",
+    _REPO_ROOT / "apps" / "data-engine" / "src",
+    _REPO_ROOT / "apps" / "llm-service" / "src",
 )
 
-#: `common.identify` itself, which is the one definition this test exists to protect.
-_THE_DEFINITION = "identify"
+#: The one definition this test exists to protect, as a repository-relative path so that a
+#: second function named `identify`, in any other module, is a copy and not the original.
+_THE_DEFINITION = "libs/contracts/src/truealpha_contracts/common.py.identify"
 
 #: Definitions that stamp a content address but are NOT `identify` under another name, each
 #: with the reason it cannot simply call it. Every entry is a known cost, not an exemption:
@@ -38,16 +41,18 @@ _NOT_YET_MERGED = {
     # normalizer that renders datetime, Decimal, timedelta and set differently from
     # `mode="json"`. Its digests are therefore not the ones `identify` computes, and merging
     # it would change ids already minted under this module's rule.
-    "policy_bundle.py._content_address": "hashes a differently normalized payload",
+    "libs/contracts/src/truealpha_contracts/policy_bundle.py._content_address": (
+        "hashes a differently normalized payload"
+    ),
     # A second concept: the id is hashed over a DECLARED SUBSET of fields (a natural key)
     # while the hash covers the whole payload. `identify` has no such grain, so these cannot
     # call it -- but they duplicate each OTHER, in two variants that differ in whether the
     # identity payload is wrapped in a {"kind", "identity"} envelope. Merging them changes
     # minted ids, so it is its own change.
-    "capture_control.py._freeze": "identity grain, no envelope",
-    "capture_control.py._freeze_wrapped": "identity grain, enveloped",
-    "datahub.py._freeze_identity": "identity grain, enveloped",
-    "reconciliation.py._freeze_content": "identity grain, enveloped",
+    "libs/contracts/src/truealpha_contracts/capture_control.py._freeze": "identity grain, no envelope",
+    "libs/contracts/src/truealpha_contracts/capture_control.py._freeze_wrapped": "identity grain, enveloped",
+    "libs/contracts/src/truealpha_contracts/datahub.py._freeze_identity": "identity grain, enveloped",
+    "libs/contracts/src/truealpha_contracts/reconciliation.py._freeze_content": "identity grain, enveloped",
 }
 
 
@@ -159,7 +164,7 @@ def _wrapper_definitions() -> list[str]:
                 # (`catalog.sort_and_validate` was).
                 builds_an_id = any(isinstance(child, ast.JoinedStr) for child in ast.walk(node))
                 if "canonical_sha256" in calls and "__setattr__" in attribute_calls and builds_an_id:
-                    found.append(f"{path.name}.{node.name}")
+                    found.append(f"{path.relative_to(_REPO_ROOT).as_posix()}.{node.name}")
     return found
 
 
@@ -168,14 +173,14 @@ def test_only_one_module_defines_content_addressing() -> None:
     the shared one. What remains is listed above with the reason it cannot, so a new copy --
     under any name, in any of the four source roots -- fails here."""
     definitions = _wrapper_definitions()
-    unexpected = [
-        name for name in definitions if not name.endswith(f".{_THE_DEFINITION}") and name not in _NOT_YET_MERGED
-    ]
+    unexpected = [name for name in definitions if name != _THE_DEFINITION and name not in _NOT_YET_MERGED]
     assert not unexpected, (
         "content addressing must be defined once, in truealpha_contracts.common.identify; "
         f"these define their own: {unexpected}"
     )
-    assert definitions, "the guard found no definition at all, so it is asserting nothing"
+    assert _THE_DEFINITION in definitions, (
+        f"the guard did not find the shared definition itself, so it is asserting nothing; it found {definitions}"
+    )
 
 
 def test_the_allowlist_has_no_entry_that_has_already_been_merged() -> None:
@@ -184,3 +189,13 @@ def test_the_allowlist_has_no_entry_that_has_already_been_merged() -> None:
     definitions = set(_wrapper_definitions())
     stale = sorted(set(_NOT_YET_MERGED) - definitions)
     assert not stale, f"these are no longer defined and must leave the allowlist: {stale}"
+
+
+def test_the_guard_identifies_a_definition_by_path_and_not_by_name() -> None:
+    """A copy is a copy even when it borrows the shared function's name. Matching on the bare
+    name let `usage.identify` pass while `usage._stamp_it` failed, which is the wrong way
+    round -- the closer the copy, the more it looked compliant. Every key the guard compares
+    is a repository-relative path, and this refuses a regression to name matching."""
+    compared = [_THE_DEFINITION, *_NOT_YET_MERGED, *_wrapper_definitions()]
+    bare = [name for name in compared if "/" not in name]
+    assert not bare, f"these are matched by name, so a copy under the same name passes: {bare}"
