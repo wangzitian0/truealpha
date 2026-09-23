@@ -111,8 +111,10 @@
         }
       ],
       "golden_mismatches": [],
+      "governed": false,
       "source": "mart",
-      "strategy_id": "large_model_value_v0"
+      "strategy_id": "large_model_value_v0",
+      "strategy_run_id": "strategy-run:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "request_strategy_id": "large_model_value_v0",
     "run": {

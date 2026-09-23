@@ -92,9 +92,8 @@ function fixtureAdapter(): StrategyRunReadAdapter {
   // proves the badge follows the data.
   assert(peg?.availability === "unavailable", "module 1 (PEG) has no value in the smoke fixture");
   assert(outcome.data.latestCutoff === "2026-06-30T23:59:59Z", `unexpected latest cutoff ${outcome.data.latestCutoff}`);
-  // #370 AC 3 (PR #440): fixture-backed reports carry no run id and honestly render null,
-  // rather than fabricating one — this had no test coverage before this review pass.
-  assert(outcome.data.run.strategyRunId === null, "fixture-backed reports must not fabricate a run id");
+  // #957: fixture-backed reports expose strategy_smoke_fixture as their strategy_run_id.
+  assert(outcome.data.run.strategyRunId === "strategy_smoke_fixture", "fixture-backed reports carry strategy_smoke_fixture run id");
   assert(outcome.data.run.executedAt === null, "fixture-backed reports must not fabricate an executedAt either");
   assert(outcome.data.run.source === "strategy_smoke_fixture", `unexpected source ${outcome.data.run.source}`);
 }

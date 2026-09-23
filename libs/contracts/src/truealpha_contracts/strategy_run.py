@@ -89,6 +89,8 @@ class StrategyRunReport(_StrictFrozenModel):
     corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
     decisions: tuple[StrategyRunDecision, ...]
     golden_mismatches: tuple[str, ...] = ()
+    strategy_run_id: str | None = None
+    governed: bool = False
 
 
 class StrategyRunUnavailable(_StrictFrozenModel):

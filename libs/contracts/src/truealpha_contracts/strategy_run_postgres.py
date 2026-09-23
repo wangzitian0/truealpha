@@ -151,6 +151,8 @@ class PostgresStrategyRunRepository:
                 source="mart",
                 corpus_sha256=run_row["corpus_sha256"],
                 decisions=tuple(_decision_from_row(row) for row in decision_rows),
+                strategy_run_id=run_row["strategy_run_id"],
+                governed=bool(run_row["is_governed"]),
             )
         except _ROW_VALIDATION_ERRORS:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")

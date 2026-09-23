@@ -134,22 +134,13 @@ if (admin !== null) {
     const reportCase = FIXTURE.report;
     const report = await repository.getLatest(reportCase.request_strategy_id, CONTEXT);
     assert("decisions" in report, `report case: expected a report, got ${JSON.stringify(report)}`);
-    // strategy_run_id/executed_at are the TS-only #370 extension, and
-    // `provenance` is the TS-only input-vintage read joined from
-    // mart.topt_core_results; the shared contract surface is what must match the
-    // Python twin byte-for-byte.
-    //
-    // Every name removed here has to be a mart-only read. Putting provenance on
-    // StrategyRunDecision instead — inside the shared surface — is what made
-    // this test fail in the first place, and the fix was to move the field, not
-    // to widen this list.
-    // `governed` (#575) is the same kind of mart-only read: whether the governed
-    // capture head resolves this run, for the overview sentence.
+    // executed_at is the TS-only #370 extension, and `provenance` is the
+    // TS-only input-vintage read joined from mart.topt_core_results; the
+    // shared contract surface (including strategy_run_id and governed) is what
+    // must match the Python twin byte-for-byte.
     const {
-      strategy_run_id: _runId,
       executed_at: _executedAt,
       provenance: _provenance,
-      governed: _governed,
       ...shared
     } = report;
     assert(

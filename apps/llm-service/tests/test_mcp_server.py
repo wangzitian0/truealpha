@@ -160,10 +160,14 @@ async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture(
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}
     )
-    assert content_blocks  # non-empty text content alongside the structured result
+    raw_result = structured["result"]  # type: ignore[index]
+    assert raw_result["strategy_run_id"] == "strategy_smoke_fixture"
+    assert "governed" in raw_result and raw_result["governed"] is False
     # JSON-mode validation: the wire payload is JSON-native (lists), not Python tuples.
-    report = StrategyRunReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
+    report = StrategyRunReport.model_validate_json(json.dumps(raw_result))
     assert report.strategy_id == "large_model_value_v0"
+    assert report.strategy_run_id == "strategy_smoke_fixture"
+    assert report.governed is False
     selected = next(d for d in report.decisions if d.issuer_id == "issuer:adm" and d.cutoff_at.month == 3)
     assert selected.outcome.value == "selected"
     assert str(selected.valuation_gap) == "1.6388"
@@ -220,9 +224,14 @@ async def test_claude_compatible_client_session_round_trip() -> None:
         result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
         assert result.isError is not True
         assert result.structuredContent is not None
-        report = StrategyRunReport.model_validate_json(json.dumps(result.structuredContent["result"]))
+        raw_result = result.structuredContent["result"]
+        assert raw_result["strategy_run_id"] == "strategy_smoke_fixture"
+        assert "governed" in raw_result and raw_result["governed"] is False
+        report = StrategyRunReport.model_validate_json(json.dumps(raw_result))
         assert len(report.decisions) == 10
         assert report.golden_mismatches == ()
+        assert report.strategy_run_id == "strategy_smoke_fixture"
+        assert report.governed is False
 
 
 @pytest.fixture

@@ -80,6 +80,8 @@ class FixtureStrategyRunRepository:
                 corpus_sha256=payload["corpus_sha256"],
                 decisions=tuple(_decision_from_json(d) for d in payload["decisions"]),
                 golden_mismatches=tuple(payload["golden_mismatches"]),
+                strategy_run_id="strategy_smoke_fixture",
+                governed=False,
             )
         except _FIXTURE_CORRUPTION_ERRORS:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="fixture_hash_mismatch")
