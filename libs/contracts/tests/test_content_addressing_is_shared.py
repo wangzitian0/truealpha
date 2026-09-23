@@ -134,6 +134,10 @@ def _wrapper_definitions() -> list[str]:
     fire on every model that has a validator."""
     found: list[str] = []
     for root in _SOURCE_ROOTS:
+        # `rglob` on a path that does not exist yields nothing and raises nothing, so a moved
+        # or renamed package would leave this guard scanning three roots and reporting the
+        # fourth as clean.
+        assert root.is_dir(), f"source root {root} is missing, so this guard is not scanning it"
         for path in sorted(root.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in tree.body:
