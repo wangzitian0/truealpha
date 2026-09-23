@@ -381,7 +381,7 @@ def test_the_tag_resolver_reads_the_registry_digest_and_refuses_junk() -> None:
     through `infra2_sdk.release.resolve_image_digest` (SDK 1.5.0) -- anonymous pull token,
     then a HEAD on the manifest with that bearer. Every way the registry fails to name a
     digest is the one RuntimeError the CLI prints as its red."""
-    from infra2_sdk._transport import HttpResponse
+    from infra2_sdk.transport import HttpResponse
 
     resolve = load_tool("health_check").resolve_data_engine_digest
     digest = "sha256:" + "a" * 64

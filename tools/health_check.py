@@ -32,7 +32,7 @@ from truealpha_runtime.deployed_release import (
 )
 
 if TYPE_CHECKING:
-    from infra2_sdk._transport import HttpTransport
+    from infra2_sdk.transport import HttpTransport
 
 DEFAULT_MAX_ATTEMPTS = 24
 INTERVAL_SECONDS = 10.0
