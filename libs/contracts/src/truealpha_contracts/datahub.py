@@ -18,14 +18,13 @@ from typing import Any, Self, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import CaptureEnvironment
+from truealpha_contracts.common import STABLE_ID_PATTERN, CaptureEnvironment
 from truealpha_contracts.common import identify_by_grain as _freeze_identity
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.universe import SubjectRef, UniverseRef
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _CONTENT_ID = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
-_STABLE_COORDINATE = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
 _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
 _T = TypeVar("_T")
 
@@ -49,7 +48,7 @@ def _sorted_unique_strings(
     if len(values) != len(set(values)):
         raise ValueError(f"{field_name} must not contain duplicates")
     for value in values:
-        if re.fullmatch(_STABLE_COORDINATE, value) is None:
+        if re.fullmatch(STABLE_ID_PATTERN, value) is None:
             raise ValueError(f"{field_name} must contain stable coordinates")
         if immutable:
             _reject_mutable_coordinate(value, field_name)
@@ -190,9 +189,9 @@ class CaptureSchedulePolicy(BaseModel):
 
     schedule_policy_id: str = Field(default="", pattern=r"^(?:|schedule-policy:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    policy_version: str = Field(pattern=_STABLE_COORDINATE)
+    policy_version: str = Field(pattern=STABLE_ID_PATTERN)
     demanded_cadence: timedelta
-    provider_availability_cadence: str = Field(pattern=_STABLE_COORDINATE)
+    provider_availability_cadence: str = Field(pattern=STABLE_ID_PATTERN)
     freshness_max_age: timedelta
     # Per-semantic freshness windows (#530): a Friday price bar is the freshest
     # possible price at a Monday-holiday tick, and a filed 10-K is the freshest
@@ -240,7 +239,7 @@ class CaptureCampaign(BaseModel):
 
     campaign_id: str = Field(default="", pattern=r"^(?:|capture-campaign:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    campaign_policy_id: str = Field(pattern=_STABLE_COORDINATE)
+    campaign_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
     environment: CaptureEnvironment
     cutoff: datetime
     universe_refs: tuple[UniverseRef, ...] = Field(min_length=1)
@@ -307,8 +306,8 @@ class ListObligation(BaseModel):
     run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
     universe_ref: UniverseRef
     subject: SubjectRef
-    capture_requirement_id: str = Field(pattern=_STABLE_COORDINATE)
-    partition: str = Field(pattern=_STABLE_COORDINATE)
+    capture_requirement_id: str = Field(pattern=STABLE_ID_PATTERN)
+    partition: str = Field(pattern=STABLE_ID_PATTERN)
 
     @field_validator("capture_requirement_id")
     @classmethod
@@ -334,12 +333,12 @@ class SourceRequest(BaseModel):
     source_request_id: str = Field(default="", pattern=r"^(?:|source-request:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     source_registry_entry_id: str = Field(pattern=r"^source-registry-entry:[0-9a-f]{64}$")
-    source_policy_id: str = Field(pattern=_STABLE_COORDINATE)
-    request_fingerprint_version: str = Field(pattern=_STABLE_COORDINATE)
+    source_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
+    request_fingerprint_version: str = Field(pattern=STABLE_ID_PATTERN)
     canonical_request_sha256: str = Field(pattern=_SHA256)
     subject_refs: tuple[SubjectRef, ...] = Field(min_length=1)
     capture_requirement_ids: tuple[str, ...] = Field(min_length=1)
-    partition: str = Field(pattern=_STABLE_COORDINATE)
+    partition: str = Field(pattern=STABLE_ID_PATTERN)
 
     @field_validator("source_policy_id", "request_fingerprint_version")
     @classmethod
@@ -515,7 +514,7 @@ class SourceVintage(BaseModel):
     source_vintage_id: str = Field(default="", pattern=r"^(?:|source-vintage:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     source_request_id: str = Field(pattern=r"^source-request:[0-9a-f]{64}$")
-    source_record_id: str = Field(pattern=_STABLE_COORDINATE)
+    source_record_id: str = Field(pattern=STABLE_ID_PATTERN)
     source_published_at: datetime | None = None
     raw_object_id: str = Field(pattern=r"^raw-object:[0-9a-f]{64}$")
 
@@ -581,15 +580,15 @@ class NormalizedObservation(BaseModel):
 
     observation_id: str = Field(default="", pattern=r"^(?:|normalized-observation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    semantic_type: str = Field(pattern=_STABLE_COORDINATE)
-    semantic_version: str = Field(pattern=_STABLE_COORDINATE)
+    semantic_type: str = Field(pattern=STABLE_ID_PATTERN)
+    semantic_version: str = Field(pattern=STABLE_ID_PATTERN)
     subject: SubjectRef
     valid_from: datetime
     valid_to: datetime | None = None
     knowable_at: datetime
     source_vintage_id: str = Field(pattern=r"^source-vintage:[0-9a-f]{64}$")
-    parser_version: str = Field(pattern=_STABLE_COORDINATE)
-    mapping_version: str = Field(pattern=_STABLE_COORDINATE)
+    parser_version: str = Field(pattern=STABLE_ID_PATTERN)
+    mapping_version: str = Field(pattern=STABLE_ID_PATTERN)
     normalized_payload_sha256: str = Field(pattern=_SHA256)
     is_restatement: bool = False
     supersedes_observation_id: str | None = Field(
@@ -663,8 +662,8 @@ class ConfidenceAssessment(BaseModel):
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     observation_id: str | None = Field(default=None, pattern=r"^normalized-observation:[0-9a-f]{64}$")
     obligation_id: str | None = Field(default=None, pattern=r"^list-obligation:[0-9a-f]{64}$")
-    assessment_policy_id: str = Field(pattern=_STABLE_COORDINATE)
-    evidence_set_id: str = Field(pattern=_STABLE_COORDINATE)
+    assessment_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
+    evidence_set_id: str = Field(pattern=STABLE_ID_PATTERN)
     components: tuple[ConfidenceComponent, ...] = ()
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     availability: AssessmentAvailability
@@ -733,7 +732,7 @@ class ConfidenceAssessment(BaseModel):
 class ProvenanceNode(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    node_id: str = Field(pattern=_STABLE_COORDINATE)
+    node_id: str = Field(pattern=STABLE_ID_PATTERN)
     kind: ProvenanceNodeKind
     content_sha256: str | None = Field(default=None, pattern=_SHA256)
 
@@ -743,9 +742,9 @@ class ProvenanceEdge(BaseModel):
 
     edge_id: str = Field(default="", pattern=r"^(?:|provenance-edge:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    from_node_id: str = Field(pattern=_STABLE_COORDINATE)
+    from_node_id: str = Field(pattern=STABLE_ID_PATTERN)
     edge_type: ProvenanceEdgeKind
-    to_node_id: str = Field(pattern=_STABLE_COORDINATE)
+    to_node_id: str = Field(pattern=STABLE_ID_PATTERN)
     edge_ordinal: int = Field(ge=0)
 
     @model_validator(mode="after")
@@ -766,7 +765,7 @@ class ProvenanceGraph(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: str = Field(pattern=_STABLE_COORDINATE)
+    schema_version: str = Field(pattern=STABLE_ID_PATTERN)
     nodes: tuple[ProvenanceNode, ...] = Field(min_length=1)
     edges: tuple[ProvenanceEdge, ...] = ()
 
@@ -925,7 +924,7 @@ class RecapturePlan(BaseModel):
     selection_cutoff: datetime
     predicate: RecapturePredicate
     selected_obligation_ids: tuple[str, ...] = Field(min_length=1)
-    planner_version: str = Field(pattern=_STABLE_COORDINATE)
+    planner_version: str = Field(pattern=STABLE_ID_PATTERN)
 
     @field_validator("selection_cutoff")
     @classmethod

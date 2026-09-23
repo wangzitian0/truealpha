@@ -4,10 +4,53 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
+
+#: What a stable identifier is spelled with: an ASCII letter or digit, then letters, digits and
+#: `. _ : / @ + -`. Both cases, and case is significant. Unanchored, so a prefixed pattern can embed
+#: it; `STABLE_ID_PATTERN` is the whole-value form a `Field(pattern=...)` takes.
+#:
+#: #1010: sixteen copies in Python under five names, and a seventeenth in app-web. Eleven agreed.
+#: `gates` required a lowercase first character and `capture_contracts` lowercase throughout, so
+#: `2026Q2` -- a partition key every demand-side model accepts -- could not become a `CaptureCell`, and
+#: `capture_contracts` embedded this reading in its own `raw_id` while refusing it everywhere else.
+#: No document chose lowercase and no stored id is derived from a pattern's spelling, so the
+#: majority reading is the definition: widening refuses nothing either narrow copy accepted.
+#:
+#: Whether a value names an immutable VERSION -- `latest`, `head`, `main` -- is a second question
+#: with eleven answers of its own, tracked on #1011; this is only the character grammar.
+STABLE_ID_BODY = r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]*"
+STABLE_ID_PATTERN = rf"^{STABLE_ID_BODY}$"
+
+
+def require_stable_and_immutable(value: str, field_name: str, *, mutable_tokens: frozenset[str]) -> str:
+    """Require `value` to be a stable identifier and refuse one whose token set names a mutable
+    version, against a token set the CALLER supplies.
+
+    #1010: after `access._stable_coordinate` and `reconciliation._immutable_coordinate` both moved
+    onto `STABLE_ID_PATTERN`, they became the same function body -- `test_content_addressing_is_
+    shared.py`'s sibling guard caught it. They were not a coincidence: both descend from the same
+    copy-paste, and the only thing still telling them apart was which of two equivalent ways they
+    spelled the pattern match, which unifying the grammar removed.
+
+    This is deliberately NOT the merge #1011 is about. `access._MUTABLE_TOKENS` has four words and
+    `reconciliation._MUTABLE_TOKENS` has six; each module keeps its own set exactly as it was, and
+    nothing this function accepts or refuses changes at either call site. Sharing the WRAPPER while
+    each site keeps its own token set is safe by construction, the same way `identify()` shares the
+    hash-and-stamp wrapper while `policy_bundle._content_address` keeps its own serializer.
+    Unifying WHICH words are mutable across the eleven sites #1011 found is a decision with its own
+    equivalence argument -- a supplied token set here is a parameter, not that decision.
+    """
+    if re.fullmatch(STABLE_ID_PATTERN, value) is None:
+        raise ValueError(f"{field_name} must be a stable coordinate")
+    tokens = {token for token in re.split(r"[._:/@+\-]", value.lower()) if token}
+    if tokens & mutable_tokens:
+        raise ValueError(f"{field_name} must name an immutable version")
+    return value
 
 
 def canonical_sha256(value: Any) -> str:

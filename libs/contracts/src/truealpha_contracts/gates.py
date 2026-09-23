@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_seriali
 
 from truealpha_contracts.capture_contracts import CaptureEvaluationReport, CaptureScope
 from truealpha_contracts.catalog import ResearchCatalogManifest
-from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
+from truealpha_contracts.common import STABLE_ID_PATTERN, CaptureEnvironment, canonical_sha256
 from truealpha_contracts.common import identify as _content_address
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.models import _require_aware
@@ -50,7 +50,6 @@ from truealpha_contracts.universe import (
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _CONTENT_SHA256_PATTERN = r"^(?:|[0-9a-f]{64})$"
-_STABLE_ID_PATTERN = r"^[a-z0-9][A-Za-z0-9._:/@+\-]*$"
 _SIGNATURE_ID_PATTERN = r"^[a-z][a-z0-9._:/-]*$"
 _SHA256 = re.compile(_SHA256_PATTERN)
 
@@ -122,7 +121,7 @@ class SourceCallIntent(_StrictFrozenModel):
 
     source_call_intent_id: str = Field(default="", pattern=r"^(?:|source-call-intent:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=_CONTENT_SHA256_PATTERN)
-    operation_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    operation_id: str = Field(pattern=STABLE_ID_PATTERN)
     registry_snapshot_id: str = Field(pattern=r"^registry-snapshot:[0-9a-f]{64}$")
     registry_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     source_id: SourceId
@@ -738,7 +737,7 @@ class ComparisonCriterion(_StrictFrozenModel):
         pattern=r"^(?:|comparison-criterion:[0-9a-f]{64})$",
     )
     content_sha256: str = Field(default="", pattern=_CONTENT_SHA256_PATTERN)
-    metric_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    metric_id: str = Field(pattern=STABLE_ID_PATTERN)
     unit: str = Field(min_length=1)
     maximum_absolute_delta: Decimal = Field(ge=0)
     rationale: str = Field(min_length=1)
@@ -761,7 +760,7 @@ class ComparisonCriterion(_StrictFrozenModel):
 
 class ComparisonObservation(_StrictFrozenModel):
     comparison_criterion_id: str = Field(pattern=r"^comparison-criterion:[0-9a-f]{64}$")
-    metric_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    metric_id: str = Field(pattern=STABLE_ID_PATTERN)
     unit: str = Field(min_length=1)
     baseline_value: Decimal
     candidate_value: Decimal

@@ -136,12 +136,16 @@ export function assertNonEmptyText(value: string, fieldName: string): string {
   return trimmed;
 }
 
-// Mirrors truealpha_contracts.access._stable_coordinate exactly (the same
-// function documents.py's _stable_id now delegates to) — sourceArtifactId
-// is a caller-supplied stable lineage identifier (a #369/#372 report_id/
-// card_id), so the TS adapter must reject the same inputs the Python DTO
-// would, or the two sides silently disagree about what's a valid id.
-const STABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
+// Mirrors truealpha_contracts.common.STABLE_ID_PATTERN exactly (the shared
+// grammar truealpha_contracts.access._stable_coordinate validates against,
+// which documents.py's _stable_id delegates to) — sourceArtifactId is a
+// caller-supplied stable lineage identifier (a #369/#372 report_id/card_id),
+// so the TS adapter must reject the same inputs the Python DTO would, or the
+// two sides silently disagree about what's a valid id. Exported so
+// tests/stable-identifier-parity.test.ts can measure it against the Python
+// pattern the conformance bundle exports (#1010) — TypeScript cannot import
+// the Python constant directly, so this is the boundary that keeps it pinned.
+export const STABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
 const MUTABLE_TOKENS = new Set(["latest", "current", "default", "head"]);
 
 export function assertStableId(value: string, fieldName: string): string {

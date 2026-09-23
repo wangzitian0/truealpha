@@ -8,10 +8,10 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from truealpha_contracts.common import STABLE_ID_PATTERN
 from truealpha_contracts.common import identify as _freeze_content_addressed
 
 _SHA256 = r"^[0-9a-f]{64}$"
-_STABLE_COORDINATE = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
 
 
 def _reject_binary_float(value: Any) -> Any:
@@ -41,7 +41,7 @@ def _sorted_unique(values: tuple[str, ...], field_name: str, *, allow_empty: boo
         raise ValueError(f"{field_name} must not be empty")
     if len(values) != len(set(values)):
         raise ValueError(f"{field_name} must not contain duplicates")
-    if any(re.fullmatch(_STABLE_COORDINATE, value) is None for value in values):
+    if any(re.fullmatch(STABLE_ID_PATTERN, value) is None for value in values):
         raise ValueError(f"{field_name} must contain stable coordinates")
     return tuple(sorted(values))
 
@@ -103,8 +103,8 @@ class SourceConfidenceEvidence(BaseModel):
         pattern=r"^(?:|source-confidence-evidence:[0-9a-f]{64})$",
     )
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    provider_id: str = Field(pattern=_STABLE_COORDINATE)
-    origin_group_id: str = Field(pattern=_STABLE_COORDINATE)
+    provider_id: str = Field(pattern=STABLE_ID_PATTERN)
+    origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
     independence_weight: Decimal = Field(ge=0, le=1)
     successful_outcome_mass: Decimal = Field(ge=0)
     failed_outcome_mass: Decimal = Field(ge=0)
@@ -149,7 +149,7 @@ class ContinuousConfidenceInput(BaseModel):
 
     input_id: str = Field(default="", pattern=r"^(?:|confidence-input:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    case_id: str = Field(pattern=_STABLE_COORDINATE)
+    case_id: str = Field(pattern=STABLE_ID_PATTERN)
     sources: tuple[SourceConfidenceEvidence, ...] = Field(min_length=1)
     agreement: Decimal = Field(ge=0, le=1)
     semantic_mapping_quality: Decimal = Field(ge=0, le=1)
@@ -187,8 +187,8 @@ class SourceConfidenceScore(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_evidence_id: str = Field(pattern=r"^source-confidence-evidence:[0-9a-f]{64}$")
-    provider_id: str = Field(pattern=_STABLE_COORDINATE)
-    origin_group_id: str = Field(pattern=_STABLE_COORDINATE)
+    provider_id: str = Field(pattern=STABLE_ID_PATTERN)
+    origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
     reliability: Decimal = Field(ge=0, le=1)
     source_quality: Decimal = Field(ge=0, le=1)
 
@@ -201,7 +201,7 @@ class SourceConfidenceScore(BaseModel):
 class OriginGroupContribution(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    origin_group_id: str = Field(pattern=_STABLE_COORDINATE)
+    origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
     independence_weight: Decimal = Field(ge=0, le=1)
     selected_source_evidence_id: str = Field(pattern=r"^source-confidence-evidence:[0-9a-f]{64}$")
     selected_source_quality: Decimal = Field(ge=0, le=1)
@@ -297,7 +297,7 @@ class ContinuousConfidenceEvaluation(BaseModel):
 class ConfidenceCalibrationScenario(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    scenario_id: str = Field(pattern=_STABLE_COORDINATE)
+    scenario_id: str = Field(pattern=STABLE_ID_PATTERN)
     evidence_class: Literal["sensitivity", "empirical_anchor"]
     expected_effect: str = Field(min_length=1)
     input: ContinuousConfidenceInput
@@ -321,7 +321,7 @@ class ConfidenceCalibrationReport(BaseModel):
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     schema_version: Literal["truealpha.confidence-calibration@v1"] = "truealpha.confidence-calibration@v1"
     policy: ContinuousConfidencePolicy
-    denominator_id: str = Field(pattern=_STABLE_COORDINATE)
+    denominator_id: str = Field(pattern=STABLE_ID_PATTERN)
     denominator_size: int = Field(gt=0)
     empirically_observed_subject_ids: tuple[str, ...]
     scenarios: tuple[ConfidenceCalibrationScenario, ...] = Field(min_length=1)
