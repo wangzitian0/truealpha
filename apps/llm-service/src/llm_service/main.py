@@ -83,7 +83,7 @@ app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
 # different topology declares its own, and a wrong value fails closed — the
 # headers are ignored and the redirect degrades to the pre-fix behaviour rather
 # than trusting a stranger.
-TRUSTED_PROXIES = os.environ.get("TRUSTED_PROXY_HOSTS", "10.0.1.0/24")
+TRUSTED_PROXIES = os.environ.get("TRUSTED_PROXY_HOSTS", "127.0.0.1,::1,10.0.1.0/24")
 app.add_middleware(
     ProxyHeadersMiddleware,
     trusted_hosts=[host.strip() for host in TRUSTED_PROXIES.split(",") if host.strip()],
