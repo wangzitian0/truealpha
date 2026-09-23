@@ -101,13 +101,14 @@ def test_mutating_input_fact_changes_snapshot_and_corpus_sha256(connection) -> N
     original_snapshot = gateway.snapshot_id(cutoff)
     original_corpus_sha = original_snapshot.split(":", 1)[1]
 
-    # Mutate one fact in staging.strategy_backtest_inputs
+    # Mutate one fact in staging.strategy_backtest_inputs for this exact cutoff
     connection.execute(
         """
         update staging.strategy_backtest_inputs
         set value = value + 100
-        where ctid in (select ctid from staging.strategy_backtest_inputs limit 1)
-        """
+        where ctid in (select ctid from staging.strategy_backtest_inputs where cutoff_at = %s limit 1)
+        """,
+        (cutoff,),
     )
     mutated_snapshot = gateway.snapshot_id(cutoff)
     mutated_corpus_sha = mutated_snapshot.split(":", 1)[1]
