@@ -247,3 +247,34 @@ function fakeRunner(
 
   console.log("#462 topt-gppe-repository missing-status path passed");
 }
+
+// --- #954: cells SQL joins mart.entity_identity to resolve symbolic listing IDs ---
+{
+  const calls: Call[] = [];
+  const runner = fakeRunner((sql) => {
+    if (sql.includes("current_pointer_head")) return { rows: [{ run_id: RUN_ID }] };
+    if (sql.includes("obligation_count")) return { rows: [{ obligation_count: 1 }] };
+    if (sql.includes("topt_gppe_results")) {
+      return {
+        rows: [
+          { listing_id: "listing:xnas:aapl", availability: "available", gppe: "1500000.00", confidence: "0.90" },
+        ],
+      };
+    }
+    if (sql.includes("datahub_quality_report where run_id")) return { rows: [] };
+    throw new Error(`unexpected query: ${sql}`);
+  }, calls);
+
+  const result = await new MartToptGppeRepository(runner).latest();
+  assert("cells" in result, "expected report");
+  const cellsCall = calls.find((c) => c.sql.includes("topt_gppe_results"));
+  assert(cellsCall !== undefined, "cells query executed");
+  assert(cellsCall.sql.includes("mart.entity_identity ei"), "cells query must join mart.entity_identity");
+  assert(
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(result.cells[0].listing_id),
+    "listing_id must not be a bare UUID",
+  );
+  assert(result.cells[0].listing_id === "listing:xnas:aapl", "symbolic listing_id must be returned");
+
+  console.log("#954 topt-gppe-repository symbolic listing_id translation passed");
+}

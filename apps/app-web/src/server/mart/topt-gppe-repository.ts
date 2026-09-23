@@ -47,13 +47,15 @@ const ACCEPTANCE_FALLBACK_HEAD_SQL = `
 `;
 
 const CELLS_SQL = `
-  select payload->>'listing_id' as listing_id,
-         payload->>'availability' as availability,
-         payload->>'gppe' as gppe,
-         payload->>'confidence' as confidence
-  from mart.topt_gppe_results
-  where payload->>'run_id' = $1
-  order by payload->>'listing_id' limit $2
+  select coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) as listing_id,
+         r.payload->>'availability' as availability,
+         r.payload->>'gppe' as gppe,
+         r.payload->>'confidence' as confidence
+  from mart.topt_gppe_results r
+  left join mart.entity_identity ei
+    on (ei.entity_id::text = (r.payload->>'listing_id') or (ei.entity_id::text = r.issuer_id and ei.kind = 'issuer'))
+  where r.payload->>'run_id' = $1
+  order by coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) limit $2
 `;
 
 const QUALITY_SQL = `

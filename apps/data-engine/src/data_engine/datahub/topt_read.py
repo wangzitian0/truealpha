@@ -68,11 +68,15 @@ class PostgresToptReadRepository:
             raise ValueError("limit must be between 1 and 500")
         rows = self._connection.execute(
             """
-            select payload->>'listing_id', payload->>'availability',
-                   payload->>'gppe', payload->>'confidence'
-            from mart.topt_gppe_results
-            where payload->>'run_id' = %s
-            order by payload->>'listing_id' limit %s
+            select coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) as listing_id,
+                   r.payload->>'availability' as availability,
+                   r.payload->>'gppe' as gppe,
+                   r.payload->>'confidence' as confidence
+            from mart.topt_gppe_results r
+            left join mart.entity_identity ei
+              on (ei.entity_id::text = (r.payload->>'listing_id') or (ei.entity_id::text = r.issuer_id and ei.kind = 'issuer'))
+            where r.payload->>'run_id' = %s
+            order by coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) limit %s
             """,
             (run_id, limit),
         ).fetchall()

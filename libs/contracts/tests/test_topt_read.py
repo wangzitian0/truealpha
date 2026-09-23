@@ -16,6 +16,7 @@ evidence-graph wiring starts advancing it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -237,3 +238,39 @@ def test_latest_fails_closed_on_a_database_error(monkeypatch: Any) -> None:
     result = repo.latest()
 
     assert result.reason == "database_unavailable"
+
+
+def test_latest_joins_entity_identity_to_resolve_symbolic_listing_id(monkeypatch: Any) -> None:
+    calls: list[str] = []
+
+    def responder(sql: str, _params: Any) -> list[dict[str, Any]]:
+        calls.append(sql)
+        if "current_pointer_head" in sql:
+            return [_row_keyed_like_postgres_would(sql, RUN_ID)]
+        if "obligation_count" in sql:
+            return [{"obligation_count": 1}]
+        if "topt_gppe_results" in sql:
+            return [
+                {
+                    "listing_id": "listing:xnas:aapl",
+                    "availability": "available",
+                    "gppe": "1500000.00",
+                    "confidence": "0.90",
+                }
+            ]
+        if "datahub_quality_report" in sql:
+            return [{"payload": {"independent_reconciliation": "0.25"}}]
+        raise AssertionError(f"unexpected query: {sql}")
+
+    _install_fake_connect(monkeypatch, responder)
+    repo = PostgresToptGppeRepository(database_url="postgresql://unused/unused")
+
+    report = repo.latest()
+
+    assert report.cells[0].listing_id == "listing:xnas:aapl"
+    assert not re.match(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        report.cells[0].listing_id,
+    )
+    cells_query = next(sql for sql in calls if "topt_gppe_results" in sql)
+    assert "mart.entity_identity ei" in cells_query
