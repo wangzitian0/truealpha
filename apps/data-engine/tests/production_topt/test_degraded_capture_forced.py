@@ -606,12 +606,31 @@ def test_a_forced_capture_version_is_distinct_and_stable() -> None:
 
 def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, monkeypatch) -> None:
     """#874: at tie-break, the forced capture is the newer look at the vendor, and it wins."""
-    # Settled session vs. run clock, same as above (#530 item 1).
+    # #530 item 1 split this test's one `day` into two genuinely different concepts that
+    # _quote() used to conflate under a single parameter:
+    #   - `day` (-> as_of -> valid_from) must be the fixed corpus's real partition, or
+    #     freeze_snapshot's `valid_from <= partition_key` now correctly refuses it.
+    #   - `knowable_at` feeds composition._satisfy_from_recent_observations' session-bound
+    #     reuse check (`_is_settled_session`), which requires it to equal
+    #     last_settled_session_date(cutoff) -- verified locally
+    #     (truealpha_contracts.calendar.settled_session_for_cutoff) to be 2026-04-21 for
+    #     this cutoff, not the corpus's 2026-03-31. Before this fix both read from `day`
+    #     and happened to agree only because the corpus partition was never checked.
     day = date(2026, 3, 31)
+    settled_day = date(2026, 4, 21)
     cutoff = datetime(2026, 4, 21, 22, 15, tzinfo=UTC)
-    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
+
+    def _reuse_quote(close: Decimal) -> MarketPriceQuote:
+        return MarketPriceQuote(
+            raw_bytes=f"bar:{day.isoformat()}:{close}".encode(),
+            close=close,
+            as_of=day,
+            knowable_at=datetime.combine(settled_day, datetime.min.time(), tzinfo=UTC),
+        )
+
+    _arm(monkeypatch, quote=lambda: _reuse_quote(Decimal("40")), price_cutoff=day)
     first_run = _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff)
-    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("39.25")), price_cutoff=day)
+    _arm(monkeypatch, quote=lambda: _reuse_quote(Decimal("39.25")), price_cutoff=day)
     forced_run = _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff, force_fetch=True)
     print(f"DIAG first_run.run_id={first_run.run_id} forced_run.run_id={forced_run.run_id}")
 
