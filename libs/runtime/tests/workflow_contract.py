@@ -76,6 +76,28 @@ def step(workflow: str, name: str) -> dict[str, Any]:
     return found[0]
 
 
+def job_step(workflow: str, job_id: str, name: str) -> dict[str, Any]:
+    """The step with this exact `name` inside ONE job.
+
+    `step` resolves across the whole workflow and (correctly) refuses a name two jobs
+    share. Some names are deliberately shared: ci-web's split gave both halves the same
+    migration step and ci-python has three, one per job that needs a schema. Naming the
+    job is what makes such a step addressable without going back to a text split.
+    """
+    candidates = job(workflow, job_id).get("steps", [])
+    found = [candidate for candidate in candidates if candidate.get("name") == name]
+    if not found:
+        named = [candidate.get("name") for candidate in candidates if candidate.get("name")]
+        raise WorkflowContractError(
+            f"{workflow}:{job_id} has no step named {name!r}. It has {named}. A renamed step is "
+            f"a contract change: rename it here too, or the property this test protects has "
+            f"silently stopped being checked"
+        )
+    if len(found) > 1:
+        raise WorkflowContractError(f"{workflow}:{job_id} has {len(found)} steps named {name!r}")
+    return found[0]
+
+
 def spec_text(spec: dict[str, Any]) -> str:
     """One parsed step rendered as a searchable string.
 

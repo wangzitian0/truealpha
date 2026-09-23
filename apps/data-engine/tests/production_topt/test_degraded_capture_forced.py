@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import os
-import subprocess
 import uuid
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -51,12 +49,8 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
+from truealpha_runtime.testing import apply_migration_chain
 
-REPOSITORY_ROOT = next(
-    parent
-    for parent in Path(__file__).resolve().parents
-    if (parent / "governance" / "vision-issue-graph.json").is_file()
-)
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 OBLIGATIONS = 84
 _RELEASE_OBLIGATIONS = 42
@@ -129,15 +123,8 @@ def tick_database_url():
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; CI runs the required integration coverage")
     try:
-        for migration in (*sorted((REPOSITORY_ROOT / "db/migrations").glob("*.sql")), REPOSITORY_ROOT / "db/roles.sql"):
-            completed = subprocess.run(
-                ["psql", target_url, "-v", "ON_ERROR_STOP=1", "-f", str(migration)],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if completed.returncode != 0:
-                pytest.fail(completed.stdout + completed.stderr, pytrace=False)
+        # The one applier, not a fourth copy of its loop (#984).
+        apply_migration_chain(target_url)
         yield target_url
     finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:

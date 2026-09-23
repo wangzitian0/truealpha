@@ -102,10 +102,12 @@ grant app_runtime to app_service_login;
 -- Password is provisioned out-of-band via Vault (APP_SERVICE_DB_PASSWORD, rendered by
 -- infra2's secrets.ctmpl into the same env apply_migrations.sh runs with) and applied
 -- here so a Vault-side rotation takes effect on the next migration run without a manual
--- psql step. `\if :{?app_service_db_password}` is true only when the CALLER passed
--- `-v app_service_db_password=...` at all -- docker-init.sh, the Makefile's db-migrate,
--- and CI never do, so this block is a complete no-op for local/CI, which don't
--- provision or use this role; only apply_migrations.sh (staging/prod/preview) sets it.
+-- psql step. Since #984 every environment reaches this file through
+-- db/apply_migrations.sh, which always passes `-v app_service_db_password=...` — empty
+-- wherever APP_SERVICE_DB_PASSWORD is unset, which is local, CI and the VPS. The
+-- `where nullif(...) is not null` below is what makes that a complete no-op there:
+-- those environments neither provision nor use this role, and only staging/prod/preview
+-- arrive with a value.
 -- The ALTER ROLE is built via \gexec rather than a dollar-quoted DO block: psql does
 -- NOT interpolate `:'var'` inside `$$...$$` bodies (verified empirically -- it sends
 -- the literal `:'...'` text and Postgres's parser rejects it), so the substitution has

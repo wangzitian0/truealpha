@@ -5,7 +5,9 @@ on:
 
 jobs:
   # Apply every migration + roles.sql against a throwaway Postgres — the DDL must
-  # always be runnable from scratch, matching what docker-compose does locally.
+  # always be runnable from scratch. Since #984 "matching what docker-compose does
+  # locally" is literal rather than aspirational: this step, the compose initdb hook,
+  # the Makefile and the llm-service boot all run db/apply_migrations.sh.
   migrate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -25,31 +27,23 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
-      - name: Apply migrations and roles
+      - name: Apply the migration chain
         env:
-          PGPASSWORD: postgres
-        run: |
-          for f in db/migrations/*.sql db/roles.sql; do
-            echo "== $f"
-            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
-          done
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+        run: sh db/apply_migrations.sh
       # apply_migrations.sh's own header comment states every migration file "is
-      # itself written to be safe to re-run" -- db/apply_migrations.sh re-applies the
-      # full chain on EVERY container boot (staging/prod/preview), not just the first.
+      # itself written to be safe to re-run" -- and it re-applies the full chain on
+      # EVERY container boot (staging/prod/preview), not just the first.
       # A single fresh-DB pass never exercises that invariant, and #455 shipped a
       # migration that silently broke it (a plain `drop constraint` with no IF
       # EXISTS, fine on the first run, ON_ERROR_STOP-fatal on every run after) --
       # crash-looping llm-service on both staging and production for days before
-      # anyone noticed, because nothing tested a second pass. Re-running the exact
-      # same loop here catches that class of regression before merge.
-      - name: Re-apply migrations and roles (idempotency)
+      # anyone noticed, because nothing tested a second pass. Running the exact same
+      # applier a second time here catches that class of regression before merge.
+      - name: Re-apply the migration chain (idempotency)
         env:
-          PGPASSWORD: postgres
-        run: |
-          for f in db/migrations/*.sql db/roles.sql; do
-            echo "== $f (2nd pass)"
-            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
-          done
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+        run: sh db/apply_migrations.sh
       # #615: the two passes above prove the DDL is syntactically re-runnable.
       # They cannot prove it survives the data the system produces, because the
       # database they replay over is EMPTY. 0017 and 0018 rebuilt the contract
@@ -62,19 +56,16 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/contract_kind_replay_seed.sql
-      - name: Re-apply migrations over real rows (replay-with-data)
+      # roles.sql is part of the pass, exactly as in the two above: the migrations
+      # rebuild views and reset grants, and roles.sql carries the permanent ones.
+      # Omitting it left the governed-research-access contract failing on "audit
+      # reader must receive only the filtered metadata view" — a permission state no
+      # boot ever has. Since #984 that ordering is not a property of this step at all:
+      # db/apply_migrations.sh applies roles.sql last, everywhere, by construction.
+      - name: Re-apply the migration chain over real rows (replay-with-data)
         env:
-          PGPASSWORD: postgres
-        run: |
-          # roles.sql is part of the pass, exactly as in the two above: the
-          # migrations rebuild views and reset grants, and roles.sql carries
-          # the permanent ones. Omitting it left the governed-research-access
-          # contract failing on "audit reader must receive only the filtered
-          # metadata view" — a permission state no boot ever has.
-          for f in db/migrations/*.sql db/roles.sql; do
-            echo "== $f (3rd pass, with data)"
-            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
-          done
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+        run: sh db/apply_migrations.sh
       - name: Assert runtime persistence contract
         env:
           PGPASSWORD: postgres
@@ -138,4 +129,18 @@ jobs:
         run: |
           uv sync --all-packages
           uv run --no-sync python tools/output_invariants.py \
+            --database-url postgresql://postgres:postgres@localhost:5432/truealpha
+
+      # #984: the schema this workflow just migrated, compared against the chain it was
+      # migrated FROM. The tool builds its own reference database from db/migrations +
+      # db/roles.sql on this same server and diffs the two catalogs, so nothing here has
+      # to be kept fresh when a migration lands. What this step proves is that the check
+      # runs in CI and is green on a database that did run the chain; that it can go RED
+      # is proved by libs/runtime/tests/test_schema_drift.py, which breaks a database on
+      # purpose (#939's staging.market_prices_daily shape among them) and asserts the
+      # tool names what broke. Green here after three replays and a seeded contract row
+      # also says replay left the schema where the chain puts it.
+      - name: Schema drift (migrated schema against the declared chain)
+        run: |
+          uv run --no-sync python tools/schema_drift.py \
             --database-url postgresql://postgres:postgres@localhost:5432/truealpha

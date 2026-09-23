@@ -46,6 +46,7 @@ _SPEC.loader.exec_module(_contract)
 
 WorkflowContractError = _contract.WorkflowContractError
 job = _contract.job
+job_step = _contract.job_step
 source = _contract.source
 step = _contract.step
 steps = _contract.steps
@@ -63,6 +64,8 @@ MAIN_HEALTH = "main-health.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
 REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
+DB = "ci-db.yml"
+RUNTIME = "ci-runtime.yml"
 NIGHTLY = "nightly-dagster-liveness.yml"
 WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
@@ -1016,6 +1019,58 @@ def test_auto_release_has_only_the_permissions_it_needs() -> None:
     assert permissions["actions"] == "write"
     assert permissions["pull-requests"] == "read"
     assert set(permissions) == {"contents", "actions", "pull-requests"}
+
+
+# --- one migration applier (#984) --------------------------------------------
+
+#: (workflow, job, step). Every CI job that needs a schema applies it by running
+#: `db/apply_migrations.sh`, the single implementation of "apply db/migrations/*.sql in
+#: glob order, then db/roles.sql, stopping on the first error". These eight steps used to
+#: be three hand-written copies of that loop, and they had drifted from the one the
+#: llm-service image boots with: no lock bound, no statement timeout, no
+#: MIGRATIONS_DATABASE_URL. `libs/runtime/tests/test_migration_applier.py` holds the rest
+#: of the tree to the same rule; this file holds the workflows, because workflow-shape
+#: assertions live here and resolve steps by name (#583).
+MIGRATION_CHAIN_STEPS = (
+    (PYTHON, "test-core", "Apply the migration chain"),
+    (PYTHON, "test-data-engine", "Apply the migration chain"),
+    (PYTHON, "dagster-code-server-liveness", "Apply the migration chain"),
+    (DB, "migrate", "Apply the migration chain"),
+    (DB, "migrate", "Re-apply the migration chain (idempotency)"),
+    (DB, "migrate", "Re-apply the migration chain over real rows (replay-with-data)"),
+    (WEB, "check", "Apply the migration chain (populated and empty)"),
+    (WEB, "browser", "Apply the migration chain (populated and empty)"),
+)
+
+
+@pytest.mark.parametrize(("workflow", "job_id", "name"), MIGRATION_CHAIN_STEPS)
+def test_every_ci_job_applies_the_chain_through_the_one_applier(workflow: str, job_id: str, name: str) -> None:
+    assert "db/apply_migrations.sh" in job_step(workflow, job_id, name).get("run", "")
+
+
+def test_no_ci_job_reaches_a_schema_by_any_other_route() -> None:
+    """The half a list of known steps cannot cover: a NEW step that migrates a database
+    its own way. Any step that runs psql against a migration file is one of the eight
+    above or it is a ninth copy.
+
+    ci-runtime is in scope with no step of its own on purpose: it brings the database up
+    through docker compose on a fresh volume, so the postgres image's initdb hook runs
+    db/docker-init.sh — the applier again. A migration step appearing there would mean
+    that path had stopped working and someone had patched around it."""
+    strays = []
+    for workflow in (PYTHON, DB, WEB, RUNTIME):
+        for job_id, spec in yaml.safe_load(source(workflow))["jobs"].items():
+            for candidate in spec.get("steps", []):
+                run = str(candidate.get("run", ""))
+                if "db/migrations" not in run and "db/roles.sql" not in run:
+                    continue
+                if "db/apply_migrations.sh" in run:
+                    continue
+                strays.append(f"{workflow}:{job_id}:{candidate.get('name')}")
+    assert not strays, (
+        f"{strays} reach the migration files without going through db/apply_migrations.sh — "
+        f"that is how the seven appliers diverged (#984)"
+    )
 
 
 # --- the boundary this file exists to hold -----------------------------------

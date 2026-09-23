@@ -1,9 +1,10 @@
 # Migration file names
 
-`db/apply_migrations.sh`, `db/docker-init.sh`, `Makefile db-migrate` and
-`.github/workflows/ci-db.yml`
-all apply `db/migrations/*.sql` in shell glob order on every boot. The filename is
-the ordering key, and it is permanent once an environment has run it.
+`db/apply_migrations.sh` applies `db/migrations/*.sql` in shell glob order, then
+`db/roles.sql`. It is the only thing that does: CI, the compose initdb hook, the
+Makefile, the VPS bootstrap and every llm-service container boot all run that one file
+(#984, `libs/runtime/tests/test_migration_applier.py`). The filename is the ordering
+key, and it is permanent once an environment has run it.
 
 Two forms are legal; `libs/runtime/tests/test_migration_chain.py` enforces both.
 

@@ -134,6 +134,10 @@ jobs:
               - 'docker-compose.yml'
               - '.github/workflows/ci-python.yml'
             runtime:
+              # #984: ci-runtime executes tools/schema_drift.py against the schema the
+              # compose bootstrap produced — the same reason `db` above carries
+              # tools/**. A tool this lane runs must re-run this lane.
+              - 'tools/**'
               - 'docker-compose.yml'
               - '.env.example'
               - 'db/**'

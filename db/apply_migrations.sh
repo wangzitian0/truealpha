@@ -1,20 +1,51 @@
 #!/bin/sh
-# Idempotent schema migration runner for an APP CONTAINER connecting to a remote/
-# external Postgres via DATABASE_URL (staging, prod, or a preview's own ephemeral DB —
-# see infra2 truealpha/truealpha/preview/compose.yaml).
+# THE migration applier: apply db/migrations/*.sql in glob order, then db/roles.sql,
+# stopping on the first error. Every call site that brings a database to the declared
+# schema runs THIS file (#984):
 #
-# Companion to db/docker-init.sh (which mounts into /docker-entrypoint-initdb.d/ and
-# runs AS the postgres process itself, peer-auth, for local dev via docker-compose.yml).
-# This script instead runs FROM an app image (baked in by apps/llm-service/Dockerfile)
-# and connects over the network via $DATABASE_URL, so it works identically whether that
-# URL points at a fresh ephemeral preview DB or the real staging/prod truealpha-postgres.
+#   1-3  .github/workflows/ci-{python,db,web}.yml    host psql -> the Postgres service
+#   4    apps/llm-service/Dockerfile CMD             every staging/production/preview boot
+#   5    Makefile db-migrate / db-reset              local: compose exec, or host psql
+#   6    db/docker-init.sh                           compose initdb, on a fresh volume only
+#   7    apps/data-engine/scripts/setup_vps_ingest.sh   VPS: docker exec into the container
 #
-# Mirrors the exact `psql ... -v ON_ERROR_STOP=1 -f "$f"` loop already proven in
-# Makefile's db-migrate target and .github/workflows/ci-db.yml — same semantics, same
-# idempotent SQL files, just parameterized on DATABASE_URL instead of
-# POSTGRES_USER/POSTGRES_DB peer auth. The first statement error in any file aborts the
-# whole run (fail closed); every migration file and roles.sql is itself written to be
-# safe to re-run (create schema if not exists / catch duplicate_object).
+# Until #984 those were seven independently written loops, and they had drifted: the
+# three CI copies, the Makefile and the compose initdb hook bounded no lock and set no
+# statement timeout; the VPS copy alone passed `-q`; and `-v app_service_db_password`
+# and MIGRATIONS_DATABASE_URL reached call site 4 and nothing else. Four more copies
+# lived in the test suite. `libs/runtime/tests/test_migration_applier.py` fails if a
+# second chain loop appears anywhere in the tree.
+#
+# REPLAY IS NOT A REPAIR PATH. The chain holds 113 `alter table` and 162 `drop <object>`
+# statements against 176 `create ... if not exists` (grep -ohiE over db/migrations/*.sql,
+# 2026-09-23), so a relation left in a superseded shape stays in that shape forever: the
+# `create ... if not exists` does nothing, and the `alter` that would have reshaped it
+# already ran against the shape that environment used to have.
+# `db/reset_database.sh` (`make db-reset`) is the repair path — it recreates the database
+# empty and runs this script, which is exactly what a fresh CI job does — and
+# `tools/schema_drift.py` (`make db-check`) is what tells you which of the two you need.
+#
+# What it connects with:
+#
+#   MIGRATIONS_DATABASE_URL  the admin-privileged DSN. #432: migrations (DDL, including
+#                            db/roles.sql's role/grant management) need an admin
+#                            credential, distinct from the scoped app_service_login
+#                            runtime credential the app itself connects with. infra2
+#                            provisions one for staging/prod.
+#   DATABASE_URL             used when MIGRATIONS_DATABASE_URL is unset — local, CI and
+#                            preview, where it is still the superuser.
+#   TRUEALPHA_PSQL           the psql command, default `psql`. Set it when psql runs
+#                            somewhere else: `docker compose exec -T postgres psql`
+#                            (Makefile) or `docker exec -i truealpha-postgres psql`
+#                            (the VPS). When it is set, each file is streamed on stdin
+#                            rather than passed with --file, because the repository path
+#                            does not exist wherever that command lands.
+#   TRUEALPHA_DB_DIR         the directory holding migrations/ and roles.sql. Defaults to
+#                            this script's own directory, which is right in all seven
+#                            places: db/ in a checkout, /app/db in the llm-service image,
+#                            /truealpha-db in the compose Postgres container.
+#   APP_SERVICE_DB_PASSWORD  rotated app_service_login password, applied by roles.sql.
+#                            Empty (local, CI, the VPS) is a complete no-op there.
 #
 # A boot never waits on a lock (2026-09-17 incident). The v0.0.81 production boot sat
 # 108 s in 0017_contract_objects.sql behind a backfill's open transaction, the llm
@@ -41,7 +72,26 @@
 # for exactly that reason); an operator running one by hand can raise the knob.
 set -eu
 
-db_dir="${TRUEALPHA_DB_DIR:-/app/db}"
+# The script's own directory. Right for a checkout (db/), the llm-service image (/app/db)
+# and the compose Postgres container (/truealpha-db) alike, so no caller has to say.
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)" || script_dir=""
+db_dir="${TRUEALPHA_DB_DIR:-$script_dir}"
+# Last resort: the llm-service image bakes the chain here (apps/llm-service/Dockerfile),
+# and infra2's compose overrides that image's CMD with an inline entrypoint of its own.
+# If that entrypoint ever reaches this script by a route where $0 is not a path, a
+# production boot must still find the files rather than fail on an empty glob.
+if [ -z "${TRUEALPHA_DB_DIR:-}" ] && [ ! -d "$db_dir/migrations" ] && [ -d /app/db/migrations ]; then
+    db_dir=/app/db
+fi
+if [ ! -d "$db_dir/migrations" ] || [ ! -f "$db_dir/roles.sql" ]; then
+    echo "apply_migrations.sh: no migration chain at '$db_dir' (expected migrations/ and roles.sql);" \
+        "set TRUEALPHA_DB_DIR" >&2
+    exit 1
+fi
+
+# psql, or the command that runs psql somewhere else. Deliberately unquoted where it is
+# used: it is a command LINE, and word splitting is how the extra arguments reach psql.
+psql_command="${TRUEALPHA_PSQL:-psql}"
 
 # Seconds unless a unit is given; passed straight to Postgres.
 lock_timeout="${TRUEALPHA_MIGRATION_LOCK_TIMEOUT:-5s}"
@@ -53,11 +103,6 @@ lock_backoff_seconds="${TRUEALPHA_MIGRATION_LOCK_BACKOFF_SECONDS:-1}"
 # Total seconds the whole run may spend in failed lock-timeout attempts and backoff.
 lock_budget_seconds="${TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS:-25}"
 
-# #432: migrations (DDL, including db/roles.sql's role/grant management) need an
-# admin-privileged credential, distinct from the scoped app_service_login runtime
-# credential the app itself is meant to connect with. MIGRATIONS_DATABASE_URL is that
-# admin credential where infra2 has provisioned one (staging/prod); local/CI/preview
-# fall back to DATABASE_URL, which is still the superuser there.
 migrations_url="${MIGRATIONS_DATABASE_URL:-${DATABASE_URL:-}}"
 if [ -z "$migrations_url" ]; then
     echo "apply_migrations.sh: MIGRATIONS_DATABASE_URL or DATABASE_URL is required" >&2
@@ -76,6 +121,16 @@ if [ "$lock_attempts" -lt 1 ]; then
     echo "apply_migrations.sh: TRUEALPHA_MIGRATION_LOCK_ATTEMPTS must be at least 1 (1 = no retry)" >&2
     exit 1
 fi
+# The two timeouts reach the server as SQL (below) as well as through PGOPTIONS, so they
+# are validated as interval literals rather than interpolated as whatever arrives.
+for knob in "$lock_timeout" "$statement_timeout"; do
+    case "$knob" in
+        '' | *[!0-9a-zA-Z]*)
+            echo "apply_migrations.sh: timeouts must be a bare Postgres interval such as 5s or 500ms (got '$knob')" >&2
+            exit 1
+            ;;
+    esac
+done
 
 # libpq reads PGOPTIONS for every connection psql opens, so the timeouts bind the
 # migration session itself — including statements inside DO blocks and functions. A
@@ -95,7 +150,7 @@ lock_waited=0
 # application schema, oldest first, one line each with the relations and modes it holds.
 # Read-only, and bounded by the same timeouts.
 report_lock_holders() {
-    psql --no-password "$migrations_url" -X -q -A -F ' | ' -P footer=off \
+    $psql_command --no-password "$migrations_url" -X -q -A -F ' | ' -P footer=off \
         -c "select a.pid, coalesce(nullif(a.application_name, ''), '-') as application,
                    a.usename, a.state,
                    date_trunc('second', now() - a.xact_start) as transaction_age,
@@ -117,22 +172,54 @@ report_lock_holders() {
              limit 20" >&2 || echo "apply_migrations.sh: (could not list lock holders)" >&2
 }
 
+# One file, one session.
+#
+# --no-password: a DSN with missing/wrong credentials must fail fast, not hang the
+# container on an interactive password prompt (same guard libs/contracts' db-contract
+# test runners already use for the identical psql-against-DATABASE_URL pattern).
+# app_service_db_password: db/roles.sql applies it to app_service_login when set and
+# non-empty (#432); every other migration file ignores an unused psql variable.
+# VERBOSITY=verbose prints the SQLSTATE, which is what classifies the failure below
+# regardless of the server's message language.
+run_one_file() {
+    if [ -n "${TRUEALPHA_PSQL:-}" ]; then
+        # psql is running elsewhere — `docker exec`, `docker compose exec` — so two things
+        # change and nothing else does. The repository path does not exist there, so the
+        # bytes go over stdin (psql then reports errors as `psql:<stdin>:<line>:`, which
+        # the location parser below reads exactly as it reads `<file>:<line>:`). And that
+        # psql is a different process tree that inherits no PGOPTIONS from here, so the
+        # same two bounds are carried as SQL instead: psql executes -c and -f in the
+        # order given, in one session, so they bind the file that follows them.
+        #
+        # `-f -` is load-bearing, not decoration. psql does not read standard input at
+        # all once -c or -f is given, so `psql -c "set ..." < file` runs the two SETs,
+        # ignores the file and EXITS 0 — a transport that reports success while applying
+        # nothing (measured 2026-09-23, before this line existed). `-f -` is what names
+        # stdin as the file to run. test_schema_drift.py applies the chain to an empty
+        # database through this branch and diffs the result, so the next person to touch
+        # it gets a red test rather than an empty database.
+        #
+        # The deployed boot (call site 4) takes the branch below; its log is unchanged.
+        $psql_command --no-password "$migrations_url" --set ON_ERROR_STOP=1 \
+            -v VERBOSITY=verbose \
+            -v app_service_db_password="${APP_SERVICE_DB_PASSWORD:-}" \
+            -c "set lock_timeout = '${lock_timeout}'" \
+            -c "set statement_timeout = '${statement_timeout}'" \
+            -f - < "$1"
+    else
+        $psql_command --no-password "$migrations_url" --set ON_ERROR_STOP=1 \
+            -v VERBOSITY=verbose \
+            -v app_service_db_password="${APP_SERVICE_DB_PASSWORD:-}" \
+            --file "$1"
+    fi
+}
+
 apply_file() {
     migration="$1"
     attempt=1
     while :; do
         attempt_started="$(date +%s)"
-        # --no-password: a DSN with missing/wrong credentials must fail fast, not hang the
-        # container on an interactive password prompt (same guard libs/contracts' db-contract
-        # test runners already use for the identical psql-against-DATABASE_URL pattern).
-        # app_service_db_password: db/roles.sql applies it to app_service_login when set and
-        # non-empty (#432); every other migration file ignores an unused psql variable.
-        # VERBOSITY=verbose prints the SQLSTATE, which is what classifies the failure below
-        # regardless of the server's message language.
-        if psql --no-password "$migrations_url" --set ON_ERROR_STOP=1 \
-            -v VERBOSITY=verbose \
-            -v app_service_db_password="${APP_SERVICE_DB_PASSWORD:-}" \
-            --file "$migration" >"$attempt_log" 2>&1; then
+        if run_one_file "$migration" >"$attempt_log" 2>&1; then
             cat "$attempt_log"
             return 0
         fi
@@ -171,6 +258,27 @@ apply_file() {
         attempt=$((attempt + 1))
     done
 }
+
+# An unmatched glob leaves the pattern itself in the list, which psql would report as a
+# missing file — but only after the run has already claimed to be applying something.
+# Count first, so "it applied nothing and said so" cannot read as success.
+chain_length=0
+for migration in "$db_dir"/migrations/*.sql "$db_dir"/roles.sql; do
+    if [ ! -f "$migration" ]; then
+        case "$migration" in
+            *'*.sql')
+                echo "apply_migrations.sh: '$db_dir/migrations' holds no .sql files — refusing to report" \
+                    "success over an empty chain" >&2
+                ;;
+            *)
+                echo "apply_migrations.sh: '$migration' is not a file — the chain at '$db_dir' is incomplete" >&2
+                ;;
+        esac
+        exit 1
+    fi
+    chain_length=$((chain_length + 1))
+done
+echo "apply_migrations.sh: applying $chain_length files from $db_dir (migrations in glob order, then roles.sql)"
 
 for migration in "$db_dir"/migrations/*.sql "$db_dir"/roles.sql; do
     echo "== $migration"

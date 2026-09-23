@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-down web llm sample sample-evidence sample-audit strategy-smoke lint format typecheck test prepush contract-conformance check clean
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence sample-audit strategy-smoke lint format typecheck test prepush contract-conformance check clean
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -11,7 +11,9 @@ help:
 	@echo "  make stack-up     Build/start runtime + web + llm-service"
 	@echo "  make runtime-check Probe Postgres, KG tables, and object storage"
 	@echo "  make runtime-down Stop the local stack (keeps volumes)"
-	@echo "  make db-migrate   Re-apply db/ DDL to a running Postgres (idempotent)"
+	@echo "  make db-migrate   Replay the declared chain onto an existing database"
+	@echo "  make db-reset     Recreate the database empty and apply the chain — CI's starting point"
+	@echo "  make db-check     Compare a live database's schema against the declared chain"
 	@echo ""
 	@echo "Run:"
 	@echo "  make web          Next.js dev server (apps/app-web)"
@@ -63,23 +65,48 @@ db-up: runtime-up
 
 db-down: runtime-down
 
-# The initdb mount in docker-compose.yml only runs on a FRESH volume — an existing
-# dev DB never picks up new migration files by itself. All DDL is `if not exists`,
-# so re-applying everything is safe and cheap.
-# Prefers the compose container; falls back to host psql (DATABASE_URL or the
-# conventional local postgres) so a docker-less machine can still migrate.
+# One decision about WHERE the local database is, shared by db-migrate and db-reset —
+# a second copy of it is how seven migration appliers happened (#984). Prefers the
+# compose container so a machine with no host psql still migrates; otherwise talks to
+# whatever DATABASE_URL names, defaulting to the conventional local postgres.
+define local_db_target
+if [ -n "$$(docker compose ps -q postgres 2>/dev/null)" ]; then \
+	export TRUEALPHA_PSQL="docker compose exec -T postgres psql"; \
+	export DATABASE_URL="postgresql:///$${POSTGRES_DB:-truealpha}?user=$${POSTGRES_USER:-postgres}"; \
+else \
+	export DATABASE_URL="$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}"; \
+fi
+endef
+
+# The initdb mount in docker-compose.yml only runs on a FRESH volume, so an existing dev
+# database never picks up new migration files by itself and this target is how it does.
+#
+# What replay actually is: every file in the chain re-applied, in order, over whatever
+# the database already holds. That fixes a database that is BEHIND the chain. It does
+# not fix one that is beside it. The chain carries 113 `alter table` and 162 `drop`
+# statements against 176 `create ... if not exists` (grep -ohiE over db/migrations/*.sql,
+# 2026-09-23), so a relation left in a superseded shape keeps that shape: the `create` is
+# a no-op and the `alter` that would have reshaped it already ran, back when this database
+# had the shape it was written against. (Before #984 these three lines claimed "All DDL is
+# `if not exists`, so re-applying everything is safe and cheap" — measured against the
+# chain, that sentence was false, and a local database sat broken for weeks behind it.)
+#
+# `make db-reset` is the repair path and `make db-check` says which of the two you need.
 db-migrate:
-	@if [ -n "$$(docker compose ps -q postgres 2>/dev/null)" ]; then \
-		for f in db/migrations/*.sql db/roles.sql; do \
-			echo "== $$f"; \
-			docker compose exec -T postgres psql -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-truealpha} -v ON_ERROR_STOP=1 < $$f || exit 1; \
-		done; \
-	else \
-		for f in db/migrations/*.sql db/roles.sql; do \
-			echo "== $$f"; \
-			psql "$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}" -v ON_ERROR_STOP=1 -f $$f || exit 1; \
-		done; \
-	fi
+	@$(local_db_target); sh db/apply_migrations.sh
+
+# CI's Postgres service declares no volume: every job starts empty and applies the chain
+# once. This is that, locally — drop, create, apply, zero seed. The local database is
+# CI's starting point retained as a cache, not a second lifecycle (#984).
+db-reset:
+	@$(local_db_target); sh db/reset_database.sh
+
+# Is this database still the chain? Read-only against the target; it builds a reference
+# from db/migrations + db/roles.sql on the same server and diffs the two catalogs, so
+# there is no snapshot to keep fresh. Needs host psql and a host-reachable DATABASE_URL
+# (the compose Postgres publishes 127.0.0.1:5432 by default).
+db-check:
+	uv run python tools/schema_drift.py --database-url "$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}"
 
 web:
 	cd apps/app-web && bun run dev
