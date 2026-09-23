@@ -20,9 +20,15 @@ How it answers, and why this way:
   same version, nothing to keep fresh.
 * The TARGET is only ever read. Every statement against it is a `select` from
   `pg_catalog`; the reference database is separate, randomly named, and dropped when the
-  run ends. Building it costs one replay of the chain, so `--reference-database-url`
-  takes a database that already ran it -- what makes a suite of repeated runs cheap, and
-  what to use where creating a database is not something this tool should be doing.
+  run ends.
+* Which is still a write, to the SERVER rather than to the target, so building a
+  reference on a host that is not this machine is refused. db/local_target.sh decides
+  what "this machine" means -- the same file db/reset_database.sh asks, because it makes
+  the same kind of write. The two ways forward are `--reference-database-url`, naming a
+  database that already ran the chain (nothing is created anywhere, and it is also what
+  makes a suite of repeated runs cheap), and TRUEALPHA_ALLOW_REMOTE_REFERENCE=1 for the
+  case where the reference has to sit on that server -- same version, same collation --
+  to be worth comparing against.
 
 What it does NOT cover, said out loud rather than implied:
 
@@ -46,17 +52,30 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
+import subprocess
 import sys
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from truealpha_runtime.testing import apply_migration_chain
+
+#: "Is this server local?" lives in one file, shared with db/reset_database.sh, which
+#: asks the same question about the same kind of write (#990 review). The two keep
+#: separate override variables: a scratch database beside staging and `drop database` on
+#: staging are not the same decision.
+LOCAL_TARGET = Path(__file__).resolve().parents[1] / "db" / "local_target.sh"
+
+#: Set to 1 to build the reference on a server that is not this machine. The other way
+#: forward — --reference-database-url — creates nothing anywhere and needs no override.
+REMOTE_REFERENCE_ENV = "TRUEALPHA_ALLOW_REMOTE_REFERENCE"
 
 #: Created by Dagster's own instance bootstrap rather than by the chain (see the header).
 RUNTIME_OWNED_SCHEMAS = ("dagster",)
@@ -251,9 +270,45 @@ def _with_database(conninfo: str, database: str) -> str:
     return make_conninfo(**(conninfo_to_dict(conninfo) | {"dbname": database}))
 
 
+def target_locality(database_url: str) -> tuple[str, str]:
+    """("local"|"remote", redacted url), through db/local_target.sh — the one definition.
+
+    The DSN goes over stdin rather than argv: it carries a password and argv is
+    world-readable on Linux.
+    """
+    completed = subprocess.run(
+        ["sh", str(LOCAL_TARGET)],
+        input=database_url,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip() or f"{LOCAL_TARGET} exited {completed.returncode}")
+    parsed = dict(token.split("=", 1) for token in shlex.split(completed.stdout))
+    return parsed["ta_locality"], parsed["ta_redacted"]
+
+
 @contextmanager
 def reference_database(server_url: str, *, keep: bool = False) -> Iterator[str]:
-    """A database of its own with the declared chain applied, dropped on the way out."""
+    """A database of its own with the declared chain applied, dropped on the way out.
+
+    The guard is here rather than in `main` because this is where the write happens: any
+    caller reaching this function is about to CREATE a database on `server_url`'s server
+    and DROP it WITH (FORCE) afterwards. "The target is only read" is true and does not
+    cover it — the reference is not the target, and short-lived is not the same as
+    harmless on a cluster someone else is using (#990 review).
+    """
+    locality, redacted = target_locality(server_url)
+    if locality != "local" and os.environ.get(REMOTE_REFERENCE_ENV) != "1":
+        raise RuntimeError(
+            f"{redacted} is not a local server, and building a reference there means CREATE "
+            f"DATABASE followed by DROP DATABASE ... WITH (FORCE) on it. Two ways forward: pass "
+            f"--reference-database-url naming a database that already ran the chain (nothing is "
+            f"created anywhere, and the target stays read-only), or set {REMOTE_REFERENCE_ENV}=1 "
+            f"to build the reference on that server anyway."
+        )
     admin_url = _with_database(server_url, "postgres")
     name = f"truealpha_chain_reference_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(admin_url, connect_timeout=10, autocommit=True) as admin:
@@ -305,7 +360,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help=(
             "an already-migrated database to compare against. Omitted, one is built on the "
-            "target's own server from db/migrations + db/roles.sql and dropped afterwards."
+            "target's OWN server from db/migrations + db/roles.sql and dropped afterwards — "
+            f"which is refused for a non-local server unless {REMOTE_REFERENCE_ENV}=1, because "
+            "it creates and force-drops a database there."
         ),
     )
     parser.add_argument(

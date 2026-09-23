@@ -23,6 +23,7 @@ detector.
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -285,3 +286,92 @@ def test_the_reset_never_echoes_the_password_it_was_given() -> None:
     )
     assert "hunter2" not in completed.stdout + completed.stderr, completed.stderr
     assert "db.example.invalid" in completed.stderr, "it must still say WHICH database it refused"
+
+
+# --- one definition of "is this server local" ---------------------------------------
+
+LOCAL_TARGET = "db/local_target.sh"
+
+#: The two commands that write to a Postgres SERVER rather than only to the database
+#: they were pointed at: reset drops and recreates the target, and the drift check
+#: creates a reference database beside it and force-drops it again (#990 review). They
+#: must agree on which hosts are this machine, and a second copy of that list is the
+#: defect class #984 exists to remove — the seven appliers differed by less.
+SERVER_WRITERS = ("db/reset_database.sh", "tools/schema_drift.py")
+
+#: (dsn, locality). Every spelling the two guards have to get right, including the two
+#: that are local without looking like it: an empty host is libpq's default Unix socket
+#: (how the compose container's own psql connects) and an explicit path is a socket
+#: directory.
+LOCALITY_CASES = (
+    ("postgresql://postgres:secret@localhost:5432/truealpha", "local"),
+    ("postgresql://postgres@127.0.0.1:5432/truealpha", "local"),
+    ("postgresql://user@[::1]:5432/db", "local"),
+    ("postgresql:///truealpha?user=postgres", "local"),
+    ("postgresql://postgres@/truealpha?host=/var/run/postgresql", "local"),
+    ("postgres://u@db.example.invalid:15433/truealpha?sslmode=require", "remote"),
+    ("postgresql://u:p@truealpha-postgres-staging:5432/truealpha", "remote"),
+    ("postgresql://u@10.0.0.7/truealpha", "remote"),
+    # A hostname that resolves to the loopback today is still another machine: this has
+    # to be decidable without a DNS lookup, because a drop-database guard cannot rest on
+    # what a resolver happened to answer.
+    ("postgresql://u@localhost.evil.example/truealpha", "remote"),
+)
+
+
+def _classify(dsn: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sh", str(REPO_ROOT / LOCAL_TARGET)],
+        input=dsn,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize(("dsn", "locality"), LOCALITY_CASES)
+def test_the_shared_classifier_says_which_server_this_is(dsn: str, locality: str) -> None:
+    completed = _classify(dsn)
+    assert completed.returncode == 0, completed.stderr
+    parsed = dict(token.split("=", 1) for token in shlex.split(completed.stdout))
+    assert parsed["ta_locality"] == locality, completed.stdout
+
+
+def test_the_shared_classifier_redacts_the_password_it_was_given() -> None:
+    """Both callers print `ta_redacted` when they refuse, so the refusal reaches a
+    terminal and a CI log. What it must never carry is the credential."""
+    completed = _classify("postgresql://postgres:hunter2@db.example.invalid:5432/truealpha")
+    parsed = dict(token.split("=", 1) for token in shlex.split(completed.stdout))
+    assert "hunter2" not in parsed["ta_redacted"]
+    assert parsed["ta_redacted"] == "postgresql://postgres@db.example.invalid:5432/truealpha"
+
+
+def test_the_shared_classifier_refuses_a_conninfo_without_quoting_it_back() -> None:
+    """A key=value conninfo cannot be rewritten to name the maintenance database, so it
+    is refused — and the refusal does not echo the input, because `password=` is in it."""
+    completed = _classify("host=db.example.invalid dbname=truealpha password=hunter2")
+    assert completed.returncode == 2
+    assert "postgresql://" in completed.stderr
+    assert "hunter2" not in completed.stderr + completed.stdout
+
+
+def test_a_value_cannot_escape_the_quoting_its_callers_eval() -> None:
+    """db/reset_database.sh runs `eval` on this output. A URI cannot legally contain a
+    bare apostrophe, which is exactly why the escaping has to hold for one."""
+    completed = _classify("postgresql://a'b:pw@db.example.invalid/x")
+    assert completed.returncode == 0, completed.stderr
+    parsed = dict(token.split("=", 1) for token in shlex.split(completed.stdout))
+    assert parsed["ta_authority"] == "a'b:pw@db.example.invalid"
+    assert parsed["ta_locality"] == "remote"
+
+
+@pytest.mark.parametrize("relative", SERVER_WRITERS)
+def test_neither_server_writer_carries_its_own_host_list(relative: str) -> None:
+    body = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    assert "local_target.sh" in body, f"{relative} no longer asks {LOCAL_TARGET} which server it is on"
+    for literal in ("127.0.0.1", "localhost", "::1"):
+        assert literal not in body, (
+            f"{relative} spells out {literal!r} again — 'which hosts are this machine' has one "
+            f"answer, in {LOCAL_TARGET}, and two copies of it drift the way the seven appliers did"
+        )

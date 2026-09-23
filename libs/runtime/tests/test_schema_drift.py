@@ -243,3 +243,59 @@ def test_the_containerised_psql_transport_lands_the_whole_chain(chain_template: 
         assert counts["relations"] > drift.MINIMUM_REFERENCE_RELATIONS, counts
     finally:
         _drop(name)
+
+
+# --- it does not create a database on somebody else's cluster -------------------------
+
+#: Reserved by RFC 2606, so it never resolves and no connection is ever attempted by the
+#: tests below that get PAST the guard — what they assert is that the guard stopped
+#: being the thing in the way.
+REMOTE_URL = "postgresql://postgres:hunter2@db.example.invalid:5432/truealpha"
+
+
+def test_building_a_reference_on_a_remote_server_is_refused(monkeypatch) -> None:
+    """The #990 review finding. Omitting --reference-database-url means CREATE DATABASE
+    and then DROP DATABASE ... WITH (FORCE) on whatever server --database-url names. The
+    target being read-only does not cover that: the reference is not the target.
+
+    Nothing connects — the refusal happens before the admin connection, which is also
+    why this test needs no Postgres.
+    """
+    monkeypatch.delenv(drift.REMOTE_REFERENCE_ENV, raising=False)
+    with pytest.raises(RuntimeError, match="not a local server") as raised:
+        with drift.reference_database(REMOTE_URL):
+            pass  # pragma: no cover - the guard raises before the body runs
+    message = str(raised.value)
+    assert "hunter2" not in message, "the refusal names the target, so it must not carry the password"
+    assert "--reference-database-url" in message and drift.REMOTE_REFERENCE_ENV in message, (
+        "a refusal has to say both ways forward, or the only way forward is editing the tool"
+    )
+
+
+def test_the_cli_refuses_the_same_way_and_says_so(monkeypatch, capsys) -> None:
+    monkeypatch.delenv(drift.REMOTE_REFERENCE_ENV, raising=False)
+    assert drift.main(["--database-url", REMOTE_URL]) == 2
+    stderr = capsys.readouterr().err
+    assert "not a local server" in stderr
+    assert "--reference-database-url" in stderr and drift.REMOTE_REFERENCE_ENV in stderr
+    assert "hunter2" not in stderr
+
+
+def test_the_override_is_a_real_way_forward(monkeypatch) -> None:
+    """The escape hatch has to open. With it set the guard is no longer what stops the
+    run — the unreachable host is, which is the failure a deliberate remote check would
+    get on a host that existed."""
+    monkeypatch.setenv(drift.REMOTE_REFERENCE_ENV, "1")
+    with pytest.raises(psycopg.Error) as raised:
+        with drift.reference_database(REMOTE_URL):
+            pass  # pragma: no cover - the connection raises before the body runs
+    assert "not a local server" not in str(raised.value)
+
+
+def test_a_supplied_reference_is_the_other_way_forward(monkeypatch, clone: str) -> None:
+    """--reference-database-url creates nothing anywhere, so a remote target needs no
+    override at all: the reference is local and the remote database is only read."""
+    monkeypatch.delenv(drift.REMOTE_REFERENCE_ENV, raising=False)
+    with pytest.raises(psycopg.Error) as raised:
+        drift.compare(REMOTE_URL, clone)
+    assert "not a local server" not in str(raised.value)
