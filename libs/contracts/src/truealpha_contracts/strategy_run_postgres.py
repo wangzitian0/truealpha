@@ -71,17 +71,41 @@ _LATEST_RUN_SQL = LATEST_RUN_SQL
 # its cutoff with the scheduled tick, and the cutoff-only join returned every decision
 # once per capture run. `DECISIONS_FROM_SQL` is the clause both twins must carry;
 # test_strategy_run_selection_parity pins the TypeScript text to it.
+#
+# #953: `issuer_id` is TRANSLATED, not echoed. Since #928 wrote entity coordinates,
+# mart.strategy_decisions.issuer_id holds the opaque entity UUID, and the MCP
+# `strategy_run` tool served it verbatim to callers -- `issuer:lei:29DX7H14B9S6O3FD6V18`
+# at staging v0.0.90, `02587046-dc99-5a44-b811-e2d086a58ccb` from v0.0.91 on. A UUID is
+# unresolvable to anyone outside this database (docs/entity-identity.md: "an id is always
+# looked up, never parsed"), so the read resolves it through mart.entity_identity -- the
+# SAME projection #954/#967 used to fix the identical leak in topt_gppe's `listing_id`,
+# extended with `legacy_id` rather than duplicated. LATERAL ... limit 1 rather than a
+# plain join: the view's staging.kg_entities join can match an entity twice (once by UUID,
+# once by legacy id), and a decision row must never be multiplied by a display lookup.
+# `coalesce` keeps the raw id for any decision the identity store does not know (a fixture
+# or preview run, a pre-#877 legacy id) -- honesty over invention.
+#
+# The join to mart.topt_core_results above still compares the RAW d.issuer_id: both sides
+# of it are entity coordinates written by the same writer, and translating either would
+# break the very join that supplies `confidence`.
 DECISIONS_FROM_SQL = """
     from mart.strategy_decisions d
     left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
     left join mart.topt_core_results t
       on t.run_id = scope.capture_run_id and t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
+    left join lateral (
+        select ei.legacy_id
+        from mart.entity_identity ei
+        where ei.entity_id::text = d.issuer_id
+        limit 1
+    ) ei on true
     where d.strategy_run_id = %s
-    order by d.cutoff_at, d.issuer_id
+    order by d.cutoff_at, coalesce(ei.legacy_id, d.issuer_id)
 """
 _DECISIONS_SQL = (
     """
-    select d.issuer_id, d.cutoff_at, d.capital_adjusted_labor_efficiency, d.tier,
+    select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
+           d.cutoff_at, d.capital_adjusted_labor_efficiency, d.tier,
            d.current_price_to_sales, d.target_price_to_sales, d.valuation_gap,
            d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
            t.confidence

@@ -77,8 +77,8 @@ export const LATEST_RUN_SQL = `
 // microseconds, which broke trace-ID parity on exactly the mart path (#469).
 // ORDER BY names the source column, not the text alias: the two text formats
 // do not sort chronologically.
-const DECISIONS_SQL = `
-  select d.issuer_id,
+export const DECISIONS_SQL = `
+  select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
          case when to_char(d.cutoff_at at time zone 'UTC', 'US') = '000000'
               then to_char(d.cutoff_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
               else to_char(d.cutoff_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
@@ -108,6 +108,17 @@ const DECISIONS_SQL = `
          -- Python twin's DECISIONS_FROM_SQL modulo placeholder syntax, pinned by
          -- test_strategy_run_selection_parity.
          --
+         -- #953: issuer_id is TRANSLATED through mart.entity_identity, not echoed.
+         -- mart.strategy_decisions.issuer_id has held the opaque entity UUID since
+         -- #928, and the MCP strategy_run tool served it verbatim: staging v0.0.90
+         -- answered issuer:lei:29DX7H14B9S6O3FD6V18, v0.0.91 onward a bare UUID.
+         -- The Python twin carries the identical lateral join and the
+         -- identical coalesce, for the same reason #954/#967 added one to topt_gppe:
+         -- one projection translates every entity coordinate, never a second
+         -- translator per consumer. The topt_core_results join above deliberately
+         -- keeps comparing the RAW d.issuer_id -- both sides of it are entity
+         -- coordinates, and translating either would break the confidence join.
+         --
          -- A join is a read, not a computation: init.md principle 2 keeps
          -- metric computation in libs/factors, and this adds no metric.
          t.confidence,
@@ -118,8 +129,14 @@ const DECISIONS_SQL = `
   left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
   left join mart.topt_core_results t
     on t.run_id = scope.capture_run_id and t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
+  left join lateral (
+    select ei.legacy_id
+    from mart.entity_identity ei
+    where ei.entity_id::text = d.issuer_id
+    limit 1
+  ) ei on true
   where d.strategy_run_id = $1
-  order by d.cutoff_at, d.issuer_id
+  order by d.cutoff_at, coalesce(ei.legacy_id, d.issuer_id)
 `;
 
 class SchemaMismatchError extends Error {}
