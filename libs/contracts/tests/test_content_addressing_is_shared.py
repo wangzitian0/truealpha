@@ -30,9 +30,18 @@ _SOURCE_ROOTS = (
     _REPO_ROOT / "apps" / "llm-service" / "src",
 )
 
-#: The one definition this test exists to protect, as a repository-relative path so that a
-#: second function named `identify`, in any other module, is a copy and not the original.
-_THE_DEFINITION = "libs/contracts/src/truealpha_contracts/common.py.identify"
+#: The definitions this test exists to protect, as repository-relative paths so that a second
+#: function of the same name, in any other module, is a copy and not the original. Two, because
+#: there are two identity CONTRACTS: `identify` hashes the whole payload for both the id and
+#: the hash; `identify_by_grain` hashes a declared subset for the id and the whole payload for
+#: the hash, so two records with the same natural key are the same record. Both live in
+#: `common.py`, each defined once.
+_THE_DEFINITIONS = frozenset(
+    {
+        "libs/contracts/src/truealpha_contracts/common.py.identify",
+        "libs/contracts/src/truealpha_contracts/common.py.identify_by_grain",
+    }
+)
 
 #: Definitions that stamp a content address but are NOT `identify` under another name, each
 #: with the reason it cannot simply call it. Every entry is a known cost, not an exemption:
@@ -50,10 +59,10 @@ _NOT_YET_MERGED = {
     # call it -- but they duplicate each OTHER, in two variants that differ in whether the
     # identity payload is wrapped in a {"kind", "identity"} envelope. Merging them changes
     # minted ids, so it is its own change.
-    "libs/contracts/src/truealpha_contracts/capture_control.py._freeze": "identity grain, no envelope",
-    "libs/contracts/src/truealpha_contracts/capture_control.py._freeze_wrapped": "identity grain, enveloped",
-    "libs/contracts/src/truealpha_contracts/datahub.py._freeze_identity": "identity grain, enveloped",
-    "libs/contracts/src/truealpha_contracts/reconciliation.py._freeze_content": "identity grain, enveloped",
+    "libs/contracts/src/truealpha_contracts/capture_control.py._freeze": (
+        "identity grain WITHOUT the {'kind', 'identity'} envelope, so it mints different ids "
+        "from identify_by_grain; merging it changes ids already stored"
+    ),
 }
 
 
@@ -212,13 +221,15 @@ def test_only_one_module_defines_content_addressing() -> None:
     the shared one. What remains is listed above with the reason it cannot, so a new copy --
     under any name, in any of the four source roots -- fails here."""
     definitions = _wrapper_definitions()
-    unexpected = [name for name in definitions if name != _THE_DEFINITION and name not in _NOT_YET_MERGED]
+    unexpected = [name for name in definitions if name not in _THE_DEFINITIONS and name not in _NOT_YET_MERGED]
     assert not unexpected, (
-        "content addressing must be defined once, in truealpha_contracts.common.identify; "
-        f"these define their own: {unexpected}"
+        "content addressing is defined in truealpha_contracts.common and nowhere else "
+        f"({sorted(_THE_DEFINITIONS)}); these define their own: {unexpected}"
     )
-    assert _THE_DEFINITION in definitions, (
-        f"the guard did not find the shared definition itself, so it is asserting nothing; it found {definitions}"
+    missing = sorted(_THE_DEFINITIONS - set(definitions))
+    assert not missing, (
+        "the guard did not find the shared definitions themselves, so it is asserting nothing; "
+        f"missing {missing}, found {definitions}"
     )
 
 
@@ -235,7 +246,7 @@ def test_the_guard_identifies_a_definition_by_path_and_not_by_name() -> None:
     name let `usage.identify` pass while `usage._stamp_it` failed, which is the wrong way
     round -- the closer the copy, the more it looked compliant. Every key the guard compares
     is a repository-relative path, and this refuses a regression to name matching."""
-    compared = [_THE_DEFINITION, *_NOT_YET_MERGED, *_wrapper_definitions()]
+    compared = [*_THE_DEFINITIONS, *_NOT_YET_MERGED, *_wrapper_definitions()]
     bare = [name for name in compared if "/" not in name]
     assert not bare, f"these are matched by name, so a copy under the same name passes: {bare}"
 
@@ -312,3 +323,86 @@ def a_copy(model, *, id_field, prefix):
     node = ast.parse(source).body[0]
     assert isinstance(node, ast.FunctionDef)
     assert _stamps_a_content_address(node)
+
+
+def _normalised(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    """The function's shape with every identifier, argument, attribute, constant AND THE
+    FUNCTION'S OWN NAME replaced, so a copy that renamed anything still hashes the same.
+
+    The name mattered more than the rest and was the one thing the first draft left alone
+    (#1009 review). `ast.dump` includes `name=`, so two byte-identical bodies under different
+    names hashed differently and the guard missed exactly the case it exists for. That is not
+    hypothetical here: the sweep this issue came from reported `_identify` and
+    `_content_address` as separate groups while their bodies were identical, which is why the
+    finding said nine copies under two names instead of one shape.
+    """
+
+    class _Blank(ast.NodeTransformer):
+        def visit_Name(self, n):
+            return ast.copy_location(ast.Name(id="_", ctx=n.ctx), n)
+
+        def visit_arg(self, n):
+            return ast.copy_location(ast.arg(arg="_", annotation=None), n)
+
+        def visit_Attribute(self, n):
+            self.generic_visit(n)
+            return ast.copy_location(ast.Attribute(value=n.value, attr="_", ctx=n.ctx), n)
+
+        def visit_Constant(self, n):
+            return ast.copy_location(ast.Constant(value=None), n)
+
+        def visit_FunctionDef(self, n):
+            self.generic_visit(n)
+            n.name = "_"
+            return n
+
+        def visit_AsyncFunctionDef(self, n):
+            self.generic_visit(n)
+            n.name = "_"
+            return n
+
+    return ast.dump(_Blank().visit(ast.parse(ast.unparse(node)).body[0]))
+
+
+def test_no_function_body_is_duplicated_across_two_modules() -> None:
+    """The sweep this issue came from, armed.
+
+    #997 found five cross-file groups holding eleven functions. Consolidating the
+    content-address wrapper left one group -- `PlannedDemandCell.identify` and
+    `SnapshotDemandCell.identify`, twelve identical lines around an already-shared
+    derivation -- which is now `stamp_planned_cell_id`. This asserts the count stays at zero,
+    so the next copy fails here rather than waiting for someone to run the sweep by hand.
+
+    Bodies under four statements are out of scope: a duplicated one-liner is real and is not
+    worth the false-positive rate. That was the sweep's own threshold and it stays here so the
+    check and the finding measure the same thing.
+    """
+    by_shape: dict[str, list[str]] = {}
+    for root in _SOURCE_ROOTS:
+        assert root.is_dir(), f"source root {root} is missing, so this guard is not scanning it"
+        for path in sorted(root.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                # Async too: a coroutine is as copyable as a function, and skipping the kind
+                # is the same class of hole as skipping the name. The line number
+                # disambiguates two methods that share a name in one file.
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or len(node.body) < 4:
+                    continue
+                where = f"{path.relative_to(_REPO_ROOT).as_posix()}:{node.lineno}::{node.name}"
+                by_shape.setdefault(_normalised(node), []).append(where)
+
+    assert by_shape, "the sweep found no functions at all, so it is asserting nothing"
+
+    # Reported as groups of names. The key is a normalised AST dump, which is the right
+    # thing to compare and the wrong thing to print: the first draft of this message put a
+    # 1.6KB tree in front of the two filenames a reader needs.
+    # `where` is "path:line::name", so the module is everything before the line number. Taking
+    # `split("::")[0]` leaves the line number attached and makes two functions in ONE file look
+    # like two modules, which is how five same-file pairs briefly appeared as cross-file ones.
+    def _module(where: str) -> str:
+        return where.split("::")[0].rsplit(":", 1)[0]
+
+    cross_file = [sorted(members) for members in by_shape.values() if len({_module(m) for m in members}) > 1]
+    assert not cross_file, (
+        "these function bodies are identical in shape across modules; give them one "
+        f"definition or say why they must stay apart: {sorted(cross_file)}"
+    )

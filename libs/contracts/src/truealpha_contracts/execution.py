@@ -21,7 +21,7 @@ from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.registries import RegistrySnapshot, SemanticTypeId
 from truealpha_contracts.universe import SubjectRef, UniverseManifest, UniverseMembership, UniverseRef
-from truealpha_contracts.usage import RequirementLevel, planned_cell_id_for
+from truealpha_contracts.usage import RequirementLevel, stamp_planned_cell_id
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _CONTENT_ID = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
@@ -375,17 +375,7 @@ class SnapshotDemandCell(BaseModel):
 
     @model_validator(mode="after")
     def identify(self) -> SnapshotDemandCell:
-        expected_id = planned_cell_id_for(
-            requirement_id=self.requirement_id,
-            capture_requirement_id=self.capture_requirement_id,
-            semantic_type_id=self.semantic_type_id,
-            domain=self.domain,
-            subject=self.subject,
-            partition_key=self.partition_key,
-        )
-        if self.planned_cell_id and self.planned_cell_id != expected_id:
-            raise ValueError("planned_cell_id does not match frozen snapshot demand")
-        object.__setattr__(self, "planned_cell_id", expected_id)
+        stamp_planned_cell_id(self)
         return self
 
     @property

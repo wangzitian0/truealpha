@@ -24,21 +24,12 @@ from truealpha_contracts.universe import (
     SecurityKind,
     SecurityListingLink,
 )
+from truealpha_contracts.universe import (
+    _require_stable_reference as _require_stable_id,
+)
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _CURRENCY_PATTERN = r"^[A-Z]{3}$"
-_STABLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
-_MUTABLE_REFERENCE_MARKERS = frozenset({"current", "head", "latest"})
-
-
-def _require_stable_id(value: str, field_name: str) -> str:
-    if value != value.strip() or not _STABLE_ID_PATTERN.fullmatch(value):
-        raise ValueError(f"{field_name} must be a non-empty stable identifier")
-    tokens = {token for token in re.split(r"[^a-z0-9]+", value.lower()) if token}
-    mutable_markers = tokens & _MUTABLE_REFERENCE_MARKERS
-    if mutable_markers:
-        raise ValueError(f"{field_name} cannot use a mutable reference marker: {sorted(mutable_markers)}")
-    return value
 
 
 def _require_currency(value: str, field_name: str) -> str:

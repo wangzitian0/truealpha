@@ -10,6 +10,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import identify_by_grain as _freeze_wrapped
 from truealpha_contracts.datahub import ListObligation, RecapturePredicate
 from truealpha_contracts.universe import SubjectRef, UniverseRef
 
@@ -17,19 +18,6 @@ from truealpha_contracts.universe import SubjectRef, UniverseRef
 def _freeze(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:
     identity = model.model_dump(mode="json", include=set(identity_fields))
     expected_id = f"{prefix}:{canonical_sha256(identity)}"
-    content = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    expected_content = canonical_sha256(content)
-    if getattr(model, id_field) not in {"", expected_id}:
-        raise ValueError(f"{id_field} does not match canonical identity")
-    if getattr(model, "content_sha256") not in {"", expected_content}:
-        raise ValueError("content_sha256 does not match canonical content")
-    object.__setattr__(model, id_field, expected_id)
-    object.__setattr__(model, "content_sha256", expected_content)
-
-
-def _freeze_wrapped(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:
-    identity = model.model_dump(mode="json", include=set(identity_fields))
-    expected_id = f"{prefix}:{canonical_sha256({'kind': prefix, 'identity': identity})}"
     content = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
     expected_content = canonical_sha256(content)
     if getattr(model, id_field) not in {"", expected_id}:

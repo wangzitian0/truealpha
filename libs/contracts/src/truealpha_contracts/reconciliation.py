@@ -27,6 +27,7 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import identify_by_grain as _freeze_content
 from truealpha_contracts.datahub import AssessmentFreshness, ObligationTerminalState
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.universe import SubjectRef
@@ -134,28 +135,6 @@ def _reason_codes(values: tuple[str, ...]) -> tuple[str, ...]:
     if not values or any(re.fullmatch(r"^[a-z][a-z0-9_.-]*$", value) is None for value in values):
         raise ValueError("reason_codes must contain stable machine-readable codes")
     return values
-
-
-def _freeze_content(
-    model: BaseModel,
-    *,
-    id_field: str,
-    prefix: str,
-    identity_fields: tuple[str, ...],
-) -> None:
-    identity = model.model_dump(mode="json", include=set(identity_fields))
-    identity_sha256 = canonical_sha256({"kind": prefix, "identity": identity})
-    expected_id = f"{prefix}:{identity_sha256}"
-    content = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    expected_content_sha256 = canonical_sha256(content)
-    supplied_id = getattr(model, id_field)
-    supplied_hash = getattr(model, "content_sha256")
-    if supplied_id and supplied_id != expected_id:
-        raise ValueError(f"{id_field} does not match its declared identity")
-    if supplied_hash and supplied_hash != expected_content_sha256:
-        raise ValueError("content_sha256 does not match the canonical record")
-    object.__setattr__(model, id_field, expected_id)
-    object.__setattr__(model, "content_sha256", expected_content_sha256)
 
 
 class _FrozenModel(BaseModel):

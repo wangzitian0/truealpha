@@ -59,3 +59,34 @@ class CaptureEnvironment(StrEnum):
     PREVIEW = "preview"
     STAGING = "staging"
     PRODUCTION = "production"
+
+
+def identify_by_grain(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:
+    """Stamp a model whose id is a NATURAL KEY and whose hash is its whole content.
+
+    The second identity shape in these contracts, and a different contract from `identify`:
+    the id hashes only the fields named in `identity_fields`, under a `{"kind", "identity"}`
+    envelope, so two records with the same key are the same record however their other fields
+    move; the hash still covers everything, so a restatement is distinguishable.
+
+    #997: `datahub._freeze_identity` and `reconciliation._freeze_content` were this function
+    twice, differing in two error-message phrasings. The derivation was identical -- same
+    envelope, same content payload -- so sharing it changes no id already minted.
+
+    `capture_control._freeze_wrapped` was a third copy, merged on the #1009 review: identical
+    derivation, and its set-membership guard is this one's tuple guard for every hashable
+    value. `capture_control._freeze` is NOT this function -- it hashes the identity without the
+    envelope, so it mints different ids, and merging it is its own change with its own
+    equivalence argument.
+    """
+    identity = model.model_dump(mode="json", include=set(identity_fields))
+    expected_id = f"{prefix}:{canonical_sha256({'kind': prefix, 'identity': identity})}"
+    expected_hash = canonical_sha256(model.model_dump(mode="json", exclude={id_field, "content_sha256"}))
+    supplied_id = getattr(model, id_field)
+    supplied_hash = getattr(model, "content_sha256")
+    if supplied_id not in ("", expected_id):
+        raise ValueError(f"{id_field} does not match its declared identity grain")
+    if supplied_hash not in ("", expected_hash):
+        raise ValueError("content_sha256 does not match the canonical record")
+    object.__setattr__(model, id_field, expected_id)
+    object.__setattr__(model, "content_sha256", expected_hash)
