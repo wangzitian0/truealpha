@@ -40,7 +40,11 @@ ship: repo
 
 ```bash
 # 列出所有 worktree，查看是否已有 issue 前缀的 worktree
-git worktree list | grep "issue<N>"
+# 按完整 token `_issue<N>_` 匹配，不是 `issue<N>` 子串：后者会让 issue12 命中
+# issue123，把别人占着的问题读成自己的。worktree 命名规范本来就是这个 token
+# （见下方 `<repo>_issue<N>_<slug>`），对齐它即可。-F 关掉正则，免得 issue 号
+# 周围的字符被当成元字符。
+git worktree list | grep -F "_issue<N>_"
 ```
 
 - 已被占据 → 警告用户，提示切换到该窗口或先 close
