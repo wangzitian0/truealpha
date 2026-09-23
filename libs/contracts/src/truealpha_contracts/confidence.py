@@ -8,7 +8,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import identify as _freeze_content_addressed
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _STABLE_COORDINATE = r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$"
@@ -44,20 +44,6 @@ def _sorted_unique(values: tuple[str, ...], field_name: str, *, allow_empty: boo
     if any(re.fullmatch(_STABLE_COORDINATE, value) is None for value in values):
         raise ValueError(f"{field_name} must contain stable coordinates")
     return tuple(sorted(values))
-
-
-def _freeze_content_addressed(model: BaseModel, *, id_field: str, prefix: str) -> None:
-    content = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    content_sha256 = canonical_sha256(content)
-    expected_id = f"{prefix}:{content_sha256}"
-    supplied_id = getattr(model, id_field)
-    supplied_sha256 = getattr(model, "content_sha256")
-    if supplied_id and supplied_id != expected_id:
-        raise ValueError(f"{id_field} does not match the canonical content")
-    if supplied_sha256 and supplied_sha256 != content_sha256:
-        raise ValueError("content_sha256 does not match the canonical content")
-    object.__setattr__(model, id_field, expected_id)
-    object.__setattr__(model, "content_sha256", content_sha256)
 
 
 class ContinuousConfidencePolicy(BaseModel):

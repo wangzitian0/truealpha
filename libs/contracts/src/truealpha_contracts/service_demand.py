@@ -12,6 +12,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_serializer, field_validator, model_validator
 
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.universe import UniverseRef
 from truealpha_contracts.usage import DataRequirement
@@ -24,18 +25,6 @@ _MUTABLE_VERSION_TOKENS = frozenset({"current", "default", "head", "latest", "ma
 
 class _FrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-def _identify(model: BaseModel, *, id_field: str, prefix: str) -> None:
-    payload = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    digest = canonical_sha256(payload)
-    expected_id = f"{prefix}:{digest}"
-    supplied_id = getattr(model, id_field)
-    supplied_hash = getattr(model, "content_sha256")
-    if supplied_id not in {"", expected_id} or supplied_hash not in {"", digest}:
-        raise ValueError(f"{prefix} identity does not match canonical content")
-    object.__setattr__(model, id_field, expected_id)
-    object.__setattr__(model, "content_sha256", digest)
 
 
 def _reject_float(value: Any) -> Any:

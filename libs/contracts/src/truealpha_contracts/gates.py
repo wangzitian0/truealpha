@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_seriali
 from truealpha_contracts.capture_contracts import CaptureEvaluationReport, CaptureScope
 from truealpha_contracts.catalog import ResearchCatalogManifest
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
+from truealpha_contracts.common import identify as _content_address
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.readiness import (
@@ -56,20 +57,6 @@ _SHA256 = re.compile(_SHA256_PATTERN)
 
 class _StrictFrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-def _content_address(model: BaseModel, *, id_field: str, prefix: str) -> None:
-    payload = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    expected_hash = canonical_sha256(payload)
-    expected_id = f"{prefix}:{expected_hash}"
-    supplied_hash = getattr(model, "content_sha256")
-    supplied_id = getattr(model, id_field)
-    if supplied_hash and supplied_hash != expected_hash:
-        raise ValueError("content_sha256 does not match canonical content")
-    if supplied_id and supplied_id != expected_id:
-        raise ValueError(f"{id_field} does not match canonical content")
-    object.__setattr__(model, "content_sha256", expected_hash)
-    object.__setattr__(model, id_field, expected_id)
 
 
 def _reference_matches(reference_id: str, content_sha256: str) -> bool:
