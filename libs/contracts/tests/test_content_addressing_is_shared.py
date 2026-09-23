@@ -13,6 +13,7 @@ The guard below is written over the shape rather than over the nine names that e
 from __future__ import annotations
 
 import ast
+import functools
 import pathlib
 
 import pytest
@@ -124,7 +125,30 @@ def test_an_unhashable_supplied_value_is_refused_rather_than_raising_typeerror()
         identify(model, id_field="thing_id", prefix="thing")
 
 
-def _wrapper_definitions() -> list[str]:
+def _stamps_a_content_address(node: ast.FunctionDef) -> bool:
+    """Whether this function hashes content, builds an id from it and writes the id back.
+
+    Both call forms count, because they are the same call: `canonical_sha256(...)` after a
+    from-import and `common.canonical_sha256(...)` after a module import. Matching only the
+    first left the attribute form as a way to write a copy the guard could not see -- the
+    same hole one hop over as matching a bare function name (#1000 review).
+
+    The f-string is what separates stamping from checking: every wrapper builds
+    `f"{prefix}:{digest}"`. Without it a validator that merely compares a stored hash and
+    sorts a tuple through `object.__setattr__` is swept up as a copy, which
+    `catalog.sort_and_validate` was.
+    """
+    called = {
+        child.func.id if isinstance(child.func, ast.Name) else child.func.attr
+        for child in ast.walk(node)
+        if isinstance(child, ast.Call) and isinstance(child.func, (ast.Name, ast.Attribute))
+    }
+    builds_an_id = any(isinstance(child, ast.JoinedStr) for child in ast.walk(node))
+    return "canonical_sha256" in called and "__setattr__" in called and builds_an_id
+
+
+@functools.cache
+def _wrapper_definitions() -> tuple[str, ...]:
     """Every MODULE-LEVEL function that stamps a model with `{prefix}:{canonical_sha256(...)}`,
     found by shape: it calls `canonical_sha256` and writes a field through `object.__setattr__`
     while building an id. Name, argument names and module are irrelevant, which is the point --
@@ -148,24 +172,11 @@ def _wrapper_definitions() -> list[str]:
             for node in tree.body:
                 if not isinstance(node, ast.FunctionDef):
                     continue
-                calls = {
-                    child.func.id
-                    for child in ast.walk(node)
-                    if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
-                }
-                attribute_calls = {
-                    child.func.attr
-                    for child in ast.walk(node)
-                    if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
-                }
-                # The f-string is what separates stamping from checking: every wrapper builds
-                # `f"{prefix}:{digest}"`. Without it, a validator that merely compares a stored
-                # hash and sorts a tuple through `object.__setattr__` is swept up as a copy
-                # (`catalog.sort_and_validate` was).
-                builds_an_id = any(isinstance(child, ast.JoinedStr) for child in ast.walk(node))
-                if "canonical_sha256" in calls and "__setattr__" in attribute_calls and builds_an_id:
+                if _stamps_a_content_address(node):
                     found.append(f"{path.relative_to(_REPO_ROOT).as_posix()}.{node.name}")
-    return found
+    # A tuple, because the result is cached and a caller must not be able to mutate what the
+    # next caller sees.
+    return tuple(found)
 
 
 def test_only_one_module_defines_content_addressing() -> None:
@@ -199,3 +210,42 @@ def test_the_guard_identifies_a_definition_by_path_and_not_by_name() -> None:
     compared = [_THE_DEFINITION, *_NOT_YET_MERGED, *_wrapper_definitions()]
     bare = [name for name in compared if "/" not in name]
     assert not bare, f"these are matched by name, so a copy under the same name passes: {bare}"
+
+
+_BOTH_CALL_FORMS = {
+    "from-import": "digest = canonical_sha256(payload)",
+    "module attribute": "digest = common.canonical_sha256(payload)",
+}
+
+
+@pytest.mark.parametrize("form", sorted(_BOTH_CALL_FORMS))
+def test_a_copy_is_seen_through_either_call_form(form: str) -> None:
+    """Confirmed against the unfixed predicate: the module-attribute form returned False,
+    because its set of `ast.Name` calls is empty. A copy could therefore evade the guard by
+    importing the module instead of the function."""
+    source = f"""
+def a_copy(model, *, id_field, prefix):
+    payload = model.model_dump(mode="json")
+    {_BOTH_CALL_FORMS[form]}
+    object.__setattr__(model, "content_sha256", digest)
+    object.__setattr__(model, id_field, f"{{prefix}}:{{digest}}")
+"""
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.FunctionDef)
+    assert _stamps_a_content_address(node), f"the {form} call form evades the guard"
+
+
+def test_a_validator_that_only_checks_a_hash_is_not_called_a_copy() -> None:
+    """`catalog.sort_and_validate` compares a stored digest and sorts a tuple through
+    `object.__setattr__`. It stamps nothing, and a guard that swept it up would have to be
+    narrowed by name, which is how allowlists start."""
+    source = """
+def only_checks(self):
+    parameters = tuple(sorted(self.parameters, key=lambda item: item.name))
+    if canonical_sha256(self.decoded) != self.expected_sha256:
+        raise ValueError("parameters do not match")
+    object.__setattr__(self, "parameters", parameters)
+"""
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.FunctionDef)
+    assert not _stamps_a_content_address(node)
