@@ -162,6 +162,49 @@ grant select on mart.current_pointer_head to app_ops_reader;
 grant select on mart.data_engine_identity to app_ops_reader;
 -- #756: the database environment identity, for admin / status readers.
 grant select on mart.environment_identity to app_ops_reader;
+-- #998: a SECURITY DEFINER routine runs with its OWNER's privileges, and PostgreSQL grants
+-- EXECUTE on every new routine to PUBLIC. #996 made staging.entity_survivor and
+-- staging.entity_alias_valid_to definers so that mart.entity_identity's own plumbing could
+-- reach the staging tables the view owner already reads. PUBLIC EXECUTE plus the USAGE on
+-- schema staging granted above (app_runtime, app_ops_reader) let either role call them
+-- directly and receive values derived from relations it holds no SELECT on -- the boundary
+-- that change was written to preserve.
+--
+-- Deny by default over the PROPERTY rather than over these two names, so the next definer
+-- helper arrives locked instead of open: revoke PUBLIC from every SECURITY DEFINER routine
+-- in staging, then grant EXECUTE by name to the roles that select the view needing them.
+-- db/tests/role_boundary_contract.sql fails when a definer routine here is PUBLIC-callable.
+do $$
+declare
+    routine text;
+begin
+    for routine in
+        select p.oid::regprocedure::text
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'staging' and p.prosecdef
+    loop
+        execute format('revoke all on function %s from public', routine);
+    end loop;
+end $$;
+
+-- The two mart.entity_identity needs, named so a new definer routine is not granted by
+-- accident. Guarded on the catalog: a partial chain has not created them yet.
+do $$
+declare
+    routine text;
+begin
+    foreach routine in array array[
+        'staging.entity_survivor(uuid, timestamptz)',
+        'staging.entity_alias_valid_to(bigint, timestamptz)'
+    ] loop
+        if to_regprocedure(routine) is not null then
+            execute format('grant execute on function %s to mart_readonly, app_ops_reader',
+                           to_regprocedure(routine)::text);
+        end if;
+    end loop;
+end $$;
+
 -- #877 PR-4: mart.entity_identity + entity_display_resolution for consumer entity display and resolution
 grant select on mart.entity_identity to mart_readonly;
 grant select on mart.entity_identity to app_ops_reader;
