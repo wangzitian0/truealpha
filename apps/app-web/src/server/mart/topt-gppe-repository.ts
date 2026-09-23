@@ -135,11 +135,9 @@ export class MartToptGppeRepository {
       try {
         const runId = requireString(head.rows[0].run_id, "run_id");
 
-        const [cellRows, qualityRows, statusRows] = await Promise.all([
-          client.query(CELLS_SQL, [runId, limit]),
-          client.query(QUALITY_SQL, [runId]),
-          client.query(REQUESTED_COUNT_SQL, [runId]),
-        ]);
+        const cellRows = await client.query(CELLS_SQL, [runId, limit]);
+        const qualityRows = await client.query(QUALITY_SQL, [runId]);
+        const statusRows = await client.query(REQUESTED_COUNT_SQL, [runId]);
 
         if (statusRows.rows.length === 0) {
           return { reason: "no capture status for the governed run" };

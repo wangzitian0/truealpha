@@ -86,6 +86,29 @@ async function assertNoVisibleRawIds(page, path, problems) {
 }
 
 /**
+ * (a2) #987 Anti-puppet check against GREEN-WHILE-EMPTY: Research data tables
+ * must display non-empty tickers/labels rather than blank cells.
+ */
+async function assertNoBlankResearchTableCells(page, path, problems) {
+  if (!["/research/rankings", "/research/strategy", "/research/compare", "/research/coverage"].includes(path)) return;
+  const emptyFirstCells = await page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll("tbody tr"));
+    if (rows.length === 0) return 0;
+    let emptyCount = 0;
+    for (const row of rows) {
+      const firstCell = row.querySelector("td, th");
+      if (firstCell && firstCell.innerText.trim() === "") {
+        emptyCount += 1;
+      }
+    }
+    return emptyCount;
+  });
+  if (emptyFirstCells > 0) {
+    problems.push(`found ${emptyFirstCells} table row(s) with blank first cell (empty ticker/entity display)`);
+  }
+}
+
+/**
  * (b) The claim ceiling renders wherever strategy output does. Unconditional on
  * both pages by construction; `tests/claim-ceiling-placement.test.ts` fails at
  * the source file if an early return is reintroduced above either banner.
@@ -247,6 +270,7 @@ async function checkRoute(page, path, role) {
   if (finalPath === "/login" && path !== "/login") problems.push("bounced to /login while authenticated");
 
   await assertNoVisibleRawIds(page, path, problems);
+  await assertNoBlankResearchTableCells(page, path, problems);
   await assertClaimCeiling(page, path, problems);
   await assertOperateChromeMembership(page, path, problems, role);
   await assertWorldSwitch(page, path, problems, role);
