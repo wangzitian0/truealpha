@@ -165,9 +165,7 @@ def test_only_one_module_defines_content_addressing() -> None:
     under any name, in any of the four source roots -- fails here."""
     definitions = _wrapper_definitions()
     unexpected = [
-        name
-        for name in definitions
-        if not name.endswith(f".{_THE_DEFINITION}") and name not in _NOT_YET_MERGED
+        name for name in definitions if not name.endswith(f".{_THE_DEFINITION}") and name not in _NOT_YET_MERGED
     ]
     assert not unexpected, (
         "content addressing must be defined once, in truealpha_contracts.common.identify; "
