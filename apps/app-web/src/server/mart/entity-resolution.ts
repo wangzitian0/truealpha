@@ -33,6 +33,6 @@ export async function loadEntityDisplayMap(): Promise<Map<string, EntityDisplay>
  * the raw id when the issuer is not in the resolution view at all. */
 export function entityLabel(issuerId: string, map: Map<string, EntityDisplay>): string {
   const entry = map.get(issuerId);
-  if (!entry) return issuerId;
+  if (!entry || !entry.ticker || entry.ticker.trim() === "") return issuerId;
   return entry.displayName ? `${entry.ticker} · ${entry.displayName}` : entry.ticker;
 }

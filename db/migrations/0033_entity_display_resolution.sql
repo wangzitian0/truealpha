@@ -30,14 +30,14 @@ left join staging.kg_entities e on e.id = m.issuer_id
 order by m.issuer_id, m.created_at desc
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    -- to_regclass, not ::regclass: a cast of a missing name fails when the expression is planned.
-    if pg_get_viewdef(to_regclass('mart.entity_display_resolution'))
-       is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
+    -- Superseded: 20260923T1600_datahub_performance_indices_and_entity_display_resolution.sql redefines mart.entity_display_resolution
+    -- later in the chain and owns its definition. Replacing it here would put this
+    -- older definition back (ACCESS EXCLUSIVE on the view) on every replay, only for
+    -- that file to replace it again, so this definition creates the view only on a
+    -- database that has none.
+    if to_regclass('mart.entity_display_resolution') is null then
         execute 'create or replace view mart.entity_display_resolution as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
 
