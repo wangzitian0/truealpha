@@ -23,7 +23,7 @@ jobs:
     # workflow, not for the job that needs it: ci-required's web job now grants
     # `actions: write` so `browser` can save the chromium cache, and without
     # this block that token would also be held by a job whose main act is
-    # `bun install` from a lockfile (review). ci-python/qlib/runtime never hit
+    # `bun install` from a lockfile (review). ci-python/ci-runtime never hit
     # this because they are single-job.
     permissions:
       contents: read

@@ -15,7 +15,7 @@ Design invariants:
   zero structural change to hold them.
 - Tier thresholds and eligibility parameters ship as provisional versioned
   research parameters, not validated truths.
-- Engine identity (Qlib distribution, adapter, operator registry) binds
+- Engine identity (expression-engine distribution, version, adapter) binds
   through :class:`StrategyEngineBinding` and never contributes to the
   semantic content hash of the definition.
 - Exclusions carry machine-readable reason codes bound to the configured
@@ -37,7 +37,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import _require_aware
-from truealpha_contracts.qlib_expression import QlibExpressionExecutionBinding
 from truealpha_contracts.research import (
     StrategyExecutionPolicy,
     StrategyTotalReturnPolicy,
@@ -442,8 +441,8 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
     """Complete versioned semantics of the v0 strategy; engine identity lives elsewhere.
 
     The content hash covers every semantic parameter and no engine coordinate,
-    so re-running the same definition on a different Qlib build provably reuses
-    the same semantics.
+    so re-running the same definition on a different engine build provably
+    reuses the same semantics.
     """
 
     strategy_definition_id: str = Field(default="", pattern=r"^(?:|strategy-definition:[0-9a-f]{64})$")
@@ -500,21 +499,54 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
         )
 
 
+class ExpressionEngineExecutionBinding(_StrictFrozenModel):
+    """One exact factor-expression engine runtime, by content identity.
+
+    Moved here from the retired expression module when the engine migrated to
+    the Polars AST (#969). The shape is unchanged — distribution, version,
+    release commit, runtime artifact and lock digests, adapter id and adapter
+    implementation digest — because none of it was ever engine-specific except
+    the distribution literal itself.
+    """
+
+    execution_binding_id: str = Field(default="", pattern=r"^(?:|expression-engine-execution-binding:[0-9a-f]{64})$")
+    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    distribution: Literal["polars"] = "polars"
+    version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+    release_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    runtime_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    runtime_lock_sha256: str = Field(pattern=_SHA256_PATTERN)
+    adapter_id: str = Field(pattern=r"^[a-z][a-z0-9._-]{0,127}$")
+    adapter_implementation_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def identify(self) -> Self:
+        _identify(self, id_field="execution_binding_id", prefix="expression-engine-execution-binding")
+        return self
+
+
 class StrategyEngineBinding(_StrictFrozenModel):
-    """Binds one exact strategy definition to one exact Qlib engine identity."""
+    """Binds one exact strategy definition to one exact engine identity.
+
+    The operator set is no longer a separately versioned artifact: the Polars
+    AST's node types ship inside ``truealpha_contracts`` and its compiler inside
+    ``factors.expressions``, so ``adapter_id`` plus
+    ``adapter_implementation_sha256`` already pin which operator semantics ran.
+    The previous engine's ``operator_registry_id``/``operator_registry_sha256``
+    pair pointed at a separate registry artifact that #969 deletes; carrying its
+    digest forward under a new name would report a hash of something that no
+    longer exists (#969, see docs/architecture-decisions/).
+    """
 
     engine_binding_id: str = Field(default="", pattern=r"^(?:|strategy-engine-binding:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     strategy_definition_id: str = Field(pattern=r"^strategy-definition:[0-9a-f]{64}$")
     strategy_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
-    execution_binding: QlibExpressionExecutionBinding
-    operator_registry_id: str = Field(pattern=r"^qlib-operator-registry:[0-9a-f]{64}$")
-    operator_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    execution_binding: ExpressionEngineExecutionBinding
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
         _validate_ref_hash(self.strategy_definition_id, self.strategy_definition_sha256, "strategy definition")
-        _validate_ref_hash(self.operator_registry_id, self.operator_registry_sha256, "operator registry")
         _identify(self, id_field="engine_binding_id", prefix="strategy-engine-binding")
         return self
 
@@ -855,6 +887,7 @@ __all__ = [
     "EvaluationPartition",
     "EvaluationSplitRule",
     "ExclusionReason",
+    "ExpressionEngineExecutionBinding",
     "FactorDimension",
     "FactorUnitSpec",
     "GoldenDecision",

@@ -65,7 +65,6 @@ jobs:
     outputs:
       db: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.db }}
       python: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.python }}
-      qlib: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.qlib }}
       runtime: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.runtime }}
       web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.web }}
       image_app_web: ${{ github.event_name == 'merge_group' && 'true' || steps.filter.outputs.image_app_web }}
@@ -134,20 +133,6 @@ jobs:
               - 'apps/data-engine/Dockerfile'
               - 'docker-compose.yml'
               - '.github/workflows/ci-python.yml'
-            qlib:
-              - 'libs/factors/qlib-runtime/**'
-              - 'libs/factors/src/factors/batches/qlib_expression_contract_tiny/**'
-              - 'libs/factors/tests/batches/qlib_expression_contract_tiny/**'
-              - 'libs/factors/src/factors/base/gross_profit_per_employee.py'
-              - 'libs/factors/src/factors/base/peg.py'
-              - 'libs/factors/src/factors/base/price_to_sales.py'
-              - 'libs/factors/src/factors/qlib_engine.py'
-              - 'libs/contracts/src/truealpha_contracts/qlib_expression.py'
-              - 'libs/factors/tests/test_gross_profit_per_employee.py'
-              - 'libs/factors/tests/test_peg.py'
-              - 'libs/factors/tests/test_price_to_sales.py'
-              - '.github/workflows/ci-qlib.yml'
-              - '.github/workflows/ci-required.yml'
             runtime:
               - 'docker-compose.yml'
               - '.env.example'
@@ -247,25 +232,7 @@ jobs:
       # `github.event_name` inside the called workflow, so the caller's real event
       # is what decides it regardless of how that context behaves once called.
       dagster_liveness_required: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dagster_liveness == 'true' }}
-    # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
-    # and a called workflow cannot exceed the caller's grant. Without `actions:
-    # write` the cache RESTORES and cannot SAVE: harmless while the key keeps
-    # hitting, and a hard job failure the first time the key changes. #645
-    # changed uv.lock, and `Post Run astral-sh/setup-uv` began failing on every
-    # run from that merge onward — every real step in the job green, the whole
-    # job red. Latent since caching was enabled; my lockfile change is what lit
-    # it (#616-adjacent, same shape: the step that reports the outcome broke
-    # while the work it reports on was fine).
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: write
-
-  qlib:
-    if: github.ref_type != 'tag' && needs.changes.outputs.qlib == 'true'
-    needs: changes
-    uses: ./.github/workflows/ci-qlib.yml
-    # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
+    # ci-python/ci-runtime both use `setup-uv` with `enable-cache: true`,
     # and a called workflow cannot exceed the caller's grant. Without `actions:
     # write` the cache RESTORES and cannot SAVE: harmless while the key keeps
     # hitting, and a hard job failure the first time the key changes. #645
@@ -283,7 +250,7 @@ jobs:
     if: github.ref_type != 'tag' && needs.changes.outputs.runtime == 'true'
     needs: changes
     uses: ./.github/workflows/ci-runtime.yml
-    # ci-python/ci-qlib/ci-runtime all use `setup-uv` with `enable-cache: true`,
+    # ci-python/ci-runtime both use `setup-uv` with `enable-cache: true`,
     # and a called workflow cannot exceed the caller's grant. Without `actions:
     # write` the cache RESTORES and cannot SAVE: harmless while the key keeps
     # hitting, and a hard job failure the first time the key changes. #645
@@ -356,7 +323,6 @@ jobs:
       (needs.security.result == 'success' || needs.security.result == 'skipped') &&
       (needs.db.result == 'success' || needs.db.result == 'skipped') &&
       (needs.python.result == 'success' || needs.python.result == 'skipped') &&
-      (needs.qlib.result == 'success' || needs.qlib.result == 'skipped') &&
       (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') &&
       (needs.web.result == 'success' || needs.web.result == 'skipped') &&
       (needs.tag_verified.result == 'success' || needs.tag_verified.result == 'skipped') &&
@@ -365,7 +331,7 @@ jobs:
     # job's own trigger clause is true, images_build's is too (its clause is a superset),
     # so "skipped" here can only mean the build never happened -- and nothing publishes
     # what was not built at this SHA.
-    needs: [changes, security, db, python, qlib, runtime, web, tag_verified, images_build]
+    needs: [changes, security, db, python, runtime, web, tag_verified, images_build]
     permissions:
       contents: read
       packages: write
@@ -393,7 +359,7 @@ jobs:
   required:
     name: ci-required
     if: always()
-    needs: [changes, security, db, python, qlib, runtime, web, images_build, images_release, tag_verified]
+    needs: [changes, security, db, python, runtime, web, images_build, images_release, tag_verified]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

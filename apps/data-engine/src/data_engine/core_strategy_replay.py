@@ -50,7 +50,7 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _FIXTURE_PACKAGE = "truealpha_contracts.data"
 _FIXTURE_NAME = "large_model_value_v0_strategy.v1.json"
-CORPUS_SHA256 = "8cdb081d887ff7754ac52a1eb02679b94a1c1c71b1eb32c606c06f5d6fe96083"
+CORPUS_SHA256 = "16f5e0b8839ecba9e6ed92690c6907a96a629b7f413d6c5f4ba29d205b8299e6"
 STRATEGY_ID = "large_model_value_v0"
 
 

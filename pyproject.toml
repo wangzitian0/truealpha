@@ -9,7 +9,6 @@ members = [
     "libs/factors",
     "libs/runtime",
 ]
-exclude = ["libs/factors/qlib-runtime"]
 
 [dependency-groups]
 dev = [

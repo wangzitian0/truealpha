@@ -1,8 +1,10 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import polars as pl
 import pytest
 from factors.base.price_to_sales import PRICE_TO_SALES_EXPRESSION_DEFINITION, price_to_sales
+from factors.expressions.compiler import compile_expression
 from factors.types import Fact, UnitFamily
 
 _AS_OF = datetime(2026, 7, 1, tzinfo=UTC)
@@ -96,41 +98,35 @@ def test_nonpositive_market_value_input_is_excluded(metric: str) -> None:
     assert result.flags == ["nonpositive_market_value"]
 
 
-def test_qlib_expression_reproduces_the_decimal_result() -> None:
-    """Matrix-compatible cross-check: the pinned Qlib runtime must reproduce
-    the same value as the native Decimal computation above (#21 criterion 3
-    — independent oracle and Qlib adapter agree)."""
+def test_polars_expression_reproduces_the_decimal_result() -> None:
+    """Matrix-compatible cross-check: the compiled Polars execution of
+    PRICE_TO_SALES_EXPRESSION_DEFINITION must reproduce the same value as the native
+    Decimal computation above (#21 criterion 3 — independent oracle and vectorised
+    engine agree).
 
-    qlib = pytest.importorskip("qlib")
-    del qlib
-    from datetime import date
+    Not gated on an optional import: the previous engine's version skipped under
+    ci-python whenever its runtime was absent, leaving the proof unarmed (#956, #969).
+    """
+    facts = [
+        _fact("price", "50"),
+        _fact("shares_outstanding", "1000000"),
+        _fact("revenue", "20000000"),
+    ]
+    native = price_to_sales(facts, entity_id="e1", as_of=_AS_OF)
+    assert native.value is not None, native.flags
 
-    from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY, evaluate_expression
-    from truealpha_contracts.qlib_expression import QlibExpressionExecutionBinding
-
-    session = date(2026, 6, 30)
-    panel = {
-        "price": {"e1": (50.0,)},
-        "shares_outstanding": {"e1": (1_000_000.0,)},
-        "revenue": {"e1": (20_000_000.0,)},
-    }
-    binding = QlibExpressionExecutionBinding(
-        version="0.9.7",
-        release_commit="a" * 40,
-        runtime_artifact_sha256="b" * 64,
-        runtime_lock_sha256="c" * 64,
-        adapter_id="factors.qlib_engine.test",
-        adapter_implementation_sha256="d" * 64,
+    panel = pl.DataFrame(
+        {
+            "symbol": ["e1"],
+            "date": [date(2026, 6, 30)],
+            "price": [50.0],
+            "shares_outstanding": [1_000_000.0],
+            "revenue": [20_000_000.0],
+        }
     )
-
-    _, outputs, _ = evaluate_expression(
-        PRICE_TO_SALES_EXPRESSION_DEFINITION,
-        BUILTIN_OPERATOR_REGISTRY,
-        panel=panel,
-        instruments=("e1",),
-        sessions=(session,),
-        execution_binding=binding,
-    )
+    compiled = panel.with_columns(factor_value=compile_expression(PRICE_TO_SALES_EXPRESSION_DEFINITION))
+    vectorised = compiled["factor_value"].to_list()[0]
 
     # market_cap = 50 * 1,000,000 = 50,000,000; P/S = 50,000,000 / 20,000,000 = 2.5
-    assert outputs[("e1", session)] == pytest.approx(2.5)
+    assert native.value == Decimal("2.5")
+    assert vectorised == pytest.approx(float(native.value), rel=1e-12)

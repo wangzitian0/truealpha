@@ -26,57 +26,33 @@ which is real future work once factor inputs carry per-component structure
 `gross_profit_per_employee`'s deliberate choice: neither factor is fed by an
 accepted capture/snapshot pipeline yet in this preview round.
 
-The formula is also expressed as a matrix-compatible Qlib expression
+The formula is also expressed as a matrix-compatible AST expression
 (`PRICE_TO_SALES_EXPRESSION_DEFINITION`), the same shape as
-`gross_profit_per_employee`'s: pure Mul/Div arithmetic over the already-
-approved `factors.qlib_engine.BUILTIN_OPERATOR_REGISTRY`, no new operators
-needed — closes #21 criterion 3's remaining gap for this factor. Unlike
-`three_tier_valuation` (module 7), whose band lookup is genuinely branching
-logic and stays native Decimal Python by `factors.qlib_engine`'s own
-documented design, this factor was always pure arithmetic; it simply hadn't
-been wired to the registry yet.
+`gross_profit_per_employee`'s: pure Mul/Div arithmetic over
+`truealpha_contracts.ast`, no new node types needed — closes #21 criterion 3's
+remaining gap for this factor. Unlike `three_tier_valuation` (module 7), whose
+band lookup is genuinely branching logic and stays native Decimal Python by
+`factors.expressions.compiler`'s own documented design, this factor was always
+pure arithmetic.
 """
 
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from truealpha_contracts.qlib_expression import (
-    QlibCallNode,
-    QlibFactorExpressionDefinition,
-    QlibFeatureBinding,
-    QlibFeatureNode,
-)
+from truealpha_contracts.ast import Div, Feature, Mul
 
-from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY
 from factors.registry import factor
 from factors.types import Fact, FactorResult, UnitFamily
 
 _REQUIRED_METRICS = ("price", "shares_outstanding", "revenue")
 
-PRICE_TO_SALES_EXPRESSION_DEFINITION = QlibFactorExpressionDefinition(
-    factor_id="factor.price_to_sales.simplified",
-    factor_version="0.1.0",
-    operator_registry_id=BUILTIN_OPERATOR_REGISTRY.operator_registry_id,
-    feature_bindings=(
-        QlibFeatureBinding(feature_binding_id="feature.price", qlib_field_name="price"),
-        QlibFeatureBinding(feature_binding_id="feature.shares_outstanding", qlib_field_name="shares_outstanding"),
-        QlibFeatureBinding(feature_binding_id="feature.revenue", qlib_field_name="revenue"),
-    ),
-    root=QlibCallNode(
-        operator_id="truealpha.qlib.div.v1",
-        arguments=(
-            QlibCallNode(
-                operator_id="truealpha.qlib.mul.v1",
-                arguments=(
-                    QlibFeatureNode(feature_binding_id="feature.price"),
-                    QlibFeatureNode(feature_binding_id="feature.shares_outstanding"),
-                ),
-            ),
-            QlibFeatureNode(feature_binding_id="feature.revenue"),
-        ),
-    ),
-    maximum_lookback_sessions=0,
+#: `(price * shares_outstanding) / revenue` as a `truealpha_contracts.ast`
+#: expression. Feature names are the panel column names the compiler resolves
+#: with `pl.col(...)`, matching the metrics the Decimal path consumes.
+PRICE_TO_SALES_EXPRESSION_DEFINITION = Div(
+    left=Mul(left=Feature(name="price"), right=Feature(name="shares_outstanding")),
+    right=Feature(name="revenue"),
 )
 
 _MISSING_REASON = {

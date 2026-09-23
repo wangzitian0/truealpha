@@ -1,11 +1,13 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import polars as pl
 import pytest
 from factors.base.gross_profit_per_employee import (
     GPPE_EXPRESSION_DEFINITION,
     gross_profit_per_employee,
 )
+from factors.expressions.compiler import compile_expression
 from factors.types import Fact, UnitFamily
 
 _AS_OF = datetime(2026, 6, 30, tzinfo=UTC)
@@ -135,42 +137,39 @@ def test_data_availability_never_overclaims_verified():
     assert result.data_availability == "unverified"
 
 
-def test_qlib_expression_reproduces_the_decimal_result():
-    """Matrix-compatible cross-check: the pinned Qlib runtime must reproduce
-    the same value as the native Decimal computation above (#26 acceptance
-    style — independent oracle and Qlib adapter agree)."""
+def test_polars_expression_reproduces_the_decimal_result():
+    """Matrix-compatible cross-check: the compiled Polars execution of
+    GPPE_EXPRESSION_DEFINITION must reproduce the same value as the native Decimal
+    computation above (#26 acceptance style — independent oracle and vectorised
+    engine agree).
 
-    qlib = pytest.importorskip("qlib")
-    del qlib
-    from datetime import date
-
-    from factors.qlib_engine import BUILTIN_OPERATOR_REGISTRY, evaluate_expression
-    from truealpha_contracts.qlib_expression import QlibExpressionExecutionBinding
-
-    session = date(2026, 6, 30)
-    panel = {
-        "gross_profit": {"issuer.acme": (1_000_000.0,)},
-        "total_assets": {"issuer.acme": (4_000_000.0,)},
-        "risk_free_rate": {"issuer.acme": (0.05,)},
-        "employees_total": {"issuer.acme": (100.0,)},
-    }
-    binding = QlibExpressionExecutionBinding(
-        version="0.9.7",
-        release_commit="a" * 40,
-        runtime_artifact_sha256="b" * 64,
-        runtime_lock_sha256="c" * 64,
-        adapter_id="factors.qlib_engine.test",
-        adapter_implementation_sha256="d" * 64,
+    Not gated on an optional import. The previous engine's version of this test
+    skipped whenever its runtime was absent — 11 of the last 12 ci-python runs —
+    so the reproducibility proof was effectively unarmed (#956, #969). `polars`
+    is a first-class dependency, so this executes in ci-python every run.
+    """
+    panel = pl.DataFrame(
+        {
+            "symbol": ["issuer.acme"],
+            "date": [date(2026, 6, 30)],
+            "gross_profit": [1_000_000.0],
+            "total_assets": [4_000_000.0],
+            "risk_free_rate": [0.05],
+            "employees_total": [100.0],
+        }
     )
 
-    _, outputs, _ = evaluate_expression(
-        GPPE_EXPRESSION_DEFINITION,
-        BUILTIN_OPERATOR_REGISTRY,
-        panel=panel,
-        instruments=("issuer.acme",),
-        sessions=(session,),
-        execution_binding=binding,
-    )
+    facts = [
+        _fact("gross_profit", "1000000"),
+        _fact("total_assets", "4000000"),
+        _fact("employees_total", "100"),
+    ]
+    native = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
+    assert native.value is not None, native.flags
+
+    compiled = panel.with_columns(factor_value=compile_expression(GPPE_EXPRESSION_DEFINITION))
+    vectorised = compiled["factor_value"].to_list()[0]
 
     # real_profit = 1_000_000 - 4_000_000 * 0.05 = 800_000; / 100 headcount = 8_000
-    assert outputs[("issuer.acme", session)] == pytest.approx(8000.0)
+    assert native.value == Decimal("8000")
+    assert vectorised == pytest.approx(float(native.value), rel=1e-12)

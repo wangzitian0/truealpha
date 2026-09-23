@@ -151,31 +151,27 @@
     "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "execution_binding": {
-      "distribution": "pyqlib",
-      "version": "0.9.6",
+      "distribution": "polars",
+      "version": "1.44.2",
       "release_commit": "0123456789abcdef0123456789abcdef01234567",
       "runtime_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "runtime_lock_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "adapter_id": "truealpha.qlib-adapter",
+      "adapter_id": "truealpha.polars-adapter",
       "adapter_implementation_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    },
-    "operator_registry_id": "qlib-operator-registry:b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122",
-    "operator_registry_sha256": "b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122"
+    }
   },
   "engine_binding_alternate": {
     "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "execution_binding": {
-      "distribution": "pyqlib",
-      "version": "0.9.7",
+      "distribution": "polars",
+      "version": "1.43.0",
       "release_commit": "fedcba9876543210fedcba9876543210fedcba98",
       "runtime_artifact_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
       "runtime_lock_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
-      "adapter_id": "truealpha.qlib-adapter",
+      "adapter_id": "truealpha.polars-adapter",
       "adapter_implementation_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    },
-    "operator_registry_id": "qlib-operator-registry:b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122",
-    "operator_registry_sha256": "b6fb30e8e0bae9427191ca14a4015c9a7721384b9ea3251e20ca5429a9392122"
+    }
   },
   "golden_decision_set": {
     "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
@@ -919,8 +915,8 @@
     "strategy_definition_id": "strategy-definition:e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "strategy_definition_sha256": "e5c56da455a2845d99e67265d96b30e9b479384ef11a8a4d242494b1816fe79d",
     "golden_decision_set_id": "golden-decision-set:3092840a0183abe687bd552201f75bc5f2e57f4786026287aab77028fde4ac53",
-    "engine_binding_id": "strategy-engine-binding:4f1949fffc0d42f3f99f265a2321f2b32ecc08e271f9f2c4a6ffb8c286c9d039",
-    "engine_binding_alternate_id": "strategy-engine-binding:cdde299e803e45b93d833ff80a149ceefd03336ec58889bd285dec5cea8c5120"
+    "engine_binding_id": "strategy-engine-binding:32fa4195a8bf8923512463ac18aade672079be5efb61747d252f0116b26140be",
+    "engine_binding_alternate_id": "strategy-engine-binding:7e213d85cdc347939fbd12c01f0010bf225677eef3e19e1af5a5207c68974ef5"
   },
   "negative_cases": [
     {
@@ -1019,7 +1015,7 @@
       "target": "strategy_definition",
       "operation": "replace",
       "path": "engine_distribution",
-      "value": "pyqlib"
+      "value": "polars"
     },
     {
       "case_id": "wrong-denominator-reason",
