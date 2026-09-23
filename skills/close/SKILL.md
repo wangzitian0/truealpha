@@ -89,14 +89,35 @@ python -m pytest <tests_dir> -q   # 或 make test, npm test 等
 
 ```bash
 # 文件改动时间 vs 进程已运行时长：进程若比文件还老，跑的就不是你刚改的代码。
-# 不用 stat -f / date -j——那是 macOS 专有写法，在 GNU/Linux（CI 与服务器上最常见）
-# 会直接失败，而这条探针的全部价值就在于它到处都能跑。
+#
+# 用 `ps -o etime=`，不用 `stat -f` / `date -j`（macOS 专有，Linux 上直接失败），
+# 也不用 `ps -o etimes=`（Linux 专有：macOS 的 ps 不认这个关键字，会把**全部合法
+# 关键字列表**打到 stdout，于是拿到一个非空字符串，`int()` 抛异常或被误读成时长）。
+# `etime` 是 POSIX 关键字，格式 `[[DD-]HH:]MM:SS`，两边都在。
+#
+# 测不出来必须说测不出来：解析不出数字就报「无法判定」，绝不退化成「不陈旧」。
+# 用一次没做成的测量换一个「通过」的结论，就是 GREEN-WHILE-EMPTY。
 FILE=<改动的文件>; PID=<进程 pid>
-python3 -c "import os,subprocess,sys,time; f,p=sys.argv[1],sys.argv[2]; \
-age=time.time()-os.stat(f).st_mtime; \
-el=subprocess.run(['ps','-o','etimes=','-p',p],capture_output=True,text=True).stdout.strip(); \
-print(f'文件改动于 {age:.0f}s 前，进程已运行 {el}s'); \
-print('进程比改动更老 → 跑的是旧代码' if el and int(el)>age else '进程晚于改动 → 可能是新代码')" "$FILE" "$PID"
+python3 - "$FILE" "$PID" <<'PROBE'
+import os, re, subprocess, sys, time
+
+path, pid = sys.argv[1], sys.argv[2]
+age = time.time() - os.stat(path).st_mtime
+r = subprocess.run(["ps", "-o", "etime=", "-p", pid],
+                   capture_output=True, text=True)
+raw = r.stdout.strip()
+m = re.fullmatch(r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", raw)
+print(f"文件改动于 {age:.0f}s 前，ps 报告 etime={raw!r}")
+if r.returncode != 0 or not m:
+    print("无法判定：ps 没有给出可解析的 etime"
+          "（进程已退出 / 无权限 / 该平台格式不同）")
+    sys.exit(2)
+d, h, mi, sec = (int(x or 0) for x in m.groups())
+elapsed = ((d * 24 + h) * 60 + mi) * 60 + sec
+print(f"进程已运行 {elapsed}s")
+print("进程比改动更老 → 跑的是旧代码" if elapsed > age
+      else "进程晚于改动 → 可能是新代码")
+PROBE
 ```
 
 判定标准：
