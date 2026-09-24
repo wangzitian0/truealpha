@@ -51,10 +51,9 @@ services:
     networks: [runtime]
 
   minio-init:
-    # Also dead (#1041, confirmed 2026-09-24) but not yet mirrored: unlike `minio` above,
-    # this isn't on ci-python.yml's path, so local `docker compose up` still needs a
-    # working alias here. Follow-up tracked on #1041.
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    # MinIO discontinued free distribution entirely (#1041); see the `minio` service
+    # above. This repo's own GHCR mirror of mc, built from its still-public source.
+    image: ghcr.io/wangzitian0/mc-mirror@sha256:94c4c001e47985ca3e609e50e0239b33c3f48ca95e0d04122f7935fb8166e4d2
     container_name: truealpha-minio-init${ENV_SUFFIX:-}
     logging: *default-logging
     depends_on:

@@ -19,10 +19,6 @@ on:
         description: 'MinIO Client (mc) release tag to build from source (e.g. RELEASE.2025-08-13T08-35-41Z)'
         required: false
         type: string
-  # Bootstrap only: workflow_dispatch requires the workflow file to already exist on the
-  # default branch. Builds mc only (minio is already mirrored); removed once verified.
-  push:
-    branches: [issue1041-minio-mirror]
 
 permissions:
   contents: read
@@ -82,11 +78,11 @@ jobs:
           exit 1
 
   build-and-push-mc:
-    if: inputs.mc_release_tag != '' || github.event_name == 'push'
+    if: inputs.mc_release_tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      MC_RELEASE_TAG: ${{ inputs.mc_release_tag || 'RELEASE.2025-08-13T08-35-41Z' }}
+      MC_RELEASE_TAG: ${{ inputs.mc_release_tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
