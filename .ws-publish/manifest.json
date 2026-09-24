@@ -3,7 +3,8 @@
   "dirty_inputs": [],
   "inputs": {
     "repo": "1ddebdfa6343f48fb2545aa09fb98606924ec10025c93b75f8c7e2e16306d3cc",
-    "root": "f73b8ab7dfd7a7901c5264c7694f32562f780d7fb4a5efc19f51dcee1f071259"
+    "root": "f73b8ab7dfd7a7901c5264c7694f32562f780d7fb4a5efc19f51dcee1f071259",
+    "skills": "2762fcbc0ec5ea4c9c086d272e1baf7257350cbb0dbab2f8ab2c5b7e9336a0bf"
   },
   "language": "en",
   "outputs": {
@@ -16,7 +17,24 @@
     "runtime"
   ],
   "schema": 2,
-  "source_revision": "3bd08b82cdbc44268e4e3b7234836fd0cbe5275f",
+  "skills": {
+    "files": {
+      "skills/deploy-evidence/SKILL.md": "822c1cb774dc65a122e2d858387e23e87147062e080d2bebee990a1162a41b7f",
+      "skills/factor-acceptance/SKILL.md": "a45c2b5d6d5138f433052f868996d117d569b58aa23c32409f6e7676c49c62b8"
+    },
+    "link_dirs": [
+      ".claude/skills",
+      ".agents/skills"
+    ],
+    "links": {
+      ".agents/skills/deploy-evidence": "../../skills/deploy-evidence",
+      ".agents/skills/factor-acceptance": "../../skills/factor-acceptance",
+      ".claude/skills/deploy-evidence": "../../skills/deploy-evidence",
+      ".claude/skills/factor-acceptance": "../../skills/factor-acceptance"
+    },
+    "root": "skills"
+  },
+  "source_revision": "e9d3fe82933d7ff1c2ea37dc5f45eb1a12fcc414",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",
