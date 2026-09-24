@@ -1,0 +1,25 @@
+{
+  "adapter": "rules-v2",
+  "dirty_inputs": [],
+  "inputs": {
+    "repo": "1ddebdfa6343f48fb2545aa09fb98606924ec10025c93b75f8c7e2e16306d3cc",
+    "root": "f73b8ab7dfd7a7901c5264c7694f32562f780d7fb4a5efc19f51dcee1f071259"
+  },
+  "language": "en",
+  "outputs": {
+    "AGENTS.md": "cdde948412acab2fc4391d4666d3eccb5fef281033ccae63062c6fe7c1cadfbd",
+    "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
+  },
+  "profiles": [
+    "code",
+    "delivery",
+    "runtime"
+  ],
+  "schema": 2,
+  "source_revision": "3bd08b82cdbc44268e4e3b7234836fd0cbe5275f",
+  "target": {
+    "remote": "github.com/wangzitian0/truealpha",
+    "repo": "truealpha",
+    "workspace": "zitian"
+  }
+}
