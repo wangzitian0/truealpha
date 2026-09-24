@@ -357,17 +357,29 @@ if [ -z "$PRS" ]; then
   [ -n "$BASE_TAG" ] \
     || fail "no prior vX.Y.Z release tag is reachable from main to derive --prs from — pass --prs explicitly for a first release"
   echo "== deriving --prs: every merge on main since $BASE_TAG =="
-  SUBJECTS=$(git log "${BASE_TAG}..${LOCAL_MAIN}" --format=%s --reverse)
-  [ -n "$SUBJECTS" ] || fail "no commits between $BASE_TAG and main HEAD ${LOCAL_MAIN:0:8} — nothing to release"
+  COMMITS=$(git log "${BASE_TAG}..${LOCAL_MAIN}" --format='%H %s' --reverse)
+  [ -n "$COMMITS" ] || fail "no commits between $BASE_TAG and main HEAD ${LOCAL_MAIN:0:8} — nothing to release"
   DERIVED_PRS=()
-  while IFS= read -r SUBJECT; do
-    if [[ "$SUBJECT" =~ \(#([0-9]+)\)$ ]]; then
-      DERIVED_PRS+=("${BASH_REMATCH[1]}")
-      note "#${BASH_REMATCH[1]}: $SUBJECT"
-    else
-      fail "commit '$SUBJECT' since $BASE_TAG has no trailing (#N) — not a squash-merge this script can attribute to a PR; pass --prs explicitly to describe this release"
+  while IFS= read -r LINE; do
+    SHA="${LINE%% *}"
+    SUBJECT="${LINE#* }"
+    # #1022: a commit subject's trailing (#N) is not reliable — it is whatever
+    # text landed in the squash-merge box, and that can be the PR title's own
+    # issue reference (e.g. a title ending "(#1001)") instead of GitHub's
+    # auto-appended PR number when the merge box was hand-edited. Resolve the
+    # PR from the commit SHA itself via the API, the same authoritative source
+    # used to catch this: a subject is text a human typed, an SHA->PR lookup
+    # is not.
+    PR_JSON=$(gh api "repos/$REPO/commits/$SHA/pulls" 2>/dev/null) \
+      || fail "could not resolve the PR for commit ${SHA:0:8} ('$SUBJECT') via the GitHub API — pass --prs explicitly to describe this release"
+    PR_COUNT=$(echo "$PR_JSON" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')
+    if [ "$PR_COUNT" != "1" ]; then
+      fail "commit ${SHA:0:8} ('$SUBJECT') resolves to $PR_COUNT PR(s), not exactly 1 — not a squash-merge this script can attribute to a PR; pass --prs explicitly to describe this release"
     fi
-  done <<<"$SUBJECTS"
+    PR_NUM=$(echo "$PR_JSON" | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["number"])')
+    DERIVED_PRS+=("$PR_NUM")
+    note "#${PR_NUM}: $SUBJECT"
+  done <<<"$COMMITS"
   PRS=$(IFS=,; echo "${DERIVED_PRS[*]}")
   note "derived --prs $PRS (${#DERIVED_PRS[@]} PR(s) since $BASE_TAG)"
 else

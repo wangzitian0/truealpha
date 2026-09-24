@@ -32,7 +32,7 @@ TIMEOUT_SECONDS = 60
 # call so a test can say what was verified and what was dispatched. `-q` filters
 # are ignored: each answer is already the filtered value the script expects.
 FAKE_GH = r"""#!/usr/bin/env python3
-import json, os, sys
+import json, os, re, sys
 
 args = sys.argv[1:]
 with open(os.environ["FAKE_GH_LOG"], "a", encoding="utf-8") as log:
@@ -42,6 +42,7 @@ def flag(name):
     return args[args.index(name) + 1] if name in args else ""
 
 merges = json.loads(os.environ["FAKE_GH_MERGES"])
+commit_prs = {sha: number for number, sha in merges.items()}
 if args[:2] == ["pr", "view"]:
     fields = flag("--json")
     if fields == "state":
@@ -52,6 +53,13 @@ if args[:2] == ["pr", "view"]:
         sys.exit(f"fake gh: unexpected pr view fields {fields!r}")
 elif args[:2] == ["api", "graphql"]:
     print(json.dumps({"data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}}))
+elif args[0] == "api" and re.fullmatch(r"repos/[^/]+/[^/]+/commits/[0-9a-f]+/pulls", args[1] if len(args) > 1 else ""):
+    # #1022: cut_release.sh resolves a commit's PR via this endpoint instead of
+    # guessing from commit-message text — the same SHA->PR fact the ceremony
+    # fixture already tracks in `merges`, just inverted.
+    sha = args[1].split("/")[-2]
+    number = commit_prs.get(sha)
+    print(json.dumps([{"number": int(number)}] if number else []))
 elif args[:2] == ["run", "list"]:
     workflow = flag("--workflow")
     if workflow == "ci-required.yml":
@@ -114,10 +122,14 @@ class Ceremony:
     work: Path
     merges: dict[str, str]
 
-    def commit(self, subject: str) -> str:
+    def commit(self, subject: str, *, pr: str | None = None) -> str:
         git(self.work, "commit", "--allow-empty", "-q", "-m", subject)
         sha = git(self.work, "rev-parse", "HEAD")
-        number = subject.rsplit("(#", 1)[1].rstrip(")")
+        # `pr` overrides the number parsed from the subject's trailing (#N):
+        # #1022's real commit had a subject ending "(#1001)" — the issue it
+        # closed — while its actual PR was #1002, because the squash-merge box
+        # was hand-edited and GitHub's own suffix never landed in the subject.
+        number = pr if pr is not None else subject.rsplit("(#", 1)[1].rstrip(")")
         self.merges[number] = sha
         git(self.work, "push", "-q", "origin", "main")
         return sha
@@ -231,6 +243,24 @@ def test_a_resumed_release_derives_its_prs_from_the_release_before_it(ceremony: 
     [deploy] = dispatched(calls)
     assert "version_ref=v0.0.2" in deploy and "deploy_type=staging" in deploy
     assert "source_run_id=202" in deploy
+
+
+def test_derivation_resolves_the_pr_from_the_commit_not_the_subjects_trailing_number(ceremony: Ceremony) -> None:
+    """#1022: v0.0.96's redeploy retry hit a commit whose subject already ended
+    in "(#1001)" — the issue it closed, not its PR (#1002) — because the
+    squash-merge box was hand-edited and GitHub's own auto-appended PR number
+    never landed in the subject. The old regex-on-text derivation grabbed
+    #1001 and failed resolving it as a PR. Derivation must resolve the PR
+    from the commit SHA via the API instead, immune to whatever text a human
+    typed into the merge box."""
+    ceremony.commit("bump dep (#1001)", pr="13")
+    ceremony.tag("v0.0.2")
+
+    result, calls = ceremony.run("v0.0.2", "--redeploy")
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "derived --prs 11,12,13" in result.stdout, result.stdout
+    assert verified_prs(calls) == ["11", "12", "13"]
 
 
 def test_an_explicit_prs_list_on_resume_is_used_as_given(ceremony: Ceremony) -> None:
