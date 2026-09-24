@@ -15,10 +15,6 @@ on:
         description: 'MinIO release tag to build from source (e.g. RELEASE.2025-09-07T16-13-09Z)'
         required: true
         type: string
-  # Bootstrap only: workflow_dispatch requires the workflow file to already exist on the
-  # default branch. Removed again once the rebuilt image is verified.
-  push:
-    branches: [issue1041-minio-mirror]
 
 permissions:
   contents: read
@@ -29,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      MINIO_RELEASE_TAG: ${{ inputs.minio_release_tag || 'RELEASE.2025-09-07T16-13-09Z' }}
+      MINIO_RELEASE_TAG: ${{ inputs.minio_release_tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

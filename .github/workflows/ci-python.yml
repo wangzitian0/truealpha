@@ -110,7 +110,7 @@ jobs:
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio_local_secret \
-            ghcr.io/wangzitian0/minio-mirror@sha256:8a9a81a3d9573e4c4267a8e276a6124ad7a4c42895b0fd4c9be8b18bd8b84588 server /data
+            ghcr.io/wangzitian0/minio-mirror@sha256:986342c576435342b38fa75d14ed2bb63831242f37907fd1c83239631f9c5b80 server /data
           for attempt in $(seq 1 30); do
             curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
             echo "Waiting for MinIO ($attempt/30)"
@@ -181,7 +181,7 @@ jobs:
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio_local_secret \
-            ghcr.io/wangzitian0/minio-mirror@sha256:8a9a81a3d9573e4c4267a8e276a6124ad7a4c42895b0fd4c9be8b18bd8b84588 server /data
+            ghcr.io/wangzitian0/minio-mirror@sha256:986342c576435342b38fa75d14ed2bb63831242f37907fd1c83239631f9c5b80 server /data
           for attempt in $(seq 1 30); do
             curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
             echo "Waiting for MinIO ($attempt/30)"

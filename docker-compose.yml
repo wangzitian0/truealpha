@@ -30,7 +30,7 @@ services:
   minio:
     # MinIO discontinued free distribution entirely (#1041); see ci-python.yml for the
     # evidence. This repo's own GHCR mirror, built from MinIO's still-public source.
-    image: ghcr.io/wangzitian0/minio-mirror@sha256:8a9a81a3d9573e4c4267a8e276a6124ad7a4c42895b0fd4c9be8b18bd8b84588
+    image: ghcr.io/wangzitian0/minio-mirror@sha256:986342c576435342b38fa75d14ed2bb63831242f37907fd1c83239631f9c5b80
     container_name: truealpha-minio${ENV_SUFFIX:-}
     restart: ${RESTART_POLICY:-unless-stopped}
     logging: *default-logging
