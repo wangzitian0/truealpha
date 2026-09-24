@@ -173,14 +173,24 @@ class Settings(RuntimeSettings):
     llm_base_url: str = Field(
         default="https://open.bigmodel.cn/api/coding/paas/v4", json_schema_extra={"source": "code", "group": "llm"}
     )
-    # #765 pinned explicit "glm-5.3" (non-flash) to replace the ambiguous glm-4.7 alias,
-    # but every production invocation that alias served was answered by glm-5.3-flash
-    # (that commit's own measurement), and its own replay verification found 16/16
-    # decision agreement between explicit glm-5.3 and glm-5.3-flash on real production
-    # cases -- no evidenced quality difference. glm-5.3 carries a much lower concurrency
-    # ceiling and was the root cause of the model_key_health 429s blocking extraction work
-    # (owner confirmed 2026-09-24: use glm-5.3-flash, "concurrency is very high").
-    llm_model: str = Field(default="glm-5.3-flash", json_schema_extra={"source": "code", "group": "llm"})
+    # No meaningful code default (owner decision 2026-09-24, #1039): a code-level default
+    # here is unobservable drift by construction -- #765 pinned "glm-5.3" believing a Vault
+    # seat would override it, #1038 then found glm-5.3's low concurrency ceiling was the
+    # real cause of the model_key_health 429s, and neither change actually reached a
+    # deployed environment for weeks because infra2's generator (correctly, given the old
+    # `"source": "code"` contract below) never wired LLM_MODEL from Vault at all -- the code
+    # default was the only thing ever running. `"source": "human"` (like `llm_api_key`)
+    # makes the generator render this bare/fail-closed in the Vault template
+    # (`error_on_missing_key = true`): a deployed container with no `LLM_MODEL` Vault seat
+    # never starts, instead of silently picking a value nobody can see. `default=""`
+    # (never a real model id) keeps local tooling/tests importable without a Vault seat --
+    # an empty model string reaches the provider and is rejected loudly through the
+    # existing `refusal`-recorded vendor-error path in `invoke()`, the same place any other
+    # vendor rejection lands. Occasional HTTP 429 on the seated model is expected, not a
+    # defect (owner, #1039).
+    llm_model: str = Field(
+        default="", json_schema_extra={"source": "human", "injected": True, "scope": "project", "group": "llm"}
+    )
     llm_provider: str = Field(default="zhipu-glm-coding-plan", json_schema_extra={"source": "code", "group": "llm"})
 
 
