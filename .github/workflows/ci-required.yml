@@ -116,6 +116,15 @@ jobs:
               # dagster_liveness true while ci-python.yml — and the liveness job
               # inside it — never runs at all, since `python` below gates the call.
               - 'docker-compose.yml'
+              # What the shared rule source publishes, all of it read by
+              # test_ci_workflows.py's repository sweep: skills/ is a scan root,
+              # .claude/ and .agents/ are excluded only while every entry links
+              # into one, and AGENTS.md is a root file. #1018 touched only such
+              # paths, matched no filter, and merged with that sweep red on main.
+              - 'skills/**'
+              - '.claude/**'
+              - '.agents/**'
+              - 'AGENTS.md'
             # #855 A4: dagster-code-server-liveness (truealpha#454's daemon
             # self-termination class) sat on every PR's and every main push's
             # critical path — 151-160s of it, most of the job's own wall time —

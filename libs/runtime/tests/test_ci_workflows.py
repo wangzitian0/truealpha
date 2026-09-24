@@ -1368,6 +1368,44 @@ def test_the_pr_trigger_covers_every_file_the_manifest_names() -> None:
     )
 
 
+def _changes_filters() -> dict[str, list[str]]:
+    workflow = yaml.safe_load(source(REQUIRED))
+    changes_job = (workflow.get("jobs") or {})["changes"]
+    # Default + assertion so a restructured changes job fails by naming the
+    # missing contract, not as a bare StopIteration.
+    filter_step = next(
+        (step for step in changes_job["steps"] if "filters" in (step.get("with") or {})),
+        None,
+    )
+    assert filter_step is not None, (
+        "ci-required's changes job no longer carries a paths-filter step; every lane decision reads from it (#673)"
+    )
+    return yaml.safe_load(filter_step["with"]["filters"])
+
+
+def test_the_changes_filter_reaches_the_sweep_over_published_agent_files() -> None:
+    """#1018 merged with test_every_top_level_directory_is_scanned_or_explicitly_excluded
+    red on main. It added `.ws-publish/` and touched nothing the python filter matched,
+    so ci-python never ran and `required` read the skip as success: #673's class, one
+    directory further over.
+
+    The shared rule source publishes this repository's `AGENTS.md` and skills, so a PR
+    that touches only those paths is the normal case, not an edge. The Qlib sweep reads
+    every one of them: `skills/` is a scan root, the symlink-only roots are excluded on a
+    premise the sweep's own test asserts, and `AGENTS.md` is a root file.
+
+    A PR that adds some other new top-level directory still skips ci-python; no filter
+    entry can name a directory that does not exist yet.
+    """
+    python = _changes_filters()["python"]
+    published = [f"{root}/**" for root in ("skills", *_SYMLINK_ONLY_EXCLUDED_ROOTS)] + ["AGENTS.md"]
+    missing = [entry for entry in published if entry not in python]
+    assert not missing, (
+        f"the python filter lacks {missing}: a PR touching only those paths skips ci-python, "
+        f"and `required` reads the skip as success (#1018)"
+    )
+
+
 def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
     """A tools-only PR used to run ZERO tests — A4 review finding (#673).
 
@@ -1385,19 +1423,7 @@ def test_the_changes_filter_reaches_every_test_that_guards_a_tool() -> None:
     """
     import tomllib
 
-    workflow = yaml.safe_load(source(REQUIRED))
-    changes_job = (workflow.get("jobs") or {})["changes"]
-    # Default + assertion so a restructured changes job fails by naming the
-    # missing contract, not as a bare StopIteration.
-    filter_step = next(
-        (step for step in changes_job["steps"] if "filters" in (step.get("with") or {})),
-        None,
-    )
-    assert filter_step is not None, (
-        "ci-required's changes job no longer carries a paths-filter step; every lane "
-        "decision below reads from it (#673)"
-    )
-    filters = yaml.safe_load(filter_step["with"]["filters"])
+    filters = _changes_filters()
 
     for lane in ("python", "db", "web"):
         assert "tools/**" in filters[lane], (
@@ -2005,11 +2031,11 @@ QLIB_SCAN_ROOTS = (".github", "apps", "db", "libs", "skills", "tools")
 #: appear in QLIB_SCAN_ROOTS — asserted below, because the two holes this guard has
 #: already had were both "a place the walk cannot reach", found by review rather than by
 #: the guard. A new top-level directory now fails this test until someone classifies it.
-#: The one excluded root whose exclusion rests on a premise rather than on its contents
-#: being out of scope outright: it is safe only while everything in it resolves into one of
-#: QLIB_SCAN_ROOTS. Used BY the tuple below, not merely named beside it, so the exclusion
+#: The excluded roots whose exclusion rests on a premise rather than on their contents
+#: being out of scope outright: each is safe only while everything in it resolves into one
+#: of QLIB_SCAN_ROOTS. Used BY the tuple below, not merely named beside it, so the exclusion
 #: and the assertion cannot drift apart (#1006 review).
-_SYMLINK_ONLY_EXCLUDED_ROOT = ".claude"
+_SYMLINK_ONLY_EXCLUDED_ROOTS = (".claude", ".agents")
 
 QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # The ADR for this migration (A5-polars-vectorbt-engine.md) and A0's amendment note
@@ -2019,15 +2045,21 @@ QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # Frozen history. Accepted records pin these files' hashes, so editing the prose
     # inside one breaks the record rather than removing a dependency.
     "governance",
-    # #1003 committed this so an agent host reads the vendored skills at the path it
-    # looks in. Every entry under it is a symlink resolving INTO A SCANNED ROOT -- today
-    # all eight land in `skills/`, but the safety argument is the general one, and it is
-    # the general one that test_every_claude_entry_is_a_symlink_into_a_scanned_root
-    # asserts. The content is therefore swept through its real path, once rather than
-    # twice. That premise is the whole reason the exclusion is safe: a real file added
-    # here later would otherwise be silently out of scope, which is the exact shape of
-    # the two holes this guard has already had.
-    _SYMLINK_ONLY_EXCLUDED_ROOT,
+    # Where agent hosts look for this repository's skills: `.claude/skills` (Claude Code,
+    # #1003) and `.agents/skills` (Codex). Every entry under them is a symlink resolving
+    # INTO A SCANNED ROOT -- today every one lands in `skills/`, but the safety argument is
+    # the general one, and it is the general one that
+    # test_every_symlink_only_root_entry_resolves_into_a_scanned_root asserts. The content
+    # is therefore swept through its real path, once rather than twice. That premise is the
+    # whole reason the exclusion is safe: a real file added here later would otherwise be
+    # silently out of scope, which is the exact shape of the two holes this guard has
+    # already had.
+    *_SYMLINK_ONLY_EXCLUDED_ROOTS,
+    # The record the shared rule source writes when it publishes `AGENTS.md` and the
+    # skills (#1018): output paths and their hashes. It names files and runs nothing; the
+    # files it names are swept where they live -- `AGENTS.md` as a root file, the skills
+    # under `skills/`.
+    ".ws-publish",
 )
 #: The repository's own top-level FILES are scanned too, non-recursively. `rglob` from a
 #: scan root cannot reach a file sitting at the repository root, and the root
@@ -2595,10 +2627,11 @@ def test_walk_evidence_can_finish_waiting_inside_the_freshness_job() -> None:
     )
 
 
-def test_every_claude_entry_is_a_symlink_into_a_scanned_root() -> None:
-    """The excluded root is excluded on one premise: everything in it is a symlink that
+@pytest.mark.parametrize("excluded_root", _SYMLINK_ONLY_EXCLUDED_ROOTS)
+def test_every_symlink_only_root_entry_resolves_into_a_scanned_root(excluded_root: str) -> None:
+    """Each of these roots is excluded on one premise: everything in it is a symlink that
     resolves into one of QLIB_SCAN_ROOTS. This asserts the premise, in those terms -- not
-    in terms of `skills/`, which is merely where all eight happen to land today.
+    in terms of `skills/`, which is merely where every link happens to land today.
 
     Without it the exclusion is a hole waiting for its first real file, which is how both of
     this guard's previous holes were shaped -- a place the walk could not reach, found by
@@ -2606,14 +2639,14 @@ def test_every_claude_entry_is_a_symlink_into_a_scanned_root() -> None:
     directory outside the scan roots.
     """
     listing = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", _SYMLINK_ONLY_EXCLUDED_ROOT],
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", excluded_root],
         capture_output=True,
         text=True,
         check=True,
     ).stdout
     entries = [entry for entry in listing.split("\0") if entry]
     assert entries, (
-        f"{_SYMLINK_ONLY_EXCLUDED_ROOT}/ is excluded from the Qlib sweep but git tracks nothing "
+        f"{excluded_root}/ is excluded from the Qlib sweep but git tracks nothing "
         f"there, so this assertion is checking nothing (GREEN-WHILE-EMPTY). Remove the exclusion "
         f"or remove this test."
     )
@@ -2629,7 +2662,7 @@ def test_every_claude_entry_is_a_symlink_into_a_scanned_root() -> None:
         if not any(target == root or root in target.parents for root in scanned):
             escapes.append(f"{entry} -> {target} resolves outside every scanned root")
     assert not escapes, (
-        f"{_SYMLINK_ONLY_EXCLUDED_ROOT}/ is excluded from the Qlib sweep only because everything "
+        f"{excluded_root}/ is excluded from the Qlib sweep only because everything "
         f"in it is scanned through its real path. These are not: {escapes}. Either move them under "
-        f"a scan root or move {_SYMLINK_ONLY_EXCLUDED_ROOT} into QLIB_SCAN_ROOTS."
+        f"a scan root or move {excluded_root} into QLIB_SCAN_ROOTS."
     )
