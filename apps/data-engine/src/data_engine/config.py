@@ -173,7 +173,14 @@ class Settings(RuntimeSettings):
     llm_base_url: str = Field(
         default="https://open.bigmodel.cn/api/coding/paas/v4", json_schema_extra={"source": "code", "group": "llm"}
     )
-    llm_model: str = Field(default="glm-5.3", json_schema_extra={"source": "code", "group": "llm"})
+    # #765 pinned explicit "glm-5.3" (non-flash) to replace the ambiguous glm-4.7 alias,
+    # but every production invocation that alias served was answered by glm-5.3-flash
+    # (that commit's own measurement), and its own replay verification found 16/16
+    # decision agreement between explicit glm-5.3 and glm-5.3-flash on real production
+    # cases -- no evidenced quality difference. glm-5.3 carries a much lower concurrency
+    # ceiling and was the root cause of the model_key_health 429s blocking extraction work
+    # (owner confirmed 2026-09-24: use glm-5.3-flash, "concurrency is very high").
+    llm_model: str = Field(default="glm-5.3-flash", json_schema_extra={"source": "code", "group": "llm"})
     llm_provider: str = Field(default="zhipu-glm-coding-plan", json_schema_extra={"source": "code", "group": "llm"})
 
 
