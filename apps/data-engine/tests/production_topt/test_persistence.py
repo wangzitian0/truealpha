@@ -194,7 +194,15 @@ def _routes(
     outage: _PrimaryOutage | None = None,
 ) -> dict[str, SourceFetchPort]:
     """The deployed adapters over fake fetchers, routed exactly as the composition root does."""
-    cutoff_date = CUTOFF.date()
+    # The settled session (#530 item 1): production's build_route uses
+    # context.price_cutoff_date here, "the last SETTLED session, not the calendar date"
+    # (market_price_adapter.py) -- CUTOFF is when the tick RUNS, not the session it
+    # captures for. They used to be interchangeable because valid_from ignored both;
+    # now that valid_from is the fact's own date, a fake quote dated CUTOFF (one day
+    # after the obligation's actual partition, plan.timeline.partition_start) would
+    # correctly be graded ineligible for this run's partition -- test the same
+    # settled-session semantics production uses instead of the run's own clock.
+    cutoff_date = plan.timeline.partition_start.date()
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
     release_targets: dict[str, ReleaseDerivedRecord] = {}
@@ -1042,6 +1050,63 @@ def test_sink_refuses_a_ledger_that_contradicts_the_served_value(connection) -> 
     ).fetchone() == (0,)
 
 
+def test_observation_valid_from_is_the_adapters_real_date_not_the_partition_anchor(connection) -> None:
+    """#530 item 1: a fact's valid_from is its own real date, not the capturing tick's
+    partition anchor -- otherwise a fact is only eligible starting from whenever it
+    happened to be captured rather than from when it became real-world true (the defect
+    the 2010 Visa share count exposed: captured in 2026, it should have been eligible
+    for any replay since 2010, not only from its capture tick's own partition onward)."""
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-530-item1-valid-from")
+    sink = PostgresCaptureControlSink(
+        connection,
+        plan.bindings,
+        source_label=plan.source_label,
+        timeline=plan.timeline,
+        retry=plan.retry,
+        object_store=_InMemoryObjectStore(),
+    )
+    work_item = next(
+        item
+        for item in plan.work_items
+        if plan.bindings[item.work_item_id].obligation.capture_requirement_id == "financial-fact:v1"
+    )
+    obligation_id = plan.bindings[work_item.work_item_id].obligation.obligation_id
+    filed_long_before_the_capture = date(2026, 1, 15)
+    payload = {"revenue": "100000000"}
+    success = FetchSuccess(
+        raw=RawResponse(body=b"{}", source=DataSource.SEC, record_id="sec:filed-2026-01-15"),
+        normalized_sha256=canonical_sha256(payload),
+        confidence=Decimal("0.9"),
+        valid_from=filed_long_before_the_capture,
+        transaction_time=datetime(2026, 1, 15, tzinfo=UTC),
+        record=NormalizedRecord(
+            payload=payload, parser_version="sec-financial-adapter-parser:v1", mapping_version="sec-map:v1"
+        ),
+    )
+    sink.record_outcome(
+        work_item, attempt_reasons=(None,), terminal_state=ObligationTerminalState.SUCCESS, success=success
+    )
+    stored = connection.execute(
+        """
+        select o.valid_from
+        from staging.capture_observation_obligations oo
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        where oo.capture_obligation_id = %s
+        """,
+        (obligation_id,),
+    ).fetchone()
+    assert stored is not None
+    # The column round-trips as an aware datetime at midnight UTC (timestamptz); a bare
+    # `date` never compares equal to a `datetime` in Python even for the same day, so
+    # normalize before asserting -- an unnormalized comparison here would stay red
+    # forever regardless of the fix, not just before it.
+    stored_valid_from = stored[0].date() if isinstance(stored[0], datetime) else stored[0]
+    partition_start = plan.timeline.partition_start
+    partition_start_date = partition_start.date() if isinstance(partition_start, datetime) else partition_start
+    assert stored_valid_from == filed_long_before_the_capture
+    assert stored_valid_from != partition_start_date
+
+
 def test_sink_refuses_more_attempts_than_the_retry_policy_permits(connection) -> None:
     plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-a1-attempts")
     sink = PostgresCaptureControlSink(
@@ -1651,7 +1716,10 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
     assert (final_outcome, final_reasons) == ("success", ["transient_network"])
     assert attempt_outcomes == ["transport_error", "transport_error", "success"]
     assert vintage_id is not None and under_planned_request is True
-    assert (record_id, landed_source) == (f"twelve-data:{victim_ticker}:{CUTOFF.date().isoformat()}", "twelvedata")
+    # The failover's own record id is stamped with the settled session it served
+    # (quote.as_of), not the tick's run clock -- see _routes' cutoff_date (#530 item 1).
+    settled_session = plan.timeline.partition_start.date()
+    assert (record_id, landed_source) == (f"twelve-data:{victim_ticker}:{settled_session.isoformat()}", "twelvedata")
     # Every other price cell is the primary's, with an untouched ledger.
     others = connection.execute(
         """

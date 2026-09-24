@@ -213,7 +213,10 @@ def _offline_routes(
     corroborating_origins: tuple[CorroboratingOrigin, ...] = (),
     cutoff_date: date | None = None,
 ) -> dict[str, SourceFetchPort]:
-    cutoff_date = cutoff_date or CUTOFF.date()
+    # The settled session (#530 item 1), matching build_route's context.price_cutoff_date
+    # -- not the tick's own run clock. A caller with a differently-partitioned corpus
+    # still passes its own cutoff_date explicitly; this is only the fallback.
+    cutoff_date = cutoff_date or plan.timeline.partition_start.date()
     price_targets: dict[str, MarketPriceTarget] = {}
     sec_targets: dict[str, SecTarget] = {}
     release_targets: dict[str, ReleaseDerivedRecord] = {}
@@ -527,7 +530,9 @@ def test_a_forced_run_fetches_every_obligation_despite_fresh_observations(tick_d
 
 def test_a_forced_fetch_of_changed_bytes_serves_the_new_vintage(tick_database_url, monkeypatch) -> None:
     """The recovery half of #874: a forced re-run lands the corrected bytes as a new vintage."""
-    day = date(2026, 4, 16)
+    # The quote's own settled session must be the fixed corpus's real partition (#530
+    # item 1); the run's own clock (cutoff) is free to be any later date.
+    day = date(2026, 3, 31)
     cutoff = datetime(2026, 4, 16, 22, 15, tzinfo=UTC)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
     first = _run_tick(tick_database_url, version="corrected-bytes", cutoff=cutoff)
@@ -601,12 +606,38 @@ def test_a_forced_capture_version_is_distinct_and_stable() -> None:
 
 def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, monkeypatch) -> None:
     """#874: at tie-break, the forced capture is the newer look at the vendor, and it wins."""
-    day = date(2026, 4, 21)
+    # #530 item 1 split this test's one `day` into three genuinely different concepts
+    # _quote()/a shared `price_cutoff=day` used to conflate:
+    #   - `as_of` (-> valid_from) must be the fixed corpus's real partition (2026-03-31),
+    #     or freeze_snapshot's `valid_from <= partition_key` now correctly refuses it.
+    #   - `knowable_at` feeds composition._satisfy_from_recent_observations' session-bound
+    #     reuse check (`_is_settled_session`), which requires it to equal
+    #     last_settled_session_date(cutoff) -- verified locally
+    #     (truealpha_contracts.calendar.settled_session_for_cutoff) to be 2026-04-21 for
+    #     this cutoff, not the corpus's 2026-03-31.
+    #   - `target.cutoff` (price_cutoff) is what the PRIMARY fetch's own look-ahead guard
+    #     compares knowable_at against (market_price_adapter.py:224: `knowable_at.date() >
+    #     target.cutoff` -> LOOK_AHEAD_VIOLATION, confirmed by CI when this was still
+    #     `day`); it must be >= knowable_at, i.e. settled_day, not the corpus partition.
+    # Before this PR none of these three were real, so one shared `day` equal to
+    # cutoff.date() (the original author's choice) satisfied all three by accident.
+    day = date(2026, 3, 31)
+    settled_day = date(2026, 4, 21)
     cutoff = datetime(2026, 4, 21, 22, 15, tzinfo=UTC)
-    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
-    _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff)
-    _arm(monkeypatch, quote=lambda: _quote(day, Decimal("39.25")), price_cutoff=day)
-    _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff, force_fetch=True)
+
+    def _reuse_quote(close: Decimal) -> MarketPriceQuote:
+        return MarketPriceQuote(
+            raw_bytes=f"bar:{day.isoformat()}:{close}".encode(),
+            close=close,
+            as_of=day,
+            knowable_at=datetime.combine(settled_day, datetime.min.time(), tzinfo=UTC),
+        )
+
+    _arm(monkeypatch, quote=lambda: _reuse_quote(Decimal("40")), price_cutoff=settled_day)
+    first_run = _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff)
+    _arm(monkeypatch, quote=lambda: _reuse_quote(Decimal("39.25")), price_cutoff=settled_day)
+    forced_run = _run_tick(tick_database_url, version="anchor-choice", cutoff=cutoff, force_fetch=True)
+    assert first_run.run_id != forced_run.run_id
 
     follower_cutoff = cutoff + timedelta(minutes=5)
     probe = psycopg.connect(tick_database_url)
@@ -641,7 +672,8 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
     from data_engine.datahub.question_coverage import peg_cells
     from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
 
-    day = date(2026, 5, 5)
+    # Settled session vs. run clock, same as above (#530 item 1).
+    day = date(2026, 3, 31)
     cutoff = datetime(2026, 5, 5, 22, 15, tzinfo=UTC)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
     scheduled = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
@@ -693,7 +725,8 @@ def test_a_withheld_forced_tick_never_displaces_the_governed_strategy_run(tick_d
     from data_engine.datahub.question_coverage import peg_cells
     from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL
 
-    day = date(2026, 5, 7)
+    # Settled session vs. run clock, same as above (#530 item 1).
+    day = date(2026, 3, 31)
     cutoff = datetime(2026, 5, 7, 22, 15, tzinfo=UTC)
     _arm(monkeypatch, quote=lambda: _quote(day, Decimal("40")), price_cutoff=day)
     scheduled = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
