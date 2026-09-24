@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
-from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
+from truealpha_contracts.common import STABLE_ID_BODY, STABLE_ID_PATTERN, CaptureEnvironment, canonical_sha256
 from truealpha_contracts.common import identify as _content_address
 from truealpha_contracts.data_quality import DataDomain, QualityStatus
 from truealpha_contracts.models import _require_aware
@@ -27,7 +27,6 @@ from truealpha_contracts.usage import DataRequirement
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _CONTENT_SHA256_PATTERN = r"^(?:|[0-9a-f]{64})$"
-_STABLE_ID_PATTERN = r"^[a-z0-9][a-z0-9._:/@+\-]*$"
 _SEMANTIC_TYPE_PATTERN = r"^semantic\.[a-z0-9]+(?:[._-][a-z0-9]+)*$"
 _FIELD_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 _SHA256 = re.compile(_SHA256_PATTERN)
@@ -52,7 +51,7 @@ def _stable_tuple(values: tuple[str, ...], field_name: str, *, allow_empty: bool
         raise ValueError(f"{field_name} must not be empty")
     if len(values) != len(set(values)):
         raise ValueError(f"{field_name} must not contain duplicates")
-    if any(not re.fullmatch(_STABLE_ID_PATTERN, value) for value in values):
+    if any(not re.fullmatch(STABLE_ID_PATTERN, value) for value in values):
         raise ValueError(f"{field_name} must contain stable identifiers")
     return tuple(sorted(values))
 
@@ -71,13 +70,13 @@ class CaptureRequirement(BaseModel):
         pattern=r"^(?:|capture-requirement:[0-9a-f]{64})$",
     )
     semantic_type_id: str = Field(pattern=_SEMANTIC_TYPE_PATTERN)
-    semantic_type_version: str = Field(pattern=_STABLE_ID_PATTERN)
+    semantic_type_version: str = Field(pattern=STABLE_ID_PATTERN)
     domain: DataDomain
     required_fields: tuple[str, ...] = Field(min_length=1)
     subject_kinds: tuple[SubjectKind, ...] = Field(min_length=1)
     cadence: timedelta
-    partition_rule_id: str = Field(pattern=_STABLE_ID_PATTERN)
-    freshness_policy_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    partition_rule_id: str = Field(pattern=STABLE_ID_PATTERN)
+    freshness_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
     maximum_age: timedelta
     quality_policy_ids: tuple[str, ...] = Field(min_length=1)
     content_sha256: str = Field(default="", pattern=_CONTENT_SHA256_PATTERN)
@@ -119,20 +118,20 @@ class CaptureScope(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     capture_scope_id: str = Field(default="", pattern=r"^(?:|capture-scope:[0-9a-f]{64})$")
-    research_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    research_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     research_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
     universe: UniverseRef
-    applicability_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    applicability_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     applicability_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
     applicability_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
-    source_coverage_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    source_coverage_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     source_coverage_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
     source_coverage_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
-    slo_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    slo_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     slo_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
-    source_registry_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    source_registry_id: str = Field(pattern=STABLE_ID_PATTERN)
     source_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
-    semantic_type_registry_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    semantic_type_registry_id: str = Field(pattern=STABLE_ID_PATTERN)
     semantic_type_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
     requirements: tuple[CaptureRequirement, ...] = Field(min_length=1)
     effective_at: datetime
@@ -180,22 +179,22 @@ class CaptureRecordEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     evidence_id: str = Field(default="", pattern=r"^(?:|capture-evidence:[0-9a-f]{64})$")
-    source_coverage_entry_id: str | None = Field(default=None, pattern=_STABLE_ID_PATTERN)
-    raw_id: str | None = Field(default=None, pattern=r"^raw(?:\.[a-z][a-z0-9_]*)+:[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
+    source_coverage_entry_id: str | None = Field(default=None, pattern=STABLE_ID_PATTERN)
+    raw_id: str | None = Field(default=None, pattern=rf"^raw(?:\.[a-z][a-z0-9_]*)+:{STABLE_ID_BODY}$")
     raw_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     normalized_id: str | None = Field(
         default=None,
-        pattern=r"^[a-z][a-z0-9_.-]*:[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$",
+        pattern=rf"^[a-z][a-z0-9_.-]*:{STABLE_ID_BODY}$",
     )
     semantic_type_id: str | None = Field(default=None, pattern=_SEMANTIC_TYPE_PATTERN)
-    semantic_type_version: str | None = Field(default=None, pattern=_STABLE_ID_PATTERN)
+    semantic_type_version: str | None = Field(default=None, pattern=STABLE_ID_PATTERN)
     populated_fields: tuple[str, ...] = ()
     knowable_at: datetime | None = None
     recorded_at: datetime | None = None
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
-    mapping_version: str | None = Field(default=None, pattern=_STABLE_ID_PATTERN)
+    mapping_version: str | None = Field(default=None, pattern=STABLE_ID_PATTERN)
     policy_versions: dict[str, str] = Field(default_factory=dict)
     quality_check_ids: tuple[str, ...] = ()
     quality_status: QualityStatus | None = None
@@ -211,7 +210,7 @@ class CaptureRecordEvidence(BaseModel):
     @classmethod
     def validate_policy_versions(cls, values: dict[str, str]) -> dict[str, str]:
         if any(
-            not re.fullmatch(_STABLE_ID_PATTERN, key) or not re.fullmatch(_STABLE_ID_PATTERN, value)
+            not re.fullmatch(STABLE_ID_PATTERN, key) or not re.fullmatch(STABLE_ID_PATTERN, value)
             for key, value in values.items()
         ):
             raise ValueError("policy_versions must bind stable policy IDs to stable versions")
@@ -253,7 +252,7 @@ class CaptureCell(BaseModel):
     capture_cell_id: str = Field(default="", pattern=r"^(?:|capture-cell:[0-9a-f]{64})$")
     subject: SubjectRef
     domain: DataDomain
-    partition_key: str = Field(pattern=_STABLE_ID_PATTERN)
+    partition_key: str = Field(pattern=STABLE_ID_PATTERN)
     capture_requirement_id: str = Field(pattern=r"^capture-requirement:[0-9a-f]{64}$")
     applicability: CaptureApplicability
     status: CaptureStatus
@@ -286,19 +285,19 @@ class CaptureManifest(BaseModel):
     capture_scope_id: str = Field(pattern=r"^capture-scope:[0-9a-f]{64}$")
     capture_scope_sha256: str = Field(pattern=_SHA256_PATTERN)
     environment: CaptureEnvironment
-    research_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    research_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     research_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
-    applicability_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    applicability_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     applicability_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
-    source_coverage_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    source_coverage_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     source_coverage_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
-    slo_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    slo_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     slo_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
-    source_registry_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    source_registry_id: str = Field(pattern=STABLE_ID_PATTERN)
     source_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
-    semantic_type_registry_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    semantic_type_registry_id: str = Field(pattern=STABLE_ID_PATTERN)
     semantic_type_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
-    partition_key: str = Field(pattern=_STABLE_ID_PATTERN)
+    partition_key: str = Field(pattern=STABLE_ID_PATTERN)
     as_of: datetime
     started_at: datetime
     cells: tuple[CaptureCell, ...] = ()
@@ -349,7 +348,7 @@ class CaptureEvaluationReport(BaseModel):
     capture_scope_sha256: str = Field(pattern=_SHA256_PATTERN)
     capture_manifest_id: str = Field(pattern=r"^capture-manifest:[0-9a-f]{64}$")
     capture_manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
-    applicability_catalog_id: str = Field(pattern=_STABLE_ID_PATTERN)
+    applicability_catalog_id: str = Field(pattern=STABLE_ID_PATTERN)
     applicability_catalog_sha256: str = Field(pattern=_SHA256_PATTERN)
     applicability_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
     source_coverage_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -408,9 +407,9 @@ def _normalize_applicability(
         kind_value, subject_id, domain_value, partition_key, requirement_id = raw_key
         kind = SubjectKind(kind_value)
         domain = DataDomain(domain_value)
-        if not re.fullmatch(_STABLE_ID_PATTERN, subject_id):
+        if not re.fullmatch(STABLE_ID_PATTERN, subject_id):
             raise ValueError("applicability subject IDs must be stable")
-        if not re.fullmatch(_STABLE_ID_PATTERN, partition_key):
+        if not re.fullmatch(STABLE_ID_PATTERN, partition_key):
             raise ValueError("applicability partition keys must be stable")
         if not re.fullmatch(r"^capture-requirement:[0-9a-f]{64}$", requirement_id):
             raise ValueError("applicability requirement IDs must be content-addressed")
@@ -459,9 +458,9 @@ def _normalize_source_coverage(
             raise ValueError("source coverage projection requires explicit logical environment tiers")
         kind = SubjectKind(kind_value)
         domain = DataDomain(domain_value)
-        if not re.fullmatch(_STABLE_ID_PATTERN, subject_id):
+        if not re.fullmatch(STABLE_ID_PATTERN, subject_id):
             raise ValueError("source coverage projection subject IDs must be stable")
-        if not re.fullmatch(_STABLE_ID_PATTERN, partition_key):
+        if not re.fullmatch(STABLE_ID_PATTERN, partition_key):
             raise ValueError("source coverage projection partition keys must be stable")
         if not re.fullmatch(r"^capture-requirement:[0-9a-f]{64}$", requirement_id):
             raise ValueError("source coverage projection requirement IDs must be content-addressed")
@@ -761,7 +760,7 @@ def evaluate_capture_manifest(
     """Evaluate one manifest against the exact pre-run applicability denominator."""
 
     evaluated_at = _require_aware(evaluated_at, "evaluated_at")
-    if not re.fullmatch(_STABLE_ID_PATTERN, applicability_catalog_id):
+    if not re.fullmatch(STABLE_ID_PATTERN, applicability_catalog_id):
         raise ValueError("applicability_catalog_id must be a stable identifier")
     if not _SHA256.fullmatch(applicability_catalog_sha256):
         raise ValueError("applicability_catalog_sha256 must be a lowercase SHA-256")

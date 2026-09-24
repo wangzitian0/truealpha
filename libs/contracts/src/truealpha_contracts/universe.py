@@ -15,11 +15,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256
 from truealpha_contracts.models import _require_aware
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
-_STABLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
 _MUTABLE_REFERENCE_MARKERS = frozenset({"current", "head", "latest"})
 
 
@@ -28,7 +27,7 @@ def _canonical_datetime(value: datetime) -> str:
 
 
 def _require_stable_reference(value: str, field_name: str) -> str:
-    if value != value.strip() or not _STABLE_ID_PATTERN.fullmatch(value):
+    if value != value.strip() or not re.fullmatch(STABLE_ID_PATTERN, value):
         raise ValueError(f"{field_name} must be a non-empty stable identifier")
     tokens = {token for token in re.split(r"[^a-z0-9]+", value.lower()) if token}
     mutable_markers = tokens & _MUTABLE_REFERENCE_MARKERS

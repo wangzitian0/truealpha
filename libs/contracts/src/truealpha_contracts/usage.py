@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256
 from truealpha_contracts.common import identify as _identify
 from truealpha_contracts.data_quality import DataDomain
 from truealpha_contracts.models import _require_aware
@@ -24,7 +24,6 @@ from truealpha_contracts.registries import RegistrySnapshot, SemanticTypeId
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 _SHA256 = r"^[0-9a-f]{64}$"
-_STABLE_ID = r"^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$"
 
 
 def planned_cell_id_for(
@@ -131,7 +130,7 @@ class DataRequirement(BaseModel):
     subject_kinds: frozenset[SubjectKind] = Field(min_length=1)
     level: RequirementLevel
     lookback: timedelta | None = None
-    valid_period_rule_id: str = Field(pattern=_STABLE_ID)
+    valid_period_rule_id: str = Field(pattern=STABLE_ID_PATTERN)
     maximum_age: timedelta
     cadence: timedelta
 
@@ -183,9 +182,9 @@ class DataUsageEvent(BaseModel):
 
     usage_event_id: str = ""
     content_sha256: str = ""
-    operation_id: str = Field(pattern=_STABLE_ID)
+    operation_id: str = Field(pattern=STABLE_ID_PATTERN)
     emitter_kind: UsageEmitterKind
-    emitter_id: str = Field(pattern=_STABLE_ID)
+    emitter_id: str = Field(pattern=STABLE_ID_PATTERN)
     stage: UsageStage
     planned_cell_id: str = Field(default="", pattern=r"^(?:|planned-demand-cell:[0-9a-f]{64})$")
     requirement_id: str = Field(pattern=r"^data-requirement:[0-9a-f]{64}$")
@@ -194,8 +193,8 @@ class DataUsageEvent(BaseModel):
     domain: DataDomain
     subject: SubjectRef
     partition_key: str = Field(min_length=1)
-    run_id: str = Field(pattern=_STABLE_ID)
-    trace_id: str = Field(pattern=_STABLE_ID)
+    run_id: str = Field(pattern=STABLE_ID_PATTERN)
+    trace_id: str = Field(pattern=STABLE_ID_PATTERN)
     normalized_record_ids: tuple[str, ...] = ()
     consumed_market_event_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = Field(min_length=1)
@@ -286,7 +285,7 @@ class DataUsageEvent(BaseModel):
 class MissingDemand(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    strategy_run_id: str = Field(pattern=_STABLE_ID)
+    strategy_run_id: str = Field(pattern=STABLE_ID_PATTERN)
     planned_cell_id: str = Field(pattern=r"^planned-demand-cell:[0-9a-f]{64}$")
     requirement_id: str = Field(pattern=r"^data-requirement:[0-9a-f]{64}$")
     capture_requirement_id: str = Field(pattern=r"^capture-requirement:[0-9a-f]{64}$")
@@ -302,7 +301,7 @@ class ReverseLineageEdge(BaseModel):
     content_sha256: str = ""
     downstream_id: str = Field(min_length=1)
     upstream_id: str = Field(min_length=1)
-    relation: str = Field(pattern=_STABLE_ID)
+    relation: str = Field(pattern=STABLE_ID_PATTERN)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> ReverseLineageEdge:
@@ -384,7 +383,7 @@ class StrategyUsageAudit(BaseModel):
 
     strategy_usage_audit_id: str = ""
     content_sha256: str = ""
-    strategy_run_id: str = Field(pattern=_STABLE_ID)
+    strategy_run_id: str = Field(pattern=STABLE_ID_PATTERN)
     research_catalog_id: str = Field(pattern=r"^research-catalog:[0-9a-f]{64}$")
     research_catalog_sha256: str = Field(pattern=_SHA256)
     universe: UniverseRef
@@ -406,8 +405,8 @@ class StrategyUsageAudit(BaseModel):
     affected_trade_ids: tuple[str, ...] = ()
     affected_valuation_ids: tuple[str, ...] = ()
     affected_metric_ids: tuple[str, ...] = ()
-    auditor_id: str = Field(pattern=_STABLE_ID)
-    auditor_version: str = Field(pattern=_STABLE_ID)
+    auditor_id: str = Field(pattern=STABLE_ID_PATTERN)
+    auditor_version: str = Field(pattern=STABLE_ID_PATTERN)
     auditor_implementation_sha256: str = Field(pattern=_SHA256)
     derivation_input_ids: tuple[str, ...] = ()
     missing_required: tuple[MissingDemand, ...] = ()
@@ -819,12 +818,12 @@ class StrategyDataQualityReview(BaseModel):
 
     review_id: str = ""
     content_sha256: str = ""
-    strategy_run_id: str = Field(pattern=_STABLE_ID)
+    strategy_run_id: str = Field(pattern=STABLE_ID_PATTERN)
     strategy_usage_audit_id: str = Field(pattern=r"^strategy-usage-audit:[0-9a-f]{64}$")
     usage_audit: StrategyUsageAudit
     cell_quality: tuple[PlannedCellQuality, ...] = Field(min_length=1)
-    evaluator_id: str = Field(pattern=_STABLE_ID)
-    evaluator_version: str = Field(pattern=_STABLE_ID)
+    evaluator_id: str = Field(pattern=STABLE_ID_PATTERN)
+    evaluator_version: str = Field(pattern=STABLE_ID_PATTERN)
     evaluator_implementation_sha256: str = Field(pattern=_SHA256)
     evaluated_at: datetime
 
