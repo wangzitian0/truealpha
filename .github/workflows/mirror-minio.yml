@@ -15,11 +15,6 @@ on:
         description: 'MinIO release tag to build from source (e.g. RELEASE.2025-09-07T16-13-09Z)'
         required: true
         type: string
-  # Bootstrap only: workflow_dispatch requires the workflow file to already exist on the
-  # default branch, which this PR itself cannot satisfy yet. Runs this one build from the
-  # PR branch directly so the image exists before merge; removed before this PR merges.
-  push:
-    branches: [issue1041-minio-mirror]
 
 permissions:
   contents: read
@@ -30,9 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      # push has no `inputs`; the bootstrap run falls back to the tag ci-python.yml
-      # currently pins.
-      MINIO_RELEASE_TAG: ${{ inputs.minio_release_tag || 'RELEASE.2025-09-07T16-13-09Z' }}
+      MINIO_RELEASE_TAG: ${{ inputs.minio_release_tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

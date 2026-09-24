@@ -28,8 +28,9 @@ services:
     networks: [runtime]
 
   minio:
-    # quay.io by digest: Docker Hub's minio/* repositories are gone (#823); see ci-python.yml.
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    # MinIO discontinued free distribution entirely (#1041); see ci-python.yml for the
+    # evidence. This repo's own GHCR mirror, built from MinIO's still-public source.
+    image: ghcr.io/wangzitian0/minio-mirror@sha256:8a9a81a3d9573e4c4267a8e276a6124ad7a4c42895b0fd4c9be8b18bd8b84588
     container_name: truealpha-minio${ENV_SUFFIX:-}
     restart: ${RESTART_POLICY:-unless-stopped}
     logging: *default-logging
@@ -50,6 +51,9 @@ services:
     networks: [runtime]
 
   minio-init:
+    # Also dead (#1041, confirmed 2026-09-24) but not yet mirrored: unlike `minio` above,
+    # this isn't on ci-python.yml's path, so local `docker compose up` still needs a
+    # working alias here. Follow-up tracked on #1041.
     image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     container_name: truealpha-minio-init${ENV_SUFFIX:-}
     logging: *default-logging
