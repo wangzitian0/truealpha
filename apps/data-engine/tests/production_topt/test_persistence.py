@@ -1523,6 +1523,75 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
     assert recency_only != governed_run_id, "the red case: recency alone would serve an unresolved run"
 
 
+def test_a_governed_head_with_no_bound_strategy_run_is_a_visible_gap_not_a_silent_one(connection) -> None:
+    """#575/#1028: `run_production_topt_capture.py` used to advance `mart.current_pointer`
+    via `register_run_evidence` without ever running the strategy bridge — the scheduled
+    tick's `seed_strategy_inputs_from_capture` -> `run_strategy_replay_for_cutoff`, which
+    binds a strategy run to the capture (#877). `mart.governed_strategy_run` inner-joins
+    from the head to that binding, so an unbound head made the view resolve to nothing;
+    readers fell back to "newest by executed_at" (the sibling test above), and the nightly
+    `report_surface_proof` check found the view empty and reported it, red, on both
+    2026-09-23 and 2026-09-24 in staging.
+
+    Reproduces the pre-fix shape directly: capture + pointer-advance with NO strategy
+    bridge in between (what the script used to do) must leave `mart.governed_strategy_run`
+    resolving nothing for that head — the same "empty view" surface_proof.py detects.
+    Reverse-verified: deleting the strategy-bridge lines the fixed script now runs turns
+    this from a documented gap into a caught one — this test is what would have caught it."""
+    plan = _capture(connection, version="test-unbound-strategy-gap")
+    core = PostgresToptCoreRepository(connection)
+    snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
+
+    env = connection.execute("select environment from mart.environment_identity").fetchone()[0]
+    pointer_sha = canonical_sha256({"probe": plan.run_id})
+    connection.execute(
+        """
+        insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version,
+                                          factor_id, target_run_id, sequence, previous_run_id, advanced_at)
+        values (%s, %s, %s, %s, %s, 'gross_profit_per_employee', %s, 0, null, %s)
+        """,
+        (
+            f"current-pointer:{pointer_sha}",
+            pointer_sha,
+            env,
+            snapshot.universe_id,
+            snapshot.universe_version,
+            plan.run_id,
+            CUTOFF,
+        ),
+    )
+
+    # No seed_strategy_inputs_from_capture, no run_strategy_replay_for_cutoff — the
+    # pre-#575-fix manual script's exact sequence. The view must show this, not hide it.
+    resolved = connection.execute(
+        "select strategy_run_id from mart.governed_strategy_run where target_run_id = %s", (plan.run_id,)
+    ).fetchall()
+    assert resolved == [], (
+        f"expected the unbound head to resolve nothing (the gap #575/#1028 describe), got {resolved} — "
+        "either a strategy run bound itself to this capture with no seed/replay call, or the view's "
+        "join changed shape; either way this test's premise needs re-checking before trusting it"
+    )
+
+    # Now run exactly what the fixed script runs, in order, before its own
+    # register_run_evidence call — not re-implemented, the same three functions — and the
+    # gap must close for this same head.
+    from data_engine.datahub.strategy_bridge import (
+        persist_strategy_input_coverage,
+        run_strategy_replay_for_cutoff,
+        seed_strategy_inputs_from_capture,
+    )
+
+    seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
+    persist_strategy_input_coverage(connection, plan.run_id, cutoff=CUTOFF)
+    bound_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
+        connection, cutoff=CUTOFF, executed_at=CUTOFF, risk_free_rate=Decimal("0.05"), capture_run_id=plan.run_id
+    )
+    resolved_after = connection.execute(
+        "select strategy_run_id from mart.governed_strategy_run where target_run_id = %s", (plan.run_id,)
+    ).fetchall()
+    assert resolved_after == [(bound_run_id,)]
+
+
 def test_the_run_plan_records_which_data_engine_build_produced_it(connection, monkeypatch) -> None:
     """#712: the compose injects GIT_COMMIT_SHA and TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST into
     every data-engine process; the run plan now carries them and
