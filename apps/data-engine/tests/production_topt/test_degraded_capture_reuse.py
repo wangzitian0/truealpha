@@ -711,7 +711,34 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
         probe.close()
 
     _arm(monkeypatch, quote=lambda: _leg_quote(topt_partition, Decimal("40")), price_cutoff=day)
-    topt = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
+    try:
+        topt = _live_topt_tick(tick_database_url, monkeypatch, executed_at=cutoff, accept=True)
+    except Exception:
+        # #530 item 1 diagnostic: capture commits in its own transaction before
+        # freeze/materialize/strategy run (composition.py #628), so this is still
+        # queryable even though the failing step's own transaction rolled back. Not
+        # local-DB reproducible from this environment.
+        with psycopg.connect(tick_database_url) as diag:
+            rows = diag.execute(
+                """
+                select ob.run_id, ob.capture_requirement_id, ob.partition_key, result.completed_at,
+                       p.normalized_payload, o.valid_from, o.knowable_at, o.parser_version
+                from raw.capture_obligations ob
+                join raw.capture_obligation_results result on result.capture_obligation_id = ob.obligation_id
+                left join raw.capture_attempt_results attempt on attempt.attempt_id = result.final_attempt_id
+                left join staging.capture_normalized_observations o
+                  on o.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
+                left join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+                where ob.subject_id = 'listing:xnas:aapl'
+                  and ob.capture_requirement_id in ('market-price:v1', 'financial-fact:v1')
+                order by result.completed_at desc
+                limit 6
+                """
+            ).fetchall()
+            for row in rows:
+                print(f"DIAG topt-leg aapl row: {row}")
+            print(f"DIAG shared aapl_issuer(from _key_topt_like_the_planes)={aapl_issuer!r}")
+        raise
     assert _status_row(tick_database_url, topt["capture_run_id"])[:4] == (OBLIGATIONS, OBLIGATIONS, OBLIGATIONS, 0)
     assert _materialized(tick_database_url, topt["capture_run_id"]) == (1, 20, 20)
 
