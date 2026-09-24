@@ -15,6 +15,10 @@ on:
         description: 'MinIO release tag to build from source (e.g. RELEASE.2025-09-07T16-13-09Z)'
         required: true
         type: string
+  # Bootstrap only: workflow_dispatch requires the workflow file to already exist on the
+  # default branch. Removed again once the rebuilt image is verified.
+  push:
+    branches: [issue1041-minio-mirror]
 
 permissions:
   contents: read
@@ -25,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      MINIO_RELEASE_TAG: ${{ inputs.minio_release_tag }}
+      MINIO_RELEASE_TAG: ${{ inputs.minio_release_tag || 'RELEASE.2025-09-07T16-13-09Z' }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -56,3 +60,18 @@ jobs:
           docker logout ghcr.io
           docker pull "ghcr.io/${{ github.repository_owner }}/minio-mirror@${{ steps.digest.outputs.digest }}" \
             || { echo "::error::Package is not public yet -- flip visibility to Public in GHCR package settings, then re-run this verification." >&2; exit 1; }
+      - name: Verify it actually runs as a healthy MinIO server, from inside the container
+        # docker-compose.yml's healthcheck runs `curl` inside the container itself, not
+        # from the host -- a pull succeeding and a host-side curl succeeding both missed
+        # a base image with no curl binary. Same command that flagged it (#1041).
+        run: |
+          docker run -d --name minio-verify -p 9000:9000 \
+            -e MINIO_ROOT_USER=verify -e MINIO_ROOT_PASSWORD=verify_local_secret \
+            "ghcr.io/${{ github.repository_owner }}/minio-mirror@${{ steps.digest.outputs.digest }}" server /data
+          for attempt in $(seq 1 30); do
+            docker exec minio-verify curl -f http://localhost:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          echo "::error::Container never became healthy" >&2
+          docker logs minio-verify >&2
+          exit 1

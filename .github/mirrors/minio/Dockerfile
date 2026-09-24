@@ -17,6 +17,8 @@ RUN LDFLAGS="$(MINIO_RELEASE=RELEASE go run buildscripts/gen-ldflags.go)" && \
     go build -trimpath --ldflags "${LDFLAGS}" -o /out/minio .
 
 FROM alpine:3.20
+# docker-compose.yml's healthcheck runs `curl` inside this container.
+RUN apk add -U --no-cache curl
 COPY --from=build /src/LICENSE /licenses/LICENSE
 COPY --from=build /src/CREDITS /licenses/CREDITS
 COPY --from=build /out/minio /usr/bin/minio
