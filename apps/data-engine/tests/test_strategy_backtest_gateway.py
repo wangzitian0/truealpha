@@ -115,3 +115,46 @@ def test_mutating_input_fact_changes_snapshot_and_corpus_sha256(connection) -> N
 
     assert mutated_snapshot != original_snapshot
     assert mutated_corpus_sha != original_corpus_sha
+
+
+def test_rows_for_cutoff_supersedes_by_knowable_at_not_insertion_order(connection) -> None:
+    """#530: `_rows_for_cutoff` used to break ties on `recorded_at` (ingestion audit
+    time) -- init.md §6 says explicitly "as-of resolution never reads it", and this IS
+    an as-of resolution (`where cutoff_at = %s`). Construct the exact shape that made
+    the old rule wrong: a row with an EARLIER `knowable_at` inserted SECOND (later
+    `recorded_at`) must not outrank a row with a LATER `knowable_at` inserted first.
+
+    Reverse-verified: reverting the ORDER BY to `recorded_at desc` (dropping
+    `knowable_at desc`) makes this test select 999 instead of 100 -- confirmed by hand
+    before landing this test, per this repo's rule 7."""
+    issuer_id = "issuer:t530-tiebreak"
+    cutoff_at = datetime(2026, 7, 1, tzinfo=UTC)
+
+    # Inserted FIRST (earlier recorded_at), but the LATER knowable_at -- must win.
+    connection.execute(
+        """
+        insert into staging.strategy_backtest_inputs
+            (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, recorded_at)
+        values (%s, %s, 'revenue', 100, 0.9, %s, %s)
+        """,
+        (issuer_id, cutoff_at, datetime(2026, 6, 1, tzinfo=UTC), datetime(2026, 6, 2, tzinfo=UTC)),
+    )
+    # Inserted SECOND (later recorded_at), but the EARLIER knowable_at -- must lose,
+    # even though it was written to the table more recently.
+    connection.execute(
+        """
+        insert into staging.strategy_backtest_inputs
+            (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, recorded_at)
+        values (%s, %s, 'revenue', 999, 0.9, %s, %s)
+        """,
+        (issuer_id, cutoff_at, datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 3, tzinfo=UTC)),
+    )
+
+    gateway = StrategyBacktestGateway(connection)
+    rows = gateway._rows_for_cutoff(cutoff_at)
+    matching = [row for row in rows if row[0] == issuer_id]
+    assert len(matching) == 1, f"expected one resolved row for this (issuer, input_key), got {matching}"
+    assert matching[0][2] == 100, (
+        f"expected the row with the LATER knowable_at (value 100) to win, got {matching[0]} -- "
+        "a later-recorded but earlier-knowable row must never outrank it"
+    )
