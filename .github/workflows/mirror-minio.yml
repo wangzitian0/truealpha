@@ -15,6 +15,11 @@ on:
         description: 'MinIO release tag to build from source (e.g. RELEASE.2025-09-07T16-13-09Z)'
         required: true
         type: string
+  # Bootstrap only: workflow_dispatch requires the workflow file to already exist on the
+  # default branch, which this PR itself cannot satisfy yet. Runs this one build from the
+  # PR branch directly so the image exists before merge; removed before this PR merges.
+  push:
+    branches: [issue1041-minio-mirror]
 
 permissions:
   contents: read
@@ -24,6 +29,10 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # push has no `inputs`; the bootstrap run falls back to the tag ci-python.yml
+      # currently pins.
+      MINIO_RELEASE_TAG: ${{ inputs.minio_release_tag || 'RELEASE.2025-09-07T16-13-09Z' }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -38,17 +47,17 @@ jobs:
         with:
           context: .github/mirrors/minio
           build-args: |
-            MINIO_RELEASE_TAG=${{ inputs.minio_release_tag }}
+            MINIO_RELEASE_TAG=${{ env.MINIO_RELEASE_TAG }}
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/minio-mirror:${{ inputs.minio_release_tag }}
+          tags: ghcr.io/${{ github.repository_owner }}/minio-mirror:${{ env.MINIO_RELEASE_TAG }}
           provenance: false
       - name: Resolve pushed digest
         id: digest
         run: |
-          DIGEST=$(docker buildx imagetools inspect "ghcr.io/${{ github.repository_owner }}/minio-mirror:${{ inputs.minio_release_tag }}" --format '{{json .Manifest}}' | python3 -c "import json,sys; print(json.load(sys.stdin)['digest'])")
+          DIGEST=$(docker buildx imagetools inspect "ghcr.io/${{ github.repository_owner }}/minio-mirror:${{ env.MINIO_RELEASE_TAG }}" --format '{{json .Manifest}}' | python3 -c "import json,sys; print(json.load(sys.stdin)['digest'])")
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "Pushed ghcr.io/${{ github.repository_owner }}/minio-mirror:${{ inputs.minio_release_tag }}@$DIGEST"
+          echo "Pushed ghcr.io/${{ github.repository_owner }}/minio-mirror:${{ env.MINIO_RELEASE_TAG }}@$DIGEST"
       - name: Verify the image is anonymously pullable (matches ci-python.yml's unauthenticated docker run)
         run: |
           docker logout ghcr.io
