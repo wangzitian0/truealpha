@@ -1390,15 +1390,19 @@ def test_the_changes_filter_reaches_the_sweep_over_published_agent_files() -> No
     directory further over.
 
     The shared rule source publishes this repository's `AGENTS.md` and skills, so a PR
-    that touches only those paths is the normal case, not an edge. The Qlib sweep reads
-    every one of them: `skills/` is a scan root, the symlink-only roots are excluded on a
-    premise the sweep's own test asserts, and `AGENTS.md` is a root file.
+    that touches only those paths is the normal case, not an edge. A test in this file
+    reads every one of them: `skills/` is a scan root, the symlink-only roots and the
+    publish record are excluded on premises asserted here, and `AGENTS.md` (with
+    `CLAUDE.md` linking to it) is a root file.
 
     A PR that adds some other new top-level directory still skips ci-python; no filter
     entry can name a directory that does not exist yet.
     """
     python = _changes_filters()["python"]
-    published = [f"{root}/**" for root in ("skills", *_SYMLINK_ONLY_EXCLUDED_ROOTS)] + ["AGENTS.md"]
+    published = [f"{root}/**" for root in ("skills", *_SYMLINK_ONLY_EXCLUDED_ROOTS, _RECORD_ONLY_EXCLUDED_ROOT)] + [
+        "AGENTS.md",
+        "CLAUDE.md",
+    ]
     missing = [entry for entry in published if entry not in python]
     assert not missing, (
         f"the python filter lacks {missing}: a PR touching only those paths skips ci-python, "
@@ -2036,6 +2040,8 @@ QLIB_SCAN_ROOTS = (".github", "apps", "db", "libs", "skills", "tools")
 #: of QLIB_SCAN_ROOTS. Used BY the tuple below, not merely named beside it, so the exclusion
 #: and the assertion cannot drift apart (#1006 review).
 _SYMLINK_ONLY_EXCLUDED_ROOTS = (".claude", ".agents")
+#: Excluded on the same kind of premise: it holds one JSON record and nothing else.
+_RECORD_ONLY_EXCLUDED_ROOT = ".ws-publish"
 
 QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # The ADR for this migration (A5-polars-vectorbt-engine.md) and A0's amendment note
@@ -2058,8 +2064,9 @@ QLIB_SCAN_EXCLUDED_ROOT_DIRS = (
     # The record the shared rule source writes when it publishes `AGENTS.md` and the
     # skills (#1018): output paths and their hashes. It names files and runs nothing; the
     # files it names are swept where they live -- `AGENTS.md` as a root file, the skills
-    # under `skills/`.
-    ".ws-publish",
+    # under `skills/`. Safe only while the record is all it holds, which
+    # test_the_publish_record_root_holds_only_the_record asserts.
+    _RECORD_ONLY_EXCLUDED_ROOT,
 )
 #: The repository's own top-level FILES are scanned too, non-recursively. `rglob` from a
 #: scan root cannot reach a file sitting at the repository root, and the root
@@ -2665,4 +2672,23 @@ def test_every_symlink_only_root_entry_resolves_into_a_scanned_root(excluded_roo
         f"{excluded_root}/ is excluded from the Qlib sweep only because everything "
         f"in it is scanned through its real path. These are not: {escapes}. Either move them under "
         f"a scan root or move {excluded_root} into QLIB_SCAN_ROOTS."
+    )
+
+
+def test_the_publish_record_root_holds_only_the_record() -> None:
+    """The publish record's directory is excluded because it holds one JSON file that
+    names other files and runs nothing. A script written there later would sit outside
+    the sweep with nothing to say so; this asserts the premise instead of trusting it.
+    """
+    listing = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", _RECORD_ONLY_EXCLUDED_ROOT],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    entries = sorted(entry for entry in listing.split("\0") if entry)
+    assert entries == [f"{_RECORD_ONLY_EXCLUDED_ROOT}/manifest.json"], (
+        f"{_RECORD_ONLY_EXCLUDED_ROOT}/ is excluded from the Qlib sweep only because it holds the "
+        f"publish record and nothing else; git tracks {entries}. Scan what was added, or remove "
+        f"the exclusion."
     )
