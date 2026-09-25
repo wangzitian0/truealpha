@@ -56,8 +56,7 @@ on conflict (run_id, issuer_id) do update set
     extractor = excluded.extractor,
     availability_status = excluded.availability_status,
     source_evidence_status = excluded.source_evidence_status,
-    factor_validation_status = excluded.factor_validation_status,
-    created_at = clock_timestamp()
+    factor_validation_status = excluded.factor_validation_status
 """
 
 

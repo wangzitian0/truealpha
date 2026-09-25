@@ -128,3 +128,62 @@ def test_extract_supply_chain_relationships_parses_sentences() -> None:
     assert "single supplier" in edges[0].evidence_sentence
     assert edges[1].relation_type == "customer"
     assert "largest customer" in edges[1].evidence_sentence
+
+
+def test_supplies_to_is_classified_as_customer_not_supplier() -> None:
+    """Regression: 'supplies to' means the issuer supplies TO a customer.
+
+    The partner in that sentence is a *customer*, not a supplier.
+    Before the fix, 'supplies' matched first and set rel='supplier', flipping
+    the edge direction for this common wording.
+    """
+    text = (
+        "Item 1. Business\n"
+        "The company supplies to Apple Inc. as its primary distribution channel.\n"
+        "We also purchase raw materials from a key supplier in Taiwan.\n"
+    )
+    edges = extract_supply_chain_relationships(
+        text,
+        issuer_id="issuer:test",
+        filing_date=date(2026, 1, 1),
+        accession="0001-00-00",
+    )
+    assert len(edges) == 2
+    # "supplies to Apple" → Apple is a customer
+    assert edges[0].relation_type == "customer", (
+        f"Expected 'customer' for 'supplies to' sentence, got {edges[0].relation_type!r}"
+    )
+    # "key supplier in Taiwan" → Taiwan partner is a supplier
+    assert edges[1].relation_type == "supplier", (
+        f"Expected 'supplier' for 'key supplier' sentence, got {edges[1].relation_type!r}"
+    )
+
+
+def test_purchases_from_is_classified_as_supplier_not_customer() -> None:
+    """Regression: 'purchases from' means the issuer buys from a supplier.
+
+    The partner in that sentence is a *supplier*, not a customer.
+    Before the fix, 'purchases from' was in is_customer_context, which would
+    misclassify "We purchase components from Acme" when no supplier/vendor
+    keyword was also present.
+    """
+    text = (
+        "Item 1. Business\n"
+        "The Company purchases from Acme Corp substantially all of its semiconductor needs.\n"
+        "Our largest customer is a major US retailer accounting for 20% of revenue.\n"
+    )
+    edges = extract_supply_chain_relationships(
+        text,
+        issuer_id="issuer:test",
+        filing_date=date(2026, 1, 1),
+        accession="0001-00-00",
+    )
+    assert len(edges) == 2
+    # "purchases from Acme" → Acme is a supplier
+    assert edges[0].relation_type == "supplier", (
+        f"Expected 'supplier' for 'purchases from' sentence, got {edges[0].relation_type!r}"
+    )
+    # "largest customer" → partner is a customer
+    assert edges[1].relation_type == "customer", (
+        f"Expected 'customer' for 'largest customer' sentence, got {edges[1].relation_type!r}"
+    )

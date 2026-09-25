@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 import psycopg
 import pytest
@@ -27,67 +28,81 @@ from data_engine.datahub.standards.supply_chain_extraction import (
     supply_chain_exposure,
 )
 
-DATABASE_URL = os.environ.get("TRUEALPHA_TEST_DATABASE_URL", "postgresql://postgres@localhost:5432/truealpha_m1_m2")
 
-
-def _is_pg_ready() -> bool:
+@pytest.fixture
+def connection():
+    url = (
+        os.environ.get("TRUEALPHA_TEST_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or "postgresql://postgres@localhost:5432/truealpha_m1_m2"
+    )
     try:
-        with psycopg.connect(DATABASE_URL, connect_timeout=1) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "select to_regclass('mart.issuer_analyst_ratings'), to_regclass('mart.issuer_supply_chain_exposure')"
-                )
-                res = cur.fetchone()
-                return bool(res and res[0] and res[1])
-    except Exception:
-        return False
+        conn = psycopg.connect(url, connect_timeout=3, autocommit=False)
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs the required integration coverage")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select to_regclass('mart.issuer_analyst_ratings'), to_regclass('mart.issuer_supply_chain_exposure')"
+            )
+            res = cur.fetchone()
+            if not (res and res[0] and res[1]):
+                if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+                    pytest.fail(
+                        "Connected to Postgres but M1/M2 mart tables are absent — run migrations before this shard.",
+                        pytrace=False,
+                    )
+                pytest.skip("PostgreSQL mart tables not available")
+        yield conn
+    finally:
+        conn.rollback()
+        conn.close()
 
 
-pytestmark = pytest.mark.skipif(not _is_pg_ready(), reason="PostgreSQL mart tables not available")
-
-
-def test_physical_postgres_analyst_ratings_and_supply_chain_insertion() -> None:
+def test_physical_postgres_analyst_ratings_and_supply_chain_insertion(connection: psycopg.Connection[Any]) -> None:
     now = datetime.now(tz=UTC)
     run_id = f"test_run_{int(now.timestamp())}"
+    conn = connection
+    # 1. Evaluate factor and materialize analyst ratings
+    ratings = [
+        AnalystRatingItem("analyst:test:1", 5, confidence=Decimal("0.9")),
+        AnalystRatingItem("analyst:test:2", 4, confidence=Decimal("0.8")),
+    ]
+    rec_analyst = analyst_track_record(ratings, entity_id="issuer:test:pg_aapl", as_of=now)
+    count_a = materialize_analyst_ratings(conn, run_id=run_id, cutoff=now, ratings_data=[rec_analyst])
+    assert count_a == 1
 
-    with psycopg.connect(DATABASE_URL) as conn:
-        # 1. Evaluate factor and materialize analyst ratings
-        ratings = [
-            AnalystRatingItem("analyst:test:1", 5, confidence=Decimal("0.9")),
-            AnalystRatingItem("analyst:test:2", 4, confidence=Decimal("0.8")),
-        ]
-        rec_analyst = analyst_track_record(ratings, entity_id="issuer:test:pg_aapl", as_of=now)
-        count_a = materialize_analyst_ratings(conn, run_id=run_id, cutoff=now, ratings_data=[rec_analyst])
-        assert count_a == 1
+    # 2. Evaluate factor and materialize supply chain exposure
+    partners = [
+        SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.4"), confidence=Decimal("0.9")),
+        SupplyChainPartner(
+            "p:foxconn", "Foxconn", "supplier", revenue_share=Decimal("0.3"), confidence=Decimal("0.85")
+        ),
+    ]
+    rec_sc = supply_chain_exposure(partners, entity_id="issuer:test:pg_aapl", as_of=now)
+    count_sc = materialize_supply_chain_exposure(conn, run_id=run_id, cutoff=now, exposure_data=[rec_sc])
+    assert count_sc == 1
 
-        # 2. Evaluate factor and materialize supply chain exposure
-        partners = [
-            SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.4"), confidence=Decimal("0.9")),
-            SupplyChainPartner(
-                "p:foxconn", "Foxconn", "supplier", revenue_share=Decimal("0.3"), confidence=Decimal("0.85")
-            ),
-        ]
-        rec_sc = supply_chain_exposure(partners, entity_id="issuer:test:pg_aapl", as_of=now)
-        count_sc = materialize_supply_chain_exposure(conn, run_id=run_id, cutoff=now, exposure_data=[rec_sc])
-        assert count_sc == 1
+    conn.commit()
 
-        conn.commit()
+    # 3. Read back cells and verify Touch Reality invariant
+    cells_a = analyst_rating_cells(conn, run_id)
+    assert len(cells_a) == 1
+    assert cells_a[0].subject_id == "issuer:test:pg_aapl"
+    assert cells_a[0].answered is True
+    assert cells_a[0].reason is None
 
-        # 3. Read back cells and verify Touch Reality invariant
-        cells_a = analyst_rating_cells(conn, run_id)
-        assert len(cells_a) == 1
-        assert cells_a[0].subject_id == "issuer:test:pg_aapl"
-        assert cells_a[0].answered is True
-        assert cells_a[0].reason is None
+    cells_sc = supply_chain_cells(conn, run_id)
+    assert len(cells_sc) == 1
+    assert cells_sc[0].subject_id == "issuer:test:pg_aapl"
+    assert cells_sc[0].answered is True
+    assert cells_sc[0].reason is None
 
-        cells_sc = supply_chain_cells(conn, run_id)
-        assert len(cells_sc) == 1
-        assert cells_sc[0].subject_id == "issuer:test:pg_aapl"
-        assert cells_sc[0].answered is True
-        assert cells_sc[0].reason is None
-
-        # Clean up test rows
-        with conn.cursor() as cur:
-            cur.execute("delete from mart.issuer_analyst_ratings where run_id = %s", (run_id,))
-            cur.execute("delete from mart.issuer_supply_chain_exposure where run_id = %s", (run_id,))
-        conn.commit()
+    # Clean up test rows
+    with conn.cursor() as cur:
+        cur.execute("delete from mart.issuer_analyst_ratings where run_id = %s", (run_id,))
+        cur.execute("delete from mart.issuer_supply_chain_exposure where run_id = %s", (run_id,))
+    conn.commit()

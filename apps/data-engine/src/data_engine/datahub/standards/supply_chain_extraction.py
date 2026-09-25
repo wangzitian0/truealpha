@@ -57,8 +57,7 @@ on conflict (run_id, issuer_id) do update set
     extractor = excluded.extractor,
     availability_status = excluded.availability_status,
     source_evidence_status = excluded.source_evidence_status,
-    factor_validation_status = excluded.factor_validation_status,
-    created_at = clock_timestamp()
+    factor_validation_status = excluded.factor_validation_status
 """
 
 
@@ -100,7 +99,19 @@ def extract_supply_chain_relationships(
         line_clean = line.strip()
         lower = line_clean.lower()
         if any(term in lower for term in ("supplier", "customer", "vendor", "supplies to", "purchases from")):
-            rel = "supplier" if any(s in lower for s in ("supplier", "vendor", "supplies")) else "customer"
+            # Direction rules:
+            #   "supplies to X"   → X is a customer (issuer sells to X)
+            #   "customer"        → partner is a customer
+            #   "supplier/vendor" → partner is a supplier
+            #   "supplies" alone  → issuer is a supplier; partner is a customer
+            #   "purchases from X"→ issuer buys from X; X is a supplier
+            is_customer_context = "supplies to" in lower or "customer" in lower
+            is_supplier_context = any(s in lower for s in ("supplier", "vendor", "purchases from")) or (
+                "supplies" in lower and "supplies to" not in lower
+            )
+            if not is_customer_context and not is_supplier_context:
+                continue
+            rel = "customer" if is_customer_context and not is_supplier_context else "supplier"
             results.append(
                 SupplyChainEdgeCandidate(
                     source_entity_id=issuer_id,
