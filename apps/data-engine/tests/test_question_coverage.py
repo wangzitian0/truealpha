@@ -332,4 +332,3 @@ def test_q4_is_bound_to_the_materialized_column_rather_than_left_missing() -> No
     assert requirement.has_column
     assert [c.table for c in requirement.columns] == ["mart.issuer_analyst_ratings"]
     assert [c.column for c in requirement.columns] == ["consensus_rating"]
-

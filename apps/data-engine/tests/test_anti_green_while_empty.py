@@ -70,9 +70,7 @@ def test_anti_green_while_empty_rejects_null_metric_as_answered() -> None:
     """
     mock_conn = MagicMock()
     # 20 rows with status 'available' but exposure_score is None!
-    mock_conn.execute.return_value.fetchall.return_value = [
-        (f"issuer:{i}", "available", [], None) for i in range(20)
-    ]
+    mock_conn.execute.return_value.fetchall.return_value = [(f"issuer:{i}", "available", [], None) for i in range(20)]
     cells = supply_chain_cells(mock_conn, "run:test")
     assert len(cells) == 20
     assert all(not c.answered for c in cells)

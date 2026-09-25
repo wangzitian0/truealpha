@@ -94,11 +94,7 @@ def capture_ticker_analyst_ratings(
         if ret == 0 and df is not None and not df.empty:
             row = df.iloc[0]
             raw_rating = row.get("consensus_rating")
-            consensus_rating = (
-                Decimal(str(raw_rating))
-                if raw_rating is not None and not pd.isna(raw_rating)
-                else None
-            )
+            consensus_rating = Decimal(str(raw_rating)) if raw_rating is not None and not pd.isna(raw_rating) else None
             raw_count = row.get("analyst_count", row.get("recommend_num", 1))
             count = int(raw_count) if raw_count is not None and not pd.isna(raw_count) else 1
 
@@ -173,7 +169,11 @@ def materialize_analyst_ratings(
             confidence = item.result.confidence
             reason_codes = list(item.result.flags)
             extractor = "origin:moomoo:v1"
-            avail = "available" if item.result.data_availability == "verified" and consensus_rating is not None else "unavailable"
+            avail = (
+                "available"
+                if item.result.data_availability == "verified" and consensus_rating is not None
+                else "unavailable"
+            )
             source_status = "verified" if avail == "available" else "degraded"
             val_status = "accepted" if consensus_rating is not None else "not_evaluated"
         else:
@@ -187,7 +187,11 @@ def materialize_analyst_ratings(
                 sell_count = rec.sell_count
                 confidence = rec.result.confidence
                 reason_codes = list(rec.result.flags)
-                avail = "available" if rec.result.data_availability == "verified" and consensus_rating is not None else "unavailable"
+                avail = (
+                    "available"
+                    if rec.result.data_availability == "verified" and consensus_rating is not None
+                    else "unavailable"
+                )
                 source_status = "verified" if avail == "available" else "degraded"
                 val_status = "accepted" if consensus_rating is not None else "not_evaluated"
             else:
@@ -199,9 +203,17 @@ def materialize_analyst_ratings(
                 sell_count = int(item.get("sell_count", 0))
                 confidence = Decimal(str(item.get("confidence", "0.8" if consensus_rating is not None else "0")))
                 reason_codes = list(item.get("reason_codes", []))
-                avail = str(item.get("availability_status", "available" if consensus_rating is not None else "unavailable"))
-                source_status = str(item.get("source_evidence_status", "verified" if avail == "available" else "degraded"))
-                val_status = str(item.get("factor_validation_status", "accepted" if consensus_rating is not None else "not_evaluated"))
+                avail = str(
+                    item.get("availability_status", "available" if consensus_rating is not None else "unavailable")
+                )
+                source_status = str(
+                    item.get("source_evidence_status", "verified" if avail == "available" else "degraded")
+                )
+                val_status = str(
+                    item.get(
+                        "factor_validation_status", "accepted" if consensus_rating is not None else "not_evaluated"
+                    )
+                )
             extractor = str(item.get("extractor", "origin:moomoo:v1"))
 
         connection.execute(

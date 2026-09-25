@@ -34,7 +34,9 @@ def _is_pg_ready() -> bool:
     try:
         with psycopg.connect(DATABASE_URL, connect_timeout=1) as conn:
             with conn.cursor() as cur:
-                cur.execute("select to_regclass('mart.issuer_analyst_ratings'), to_regclass('mart.issuer_supply_chain_exposure')")
+                cur.execute(
+                    "select to_regclass('mart.issuer_analyst_ratings'), to_regclass('mart.issuer_supply_chain_exposure')"
+                )
                 res = cur.fetchone()
                 return bool(res and res[0] and res[1])
     except Exception:
@@ -61,7 +63,9 @@ def test_physical_postgres_analyst_ratings_and_supply_chain_insertion() -> None:
         # 2. Evaluate factor and materialize supply chain exposure
         partners = [
             SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.4"), confidence=Decimal("0.9")),
-            SupplyChainPartner("p:foxconn", "Foxconn", "supplier", revenue_share=Decimal("0.3"), confidence=Decimal("0.85")),
+            SupplyChainPartner(
+                "p:foxconn", "Foxconn", "supplier", revenue_share=Decimal("0.3"), confidence=Decimal("0.85")
+            ),
         ]
         rec_sc = supply_chain_exposure(partners, entity_id="issuer:test:pg_aapl", as_of=now)
         count_sc = materialize_supply_chain_exposure(conn, run_id=run_id, cutoff=now, exposure_data=[rec_sc])

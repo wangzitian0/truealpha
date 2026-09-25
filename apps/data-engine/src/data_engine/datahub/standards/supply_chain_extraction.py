@@ -134,7 +134,11 @@ def materialize_supply_chain_exposure(
             confidence = item.result.confidence
             reason_codes = list(item.result.flags)
             extractor = "graph:kg-edges:v1"
-            avail = "available" if item.result.data_availability == "verified" and exposure_score is not None else "unavailable"
+            avail = (
+                "available"
+                if item.result.data_availability == "verified" and exposure_score is not None
+                else "unavailable"
+            )
             source_status = "verified" if avail == "available" else "degraded"
             val_status = "accepted" if exposure_score is not None else "not_evaluated"
         else:
@@ -148,7 +152,11 @@ def materialize_supply_chain_exposure(
                 max_partner_share = rec.max_partner_share
                 confidence = rec.result.confidence
                 reason_codes = list(rec.result.flags)
-                avail = "available" if rec.result.data_availability == "verified" and exposure_score is not None else "unavailable"
+                avail = (
+                    "available"
+                    if rec.result.data_availability == "verified" and exposure_score is not None
+                    else "unavailable"
+                )
                 source_status = "verified" if avail == "available" else "degraded"
                 val_status = "accepted" if exposure_score is not None else "not_evaluated"
             else:
@@ -161,9 +169,15 @@ def materialize_supply_chain_exposure(
                 max_partner_share = Decimal(str(raw_share)) if raw_share is not None else Decimal("0")
                 confidence = Decimal(str(item.get("confidence", "0.8" if exposure_score is not None else "0")))
                 reason_codes = list(item.get("reason_codes", []))
-                avail = str(item.get("availability_status", "available" if exposure_score is not None else "unavailable"))
-                source_status = str(item.get("source_evidence_status", "verified" if avail == "available" else "degraded"))
-                val_status = str(item.get("factor_validation_status", "accepted" if exposure_score is not None else "not_evaluated"))
+                avail = str(
+                    item.get("availability_status", "available" if exposure_score is not None else "unavailable")
+                )
+                source_status = str(
+                    item.get("source_evidence_status", "verified" if avail == "available" else "degraded")
+                )
+                val_status = str(
+                    item.get("factor_validation_status", "accepted" if exposure_score is not None else "not_evaluated")
+                )
             extractor = str(item.get("extractor", "graph:kg-edges:v1"))
 
         connection.execute(

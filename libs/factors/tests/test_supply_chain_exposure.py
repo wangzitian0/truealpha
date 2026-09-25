@@ -23,8 +23,12 @@ def test_supply_chain_exposure_refuses_when_no_partners() -> None:
 def test_supply_chain_exposure_computes_with_shares() -> None:
     now = datetime(2026, 9, 25, tzinfo=UTC)
     partners = [
-        SupplyChainPartner("partner:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.40"), confidence=Decimal("0.9")),
-        SupplyChainPartner("partner:foxconn", "Foxconn", "supplier", revenue_share=Decimal("0.30"), confidence=Decimal("0.85")),
+        SupplyChainPartner(
+            "partner:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.40"), confidence=Decimal("0.9")
+        ),
+        SupplyChainPartner(
+            "partner:foxconn", "Foxconn", "supplier", revenue_share=Decimal("0.30"), confidence=Decimal("0.85")
+        ),
     ]
     res = supply_chain_exposure(partners, entity_id="issuer:aapl", as_of=now)
     assert isinstance(res, SupplyChainExposure)
