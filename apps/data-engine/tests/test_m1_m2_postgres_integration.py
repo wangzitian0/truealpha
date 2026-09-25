@@ -30,15 +30,17 @@ from data_engine.datahub.standards.supply_chain_extraction import (
 DATABASE_URL = os.environ.get("TRUEALPHA_TEST_DATABASE_URL", "postgresql://postgres@localhost:5432/truealpha_m1_m2")
 
 
-_REQUIRE_RUNTIME = bool(os.environ.get("TRUEALPHA_REQUIRE_RUNTIME") or os.environ.get("TRUEALPHA_TEST_DATABASE_URL"))
+_REQUIRE_RUNTIME = bool(os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"))
 
 
-def _pg_ready_or_raise() -> bool:
-    """Return True when marts are reachable.
+def _pg_ready_or_fail() -> bool:
+    """Return True when M1/M2 mart tables are reachable.
 
-    Raises RuntimeError when the environment explicitly requires DB access
-    (TRUEALPHA_TEST_DATABASE_URL or TRUEALPHA_REQUIRE_RUNTIME is set) so CI
-    misconfigurations do not silently drop coverage.
+    - If we connect but marts are missing and runtime is required → RuntimeError
+      (CI misconfiguration: migrations not applied in this shard).
+    - If we can't connect at all and runtime is required → pytest.fail
+      (matches the pattern in test_entity_display_resolution_view.py).
+    - Otherwise → skip silently (local dev or non-DB shard).
     """
     try:
         with psycopg.connect(DATABASE_URL, connect_timeout=1) as conn:
@@ -47,14 +49,19 @@ def _pg_ready_or_raise() -> bool:
                     "select to_regclass('mart.issuer_analyst_ratings'), to_regclass('mart.issuer_supply_chain_exposure')"
                 )
                 res = cur.fetchone()
-                return bool(res and res[0] and res[1])
-    except Exception as exc:
+                ready = bool(res and res[0] and res[1])
+        if not ready and _REQUIRE_RUNTIME:
+            raise RuntimeError(
+                f"Connected to {DATABASE_URL} but M1/M2 mart tables are absent — run migrations before this shard."
+            )
+        return ready
+    except psycopg.OperationalError as exc:
         if _REQUIRE_RUNTIME:
-            raise RuntimeError(f"DB required by env but unreachable at {DATABASE_URL}: {exc}") from exc
+            pytest.fail(f"configured Postgres is unreachable: {exc}", pytrace=False)
         return False
 
 
-pytestmark = pytest.mark.skipif(not _pg_ready_or_raise(), reason="PostgreSQL mart tables not available")
+pytestmark = pytest.mark.skipif(not _pg_ready_or_fail(), reason="PostgreSQL mart tables not available")
 
 
 def test_physical_postgres_analyst_ratings_and_supply_chain_insertion() -> None:
