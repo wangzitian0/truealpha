@@ -6,7 +6,8 @@ exposure metrics into mart.issuer_supply_chain_exposure.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -25,6 +26,7 @@ __all__ = (
     "SupplyChainPartner",
     "extract_supply_chain_relationships",
     "materialize_supply_chain_exposure",
+    "materialize_universe_supply_chain_exposure",
     "supply_chain_exposure",
 )
 
@@ -70,6 +72,28 @@ class SupplyChainEdgeCandidate:
     confidence: Decimal
 
 
+_NEGATIVE_SUBSTRINGS = (
+    "customer service",
+    "customer support",
+    "customer deposit",
+    "customer care",
+    "customer satisfaction",
+    "customer relations",
+    "customer experience",
+    "customer base",
+    "vendor management",
+)
+
+_SUPPLIES_TO_PATTERN = re.compile(
+    r"supplies\s+to\s+([A-Z][A-Za-z0-9\s,\.&]{1,40}?)(?:\s+(?:as|for|under|with|\.|\,)|$)",
+    re.IGNORECASE,
+)
+_PURCHASES_FROM_PATTERN = re.compile(
+    r"purchase(?:s)?\s+(?:raw\s+materials\s+|components\s+)?from\s+([A-Z][A-Za-z0-9\s,\.&]{1,40}?)(?:\s+(?:substantially|as|for|under|with|\.|\,)|$)",
+    re.IGNORECASE,
+)
+
+
 def extract_supply_chain_relationships(
     filing_text: str,
     *,
@@ -98,24 +122,38 @@ def extract_supply_chain_relationships(
     for line in filing_text.splitlines():
         line_clean = line.strip()
         lower = line_clean.lower()
-        if any(term in lower for term in ("supplier", "customer", "vendor", "supplies to", "purchases from")):
+        if any(neg in lower for neg in _NEGATIVE_SUBSTRINGS):
+            continue
+
+        if any(term in lower for term in ("supplier", "customer", "vendor", "supplies", "purchase", "purchasing")):
             # Direction rules:
             #   "supplies to X"   → X is a customer (issuer sells to X)
             #   "customer"        → partner is a customer
             #   "supplier/vendor" → partner is a supplier
             #   "supplies" alone  → issuer is a supplier; partner is a customer
-            #   "purchases from X"→ issuer buys from X; X is a supplier
+            #   "purchase(s) from X"→ issuer buys from X; X is a supplier
             is_customer_context = "supplies to" in lower or "customer" in lower
-            is_supplier_context = any(s in lower for s in ("supplier", "vendor", "purchases from")) or (
+            is_supplier_context = any(s in lower for s in ("supplier", "vendor", "purchase", "purchasing")) or (
                 "supplies" in lower and "supplies to" not in lower
             )
             if not is_customer_context and not is_supplier_context:
                 continue
             rel = "customer" if is_customer_context and not is_supplier_context else "supplier"
+
+            target_name = "Major Customer" if rel == "customer" else "Key Supplier"
+            if rel == "customer":
+                m_sup = _SUPPLIES_TO_PATTERN.search(line_clean)
+                if m_sup:
+                    target_name = m_sup.group(1).strip()
+            else:
+                m_pur = _PURCHASES_FROM_PATTERN.search(line_clean)
+                if m_pur:
+                    target_name = m_pur.group(1).strip()
+
             results.append(
                 SupplyChainEdgeCandidate(
                     source_entity_id=issuer_id,
-                    target_entity_name="Disclosed Partner",
+                    target_entity_name=target_name,
                     relation_type=rel,
                     evidence_sentence=line_clean[:200],
                     confidence=Decimal("0.85"),
@@ -211,4 +249,55 @@ def materialize_supply_chain_exposure(
             ),
         )
         count += 1
+    return count
+
+
+def materialize_universe_supply_chain_exposure(
+    connection: Connection[Any],
+    *,
+    run_id: str,
+    cutoff: datetime,
+    tickers: Mapping[str, str],
+) -> int:
+    """Extract and materialize supply chain exposure for all issuers in a universe run."""
+    count = 0
+    has_edges_table = False
+    try:
+        with connection.cursor() as cur:
+            cur.execute("select to_regclass('staging.kg_edges')")
+            res = cur.fetchone()
+            has_edges_table = bool(res and res[0])
+    except Exception:
+        has_edges_table = False
+
+    for issuer_id, ticker in tickers.items():
+        partners: list[SupplyChainPartner] = []
+        if has_edges_table:
+            rows = connection.execute(
+                """
+                select target_entity_id, target_entity_name, relation_type, revenue_share, confidence
+                from staging.kg_edges
+                where source_entity_id = %s and valid_from <= %s and (valid_to is null or valid_to > %s)
+                """,
+                (issuer_id, cutoff, cutoff),
+            ).fetchall()
+            for r in rows:
+                p_id, p_name, r_type, rev_share, conf = r
+                partners.append(
+                    SupplyChainPartner(
+                        partner_id=str(p_id or p_name),
+                        partner_name=str(p_name),
+                        relation_type=str(r_type),
+                        revenue_share=Decimal(str(rev_share)) if rev_share is not None else None,
+                        confidence=Decimal(str(conf)) if conf is not None else Decimal("0.8"),
+                    )
+                )
+
+        record = supply_chain_exposure(partners, entity_id=issuer_id, as_of=cutoff)
+        count += materialize_supply_chain_exposure(
+            connection,
+            run_id=run_id,
+            cutoff=cutoff,
+            exposure_data=[record],
+        )
     return count

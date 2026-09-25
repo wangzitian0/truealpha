@@ -6,7 +6,7 @@ Materialized table: mart.issuer_analyst_ratings.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -25,6 +25,7 @@ __all__ = (
     "analyst_track_record",
     "capture_ticker_analyst_ratings",
     "materialize_analyst_ratings",
+    "materialize_universe_analyst_ratings",
 )
 
 _INSERT_SQL = """
@@ -94,11 +95,21 @@ def capture_ticker_analyst_ratings(
             row = df.iloc[0]
             raw_rating = row.get("consensus_rating")
             consensus_rating = Decimal(str(raw_rating)) if raw_rating is not None and not pd.isna(raw_rating) else None
-            raw_count = row.get("analyst_count", row.get("recommend_num", 1))
-            count = int(raw_count) if raw_count is not None and not pd.isna(raw_count) else 1
+            raw_count = row.get("analyst_count", row.get("recommend_num", 0))
+            count = int(raw_count) if raw_count is not None and not pd.isna(raw_count) else 0
+
+            # If consensus_rating is None or count <= 0, there is no real analyst coverage
+            if consensus_rating is None or count <= 0:
+                record = analyst_track_record([], entity_id=company_id, as_of=as_of)
+                return materialize_analyst_ratings(
+                    connection,
+                    run_id=run_id,
+                    cutoff=as_of,
+                    ratings_data=[record],
+                )
 
             # Construct ratings items and evaluate factor
-            rating_val = int(round(float(consensus_rating))) if consensus_rating is not None else 3
+            rating_val = int(round(float(consensus_rating)))
             rating_val = max(1, min(5, rating_val))
             items = [
                 AnalystRatingItem(
@@ -106,7 +117,7 @@ def capture_ticker_analyst_ratings(
                     rating=rating_val,
                     confidence=Decimal("0.85"),
                 )
-                for i in range(max(1, count))
+                for i in range(count)
             ]
             record = analyst_track_record(items, entity_id=company_id, as_of=as_of)
             return materialize_analyst_ratings(
@@ -200,7 +211,11 @@ def materialize_analyst_ratings(
                 buy_count = int(item.get("buy_count", 0))
                 hold_count = int(item.get("hold_count", 0))
                 sell_count = int(item.get("sell_count", 0))
-                confidence = Decimal(str(item.get("confidence", "0.8" if consensus_rating is not None else "0")))
+                raw_conf = item.get("confidence")
+                if raw_conf is not None:
+                    confidence = Decimal(str(raw_conf))
+                else:
+                    confidence = Decimal("0.8") if consensus_rating is not None else Decimal("0")
                 reason_codes = list(item.get("reason_codes", []))
                 avail = str(
                     item.get("availability_status", "available" if consensus_rating is not None else "unavailable")
@@ -235,4 +250,26 @@ def materialize_analyst_ratings(
             ),
         )
         count += 1
+    return count
+
+
+def materialize_universe_analyst_ratings(
+    connection: Connection[Any],
+    *,
+    run_id: str,
+    cutoff: datetime,
+    tickers: Mapping[str, str],
+    ctx: Any | None = None,
+) -> int:
+    """Capture and materialize analyst ratings for all issuers in a universe run."""
+    count = 0
+    for issuer_id, ticker in tickers.items():
+        count += capture_ticker_analyst_ratings(
+            ctx,
+            ticker=ticker,
+            company_id=issuer_id,
+            connection=connection,
+            run_id=run_id,
+            cutoff=cutoff,
+        )
     return count

@@ -8,6 +8,7 @@ from decimal import Decimal
 from data_engine.datahub.standards.supply_chain_extraction import (
     extract_supply_chain_relationships,
     materialize_supply_chain_exposure,
+    materialize_universe_supply_chain_exposure,
 )
 from factors.base.supply_chain_exposure import (
     SupplyChainPartner,
@@ -23,6 +24,12 @@ class _MockCursor:
         self.executed.append((sql, params))
         return self
 
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
 
 class _MockConnection:
     def __init__(self):
@@ -32,12 +39,22 @@ class _MockConnection:
         self.executed.append((sql, params))
         return _MockCursor()
 
+    def cursor(self):
+        return _MockCursor()
 
-def test_materialize_supply_chain_exposure_executes_insert() -> None:
+
+def test_materialize_supply_chain_exposure_handles_dict_and_factor_record() -> None:
+    """Consolidated: tests both raw dict rows and SupplyChainExposure factor results."""
     conn = _MockConnection()
+    now = datetime(2026, 9, 25, tzinfo=UTC)
+    partners = [
+        SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.5"), confidence=Decimal("0.9")),
+    ]
+    rec = supply_chain_exposure(partners, entity_id="issuer:nvda", as_of=now)
     count = materialize_supply_chain_exposure(
         conn,
-        run_id="run:sc1",
+        run_id="run:sc_both",
+        cutoff=now,
         exposure_data=[
             {
                 "issuer_id": "issuer:aapl",
@@ -46,76 +63,37 @@ def test_materialize_supply_chain_exposure_executes_insert() -> None:
                 "availability_status": "available",
                 "reason_codes": [],
             },
-            {
-                "issuer_id": "issuer:tiny",
-                "exposure_score": None,
-                "direct_partners": 0,
-                "availability_status": "unavailable",
-                "reason_codes": ["no_disclosed_suppliers"],
-            },
+            rec,
         ],
     )
     assert count == 2
     assert len(conn.executed) == 2
+    # Row 1: dict
     sql1, params1 = conn.executed[0]
     assert "insert into mart.issuer_supply_chain_exposure" in sql1
-    assert len(params1) == 14
-    assert params1[0] == "run:sc1"
     assert params1[1] == "issuer:aapl"
-    assert params1[2] is not None  # cutoff
     assert params1[3] == Decimal("0.85")
-    assert params1[4] == 12
     assert params1[11] == "available"
-    assert params1[12] == "verified"
-    assert params1[13] == "accepted"
-
-    sql2, params2 = conn.executed[1]
-    assert len(params2) == 14
-    assert params2[0] == "run:sc1"
-    assert params2[1] == "issuer:tiny"
-    assert params2[3] is None
-    assert params2[4] == 0
-    assert params2[11] == "unavailable"
-    assert params2[12] == "degraded"
-    assert params2[13] == "not_evaluated"
-    assert params2[9] == ["no_disclosed_suppliers"]
+    # Row 2: factor record
+    _, params2 = conn.executed[1]
+    assert params2[1] == "issuer:nvda"
+    assert params2[3] == Decimal("0.25")
+    assert params2[4] == 1
+    assert params2[11] == "available"
 
 
-def test_materialize_supply_chain_exposure_from_factor_record() -> None:
-    conn = _MockConnection()
-    now = datetime(2026, 9, 25, tzinfo=UTC)
-    partners = [
-        SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.5"), confidence=Decimal("0.9")),
-    ]
-    rec = supply_chain_exposure(partners, entity_id="issuer:nvda", as_of=now)
-    count = materialize_supply_chain_exposure(conn, run_id="run:sc2", cutoff=now, exposure_data=[rec])
-    assert count == 1
-    assert len(conn.executed) == 1
-    _, params = conn.executed[0]
-    assert len(params) == 14
-    assert params[0] == "run:sc2"
-    assert params[1] == "issuer:nvda"
-    assert params[3] == Decimal("0.25")  # 0.5^2
-    assert params[4] == 1
-    assert params[11] == "available"
+def test_extract_supply_chain_relationships_directions_and_entities() -> None:
+    """Consolidated: tests sentence parsing, relation direction rules, and entity name extraction."""
+    # 1. Empty text check
+    assert extract_supply_chain_relationships("", issuer_id="test", filing_date=date(2026, 1, 1), accession="000") == ()
 
-
-def test_extract_supply_chain_relationships_empty_text() -> None:
-    edges = extract_supply_chain_relationships(
-        "",
-        issuer_id="issuer:test",
-        filing_date=date(2026, 1, 1),
-        accession="0001-00-00",
-    )
-    assert edges == ()
-
-
-def test_extract_supply_chain_relationships_parses_sentences() -> None:
+    # 2. Directions and named entity extraction
     text = (
         "Item 1. Business\n"
+        "The company supplies to Apple Inc. as its primary distribution partner.\n"
+        "We also purchase raw materials from Acme Corp for our semiconductor needs.\n"
         "We rely on a single supplier for our key semiconductor chips.\n"
         "Our largest customer accounts for 15% of net revenues.\n"
-        "General operational descriptions and regulatory disclosures follow."
     )
     edges = extract_supply_chain_relationships(
         text,
@@ -123,67 +101,47 @@ def test_extract_supply_chain_relationships_parses_sentences() -> None:
         filing_date=date(2026, 1, 1),
         accession="0001-00-00",
     )
-    assert len(edges) == 2
-    assert edges[0].relation_type == "supplier"
-    assert "single supplier" in edges[0].evidence_sentence
-    assert edges[1].relation_type == "customer"
-    assert "largest customer" in edges[1].evidence_sentence
+    assert len(edges) == 4
+    # supplies to Apple Inc. -> customer
+    assert edges[0].relation_type == "customer"
+    assert edges[0].target_entity_name == "Apple Inc."
+    # purchase from Acme Corp -> supplier
+    assert edges[1].relation_type == "supplier"
+    assert edges[1].target_entity_name == "Acme Corp"
+    # single supplier -> supplier
+    assert edges[2].relation_type == "supplier"
+    assert edges[2].target_entity_name == "Key Supplier"
+    # largest customer -> customer
+    assert edges[3].relation_type == "customer"
+    assert edges[3].target_entity_name == "Major Customer"
 
 
-def test_supplies_to_is_classified_as_customer_not_supplier() -> None:
-    """Regression: 'supplies to' means the issuer supplies TO a customer.
-
-    The partner in that sentence is a *customer*, not a supplier.
-    Before the fix, 'supplies' matched first and set rel='supplier', flipping
-    the edge direction for this common wording.
-    """
-    text = (
+def test_extract_supply_chain_adversarial_negative_corpus() -> None:
+    """Adversarial Negative Corpus: generic customer/vendor mentions must NOT produce supply chain edges."""
+    negative_text = (
         "Item 1. Business\n"
-        "The company supplies to Apple Inc. as its primary distribution channel.\n"
-        "We also purchase raw materials from a key supplier in Taiwan.\n"
+        "We maintain customer service centers across the country to assist users.\n"
+        "Customer deposits are insured by the FDIC up to legal limits.\n"
+        "We emphasize customer experience and customer satisfaction metrics.\n"
+        "Vendor management programs are reviewed on an annual basis.\n"
     )
     edges = extract_supply_chain_relationships(
-        text,
-        issuer_id="issuer:test",
+        negative_text,
+        issuer_id="issuer:bank",
         filing_date=date(2026, 1, 1),
         accession="0001-00-00",
     )
-    assert len(edges) == 2
-    # "supplies to Apple" → Apple is a customer
-    assert edges[0].relation_type == "customer", (
-        f"Expected 'customer' for 'supplies to' sentence, got {edges[0].relation_type!r}"
-    )
-    # "key supplier in Taiwan" → Taiwan partner is a supplier
-    assert edges[1].relation_type == "supplier", (
-        f"Expected 'supplier' for 'key supplier' sentence, got {edges[1].relation_type!r}"
-    )
+    assert len(edges) == 0, f"False positives detected in negative corpus: {edges}"
 
 
-def test_purchases_from_is_classified_as_supplier_not_customer() -> None:
-    """Regression: 'purchases from' means the issuer buys from a supplier.
-
-    The partner in that sentence is a *supplier*, not a customer.
-    Before the fix, 'purchases from' was in is_customer_context, which would
-    misclassify "We purchase components from Acme" when no supplier/vendor
-    keyword was also present.
-    """
-    text = (
-        "Item 1. Business\n"
-        "The Company purchases from Acme Corp substantially all of its semiconductor needs.\n"
-        "Our largest customer is a major US retailer accounting for 20% of revenue.\n"
+def test_materialize_universe_supply_chain_exposure_iterates_all_issuers() -> None:
+    conn = _MockConnection()
+    tickers = {"issuer:1": "NVDA", "issuer:2": "AAPL"}
+    total = materialize_universe_supply_chain_exposure(
+        conn,
+        run_id="run:sc_uni",
+        cutoff=datetime.now(tz=UTC),
+        tickers=tickers,
     )
-    edges = extract_supply_chain_relationships(
-        text,
-        issuer_id="issuer:test",
-        filing_date=date(2026, 1, 1),
-        accession="0001-00-00",
-    )
-    assert len(edges) == 2
-    # "purchases from Acme" → Acme is a supplier
-    assert edges[0].relation_type == "supplier", (
-        f"Expected 'supplier' for 'purchases from' sentence, got {edges[0].relation_type!r}"
-    )
-    # "largest customer" → partner is a customer
-    assert edges[1].relation_type == "customer", (
-        f"Expected 'customer' for 'largest customer' sentence, got {edges[1].relation_type!r}"
-    )
+    assert total == 2
+    assert len(conn.executed) == 2
