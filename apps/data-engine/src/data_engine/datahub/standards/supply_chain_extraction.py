@@ -99,9 +99,14 @@ def extract_supply_chain_relationships(
         line_clean = line.strip()
         lower = line_clean.lower()
         if any(term in lower for term in ("supplier", "customer", "vendor", "supplies to", "purchases from")):
-            # "supplies to X" → X is a customer of the issuer; "supplier/vendor/supplies [from]" → X is a supplier
-            is_customer_context = "supplies to" in lower or "customer" in lower or "purchases from" in lower
-            is_supplier_context = any(s in lower for s in ("supplier", "vendor")) or (
+            # Direction rules:
+            #   "supplies to X"   → X is a customer (issuer sells to X)
+            #   "customer"        → partner is a customer
+            #   "supplier/vendor" → partner is a supplier
+            #   "supplies" alone  → issuer is a supplier; partner is a customer
+            #   "purchases from X"→ issuer buys from X; X is a supplier
+            is_customer_context = "supplies to" in lower or "customer" in lower
+            is_supplier_context = any(s in lower for s in ("supplier", "vendor", "purchases from")) or (
                 "supplies" in lower and "supplies to" not in lower
             )
             if not is_customer_context and not is_supplier_context:

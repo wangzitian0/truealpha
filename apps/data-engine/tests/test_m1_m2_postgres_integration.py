@@ -36,11 +36,10 @@ _REQUIRE_RUNTIME = bool(os.environ.get("DATABASE_URL") or os.environ.get("TRUEAL
 def _pg_ready_or_fail() -> bool:
     """Return True when M1/M2 mart tables are reachable.
 
-    - If we connect but marts are missing and runtime is required → RuntimeError
-      (CI misconfiguration: migrations not applied in this shard).
-    - If we can't connect at all and runtime is required → pytest.fail
-      (matches the pattern in test_entity_display_resolution_view.py).
-    - Otherwise → skip silently (local dev or non-DB shard).
+    When DATABASE_URL or TRUEALPHA_REQUIRE_RUNTIME is set:
+    - Connection failure → pytest.fail (unreachable configured DB).
+    - Connected but mart tables absent → pytest.fail (migrations not applied).
+    Otherwise: skip silently (local dev without M1/M2 DB or non-DB CI shard).
     """
     try:
         with psycopg.connect(DATABASE_URL, connect_timeout=1) as conn:
@@ -51,8 +50,9 @@ def _pg_ready_or_fail() -> bool:
                 res = cur.fetchone()
                 ready = bool(res and res[0] and res[1])
         if not ready and _REQUIRE_RUNTIME:
-            raise RuntimeError(
-                f"Connected to {DATABASE_URL} but M1/M2 mart tables are absent — run migrations before this shard."
+            pytest.fail(
+                "Connected to Postgres but M1/M2 mart tables are absent — run migrations before this shard.",
+                pytrace=False,
             )
         return ready
     except psycopg.OperationalError as exc:
