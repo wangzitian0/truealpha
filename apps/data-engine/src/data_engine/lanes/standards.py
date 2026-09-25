@@ -65,6 +65,8 @@ __all__ = (
     "THEME_PURITY_VERDICT",
     "analyst_ratings",
     "defs",
+    "run_analyst_ratings",
+    "run_supply_chain_exposure",
     "supply_chain_extraction",
 )
 
@@ -251,16 +253,86 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
 
 
 @dg.op
-def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str) -> str:
-    """#748: after the week's backfill of EVERY standard and module 6's purity rows, count
-    the six questions on the governed head — answered / unavailable-by-reason / missing — and
+def run_supply_chain_exposure(
+    context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str
+) -> str:
+    """#772 (init.md §7 module 3): supply-chain exposure rows for this week's governed head.
+
+    Sequenced after theme purity and before analyst ratings and question coverage.
+    """
+    from data_engine.datahub.question_coverage import governed_head
+    from data_engine.datahub.standards.planner import universe_issuers
+    from data_engine.datahub.standards.supply_chain_extraction import (
+        materialize_universe_supply_chain_exposure,
+    )
+
+    context.log.info("supply chain exposure follows theme purity: %s", purity_summary[:200])
+    current = reports_current(purity_summary)
+    if current is not None:
+        return current
+
+    prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
+    with psycopg.connect(settings.database_url) as connection:
+        head = governed_head(connection, universe_prefix=prefix)
+        if head is None:
+            context.log.warning("no governed head for %s; no supply chain exposure rows", config.universe)
+            return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
+
+        tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
+        rows_count = materialize_universe_supply_chain_exposure(
+            connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers
+        )
+        connection.commit()
+
+    context.log.info("published %s supply-chain exposure rows for %s", rows_count, config.universe)
+    context.add_output_metadata({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
+    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
+
+
+@dg.op
+def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillConfig, sc_summary: str) -> str:
+    """#771 (init.md §7 module 4): analyst consensus ratings rows for this week's governed head.
+
+    Sequenced after supply chain exposure and before question coverage.
+    """
+    from data_engine.datahub.analyst_ratings import materialize_universe_analyst_ratings
+    from data_engine.datahub.question_coverage import governed_head
+    from data_engine.datahub.standards.planner import universe_issuers
+
+    context.log.info("analyst ratings follows supply chain exposure: %s", sc_summary[:200])
+    current = reports_current(sc_summary)
+    if current is not None:
+        return current
+
+    prefix = UNIVERSE_PREFIXES.get(config.universe, config.universe)
+    with psycopg.connect(settings.database_url) as connection:
+        head = governed_head(connection, universe_prefix=prefix)
+        if head is None:
+            context.log.warning("no governed head for %s; no analyst ratings rows", config.universe)
+            return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
+
+        tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
+        rows_count = materialize_universe_analyst_ratings(
+            connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers
+        )
+        connection.commit()
+
+    context.log.info("published %s analyst ratings rows for %s", rows_count, config.universe)
+    context.add_output_metadata({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
+    return json.dumps({"universe": config.universe, "run_id": head.run_id, "rows": rows_count})
+
+
+@dg.op
+def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, analyst_summary: str) -> str:
+    """#748: after the week's backfill of EVERY standard, theme purity, supply chain exposure,
+    and analyst ratings, count the six questions on the governed head — answered / unavailable-by-reason / missing — and
     append the report."""
     from data_engine.datahub.question_coverage import compile_report, persist, summary_line
 
-    # The backfill's summary is this op's only upstream: consuming it is what sequences the
-    # report after the week's facts have landed, and logging it keeps the pair legible.
-    context.log.info("coverage follows theme purity: %s", purity_summary[:400])
-    current = reports_current(purity_summary)
+    # The analyst ratings' summary is this op's only upstream: consuming it is what sequences the
+    # report after all upstream factors have landed, and logging it keeps the chain legible.
+    context.log.info("coverage follows analyst ratings: %s", analyst_summary[:400])
+    current = reports_current(analyst_summary)
     if current is not None:
         return _already_current(context, QUESTION_COVERAGE_VERDICT, config, current)
     executed_at = datetime.fromisoformat(config.executed_at)
@@ -297,11 +369,11 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
 
 @dg.job(name=STANDARD_BACKFILL_JOB_NAME)
 def standard_backfill_pipeline_job() -> None:
-    run_question_coverage(run_theme_purity(run_standard_backfill()))
+    run_question_coverage(run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(run_standard_backfill()))))
 
 
 def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> dg.RunConfig:
-    """One universe's backfill → purity → coverage, every op configured alike. `standard` bounds
+    """One universe's backfill → purity → supply chain → analyst ratings → coverage, every op configured alike. `standard` bounds
     the backfill to one registered standard; empty runs them all."""
     return dg.RunConfig(
         ops={
@@ -310,6 +382,10 @@ def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> 
             ),
             # #772: module 6 consumes the partitions the backfill just landed.
             "run_theme_purity": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+            # #772: module 3 supply-chain exposure
+            "run_supply_chain_exposure": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+            # #771: module 4 analyst ratings
+            "run_analyst_ratings": StandardBackfillConfig(executed_at=executed_at, universe=universe),
             # #748: the coverage report follows, for the same universe and tick.
             "run_question_coverage": StandardBackfillConfig(executed_at=executed_at, universe=universe),
         }

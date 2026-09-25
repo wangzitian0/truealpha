@@ -18,13 +18,14 @@ from data_engine.lanes.standards import (
 )
 
 
-def test_the_job_chains_backfill_then_purity_then_coverage() -> None:
+def test_the_job_chains_all_modules_to_coverage() -> None:
     """Each op consumes the one before it, so the chain is enforced by the dependency rather
-    than by ordering luck: purity would classify an empty plane if it ran first, and coverage
-    would count a column that had not been written yet."""
+    than by ordering luck: backfill -> theme purity -> supply chain -> analyst ratings -> coverage."""
     assert [node.name for node in standard_backfill_pipeline_job.graph.node_defs] == [
         "run_standard_backfill",
         "run_theme_purity",
+        "run_supply_chain_exposure",
+        "run_analyst_ratings",
         "run_question_coverage",
     ]
 
@@ -37,7 +38,13 @@ def test_every_run_request_configures_every_op_for_its_universe() -> None:
     ]
     for request, universe in zip(requests, STANDARD_BACKFILL_UNIVERSES, strict=True):
         ops = request.run_config["ops"]
-        assert set(ops) == {"run_standard_backfill", "run_theme_purity", "run_question_coverage"}
+        assert set(ops) == {
+            "run_standard_backfill",
+            "run_theme_purity",
+            "run_supply_chain_exposure",
+            "run_analyst_ratings",
+            "run_question_coverage",
+        }
         for op in ops.values():
             assert op["config"]["universe"] == universe
             assert op["config"]["executed_at"] == "2026-09-13T09:07:00+00:00"
