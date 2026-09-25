@@ -71,6 +71,20 @@
         "employees_total"
       ]
     },
+    "supply_chain_exposure": {
+      "function": "supply_chain_exposure",
+      "kind": "base",
+      "module": 3,
+      "module_path": "libs/factors/src/factors/base/supply_chain_exposure.py",
+      "signature": "(partners: Sequence[SupplyChainPartner], *, entity_id: str, as_of: datetime) -> SupplyChainExposure"
+    },
+    "analyst_track_record": {
+      "function": "analyst_track_record",
+      "kind": "base",
+      "module": 4,
+      "module_path": "libs/factors/src/factors/base/analyst_track_record.py",
+      "signature": "(ratings: Sequence[AnalystRatingItem], *, entity_id: str, as_of: datetime) -> AnalystTrackRecord"
+    },
     "etf_virtual_company": {
       "function": "consolidate_fund",
       "kind": "base",

@@ -12,17 +12,20 @@ from data_engine.datahub.question_coverage import (
     NO_ROW,
     UNRECORDED_REASON,
     Cell,
+    analyst_rating_cells,
     classify_question,
     gppe_cells,
     peg_cells,
     persist,
     summary_line,
+    supply_chain_cells,
     theme_purity_cells,
 )
 from truealpha_contracts.question_requirements import (
     QUESTION_REQUIREMENTS,
     QUESTION_REQUIREMENTS_SHA256,
     Question,
+    QuestionRequirement,
 )
 
 TOPT = "universe:topt-us-2026-03-31"
@@ -59,8 +62,9 @@ def test_removing_the_left_join_is_red() -> None:
         cells_by_column={},
     )
     assert entry["answered"] == 0 and entry["unavailable"] == {NO_ROW: 1}
+    synthetic_unbound = QuestionRequirement(Question.Q3_SUPPLY_CHAIN_EXPOSURE, (), (), "#772")
     unbound = classify_question(
-        REQ[Question.Q3_SUPPLY_CHAIN_EXPOSURE], universe_id=QQQ, issuers=["issuer:a", "issuer:b"], cells_by_column={}
+        synthetic_unbound, universe_id=QQQ, issuers=["issuer:a", "issuer:b"], cells_by_column={}
     )
     assert unbound["missing"] == 2 and unbound["column"] is None and unbound["tracking_issue"] == "#772"
 
@@ -140,10 +144,10 @@ def test_the_report_persists_append_only_and_reads_back() -> None:
         report_id = persist(connection, report)
         assert persist(connection, report) == report_id  # idempotent under the same content
         row = connection.execute(
-            "select universe_id, requirements_sha256, payload->'questions'->'q3'->>'missing' from mart.question_coverage_report where report_id = %s",
+            "select universe_id, requirements_sha256, payload->'questions'->'q3'->>'missing', payload->'questions'->'q3'->'unavailable'->>'no_row' from mart.question_coverage_report where report_id = %s",
             (report_id,),
         ).fetchone()
-        assert row == (TOPT, QUESTION_REQUIREMENTS_SHA256, "1")
+        assert row == (TOPT, QUESTION_REQUIREMENTS_SHA256, "0", "1")
         assert "q1: 0/1 answered" in summary_line(report)
     finally:
         connection.rollback()
@@ -293,3 +297,39 @@ def test_q6_is_bound_to_the_materialized_column_rather_than_left_missing() -> No
     assert [c.table for c in requirement.columns] == ["mart.issuer_theme_purity"]
     assert [c.column for c in requirement.columns] == ["theme_share"]
     assert requirement.standards == ("segment_revenue",), "and it names the standard it consumes"
+
+
+def test_supply_chain_cells_records_status_and_reasons() -> None:
+    rows = [
+        ("issuer:a", "available", []),
+        ("issuer:b", "unavailable", ["no_disclosed_suppliers"]),
+        ("issuer:c", "stale", ["stale_filing"]),
+    ]
+    cells = supply_chain_cells(_Rows(rows), "run")
+    assert [c.answered for c in cells] == [True, False, False]
+    assert cells[1].reason == "no_disclosed_suppliers" and cells[2].reason == "stale_filing"
+
+
+def test_analyst_rating_cells_records_status_and_reasons() -> None:
+    rows = [
+        ("issuer:a", "available", []),
+        ("issuer:b", "unavailable", ["no_analyst_coverage"]),
+    ]
+    cells = analyst_rating_cells(_Rows(rows), "run")
+    assert [c.answered for c in cells] == [True, False]
+    assert cells[1].reason == "no_analyst_coverage"
+
+
+def test_q3_is_bound_to_the_materialized_column_rather_than_left_missing() -> None:
+    requirement = REQ[Question.Q3_SUPPLY_CHAIN_EXPOSURE]
+    assert requirement.has_column
+    assert [c.table for c in requirement.columns] == ["mart.issuer_supply_chain_exposure"]
+    assert [c.column for c in requirement.columns] == ["exposure_score"]
+
+
+def test_q4_is_bound_to_the_materialized_column_rather_than_left_missing() -> None:
+    requirement = REQ[Question.Q4_ANALYST_TRACK_RECORD]
+    assert requirement.has_column
+    assert [c.table for c in requirement.columns] == ["mart.issuer_analyst_ratings"]
+    assert [c.column for c in requirement.columns] == ["consensus_rating"]
+
