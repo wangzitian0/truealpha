@@ -14,6 +14,7 @@ from factors.shared.extraction import (
     Extraction,
     Selection,
     Selector,
+    extract_metric,
     select_single_candidate,
 )
 
@@ -93,3 +94,27 @@ def test_a_model_backed_callable_satisfies_the_selector_protocol() -> None:
 
 def test_a_declining_selector_returns_none_like_the_rule_does() -> None:
     assert _fake_model_selector([]) is None
+
+
+def test_extract_metric_deterministic_rule() -> None:
+    candidates = [Candidate(42000, "we had 42,000 employees")]
+    res = extract_metric(candidates)
+    assert res.candidates == tuple(candidates)
+    assert res.selection is not None
+    assert res.selection.value == 42000
+    assert res.selection.extractor == RULE_SINGLE_CANDIDATE
+
+
+def test_extract_metric_delegates_to_selector_on_ambiguity() -> None:
+    candidates = [Candidate(50000, "total"), Candidate(12000, "R&D")]
+    res = extract_metric(candidates, selector=_fake_model_selector)
+    assert res.candidates == tuple(candidates)
+    assert res.selection is not None
+    assert res.selection.value == 50000
+    assert res.selection.extractor == "model:fake-model:deadbeefcafe1"
+
+
+def test_extract_metric_empty_candidates() -> None:
+    res = extract_metric([])
+    assert res.candidates == ()
+    assert res.selection is None

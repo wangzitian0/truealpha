@@ -13,6 +13,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
@@ -227,6 +228,56 @@ def theme_purity_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, 
     return tuple(answered[key] for key in sorted(answered))
 
 
+def supply_chain_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
+    """Module 3's supply-chain exposure rows for this run (#772)."""
+    rows = connection.execute(
+        """
+        select issuer_id, availability_status, reason_codes, exposure_score
+        from mart.issuer_supply_chain_exposure where run_id = %s order by issuer_id
+        """,
+        (run_id,),
+    ).fetchall()
+    cells = []
+    for row in rows:
+        issuer_id = row[0]
+        availability_status = row[1]
+        reason_codes = row[2]
+        score = row[3] if len(row) > 3 else (Decimal("1") if availability_status == "available" else None)
+        if availability_status == "available" and score is not None:
+            cells.append(Cell(str(issuer_id), True))
+        elif availability_status == "available" and score is None:
+            cells.append(Cell(str(issuer_id), False, "null_metric_value"))
+        else:
+            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
+            cells.append(Cell(str(issuer_id), False, str(reason)))
+    return tuple(cells)
+
+
+def analyst_rating_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
+    """Module 4's analyst ratings rows for this run (#771)."""
+    rows = connection.execute(
+        """
+        select issuer_id, availability_status, reason_codes, consensus_rating
+        from mart.issuer_analyst_ratings where run_id = %s order by issuer_id
+        """,
+        (run_id,),
+    ).fetchall()
+    cells = []
+    for row in rows:
+        issuer_id = row[0]
+        availability_status = row[1]
+        reason_codes = row[2]
+        rating = row[3] if len(row) > 3 else (Decimal("1") if availability_status == "available" else None)
+        if availability_status == "available" and rating is not None:
+            cells.append(Cell(str(issuer_id), True))
+        elif availability_status == "available" and rating is None:
+            cells.append(Cell(str(issuer_id), False, "null_metric_value"))
+        else:
+            reason = (list(reason_codes or []) or [availability_status or UNRECORDED_REASON])[0]
+            cells.append(Cell(str(issuer_id), False, str(reason)))
+    return tuple(cells)
+
+
 def classify_question(
     requirement: QuestionRequirement,
     *,
@@ -310,6 +361,8 @@ def compile_report(
     cells_by_column = {
         "mart.topt_gppe_results.gppe": gppe,
         "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id) if prefix == "universe:topt-" else (),
+        "mart.issuer_supply_chain_exposure.exposure_score": supply_chain_cells(connection, head.run_id),
+        "mart.issuer_analyst_ratings.consensus_rating": analyst_rating_cells(connection, head.run_id),
         "mart.fund_virtual_company.weighted_valuation_gap": funds_observed,
         "mart.issuer_theme_purity.theme_share": theme_purity_cells(connection, head.run_id),
     }

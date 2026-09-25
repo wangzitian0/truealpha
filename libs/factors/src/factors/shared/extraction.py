@@ -168,6 +168,28 @@ def select_single_candidate(candidates: Sequence[Candidate]) -> Selection | None
     )
 
 
+def extract_metric(
+    candidates: Sequence[Candidate],
+    selector: Selector | None = None,
+) -> Extraction:
+    """The canonical extraction entry point (#769): candidate -> selection -> evidence.
+
+    1. If no candidates, returns Extraction with empty candidates and selection=None.
+    2. Runs the deterministic rule (select_single_candidate): exactly one distinct value.
+    3. If ambiguous (>1 distinct values) and a Selector is provided, delegates to selector.
+    4. Otherwise returns Extraction with selection=None.
+    """
+    if not candidates:
+        return Extraction(candidates=(), selection=None)
+    rule_selection = select_single_candidate(candidates)
+    if rule_selection is not None:
+        return Extraction(candidates=tuple(candidates), selection=rule_selection)
+    if selector is not None:
+        model_selection = selector(candidates)
+        return Extraction(candidates=tuple(candidates), selection=model_selection)
+    return Extraction(candidates=tuple(candidates), selection=None)
+
+
 class PartitionRefusal(StrEnum):
     """Why a candidate set is NOT the answer. Every value is a different problem with a
     different fix, which is the reason this is an enum rather than a bool.

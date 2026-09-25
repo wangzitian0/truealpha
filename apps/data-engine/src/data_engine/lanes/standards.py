@@ -30,8 +30,9 @@ import psycopg
 from truealpha_contracts.standards import STANDARDS
 
 from data_engine.config import settings
-from data_engine.datahub import question_coverage
+from data_engine.datahub import analyst_ratings, question_coverage
 from data_engine.datahub.question_coverage import UNIVERSE_PREFIXES
+from data_engine.datahub.standards import supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
 from data_engine.datahub.standards.planner import universe_issuers
@@ -52,6 +53,19 @@ NIGHTLY_VERDICTS: tuple[str, ...] = tuple(
     check_name(check, universe)
     for check in (THEME_PURITY_VERDICT, QUESTION_COVERAGE_VERDICT)
     for universe in STANDARD_BACKFILL_UNIVERSES
+)
+
+__all__ = (
+    "NIGHTLY_VERDICTS",
+    "QUESTION_COVERAGE_VERDICT",
+    "STANDARD_BACKFILL_CRON",
+    "STANDARD_BACKFILL_JOB_NAME",
+    "STANDARD_BACKFILL_UNIVERSES",
+    "StandardBackfillConfig",
+    "THEME_PURITY_VERDICT",
+    "analyst_ratings",
+    "defs",
+    "supply_chain_extraction",
 )
 
 
