@@ -30,7 +30,16 @@ from data_engine.datahub.standards.supply_chain_extraction import (
 DATABASE_URL = os.environ.get("TRUEALPHA_TEST_DATABASE_URL", "postgresql://postgres@localhost:5432/truealpha_m1_m2")
 
 
-def _is_pg_ready() -> bool:
+_REQUIRE_RUNTIME = bool(os.environ.get("TRUEALPHA_REQUIRE_RUNTIME") or os.environ.get("TRUEALPHA_TEST_DATABASE_URL"))
+
+
+def _pg_ready_or_raise() -> bool:
+    """Return True when marts are reachable.
+
+    Raises RuntimeError when the environment explicitly requires DB access
+    (TRUEALPHA_TEST_DATABASE_URL or TRUEALPHA_REQUIRE_RUNTIME is set) so CI
+    misconfigurations do not silently drop coverage.
+    """
     try:
         with psycopg.connect(DATABASE_URL, connect_timeout=1) as conn:
             with conn.cursor() as cur:
@@ -39,11 +48,13 @@ def _is_pg_ready() -> bool:
                 )
                 res = cur.fetchone()
                 return bool(res and res[0] and res[1])
-    except Exception:
+    except Exception as exc:
+        if _REQUIRE_RUNTIME:
+            raise RuntimeError(f"DB required by env but unreachable at {DATABASE_URL}: {exc}") from exc
         return False
 
 
-pytestmark = pytest.mark.skipif(not _is_pg_ready(), reason="PostgreSQL mart tables not available")
+pytestmark = pytest.mark.skipif(not _pg_ready_or_raise(), reason="PostgreSQL mart tables not available")
 
 
 def test_physical_postgres_analyst_ratings_and_supply_chain_insertion() -> None:
