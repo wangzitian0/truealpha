@@ -295,7 +295,10 @@ jobs:
       - name: Start persistent code-server + daemon over --grpc-socket
         run: |
           SOCK=/tmp/ta-code-server.sock
-          uv run --package truealpha-data-engine dagster api grpc \
+          # setsid: each background process leads its own process group, so the stop step can
+          # end uv AND its dagster child together (#1051 -- killing only the uv PID left both
+          # alive, holding the uv cache lock that setup-uv's post-step prune then waits on).
+          setsid uv run --package truealpha-data-engine dagster api grpc \
             -m data_engine.dagster_defs --socket "$SOCK" --lazy-load-user-code \
             --location-name data_engine.dagster_defs --log-level debug \
             > code_server.log 2>&1 &
@@ -318,7 +321,7 @@ jobs:
             cat code_server.log >&2
             exit 1
           fi
-          uv run --package truealpha-data-engine dagster-daemon run --grpc-socket "$SOCK" \
+          setsid uv run --package truealpha-data-engine dagster-daemon run --grpc-socket "$SOCK" \
             > daemon.log 2>&1 &
           echo "DAEMON_PID=$!" >> "$GITHUB_ENV"
           echo "SOCK=$SOCK" >> "$GITHUB_ENV"
@@ -349,4 +352,21 @@ jobs:
       - name: Stop background processes
         if: always()
         run: |
-          kill "$DAEMON_PID" "$CODE_SERVER_PID" 2>/dev/null || true
+          # Signal each process GROUP (negative pid): uv and the dagster process it runs.
+          for pid in "${DAEMON_PID:-}" "${CODE_SERVER_PID:-}"; do
+            [ -n "$pid" ] && kill -TERM -- "-$pid" 2>/dev/null || true
+          done
+          for _ in $(seq 1 20); do
+            pgrep -f "dagster api grpc|dagster-daemon run" >/dev/null || break
+            sleep 1
+          done
+          for pid in "${DAEMON_PID:-}" "${CODE_SERVER_PID:-}"; do
+            [ -n "$pid" ] && kill -KILL -- "-$pid" 2>/dev/null || true
+          done
+          sleep 1
+          # A survivor keeps the uv cache lock and stalls setup-uv's post-step prune (#1051):
+          # fail here, naming it, instead of five minutes later inside the prune.
+          if pgrep -af "dagster api grpc|dagster-daemon run"; then
+            echo "::error::dagster processes survived the stop step (see above)" >&2
+            exit 1
+          fi
