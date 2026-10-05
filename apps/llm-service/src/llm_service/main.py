@@ -13,7 +13,9 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from truealpha_runtime.boot import assert_environment
+from truealpha_runtime.telemetry import init_telemetry
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from llm_service.config import settings
@@ -59,6 +61,17 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 ROUTED_PREFIX = "/api"
 
 app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
+
+# OTLP telemetry for infra2's shared SigNoz (#1034): traces, metrics and ERROR logs under the
+# identity infra2's deploy renders into OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES. Off unless
+# OTEL_EXPORTER_OTLP_ENDPOINT is set; once on, a missing identity refuses the import, so uvicorn
+# never starts serving untagged telemetry. At import, not in the lifespan: FastAPIInstrumentor wraps
+# the middleware stack, which Starlette builds before the first lifespan event.
+_telemetry = init_telemetry()
+if _telemetry is not None:
+    FastAPIInstrumentor.instrument_app(
+        app, tracer_provider=_telemetry.tracer_provider, meter_provider=_telemetry.meter_provider
+    )
 
 # TLS terminates at Traefik, so requests arrive over http. Without this, Starlette
 # builds redirect Locations from the request scheme and `GET /api/mcp` answered
